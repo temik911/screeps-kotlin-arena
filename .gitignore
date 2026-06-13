@@ -6,3 +6,5 @@ typings/
 node_modules/
 arenas/**/package-lock.json
 arenas/**/typings
+.DS_Store
+**/.DS_Store

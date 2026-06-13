@@ -1,0 +1,12 @@
+{
+  "name": "season3-power_split",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.mjs",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "screeps-kotlin-arena-starter": "file:../../build/js/packages/screeps-kotlin-arena-starter"
+  }
+}
