@@ -14,9 +14,13 @@ declare module "game/prototypes/game-object" {
         y: number;
     }
 
+    /** Effect values are calculated as base * (multiplier ?? 1) + (offset ?? 0) */
     export type EffectData = {
-        /** The effect multiplier */
-        multiplier: number;
+        /** The effect multiplier. Defaults to 1 */
+        multiplier?: number;
+
+        /** The effect offset. Defaults to 0 and is applied after the multiplier */
+        offset?: number;
     }
 
     /** Represents an effect applied to a game object */
@@ -25,6 +29,8 @@ declare module "game/prototypes/game-object" {
         effectType: string;
         /** The effect data */
         data: EffectData;
+        /** The game tick when the effect expires. May be omitted from effect templates */
+        endTime?: number;
     }
 
     /**

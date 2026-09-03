@@ -125,3 +125,10 @@ external val EFF_RANGED_ATTACK_BOOST: String
 external val EFF_ATTACK_BOOST: String
 external val EFF_WORK_BOOST: String
 external val EFF_MOVE_BOOST: String
+// Season 4: модификаторы эффектов (Pain and Gain и др.). Значение эффекта = base * (multiplier ?: 1) + (offset ?: 0)
+external val EFF_ATTACK_MODIFIER: String
+external val EFF_RANGED_ATTACK_MODIFIER: String
+external val EFF_HEAL_MODIFIER: String
+external val EFF_DAMAGE_TAKEN_MODIFIER: String
+external val EFF_FATIGUE_MODIFIER: String
+external val EFF_HITS_LOSS: String

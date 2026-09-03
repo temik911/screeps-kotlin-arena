@@ -14,10 +14,13 @@ external interface Position {
     var y: Int
 }
 
+/** Effect values are calculated as base * (multiplier ?: 1) + (offset ?: 0). */
 @JsPlainObject
 external interface EffectData {
-    /** The effect multiplier. */
-    var multiplier: Int
+    /** The effect multiplier. Defaults to 1. */
+    var multiplier: Double?
+    /** The effect offset. Defaults to 0 and is applied after the multiplier. */
+    var offset: Double?
 }
 
 /** Represents an effect applied to a game object. */
@@ -26,6 +29,8 @@ external class Effect {
     var effectType: String
     /** The effect data. */
     var data: EffectData
+    /** The game tick when the effect expires. May be omitted from effect templates. */
+    var endTime: Int?
 }
 
 /**
