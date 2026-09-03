@@ -127,6 +127,14 @@ object PainAndGain {
     private const val CLOSE_STANDOFF = 2
     private const val APPROACH_WINDOW = 20
 
+    /** Столько тиков без сдвига — враг «стоит» и в стаи по «успеет дойти» не входит (см. packAt). */
+    private const val STILL_TICKS = 20
+
+    /** Вне боя шаг делается только ради заметно лучшей клетки: у поста клетки в зазоре standoff равноценны с
+     *  точностью до штрафа за соседа (4), и отряд без порога всё время менялся местами — сотни обменов на сто
+     *  тиков в матче 1. Порог меньше выигрыша одной клетки по полю (10) и больше одного соседа. */
+    private const val STAY_BIAS = 5.0
+
     // веса оценки клетки (скопированы из spawn-and-swamp, где обкатаны)
     private const val PAIR_W_DIST = 10.0
     private const val PAIR_W_DAMAGE = 0.3
@@ -168,6 +176,8 @@ object PainAndGain {
     private val arrivalById = HashMap<String, Int>()
     private val approachHistory = HashMap<String, ArrayDeque<Pair<Int, Int>>>()
     private val enemyPrevCell = HashMap<String, Int>()
+    /** id врага -> тик его последнего сдвига (см. stationary). */
+    private val enemyLastMove = HashMap<String, Int>()
     private var huntingThreat = false
     private val aggressiveIds = HashSet<String>()
     private val lastHits = HashMap<String, Int>()
@@ -276,6 +286,12 @@ object PainAndGain {
 
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
         InfluenceMap.pruneStances(myCreeps.mapTo(HashSet()) { it.id })
+        // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
+        for (e in enemyCreeps) {
+            val cell = e.x * 100 + e.y
+            if (enemyPrevCell[e.id] != cell) enemyLastMove[e.id] = getTicks()
+        }
+        enemyLastMove.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
         enemyPrevCell.clear()
         for (e in enemyCreeps) enemyPrevCell[e.id] = e.x * 100 + e.y
         if (DEBUG_LOG) logStuck(active, enemyCreeps)
@@ -479,33 +495,43 @@ object PainAndGain {
         val crowdMatrix = crowdMatrixOf(ctx)
         fun dbg(s: Creep, mode: String, f: FlagInfo?, step: Position? = null) {
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-                println("  r${s.id} (${s.x},${s.y}) ${bodySummary(s)} hits=${s.hits} $mode flag=${f?.let { "(${it.pos.x},${it.pos.y})${typeChar(it.type)}${it.score}my=${it.mine}" } ?: "-"} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(s.id)) " STUCK" else ""}")
+                println("  r${s.id} (${s.x},${s.y}) ${bodySummary(s)} hits=${s.hits} $mode flag=${f?.let { "(${it.pos.x},${it.pos.y})${typeChar(it.type)}${it.score}my=${it.mine}" } ?: "-"} fatigue=${s.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(s.id)) " STUCK" else ""}")
             }
         }
-        // назначение — каждый тик заново по ценности с премией текущему (липкость без зависания): захватчик,
-        // взявший флаг, идёт за следующим НЕ НАШИМ, а не сидит на взятом (сидел, пока свободный флаг брала
-        // армия за сорок тиков — стенд grab); сидеть на своём — когда чужих свободных нет
-        val taken = HashSet<String>()
-        val order = runners.sortedBy { runnerFlag[it.id] ?: "" }
-        for (s in order) {
+        // назначение — глобальное жадное паросочетание по ценности (лучшая пара «захватчик-флаг» первой),
+        // НЕ зависящее от порядка обхода: обход в порядке текущих назначений менял очерёдность от тика к
+        // тику, два скаута по очереди отбирали друг у друга центральный флаг и полторы тысячи тиков
+        // шагали туда-обратно на одной клетке, ни разу не выйдя за неё (матч 1). Взявший флаг идёт за
+        // следующим НЕ НАШИМ; сидеть на своём — когда чужих свободных на всех не хватает
+        class Cand(val runner: Creep, val flag: FlagInfo, val value: Double)
+        val cands = ArrayList<Cand>()
+        val foreignFree = ctx.flags.count { o -> !o.ours && o.guards.isEmpty() && (o.occupant == null || o.occupant.my) }
+        for (s in runners) {
             val currentId = runnerFlag[s.id]
-            var best: FlagInfo? = null
-            var bestValue = 0.0
             for (f in ctx.flags) {
-                if (f.id in taken || f.guards.isNotEmpty()) continue
+                if (f.guards.isNotEmpty()) continue
                 val occ = f.occupant
                 if (occ != null && occ.id != s.id) continue // занято (чужим — ждём отряд; своим — тот и держит)
-                if (f.ours && ctx.flags.any { o -> !o.ours && o.guards.isEmpty() && o.id !in taken && (o.occupant == null || o.occupant.id == s.id) }) continue
+                if (f.ours && foreignFree >= runners.size) continue
                 val flow = flowTo(ctx, f.pos)
                 val ticks = pathTicks(s, flow, s.x * 100 + s.y)
                 if (ticks >= Int.MAX_VALUE / 4) continue
                 // свой пустой флаг стоит половину: враг за ним ещё должен прийти; чужой — двойной размен;
                 // дорогой по силе флаг — позже дешёвого (см. captureCost); текущий — с премией
                 val value = (if (f.ours) 0.5 * f.score else f.swing) * captureCost(ctx, f) / (ticks + 5) * (if (f.id == currentId) 1.25 else 1.0)
-                if (value > bestValue) { bestValue = value; best = f }
+                cands.add(Cand(s, f, value))
             }
-            if (best != null) { runnerFlag[s.id] = best.id; taken.add(best.id) } else runnerFlag.remove(s.id)
         }
+        cands.sortByDescending { it.value }
+        val assigned = HashSet<String>()
+        val taken = HashSet<String>()
+        for (c in cands) {
+            if (c.runner.id in assigned || c.flag.id in taken) continue
+            assigned.add(c.runner.id)
+            taken.add(c.flag.id)
+            runnerFlag[c.runner.id] = c.flag.id
+        }
+        for (s in runners) if (s.id !in assigned) runnerFlag.remove(s.id)
 
         for (s in runners) {
             val f = runnerFlag[s.id]?.let { flagById[it] }
@@ -545,9 +571,14 @@ object PainAndGain {
     private fun flowTo(ctx: Ctx, target: Position): IntArray =
         flowCache.getOrPut(target.x * 100 + target.y) { DistanceMap.flowFieldTo(target, ctx.blocked) }
 
-    /** Стая у цели: боевые враги рядом с ней и те, кто дойдёт до неё (своим телом по полю) не позже нас. */
+    /** Стая у цели: боевые враги рядом с ней и те, кто дойдёт до неё (своим телом по полю) не позже нас —
+     *  из ХОДЯЧИХ: стоящий на месте STILL_TICKS тиков в стаю по «успеет дойти» не зачисляется (матч 1:
+     *  армия врага не сделала ни шага за 1570 тиков, а «успевала» к каждому флагу, и армия простояла на посту). */
     private fun packAt(ctx: Ctx, pos: Position, flow: IntArray, ourTravel: Int): List<Creep> =
-        ctx.combatEnemies.filter { getRange(it, pos) <= FLAG_GUARD_RANGE || pathTicks(it, flow, it.x * 100 + it.y) <= ourTravel }
+        ctx.combatEnemies.filter { getRange(it, pos) <= FLAG_GUARD_RANGE || (!stationary(it) && pathTicks(it, flow, it.x * 100 + it.y) <= ourTravel) }
+
+    /** Враг не двигался последние STILL_TICKS тиков (новый враг считается идущим). */
+    private fun stationary(e: Creep): Boolean = getTicks() - (enemyLastMove[e.id] ?: getTicks()) >= STILL_TICKS
 
     private class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: Double, val travel: Int)
 
@@ -663,7 +694,7 @@ object PainAndGain {
         huntingThreat = posture != Posture.RETREAT && threat != null && strikers.isNotEmpty() && run {
             val field = flowTo(ctx, threat)
             val ourTravel = strikers.map { pathTicks(it, field, it.x * 100 + it.y) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: Int.MAX_VALUE / 4
-            val pack = combatEnemies.filter { getRange(it, threat) <= ENGAGE_RANGE + RANGED_RANGE || pathTicks(it, field, it.x * 100 + it.y) <= ourTravel }
+            val pack = combatEnemies.filter { getRange(it, threat) <= ENGAGE_RANGE + RANGED_RANGE || (!stationary(it) && pathTicks(it, field, it.x * 100 + it.y) <= ourTravel) }
             val o = ourPowerOf(strikers, pack)
             val t = enemyPowerOf(pack, strikers)
             o >= t * (if (huntingThreat) PUSH_RELEASE_RATIO else PUSH_RATIO) &&
@@ -927,7 +958,8 @@ object PainAndGain {
         enemyPositions: Set<Int>,
         occupantAt: Map<Int, Creep>,
     ): Position? {
-        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies)
+        // своя клетка с форой: вне боя не дёргаемся ради мелочи (см. STAY_BIAS)
+        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies) + (if (inCombat) 0.0 else STAY_BIAS)
         var bx = creep.x; var by = creep.y
         val hereDist = flow[creep.x * 100 + creep.y]
         var pushDist = if (hereDist >= 0) hereDist else Int.MAX_VALUE
