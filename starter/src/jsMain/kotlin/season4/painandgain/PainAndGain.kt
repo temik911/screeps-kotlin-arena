@@ -130,6 +130,23 @@ object PainAndGain {
     /** Столько тиков без сдвига — враг «стоит» и в стаи по «успеет дойти» не входит (см. packAt). */
     private const val STILL_TICKS = 20
 
+    /** Дальше стольких клеток от авангарда отставший идёт К АВАНГАРДУ, а не к цели, и авангард его ждёт:
+     *  сплочение по разнице поля не видит раскола на два обхода препятствия (матч 2 на стенде: две колонны
+     *  в 30 клетках друг от друга с равной «отставкой», северная четвёрка легла под двенадцать). */
+    private const val RALLY_RANGE = 12
+
+    /** Далёкого напарника медленнее этого (тиков на клетку) авангард не ждёт — калека дойдёт, когда дойдёт. */
+    private const val RALLY_MAX_PERIOD = 3
+
+    /** Уже дерущийся выходит из боя только при таком местном соотношении (см. localAggressive в ANNIHILATE). */
+    private const val ANNIHILATE_HOLD_RATIO = 0.5
+    private const val USE_AVOID = true
+    private const val USE_RALLY = true
+    private const val USE_LOCAL_ANNIHILATE = true
+
+    /** Клетки в такой близости от боевого врага поле «в обход» считает стеной (см. flowAvoiding). */
+    private const val AVOID_RANGE = RANGED_RANGE + 1
+
     /** Вне боя шаг делается только ради заметно лучшей клетки: у поста клетки в зазоре standoff равноценны с
      *  точностью до штрафа за соседа (4), и отряд без порога всё время менялся местами — сотни обменов на сто
      *  тиков в матче 1. Порог меньше выигрыша одной клетки по полю (10) и больше одного соседа. */
@@ -178,6 +195,8 @@ object PainAndGain {
     private val enemyPrevCell = HashMap<String, Int>()
     /** id врага -> тик его последнего сдвига (см. stationary). */
     private val enemyLastMove = HashMap<String, Int>()
+    /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
+    private val rallyingIds = HashSet<String>()
     private var huntingThreat = false
     private val aggressiveIds = HashSet<String>()
     private val lastHits = HashMap<String, Int>()
@@ -233,6 +252,7 @@ object PainAndGain {
 
     fun tick() {
         flowCache.clear()
+        avoidCellsCache = null
 
         val myCreeps = getObjectsByPrototype(Creep::class).filter { it.my && it.exists }
         val enemyCreeps = getObjectsByPrototype(Creep::class).filter { !it.my && it.exists && !it.spawning }
@@ -505,20 +525,22 @@ object PainAndGain {
         // следующим НЕ НАШИМ; сидеть на своём — когда чужих свободных на всех не хватает
         class Cand(val runner: Creep, val flag: FlagInfo, val value: Double)
         val cands = ArrayList<Cand>()
-        val foreignFree = ctx.flags.count { o -> !o.ours && o.guards.isEmpty() && (o.occupant == null || o.occupant.my) }
         for (s in runners) {
             val currentId = runnerFlag[s.id]
             for (f in ctx.flags) {
                 if (f.guards.isNotEmpty()) continue
                 val occ = f.occupant
                 if (occ != null && occ.id != s.id) continue // занято (чужим — ждём отряд; своим — тот и держит)
-                if (f.ours && foreignFree >= runners.size) continue
                 val flow = flowTo(ctx, f.pos)
                 val ticks = pathTicks(s, flow, s.x * 100 + s.y)
                 if (ticks >= Int.MAX_VALUE / 4) continue
-                // свой пустой флаг стоит половину: враг за ним ещё должен прийти; чужой — двойной размен;
-                // дорогой по силе флаг — позже дешёвого (см. captureCost); текущий — с премией
-                val value = (if (f.ours) 0.5 * f.score else f.swing) * captureCost(ctx, f) / (ticks + 5) * (if (f.id == currentId) 1.25 else 1.0)
+                // свой пустой флаг стоит половину — но СИДЯЩИЙ на нём закрывает клетку от чужих бегунов (матч 2:
+                // центральный D5 забрал вражеский M1, пока армия уходила за соседним флагом, и вернуть его было
+                // некому); чужой — двойной размен; флаг, который порог силы сейчас не разрешает, — пятую часть
+                // (ждать у него можно, но сидеть на своём полезнее); дорогой по силе — позже дешёвого (см.
+                // captureCost); текущий — с премией
+                val value = (if (f.ours) 0.5 * f.score else f.swing) * captureCost(ctx, f) / (ticks + 5) *
+                    (if (f.id == currentId) 1.25 else 1.0) * (if (!f.ours && !captureAllowed(ctx, f)) 0.2 else 1.0)
                 cands.add(Cand(s, f, value))
             }
         }
@@ -568,8 +590,35 @@ object PainAndGain {
 
     // ==================== армия ====================
 
-    private fun flowTo(ctx: Ctx, target: Position): IntArray =
-        flowCache.getOrPut(target.x * 100 + target.y) { DistanceMap.flowFieldTo(target, ctx.blocked) }
+    private fun flowTo(ctx: Ctx, target: Position, avoid: Boolean = false): IntArray =
+        flowCache.getOrPut(target.x * 100 + target.y + (if (avoid) 10000 else 0)) {
+            DistanceMap.flowFieldTo(target, if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked)
+        }
+
+    /** Клетки в AVOID_RANGE от СТОЯЩИХ боевых врагов — поле «в обход» ведёт мимо лагеря, а не сквозь него.
+     *  Идущий враг не обходится: обход идущего навстречу разводил строй с поста в стороны за тик до
+     *  столкновения, и рывок врага, прежде отбитый к 212-му тику, стал разгромом (стенд rush). */
+    private var avoidCellsCache: List<Position>? = null
+    private fun avoidCells(ctx: Ctx): List<Position> = avoidCellsCache ?: run {
+        val seen = HashSet<Int>()
+        val out = ArrayList<Position>()
+        for (e in ctx.combatEnemies) for (dx in -AVOID_RANGE..AVOID_RANGE) for (dy in -AVOID_RANGE..AVOID_RANGE) {
+            if (!stationary(e)) continue
+            val x = e.x + dx; val y = e.y + dy
+            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+            if (seen.add(x * 100 + y)) out.add(InfluenceMap.cell(x, y))
+        }
+        avoidCellsCache = out
+        out
+    }
+
+    /** Поле к НЕ-вражеской цели (флаг, пост, сбор, отход): в обход врагов, если оттуда, где стоит крип, такой
+     *  путь есть, иначе обычное (матч 2 на стенде: маршрут к дальнему флагу вёл через стоящий отряд врага). */
+    private fun flowAvoiding(ctx: Ctx, target: Position, creep: Creep): IntArray {
+        if (!USE_AVOID) return flowTo(ctx, target)
+        val f = flowTo(ctx, target, true)
+        return if (f[creep.x * 100 + creep.y] >= 0) f else flowTo(ctx, target)
+    }
 
     /** Стая у цели: боевые враги рядом с ней и те, кто дойдёт до неё (своим телом по полю) не позже нас —
      *  из ХОДЯЧИХ: стоящий на месте STILL_TICKS тиков в стаю по «успеет дойти» не зачисляется (матч 1:
@@ -701,6 +750,7 @@ object PainAndGain {
                 (fightCost(pack, strikers) <= strikers.maxOf { speedSlack(it) } || inContact(pack, strikers))
         }
         aggressiveIds.retainAll { id -> army.any { it.id == id } }
+        rallyingIds.retainAll { id -> army.any { it.id == id } }
         lastHits.keys.retainAll { id -> army.any { it.id == id } }
         lastCell.keys.retainAll { id -> army.any { it.id == id } }
 
@@ -773,7 +823,13 @@ object PainAndGain {
             // досягаемости; цена боя — по ГРУППЕ (самый большой запас хода), в контакте цена больше не гейт
             val localAggressive = when {
                 posture == Posture.RETREAT -> inContact(localEnemies, localAllies) && ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio
-                posture == Posture.ANNIHILATE -> true
+                // добивание: армия в целом сильнее (или в контакте без отхода), но ЯВНО слабейшая на месте группа
+                // отходит к массе — «всегда агрессивен» посылал четверых на двенадцать (матч 2 на стенде). Вход в
+                // бой при 0.9 (при равных силах никто не вступал в бой — рывок врага кончался ничьёй), выход — только
+                // при разгроме на месте (ANNIHILATE_HOLD_RATIO): в гуще боя местный счёт скачет, и бойцы по одному
+                // «отходили к центру» и гибли поодиночке (стенд rush 7:2 против прежних 0:12)
+                posture == Posture.ANNIHILATE -> !USE_LOCAL_ANNIHILATE || localEnemies.isEmpty() ||
+                    ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * (if (creep.id in aggressiveIds) ANNIHILATE_HOLD_RATIO else PUSH_RELEASE_RATIO)
                 localEnemies.isEmpty() -> true
                 else -> ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio &&
                     (fightCost(localEnemies, localAllies) <= localAllies.maxOf { speedSlack(it) } || inContact(localEnemies, localAllies))
@@ -792,24 +848,56 @@ object PainAndGain {
                     ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
                     ?: fighters.minByOrNull { getRange(creep, it) }
             } else null
+            // сбор: по полю марша (флаг-цель или пост, в обход врагов) авангард — самый продвинутый из ходячих
+            // вооружённых (при равном поле — меньший id); кто дальше RALLY_RANGE от авангарда, идёт к нему
+            // только на марше к флагу-цели: в HOLD цель — точка, к ней сходятся и так, а в ANNIHILATE ожидание
+            // «далёкого» напарника, занятого своим боем, останавливало армию (стенд greedy)
+            // ходячий по canMove, не «полноскоростной»: покалеченный участник, не входящий в сбор, но ждущий
+            // далёких, замыкал группу в тупик (стенд rush: 10 против 2 до конца матча)
+            val groupedPre = USE_RALLY && !healer && canMove(creep) && posture == Posture.FLAG
+            val marchTarget: Position? = objective?.flag?.pos
+            var rallyTo: Position? = null
+            if (groupedPre && marchTarget != null) {
+                val mf = flowAvoiding(ctx, marchTarget, creep)
+                val my = mf[creep.x * 100 + creep.y]
+                var van: Creep? = null
+                var vanFlow = my
+                var vanId = creep.id
+                for (m in mobileArmy) {
+                    if (m.id == creep.id || !hasWeapon(m)) continue
+                    val d = mf[m.x * 100 + m.y]
+                    if (d < 0) continue
+                    if (vanFlow < 0 || d < vanFlow || (d == vanFlow && m.id < vanId)) { vanFlow = d; vanId = m.id; van = m }
+                }
+                // с гистерезисом: с клетки «13 от авангарда» крип шёл к нему, со следующей («12») — снова к цели,
+                // и два шага туда-обратно длились до конца матча, а авангард ждал (стенд rush)
+                val rallyRange = if (creep.id in rallyingIds) RALLY_RANGE / 2 else RALLY_RANGE
+                if (van != null && getRange(creep, van) > rallyRange) { rallyTo = InfluenceMap.cell(van.x, van.y); rallyingIds.add(creep.id) }
+                else rallyingIds.remove(creep.id)
+            } else rallyingIds.remove(creep.id)
             val target: Position
             val standoff: Int
+            var avoid = false
             when {
-                posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1 }
+                posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1; avoid = true }
                 healer && healMate != null -> { target = healMate; standoff = 1 }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
-                grab != null -> { target = grab.pos; standoff = 0 }
+                grab != null -> { target = grab.pos; standoff = 0; avoid = true }
+                // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»
+                posture == Posture.ANNIHILATE && !localAggressive && !healer -> { target = centroid; standoff = CLOSE_STANDOFF; avoid = true }
                 prey != null -> { target = prey; standoff = if (melee) 1 else closeIn }
+                rallyTo != null -> { target = rallyTo; standoff = CLOSE_STANDOFF; avoid = true }
                 objective != null -> {
                     val capturer = objectiveCapturer == creep.id
                     target = objective.flag.pos
                     standoff = if (capturer) 0 else CLOSE_STANDOFF
+                    avoid = true
                 }
                 threat != null && huntingThreat && mobile -> { target = threat; standoff = if (melee) 1 else closeIn }
                 raider != null && mobile && !healer -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
-                else -> { target = post; standoff = POST_STANDOFF }
+                else -> { target = post; standoff = POST_STANDOFF; avoid = true }
             }
-            val flow = flowTo(ctx, target)
+            val flow = if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)
 
             val nearbyEnemies = combatEnemies.filter { getRange(creep, it) <= 12 }
             val inCombat = combatEnemies.any { creep.getRangeTo(it) <= RANGED_RANGE + 2 }
@@ -834,6 +922,9 @@ object PainAndGain {
                     if (getRange(creep, m) <= RANGED_RANGE) continue
                     val d = flow[m.x * 100 + m.y]
                     if (d < 0) continue
+                    // напарник на другом обходе (только на марше к флагу): далеко и не впереди — ждём его, он идёт
+                    // к нам (см. rallyTo)
+                    if (USE_RALLY && posture == Posture.FLAG && getRange(creep, m) > RALLY_RANGE && plainPeriod(m) <= RALLY_MAX_PERIOD && (d > myFlow || (d == myFlow && m.id > creep.id))) { lagging = true; break }
                     val lag = (d - myFlow) * plainPeriod(m)
                     if (lag in (gap + 1)..COHESION_GAP_MAX) { lagging = true; break }
                 }
@@ -958,10 +1049,12 @@ object PainAndGain {
         enemyPositions: Set<Int>,
         occupantAt: Map<Int, Creep>,
     ): Position? {
-        // своя клетка с форой: вне боя не дёргаемся ради мелочи (см. STAY_BIAS)
-        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies) + (if (inCombat) 0.0 else STAY_BIAS)
-        var bx = creep.x; var by = creep.y
         val hereDist = flow[creep.x * 100 + creep.y]
+        // своя клетка с форой — только ПРИБЫВ (в зазоре standoff): вне боя не дёргаемся ради мелочи (см.
+        // STAY_BIAS); на марше форы нет — вместе со штрафом за соседей она съедала выигрыш шага (матч 2)
+        val settled = !inCombat && hereDist in 0..(standoff + ARRIVED_SLACK)
+        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies) + (if (settled) STAY_BIAS else 0.0)
+        var bx = creep.x; var by = creep.y
         var pushDist = if (hereDist >= 0) hereDist else Int.MAX_VALUE
         var pushX = -1; var pushY = -1
         var blockedByStatic = false
@@ -1009,7 +1102,10 @@ object PainAndGain {
             else -> (standoff - flowDist) * 0.5
         }
         val separation = allies.count { !it.spawning && (it.x != x || it.y != y) && getRange(InfluenceMap.cell(x, y), it) <= SEPARATION_RADIUS } * PAIR_W_SPREAD
-        if (!inCombat) return -firePenalty * PAIR_W_DIST - separation
+        // на марше (вне боя и дальше зазора прибытия) соседи не штрафуются: в колонне клетка впереди почти всегда
+        // соседствует с двумя союзниками (−8), и штраф вместе с форой своей клетки (+5) съедал выигрыш шага (10) —
+        // двенадцать бойцов простояли 1800 тиков в 12 клетках от цели (матч 2); разрежение нужно на месте и в бою
+        if (!inCombat) return -firePenalty * PAIR_W_DIST - (if (flowDist > standoff + ARRIVED_SLACK) 0.0 else separation)
 
         val damage = InfluenceMap.netDamageAt(x, y, enemyCreeps, allies)
         val meleeSelf = isMelee(creep) && !hasRanged(creep)
