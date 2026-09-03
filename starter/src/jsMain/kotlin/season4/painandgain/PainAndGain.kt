@@ -41,6 +41,7 @@ import screeps.api.structures.StructureSpawn
 import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.sqrt
 
 @OptIn(ExperimentalJsExport::class)
@@ -130,6 +131,19 @@ object PainAndGain {
 
     /** В последних тиках матча проигрывающему по счёту флаги нужны любой ценой: бой уже не успеет. */
     private const val LAST_CALL_TICKS = 300
+
+    /** Построение перед контактом: боец не входит в дальность врага (≤ RANGED_RANGE от боевого врага), пока у
+     *  авангарда (ближайшего к врагу ходячего вооружённого) в FORM_RANGE клетках не соберётся доля FORM_SHARE
+     *  вооружённых, что в RALLY_RANGE от него; кто дальше — идёт к авангарду, не заходя в огонь. Матч 4: колонна
+     *  с марша входила в блоб врага по одному — melee_2 один внутри двенадцати, стрелки в 4–5 клетках, лекари
+     *  дальше, минус два мили за шесть тиков при равной силе; прежнее «любой напарник в бою снимает ожидание»
+     *  и было командой «в атаку по одному». */
+    private const val FORM_RANGE = 3
+    private const val FORM_SHARE = 0.75
+
+    /** Отход строем: убежавший вперёд дальше стольких клеток (по полю отхода) от самого отставшего вооружённого
+     *  ждёт его вне огня — иначе погоня добивает отставших по одному (матч 4: армия рассыпалась по трём углам). */
+    private const val RETREAT_GAP = 3
 
     /** Вес фактического огня в оценке клетки ЛЕКАРЯ: шаг к подопечному (10) стоит двух стрелков (120 → 6), трёх
      *  уже нет. Тело H×6 M×6 теряет лечение с первого попадания — каждые 100 урона это −12 лечения в тик до конца
@@ -233,6 +247,8 @@ object PainAndGain {
     private var huntingThreat = false
     /** ДОБИТЬ по перевесу (не по контакту) — только к нему применяется гистерезис PUSH_RELEASE_RATIO. */
     private var pushing = false
+    /** Точка отхода — одна на весь отход (см. retreatPoint). */
+    private var retreatTarget: Position? = null
     private val aggressiveIds = HashSet<String>()
     private val lastHits = HashMap<String, Int>()
     private val lastCell = HashMap<String, Int>()
@@ -724,17 +740,23 @@ object PainAndGain {
      *  дальний угол через всю карту вёл сквозь врага, и армию добивали по одному — стенд rush). */
     private fun retreatPoint(ctx: Ctx): Position {
         val enemy = ctx.enemyCentroid ?: return ctx.home
+        // точка одна на весь отход, пока враг не ближе к ней, чем мы: смена точки на ходу ((3,96), потом (96,96))
+        // развела армию по трём углам карты, и погоня добила всех поодиночке (матч 4)
+        retreatTarget?.let { t -> if (getRange(t, enemy) > getRange(t, ctx.ourCentroid)) return t }
         val corners = listOf(InfluenceMap.cell(3, 3), InfluenceMap.cell(3, 96), InfluenceMap.cell(96, 3), InfluenceMap.cell(96, 96))
         val candidates = listOf(ctx.home) + corners.filter { DistanceMap.inOurHalf(it.x, it.y) }
         var best = ctx.home
-        var bestScore = -1.0
+        var bestScore = Int.MIN_VALUE
         for (c in candidates) {
             val flow = flowTo(ctx, c)
             val reach = ctx.army.count { flow[it.x * 100 + it.y] >= 0 }
             if (reach == 0) continue
-            val score = getRange(c, enemy) - 0.5 * getRange(c, ctx.ourCentroid)
+            // выигрыш дистанции от врага НА КЛЕТКУ ПУТИ: «самая дальняя от врага» точка (3,96) лежала за его
+            // флангом — 66 клеток пути ради 62 дистанции, мимо его строя; дом в 17 клетках даёт 22
+            val score = getRange(c, enemy) - getRange(c, ctx.ourCentroid)
             if (score > bestScore) { bestScore = score; best = c }
         }
+        retreatTarget = best
         return best
     }
 
@@ -788,6 +810,7 @@ object PainAndGain {
             else -> Posture.HOLD
         }
         objectiveFlagId = objective?.flag?.id
+        if (newPosture != Posture.RETREAT) retreatTarget = null
         val retreatTo = if (newPosture == Posture.RETREAT) retreatPoint(ctx) else null
         val post = postPoint(ctx)
         val postureKey = "$newPosture:${objectiveFlagId ?: ""}"
@@ -873,9 +896,25 @@ object PainAndGain {
             grabberOf[near.id] = f.id
         }
 
+        // построение перед контактом (см. FORM_RANGE): авангард — ближайший к врагу ходячий вооружённый; готовность —
+        // доля вооружённых в RALLY_RANGE от него, собравшихся в FORM_RANGE; клетки под огнём — в дальности стрелка
+        val formers = mobileArmy.filter { hasWeapon(it) }
+        val formVan = if (combatEnemies.isEmpty()) null else formers.minWithOrNull(compareBy<Creep>({ f -> combatEnemies.minOf { getRange(f, it) } }, { it.id }))
+        val formationReady = formVan == null || run {
+            val near = formers.filter { getRange(it, formVan) <= RALLY_RANGE }
+            val needed = maxOf(2, ceil(FORM_SHARE * near.size).toInt())
+            near.count { getRange(it, formVan) <= FORM_RANGE } >= needed
+        }
+        val fireCells = HashSet<Int>()
+        for (e in combatEnemies) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
+            val x = e.x + dx; val y = e.y + dy
+            if (x in 0..99 && y in 0..99) fireCells.add(x * 100 + y)
+        }
+
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
             val healer = !hasWeapon(creep) && hasHeal(creep)
+            val nearestEnemyRange = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
             val localAllies = army.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
             val localEnemies = combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE + RANGED_RANGE }
             val ratio = if (creep.id in aggressiveIds) LOCAL_ENTER_RATIO else PUSH_RATIO
@@ -958,11 +997,19 @@ object PainAndGain {
                 if (van != null && getRange(creep, van) > rallyRange) { rallyTo = InfluenceMap.cell(van.x, van.y); rallyingIds.add(creep.id) }
                 else rallyingIds.remove(creep.id)
             } else rallyingIds.remove(creep.id)
+            // построение: вне огня и без готовности авангард и собравшиеся у него стоят, остальные идут к нему
+            val forming = formVan != null && !formationReady && !healer && canMove(creep) && posture != Posture.RETREAT &&
+                localEnemies.isNotEmpty() && nearestEnemyRange > RANGED_RANGE
+            val formHold = forming && (formVan!!.id == creep.id || getRange(creep, formVan) <= FORM_RANGE)
+            val formGo = forming && !formHold
             val target: Position
             val standoff: Int
             var avoid = false
             when {
-                posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1; avoid = true }
+                // отход — по обычному полю: поле «в обход» стоящих врагов (а дерущиеся стоят) увело пару в обход
+                // стенного блока на другой край карты (матч 4)
+                posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1 }
+                formGo -> { target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
                 healer && healMate != null -> { target = healMate; standoff = 1 }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
                 grab != null -> { target = grab.pos; standoff = 0; avoid = true }
@@ -1003,7 +1050,7 @@ object PainAndGain {
             val gap = if (localEnemies.isEmpty()) COHESION_GAP else ENGAGE_COHESION_TICKS
             // идущий к авангарду (rallyTo) не ждёт никого: четверо шли к авангарду и «ждали» одиночку в 14 клетках,
             // а тот ждал их — взаимное ожидание на 1600 тиков (стенд m2 scouts, v4)
-            val hold = grouped && rallyTo == null && !underFire && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff + ARRIVED_SLACK && run {
+            val cohesionHold = grouped && rallyTo == null && !underFire && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff + ARRIVED_SLACK && run {
                 var lagging = false
                 for (m in mates) {
                     if (getRange(creep, m) <= RANGED_RANGE) continue
@@ -1017,6 +1064,12 @@ object PainAndGain {
                 }
                 lagging
             }
+            // отход строем (см. RETREAT_GAP): ушедший вперёд ждёт самого отставшего вооружённого, пока сам вне огня
+            val retreatHold = posture == Posture.RETREAT && !healer && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
+                val rear = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }.maxOfOrNull { flow[it.x * 100 + it.y] } ?: -1
+                rear >= 0 && rear - myFlow > RETREAT_GAP
+            }
+            val hold = cohesionHold || formHold || retreatHold
 
             val step: Position? = when {
                 !canMove(creep) -> null
@@ -1025,12 +1078,13 @@ object PainAndGain {
                 else -> {
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
                     val designated = grab?.pos ?: objective?.flag?.pos?.takeIf { objectiveCapturer == creep.id }
-                    val myBlocked = if (designated != null) blockedSet - (designated.x * 100 + designated.y) else blockedSet
+                    var myBlocked = if (designated != null) blockedSet - (designated.x * 100 + designated.y) else blockedSet
+                    if (formGo) myBlocked = myBlocked + fireCells // к авангарду — не через огонь
                     bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt)
                 }
             }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-                println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
+                println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
             }
             if (step != null) TrafficManager.request(creep, step, FIGHTER_PRIORITY)
             lastHits[creep.id] = creep.hits
@@ -1235,7 +1289,7 @@ object PainAndGain {
         if (x < 0 || y < 0 || x > 99 || y > 99) return false
         val key = x * 100 + y
         if (key in blockedSet || key in enemyPositions) return false
-        return getTerrainAt(InfluenceMap.cell(x, y)) != TERRAIN_WALL
+        return !DistanceMap.isTerrainWall(x, y)
     }
 
     // ==================== тело, скорость, мощь ====================
@@ -1486,15 +1540,16 @@ object PainAndGain {
         for (y in 0..99) {
             val row = StringBuilder()
             for (x in 0..99) {
-                val terrain = getTerrainAt(InfluenceMap.cell(x, y))
-                if (terrain == TERRAIN_SWAMP) swamp++
-                if (terrain == TERRAIN_WALL) wall++
+                val isWall = DistanceMap.isTerrainWall(x, y)
+                val isSwamp = !isWall && DistanceMap.isSwamp(x, y)
+                if (isSwamp) swamp++
+                if (isWall) wall++
                 val structure = marks[x * 100 + y]
                 row.append(
                     when {
                         structure != null -> structure
-                        terrain == TERRAIN_WALL -> '#'
-                        terrain == TERRAIN_SWAMP -> '~'
+                        isWall -> '#'
+                        isSwamp -> '~'
                         else -> '.'
                     }
                 )

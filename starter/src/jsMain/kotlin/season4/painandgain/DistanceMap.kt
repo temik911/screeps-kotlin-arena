@@ -120,14 +120,36 @@ object DistanceMap {
 
     private fun ensureStaticBlocked() {
         if (staticBlocked != null) return
-        val block = BooleanArray(FIELD * FIELD)
-        for (x in 0 until FIELD) {
-            for (y in 0 until FIELD) {
-                if (getTerrainAt(InfluenceMap.cell(x, y)) == TERRAIN_WALL) block[index(x, y)] = true
-            }
-        }
+        scanTerrain()
+        val block = terrainWalls!!.copyOf()
         getObjectsByPrototype(StructureWall::class).forEach { if (inBounds(it.x, it.y)) block[index(it.x, it.y)] = true }
         staticBlocked = block
+    }
+
+    private var terrainWalls: BooleanArray? = null
+
+    /** Местность читается ОДИН раз одним проходом (стены и болото вместе): getTerrainAt — вызов через границу
+     *  изолята, и три отдельных прохода по 10 000 клеток (стены, болото, карта в журнал) на первом тике
+     *  уложились в лимит в трёх матчах и вылетели по таймауту в четвёртом. */
+    private fun scanTerrain() {
+        if (terrainWalls != null && swampCells != null) return
+        val walls = BooleanArray(FIELD * FIELD)
+        val swamp = BooleanArray(FIELD * FIELD)
+        for (x in 0 until FIELD) {
+            for (y in 0 until FIELD) {
+                val t = getTerrainAt(InfluenceMap.cell(x, y))
+                if (t == TERRAIN_WALL) walls[index(x, y)] = true
+                else if (t == TERRAIN_SWAMP) swamp[index(x, y)] = true
+            }
+        }
+        terrainWalls = walls
+        swampCells = swamp
+    }
+
+    /** Стена ПО МЕСТНОСТИ (без структур) — для карты в журнал. */
+    fun isTerrainWall(x: Int, y: Int): Boolean {
+        scanTerrain()
+        return !inBounds(x, y) || terrainWalls!![index(x, y)]
     }
 
     /**
@@ -329,14 +351,8 @@ object DistanceMap {
 
     private fun ensureSwamp(): BooleanArray {
         swampCells?.let { return it }
-        val swamp = BooleanArray(FIELD * FIELD)
-        for (x in 0 until FIELD) {
-            for (y in 0 until FIELD) {
-                if (getTerrainAt(InfluenceMap.cell(x, y)) == TERRAIN_SWAMP) swamp[index(x, y)] = true
-            }
-        }
-        swampCells = swamp
-        return swamp
+        scanTerrain()
+        return swampCells!!
     }
 
     /**
