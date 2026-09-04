@@ -25,9 +25,9 @@ const scenario = (process.argv[3] || 'none').split('+');
 const has = (s) => scenario.includes(s);
 
 const M = 'move', A = 'attack', R = 'ranged_attack', H = 'heal', T = 'tough', W = 'work', C = 'carry';
-// the escort body is a guess until the first match log prints escort.body: 40 non-MOVE + 10 MOVE gives the client's
-// "1 tile per 4 ticks" on plain (and 20 on swamp); TOUGH first so the MOVEs die last
-const ESCORT_BODY = [...Array(40).fill(T), ...Array(10).fill(M)];
+// measured in match 1 (04.09.2026): ten blocks of MOVE + four TOUGH — weight 40, ten MOVE, so four ticks a cell on
+// plain and twenty on swamp, exactly as the lobby says; the MOVEs are spread through the body, not front-loaded
+const ESCORT_BODY = [].concat(...Array.from({ length: 10 }, () => [M, T, T, T, T]));
 
 // ---------- synthetic map ----------
 // A guess at the lobby picture: an X of open ground joining four corner areas; both bases on the LEFT edge (top-left
@@ -49,10 +49,13 @@ function buildMap() {
   // border is wall
   rect(0, 0, 99, 0, 1); rect(0, 99, 99, 99, 1); rect(0, 0, 0, 99, 1); rect(99, 0, 99, 99, 1);
 }
-const OURS = { spawn: [6, 93], escort: [7, 92], source: [9, 95], flag: [93, 93] };
-const ENEMY = { spawn: [6, 6], escort: [7, 7], source: [9, 4], flag: [93, 6] };
+// match 1 (04.09.2026): the live layout — a source in each base corner, two more plus two 2500-containers on the far
+// right edge, the flags in the far corners, spawns starting at 500 energy
+const OURS = MAP ? { spawn: [9, 90], escort: [7, 92], source: [2, 97], flag: [95, 95] } : { spawn: [6, 93], escort: [7, 92], source: [9, 95], flag: [93, 93] };
+const ENEMY = MAP ? { spawn: [9, 9], escort: [7, 7], source: [2, 2], flag: [95, 4] } : { spawn: [6, 6], escort: [7, 7], source: [9, 4], flag: [93, 6] };
+const SPAWN_START = MAP ? 500 : 1000;
 function place(side, owner) {
-  const sp = new StructureSpawn(side.spawn[0], side.spawn[1], owner, 1000); world.objects.push(sp);
+  const sp = new StructureSpawn(side.spawn[0], side.spawn[1], owner, SPAWN_START); world.objects.push(sp);
   const src = new Source(side.source[0], side.source[1], 1000, 1000); world.objects.push(src);
   const esc = new EscortCreep(side.escort[0], side.escort[1], owner, ESCORT_BODY); world.objects.push(esc);
   const flag = new Flag(side.flag[0], side.flag[1]); flag.owner = owner; world.objects.push(flag);
@@ -68,9 +71,14 @@ if (MAP) buildLiveMap(MAP); else buildMap();
 const swap = process.env.START === 'match2';
 const ours = place(swap ? ENEMY : OURS, 0);
 const theirs = place(swap ? OURS : ENEMY, 1);
-// far-side energy of the lobby text: two sources and two containers on the right edge
-world.objects.push(new Source(95, 45, 1000, 1000)); world.objects.push(new Source(95, 54, 1000, 1000));
-world.objects.push(new StructureContainer(92, 49, 2000)); world.objects.push(new StructureContainer(92, 50, 2000));
+// far-side energy: two sources and two 2500-containers on the right edge (match 1 coordinates when a live map is used)
+if (MAP) {
+  world.objects.push(new Source(96, 24, 1000, 1000)); world.objects.push(new Source(96, 75, 1000, 1000));
+  world.objects.push(new StructureContainer(92, 49, 2500, 2500)); world.objects.push(new StructureContainer(92, 50, 2500, 2500));
+} else {
+  world.objects.push(new Source(95, 45, 1000, 1000)); world.objects.push(new Source(95, 54, 1000, 1000));
+  world.objects.push(new StructureContainer(92, 49, 2500, 2500)); world.objects.push(new StructureContainer(92, 50, 2500, 2500));
+}
 world.spawnRegen = [1, has('harvest') ? 11 : 1]; // 'harvest': the enemy economy as if it had a W5 harvester from tick 1
 
 // ---------- enemy AI ----------

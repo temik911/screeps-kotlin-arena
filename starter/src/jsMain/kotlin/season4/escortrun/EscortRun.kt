@@ -180,6 +180,9 @@ object EscortRun {
     private const val MIN_FIGHTER_RANGED = 2
     /** Окно наблюдения за сближением врага (тиков) и половина его — сколько ждать первый заказ врага. */
     private const val APPROACH_WINDOW = 20
+    /** Окно наблюдения за эскортом врага: его темп по маршруту решает, есть ли у нас запас на экономику. Эскорт идёт
+     *  клетку за 1–4 тика, так что за полсотни тиков едущий проходит не меньше дюжины клеток, а стоящий — ноль. */
+    private const val ESCORT_WATCH = 50
 
     // ---------- диагностика ----------
     private const val DEBUG_LOG = true
@@ -326,7 +329,8 @@ object EscortRun {
         val extensions = getObjectsByPrototype(StructureExtension::class).filter { it.exists }
         val ramparts = getObjectsByPrototype(StructureRampart::class).filter { it.exists }
 
-        val structures: List<Position> = spawns + walls + towers + extensions + ramparts.filter { it.my != true }
+        val structuresBase: List<Position> = spawns + walls + towers + extensions
+        val structures: List<Position> = structuresBase + ramparts.filter { it.my != true }
         DistanceMap.syncStructures(structures)
 
         val home = mySpawn ?: escort
@@ -360,7 +364,10 @@ object EscortRun {
         InfluenceMap.setEnemyTowers(towers.filter { it.my == false }.map { InfluenceMap.TowerThreat(it.x, it.y, (it.store[RESOURCE_ENERGY] ?: 0) >= InfluenceMap.towerCost, 0) })
 
         val escortFlow = if (escort != null && myFlag != null) flowTo("escort", myFlag, blocked, swampRatio(escort)) else null
-        val enemyEscortFlow = if (enemyEscort != null && enemyFlag != null) flowTo("enemyEscort", enemyFlag, blocked, swampRatio(enemyEscort)) else null
+        // поле ВРАГА — по ЕГО проходимости: рампарт пускает только владельца, и с нашим списком преград путь их эскорта
+        // к их флагу в первом матче не находился вовсе (пятьдесят рампартов на карте), а приход читался как «никогда»
+        val blockedForEnemy: List<Position> = structuresBase + ramparts.filter { it.my != false }
+        val enemyEscortFlow = if (enemyEscort != null && enemyFlag != null) flowToWith("enemyEscort", enemyFlag, blockedForEnemy, swampRatio(enemyEscort)) else null
         val toEscortFlow = if (escort != null) flowTo("toEscort", escort, blocked, 5, ttl = 1) else null
 
         val ctx = Ctx(mySpawn, enemySpawn, escort, enemyEscort, myFlag, enemyFlag, homeSource, myCreeps, active, enemyCreeps, enemyPending, combatEnemies,
@@ -419,6 +426,11 @@ object EscortRun {
             "cost M=${cost(MOVE)} W=${cost(WORK)} C=${cost(CARRY)} R=${cost(RANGED_ATTACK)} A=${cost(ATTACK)} H=${cost(HEAL)} T=${cost(TOUGH)}")
         val others = getObjects().filter { it.exists }.groupBy { protoName(it) ?: "?" }.mapValues { it.value.size }
         println("objects by prototype: " + others.entries.joinToString(" ") { "${it.key}=${it.value}" })
+        // стены и рампарты — где они и чьи: в первом матче их было 48 и 50, и о них не говорила ни одна строка журнала
+        val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }
+        val ramparts = getObjectsByPrototype(StructureRampart::class).filter { it.exists }
+        println("walls(${walls.size}): " + walls.joinToString(" ") { "(${it.x},${it.y})h${it.hits}" })
+        println("ramparts(${ramparts.size}): " + ramparts.joinToString(" ") { "(${it.x},${it.y})my=${it.my}h${it.hits}" })
     }
 
     /** Число из константы арены (внешнее объявление может оказаться undefined — тогда запасное). */
@@ -719,12 +731,12 @@ object EscortRun {
     /** Заказ плана: тело и роль. */
     private class Order(val body: Array<BodyPartType>, val role: String)
 
-    /** План: первый заказ (null — ничего не заказывать), предсказанный приход эскорта на флаг и готовность первого
-     *  полного бойца у эскорта (тиков от сейчас), цена = приход + опоздание бойца к сроку обороны. */
-    private class Plan(val first: Order?, val arrival: Int, val fighterReady: Int, val cost: Int, val desc: String)
+    /** План: первый заказ (null — ничего не заказывать), предсказанный приход эскорта на флаг, готовность обороны у
+     *  эскорта и энергия, накопленная к приходу (тай-брейк: см. planOpening). */
+    private class Plan(val first: Order?, val arrival: Int, val fighterReady: Int, val energy: Double, val cost: Int, val desc: String)
 
-    /** Итог прогона: приход эскорта и готовность полного бойца у эскорта после заказов плана. */
-    private class Sim(val arrival: Int, val fighterReady: Int)
+    /** Итог прогона: приход эскорта, готовность обороны и энергия спавна на момент прихода. */
+    private class Sim(val arrival: Int, val fighterReady: Int, val energyAtArrival: Double)
 
     /** Клетки маршрута эскорта по полю: болото ли каждая (для расчёта времени с разным ΣMOVE). */
     private fun routeCells(escort: Creep, flow: IntArray): BooleanArray {
@@ -763,10 +775,11 @@ object EscortRun {
         // оборона готова, когда мощь купленных бойцов (в плане и полные тела после него) по Ланчестеру достигает мощи
         // видимого врага (requiredPower) — с рождением и подходом последнего из них к эскорту
         val required = requiredPower(ctx)
+        var energyAtArrival = -1.0
         var defDps = ctx.fighters.sumOf { val p = InfluenceMap.profileOf(it); p.melee + p.ranged }
         var defHits = ctx.fighters.sumOf { it.hits }.toDouble()
         fun defended() = (defDps > 0.0) && sqrt(defDps * defHits) >= required
-        val spawn = ctx.mySpawn ?: return Sim(Int.MAX_VALUE / 4, Int.MAX_VALUE / 4)
+        val spawn = ctx.mySpawn ?: return Sim(Int.MAX_VALUE / 4, Int.MAX_VALUE / 4, 0.0)
         val horizon = arenaInfo.ticksLimit - getTicks()
         var energy = (spawn.store[RESOURCE_ENERGY] ?: 0).toDouble()
         val cap = spawn.store.getCapacity(RESOURCE_ENERGY) ?: SPAWN_ENERGY_CAPACITY
@@ -833,11 +846,12 @@ object EscortRun {
                     val period = trainPeriod(weight, moves, route[cell])
                     if (t - cellStart >= period) { cell++; cellStart = t; if (cell >= route.size) arrival = t }
                 } else arrival = t
+                if (arrival < Int.MAX_VALUE / 4) energyAtArrival = energy
                 if (arrival < Int.MAX_VALUE / 4 && fighterReady < Int.MAX_VALUE / 4) break
             }
             t++
         }
-        return Sim(arrival, fighterReady)
+        return Sim(arrival, fighterReady, if (energyAtArrival >= 0.0) energyAtArrival else energy)
     }
 
     /**
@@ -889,22 +903,30 @@ object EscortRun {
         if (ctx.fighters.isEmpty() && deadline < Int.MAX_VALUE / 8) {
             for (b in intArrayOf(fullBudget * 7 / 10, fullBudget)) combatBody(ctx, b)?.let { fb -> if (fighters.none { it.body.contentEquals(fb) }) fighters.add(Order(fb, "fighter")) }
         }
-        // срок обороны жёсткий: боец позже срока — эскорт мёртв, а мёртвый эскорт не приходит никуда (мягкий штраф «тик за
-        // тик» покупал тягач при бойце на 57 тиков позже срока — 57 × 210 хитов; стенд melee v8). Планы, срывающие срок,
-        // ранжируются после всех выполняющих — по опозданию
+        // цена плана — приход эскорта, а срок обороны жёсткий: боец позже срока — эскорт мёртв, а мёртвый эскорт не
+        // приходит никуда (мягкий штраф «тик за тик» покупал тягач при бойце на 57 тиков позже срока). Планы, срывающие
+        // срок, ранжируются после всех выполняющих — по опозданию.
+        // ⚠️ Пробовал третий класс «гонка уже выиграна по наблюдению — ранжируем по энергии»: против стоящего эскорта
+        // врага он включался сразу, скорость переставала цениться совсем, и приход уезжал с 259 тиков на 436. Наблюдение
+        // «враг стоит» может смениться в любой тик, а потерянные тики не возвращаются — экономика берётся только тогда,
+        // когда она гонку НЕ замедляет (тай-брейк по энергии ниже), а лишние деньги тратит ветка конвоя
         val horizon = arenaInfo.ticksLimit - getTicks()
         fun costOf(s: Sim) = if (deadline >= Int.MAX_VALUE / 8 || s.fighterReady <= deadline) minOf(s.arrival, horizon) else horizon + minOf(s.fighterReady, horizon) - deadline
         val base = simulateArrival(ctx, escort, route, emptyList(), fighterFull)
-        var best = Plan(null, base.arrival, base.fighterReady, costOf(base), "nothing")
+        var best = Plan(null, base.arrival, base.fighterReady, base.energyAtArrival, costOf(base), "nothing")
         var sims = 0
         val all = ArrayList<Plan>()
+        // при РАВНОЙ цене выигрывает план с большей энергией к приходу эскорта: добытчик гонку не ускоряет, поэтому по
+        // одной цене он всегда проигрывал «ничего» — и в первом живом матче бот семьсот тиков копил на бойца при доходе
+        // 1 в тик, не построив ни одного добытчика. Доход — это будущие бойцы и тягачи, и он берётся, когда бесплатен
+        fun better(p: Plan) = p.cost < best.cost || (p.cost == best.cost && p.energy > best.energy + 1e-9)
         fun consider(orders: List<Order>) {
             sims++
             val s = simulateArrival(ctx, escort, route, orders, fighterFull)
             val c = costOf(s)
-            val p = Plan(orders.first(), s.arrival, s.fighterReady, c, orders.joinToString("+") { "${it.role}:${summaryOf(it.body)}" })
+            val p = Plan(orders.first(), s.arrival, s.fighterReady, s.energyAtArrival, c, orders.joinToString("+") { "${it.role}:${summaryOf(it.body)}" })
             if (DEBUG_PLANS) all.add(p)
-            if (c < best.cost) best = p
+            if (better(p)) best = p
         }
         val groups = listOf(harvesters, pullers, fighters).filter { it.isNotEmpty() }
         // все перестановки подмножеств ролей (1..3 роли), по одному кандидату из каждой роли
@@ -917,10 +939,10 @@ object EscortRun {
             }
         }
         rec(emptyList(), emptySet())
-        if (best.first != null && DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("plan t=${getTicks()}: ${best.desc} arrival=${best.arrival} fighterReady=${best.fighterReady} deadline=$deadline cost=${best.cost} sims=$sims (nothing: arrival=${base.arrival} fighter=${base.fighterReady} cost=${costOf(base)})")
+        if (best.first != null && DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("plan t=${getTicks()}: ${best.desc} arrival=${best.arrival} fighterReady=${best.fighterReady} energy=${best.energy.toInt()} deadline=$deadline cost=${best.cost} sims=$sims (nothing: arrival=${base.arrival} fighter=${base.fighterReady} energy=${base.energyAtArrival.toInt()})")
         if (DEBUG_PLANS && !plansDumped) {
             plansDumped = true
-            println("plans t=${getTicks()} deadline=$deadline required=${requiredPower(ctx).toInt()}:\n" + all.sortedBy { it.cost }.take(12).joinToString("\n") { "  cost=${it.cost} arrival=${it.arrival} fighter=${it.fighterReady} ${it.desc}" })
+            println("plans t=${getTicks()} deadline=$deadline required=${requiredPower(ctx).toInt()}:\n" + all.sortedWith(compareBy({ it.cost }, { -it.energy })).take(12).joinToString("\n") { "  cost=${it.cost} arrival=${it.arrival} fighter=${it.fighterReady} energy=${it.energy.toInt()} ${it.desc}" })
         }
         return best
     }
@@ -966,6 +988,36 @@ object EscortRun {
                 val o = plan.first
                 if (energy >= bodyCost(o.body)) { order(spawn, o.body, o.role, "plan ${plan.desc} arrival=${plan.arrival} fighterReady=${plan.fighterReady} threat=$threat income=${inc.toInt()}"); return }
                 if (DEBUG_LOG && now % LOG_EVERY == 0) println("spawn t=$now: saving ${o.role} ${summaryOf(o.body)} e=$energy/${bodyCost(o.body)} plan=${plan.desc} arrival=${plan.arrival} threat=$threat")
+                return
+            }
+        }
+
+        // пока боевого врага не видно, копить на бойца незачем — деньги идут в доход, если он окупается за остаток матча
+        // (в первом живом матче бот семьсот тиков держал «saving fighter e=249/980» при доходе 1 в тик и пустом поле)
+        if (requiredPower(ctx) <= 0.0 && ctx.harvesters.isEmpty() && ctx.homeSource != null && ctx.homeSource.energy > 0) {
+            // из тел под разные бюджеты берётся то, что окупается БЫСТРЕЕ всех (ожидание накопления + стоимость делить на
+            // прирост): до окупаемости деньги заморожены, а после работают, и дешёвый добытчик поднимает доход, на котором
+            // следующий копится быстрее. По «отдаче за остаток матча» выигрывал M5C5W5 за 1000 — тысяча тиков без спавна
+            val d = harvestCommute(ctx)
+            var best: Array<BodyPartType>? = null
+            var bestPayback = Double.MAX_VALUE
+            var bestGain = 0.0
+            var b = 200
+            while (b <= fullBudget) {
+                val hb = harvesterBody(b, d)
+                b += 100
+                if (hb == null) continue
+                val gain = harvesterIncome(hb.count { it == WORK }, hb.count { it == CARRY }, hb.count { it == MOVE }, d)
+                if (gain <= 0.0) continue
+                val cost = bodyCost(hb)
+                val payback = ticksToAccumulate(cost - energy, inc) + spawnTicks(hb) + cost / gain
+                val left = arenaInfo.ticksLimit - now - payback
+                if (left <= 0) continue // до конца матча не окупится — не берём
+                if (payback < bestPayback) { bestPayback = payback; best = hb; bestGain = gain }
+            }
+            if (best != null) {
+                if (energy >= bodyCost(best)) { order(spawn, best, "harvester", "no enemy in sight: +${bestGain.toInt()}/tick, pays for itself in ${bestPayback.toInt()} ticks"); return }
+                if (DEBUG_LOG && now % LOG_EVERY == 0) println("spawn t=$now: saving harvester ${summaryOf(best)} e=$energy/${bodyCost(best)} gain=${bestGain.toInt()}/tick payback=${bestPayback.toInt()}")
                 return
             }
         }
@@ -1396,6 +1448,29 @@ object EscortRun {
         return routeTicks(target, flow, trainMoves(target, enemyPullers))
     }
 
+    /** История дистанции эскорта врага до его флага: (тик, дистанция по его полю). */
+    private val enemyEscortHist = ArrayDeque<Pair<Int, Int>>()
+
+    /**
+     * Приход эскорта врага ПО НАБЛЮДЕНИЮ: остаток пути делённый на его же темп за окно. Стоящий эскорт не приходит
+     * никогда — и это не догадка, а измерение: в первом матче враг не сдвинул свой эскорт за весь лог. Пока истории
+     * мало, берётся оценка по телу (enemyEscortArrival). Оценка самокорректируется: враг тронулся — темп появился
+     * через несколько тиков, и план тут же возвращается к гонке (пересчёт раз в PLAN_EVERY тиков).
+     */
+    private fun enemyEscortArrivalObserved(ctx: Ctx): Int {
+        val target = ctx.enemyEscort ?: return Int.MAX_VALUE / 4
+        val flow = ctx.enemyEscortFlow ?: return Int.MAX_VALUE / 4
+        val here = flow[target.x * 100 + target.y]
+        if (here < 0) return Int.MAX_VALUE / 4
+        val now = getTicks()
+        if (enemyEscortHist.isEmpty() || enemyEscortHist.last().first != now) enemyEscortHist.addLast(now to here)
+        while (enemyEscortHist.isNotEmpty() && enemyEscortHist.first().first < now - ESCORT_WATCH) enemyEscortHist.removeFirst()
+        val (t0, d0) = enemyEscortHist.first()
+        if (now - t0 < ESCORT_WATCH) return enemyEscortArrival(ctx) // истории мало — оценка по телу
+        val rate = (d0 - here).toDouble() / (now - t0)
+        return if (rate <= 0.0) Int.MAX_VALUE / 4 else (here / rate).toInt()
+    }
+
     /** Через сколько тиков умрёт наш эскорт под боевыми врагами: теми, что у него сейчас (в THREAT_RANGE), и теми, что
      *  дойдут до него за horizon тиков (по их ходу вдоль поля к эскорту) — с их прихода; минус наше лечение рядом с ним;
      *  бесконечность — если лечение перекрывает урон или угроз нет. Удар по эскорту врага без этого уводил единственного
@@ -1493,6 +1568,10 @@ object EscortRun {
     }
 
     // ==================== движение ====================
+
+    /** Поле с ЧУЖИМ списком преград (проходимость врага): свой ключ кэша, чтобы не смешивать с нашими полями. */
+    private fun flowToWith(key: String, target: Position, blocked: List<Position>, swampCost: Int): IntArray =
+        flowTo("enemyside:$key", target, blocked, swampCost)
 
     private fun flowTo(key: String, target: Position, blocked: List<Position>, swampCost: Int, ttl: Int = 50, maxDist: Int = Int.MAX_VALUE): IntArray {
         val k = "$key@${target.x},${target.y}"
@@ -1850,6 +1929,8 @@ object EscortRun {
     private fun captureMapMarks(spawns: List<StructureSpawn>, sources: List<Source>, containers: List<StructureContainer>, flags: List<Flag>, creeps: List<Creep>) {
         val m = HashMap<Int, Char>()
         fun mark(x: Int, y: Int, c: Char) { m[x * 100 + y] = c }
+        // рампарты — раньше их не было на карте вовсе, а в первом матче их пятьдесят (и сорок восемь стен)
+        getObjectsByPrototype(StructureRampart::class).forEach { mark(it.x, it.y, if (it.my == true) 'r' else 'R') }
         getObjectsByPrototype(StructureWall::class).forEach { mark(it.x, it.y, '#') }
         containers.forEach { mark(it.x, it.y, 'C') }
         sources.forEach { mark(it.x, it.y, 'S') }
@@ -1863,7 +1944,7 @@ object EscortRun {
      *  второй — обычный бюджет; Pain and Gain упирался в оба). */
     private fun logMap(fromRow: Int) {
         val marks = mapMarks ?: return
-        val out = StringBuilder(if (fromRow == 0) "=== MAP (rows y=0..99, cols x=0..99; # wall ~ swamp M/E spawns S source C container f/F flags x/X escorts) ===" else "")
+        val out = StringBuilder(if (fromRow == 0) "=== MAP (rows y=0..99, cols x=0..99; # wall ~ swamp r/R our/their ramparts M/E spawns S source C container f/F flags x/X escorts) ===" else "")
         for (y in fromRow until minOf(fromRow + 25, 100)) {
             val row = StringBuilder()
             for (x in 0..99) {

@@ -25,10 +25,12 @@ MAP=map-match1.txt START=match2 $NODE --import ./register.mjs run.mjs 2000 rush 
 zsh regress.sh v1                                                                # every scenario, one line each, logs in out/
 ```
 
-The synthetic map is a guess at the lobby picture (an X of open ground, bases on the left edge, flags on the right,
-edge passes, a swamp ring round the centre); it is replaced by `map-matchN.txt` dumps (`DEBUG_MAP` block of a match
-log: `#` wall, `~` swamp) as matches are played. Both sides get a spawn with 1000 energy and regen 1, a source (regen
-10), an escort `T×40 M×10` (a guess for "1 tile per 4 ticks" — the first match log prints the real body) and a flag.
+`map-match1.txt` is the map of the first live match (04.09.2026) and comes with its measured layout: spawns at (9,90)
+and (9,9) starting at **500** energy, a source in each base corner plus two on the far edge, two 2500-containers, the
+flags in the far corners, and the real escort body `MTTTT`×10 (weight 40, ten MOVE — four ticks a cell on plain,
+twenty on swamp). Running with `MAP=` switches to that layout; without it the synthetic map is used (a guess at the
+lobby picture: an X of open ground, bases on the left edge, flags on the right, edge passes, a swamp ring round the
+centre, spawns at 1000). The replay of match 1 lands the escort on the flag at t=259 against the live ~258.
 
 Enemy scripts (combine with `+`): `none` (nothing moves), `race` (its escort walks to its flag), `rush` (a `M5R5` per
 1000 energy sent at our escort, kiting our armed creeps at two cells), `melee` (`M7A7` per 910), `guard` (fighters

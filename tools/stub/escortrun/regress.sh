@@ -33,6 +33,13 @@ run() { # $1 = map file or -, $2 = START or -, $3 = scenario, $4.. = extra env (
   else verdict=FAIL; fi
   printf '%-4s %-26s %-52s | errors: %s \n' "$verdict" "$label" "$outcome" "$errors"
 }
+# the live map of match 1 (04.09.2026) with its measured layout — the escort body, the 500-energy spawns, the flags and
+# the sources are the real ones, so these lines are the closest thing to a replay of a live match
+run  map-match1.txt - none
+run  map-match1.txt - race
+run  map-match1.txt - melee
+run  map-match1.txt - train
+open map-match1.txt - rush+harvest
 run  - - none
 run  - - race
 run  - - melee
