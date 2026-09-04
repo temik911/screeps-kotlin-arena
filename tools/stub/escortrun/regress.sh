@@ -56,6 +56,11 @@ run  map-match1.txt - hardy
 # never moved its own escort — this line is the regression test for that
 run  map-stuck.txt - none
 run  map-stuck.txt - hardy
+# the map of match 6a9b3af2 (05.09.2026), played from the OTHER side: there the puller is born behind the escort on a
+# diagonal, the only cell closer to its slot is the escort's own, and without an overtaking step it trails the escort
+# for the whole match — the train never rolled and the escort walked at period 4. Regression test for the overtake
+run  map-chase.txt match2 none
+run  map-chase.txt match2 hardy
 run  - - racer
 run  - - none
 run  - - race

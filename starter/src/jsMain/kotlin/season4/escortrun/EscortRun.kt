@@ -195,7 +195,7 @@ object EscortRun {
      *  при старте матча, поэтому пересобранный бандл попадает в игру только со следующего запуска, и по логу должно
      *  быть видно, какая сборка играла: вопрос «в игре какая версия?» иначе не решается ничем. Поднимать при каждом
      *  выкате в main (тег escort-run-vN). */
-    private const val BOT_VERSION = "v9"
+    private const val BOT_VERSION = "v10"
 
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
@@ -1263,6 +1263,34 @@ object EscortRun {
 
     private fun dirTo(from: Position, to: Position) = screeps.api.getDirection(to.x - from.x, to.y - from.y)
 
+    /**
+     * Шаг тягача к своей клетке цепи — с ОБГОНОМ. Обычный `flowStep` идёт только туда, где расстояние строго меньше,
+     * и когда единственная такая клетка занята эскортом, тягач плетётся ЗА ним, ни разу не обгоняя: слот всегда
+     * впереди эскорта, эскорт всегда впереди тягача, цепь не собирается никогда. Раньше его пропускал вперёд обмен
+     * местами; обмен запрещён (он откатывал эскорт назад), поэтому обгон нужен явный — свободная клетка с РАВНЫМ
+     * расстоянием, то есть шаг вбок мимо эскорта. Живой матч 6a9b3af2: поезд не поехал ни разу, эскорт всю дорогу
+     * шёл пешком с периодом 4 вместо 2 и пришёл на 300-м тике вместо 250-го.
+     */
+    private fun pullerStep(flow: IntArray, from: Creep, ctx: Ctx): Position? {
+        val here = flow[from.x * 100 + from.y]
+        if (here < 0) return null
+        var sideX = -1
+        var sideY = -1
+        for ((dx, dy) in DIRECTIONS) {
+            val x = from.x + dx
+            val y = from.y + dy
+            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+            val key = x * 100 + y
+            val d = flow[key]
+            if (d < 0 || d > here) continue
+            if (key in ctx.enemyPositions || ctx.occupantAt.containsKey(key)) continue
+            if (d < here) return InfluenceMap.cell(x, y) // прямо вперёд — всегда лучше обхода
+            if (sideX < 0) { sideX = x; sideY = y }
+        }
+        if (sideX >= 0) return InfluenceMap.cell(sideX, sideY)
+        return DistanceMap.flowStep(flow, from.x, from.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
+    }
+
     private fun selfStep(ctx: Ctx, escort: Creep, flow: IntArray) {
         val step = DistanceMap.flowStep(flow, escort.x, escort.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
         if (step != null) TrafficManager.request(escort, step, ESCORT_PRIORITY)
@@ -1317,7 +1345,7 @@ object EscortRun {
             val slot = tailCells.getOrNull(near.size + k) ?: tailCells.lastOrNull() ?: continue
             if (p.x == slot.x && p.y == slot.y) continue
             val f = flowTo("slot", slot, ctx.blocked, 1, ttl = 1)
-            val step = DistanceMap.flowStep(f, p.x, p.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
+            val step = pullerStep(f, p, ctx)
             if (step != null) TrafficManager.request(p, step, PULLER_PRIORITY)
         }
         if (near.isEmpty()) { selfStep(ctx, escort, flow); return }
@@ -1416,7 +1444,7 @@ object EscortRun {
             // занятые клетки — ОБХОДИТЬ: тягач, рождённый позади, шёл к слоту сквозь эскорта и полагался на то, что
             // диспетчер поменяет их местами, то есть откатит эскорта на клетку назад. Обход стоит тягачу тик, откат
             // стоит эскорту два, и это его единственная работа в матче
-            val step = DistanceMap.flowStep(f, p.x, p.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
+            val step = pullerStep(f, p, ctx)
             if (step != null) TrafficManager.request(p, step, PULLER_PRIORITY)
         }
         // Сторож на весь класс «сборка не двигается с места». Причину, найденную в живом матче, мы устранили выше, но
