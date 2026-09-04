@@ -138,6 +138,9 @@ object PainAndGain {
     /** Пикет у флага: столько вооружённых врагов в KEEP_RANGE хранителя не снимают — россыпь сторожит флаг парой, и без
      *  хранителя взятый флаг отбирали за десять тиков (стенд m19 spread); армия (матч 18) — это дюжина, не пара. */
     private const val KEEP_PICKET = 2
+    /** Снятие хранителя — только когда врага нет и в этой дальности: пикет россыпи отходил за KEEP_RANGE, хранитель
+     *  уходил, пикет возвращался на свободный флаг (стенд m18 spread: D5 и R3 потеряны на 815-м и 846-м). */
+    private const val KEEP_RELEASE = 20
     /** Паритетный порог при бесплодной охоте (см. STALL_TICKS): враг россыпью не дерётся и держит четыре флага, а нам
      *  0.97 запрещал четвёртый — три против четырёх до конца матча и 12:13 в тик (стенд m18/m12 spread). Против армии,
      *  которая не бьёт двадцать тиков с добычей в досягаемости, «примерно равные» — 0.93; первый же удар возвращает 0.97.
@@ -1451,6 +1454,12 @@ object PainAndGain {
         // его лечение, делённые на его хиты: мили вплотную за 1000 хитов снимает 90, стрелок за 800 — 40, лекарь
         // за 600 — 36; «лекари первыми» без учёта хитов вело огонь мимо мили, который резал наш строй)
         val inFireRange = enemyCreeps.filter { e -> combatArmy.any { it.getRangeTo(e) <= RANGED_RANGE } }
+        // остовы (без оружия и лечения) — вне пула, пока есть боевые. Матч 22: разоружённый M6 с 542 хитами простоял
+        // 25 тиков в 2–4 клетках от наших стрелков необстрелянным и был вылечен обратно в M8A8, пока пять его стрелков
+        // добивали наших. ДВА способа перенести на него огонь ОТВЕРГНУТЫ стендом: «отрастающая угроза» (мёртвые части
+        // оружия × 0.5 в угрозе любой цели) проиграла m9 hunter, m3 army и все рубки sleeper; «остов, добиваемый за
+        // два залпа, — сразу после добиваемых за тик» проиграла m3 army, рубки sleeper и m18 spread. Огонь по живой
+        // угрозе, а не по раненым, — то, на чём стенд стоит; остов на лечении врага — открытая находка
         val focusPool = inFireRange.filter { e -> combatEnemies.any { it.id == e.id } }.ifEmpty { inFireRange }
         fun fireAvailableAt(e: Creep) = army.filter { it.getRangeTo(e) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged } +
             army.filter { it.getRangeTo(e) <= 1 }.sumOf { InfluenceMap.profileOf(it).melee }
@@ -1532,10 +1541,11 @@ object PainAndGain {
         // в контактном бою лекарь избегает только мили (2 клетки): «вне досягаемости стрелков» выкидывало слот тыла из
         // ряда back+1, лекари стояли в 4–6 клетках за фронтом, и мили гибли без лечения, пока лекари врага стояли у своей
         // линии под нашим огнём (матч 21, t=68–84: четыре мили за шестнадцать тиков, ни одного лечения)
+        // только вплотную к мили (клетка в 2 — это ряд сразу за нашим фронтом, свой мили между ними)
         val meleeReachCells = HashSet<Int>()
         for (e in combatEnemies) {
             if (InfluenceMap.profileOf(e).melee <= 0.0) continue
-            for (dx in -2..2) for (dy in -2..2) {
+            for (dx in -1..1) for (dy in -1..1) {
                 val x = e.x + dx; val y = e.y + dy
                 if (x in 0..99 && y in 0..99) meleeReachCells.add(x * 100 + y)
             }
@@ -1968,9 +1978,12 @@ object PainAndGain {
             // враг с боем в KEEP_RANGE от флага — хранителя нет: стрелок стоял на R3 весь бой, пока в десяти клетках
             // висели скауты врага, и не стрелял (матч 18)
             val stay = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && c.hits * 2 >= c.hitsMax &&
-                enemyCreeps(ctx).any { it.id != c.id && getRange(f.pos, it) <= KEEP_RANGE } &&
+                enemyCreeps(ctx).any { it.id != c.id && getRange(f.pos, it) <= KEEP_RELEASE } &&
                 armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } <= KEEP_PICKET
-            if (!stay) iter.remove()
+            if (!stay) {
+                if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value}")
+                iter.remove()
+            }
         }
         for (f in ctx.flags) {
             if (!f.ours) continue
@@ -1980,6 +1993,7 @@ object PainAndGain {
             if (enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
             if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
             keeperIds[occ.id] = f.id
+            if (DEBUG_LOG) println("keeper t=${getTicks()}: ${occ.id} keeps ${f.id} at (${f.pos.x},${f.pos.y})")
         }
     }
 
@@ -2029,12 +2043,15 @@ object PainAndGain {
                 val best = free.minByOrNull { getRange(c, it) } ?: break
                 free.remove(best)
                 slotOf[c.id] = best
+                taken.add(best.x * 100 + best.y)
             }
         }
         val d = pair.third
         val back = (RANGED_RANGE - d).coerceIn(0, 2)
         if (melees.isNotEmpty()) assign(rangeds, rowCells(back, rangeds.size))
-        assign(rear, rowCells(back + 1, rear.size))
+        // тыл — всегда сразу за фронтом: ряд «за стрелками» при враге вплотную (back=2) ставил лекарей в трёх клетках
+        // от мили, лечение 4 за часть вместо 12 (матч 22, t=110–130: лекари в 2–3 клетках от дерущихся мили)
+        assign(rear, rowCells(1, rear.size))
     }
 
     /** Шаг к слоту строя без поля потока: соседняя проходимая клетка, ближайшая к слоту (при равенстве — под меньшим
