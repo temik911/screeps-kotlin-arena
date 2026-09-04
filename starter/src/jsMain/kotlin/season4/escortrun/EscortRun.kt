@@ -192,7 +192,7 @@ object EscortRun {
      *  при старте матча, поэтому пересобранный бандл попадает в игру только со следующего запуска, и по логу должно
      *  быть видно, какая сборка играла: вопрос «в игре какая версия?» иначе не решается ничем. Поднимать при каждом
      *  выкате в main (тег escort-run-vN). */
-    private const val BOT_VERSION = "v6"
+    private const val BOT_VERSION = "v7"
 
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
