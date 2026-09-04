@@ -48,6 +48,9 @@ run  map-match1.txt - racer
 run  map-match4.txt - none
 run  map-match4.txt - racer
 run  map-match4.txt - train
+# 'hardy' is that rival modelled by its measured speed (see run.mjs): the closest thing to the matches we lost
+run  map-match4.txt - hardy
+run  map-match1.txt - hardy
 run  - - racer
 run  - - none
 run  - - race

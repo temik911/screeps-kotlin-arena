@@ -84,6 +84,13 @@ world.spawnRegen = [1, has('harvest') ? 11 : 1]; // 'harvest': the enemy economy
 // it does not lose the thirty ticks of spawning we lose. That match was lost by two ticks, and the stub needs a rival
 // that actually wins the race to exercise the "race lost" branch at all
 if (has('racer')) { const p = new Creep(theirs.esc.x + 1, theirs.esc.y + 1, 1, Array(10).fill(M)); world.objects.push(p); }
+// 'hardy' (matches 4-7, 04.09.2026): the rival that won four out of four. It is modelled by its MEASURED behaviour and
+// not by a mechanism, because the mechanism is unknown: its escort covers 4 cells in the first 10 ticks, 7 in 20 and 9
+// in 30, where the body's own period (4 ticks per plain cell at weight 40 / 10 MOVE) allows 3, 5 and 8, and it has no
+// second creep in those ticks at all. After ~35 ticks it runs a normal M10 train at period 2, same as ours, and the
+// gap it opened in the opening — four cells, eight ticks — never closes again. So: period 3 while the debut lasts,
+// fatigue ignored, then the ordinary train. Whatever it really does, this is what it DID, and it arrives around 246.
+const HARDY_DEBUT_PERIOD = 3;
 
 // ---------- enemy AI ----------
 // the stub's searchPath knows terrain only: structures (spawns, sources, walls) go into the cost matrix — the first
@@ -132,7 +139,7 @@ function enemyTick() {
   if (!theirs.sp.spawning) {
     let body = null;
     const e = theirs.sp.store.energy;
-    if (has('train') && !mine.some(isPuller) && e >= 500) body = PULLER;
+    if ((has('train') || has('hardy')) && !mine.some(isPuller) && e >= 500) body = PULLER;
     else if ((has('rush') || has('hunt') || has('guard')) && e >= 1000) body = FIGHTER;
     else if (has('melee') && e >= 910) body = MELEE;
     if (body) { const r = theirs.sp.spawnCreep(body); if (r.object) world.events.push(`t=${world.tick} enemy orders ${r.object.summary()}`); }
@@ -140,10 +147,20 @@ function enemyTick() {
   // the escort walks to its flag ('none': it does not move at all); with a puller: the puller stands on the escort's
   // next cell, pulls, the escort steps into it (the World scheme)
   if (!has('none') && esc && esc.exists) {
-    const pullers = mine.filter(isPuller);
+    // a puller still in the spawn can neither walk nor pull: counting it made the enemy escort WAIT for it and stand
+    // still for the whole spawn time, which no live opponent does
+    const pullers = mine.filter((c) => isPuller(c) && !c.spawning);
+    // the debut of 'hardy': the escort walks faster than its own fatigue allows, by measurement (see above)
+    if (has('hardy') && !pullers.length) {
+      esc.fatigue = 0;
+      if (world.tick % HARDY_DEBUT_PERIOD === 0) {
+        const next = pathStepTo(esc, theirs.flag, 0);
+        if (next) esc.move(getDirection(next.x - esc.x, next.y - esc.y));
+      }
+    } else
     // near the flag the train has to dissolve, or the puller parks ON the flag cell and blocks its own escort — the
     // stub's racer did exactly that and stalled two cells short of winning
-    if ((has('train') || has('racer')) && pullers.length && range(esc, theirs.flag) > 2) {
+    if ((has('train') || has('racer') || has('hardy')) && pullers.length && range(esc, theirs.flag) > 2) {
       // the World scheme: the puller stands on the escort's next cell (path computed with the puller NOT an obstacle),
       // pulls every tick, and both move when the puller is rested; the escort waits for a puller within 3 cells
       const p = pullers[0];
