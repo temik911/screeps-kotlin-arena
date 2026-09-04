@@ -14,7 +14,7 @@ const my=new StructureSpawn(94,49,true,1000); const en=new StructureSpawn(5,50,f
 for(const [cx,cy] of [[88,49],[11,50]]){ new StructureContainer(cx,cy,5000); for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx||dy) new StructureWall(cx+dx,cy+dy,10000); } }
 new StructureContainer(98,1,2500); new StructureContainer(98,98,2500); new StructureContainer(1,1,2500); new StructureContainer(1,98,2500);
 const TICKS=parseInt(process.argv[2]||'900'); const MODES=(process.argv[3]||'none').split('+');
-const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress');
+const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped');
 // STREAM: противник матча 15 — с 280-го тика попеременно M3R3 и M4H2 каждые 40 тиков, каждый идёт к нашему спавну сразу,
 // без сбора в четвёрки (правила движения и стрельбы — как у HEALBALL); подкрепление тянется потоком за первыми
 // RUSH: противник матча 14 — два M5R1 с первого тика через свой спавн, третий на 200-м; идут к нашему спавну, встают в трёх
@@ -59,6 +59,10 @@ for(let t=0;t<TICKS;t++){
   if(HARASS && t===220) harassQueue.push([C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK]);
   if(RUSH && t===200) rushQueue.push([C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK]);
   if(RUSH && rushQueue.length && !en.spawning && t>=1){ const r=en.spawnCreep(rushQueue[0]); if(r.object){ r.object.camper=true; rushQueue.shift(); } }
+  // CAMPED: с 500-го каждые 110 тиков к нашему спавну идёт M5R1 и ОСТАЁТСЯ рядом: бьёт ближайшего
+  // нашего в трёх клетках, иначе спавн, и не кайтит. Так противник матча 19 задушил экономику
+  // (хаулеры выбиты, приток 0) и держал спавн под огнём, пока тот копил на полное тело
+  if(CAMPED && t>=500 && (t-500)%110===0){ const r=new Creep(6,50,false,[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK]); r.camper=true; }
   if(CAMP && t===60){ for(let i=0;i<2;i++){ const r=new Creep(93,47+4*i,false,[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK]); r.camper=true; } }
   if(CAMP && t>=60 && t<=90){ lines.push('CAMP t='+t+': '+world.objects.filter(o=>o instanceof Creep&&!o.my&&o.exists).map(c=>'('+c.x+','+c.y+')h='+c.hits).join(' ')+' | mine: '+world.objects.filter(o=>o instanceof Creep&&o.my&&o.exists&&!o.spawning).map(c=>c.id+'('+c.x+','+c.y+')h='+c.hits).join(' ')); }
   if(TOWERSITE && t===150){ site=new ConstructionSite(7,50,false,C.CONSTRUCTION_COST.StructureTower); }

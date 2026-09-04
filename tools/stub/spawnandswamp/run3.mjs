@@ -18,6 +18,16 @@ function guard(x,y,body){ const g=new Creep(x,y,false,body||[C.MOVE,C.MOVE,C.MOV
 function mine(x,y,body,energy){ const c=new Creep(x,y,true,body); if(energy) c.store.energy=energy; return c; }
 const watch=[];
 if(SCEN==='freeze'){ guard(14,89); guard(84,90); }
+// CAMPED19: состояние, в котором проигран матч 19 (05.09.2026) — пять стрелков врага вплотную к нашему
+// спавну, своих крипов нет, в спавне 900 энергии и притока нет. Проверяется одно: строит ли спавн
+// хоть что-то, пока его сносят, или копит на полное тело до самой смерти
+if(SCEN==='camped19'){
+  const R3=[C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK];
+  // двое: 60 урона в тик, спавну жить ~50 тиков — тело из наличных 900 (39 тиков) успевает родиться,
+  // а ожидание последней сотни при потоке 1/тик (100 тиков) — нет
+  for(const [x,y] of [[8,50],[8,52]]){ const e=new Creep(x,y,false,R3); e.camper=true; }
+  my.store.energy=900;
+}
 // RUSH: повтор матча 14 на живой карте — два M5R1 с первого тика через спавн врага, третий на 200-м; идут к нашему спавну,
 // встают в трёх клетках и не кайтят: бьют самого битого нашего в трёх клетках, иначе спавн
 const M5R1=[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK]; let rushQueue = SCEN==='rush' ? [M5R1,M5R1] : SCEN==='stream17' ? [M5R1] : [];

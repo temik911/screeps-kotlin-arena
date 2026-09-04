@@ -1149,6 +1149,12 @@ object SpawnAndSwamp {
         val fullCost = fullBody.sumOf { cost(it) }
         val deficit = enemyPower * DEFEND_MARGIN - ourPower
         val breach = breachPlan(ctx)
+        // СКОЛЬКО ЖИВЁТ СПАВН при нынешнем входящем уроне: 3000 хитов, делённые на выстрелы в тик.
+        // Это часы для обоих правил ожидания ниже. «Придёт враг» (enemyArrival) на них не отвечает: враг,
+        // который УЖЕ стоит вплотную и стреляет, никуда не «приходит», и оба правила ждали полное тело,
+        // пока спавн сносили (матч 19: 904 энергии в банке, ноль крипов, снесён на 1000-м)
+        val spawnFire = InfluenceMap.fireAt(spawn.x, spawn.y, threats)
+        val spawnLife = if (spawnFire > 0.0) (spawn.hits ?: SPAWN_HITS) / spawnFire else Double.MAX_VALUE
         val minFighter = cost(RANGED_ATTACK) + cost(MOVE)
         // БОЕЦ ПЕРВЫМ — держать энергию под полное тело, не покупая ничего, — только когда так боец
         // приходит раньше. «Держать» — полный боец из того, что в спавне и едет, при нынешнем потоке;
@@ -1227,8 +1233,12 @@ object SpawnAndSwamp {
         if (energy < minFighter) return
 
         // ЛАГЕРЬ у спавна: враг рядом и сильнее — боец по 300 умирает один (матч 02.09: восемь
-        // подряд). Копим на полное тело; хуже, чем ждать, здесь только кормить.
-        if (alarm && ourPower < enemyPower && energy < SPAWN_ENERGY_CAPACITY) return
+        // подряд). Копим на полное тело — но только пока СПАВН ДОЖИВАЕТ до него: 3000 хитов, делённые
+        // на входящий урон, против времени накопления недостающего при нынешнем потоке. Без этого счёта
+        // правило копило до конца: матч 19 (05.09.2026) — с 850-го по 1000-й спавн набрал с 584 до 904
+        // энергии и не построил НИЧЕГО, пока последние бойцы гибли по одному, и был снесён с 904 в банке
+        if (alarm && ourPower < enemyPower && energy < SPAWN_ENERGY_CAPACITY &&
+            spawnLife > energyArrivalTicks(ctx, SPAWN_ENERGY_CAPACITY - energy, flow)) return
 
         // ожидаемая энергия — в спавне и В ПУТИ (хаулеры), не пул на земле: тот приедет за рейсы.
         // Копим на тело ценнее (урон×HP), если враг не успеет прийти за время накопления: тринадцать
@@ -1252,7 +1262,7 @@ object SpawnAndSwamp {
         val gap = SPAWN_ENERGY_CAPACITY - energy
         if (gap > 0 && bodyValue(full) > bodyValue(body)) {
             val waitTicks = energyArrivalTicks(ctx, gap, flow)
-            if (deficit <= 0.0 || enemyArrival > waitTicks) return
+            if (deficit <= 0.0 || (enemyArrival > waitTicks && spawnLife > waitTicks)) return
             // недомерок — только если САМ закрывает дефицит: тело, которое ничего не меняет, — корм
             // (матч 12: M2R1 и M5R1 по одному против трёх M5R1); под огнём спавна строим, что есть
             if (!spawnUnderFire && !closesDeficit(body, defenders, threats)) return

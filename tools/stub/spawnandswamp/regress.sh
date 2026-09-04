@@ -25,3 +25,14 @@ for s in freeze rush stream17; do
   "$NODE" --import ./register.mjs run3.mjs 2000 "$s" > "$f" 2>&1
   report "run3:$s" "$f"
 done
+# camped19 — фикстура правила лагеря: враг уже вплотную, притока нет, спавн живёт ~50 тиков. Проход —
+# спавн СТРОИТ бойца из наличных 900, а не копит на полное тело до самой смерти (матч 19)
+f=out/${TAG}_r3_camped19.txt
+"$NODE" --import ./register.mjs run3.mjs 200 camped19 > "$f" 2>&1
+built=$(grep -cE '^spawn: (fighter|guard) parts' "$f")
+errs=$(grep -cE 'loop error|exception' "$f")
+if [[ $built -ge 1 && $errs -eq 0 ]]; then
+  printf '%-18s %-32s | %s | ghost=0\n' "run3:camped19" "PASS built $built body under fire" "--- ticks run: fixture errors: 0 "
+else
+  printf '%-18s %-32s | %s | ghost=0\n' "run3:camped19" "FAIL built nothing while dying" "--- ticks run: fixture errors: $errs "
+fi
