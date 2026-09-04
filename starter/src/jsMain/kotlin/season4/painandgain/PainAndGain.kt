@@ -141,6 +141,13 @@ object PainAndGain {
     private const val FORM_RANGE = 3
     private const val FORM_SHARE = 0.75
 
+    /** Ловимость (см. catchable/evasive): окно наблюдения за движением врага, и поводок — дальше стольких клеток от
+     *  центра вооружённой армии боец при враге рядом идёт к центру, а не к цели. Уходящего с равной скоростью не
+     *  догнать никогда: в матче 5 армия 80 тиков гналась за тремя мили-приманками через всю карту, потом два мили —
+     *  40 клеток за одиноким лекарем, и половина армии осталась одна против пяти стрелков с лекарями. */
+    private const val CHASE_WINDOW = 8
+    private const val LEASH_RANGE = 8
+
     /** Отход строем: убежавший вперёд дальше стольких клеток (по полю отхода) от самого отставшего вооружённого
      *  ждёт его вне огня — иначе погоня добивает отставших по одному (матч 4: армия рассыпалась по трём углам). */
     private const val RETREAT_GAP = 3
@@ -242,6 +249,9 @@ object PainAndGain {
     private val enemyPrevCell = HashMap<String, Int>()
     /** id врага -> тик его последнего сдвига (см. stationary). */
     private val enemyLastMove = HashMap<String, Int>()
+    /** Центр вооружённой армии и клетки врагов за последние CHASE_WINDOW тиков (см. evasive). */
+    private val ourCentroidHist = ArrayDeque<Int>()
+    private val enemyCellHist = HashMap<String, ArrayDeque<Int>>()
     /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
     private val rallyingIds = HashSet<String>()
     private var huntingThreat = false
@@ -381,6 +391,16 @@ object PainAndGain {
         enemyLastMove.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
         enemyPrevCell.clear()
         for (e in enemyCreeps) enemyPrevCell[e.id] = e.x * 100 + e.y
+        // история движения — для ловимости (см. evasive)
+        val armedCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ourCentroid
+        ourCentroidHist.addLast(armedCentroid.x * 100 + armedCentroid.y)
+        while (ourCentroidHist.size > CHASE_WINDOW) ourCentroidHist.removeFirst()
+        for (e in enemyCreeps) {
+            val h = enemyCellHist.getOrPut(e.id) { ArrayDeque() }
+            h.addLast(e.x * 100 + e.y)
+            while (h.size > CHASE_WINDOW) h.removeFirst()
+        }
+        enemyCellHist.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
         if (DEBUG_LOG) logStuck(active, enemyCreeps)
         if (DEBUG_VISUALS) InfluenceMap.drawDebug(army, myCreeps, enemyCreeps)
 
@@ -738,13 +758,35 @@ object PainAndGain {
 
     /** Точка отхода: дом и углы НАШЕЙ половины — достижимая и самая дальняя от центра армии врага (отход в
      *  дальний угол через всю карту вёл сквозь врага, и армию добивали по одному — стенд rush). */
+    /** Враг уходит: за CHASE_WINDOW тиков отдалился от ТОГДАШНЕГО центра нашей армии больше чем на клетку. Кайтер
+     *  держит дистанцию, и «дистанция до нас не растёт» его не выдаёт — выдаёт движение прочь от места, где мы были. */
+    private fun evasive(e: Creep): Boolean {
+        val h = enemyCellHist[e.id] ?: return false
+        if (h.size < CHASE_WINDOW || ourCentroidHist.size < CHASE_WINDOW) return false
+        val c0 = ourCentroidHist.first()
+        val old = h.first()
+        val cPos = InfluenceMap.cell(c0 / 100, c0 % 100)
+        val oldPos = InfluenceMap.cell(old / 100, old % 100)
+        return getRange(e, cPos) > getRange(oldPos, cPos) + 1
+    }
+
+    /** Ловим ли враг: вплотную к нашему вооружённому (MELEE_KEEP_RANGE), медленнее нашего самого быстрого или не
+     *  уходит (см. evasive). Только за ловимым идут стая, охота, добивание и местный бросок (см. CHASE_WINDOW). */
+    private fun catchable(e: Creep, armed: List<Creep>): Boolean =
+        armed.any { getRange(e, it) <= MELEE_KEEP_RANGE } ||
+            plainPeriod(e) > (armed.minOfOrNull { plainPeriod(it) } ?: 1) ||
+            !evasive(e)
+
     private fun retreatPoint(ctx: Ctx): Position {
         val enemy = ctx.enemyCentroid ?: return ctx.home
         // точка одна на весь отход, пока враг не ближе к ней, чем мы: смена точки на ходу ((3,96), потом (96,96))
         // развела армию по трём углам карты, и погоня добила всех поодиночке (матч 4)
         retreatTarget?.let { t -> if (getRange(t, enemy) > getRange(t, ctx.ourCentroid)) return t }
         val corners = listOf(InfluenceMap.cell(3, 3), InfluenceMap.cell(3, 96), InfluenceMap.cell(96, 3), InfluenceMap.cell(96, 96))
-        val candidates = listOf(ctx.home) + corners.filter { DistanceMap.inOurHalf(it.x, it.y) }
+        // дом, пока враг не ближе к нему, чем мы; угол — только тогда: «выигрышный по дистанции» угол (3,96) в
+        // матче 5 был ловушкой — армия отошла в него от кайтеров и была расстреляна, не имея куда шагнуть
+        val enemyBetween = getRange(enemy, ctx.home) < getRange(ctx.ourCentroid, ctx.home)
+        val candidates = if (enemyBetween) listOf(ctx.home) + corners.filter { DistanceMap.inOurHalf(it.x, it.y) } else listOf(ctx.home)
         var best = ctx.home
         var bestScore = Int.MIN_VALUE
         for (c in candidates) {
@@ -773,6 +815,9 @@ object PainAndGain {
 
         val strikers = army.filter { fullSpeed(it) && hasWeapon(it) }
         val mobileArmy = army.filter { canMove(it) }
+        val chasers = strikers.ifEmpty { mobileArmy }
+        // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними
+        val huntable = combatEnemies.filter { catchable(it, chasers) }
 
         // ---- постура ----
         val ours = ourPowerOf(army, combatEnemies)
@@ -788,13 +833,16 @@ object PainAndGain {
         val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
         val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
         val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4
-        // при РАВНОЙ скорости отход из контакта без мили вплотную — размен выстрелами в обе стороны, не бегство
-        val retreatFeasible = !contact || (!meleeAdjacent && ourPeriod <= theirPeriod)
+        // при РАВНОЙ скорости отход из контакта без мили вплотную — размен выстрелами в обе стороны, не бегство; из
+        // точки отхода, куда уже пришли, отходить некуда — бой (матч 5: семеро в углу (3,96) при «отходе» не
+        // шевелились и не били, пока их расстреливали с трёх клеток)
+        val atRetreatPoint = retreatTarget?.let { getRange(ctx.ourCentroid, it) <= POST_STANDOFF + ARRIVED_SLACK } ?: false
+        val retreatFeasible = !contact || (!meleeAdjacent && ourPeriod <= theirPeriod && !atRetreatPoint)
         val weaker = theirs >= ours * (if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // ДОБИТЬ по перевесу — с гистерезисом; по контакту — пока контакт есть (без гистерезиса: см. PUSH_RELEASE_RATIO)
         val pushRatio = if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
         val pushRelease = if (behindOnScore) PUSH_RELEASE_RATIO_BEHIND else PUSH_RELEASE_RATIO
-        pushing = combatEnemies.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)
+        pushing = huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -816,7 +864,7 @@ object PainAndGain {
         val postureKey = "$newPosture:${objectiveFlagId ?: ""}"
         if (DEBUG_LOG && (postureKey != postureLogged || getTicks() % (LOG_EVERY * 10) == 0)) {
             postureLogged = postureKey
-            println("posture: $newPosture t=${getTicks()} our=${ours.toInt()} enemy=${theirs.toInt()} near=$enemyNear contact=$contact pushing=$pushing retreatFeasible=$retreatFeasible strikers=${strikers.size}/${army.size} " +
+            println("posture: $newPosture t=${getTicks()} our=${ours.toInt()} enemy=${theirs.toInt()} near=$enemyNear contact=$contact pushing=$pushing huntable=${huntable.size}/${combatEnemies.size} retreatFeasible=$retreatFeasible strikers=${strikers.size}/${army.size} " +
                 "obj=${objective?.let { "(${it.flag.pos.x},${it.flag.pos.y})${typeChar(it.flag.type)}${it.flag.score} pack=${it.pack.size} travel=${it.travel} v=${(it.value * 100).toInt()}" } ?: "-"} " +
                 "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} post=(${post.x},${post.y}) behind=$behindOnScore hunt=$huntingThreat")
         }
@@ -827,14 +875,14 @@ object PainAndGain {
         val ourHalfCombat = combatEnemies.filter { DistanceMap.inOurHalf(it.x, it.y) }
         val ourHalfSoft = enemyCreeps.filter { c -> combatEnemies.none { it.id == c.id } && DistanceMap.inOurHalf(c.x, c.y) }
         fun arrivalOf(c: Creep) = arrivalById[c.id] ?: Int.MAX_VALUE / 2
-        val threat = ourHalfCombat.minWithOrNull(compareBy<Creep>({ arrivalOf(it) }, { getRange(it, centroid) }))
+        val threat = ourHalfCombat.filter { catchable(it, chasers) }.minWithOrNull(compareBy<Creep>({ arrivalOf(it) }, { getRange(it, centroid) }))
         // рейдер: чужой безоружный на нашей половине — тот, что ближе к нашему флагу (захватчик идёт к нему); гонимся,
         // только если стрелки бьют стаю вокруг него: без этой проверки армия гналась за безоружным остовом к
         // стоявшей за ним армии врага и вошла в бой при 0.77 (матч 3, t=100)
         val raider = ourHalfSoft.minByOrNull { r -> minOf(getRange(r, centroid), ctx.flags.filter { !it.theirs }.minOfOrNull { getRange(r, it.pos) } ?: 99) }
             ?.takeIf { r ->
                 val pack = combatEnemies.filter { getRange(it, r) <= FLAG_GUARD_RANGE }
-                pack.isEmpty() || (strikers.isNotEmpty() && ourPowerOf(strikers, pack) >= enemyPowerOf(pack, strikers) * PUSH_RATIO)
+                catchable(r, chasers) && (pack.isEmpty() || (strikers.isNotEmpty() && ourPowerOf(strikers, pack) >= enemyPowerOf(pack, strikers) * PUSH_RATIO))
             }
         // охота на угрозу на нашей половине — решение группы с гистерезисом: стрелки против всей стаи у угрозы
         huntingThreat = posture != Posture.RETREAT && threat != null && strikers.isNotEmpty() && run {
@@ -880,9 +928,10 @@ object PainAndGain {
         val contactPack = combatEnemies.filter { e -> army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
         val prey = when {
             posture != Posture.ANNIHILATE -> null
-            pushing -> combatEnemies.minByOrNull { pathTicksFrom(ctx, centroid, it) }
-            else -> contactPack.minByOrNull { pathTicksFrom(ctx, centroid, it) }
+            pushing -> huntable.minByOrNull { pathTicksFrom(ctx, centroid, it) }
+            else -> contactPack.filter { catchable(it, chasers) }.minByOrNull { pathTicksFrom(ctx, centroid, it) }
         }
+        val armedCentroid = centroidOf(mobileArmy.filter { hasWeapon(it) }.ifEmpty { army }) ?: centroid
         // захватчик флага-цели — ближайший к флагу ВООРУЖЁННЫЙ член группы (одной клетки на всех не хватит; лекарь
         // ходит за подопечным, и назначенный захватчиком лекарь тысячу тиков стоял рядом с флагом — стенд greedy)
         val objectiveCapturer = objective?.let { o -> mobileArmy.filter { hasWeapon(it) }.ifEmpty { mobileArmy }.minByOrNull { getRange(it, o.flag.pos) }?.id }
@@ -957,7 +1006,9 @@ object PainAndGain {
                     (fightCost(localEnemies, localAllies) <= localAllies.maxOf { speedSlack(it) } || inContact(localEnemies, localAllies))
             }
             if (localAggressive) aggressiveIds.add(creep.id) else aggressiveIds.remove(creep.id)
-            val engage = if (localAggressive && !healer) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE }.minByOrNull { getRange(creep, it) } else null
+            val engage = if (localAggressive && !healer) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && catchable(it, chasers) }.minByOrNull { getRange(creep, it) } else null
+            // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
+            val leashed = !healer && canMove(creep) && posture != Posture.RETREAT && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
             val melee = isMelee(creep) && !hasRanged(creep)
             val grab = grabberOf[creep.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } }
@@ -1011,10 +1062,12 @@ object PainAndGain {
                 posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1 }
                 formGo -> { target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
                 healer && healMate != null -> { target = healMate; standoff = 1 }
+                leashed -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
                 grab != null -> { target = grab.pos; standoff = 0; avoid = true }
-                // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»
-                posture == Posture.ANNIHILATE && !localAggressive && !healer -> { target = centroid; standoff = CLOSE_STANDOFF; avoid = true }
+                // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»; без
+                // ловимой добычи (кайтеры) — тоже к массе: стоим строем и стреляем в то, что подойдёт
+                posture == Posture.ANNIHILATE && !healer && (!localAggressive || prey == null) -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
                 prey != null -> { target = prey; standoff = if (melee) 1 else closeIn }
                 rallyTo != null -> { target = rallyTo; standoff = CLOSE_STANDOFF; avoid = true }
                 objective != null -> {
@@ -1084,7 +1137,7 @@ object PainAndGain {
                 }
             }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-                println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
+                println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
             }
             if (step != null) TrafficManager.request(creep, step, FIGHTER_PRIORITY)
             lastHits[creep.id] = creep.hits
