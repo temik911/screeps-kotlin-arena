@@ -168,6 +168,9 @@ object EscortRun {
      *  хвосту цепи сам, а эскорт без близких тягачей идёт своим ходом. */
     private const val JOIN_RANGE = 4
 
+    /** Сколько тиков подряд стоящий эскорт при собирающемся поезде считается неисправностью, а не расчётом. */
+    private const val TRAIN_STALL_TICKS = 8
+
     // ---------- спавн ----------
     /** Меньше стольких WORK добытчик не строится: два MOVE+CARRY на один WORK — это ещё не добытчик. */
     private const val HARVESTER_MIN_WORK = 1
@@ -192,7 +195,7 @@ object EscortRun {
      *  при старте матча, поэтому пересобранный бандл попадает в игру только со следующего запуска, и по логу должно
      *  быть видно, какая сборка играла: вопрос «в игре какая версия?» иначе не решается ничем. Поднимать при каждом
      *  выкате в main (тег escort-run-vN). */
-    private const val BOT_VERSION = "v7"
+    private const val BOT_VERSION = "v8"
 
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
@@ -244,6 +247,8 @@ object EscortRun {
 
     /** Поезд: кто в этом тике сдвинут прямыми move (мимо TrafficManager), клетки, которые остальным надо освободить. */
     private val trainMoved = HashSet<String>()
+    private var escortStallTicks = 0
+    private var escortStallKey = -1
     private var raceOurCell = -1
     private var raceTheirCell = -1
     private var raceOurSteps = 0
@@ -1367,6 +1372,7 @@ object EscortRun {
         // где k — тиков цепи до её клеток, взятых из того же поля, которым тягачи и ходят. Идём, пока выигрыш больше
         // задержки; на равнине (pTrain 2, pSelf 4) это значит «идём, пока цепь не соберётся раньше чем через три тика».
         var chainEta = 0
+        var blockedByEscort = false
         for (i in chain.indices) {
             val p = chain[i]
             val slot = cells[i]
@@ -1374,6 +1380,13 @@ object EscortRun {
             val f = flowTo("slot", slot, ctx.blocked, 1, ttl = 1)
             val d = f[p.x * 100 + p.y]
             chainEta = maxOf(chainEta, if (d >= 0) d else JOIN_RANGE * 2)
+            // ⚠️ Тягач, чей единственный путь к слоту идёт ЧЕРЕЗ клетку стоящего эскорта, не придёт никогда: раньше его
+            // пропускал обмен местами (эскорт отлетал на клетку назад), а обмен запрещён. Тогда «подожду, цепь вот-вот
+            // соберётся» превращается в вечное стояние — и это не теория: живой матч 6a9b335e простоял так до 2000-го
+            // тика и кончился ничьёй с соперником, который свой эскорт не двигал вовсе. Расстояние по полю этого не
+            // видит (поле знает стены, а не крипов), поэтому спрашиваем сам шаг
+            val step = DistanceMap.flowStep(f, p.x, p.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
+            if (step != null && step.x == escort.x && step.y == escort.y) blockedByEscort = true
         }
         val ahead = cells.getOrNull(0)
         var escortStepping = false
@@ -1382,7 +1395,9 @@ object EscortRun {
             val swamp = DistanceMap.isSwamp(ahead.x, ahead.y)
             val pSelf = trainPeriod(weight, liveMoves(escort), swamp)
             val pTrain = trainPeriod(weight, trainMoves(escort, chain), swamp)
-            escortStepping = pTrain > maxOf(0, pSelf - chainEta)
+            // при РАВЕНСТВЕ выигрыша и задержки идём: по тикам это ничья, а по риску — нет, потому что стоящий эскорт
+            // и есть то состояние, из которого вырастают заторы, а идущий их не создаёт
+            escortStepping = blockedByEscort || pTrain >= maxOf(0, pSelf - chainEta)
         }
         // тягач целится туда, где эскорт БУДЕТ: иначе он идёт в клетку, которую эскорт занимает сам, и оба спорят за неё
         val slotCells = if (escortStepping) chainCells(ctx, flow, chain.size + 1, ahead) else cells
@@ -1397,6 +1412,26 @@ object EscortRun {
             val step = DistanceMap.flowStep(f, p.x, p.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
             if (step != null) TrafficManager.request(p, step, PULLER_PRIORITY)
         }
+        // Сторож на весь класс «сборка не двигается с места». Причину, найденную в живом матче, мы устранили выше, но
+        // цена ошибки здесь — весь матч (ничья на 2000 тиков), поэтому у неподвижности есть предел.
+        // ⚠️ Считается ИМЕННО неподвижность всей картины, а не стояние эскорта: пока цепь подходит, эскорт стоит
+        // законно — поезд с двумя тягачами идёт клетку в тик, и дождаться его выгоднее любого шага. Первая редакция
+        // сторожа смотрела только на эскорта, срабатывала 29 раз за матч там, где голова цепи просто гасила усталость
+        // после болота, и гнала эскорт вперёд из выгодного ожидания — сценарий guard подорожал с 380 тиков до 405
+        // усталость — ЧАСТЬ признака: пока она тает, система работает, даже если никто не сместился ни на клетку.
+        // Голова цепи после болота гасит 400 единиц десять тиков подряд, и без этого слагаемого сторож считал такое
+        // ожидание залипанием (55 срабатываний за матч) и выталкивал эскорт из выгодной прицепки
+        val stallKey = escort.x * 100 + escort.y + 10000 * chainEta + chain.sumOf { it.x * 100 + it.y } +
+            1000000 * (escort.fatigue + chain.sumOf { it.fatigue })
+        if (!escortStepping && stallKey == escortStallKey) {
+            escortStallTicks++
+            if (escortStallTicks > TRAIN_STALL_TICKS) {
+                escortStepping = true
+                println("train t=${getTicks()}: STALLED — nothing has moved for $escortStallTicks ticks: escort (${escort.x},${escort.y}) f=${escort.fatigue}, eta=$chainEta, " +
+                    "pullers=${chain.joinToString(" ") { "${it.id}(${it.x},${it.y})f=${it.fatigue}" }}; walking on")
+            }
+        } else escortStallTicks = 0
+        escortStallKey = stallKey
         if (escortStepping) selfStep(ctx, escort, flow)
         // а если стоит — то СТОИТ: без этого диспетчер считает неподвижного эскорта свободным и меняет его местами с
         // тягачом, обходящим его к слоту; в живом матче эскорт так уехал на клетку НАЗАД (t=30 (14,84) -> t=40 (13,85))

@@ -51,6 +51,11 @@ run  map-match4.txt - train
 # 'hardy' is that rival modelled by its measured speed (see run.mjs): the closest thing to the matches we lost
 run  map-match4.txt - hardy
 run  map-match1.txt - hardy
+# the map of match 6a9b335e (05.09.2026), where v7 deadlocked: the puller is born behind the escort and its only way to
+# the slot leads through the escort's cell. Held the escort still for 2000 ticks and drew a match against a rival that
+# never moved its own escort — this line is the regression test for that
+run  map-stuck.txt - none
+run  map-stuck.txt - hardy
 run  - - racer
 run  - - none
 run  - - race
