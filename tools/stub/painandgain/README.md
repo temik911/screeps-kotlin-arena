@@ -18,7 +18,7 @@ TRACE=510-600 MAP=map-match11.txt $NODE --import ./register.mjs run.mjs 2000 sle
 zsh regress.sh v9                                                               # every scenario, one line each, logs in out/
 ```
 
-Maps `map-match1..25.txt` and `map-match28.txt` are the `DEBUG_MAP` dumps of the live matches, numbered by match — the gaps are matches whose map was one already here (`#` wall, `~` swamp, `m`/`e` the two armies'
+Maps `map-match1..25.txt`, `map-match28.txt` and `map-match29.txt` are the `DEBUG_MAP` dumps of the live matches, numbered by match — the gaps are matches whose map was one already here (`#` wall, `~` swamp, `m`/`e` the two armies'
 start cells, `F` the flags). Enemy scripts: `none` (a dead bot), `scouts` (only the two scouts take flags), `grab`
 (the army camps on our side), `rush` (everyone at the nearest of ours), `greedy`, `army` (the match-3 opponent: D5,
 own A3, hover by its corner, engage within 20, healers adjacent, focus the lowest hits, sweep after we die), `hunter`
@@ -38,7 +38,7 @@ leaves its flag — it does not step away from ours either; the live opponent of
 never moved again, and our own log reported every combat enemy stationary), `farm` (live match 26: the army moves as
 one blob to the flag nearest the blob that it does not own, and never engages — a creep with one of our armed creeps
 within six steps away and comes back after; its two runners each sit on a flag. That match ended with both armies at
-full strength, 902 hits of damage in 1500 ticks and not one death, and it won on points 23408:12721). Modes combine with `+`. The runner prints
+full strength, 902 hits of damage in 1500 ticks and not one death, and it won on points 23408:12721). `screen` (match 29: the live block that won an even fight — healers one cell behind the front and never stepping away, ranged in the front row firing from one to two cells, melee never advancing without a healer within two, no rotation, every gun on our most forward creep, standing once any of ours is within three; it does NOT reproduce the live loss — the bot beats it on every map — and is kept as the closest model of that opponent). Modes combine with `+`. The runner prints
 a `cpu t=N: max=..ms at t=M slow(>50ms)=K` line every 100 ticks — the bot's `loop()` wall time in Node, a relative
 measure of the arena's 100 ms tick budget (match 16 timed out three ticks in the thick of the fight). The bot itself
 prints `bfs t=N max=K` every ten ticks — the most flow-field BFS runs in one tick since the previous line (the live

@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|screen
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -117,7 +117,12 @@ const healerOf = (o) => live(o, H) > 0 && live(o, A) === 0 && live(o, R) === 0;
 const NINE = has('nine') || has('twelve') || has('fourteen') || has('block') || has('wing');
 const ROTATE_OUT = 0.5, ROTATE_IN = 0.9;
 const rotating = new Set();
-const targetKey = (o) => (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
+// 'screen' (match 29): the live block that beat v28 in an even fight — healers ONE cell behind the front and never
+// stepping away, ranged one behind too (mass attack from one to two cells), melee never advancing without a healer
+// within two, no rotation (a melee is healed back in place, M8A5 -> M8A8 in two ticks), and every gun on our MOST
+// FORWARD creep — the one our healers have not caught up with — then the lowest hits
+let focusAnchor = null;
+const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
 function fireAt(c, ours) {
   const inRange = ours.filter((o) => range(c, o) <= 3);
   if (live(c, R) > 0 && inRange.length) {
@@ -158,31 +163,39 @@ function planBlock(fighters, ours, ourCentroid) {
 function blockMove(c, plan, fighters, ours) {
   const { anchor, dir, isH, isR } = plan;
   const healers = fighters.filter((o) => o !== c && live(o, H) > 0);
-  if (!isH(c) && rotate(c, fighters, ours)) return;
+  const screen = has('screen');
+  if (!screen && !isH(c) && rotate(c, fighters, ours)) return;
   const ourF = ours.filter((o) => !isRunner(o));
   const nearest = ourF.sort((a, b) => range(c, a) - range(c, b))[0];
   if (isH(c)) {
     const mate = fighters.filter((o) => o !== c && live(o, H) === 0 && o.hits < o.hitsMax).sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax))[0];
     const threat = ourF.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 3);
-    const slot = { x: anchor.x - 3 * dir.x, y: anchor.y - 3 * dir.y };
-    if (threat.length) stepAway(c, threat);
+    const slot = { x: anchor.x - (screen ? 1 : 3) * dir.x, y: anchor.y - (screen ? 1 : 3) * dir.y };
+    if (!screen && threat.length) stepAway(c, threat);
     else if (mate && range(mate, anchor) > 1 && range(c, mate) > 1) stepToward(c, mate, 1);
-    else if (range(c, slot) > 1) stepToward(c, slot, 1);
+    else if (range(c, slot) > (screen ? 0 : 1)) stepToward(c, slot, screen ? 0 : 1);
     return;
   }
   const wing = has('wing');
   if (isR(c)) {
     const armedNear = ourF.some((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 2);
-    const back = wing && !armedNear ? 0 : 2;
+    const back = (wing && !armedNear) || screen ? 0 : 2;
     const slot = { x: anchor.x - back * dir.x, y: anchor.y - back * dir.y };
     const close = ourF.filter((o) => live(o, A) > 0 && range(c, o) <= 1);
-    if (close.length) stepAway(c, close);
+    if (!screen && close.length) stepAway(c, close);
     else if (range(c, slot) > (back === 0 ? 0 : 1)) stepToward(c, slot, back === 0 ? 0 : 1);
     return;
   }
   // melee: hold the front row — attack what is adjacent, otherwise advance with the block (never more than two from it);
   // the wing's line stops three from our nearest creep and its melee only step to what is within two
   if (nearest && range(c, nearest) <= 1) return;
+  // the live block STOOD: once any of ours was within three of its front it waited, and our melee came into it one by
+  // one (match 29, t=67-200: their fighting eight never moved off (70-73, 63-65) while four of our melee died there)
+  if (screen) {
+    if (nearest && range(c, nearest) <= 2) { stepToward(c, nearest, 1); return; }
+    if (ourF.some((o) => range(anchor, o) <= 3)) return;
+    if (!healers.some((h) => range(c, h) <= 2)) { if (range(c, anchor) > 1) stepToward(c, anchor, 1); return; }
+  }
   if (wing) {
     if (nearest && range(c, nearest) <= 2) { stepToward(c, nearest, 1); return; }
     if (nearest && ourF.some((o) => range(anchor, o) <= 3)) return;
@@ -224,7 +237,7 @@ function enemyTick() {
   // it sweeps the flags and hunts runners
   let armyMode = null;
   // 'hunter' (match 4 opponent): D5 with the whole army, then straight at our army wherever it is
-  if ((has('army') || has('hunter') || has('nine') || has('twelve') || has('fourteen') || has('block') || has('wing')) && fighters.length) {
+  if ((has('army') || has('hunter') || has('nine') || has('twelve') || has('fourteen') || has('block') || has('wing') || has('screen')) && fighters.length) {
     const cen = { x: Math.round(fighters.reduce((s, c) => s + c.x, 0) / fighters.length), y: Math.round(fighters.reduce((s, c) => s + c.y, 0) / fighters.length) };
     if (!armyState.waypoints) {
       const south = cen.y > 50;
@@ -240,7 +253,7 @@ function enemyTick() {
     if (has('hunter') && range(cen, armyState.waypoints[0]) <= 2) armyState.hunting = true;
     if (has('twelve') && armyState.phase === armyState.waypoints.length - 1 && range(cen, armyState.waypoints[armyState.phase]) <= 2) armyState.hunting = true;
     // match 9: the whole army walked straight at ours as one blob, no flag on the way; it charges from six cells
-    if (has('nine') || has('fourteen') || has('block') || has('wing')) { armyState.waypoints = [ourCentroid]; armyState.phase = 0; if (range(cen, ourCentroid) <= 6) armyState.hunting = true; }
+    if (has('nine') || has('fourteen') || has('block') || has('wing') || has('screen')) { armyState.waypoints = [ourCentroid]; armyState.phase = 0; if (range(cen, ourCentroid) <= 6) armyState.hunting = true; }
     if (armyState.hunting) armyState.engaged = true;
     if (ourFighters.length === 0) armyMode = 'sweep';
     else if (armyState.engaged) armyMode = 'fight';
@@ -256,7 +269,8 @@ function enemyTick() {
   // 'wing' (match 17): the block's ranged walk in the FRONT row and the line stops three cells from our nearest creep —
   // the ranged shoot our front for free while the melee hold the line and only hit what steps within two; a ranged
   // with one of our armed creeps within two backs off two rows; healers two behind
-  const blockPlan = (has('block') || has('wing')) && armyMode === 'fight' ? planBlock(fighters, ours, ourCentroid) : null;
+  const blockPlan = (has('block') || has('wing') || has('screen')) && armyMode === 'fight' ? planBlock(fighters, ours, ourCentroid) : null;
+  focusAnchor = blockPlan ? blockPlan.anchor : null;
   for (const c of fighters) {
     fireAt(c, ours);
     healAt(c, mine);
