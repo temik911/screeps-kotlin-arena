@@ -113,7 +113,10 @@ function isRunner(c) { return c.body.every((p) => p.type === M); }
 // 'nine' (match 9 opponent): our healers first, then the lowest hits — two of ours lost every HEAL part by tick 140
 const healerOf = (o) => live(o, H) > 0 && live(o, A) === 0 && live(o, R) === 0;
 // 'twelve' hunts the way 'nine' does (healers first, single-target fire, its healers behind), after a roam
-const NINE = has('nine') || has('twelve');
+// 'fourteen' is 'nine' plus rotation: a fighter below half hits steps back to its healers and returns healed
+const NINE = has('nine') || has('twelve') || has('fourteen');
+const ROTATE_OUT = 0.5, ROTATE_IN = 0.9;
+const rotating = new Set();
 const targetKey = (o) => (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
 function fireAt(c, ours) {
   const inRange = ours.filter((o) => range(c, o) <= 3);
@@ -126,6 +129,20 @@ function fireAt(c, ours) {
     const adj = inRange.filter((o) => range(c, o) <= 1);
     if (adj.length) c.attack(adj.sort((a, b) => targetKey(a) - targetKey(b))[0]);
   }
+}
+// match 14: a damaged fighter (below ROTATE_OUT of its hits) walks to its nearest healer, stays out of our armed
+// creeps' reach until healed above ROTATE_IN, then returns to the line; the live opponent's melee went M8A1 -> M8A5
+// behind its healers in eight ticks and came back while ours died in place
+function rotate(c, fighters, ours) {
+  const healers = fighters.filter((o) => o !== c && live(o, H) > 0);
+  if (!healers.length) { rotating.delete(c.id); return false; }
+  if (rotating.has(c.id)) { if (c.hits >= c.hitsMax * ROTATE_IN) rotating.delete(c.id); }
+  else if (c.hits < c.hitsMax * ROTATE_OUT) rotating.add(c.id);
+  if (!rotating.has(c.id)) return false;
+  const h = healers.sort((a, b) => range(c, a) - range(c, b))[0];
+  const near = ours.filter((o) => !isRunner(o) && live(o, A) + live(o, R) > 0 && range(c, o) <= 3);
+  if (near.length && range(c, h) <= 1) stepAway(c, near); else stepToward(c, h, 1);
+  return true;
 }
 function healAt(c, mine) {
   if (live(c, H) === 0) return;
@@ -161,7 +178,7 @@ function enemyTick() {
   // it sweeps the flags and hunts runners
   let armyMode = null;
   // 'hunter' (match 4 opponent): D5 with the whole army, then straight at our army wherever it is
-  if ((has('army') || has('hunter') || has('nine') || has('twelve')) && fighters.length) {
+  if ((has('army') || has('hunter') || has('nine') || has('twelve') || has('fourteen')) && fighters.length) {
     const cen = { x: Math.round(fighters.reduce((s, c) => s + c.x, 0) / fighters.length), y: Math.round(fighters.reduce((s, c) => s + c.y, 0) / fighters.length) };
     if (!armyState.waypoints) {
       const south = cen.y > 50;
@@ -177,7 +194,7 @@ function enemyTick() {
     if (has('hunter') && range(cen, armyState.waypoints[0]) <= 2) armyState.hunting = true;
     if (has('twelve') && armyState.phase === armyState.waypoints.length - 1 && range(cen, armyState.waypoints[armyState.phase]) <= 2) armyState.hunting = true;
     // match 9: the whole army walked straight at ours as one blob, no flag on the way; it charges from six cells
-    if (has('nine')) { armyState.waypoints = [ourCentroid]; armyState.phase = 0; if (range(cen, ourCentroid) <= 6) armyState.hunting = true; }
+    if (has('nine') || has('fourteen')) { armyState.waypoints = [ourCentroid]; armyState.phase = 0; if (range(cen, ourCentroid) <= 6) armyState.hunting = true; }
     if (armyState.hunting) armyState.engaged = true;
     if (ourFighters.length === 0) armyMode = 'sweep';
     else if (armyState.engaged) armyMode = 'fight';
@@ -200,7 +217,9 @@ function enemyTick() {
           // match 9: the enemy healers stayed two to four cells behind their line and were never touched
           const threat = NINE ? ours.filter((o) => !isRunner(o) && live(o, A) + live(o, R) > 0 && range(c, o) <= 2) : [];
           if (threat.length) stepAway(c, threat);
-          else if (mate) stepToward(c, mate, NINE ? 2 : 1);
+          else if (mate) stepToward(c, mate, has('fourteen') ? 1 : NINE ? 2 : 1);
+        } else if (has('fourteen') && rotate(c, fighters, ours)) {
+          // rotating: handled inside rotate()
         } else if (nearestOur) stepToward(c, nearestOur, live(c, A) > 0 ? 1 : 2);
       } else if (armyMode === 'march') {
         const wp = armyState.waypoints[armyState.phase];

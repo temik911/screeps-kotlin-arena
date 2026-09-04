@@ -95,3 +95,11 @@ run map-match13.txt -      hunter
 run map-match13.txt -      kite
 run map-match13.txt -      rush
 grind map-match13.txt -      sleeper
+run map-match13.txt -      fourteen
+run map-match14.txt -      fourteen
+run map-match14.txt -      nine
+run map-match14.txt -      hunter
+run map-match14.txt -      kite
+run map-match14.txt -      rush
+grind map-match14.txt -      sleeper
+run map-match9.txt match2 fourteen

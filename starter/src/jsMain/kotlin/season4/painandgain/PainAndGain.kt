@@ -162,6 +162,16 @@ object PainAndGain {
      *  дальше, минус два мили за шесть тиков при равной силе; прежнее «любой напарник в бою снимает ожидание»
      *  и было командой «в атаку по одному». */
     private const val FORM_RANGE = 2
+    /** Ротация: боец, у которого живых частей ОРУЖИЯ меньше ROTATE_OUT от их числа в теле, при живом лекаре выходит из
+     *  строя к ближайшему лекарю и возвращается, когда оружие отросло до ROTATE_IN. Считать по оружию, не по хитам:
+     *  оружие в теле впереди, и M8A8 при половине хитов уже безоружен. Так дерётся живой противник (матч 14): его мили
+     *  M8A1 ушёл за лекарей, за восемь тиков стал M8A5 и вернулся, наши умирали на месте — из двенадцати ни один не
+     *  отошёл, и бой при 0.97 проигран 12:0 без единой его потери. Лечение касанием возвращает часть за полтора тика;
+     *  отходящий боец стреляет и рубит по пути. */
+    private const val ROTATE_OUT = 0.5
+    private const val ROTATE_IN = 0.9
+    private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
+    private const val USE_INLINE = true       // бросок только в строю (v15)
     private const val FORM_SHARE = 0.75
 
     /** Дольше стольких тиков строй не ждёт: кто мог подойти — подошёл. Без этого готовность могла не наступить
@@ -720,6 +730,7 @@ object PainAndGain {
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
      *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
     private val plannedCaptures = HashSet<String>()
+    private val rotatingIds = HashSet<String>()   // бойцы в ротации (см. ROTATE_OUT)
 
     private fun planCapture(ctx: Ctx, step: Position?) {
         if (step == null) return
@@ -1377,11 +1388,20 @@ object PainAndGain {
             if (x in 0..99 && y in 0..99) fireCells.add(x * 100 + y)
         }
 
+        val healersAlive = army.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
             val healer = !hasWeapon(creep) && hasHeal(creep)
             // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
             val wounded = !healer && !hasWeapon(creep)
+            // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
+            val rotating = !healer && hasWeapon(creep) && healersAlive && run {
+                val weapons = creep.body.count { it.type == ATTACK || it.type == RANGED_ATTACK }
+                val live = creep.body.count { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
+                val frac = if (weapons == 0) 1.0 else live.toDouble() / weapons
+                if (creep.id in rotatingIds) { if (frac >= ROTATE_IN) { rotatingIds.remove(creep.id); false } else true }
+                else if (frac < ROTATE_OUT) { rotatingIds.add(creep.id); true } else false
+            }
             val support = healer || wounded
             val nearestEnemyRange = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
             val localAllies = combatArmy.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
@@ -1428,7 +1448,10 @@ object PainAndGain {
             if (localAggressive) aggressiveIds.add(creep.id) else aggressiveIds.remove(creep.id)
             // бросок — только на врага «с боем» (см. threatening): одинокий лекарь врага в восьми клетках был целью бойца,
             // который ждал по сплочению группу, а группа ждала его как отставшего на пути к флагу — 1500 тиков (m1 rush)
-            val engage = if (localAggressive && !support) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && catchable(it, chasers) && threatening(it, enemyCreeps) }.minByOrNull { getRange(creep, it) } else null
+            // бросок — только в строю: построение готово и не меньше двух вооружённых в FORM_RANGE; одиночный мили, ушедший
+            // вперёд на стрелков врага, погиб за восемь тиков, пока остальные держали построение (матч 14, t=71–78)
+            val inLine = !USE_INLINE || (formationReady && combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
+            val engage = if (localAggressive && !support && inLine && !rotating) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && catchable(it, chasers) && threatening(it, enemyCreeps) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
             val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
@@ -1449,7 +1472,10 @@ object PainAndGain {
                     ?: patients.minByOrNull { getRange(creep, it) }
             } else null
             // раненый идёт к ближайшему лекарю (вплотную — лечение 12 за часть против 4 на дистанции)
-            val healerNear: Creep? = if (wounded) army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }.minByOrNull { getRange(creep, it) } else null
+            val healerNear: Creep? = if (wounded || rotating) army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }.minByOrNull { getRange(creep, it) } else null
+            // под огнём без двух бойцов вплотную — назад к строю, не вперёд: шип в строй врага бьют трое-четверо, а он один
+            val aloneInFire = USE_ALONE_FIRE && !support && !wounded && posture == Posture.ANNIHILATE && !pushing && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) > 0.0 &&
+                combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= 1 } < 2
             // вес огня лекаря: подопечный в бою — только разница между клетками (HEALER_W_DAMAGE_FIGHT); место за
             // подопечным и шаг от мили задают HEALER_W_FRONT и HEALER_W_MELEE, а вес 0.05 в бою держал лекаря на кромке
             // огня в 2–3 клетках (лечение 24 вместо 72) и проиграл рубки sleeper на картах 4 и 8
@@ -1499,6 +1525,8 @@ object PainAndGain {
                 posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1 }
                 formGo -> { target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
                 wounded && healerNear != null -> { target = healerNear; standoff = 1; avoid = true }
+                rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true }
+                aloneInFire -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
                 leashed -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
                 grab != null -> { target = grab.pos; standoff = 0; avoid = true }
