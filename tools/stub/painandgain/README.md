@@ -17,7 +17,7 @@ SLEEP=300 MAP=map-match7.txt START=match2 $NODE --import ./register.mjs run.mjs 
 zsh regress.sh v9                                                               # every scenario, one line each, logs in out/
 ```
 
-Maps `map-match1..9.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
+Maps `map-match1..10.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
 start cells, `F` the flags). Enemy scripts: `none` (a dead bot), `scouts` (only the two scouts take flags), `grab`
 (the army camps on our side), `rush` (everyone at the nearest of ours), `greedy`, `army` (the match-3 opponent: D5,
 own A3, hover by its corner, engage within 20, healers adjacent, focus the lowest hits, sweep after we die), `hunter`
