@@ -188,6 +188,12 @@ object EscortRun {
     private const val ENEMY_OPENING_WAIT = 2
 
     // ---------- диагностика ----------
+    /** Версия бота — печатается ПЕРВОЙ строкой матча вместе с подписью ключевых параметров. Клиент арены читает скрипт
+     *  при старте матча, поэтому пересобранный бандл попадает в игру только со следующего запуска, и по логу должно
+     *  быть видно, какая сборка играла: вопрос «в игре какая версия?» иначе не решается ничем. Поднимать при каждом
+     *  выкате в main (тег escort-run-vN). */
+    private const val BOT_VERSION = "v4"
+
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     private const val LOG_EVERY = 10
@@ -411,8 +417,13 @@ object EscortRun {
 
     private fun probe(spawns: List<StructureSpawn>, sources: List<Source>, containers: List<StructureContainer>, flags: List<Flag>, creeps: List<Creep>, escortObjs: List<Creep>, myFlag: Position?, enemyFlag: Position?) {
         println(
-            "hello season4 escort-run: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} ticksLimit=${arenaInfo.ticksLimit} " +
+            "hello season4 escort-run $BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} ticksLimit=${arenaInfo.ticksLimit} " +
                 "cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${getTicks()}"
+        )
+        // подпись сборки: по ней видно, какая версия играет, даже если строка версии не поднята по забывчивости
+        println(
+            "tuning: pull=$USE_PULL chain=$MAX_CHAIN pullerMove=$PULLER_MIN_MOVE..$PULLER_MAX_MOVE openingWait=$ENEMY_OPENING_WAIT " +
+                "escortWatch=$ESCORT_WATCH healerEvery=$HEALER_EVERY strikeRatio=$STRIKE_RATIO planEvery=$PLAN_EVERY"
         )
         println("spawns: " + spawns.joinToString(" ") { "(${it.x},${it.y}) my=${it.my} e=${it.store[RESOURCE_ENERGY]}/${it.store.getCapacity(RESOURCE_ENERGY)} hits=${it.hits}/${it.hitsMax} spawning=${it.spawning != null}" })
         println("sources: " + sources.joinToString(" ") { "(${it.x},${it.y}) e=${it.energy}/${it.energyCapacity}" })
