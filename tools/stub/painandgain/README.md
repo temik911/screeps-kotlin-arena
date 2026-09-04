@@ -18,7 +18,7 @@ TRACE=510-600 MAP=map-match11.txt $NODE --import ./register.mjs run.mjs 2000 sle
 zsh regress.sh v9                                                               # every scenario, one line each, logs in out/
 ```
 
-Maps `map-match1..16.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
+Maps `map-match1..17.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
 start cells, `F` the flags). Enemy scripts: `none` (a dead bot), `scouts` (only the two scouts take flags), `grab`
 (the army camps on our side), `rush` (everyone at the nearest of ours), `greedy`, `army` (the match-3 opponent: D5,
 own A3, hover by its corner, engage within 20, healers adjacent, focus the lowest hits, sweep after we die), `hunter`
@@ -29,7 +29,9 @@ healers shot first, its own healers two cells behind its line and stepping away 
 14: `nine` plus rotation — a fighter below half its hits walks to its healers, stays out of our armed creeps' reach and
 returns above 0.9; its healers stand adjacent to the most damaged), `block` (matches 14–16: once hunting, the army
 moves as one block — melee in the front row, ranged two cells behind the melee anchor, healers three behind — fires at
-whatever is in range and rotates its damaged fighters back to the healers). Modes combine with `+`. The runner prints
+whatever is in range and rotates its damaged fighters back to the healers), `wing` (match 17: the block with its
+ranged in the front row — the line stops three cells from our nearest creep and shoots, its melee only step to what
+comes within two, a ranged with one of our armed creeps within two backs off two rows). Modes combine with `+`. The runner prints
 a `cpu t=N: max=..ms at t=M slow(>50ms)=K` line every 100 ticks — the bot's `loop()` wall time in Node, a relative
 measure of the arena's 100 ms tick budget (match 16 timed out three ticks in the thick of the fight).
 

@@ -118,3 +118,13 @@ run map-match16.txt -      hunter
 run map-match16.txt -      kite
 run map-match16.txt -      rush
 grind map-match16.txt -      sleeper
+run map-match16.txt -      wing
+run map-match15.txt -      wing
+run map-match17.txt -      wing
+run map-match17.txt -      block
+run map-match17.txt -      nine
+run map-match17.txt -      fourteen
+run map-match17.txt -      hunter
+run map-match17.txt -      kite
+run map-match17.txt -      rush
+grind map-match17.txt -      sleeper

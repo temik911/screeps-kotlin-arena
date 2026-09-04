@@ -181,6 +181,13 @@ object PainAndGain {
      *  боем. Шаг к слоту — локальный, без поля потока: двенадцать разных целей давали бы двенадцать BFS в тик (таймауты
      *  матча 16). */
     private const val USE_BLOCK = true
+    /** Хранитель флага (v18): боец, стоящий на НАШЕМ флаге, при чужом бегуне в KEEP_RANGE и без нашего бегуна на флаге
+     *  или назначенного к нему остаётся на месте, пока бегун врага рядом; в строю, в ударной группе и в цели армии он не
+     *  участвует; снимается, когда флаг не наш, бегун врага ушёл, наш бегун встал на флаг или враг с боем в
+     *  досягаемости. Пустой M1 не догнать: он отбегает от бойца и возвращается, едва тот уйдёт — армия брала R3, шла к
+     *  D5 в сорока тиках, через четыре тика теряла R3, и цель прыгала между ними 1800 тиков, армия стояла, а враг с
+     *  пятью флагами набирал вдвое (стенд m8 kite). */
+    private const val KEEP_RANGE = 10
     private const val FORM_SHARE = 0.75
 
     /** Дольше стольких тиков строй не ждёт: кто мог подойти — подошёл. Без этого готовность могла не наступить
@@ -495,7 +502,9 @@ object PainAndGain {
             greeted = true
             probe(flags, myCreeps, enemyCreeps, home, enemyHome)
         }
-        if (DEBUG_MAP && !mapLogged) {
+        // дамп карты — со ВТОРОГО тика и одной строкой: сто println на холодном первом тике (без JIT) упирались в лимит
+        // времени, и приказы первого тика пропадали (матч 17)
+        if (DEBUG_MAP && !mapLogged && getTicks() >= 2) {
             mapLogged = true
             logMap(flags, myCreeps, enemyCreeps)
         }
@@ -741,6 +750,7 @@ object PainAndGain {
     private val plannedCaptures = HashSet<String>()
     private val rotatingIds = HashSet<String>()   // бойцы в ротации (см. ROTATE_OUT)
     private val NO_FLOW = IntArray(10000) { -1 }
+    private val keeperIds = HashMap<String, String>()   // хранитель флага → id флага (см. KEEP_RANGE)
     private val SLOT_ORDER = intArrayOf(0, -1, 1, -2, 2, -3, 3, -4, 4)
 
     private fun planCapture(ctx: Ctx, step: Position?) {
@@ -1187,15 +1197,16 @@ object PainAndGain {
         val allies = ctx.myCreeps
         val enemyCreeps = ctx.enemyCreeps
         val combatEnemies = ctx.combatEnemies
+        updateKeepers(ctx, army)
 
-        val strikers = army.filter { fullSpeed(it) && hasWeapon(it) }
+        val strikers = army.filter { fullSpeed(it) && hasWeapon(it) && it.id !in keeperIds }
         // враги, с которыми есть бой: с уроном — и лекари, у которых рядом (в дальности лечения плюс шаг) есть свой с
         // оружием в теле, живым или мёртвым: такого лекарь вернёт в строй за шесть тиков (стенд m2 rush: армия ушла за
         // флагами от лекарей с обломками, и через сто тиков те вернулись в полном теле). Стая из одних лекарей при
         // скаутах (сила 0) не повод для боя: два уцелевших лекаря врага кайтили в четырёх клетках 1700 тиков, армия
         // в ДОБИТЬ то гналась, то сбивалась в кучу и не шла за флагами, пока скауты врага брали пять (m7 rush)
         val armedEnemies = combatEnemies.filter { threatening(it, enemyCreeps) }
-        val mobileArmy = army.filter { canMove(it) }
+        val mobileArmy = army.filter { canMove(it) && it.id !in keeperIds }
         val chasers = strikers.ifEmpty { mobileArmy }
         // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними
         val huntable = armedEnemies.filter { catchable(it, chasers) }
@@ -1422,6 +1433,7 @@ object PainAndGain {
             val mobile = strikers.any { it.id == creep.id }
             val healer = !hasWeapon(creep) && hasHeal(creep)
             val slot = slotOf[creep.id]
+            val keeper = creep.id in keeperIds
             // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
             val wounded = !healer && !hasWeapon(creep)
             // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
@@ -1550,6 +1562,7 @@ object PainAndGain {
             // в строю (см. USE_BLOCK): мили вплотную к врагу стоит и рубит, остальные — в свой слот
             val slotHold = slot != null && melee && localEnemies.any { getRange(creep, it) <= 1 }
             when {
+                keeper -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 slotHold -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
@@ -1581,7 +1594,7 @@ object PainAndGain {
                 raider != null && mobile && !support -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
                 else -> { target = post; standoff = POST_STANDOFF; avoid = true }
             }
-            val flow = if (slot != null) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)
+            val flow = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)
 
             val nearbyEnemies = combatEnemies.filter { getRange(creep, it) <= 12 }
             // «в бою», плотность и передний ряд — по врагам С БОЕМ: три безоружных лекаря врага в 4–5 клетках после выигранного
@@ -1652,6 +1665,7 @@ object PainAndGain {
 
             val step: Position? = when {
                 !canMove(creep) -> null
+                keeper -> null
                 mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
                 slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachCells else emptySet())
                 hold -> null
@@ -1808,29 +1822,63 @@ object PainAndGain {
 
     private fun sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0
 
-    /** План строя (см. USE_BLOCK): ряды поперёк оси центр мили → ближайшая группа врагов с боем; слоты — по порядку
-     *  SLOT_ORDER от середины ряда, стены пропускаются; крип берёт ближайший свободный слот своего ряда. Мили слотов не
-     *  получают — они и есть фронт; без мили фронт — стрелки, и тогда слоты только у тыла. */
+    /** Хранители флагов (см. KEEP_RANGE): снятие, потом назначение. */
+    private fun updateKeepers(ctx: Ctx, army: List<Creep>) {
+        val enemyRunners = ctx.enemyCreeps.filter { e -> ctx.combatEnemies.none { it.id == e.id } }
+        val armedEnemies = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        val iter = keeperIds.entries.iterator()
+        while (iter.hasNext()) {
+            val e = iter.next()
+            val c = army.firstOrNull { it.id == e.key }
+            val f = ctx.flags.firstOrNull { it.id == e.value }
+            val stay = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y &&
+                enemyRunners.any { getRange(f.pos, it) <= KEEP_RANGE } &&
+                armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 2 }
+            if (!stay) iter.remove()
+        }
+        for (f in ctx.flags) {
+            if (!f.ours) continue
+            val occ = f.occupant ?: continue
+            if (occ.my != true || army.none { it.id == occ.id } || occ.id in keeperIds) continue
+            if (runnerFlag.values.contains(f.id)) continue
+            if (enemyRunners.none { getRange(f.pos, it) <= KEEP_RANGE }) continue
+            if (armedEnemies.any { getRange(occ, it) <= RANGED_RANGE + 2 }) continue
+            keeperIds[occ.id] = f.id
+        }
+    }
+
+    /** План строя (см. USE_BLOCK): фронт — наши мили (без слотов, дерутся по своим правилам), стрелки — в ряду за центром
+     *  мили на RANGED_RANGE − d клеток, где d — дистанция фронта до ближайшей угрозы (вплотную — в 2, достают на клетку
+     *  за фронт, как стрелки врага за его мили; враг в 3 — в одном ряду с мили, иначе не достают вовсе: матч 17 — линия
+     *  врага встала в 3 от наших мили, его мили не лезли, наши стрелки «в 2 за мили» стояли в 5–6 от целей и молчали, а
+     *  наш фронт били бесплатно), тыл на клетку дальше. Первая правка делила случаи «есть их мили в 3 / нет» и меняла
+     *  местами ряды стрелков и мили — при подходе толпы случай менялся через пару тиков, и строй переворачивался под
+     *  ударами (стенд m6 sleeper, армия потеряна). Ряды поперёк оси центр → ближайшая группа врагов с боем; слоты по
+     *  порядку SLOT_ORDER от середины ряда, стены и клетки мили пропускаются; крип берёт ближайший свободный слот
+     *  своего ряда. */
     private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
-        val front = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in rotatingIds }
-        val second = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in rotatingIds }
-        val rear = army.filter { c -> front.none { it.id == c.id } && second.none { it.id == c.id } }
-        val base = front.ifEmpty { second }
-        if (base.isEmpty()) return
-        val anchor = centroidOf(base.map { InfluenceMap.cell(it.x, it.y) }) ?: return
+        val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in rotatingIds }
+        val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in rotatingIds }
+        val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
+        val armed = melees + rangeds
+        if (armed.isEmpty()) return
         val threats = armedEnemies.ifEmpty { combatEnemies }
+        val front = melees.ifEmpty { rangeds }
+        val anchor = centroidOf(front.map { InfluenceMap.cell(it.x, it.y) }) ?: return
         val nearest = threats.minByOrNull { getRange(anchor, it) } ?: return
         val group = threats.filter { getRange(nearest, it) <= ENGAGE_RANGE }
         val ec = centroidOf(group.map { InfluenceMap.cell(it.x, it.y) }) ?: return
         val dx0 = sgn(ec.x - anchor.x); val dy = sgn(ec.y - anchor.y)
         val dx = if (dx0 == 0 && dy == 0) 1 else dx0
         val px = -dy; val py = dx
+        val taken = HashSet<Int>()
+        for (m in melees) taken.add(m.x * 100 + m.y)
         fun rowCells(back: Int, n: Int): List<Position> {
             val out = ArrayList<Position>()
             for (k in SLOT_ORDER) {
                 if (out.size >= n) break
                 val x = anchor.x - back * dx + k * px; val y = anchor.y - back * dy + k * py
-                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
+                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in taken) continue
                 out.add(InfluenceMap.cell(x, y))
             }
             return out
@@ -1844,8 +1892,10 @@ object PainAndGain {
                 slotOf[c.id] = best
             }
         }
-        if (front.isNotEmpty()) assign(second, rowCells(2, second.size))
-        assign(rear, rowCells(3, rear.size))
+        val d = front.minOf { f -> threats.minOf { getRange(f, it) } }
+        val back = (RANGED_RANGE - d).coerceIn(0, 2)
+        if (melees.isNotEmpty()) assign(rangeds, rowCells(back, rangeds.size))
+        assign(rear, rowCells(back + 1, rear.size))
     }
 
     /** Шаг к слоту строя без поля потока: соседняя проходимая клетка, ближайшая к слоту (при равенстве — под меньшим
@@ -2240,7 +2290,7 @@ object PainAndGain {
 
         var swamp = 0
         var wall = 0
-        println("=== MAP (rows y=0..99, cols x=0..99) ===")
+        val out = StringBuilder("=== MAP (rows y=0..99, cols x=0..99) ===")
         for (y in 0..99) {
             val row = StringBuilder()
             for (x in 0..99) {
@@ -2258,8 +2308,9 @@ object PainAndGain {
                     }
                 )
             }
-            println("${y.toString().padStart(2, '0')}:$row")
+            out.append('\n').append(y.toString().padStart(2, '0')).append(':').append(row)
         }
+        println(out.toString())
         println("=== END MAP swamp=$swamp wall=$wall plain=${10000 - swamp - wall} ===")
     }
 }
