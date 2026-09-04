@@ -1,22 +1,24 @@
 #!/bin/zsh
 # Full stub regression for the Pain and Gain bot against THIS worktree's build (run.mjs imports ../../../build/js/...).
-# Usage: zsh tools/stub/painandgain/regress.sh [tag]
+# Usage: zsh tools/stub/painandgain/regress.sh [tag]        JOBS=<n> to change the parallel width (default 8)
 # One line per scenario: PASS/FAIL, the outcome, errors. Logs go to ./out/ (gitignored).
 # Pass = the enemy army destroyed, or the match ended (unreachable lead / 2000 ticks) with our score ahead — with
 # errors: 0. tools/land.sh checks for a line with PASS (or ENEMY SPAWN DESTROYED for arenas with spawns) and errors: 0.
 # The synthetic map (guessed bodies from before the first live match) is not in the gate: run it by hand,
 #   $NODE --import ./register.mjs run.mjs 2000 rush|greedy|grab
-cd "$(dirname "$0")"
+#
+# Scenarios run in PARALLEL, JOBS at a time: each is its own node process with its own map, log and result, so nothing
+# is shared between them and the order of the report is restored at the end from numbered result files. Serially the
+# suite took over three minutes, and tools/land.sh runs every arena's suite one after another — one slow suite delays
+# every other arena's landing. Determinism is unaffected: the scenarios never talk to each other.
+SELF=${0:A}
+cd "${SELF:h}"
 NODE=${NODE:-$(ls -d ~/.gradle/nodejs/node-*/bin/node 2>/dev/null | tail -1)}
 if [[ ! -x "$NODE" ]]; then echo "regress: node not found under ~/.gradle/nodejs (run ./gradlew build once)"; exit 1; fi
-TAG=${1:-cur}
-mkdir -p out
-# grind: the debuffed fight after passive captures (sleeper) is lost by construction — we hold R×0.6 H×0.75 against a
-# full army — and its points outcome is decided by where the enemy wanders after our army is gone (two identical
-# fights on map 4 ended 17229:12409 and 12127:19175). It is run and reported in full mode but not by the landing gate.
-grind() { if [[ "$TAG" == land ]]; then return; fi; run "$@"; }
-run() { # $1 = map file or -, $2 = START or -, $3 = scenario
-  local map=$1 start=$2 sc=$3 label out line
+
+# one scenario, in a worker process: writes its report line into <dir>/<n> (see the xargs call at the end)
+if [[ "$1" == --one ]]; then
+  local_n=$2; map=$3; start=$4; sc=$5; TAG=$6; dir=$7
   label="${map#map-}"; label="${label%.txt}:$sc"
   if [[ "$map" == - ]]; then
     line=$(LOGTAG="${TAG}-" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1 | grep '^done:' | tail -1)
@@ -26,7 +28,6 @@ run() { # $1 = map file or -, $2 = START or -, $3 = scenario
     line=$(LOGTAG="${TAG}-$label-" MAP="$map" START="$start" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1 | grep '^done:' | tail -1)
   fi
   # done: <outcome> score=a/b alive=x/y errors=N time=..s log=...
-  local outcome errors verdict a b
   outcome=$(print -r -- "$line" | sed -E 's/^done: (.*) score=.*/\1/')
   a=$(print -r -- "$line" | sed -E 's/.*score=([0-9]+)\/([0-9]+).*/\1/'); b=$(print -r -- "$line" | sed -E 's/.*score=([0-9]+)\/([0-9]+).*/\2/')
   errors=$(print -r -- "$line" | sed -E 's/.*errors=([0-9]+).*/\1/')
@@ -35,7 +36,21 @@ run() { # $1 = map file or -, $2 = START or -, $3 = scenario
   elif [[ "$outcome" == "our army destroyed"* ]]; then verdict=FAIL
   elif (( a > b )); then verdict=PASS
   else verdict=FAIL; fi
-  printf '%-4s %-22s %-40s score %s:%s | errors: %s \n' "$verdict" "$label" "$outcome" "$a" "$b" "$errors"
+  printf '%-4s %-22s %-40s score %s:%s | errors: %s \n' "$verdict" "$label" "$outcome" "$a" "$b" "$errors" > "$dir/$local_n"
+  exit 0
+fi
+
+TAG=${1:-cur}
+JOBS=${JOBS:-8}
+mkdir -p out
+PLANDIR=$(mktemp -d)
+N=0
+# grind: the debuffed fight after passive captures (sleeper) is lost by construction — we hold R×0.6 H×0.75 against a
+# full army — and its points outcome is decided by where the enemy wanders after our army is gone (two identical
+# fights on map 4 ended 17229:12409 and 12127:19175). It is run and reported in full mode but not by the landing gate.
+grind() { if [[ "$TAG" == land ]]; then return; fi; run "$@"; }
+run() { # $1 = map file or -, $2 = START or -, $3 = scenario — collected here, executed in parallel below
+  N=$((N + 1)); print -r -- "$N $1 $2 $3 $TAG $PLANDIR" >> "$PLANDIR/plan"
 }
 run map-match1.txt -      grab
 run map-match1.txt -      rush
@@ -219,3 +234,11 @@ run map-match18.txt match2 farm
 grind map-match25.txt match2 farm
 grind map-match21.txt match2 farm
 grind map-match12.txt match2 farm
+
+
+xargs -P "$JOBS" -n 6 zsh "$SELF" --one < "$PLANDIR/plan"
+for ((i = 1; i <= N; i++)); do
+  if [[ -s "$PLANDIR/$i" ]]; then cat "$PLANDIR/$i"
+  else printf '%-4s %-22s %-40s score %s:%s | errors: %s \n' FAIL "scenario-$i" "worker produced nothing" 0 0 '?'; fi
+done
+rm -rf "$PLANDIR"

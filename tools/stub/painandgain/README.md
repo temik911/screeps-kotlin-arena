@@ -44,6 +44,14 @@ measure of the arena's 100 ms tick budget (match 16 timed out three ticks in the
 prints `bfs t=N max=K` every ten ticks — the most flow-field BFS runs in one tick since the previous line (the live
 timeouts of matches 16–18 all fell inside flow-field BFS).
 
+`regress.sh` runs its scenarios **in parallel**, `JOBS` at a time (default 8, `JOBS=14 zsh regress.sh tag` to widen):
+each scenario is its own node process with its own map, log and result file, and the report is put back in order at the
+end. Serially the suite took over three minutes; parallel it is under a minute, and the report is byte-identical. This
+is not only about impatience — `tools/land.sh` runs every arena's suite one after another, so a slow suite here delays
+the landing of every other arena. Logs still land in `out/`, one file per scenario per tag; a full run writes a few
+hundred megabytes there, so `out/` is worth emptying between investigations (it is gitignored and every log is
+reproducible by re-running its scenario).
+
 `tools/land.sh` runs `regress.sh` as the landing gate: every line must say `PASS` with `errors: 0` — the enemy army
 destroyed, or the match ended with our score ahead. A new arena's harness starts as a copy of a sibling directory
 (`game/` is arena-agnostic; the runner and `world.mjs` are where the arena rules live).
