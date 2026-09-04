@@ -12,8 +12,9 @@ the client itself runs up to three series at once and the server keeps one match
     tools/play.py spawn-and-swamp -n 20 --stop-on-defeat    # a series, stopping at the first loss
     tools/play.py spawn-and-swamp -n 5 --logs runs/         # keep every match's console
 
-Rating matches move your rating; that is the point of playing them, but land the version first
-(rule 5 in CLAUDE.md) so the log refers to a commit that is in `main`.
+Rating matches move your rating; that is the point of playing them. Landing first is NOT required
+(rule 5 in CLAUDE.md): what a match needs is that the code being played is committed on your branch
+and that the bot prints its version in the first log line, so the log can be tied back to a commit.
 """
 import argparse, base64, io, json, os, sys, time, zipfile
 
