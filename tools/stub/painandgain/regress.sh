@@ -85,3 +85,8 @@ run map-match11.txt -      hunter
 run map-match11.txt -      kite
 run map-match11.txt -      rush
 grind map-match11.txt -      sleeper
+run map-match12.txt match2 twelve
+run map-match12.txt match2 hunter
+run map-match12.txt match2 kite
+run map-match12.txt match2 rush
+grind map-match12.txt match2 sleeper

@@ -18,13 +18,14 @@ TRACE=510-600 MAP=map-match11.txt $NODE --import ./register.mjs run.mjs 2000 sle
 zsh regress.sh v9                                                               # every scenario, one line each, logs in out/
 ```
 
-Maps `map-match1..11.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
+Maps `map-match1..12.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
 start cells, `F` the flags). Enemy scripts: `none` (a dead bot), `scouts` (only the two scouts take flags), `grab`
 (the army camps on our side), `rush` (everyone at the nearest of ours), `greedy`, `army` (the match-3 opponent: D5,
 own A3, hover by its corner, engage within 20, healers adjacent, focus the lowest hits, sweep after we die), `hunter`
 (match 4 and 8: D5 with the whole army, then straight at ours), `kite` (match 5: bait melee plus kiting ranged),
 `sleeper` (idle until `SLEEP`, default 500, then rush), `nine` (match 9: straight at our army from tick 1, our
-healers shot first, its own healers two cells behind its line and stepping away from our armed creeps). Modes combine
+healers shot first, its own healers two cells behind its line and stepping away from our armed creeps), `twelve`
+(match 12: D5, a loop through our half up to its H4 corner, then the match-9 hunt at full speed). Modes combine
 with `+`.
 
 `tools/land.sh` runs `regress.sh` as the landing gate: every line must say `PASS` with `errors: 0` — the enemy army

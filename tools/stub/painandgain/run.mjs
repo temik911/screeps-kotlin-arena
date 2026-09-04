@@ -112,12 +112,14 @@ function stepAway(c, from) {
 function isRunner(c) { return c.body.every((p) => p.type === M); }
 // 'nine' (match 9 opponent): our healers first, then the lowest hits — two of ours lost every HEAL part by tick 140
 const healerOf = (o) => live(o, H) > 0 && live(o, A) === 0 && live(o, R) === 0;
-const targetKey = (o) => (has('nine') && healerOf(o) ? 0 : 1) * 100000 + o.hits;
+// 'twelve' hunts the way 'nine' does (healers first, single-target fire, its healers behind), after a roam
+const NINE = has('nine') || has('twelve');
+const targetKey = (o) => (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
 function fireAt(c, ours) {
   const inRange = ours.filter((o) => range(c, o) <= 3);
   if (live(c, R) > 0 && inRange.length) {
     const close = inRange.filter((o) => range(c, o) <= 2);
-    if (close.length >= 2 && !has('nine')) c.rangedMassAttack();
+    if (close.length >= 2 && !NINE) c.rangedMassAttack();
     else c.rangedAttack(inRange.sort((a, b) => targetKey(a) - targetKey(b))[0]);
   }
   if (live(c, A) > 0) {
@@ -159,19 +161,21 @@ function enemyTick() {
   // it sweeps the flags and hunts runners
   let armyMode = null;
   // 'hunter' (match 4 opponent): D5 with the whole army, then straight at our army wherever it is
-  if ((has('army') || has('hunter') || has('nine')) && fighters.length) {
+  if ((has('army') || has('hunter') || has('nine') || has('twelve')) && fighters.length) {
     const cen = { x: Math.round(fighters.reduce((s, c) => s + c.x, 0) / fighters.length), y: Math.round(fighters.reduce((s, c) => s + c.y, 0) / fighters.length) };
     if (!armyState.waypoints) {
       const south = cen.y > 50;
-      const wp = (has('hunter') ? [[49, 49]] : [[49, 49], [31, 67], [17, 85]]).map(([x, y]) => (south ? { x: 99 - x, y: 99 - y } : { x, y }));
+      // match 12: D5, then a loop through our half (78,59) up to its H4 corner (85,15), then the match-9 hunt at 1.0
+      const wp = (has('hunter') ? [[49, 49]] : has('twelve') ? [[49, 49], [78, 59], [85, 15]] : [[49, 49], [31, 67], [17, 85]]).map(([x, y]) => (south ? { x: 99 - x, y: 99 - y } : { x, y }));
       armyState.waypoints = wp; armyState.phase = 0; armyState.engaged = false;
     }
     const ourFighters = ours.filter((o) => !isRunner(o));
     // match 3: the enemy left its hover point when our army came within ~20 cells of it
     const near = ourFighters.filter((o) => range(o, cen) <= 20 || fighters.some((f) => range(f, o) <= 8));
-    if (near.length && !has('nine')) armyState.engaged = true;
+    if (near.length && !NINE) armyState.engaged = true;
     else if (!ourFighters.some((o) => range(o, cen) <= 26)) armyState.engaged = false;
     if (has('hunter') && range(cen, armyState.waypoints[0]) <= 2) armyState.hunting = true;
+    if (has('twelve') && armyState.phase === armyState.waypoints.length - 1 && range(cen, armyState.waypoints[armyState.phase]) <= 2) armyState.hunting = true;
     // match 9: the whole army walked straight at ours as one blob, no flag on the way; it charges from six cells
     if (has('nine')) { armyState.waypoints = [ourCentroid]; armyState.phase = 0; if (range(cen, ourCentroid) <= 6) armyState.hunting = true; }
     if (armyState.hunting) armyState.engaged = true;
@@ -194,9 +198,9 @@ function enemyTick() {
         if (isHealer) {
           const mate = fighters.filter((o) => o !== c && live(o, H) === 0).sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax))[0];
           // match 9: the enemy healers stayed two to four cells behind their line and were never touched
-          const threat = has('nine') ? ours.filter((o) => !isRunner(o) && live(o, A) + live(o, R) > 0 && range(c, o) <= 2) : [];
+          const threat = NINE ? ours.filter((o) => !isRunner(o) && live(o, A) + live(o, R) > 0 && range(c, o) <= 2) : [];
           if (threat.length) stepAway(c, threat);
-          else if (mate) stepToward(c, mate, has('nine') ? 2 : 1);
+          else if (mate) stepToward(c, mate, NINE ? 2 : 1);
         } else if (nearestOur) stepToward(c, nearestOur, live(c, A) > 0 ? 1 : 2);
       } else if (armyMode === 'march') {
         const wp = armyState.waypoints[armyState.phase];

@@ -179,6 +179,15 @@ object PainAndGain {
      *  правила ожидания не видят, кто кого держит, — предохранитель по времени видит. */
     private const val COHESION_PATIENCE = 30
 
+    /** Бегство скаута: от боевого врага ближе SCOUT_FLEE_TRIGGER — прочь, путь бегства ищется до клетки дальше
+     *  SCOUT_FLEE_RANGE от ВСЕХ врагов. С дальностью цели 3 ближайшая «безопасная» клетка лежала на два шага глубже в
+     *  углу H4, и скаут бежал в тупик, пока армия врага шла в устье (матч 12, t=117); цель дальше глубины кармана
+     *  ведёт через устье наружу. Триггер больше досягаемости на глубину кармана: на равной скорости уходить надо,
+     *  пока устье открыто, а не когда враг в четырёх клетках. Скаут — страховка от аннигиляции (пустой MOVE не
+     *  устаёт и не догоняется на открытом месте), его гибель стоит матча. */
+    private const val SCOUT_FLEE_TRIGGER = 8
+    private const val SCOUT_FLEE_RANGE = 12
+
     /** Уклонение (поза EVADE): армия, которую мы не можем ДОБИТЬ (наша мощь меньше их × pushRatio), существует — не
      *  драться с ней, а держаться там, откуда есть выход, и уходить, когда она подходит: при равной скорости догнать
      *  нельзя, а скауты тем временем берут флаги. Четыре равных боя у поста подряд (матчи 7–10) проиграны разменом
@@ -187,10 +196,16 @@ object PainAndGain {
      *  сейчас минус наше прибытие минус наш путь дальше), счёт точки — меньший из них. Матч 11: армия ушла за флагом
      *  H4 в угол (8,90) за 52 тика, пока враг шёл на нас с 80 клеток, точка уклонения выбралась там же (прибытие 15,
      *  выхода нет), враг закрыл карман, и при четырёх дебаффах (0.81) армия была уничтожена. Флаг-цель армии при
-     *  непобедимом враге тоже обязан иметь выход не меньше ESCAPE_MARGIN после прибытия. Стоять на месте можно,
-     *  пока счёт места не меньше EVADE_SAFE; иначе — в лучшую точку, с гистерезисом EVADE_HYSTERESIS и пересчётом
-     *  раз в EVADE_EVAL_EVERY (девять полей); счёт лучшей меньше EVADE_MIN_MARGIN — карман, уклонения нет:
-     *  RETREAT/бой как прежде. */
+     *  непобедимом враге тоже обязан иметь выход не меньше ESCAPE_MARGIN после прибытия. Преследователь проецируется
+     *  к точке на измеренный темп × наше прибытие ПЛЮС запаздывание REACTION_LAG: стоящий враг может пойти в любой
+     *  момент, а узнаем мы об этом через окно темпа и период пересчёта (за R3 (13,49) армия шла 41 тик вдоль западного
+     *  края при спящем враге; тот пошёл на полпути, запер коридор, и при семи флагах (0.76) армия была уничтожена —
+     *  матч 12). Худший случай целиком — враг выходит вместе с нами — бракует и центральный D5 (выход 6 с любой
+     *  стороны), и армия сидела дома весь матч (стенд m1 scouts).
+     *  Стоять на месте можно, пока счёт места не меньше EVADE_SAFE; иначе — в лучшую точку, с гистерезисом
+     *  EVADE_HYSTERESIS и пересчётом раз в EVADE_EVAL_EVERY (девять полей). Лучшая точка берётся ВСЕГДА, и с плохим
+     *  счётом тоже: «карман — отход как прежде» вёл в угол (3,96) и к дому-тупику, где армия стояла и была догнана
+     *  (матч 12, стенд m11 sleeper); худшая из точек всё же дальше от врага, чем угол. */
     /** Дистанция, с которой уклонение идёт раньше флагов-целей: при враге ближе армия с пятью дебаффами (0.72) меняла
      *  цели и точки уклонения в разные стороны через каждые 3–6 тиков, в сумме стояла на месте и была догнана
      *  (стенд m8 army); дальше — цели с выходом, иначе безопасная точка. */
@@ -198,7 +213,6 @@ object PainAndGain {
     private const val EVADE_ARRIVED = 3
     private const val EVADE_EVAL_EVERY = 5
     private const val EVADE_HYSTERESIS = 4
-    private const val EVADE_MIN_MARGIN = 3
     private const val EVADE_SAFE = 20
     private const val ESCAPE_MARGIN = 10
 
@@ -257,6 +271,8 @@ object PainAndGain {
     private const val ENGAGE_RANGE = 8
     private const val CLOSE_STANDOFF = 2
     private const val APPROACH_WINDOW = 20
+    /** Запаздывание реакции на пошедшего врага: окно темпа плюс период пересчёта (см. exitMargin). */
+    private const val REACTION_LAG = APPROACH_WINDOW + EVADE_EVAL_EVERY
 
     /** Столько тиков без сдвига — враг «стоит» и в стаи по «успеет дойти» не входит (см. packAt). */
     private const val STILL_TICKS = 20
@@ -766,13 +782,17 @@ object PainAndGain {
             val onIt = f != null && s.x == f.pos.x && s.y == f.pos.y
             val nearby = ctx.combatEnemies.filter { getRange(s, it) <= RANGED_RANGE + 2 }
             val underFire = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies) > 0.0
-            // захватчик без замены: от врага рядом — прочь (пустой MOVE ходит клетку за тик и по болоту, где
-            // стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
-            if (canMove(s) && (underFire || nearby.any { getRange(s, it) <= RANGED_RANGE + 1 })) {
+            // захватчик без замены: от врага «с боем» ближе SCOUT_FLEE_TRIGGER — прочь (пустой MOVE ходит клетку за тик и
+            // по болоту, где стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
+            val threats = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER && threatening(it, ctx.enemyCreeps) }
+            if (canMove(s) && (underFire || threats.isNotEmpty())) {
                 // поиск пути бегства может не дать шага (скаут в матче 3 «бежал» на месте три тика и погиб) —
-                // тогда жадно: соседняя клетка подальше от врагов и под меньшим огнём
-                val foes = nearby.ifEmpty { ctx.combatEnemies }
-                val step = fleeStep(s, foes, ctx.dangerMatrix) ?: greedyFlee(ctx, s, foes)
+                // тогда жадно: соседняя клетка подальше от врагов и под меньшим огнём; в опасности шаг делается ВСЕГДА,
+                // и на не лучшую клетку тоже: скаут у стены (4,40) «бежал» стоя тридцать тиков рядом с боем и погиб
+                // (матч 12) — стоящего враг на равной скорости достаёт следующим тиком, идущего нет
+                val foes = threats.ifEmpty { ctx.combatEnemies }
+                val danger = underFire || nearby.isNotEmpty()
+                val step = fleeStep(s, foes, ctx.dangerMatrix, SCOUT_FLEE_RANGE) ?: greedyFlee(ctx, s, foes, force = danger)
                 if (step != null) TrafficManager.request(s, step, RUNNER_PRIORITY)
                 dbg(s, "FLEE", f, step)
                 continue
@@ -866,9 +886,16 @@ object PainAndGain {
             val flow = flowTo(ctx, f.pos)
             val travel = group.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
             if (travel >= Int.MAX_VALUE / 4) continue
-            // при непобедимом враге — только флаг с выходом (см. ESCAPE_MARGIN): за H4 в угол (8,90) армия шла 52 тика,
-            // пока враг шёл на неё с 80 клеток, и в углу была уничтожена (матч 11)
-            if (escapeNeeded && exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) continue
+            if (escapeNeeded) {
+                // покинутую точку уклонения армия не идёт «захватывать»: у R3 (13,49) счёт места упал, точка покинута — и
+                // тут же выбрана целью в шести тиках, навстречу врагу (матч 12, t=188)
+                val left = evadeLeft
+                if (left != null && left.x == f.pos.x && left.y == f.pos.y) continue
+                // только флаг с выходом (см. ESCAPE_MARGIN, REACTION_LAG): за H4 в угол (8,90) армия шла 52 тика, пока
+                // враг шёл на неё с 80 клеток (матч 11); за R3 (13,49) — 41 тик вдоль западного края при спящем враге,
+                // и тот пошёл на полпути (матч 12)
+                if (exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) continue
+            }
             // стая без урона ничего не охраняет: три лекаря врага, лечащие друг друга, делали цену боя бесконечной для
             // ослабленной армии, и она 1500 тиков держала пост при шести свободных флагах (стенд m2 rush)
             val pack = packAt(ctx, f.pos, flow, travel).filter { threatening(it, ctx.enemyCreeps) }
@@ -985,7 +1012,7 @@ object PainAndGain {
         val flowC = escapeFlows[ckey] ?: return Int.MIN_VALUE / 2
         val start = escapeNearest[ckey] ?: return Int.MIN_VALUE / 2
         val theirsC = escapeTheirs[ckey] ?: return Int.MIN_VALUE / 2
-        val pursuer = if (start < 0) -1 else projectAlong(flowC, start, minOf(theirsC, (approachRate * arrive).toInt()))
+        val pursuer = if (start < 0) -1 else projectAlong(flowC, start, minOf(theirsC, (approachRate * arrive).toInt() + REACTION_LAG))
         var best = Int.MIN_VALUE / 2
         for (d in escapeCandidates(ctx)) {
             if (d.x == c.x && d.y == c.y) continue
@@ -1045,7 +1072,7 @@ object PainAndGain {
             if (best == null || score > bestScore) { bestScore = score; best = c; bestArrive = theirs - ourTicks; bestExit = exit }
         }
         if (cur != null && !arrived && curScore >= bestScore - EVADE_HYSTERESIS) return cur
-        if (best == null || bestScore <= EVADE_MIN_MARGIN) { evadeTarget = null; return null }
+        if (best == null) { evadeTarget = null; return null }
         if (cur == null || cur.x != best.x || cur.y != best.y)
             println("evade: t=$now to=(${best.x},${best.y}) score=$bestScore arrive=$bestArrive exit=$bestExit from=(${ctx.ourCentroid.x},${ctx.ourCentroid.y}) approach=${(approachRate * 100).toInt()}")
         evadeTarget = best
@@ -1938,11 +1965,12 @@ object PainAndGain {
 
     /** Жадный шаг бегства: свободная соседняя клетка (не стена, не чужой флаг, не занята) с наибольшей
      *  дальностью до ближайшего врага, при равной — под меньшим огнём; null — некуда. */
-    private fun greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>): Position? {
+    private fun greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>, force: Boolean = false): Position? {
         val occupied = (ctx.myCreeps + ctx.enemyCreeps).filter { !it.spawning }.mapTo(HashSet()) { it.x * 100 + it.y }
         var best: Position? = null
-        var bestRange = enemies.minOfOrNull { getRange(creep, it) } ?: 0
-        var bestFire = InfluenceMap.fireAt(creep.x, creep.y, enemies)
+        // force: лучшая из соседних, даже если она не лучше своей клетки (см. SCOUT_FLEE_TRIGGER)
+        var bestRange = if (force) -1 else (enemies.minOfOrNull { getRange(creep, it) } ?: 0)
+        var bestFire = if (force) Double.MAX_VALUE else InfluenceMap.fireAt(creep.x, creep.y, enemies)
         for ((dx, dy) in DIRECTIONS) {
             if (dx == 0 && dy == 0) continue
             val x = creep.x + dx; val y = creep.y + dy
@@ -1963,9 +1991,9 @@ object PainAndGain {
         return result.path.firstOrNull()
     }
 
-    private fun fleeStep(creep: Creep, enemies: List<Creep>, dangerMatrix: CostMatrix): Position? {
+    private fun fleeStep(creep: Creep, enemies: List<Creep>, dangerMatrix: CostMatrix, range: Int = RANGED_RANGE): Position? {
         if (enemies.isEmpty()) return null
-        val goals = enemies.map { e -> SearchGoal(pos = InfluenceMap.cell(e.x, e.y), range = RANGED_RANGE) }.toTypedArray()
+        val goals = enemies.map { e -> SearchGoal(pos = InfluenceMap.cell(e.x, e.y), range = range) }.toTypedArray()
         val result = searchPath(creep, goals, SearchPathOptions(flee = true, costMatrix = dangerMatrix))
         return result.path.firstOrNull()
     }
