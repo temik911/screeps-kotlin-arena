@@ -136,7 +136,7 @@ run map-match18.txt match2 hunter
 run map-match18.txt match2 kite
 run map-match18.txt match2 rush
 grind map-match18.txt match2 sleeper
-grind map-match18.txt match2 spread
+run map-match18.txt match2 spread
 run map-match12.txt match2 spread
 grind map-match19.txt match2 spread
 run map-match19.txt match2 block
@@ -146,3 +146,12 @@ run map-match19.txt match2 hunter
 run map-match19.txt match2 kite
 run map-match19.txt match2 rush
 grind map-match19.txt match2 sleeper
+run map-match20.txt -      hunter
+run map-match20.txt -      army
+run map-match20.txt -      nine
+run map-match20.txt -      wing
+run map-match20.txt -      block
+run map-match20.txt -      rush
+run map-match20.txt -      kite
+grind map-match20.txt -      sleeper
+grind map-match20.txt -      spread

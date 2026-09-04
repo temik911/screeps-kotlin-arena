@@ -122,6 +122,15 @@ object PainAndGain {
      *  давление вовсе, и обе армии простояли до конца. Критерий — результат, не дистанция. */
     private const val STALL_TICKS = 20
     private const val STALL_COOLDOWN = 300   // до чистого урона врагу или столько тиков: 60 рвали марш к флагу каждым циклом
+    /** Простой — это пикет, не армия: не больше стольких вооружённых врагов в досягаемости броска, и все STALL_TICKS
+     *  подряд. Матч 20: авангард армии врага вошёл в восемь клеток на 64-м тике, окно «20 тиков без урона» считалось с
+     *  начала матча — простой сработал в тот же тик, армия развернулась на H4 спиной к подходящему врагу и была
+     *  разбита в развороте 0:12. Второй раз он сработал на 117-м посреди проигрываемого боя (падали только наши хиты) и
+     *  снял бой по контакту — обмен уронами считается с обеих сторон. */
+    private const val STALL_PICKET = 4
+    /** Чистый урон за окно, который считается боем: залп пикета с трёх клеток при проходе (60–180 хитов, залечены через
+     *  тик) сбрасывал 300-тиковый простой, и цель-флаг пропадала посреди марша (стенд m12 spread, t=431). */
+    private const val STALL_DAMAGE = 300
     /** Пикет у флага: столько вооружённых врагов в KEEP_RANGE хранителя не снимают — россыпь сторожит флаг парой, и без
      *  хранителя взятый флаг отбирали за десять тиков (стенд m19 spread); армия (матч 18) — это дюжина, не пара. */
     private const val KEEP_PICKET = 2
@@ -802,6 +811,8 @@ object PainAndGain {
     private val NO_FLOW = IntArray(10000) { -1 }
     private val keeperIds = HashMap<String, String>()   // хранитель флага → id флага (см. KEEP_RANGE)
     private val enemyHitsHist = ArrayDeque<Int>()         // сумма хитов врага за STALL_TICKS тиков (чистый урон)
+    private val ourHitsHist = ArrayDeque<Int>()           // и наша: бьют только нас — это бой, не простой
+    private var preyNearTicks = 0                         // тиков подряд с пикетом (см. STALL_PICKET) в досягаемости
     private var stallUntil = 0
     private var stalledNow = false                        // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
     private val SLOT_ORDER = intArrayOf(0, -1, 1, -2, 2, -3, 3, -4, 4)
@@ -1277,16 +1288,23 @@ object PainAndGain {
         // нет — стенд m3 army: пауза на подходе выключала давление, и обе армии простояли до конца)
         val now = getTicks()
         val enemyHitsNow = enemyCreeps.sumOf { it.hits }
-        enemyHitsHist.addLast(enemyHitsNow)
+        val ourHitsNow = army.sumOf { it.hits }
+        enemyHitsHist.addLast(enemyHitsNow); ourHitsHist.addLast(ourHitsNow)
         while (enemyHitsHist.size > STALL_TICKS) enemyHitsHist.removeFirst()
-        val netDamage = enemyHitsHist.size == STALL_TICKS && enemyHitsNow < enemyHitsHist.first()
+        while (ourHitsHist.size > STALL_TICKS) ourHitsHist.removeFirst()
+        // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
+        val netDamage = enemyHitsHist.size == STALL_TICKS &&
+            (enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
         if (netDamage) stallUntil = 0
-        val preyNear = armedEnemies.any { e -> strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
+        // пикет в досягаемости броска все STALL_TICKS подряд (см. STALL_PICKET): армия, только что вошедшая в досягаемость,
+        // простоя не даёт (матч 20, t=64)
+        val nearArmed = armedEnemies.count { e -> strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
+        preyNearTicks = if (nearArmed in 1..STALL_PICKET) preyNearTicks + 1 else 0
         // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
         // конца матча (стенд m19 spread, t=600–1600)
-        if (posture != Posture.RETREAT && posture != Posture.EVADE && combatEnemies.isNotEmpty() && preyNear && enemyHitsHist.size == STALL_TICKS && !netDamage && now >= stallUntil) {
+        if (posture != Posture.RETREAT && posture != Posture.EVADE && combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS && !netDamage && now >= stallUntil) {
             stallUntil = now + STALL_COOLDOWN
-            if (DEBUG_LOG) println("stall t=$now: no net damage for $STALL_TICKS ticks with prey in reach — flags until $stallUntil")
+            if (DEBUG_LOG) println("stall t=$now: picket of $nearArmed armed in reach for $preyNearTicks ticks without damage either way — flags until $stallUntil")
         }
         val stalled = now < stallUntil
         stalledNow = stalled
