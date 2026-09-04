@@ -1643,7 +1643,11 @@ object PainAndGain {
             val inLine = !USE_INLINE || (formationReady && combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
             // при бесплодной охоте (см. STALL_TICKS) броска нет: висящие крипы россыпи «ловимы» (не уходят стабильно), и
             // каждый наш крип танцевал со своим соседом вместо марша к флагу-цели (стенд m19 spread, travel=23 четыреста тиков)
-            val holdMelee = isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact
+            // «держит линию» — про мили В ЛИНИИ, а не про любого мили в бою: без этого условия мили, до которого враг
+            // ещё не дошёл, стоял на месте весь бой. Матч 24: двое из четырёх простояли в 4–6 клетках от схватки в полном
+            // здравии (M8A8 1600 на 140-м тике), пока двое дрались и армия гибла — 14:1 при равной мощи
+            val holdMelee = isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact &&
+                localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
             val engage = if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) MELEE_HOLD_RANGE else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру

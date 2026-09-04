@@ -185,3 +185,13 @@ run map-match23.txt -      kite
 run map-match23.txt -      fourteen
 grind map-match23.txt -      sleeper
 grind map-match23.txt -      spread
+run map-match24.txt match2 wing
+run map-match24.txt match2 hunter
+run map-match24.txt match2 block
+run map-match24.txt match2 nine
+run map-match24.txt match2 army
+run map-match24.txt match2 rush
+run map-match24.txt match2 kite
+run map-match24.txt match2 fourteen
+grind map-match24.txt match2 sleeper
+grind map-match24.txt match2 spread
