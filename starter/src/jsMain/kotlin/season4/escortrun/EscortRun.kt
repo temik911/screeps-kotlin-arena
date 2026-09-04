@@ -195,7 +195,7 @@ object EscortRun {
      *  при старте матча, поэтому пересобранный бандл попадает в игру только со следующего запуска, и по логу должно
      *  быть видно, какая сборка играла: вопрос «в игре какая версия?» иначе не решается ничем. Поднимать при каждом
      *  выкате в main (тег escort-run-vN). */
-    private const val BOT_VERSION = "v8"
+    private const val BOT_VERSION = "v9"
 
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
@@ -203,6 +203,9 @@ object EscortRun {
 
     /** До какого тика печатается построчная трасса гонки (см. logRace): дебют решает матч, и мерить надо именно его. */
     private const val RACE_TRACE_TICKS = 120
+
+    /** До какого тика трасса печатается КАЖДЫЙ тик, а не только когда кто-то сменил клетку. */
+    private const val RACE_DENSE_TICKS = 24
     private const val BODIES_EVERY = 50
 
     private val DIRECTIONS = listOf(
@@ -370,8 +373,13 @@ object EscortRun {
         val harvesters = active.filter { !isEscort(it) && it.body.any { p -> p.type == WORK } }
         val fighters = active.filter { !isEscort(it) && hasWeapon(it) }
         val healers = active.filter { !isEscort(it) && !hasWeapon(it) && hasHeal(it) }
-        // блокировщик тоже из одних MOVE, но он не тягач: его место на клетке вражеского флага, а не в цепи поезда
-        val pullers = active.filter { !isEscort(it) && it.id !in blockerIds && it.body.all { p -> p.type == MOVE } }.sortedWith(compareBy({ it.id.length }, { it.id }))
+        // Блокировщик тоже из одних MOVE, но он не тягач: его место на клетке вражеского флага, а не в цепи поезда.
+        // ⚠️ Роль читается из ТЕЛА, а не из запомненного id. Список id чистился каждый тик по ЖИВЫМ крипам, а
+        // рождающийся в этот список не попадал — поэтому бот забывал про заказанного блокировщика и покупал следующего
+        // каждые три тика, а забытый становился ТЯГАЧОМ: вставал на клетку цепи, минуя enforceYield (он же «свой
+        // тягач»), и запирал поезд намертво. Живой матч 6a9b37c8: три лишних M1, поезд не поехал НИ РАЗУ, эскорт
+        // простоял в (41,41) полсотни тиков до конца матча
+        val pullers = active.filter { !isEscort(it) && !isBlocker(it) && it.body.all { p -> p.type == MOVE } }.sortedWith(compareBy({ it.id.length }, { it.id }))
         val husks = active.filter { !isEscort(it) && it !in harvesters && it !in fighters && it !in healers && it !in pullers }
 
         val immobile = active.filter { !canMove(it) && !isEscort(it) }
@@ -398,7 +406,6 @@ object EscortRun {
         measureRegen(ctx)
         // чистится ЗДЕСЬ, а не после заказа: контекст собран до runSpawn, и крип, рождённый в этом тике, в myCreeps
         // ещё не попал — очистка в том же тике стирала только что назначенного блокировщика, и бот покупал второго
-        blockerIds.retainAll { id -> myCreeps.any { it.id == id } }
         if (firstEnemySeenTick < 0 && enemyAll.any { !isEscort(it) }) firstEnemySeenTick = now
 
         runSpawn(ctx)
@@ -1040,7 +1047,8 @@ object EscortRun {
         // финишировать вовсе, пока они не построят бойца и не убьют блокировщика. Это самый дешёвый способ сорвать
         // чужую гонку, и три матча подряд она решалась несколькими тиками
         if (raceLost(ctx) && ctx.pullers.isNotEmpty() && ctx.enemyFlag != null && !flagBlocked(ctx) &&
-            ctx.myCreeps.none { it.id in blockerIds }) {
+            // myCreeps включает РОЖДАЮЩИХСЯ: пока блокировщик в спавне, второй не заказывается
+            ctx.myCreeps.none { isBlocker(it) }) {
             val enemyArrival = enemyEscortArrivalObserved(ctx)
             val body = blockerBody()
             // путь считается по ПОЛЮ от клетки, куда крип родится: клетка самого спавна в поле непроходима, а прямая
@@ -1054,8 +1062,7 @@ object EscortRun {
                     val r = spawn.spawnCreep(body)
                     if (r.`object` != null) {
                         spawnedLastTick = true
-                        r.`object`?.let { blockerIds.add(it.id) }
-                        println("spawn t=$now: blocker ${summaryOf(body)} — race lost (ours ${ourArrival(ctx)} vs theirs $enemyArrival), their flag in $walk steps, ready in $ready")
+                        println("spawn t=$now: blocker ${summaryOf(body)} id=${r.`object`?.id} — race lost (ours ${ourArrival(ctx)} vs theirs $enemyArrival), their flag in $walk steps, ready in $ready")
                         return
                     }
                 } else {
@@ -1519,7 +1526,7 @@ object EscortRun {
         val enemyFlag = ctx.enemyFlag
         for (h in ctx.husks) {
             if (!canMove(h)) continue
-            if (h.id in blockerIds && enemyFlag != null) {
+            if (isBlocker(h) && enemyFlag != null) {
                 if (h.x == enemyFlag.x && h.y == enemyFlag.y) continue // на месте — стоим намертво
                 val flow = flowTo("enemyFlag", enemyFlag, ctx.blocked, 1, ttl = 10)
                 val step = DistanceMap.flowStep(flow, h.x, h.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
@@ -1718,6 +1725,9 @@ object EscortRun {
      */
     private fun blockerBody(): Array<BodyPartType> = arrayOf(MOVE)
 
+    /** Блокировщик — крип РОВНО из одного MOVE (тягач начинается с PULLER_MIN_MOVE): признак роли — тело, не память. */
+    private fun isBlocker(c: Creep) = c.body.size == 1 && c.body[0].type == MOVE
+
     /** На клетке вражеского флага уже стоит наш крип. */
     private fun flagBlocked(ctx: Ctx): Boolean {
         val flag = ctx.enemyFlag ?: return false
@@ -1725,7 +1735,6 @@ object EscortRun {
     }
 
     /** Крипы, посланные занять вражеский флаг. */
-    private val blockerIds = HashSet<String>()
 
     /** Тягачи ВРАГА: тела из одних MOVE рядом с его эскортом — они и держат его скорость. */
     private fun enemyPullers(ctx: Ctx): List<Creep> {
@@ -2230,7 +2239,9 @@ object EscortRun {
         val theirs = ctx.enemyEscort
         val oc = ours?.let { it.x * 100 + it.y } ?: -1
         val tc = theirs?.let { it.x * 100 + it.y } ?: -1
-        if (oc == raceOurCell && tc == raceTheirCell) return
+        // первые тики — КАЖДЫЙ тик, а не только по смене клетки: ряд усталости соперника восстанавливается лишь
+        // подряд идущими значениями, а именно в дебюте он и расходится с нашим (у Hardy после шага 40, а не 60)
+        if (now > RACE_DENSE_TICKS && oc == raceOurCell && tc == raceTheirCell) return
         if (raceOurCell >= 0 && oc != raceOurCell) raceOurSteps++
         if (raceTheirCell >= 0 && tc != raceTheirCell) raceTheirSteps++
         raceOurCell = oc
