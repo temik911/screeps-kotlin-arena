@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -360,6 +360,24 @@ function enemyTick() {
       const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
       if (threat.length) stepAway(c, threat);
       else stepToward(c, post, 0);
+    } else if (has('farm')) {
+      // 'farm' (live match 26): the army moves as ONE blob to the flag nearest the blob that it does not already own,
+      // and never engages — a creep with one of our armed creeps within six steps away and comes back after. Its two
+      // runners each sit on a flag of their own. That match ended with both armies at full strength — 902 hits of
+      // damage in 1500 ticks and not one death — and it won on points 23408:12721 while our army chased the one
+      // catchable straggler around the middle and let everything it captured be walked back onto
+      const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
+      if (threat.length) stepAway(c, threat);
+      else if (isRunner(c)) {
+        const free = flags.filter((f) => f.owner !== 1).sort((a, b) => range(c, a) - range(c, b));
+        const post = free[Math.min(runners.indexOf(c), free.length - 1)];
+        if (post) stepToward(c, post, 0);
+      } else if (fighters.length) {
+        const blob = { x: Math.round(fighters.reduce((s, f) => s + f.x, 0) / fighters.length),
+                       y: Math.round(fighters.reduce((s, f) => s + f.y, 0) / fighters.length) };
+        const post = flags.filter((f) => f.owner !== 1).sort((a, b) => range(blob, a) - range(blob, b))[0];
+        if (post) stepToward(c, post, fighters.indexOf(c) === 0 ? 0 : 2);
+      }
     } else if (has('roost')) {
       // 'roost' (match 25): like 'spread', but the creep never leaves the flag — it does not even step away from ours.
       // The live opponent of match 25 held all seven flags by t=80 and never moved again (our own log reported

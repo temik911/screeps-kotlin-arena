@@ -35,7 +35,10 @@ comes within two, a ranged with one of our armed creeps within two backs off two
 creep takes a flag of its own, two per flag, sits on it, steps away from our armed creeps within six and comes back —
 it never fights as an army and farms the flags' points), `roost` (match 25: the same dispersal, but the creep never
 leaves its flag — it does not step away from ours either; the live opponent of match 25 held all seven flags by t=80 and
-never moved again, and our own log reported every combat enemy stationary). Modes combine with `+`. The runner prints
+never moved again, and our own log reported every combat enemy stationary), `farm` (live match 26: the army moves as
+one blob to the flag nearest the blob that it does not own, and never engages — a creep with one of our armed creeps
+within six steps away and comes back after; its two runners each sit on a flag. That match ended with both armies at
+full strength, 902 hits of damage in 1500 ticks and not one death, and it won on points 23408:12721). Modes combine with `+`. The runner prints
 a `cpu t=N: max=..ms at t=M slow(>50ms)=K` line every 100 ticks — the bot's `loop()` wall time in Node, a relative
 measure of the arena's 100 ms tick budget (match 16 timed out three ticks in the thick of the fight). The bot itself
 prints `bfs t=N max=K` every ten ticks — the most flow-field BFS runs in one tick since the previous line (the live

@@ -1313,14 +1313,25 @@ object PainAndGain {
         enemyHitsHist.addLast(enemyHitsNow); ourHitsHist.addLast(ourHitsNow)
         while (enemyHitsHist.size > STALL_TICKS) enemyHitsHist.removeFirst()
         while (ourHitsHist.size > STALL_TICKS) ourHitsHist.removeFirst()
+        val mobileArmy = army.filter { canMove(it) && it.id !in keeperIds }
+        val chasers = strikers.ifEmpty { mobileArmy }
+        // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
+        // пикет простоя — поэтому охота посчитана здесь, до простоя
+        val huntable = armedEnemies.filter { catchable(it, chasers) }
         // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
         val netDamage = enemyHitsHist.size == STALL_TICKS &&
             (enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
         if (netDamage) stallUntil = 0
-        // пикет в досягаемости броска все STALL_TICKS подряд (см. STALL_PICKET): армия, только что вошедшая в досягаемость,
-        // простоя не даёт (матч 20, t=64)
+        // пикет в досягаемости броска все STALL_TICKS подряд (см. STALL_PICKET): армия, только что вошедшая в
+        // досягаемость, простоя не даёт (матч 20, t=64). Считается пикет по ДОГОНЯЕМЫМ (см. catchable): прежде
+        // «не больше STALL_PICKET вооружённых» отделяло пикет от армии по ЧИСЛУ, и блоб, который от нас уклоняется и
+        // не дерётся, одним своим числом отменял простой — армия гналась за ним весь матч. Живой матч 26: huntable=0/8,
+        // 902 хита урона за 1500 тиков с обеих сторон, ни одной смерти, проигрыш 12721:23408; стенд farm на карте 21:
+        // три флага на одиннадцать очков в тик простояли ничьими 1500 тиков. Кого можем догнать — драка; кто
+        // уклоняется — не повод стоять
         val nearArmed = armedEnemies.count { e -> strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
-        preyNearTicks = if (nearArmed in 1..STALL_PICKET) preyNearTicks + 1 else 0
+        val nearCatchable = huntable.count { e -> strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
+        preyNearTicks = if (nearArmed >= 1 && nearCatchable <= STALL_PICKET) preyNearTicks + 1 else 0
         // ВТОРОЙ вид простоя — марш, который не идёт. Пикет ловит бесплодную погоню, только пока добыча ближе
         // ENGAGE_RANGE; за этой чертой армия «гналась» и стояла, а простой не считался ни разу. Идущая погоня обязана
         // двигать центр вооружённой массы: за MARCH_STALL_TICKS тиков он не сдвинулся НИ НА КЛЕТКУ — это не марш.
@@ -1343,10 +1354,6 @@ object PainAndGain {
         }
         val stalled = now < stallUntil
         stalledNow = stalled
-        val mobileArmy = army.filter { canMove(it) && it.id !in keeperIds }
-        val chasers = strikers.ifEmpty { mobileArmy }
-        // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними
-        val huntable = armedEnemies.filter { catchable(it, chasers) }
 
         // ---- постура ----
         val ours = ourPowerOf(army, combatEnemies)

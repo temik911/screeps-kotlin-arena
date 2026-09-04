@@ -212,3 +212,10 @@ run map-match20.txt -      roost
 run map-match19.txt match2 roost
 run map-match12.txt match2 roost
 run map-match18.txt match2 roost
+run map-match24.txt match2 farm
+run map-match20.txt -      farm
+run map-match19.txt match2 farm
+run map-match18.txt match2 farm
+grind map-match25.txt match2 farm
+grind map-match21.txt match2 farm
+grind map-match12.txt match2 farm
