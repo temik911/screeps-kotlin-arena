@@ -157,12 +157,14 @@ object DistanceMap {
      * По нему крип спускается по градиенту к цели, гарантированно огибая любые препятствия —
      * в отличие от searchPath, который на длинном обходе может упереться в стену.
      */
-    fun flowFieldTo(target: Position, extraBlocked: List<Position>, swampCost: Int = SWAMP_COST): IntArray {
+    /** maxDist — предел стоимости пути: дальше клетки остаются −1 (поле «вблизи» для целей-крипов в нескольких
+     *  клетках — полный обход 10 000 клеток на каждую из дюжины целей стоил тика в гуще боя, матчи 16–18). */
+    fun flowFieldTo(target: Position, extraBlocked: List<Position>, swampCost: Int = SWAMP_COST, maxDist: Int = Int.MAX_VALUE): IntArray {
         ensureStaticBlocked()
         val block = staticBlocked!!.copyOf()
         for (p in extraBlocked) if (inBounds(p.x, p.y)) block[index(p.x, p.y)] = true
         if (inBounds(target.x, target.y)) block[index(target.x, target.y)] = false // цель всегда достижима
-        return bfs(target.x, target.y, block, swampCost)
+        return bfs(target.x, target.y, block, swampCost, maxDist)
     }
 
     /** Поле в ШАГАХ (болото = равнина): пустой CARRY усталости не даёт, пустой хаулер идёт по болоту
@@ -360,7 +362,7 @@ object DistanceMap {
      * болото SWAMP_COST. Расстояние — в тиках пути, -1 = недостижимо. Дейкстра кольцевыми
      * корзинами (Dial): цены целые и малые, куча не нужна.
      */
-    private fun bfs(startX: Int, startY: Int, blocked: BooleanArray, swampCost: Int = SWAMP_COST): IntArray {
+    private fun bfs(startX: Int, startY: Int, blocked: BooleanArray, swampCost: Int = SWAMP_COST, maxDist: Int = Int.MAX_VALUE): IntArray {
         val dist = IntArray(FIELD * FIELD) { -1 }
         if (!inBounds(startX, startY)) return dist
         val swamp = ensureSwamp()
@@ -391,6 +393,7 @@ object DistanceMap {
                     val ni = index(nx, ny)
                     if (blocked[ni]) continue
                     val next = current + if (swamp[ni]) swampCost else 1
+                    if (next > maxDist) continue
                     if (dist[ni] < 0 || next < dist[ni]) {
                         dist[ni] = next
                         buckets[next % (swampCost + 1)].addLast(ni)

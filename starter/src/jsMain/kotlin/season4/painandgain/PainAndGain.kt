@@ -373,7 +373,7 @@ object PainAndGain {
     private enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
 
     private var greeted = false
-    private var mapLogged = false
+    private var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
     private var posture = Posture.HOLD
     private var objectiveFlagId: String? = null
     private var postureLogged = ""
@@ -442,6 +442,26 @@ object PainAndGain {
 
     // ---------- кэши на тик ----------
     private val flowCache = HashMap<Int, IntArray>()
+    private val flowCacheTick = HashMap<Int, Int>()   // тик расчёта поля (см. FLOW_TTL)
+    private var flowSig = 0                            // подпись препятствий, при которой считан кэш
+    /** Срок жизни поля к неподвижной цели (флаг, дом, угол): препятствия поля — стены, чужие рампарты, спавны,
+     *  неподвижные крипы и чужие флаги — меняются редко, а считались поля каждый тик: 21–24 BFS в тик в гуще боя
+     *  (семь флагов для выбора цели, девять точек выхода, цели крипов) — и три живых таймаута (матчи 16–18). Поле к
+     *  цели-крипу (см. NEAR_FLOW) живёт один тик; смена подписи препятствий сбрасывает весь кэш. */
+    private const val FLOW_TTL = 5
+    /** Бюджет полных полей в тик (поле «вблизи» — четверть): сверх него устаревшее поле отдаётся как есть, а НОВАЯ
+     *  цель получает ограниченное поле (см. NEAR_FLOW) с пометкой «устарело» — полное досчитается следующим тиком в
+     *  пределах бюджета. Без этого начало боя (клетки врагов для броска и добычи, точки уклонения, флаги, вычищенные
+     *  из кэша за время боя) давало 16–17 полных полей одним тиком (стенд, счётчик bfs). */
+    private const val BFS_BUDGET = 8.0
+    private const val FLOW_KEEP = 60   // тиков без обращения — запись кэша вычищается (иначе рост на клетках целей)
+    private var bfsCost = 0.0
+    private var bfsMaxCost = 0.0
+    private var bfsThisTick = 0
+    private var bfsMaxTick = 0
+    /** Предел стоимости пути для поля «вблизи» (см. DistanceMap.flowFieldTo): цели-крипы — лекарь, раненый, бросок,
+     *  добыча — в нескольких клетках; крип за пределом получает полное поле. */
+    private const val NEAR_FLOW = 24
 
     // ---------- модель ----------
 
@@ -480,7 +500,13 @@ object PainAndGain {
     )
 
     fun tick() {
-        flowCache.clear()
+        bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick)
+        bfsMaxCost = maxOf(bfsMaxCost, bfsCost)
+        bfsThisTick = 0
+        bfsCost = 0.0
+        val nowT = getTicks()
+        val dead = flowCacheTick.filterValues { nowT - it > FLOW_KEEP }.keys.toList()
+        for (k in dead) { flowCache.remove(k); flowCacheTick.remove(k) }
         avoidCellsCache = null
 
         val myCreeps = getObjectsByPrototype(Creep::class).filter { it.my && it.exists }
@@ -502,12 +528,9 @@ object PainAndGain {
             greeted = true
             probe(flags, myCreeps, enemyCreeps, home, enemyHome)
         }
-        // дамп карты — со ВТОРОГО тика и одной строкой: сто println на холодном первом тике (без JIT) упирались в лимит
-        // времени, и приказы первого тика пропадали (матч 17)
-        if (DEBUG_MAP && !mapLogged && getTicks() >= 2) {
-            mapLogged = true
-            logMap(flags, myCreeps, enemyCreeps)
-        }
+        // дамп карты — четырьмя частями по 25 строк на тиках 3–6 (см. logMap)
+        if (DEBUG_MAP && mapMarks == null) captureMapMarks(flags, myCreeps, enemyCreeps)
+        if (DEBUG_MAP && getTicks() in 3..6) logMap((getTicks() - 3) * 25)
         logBodies(myCreeps, enemyCreeps)
 
         // раненый (см. wounded): боец, потерявший всё оружие, остаётся в армии, пока жив хоть один ходячий лекарь —
@@ -533,6 +556,9 @@ object PainAndGain {
         // которого сама же сняла дебаффы. Не наш флаг — стена для всех, кроме назначенного на него
         val flagCells = flags.filter { !it.ours }.mapTo(HashSet()) { it.pos.x * 100 + it.pos.y }
         val flagBlocked = flags.filter { !it.ours }.map { it.pos }
+        val blockSig = blocked.sumOf { it.x * 100 + it.y + 1 } * 31 + flagBlocked.sumOf { it.x * 100 + it.y + 1 }
+        // смена препятствий: поля не удаляются, а помечаются устаревшими — сверх бюджета (см. BFS_BUDGET) идут как есть
+        if (blockSig != flowSig) { for (k in flowCacheTick.keys.toList()) flowCacheTick[k] = -1000; flowSig = blockSig }
         val dangerMatrix = rawDanger.clone()
         for (c in flagCells) dangerMatrix.set(c / 100, c % 100, 255)
         val passiveEnemy = combatEnemies.isNotEmpty() && combatEnemies.all { stationaryFor(it) >= PASSIVE_TICKS }
@@ -569,6 +595,11 @@ object PainAndGain {
             while (h.size > CHASE_WINDOW) h.removeFirst()
         }
         enemyCellHist.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
+            println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
+            bfsMaxTick = 0
+            bfsMaxCost = 0.0
+        }
         if (DEBUG_LOG) logStuck(active, enemyCreeps)
         if (DEBUG_VISUALS) InfluenceMap.drawDebug(army, myCreeps, enemyCreeps)
 
@@ -900,10 +931,22 @@ object PainAndGain {
     // ==================== армия ====================
 
     /** Поле к цели; не наши флаги — стены (кроме самой цели: flowFieldTo всегда открывает целевую клетку). */
-    private fun flowTo(ctx: Ctx, target: Position, avoid: Boolean = false): IntArray =
-        flowCache.getOrPut(target.x * 100 + target.y + (if (avoid) 10000 else 0)) {
-            DistanceMap.flowFieldTo(target, ctx.flagBlocked + (if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked))
-        }
+    private fun flowTo(ctx: Ctx, target: Position, avoid: Boolean = false, near: Boolean = false): IntArray {
+        val key = target.x * 100 + target.y + (if (avoid) 10000 else 0) + (if (near) 20000 else 0)
+        val now = getTicks()
+        val hit = flowCache[key]
+        val at = flowCacheTick[key]
+        if (hit != null && at != null && now - at < (if (near) 1 else FLOW_TTL)) return hit
+        if (hit != null && bfsCost >= BFS_BUDGET) return hit   // сверх бюджета — устаревшее поле
+        val bounded = near || bfsCost >= BFS_BUDGET            // сверх бюджета новая цель — ограниченное поле
+        bfsThisTick++
+        bfsCost += if (bounded) 0.25 else 1.0
+        val f = DistanceMap.flowFieldTo(target, ctx.flagBlocked + (if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked),
+            maxDist = if (bounded) NEAR_FLOW else Int.MAX_VALUE)
+        flowCache[key] = f
+        flowCacheTick[key] = if (bounded && !near) -1000 else now
+        return f
+    }
 
     /** Клетки в AVOID_RANGE от СТОЯЩИХ боевых врагов — поле «в обход» ведёт мимо лагеря, а не сквозь него.
      *  Идущий враг не обходится: обход идущего навстречу разводил строй с поста в стороны за тик до
@@ -924,10 +967,10 @@ object PainAndGain {
 
     /** Поле к НЕ-вражеской цели (флаг, пост, сбор, отход): в обход врагов, если оттуда, где стоит крип, такой
      *  путь есть, иначе обычное (матч 2 на стенде: маршрут к дальнему флагу вёл через стоящий отряд врага). */
-    private fun flowAvoiding(ctx: Ctx, target: Position, creep: Creep): IntArray {
-        if (!USE_AVOID) return flowTo(ctx, target)
-        val f = flowTo(ctx, target, true)
-        return if (f[creep.x * 100 + creep.y] >= 0) f else flowTo(ctx, target)
+    private fun flowAvoiding(ctx: Ctx, target: Position, creep: Creep, near: Boolean = false): IntArray {
+        if (!USE_AVOID) return flowTo(ctx, target, near = near)
+        val f = flowTo(ctx, target, true, near)
+        return if (f[creep.x * 100 + creep.y] >= 0) f else flowTo(ctx, target, near = near)
     }
 
     /** Стая у цели: боевые враги рядом с ней и те, кто дойдёт до неё (своим телом по полю) не позже нас —
@@ -1559,6 +1602,7 @@ object PainAndGain {
             val target: Position
             val standoff: Int
             var avoid = false
+            var nearFlow = false   // цель-крип рядом: поле «вблизи» (см. NEAR_FLOW)
             // в строю (см. USE_BLOCK): мили вплотную к врагу стоит и рубит, остальные — в свой слот
             val slotHold = slot != null && melee && localEnemies.any { getRange(creep, it) <= 1 }
             when {
@@ -1567,22 +1611,22 @@ object PainAndGain {
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
-                healer && healMate != null -> { target = healMate; standoff = 1 }
+                healer && healMate != null -> { target = healMate; standoff = 1; nearFlow = true }
                 // отход — по обычному полю: поле «в обход» стоящих врагов (а дерущиеся стоят) увело пару в обход
                 // стенного блока на другой край карты (матч 4)
                 posture == Posture.EVADE && evadeTo != null -> { target = evadeTo; standoff = 1 }
                 posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1 }
                 formGo -> { target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
-                wounded && healerNear != null -> { target = healerNear; standoff = 1; avoid = true }
-                rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true }
-                aloneInFire -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
-                leashed -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
-                engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
+                wounded && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
+                rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
+                aloneInFire -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
+                leashed -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
+                engage != null -> { target = engage; standoff = if (melee) 1 else closeIn; nearFlow = true }
                 grab != null -> { target = grab.pos; standoff = 0; avoid = true }
                 // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»; без
                 // ловимой добычи (кайтеры) — тоже к массе: стоим строем и стреляем в то, что подойдёт
                 posture == Posture.ANNIHILATE && !support && (!localAggressive || prey == null) -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
-                prey != null -> { target = prey; standoff = if (melee) 1 else closeIn }
+                prey != null -> { target = prey; standoff = if (melee) 1 else closeIn; nearFlow = true }
                 rallyTo != null -> { target = rallyTo; standoff = CLOSE_STANDOFF; avoid = true }
                 objective != null -> {
                     val capturer = objectiveCapturer == creep.id
@@ -1594,7 +1638,10 @@ object PainAndGain {
                 raider != null && mobile && !support -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
                 else -> { target = post; standoff = POST_STANDOFF; avoid = true }
             }
-            val flow = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)
+            val flow0 = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep, nearFlow) else flowTo(ctx, target, near = nearFlow)
+            // за пределом поля «вблизи» — полное поле
+            val flow = if (nearFlow && slot == null && !keeper && flow0[creep.x * 100 + creep.y] < 0)
+                (if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)) else flow0
 
             val nearbyEnemies = combatEnemies.filter { getRange(creep, it) <= 12 }
             // «в бою», плотность и передний ряд — по врагам С БОЕМ: три безоружных лекаря врага в 4–5 клетках после выигранного
@@ -1831,9 +1878,11 @@ object PainAndGain {
             val e = iter.next()
             val c = army.firstOrNull { it.id == e.key }
             val f = ctx.flags.firstOrNull { it.id == e.value }
+            // враг с боем в KEEP_RANGE от флага — хранителя нет: стрелок стоял на R3 весь бой, пока в десяти клетках
+            // висели скауты врага, и не стрелял (матч 18)
             val stay = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y &&
                 enemyRunners.any { getRange(f.pos, it) <= KEEP_RANGE } &&
-                armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 2 }
+                armedEnemies.none { getRange(f.pos, it) <= KEEP_RANGE }
             if (!stay) iter.remove()
         }
         for (f in ctx.flags) {
@@ -1842,7 +1891,7 @@ object PainAndGain {
             if (occ.my != true || army.none { it.id == occ.id } || occ.id in keeperIds) continue
             if (runnerFlag.values.contains(f.id)) continue
             if (enemyRunners.none { getRange(f.pos, it) <= KEEP_RANGE }) continue
-            if (armedEnemies.any { getRange(occ, it) <= RANGED_RANGE + 2 }) continue
+            if (armedEnemies.any { getRange(f.pos, it) <= KEEP_RANGE }) continue
             keeperIds[occ.id] = f.id
         }
     }
@@ -1864,8 +1913,11 @@ object PainAndGain {
         if (armed.isEmpty()) return
         val threats = armedEnemies.ifEmpty { combatEnemies }
         val front = melees.ifEmpty { rangeds }
-        val anchor = centroidOf(front.map { InfluenceMap.cell(it.x, it.y) }) ?: return
-        val nearest = threats.minByOrNull { getRange(anchor, it) } ?: return
+        // якорь — ПЕРЕДНИЙ боец (ближайший к врагу), не центроид: центроид мили отстаёт от фронта на 1–2 клетки, и ряд
+        // стрелков «в 3 − d» от него стоял в 4–5 от линии врага, вставшей в 3 от нашего переднего (матч 18)
+        val pair = front.flatMap { f -> threats.map { e -> Triple(f, e, getRange(f, e)) } }.minByOrNull { it.third } ?: return
+        val anchor = InfluenceMap.cell(pair.first.x, pair.first.y)
+        val nearest = pair.second
         val group = threats.filter { getRange(nearest, it) <= ENGAGE_RANGE }
         val ec = centroidOf(group.map { InfluenceMap.cell(it.x, it.y) }) ?: return
         val dx0 = sgn(ec.x - anchor.x); val dy = sgn(ec.y - anchor.y)
@@ -1892,7 +1944,7 @@ object PainAndGain {
                 slotOf[c.id] = best
             }
         }
-        val d = front.minOf { f -> threats.minOf { getRange(f, it) } }
+        val d = pair.third
         val back = (RANGED_RANGE - d).coerceIn(0, 2)
         if (melees.isNotEmpty()) assign(rangeds, rowCells(back, rangeds.size))
         assign(rear, rowCells(back + 1, rear.size))
@@ -2278,26 +2330,29 @@ object PainAndGain {
     }
 
     /** ASCII-карта один раз: '#' стена, '~' болото, '.' равнина, 'F' флаг, 'm' наш крип, 'e' вражеский. */
-    private fun logMap(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
-        val marks = HashMap<Int, Char>()
-        fun mark(x: Int, y: Int, c: Char) { marks[x * 100 + y] = c }
+    private fun captureMapMarks(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
+        val m = HashMap<Int, Char>()
+        fun mark(x: Int, y: Int, c: Char) { m[x * 100 + y] = c }
         getObjectsByPrototype(StructureWall::class).forEach { mark(it.x, it.y, '#') }
         getObjectsByPrototype(StructureRampart::class).forEach { mark(it.x, it.y, 'R') }
         getObjectsByPrototype(StructureSpawn::class).forEach { mark(it.x, it.y, if (it.my == true) 'M' else 'E') }
         enemyCreeps.forEach { mark(it.x, it.y, 'e') }
         myCreeps.forEach { mark(it.x, it.y, 'm') }
         flags.forEach { mark(it.pos.x, it.pos.y, 'F') }
+        mapMarks = m
+    }
 
-        var swamp = 0
-        var wall = 0
-        val out = StringBuilder("=== MAP (rows y=0..99, cols x=0..99) ===")
-        for (y in 0..99) {
+    /** Дамп карты — четырьмя частями по 25 строк на тиках 3–6, одной строкой каждая: сто println на холодном первом
+     *  тике упирались в лимит (матч 17), а весь дамп вторым тиком — в бюджет 100 мс (матч 18). Метки крипов сняты на
+     *  первом тике (см. captureMapMarks), чтобы стенд получал стартовые клетки. */
+    private fun logMap(fromRow: Int) {
+        val marks = mapMarks ?: return
+        val out = StringBuilder(if (fromRow == 0) "=== MAP (rows y=0..99, cols x=0..99) ===" else "")
+        for (y in fromRow until minOf(fromRow + 25, 100)) {
             val row = StringBuilder()
             for (x in 0..99) {
                 val isWall = DistanceMap.isTerrainWall(x, y)
                 val isSwamp = !isWall && DistanceMap.isSwamp(x, y)
-                if (isSwamp) swamp++
-                if (isWall) wall++
                 val structure = marks[x * 100 + y]
                 row.append(
                     when {
@@ -2308,9 +2363,15 @@ object PainAndGain {
                     }
                 )
             }
-            out.append('\n').append(y.toString().padStart(2, '0')).append(':').append(row)
+            if (out.isNotEmpty()) out.append('\n')
+            out.append(y.toString().padStart(2, '0')).append(':').append(row)
         }
         println(out.toString())
-        println("=== END MAP swamp=$swamp wall=$wall plain=${10000 - swamp - wall} ===")
+        if (fromRow + 25 >= 100) {
+            var swamp = 0
+            var wall = 0
+            for (y in 0..99) for (x in 0..99) { if (DistanceMap.isTerrainWall(x, y)) wall++ else if (DistanceMap.isSwamp(x, y)) swamp++ }
+            println("=== END MAP swamp=$swamp wall=$wall plain=${10000 - swamp - wall} ===")
+        }
     }
 }

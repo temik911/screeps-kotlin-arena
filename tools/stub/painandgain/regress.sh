@@ -128,3 +128,11 @@ run map-match17.txt -      hunter
 run map-match17.txt -      kite
 run map-match17.txt -      rush
 grind map-match17.txt -      sleeper
+run map-match18.txt match2 wing
+run map-match18.txt match2 block
+run map-match18.txt match2 nine
+run map-match18.txt match2 fourteen
+run map-match18.txt match2 hunter
+run map-match18.txt match2 kite
+run map-match18.txt match2 rush
+grind map-match18.txt match2 sleeper
