@@ -167,6 +167,12 @@ object PainAndGain {
     private const val CHASE_WINDOW = 8
     private const val LEASH_RANGE = 8
 
+    /** Плотность строя при враге рядом (см. compact): шаг разрешён только на клетку в COMPACT_RANGE от центра
+     *  вооружённой армии или с двумя вооружёнными соседями. Авангард один впереди не шагает на врага — ждёт линию;
+     *  линия идёт вперёд линией. Матчи 4, 6, 7: первый размен всякий раз проигран 0:2, потому что мили-авангард
+     *  дрался один, а стрелки в трёх-пяти клетках за ним ждали «готовности» и не стреляли. */
+    private const val COMPACT_RANGE = 2
+
     /** Отход строем: убежавший вперёд дальше стольких клеток (по полю отхода) от самого отставшего вооружённого
      *  ждёт его вне огня — иначе погоня добивает отставших по одному (матч 4: армия рассыпалась по трём углам). */
     private const val RETREAT_GAP = 3
@@ -243,7 +249,9 @@ object PainAndGain {
     // ---------- отладка ----------
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
-    private const val DEBUG_VISUALS = true
+    /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
+     *  первый тик матча 7 вылетел по таймауту именно в drawDebug; журнал даёт всё, что нужно для разбора. */
+    private const val DEBUG_VISUALS = false
     private const val LOG_EVERY = 10
 
     private val DIRECTIONS = listOf(
@@ -861,7 +869,10 @@ object PainAndGain {
         // точки отхода, куда уже пришли, отходить некуда — бой (матч 5: семеро в углу (3,96) при «отходе» не
         // шевелились и не били, пока их расстреливали с трёх клеток)
         val atRetreatPoint = retreatTarget?.let { getRange(ctx.ourCentroid, it) <= POST_STANDOFF + ARRIVED_SLACK } ?: false
-        val retreatFeasible = !contact || (!meleeAdjacent && ourPeriod <= theirPeriod && !atRetreatPoint)
+        // из контакта отхода нет: «отход, пока мили не вплотную» мигал ДОБИТЬ/ОТХОД через тик и отдавал армию по одному
+        // в матчах 4, 6 и 7 (в седьмом — при 1.53, без единой потери у врага); при равной скорости из контакта не
+        // уйти, и единственный способ его кончить — бой строем
+        val retreatFeasible = !contact && !atRetreatPoint
         val weaker = theirs >= ours * (if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // из идущего боя (см. RETREAT_CONTACT_RATIO) — только при явном проигрыше
         val weakerContact = theirs >= ours * (if (posture == Posture.ANNIHILATE) RETREAT_CONTACT_RATIO else if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
@@ -1143,10 +1154,14 @@ object PainAndGain {
             val gap = if (localEnemies.isEmpty()) COHESION_GAP else ENGAGE_COHESION_TICKS
             // идущий к авангарду (rallyTo) не ждёт никого: четверо шли к авангарду и «ждали» одиночку в 14 клетках,
             // а тот ждал их — взаимное ожидание на 1600 тиков (стенд m2 scouts, v4)
-            val cohesionHold = grouped && rallyTo == null && !underFire && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff + ARRIVED_SLACK && run {
+            // подбирающий флаг рядом (grab) не ждёт никого, и его никто не ждёт: он ждал по сплочению группу у своего
+            // флага, а группа ждала его как «отставшего» на пути к цели — взаимное ожидание на 1200 тиков при живом
+            // враге из двух скаутов на наших флагах (стенд m3 kite, проигрыш по очкам 9128:23661)
+            val cohesionHold = grouped && rallyTo == null && grab == null && !underFire && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff + ARRIVED_SLACK && run {
                 var lagging = false
                 for (m in mates) {
                     if (getRange(creep, m) <= RANGED_RANGE) continue
+                    if (grabberOf.containsKey(m.id)) continue
                     val d = flow[m.x * 100 + m.y]
                     if (d < 0) continue
                     // напарник на другом обходе (только на марше к флагу): далеко и не впереди — ждём его, он идёт
@@ -1172,7 +1187,19 @@ object PainAndGain {
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
                     val designated = grab?.pos ?: objective?.flag?.pos?.takeIf { objectiveCapturer == creep.id }
                     var myBlocked = if (designated != null) blockedSet - (designated.x * 100 + designated.y) else blockedSet
-                    if (formGo) myBlocked = myBlocked + fireCells // к авангарду — не через огонь
+                    // плотность (см. COMPACT_RANGE): при враге в досягаемости — только на клетки строя
+                    if (localEnemies.isNotEmpty() && posture != Posture.RETREAT && canMove(creep)) {
+                        val armedMates = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }
+                        val loose = HashSet<Int>()
+                        for ((dx, dy) in DIRECTIONS) {
+                            val x = creep.x + dx; val y = creep.y + dy
+                            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                            val c = InfluenceMap.cell(x, y)
+                            val compact = getRange(c, armedCentroid) <= COMPACT_RANGE || armedMates.count { getRange(c, it) <= 1 } >= 2
+                            if (!compact) loose.add(x * 100 + y)
+                        }
+                        if (loose.isNotEmpty()) myBlocked = myBlocked + loose
+                    }
                     bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt)
                 }
             }
