@@ -694,20 +694,111 @@ object SpawnAndSwamp {
     private fun isMelee(creep: Creep) = creep.body.any { it.type == ATTACK }
     private fun hasWeapon(creep: Creep) = hasRanged(creep) || hasMelee(creep)
 
-    /** Тело бурильщика [MOVE, ATTACK]×k: k минимизирует спавн + ломку (6k + H/30k тиков → k ≈ √(H/180)),
-     *  в пределах бюджета и размера тела. */
-    private fun breacherBlocks(budget: Int, totalHits: Int): Int {
-        val block = cost(MOVE) + cost(ATTACK)
-        val perTick = CREEP_SPAWN_TIME * 2 * ATTACK_POWER
-        val opt = kotlin.math.sqrt(totalHits.toDouble() / perTick).let { kotlin.math.round(it).toInt() }
-        return minOf(opt.coerceAtLeast(1), budget / block, MAX_CREEP_SIZE / 2)
+    /** Тело бурильщика [MOVE, ATTACK]×k под нынешний ПОТОК энергии (регенерация + приток): k минимизирует
+     *  накопление недостающего + рождение + ход + ломку. Прежняя формула (k ≈ √(H/180)) считала энергию
+     *  бесплатной: после дебюта «боец первым» ветка ждала тело за 980 при потоке 1/тик и пролом не открылся
+     *  за весь матч (матч 17). expected — энергия в спавне и в пути. Ветка спавна, breachOpenIn и
+     *  guardReadySim считают ОДНО тело. */
+    private fun breacherBlocksFor(totalHits: Int, walk: Int, steps: Int, expected: Int, flow: Double, fire: Int): Int {
+        var best = 0
+        var bestT = breachIncomeStart(totalHits, walk, steps, expected, flow, fire, 0) // без бурильщика: стрелки на посту или никогда
+        for (k in 1..MAX_CREEP_SIZE / 2) {
+            val t = breachIncomeStart(totalHits, walk, steps, expected, flow, fire, k)
+            if (t < bestT) { bestT = t; best = k }
+        }
+        return best
     }
 
-    /** Блоки бурильщика, которого спавн закажет из энергии energy: минимальный хаулер из неё зарезервирован
-     *  (ветка спавна, breachOpenIn и breachGuardReady считают ОДНО тело: прогон с телом на 130 дороже
-     *  оставлял симуляции 90 энергии вместо 220 и «страж к 1989-му», стенд freeze). */
-    private fun plannedBreacherBlocks(energy: Int, totalHits: Int): Int =
-        breacherBlocks(energy - HAULER_BLOCKS_MIN * blockCost(), totalHits)
+    /** Старт притока с пролома при k блоках бурильщика: стена открыта (breachOpenAt) И минимальный хаулер
+     *  рождён и дошёл до контейнера (steps) — оба из потока после expected, бурильщик первым. Цель плана —
+     *  именно приток, не падение стены: без резерва на хаулера стена открылась на 350-м, а первый хаулер
+     *  дошёл на 470-м (стенд stream17). k=0 — открытие огнём стрелков. */
+    private fun breachIncomeStart(hits: Int, walk: Int, steps: Int, expected: Int, flow: Double, fire: Int, k: Int): Int {
+        val f = maxOf(flow, 1.0)
+        val block = cost(MOVE) + cost(ATTACK)
+        val born = 2 * k * CREEP_SPAWN_TIME
+        val wait = ceil(maxOf(0.0, (k * block - expected) / f)).toInt()
+        val open = breachOpenAt(hits, fire, k, wait + born + walk)
+        if (open >= Int.MAX_VALUE / 4) return open
+        val haulerCost = HAULER_BLOCKS_MIN * blockCost()
+        val haulerAt = maxOf(wait + born, ceil(maxOf(0.0, (k * block + haulerCost - expected) / f)).toInt())
+        val haulerReady = haulerAt + 2 * HAULER_BLOCKS_MIN * CREEP_SPAWN_TIME + steps
+        return maxOf(open, haulerReady)
+    }
+
+    /** Огонь наших стрелков по текущей стене пролома: живые RANGED тех, кто стоит в её дальности — боец на
+     *  посту без целей бьёт стену (wallTarget в strike/shoot). Матч 17: стрелок на посту снял 3060 хитов за
+     *  сто тиков, а план этого не знал и купил бурильщика за 260, открывавшего стену на 18 тиков раньше. */
+    private fun wallFire(ctx: Ctx, breach: BreachPlan): Int {
+        val wall = breach.current() ?: return 0
+        return ctx.myCreeps.filter { !it.spawning && getRange(it, wall) <= RANGED_RANGE }
+            .sumOf { c -> c.body.count { it.type == RANGED_ATTACK && it.hits > 0 } } * RANGED_ATTACK_POWER
+    }
+
+    /** Через сколько тиков падёт стена в hits: огонь стрелков fire с этого тика плюс бурильщик с attacks
+     *  ATTACK, подходящий через lead тиков. Ломать некому — «никогда». */
+    private fun breachOpenAt(hits: Int, fire: Int, attacks: Int, lead: Int): Int {
+        val never = Int.MAX_VALUE / 4
+        val byFire = if (fire > 0) (hits + fire - 1) / fire else never
+        if (attacks <= 0 || lead >= never) return byFire
+        if (byFire <= lead) return byFire
+        val left = hits - fire * lead
+        val rate = attacks * ATTACK_POWER + fire
+        return lead + (left + rate - 1) / rate
+    }
+
+    /** Ход бурильщика от спавна до текущей стены пролома по полю (болото ×5). */
+    private fun breachWalk(ctx: Ctx, breach: BreachPlan): Int {
+        val wall = breach.current() ?: return 0
+        val field = flowTo(ctx, wall)
+        val fromSpawn = flowNear(field, ctx.mySpawn.x, ctx.mySpawn.y)
+        return if (fromSpawn < 0) breach.steps else field[fromSpawn]
+    }
+
+    /** Прибавка притока от точки пролома для флота не меньше минимального хаулера — против нынешних точек. */
+    private fun breachGain(points: List<Pair<Int, Int>>, breach: BreachPlan, fleet: Int): Double {
+        val ref = maxOf(fleet, HAULER_BLOCKS_MIN * CARRY_CAPACITY)
+        val point = (breach.container.store[RESOURCE_ENERGY] ?: 0) to breach.trip
+        return incomeOf(points + point, ref) - incomeOf(points, ref)
+    }
+
+    private fun regenRate(): Double = if (regenSamples > 0) regenSum.toDouble() / regenSamples else 1.0
+
+    /** Поток энергии в спавн: регенерация плюс прогноз притока флота. */
+    private fun energyFlow(ctx: Ctx): Double = projectedIncome(ctx, usableSites(ctx)) + regenRate()
+
+    /**
+     * Решение по бурильщику ИЗ СОСТОЯНИЯ: тело под поток (breacherBlocksFor); стоит ли пролом своей цены —
+     * прибавка притока флота от его точки за остаток матча (не больше содержимого контейнера) против цены
+     * тела; и порядок с хаулером — копить на бурильщика или пустить минимального хаулера вперёд, если с его
+     * притоком бурильщик доступен раньше, чем накоплением без него (после бойца за тысячу: 42 энергии при
+     * потоке 1 — копить 218 тиков, через хаулера 288 → копим; при 300 — хаулер вперёд). null — пролом
+     * бурильщика не стоит (контейнер за стеной не ближе угловых). Пара: блоки и «копить на него».
+     */
+    private fun breacherOrderOf(breach: BreachPlan, hits: Int, walk: Int, fire: Int, points: List<Pair<Int, Int>>, fleet: Int, expected: Int, flow: Double, horizon: Int): Pair<Int, Boolean>? {
+        val block = cost(MOVE) + cost(ATTACK)
+        val f = maxOf(flow, 1.0)
+        val k = breacherBlocksFor(hits, walk, breach.steps, expected, flow, fire)
+        if (k == 0) return null // стрелки на посту откроют сами — бурильщик приток не приблизит
+        val breacherCost = k * block
+        val wait = ceil(maxOf(0.0, (breacherCost - expected) / f)).toInt()
+        val start = breachIncomeStart(hits, walk, breach.steps, expected, flow, fire, k)
+        // выигрыш — против старта притока БЕЗ бурильщика (огнём стрелков), а не против «никогда»
+        val base = minOf(horizon, breachIncomeStart(hits, walk, breach.steps, expected, flow, fire, 0))
+        val gain = breachGain(points, breach, fleet) * (base - start)
+        val container = (breach.container.store[RESOURCE_ENERGY] ?: 0).toDouble()
+        if (minOf(gain, container) <= breacherCost) return null
+        val haulerCost = HAULER_BLOCKS_MIN * blockCost()
+        val yieldH = incomeOf(points, fleet + HAULER_BLOCKS_MIN * CARRY_CAPACITY) - incomeOf(points, fleet)
+        val afterHauler = expected - haulerCost
+        val viaHauler = maxOf(0.0, -afterHauler / f) + 2 * HAULER_BLOCKS_MIN * CREEP_SPAWN_TIME +
+            maxOf(0.0, (breacherCost - maxOf(afterHauler, 0)) / (f + yieldH))
+        return k to (wait <= viaHauler)
+    }
+
+    private fun breacherOrder(ctx: Ctx, breach: BreachPlan, usable: List<EnergySite>, energy: Int, carried: Int, flow: Double): Pair<Int, Boolean>? =
+        breacherOrderOf(breach, breach.totalHits, breachWalk(ctx, breach), wallFire(ctx, breach), fleetPoints(ctx, usable),
+            ctx.haulers.sumOf { capacityOf(it) }, energy + carried, flow, arenaInfo.ticksLimit - getTicks())
 
     private fun breacherBody(blocks: Int): Array<BodyPartType> {
         // вперемешку: урон снимает части спереди, блок MOVE впереди оставлял обездвиженного мили
@@ -825,7 +916,7 @@ object SpawnAndSwamp {
         // контейнер пролома, пока стена стоит: точка, которая откроется через breachOpenIn
         val breach = breachPlan(ctx)
         val breachWall = breach?.current()
-        val breachOpen = if (breach != null && breachWall != null) breachOpenIn(ctx, breach, mySpawn.store[RESOURCE_ENERGY] ?: 0) else Int.MAX_VALUE / 4
+        val breachOpen = if (breach != null && breachWall != null) breachOpenIn(ctx, breach, mySpawn.store[RESOURCE_ENERGY] ?: 0, energyFlow(ctx)) else Int.MAX_VALUE / 4
         val breachSafe = breach != null && ctx.combatEnemies.none { getRange(it, breach.container) <= SITE_DANGER_RANGE } &&
             (breachWall == null || InfluenceMap.damageAt(breachWall.x, breachWall.y, ctx.combatEnemies) <= 0.0)
         val wallSteps by lazy { DistanceMap.stepFieldTo(breachWall!!, ctx.blocked) }
@@ -1049,43 +1140,58 @@ object SpawnAndSwamp {
         // мили-бурильщик первым: ATTACK бьёт структуры впятеро дешевле RANGED. Хаулеру оставляем
         // минимальное тело, чтобы он был готов к открытию.
         val income = projectedIncome(ctx, usable)
-        // пол притока — регенерация спавна: при нуле хаулеров «время догнать» было бесконечным, и «боец
+        // пол потока — регенерация спавна: при нуле хаулеров «время догнать» было бесконечным, и «боец
         // первым» либо замыкался сам на себя (стенд 02.09), либо запрещался вовсе — и против ранней атаки
         // спавн держал 262 энергии на бурильщика и хаулера (матч 12)
-        val regen = if (regenSamples > 0) regenSum.toDouble() / regenSamples else 1.0
+        val regen = regenRate()
+        val flow = income + regen
         val fullBody = fighterBody(SPAWN_ENERGY_CAPACITY)
-        val bodyPower = lanchester(fullBody.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER.toDouble(), 0.0, fullBody.size * 100)
+        val fullCost = fullBody.sumOf { cost(it) }
         val deficit = enemyPower * DEFEND_MARGIN - ourPower
-        val catchUpTicks = if (deficit <= 0.0 || bodyPower <= 0.0) 0.0 else
-            ceil(deficit / bodyPower) * maxOf(fullBody.size * CREEP_SPAWN_TIME.toDouble(), fullBody.sumOf { cost(it) } / maxOf(income, regen, 1.0))
         val breach = breachPlan(ctx)
-        // полный боец приходит из экономики пролома, пока пролом не открыт (см. breachGuardReady), иначе
-        // из нынешнего притока; враг, который придёт раньше, — сначала боец из того, что есть
-        val guardReady = if (breach != null) minOf(catchUpTicks, breachGuardReady(ctx, breach, energy).toDouble()) else catchUpTicks
-        val fighterFirst = alarm || (deficit > 0.0 && enemyArrival <= guardReady)
+        val minFighter = cost(RANGED_ATTACK) + cost(MOVE)
+        // БОЕЦ ПЕРВЫМ — держать энергию под полное тело, не покупая ничего, — только когда так боец
+        // приходит раньше. «Держать» — полный боец из того, что в спавне и едет, при нынешнем потоке;
+        // «вкладывать» — прогон политики самого спавна (бурильщик, хаулеры) до бойца из выросшего притока.
+        // Прежнее правило держало всегда, пока враг приходил раньше прогона: при потоке 1/тик спавн двести
+        // тиков копил на тысячу, запретив хаулеров, которые одни могли поток поднять (матч 17, 210–430:
+        // ни хаулера, ни бойца, «guard by breach in 495»). Держим, если так боец успевает к приходу врага,
+        // или приходит раньше, чем вложением, или недомерок из наличной энергии сам закрывает дефицит
+        // (ветка бойца ниже); иначе вкладываем — враг всё равно придёт раньше бойца, и только приток даёт
+        // следующего
+        val holdReady = energyArrivalTicks(ctx, fullCost - energy, flow) + fullBody.size * CREEP_SPAWN_TIME
+        val investReady = guardReadySim(ctx, breach, energy).toDouble()
+        val closesNow = energy >= minFighter && closesDeficit(fighterBody(energy), defenders, threats)
+        // тревога — тот же выбор, а не безусловный запрет: враг, вставший у ворот на тысячу тиков, держал
+        // спавн на регенерации 1/тик без единого хаулера при открытом проломе в девяти клетках (стенд stream17)
+        // под тревогой враг уже в SPAWN_ALARM_TICKS от спавна, даже если стоит: enemyArrival для стоящего
+        // шара — «никогда», и угроза выходила несрочной (стенд tower+hover: четыре хаулера под тревогой)
+        val threatIn = if (alarm) minOf(enemyArrival, SPAWN_ALARM_TICKS) else enemyArrival
+        val fighterFirst = (alarm || deficit > 0.0) && threatIn < investReady &&
+            (holdReady <= threatIn || holdReady < investReady || closesNow)
         if (breach != null && !alarm && !fighterFirst && ctx.myCreeps.none { isMelee(it) }) {
-            val k = plannedBreacherBlocks(energy, breach.totalHits)
-            // бурильщик — оптимальным телом; копим на него, только если энергия уже в пути (в спавне и у
-            // хаулеров), иначе очередь хаулерам: после дебюта «боец первым» ветка триста тиков копила
-            // регенерацию на однокубовый бурильщик и не пускала ни одного хаулера (стенд freeze/harass)
-            val kOpt = breacherBlocks(SPAWN_ENERGY_CAPACITY - HAULER_BLOCKS_MIN * blockCost(), breach.totalHits)
-            val breacherCost = kOpt * (cost(MOVE) + cost(ATTACK)) + HAULER_BLOCKS_MIN * blockCost()
-            if (k < kOpt) {
-                if (energy + carried >= breacherCost) return // копим — доедет
-            }
-            if (k >= kOpt) {
+            val order = breacherOrder(ctx, breach, usable, energy, carried, flow)
+            // бурильщик под поток — и копим на него, если по потоку он ближе, чем через хаулера; иначе
+            // хаулер вперёд (ветка хаулера ниже) — после него та же проверка снова укажет на бурильщика
+            if (order != null && order.second) {
+                val k = order.first
+                val breacherCost = k * (cost(MOVE) + cost(ATTACK))
+                if (energy < breacherCost) {
+                    if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: saving for breacher blocks=$k cost=$breacherCost energy=$energy carried=$carried flow=${(flow * 10).toInt() / 10.0} hold=${holdReady.toInt()} invest=${investReady.toInt()}")
+                    return
+                }
                 val r = spawn.spawnCreep(breacherBody(k))
-                if (r.error == null) spentFighters += k * (cost(MOVE) + cost(ATTACK))
+                if (r.error == null) spentFighters += breacherCost
                 if (DEBUG_LOG) {
                     val trace = StringBuilder()
-                    val sim = breachGuardReady(ctx, breach, energy, trace)
-                    println("spawn: breacher blocks=$k walls=${breach.walls.size} hits=${breach.totalHits} trip=${breach.trip} open=${breachOpenIn(ctx, breach, energy)} guardReady=${guardReady.toInt()} sim=$sim arrival=$enemyArrival err=${r.error}$trace")
+                    val sim = guardReadySim(ctx, breach, energy, trace)
+                    println("spawn: breacher blocks=$k walls=${breach.walls.size} hits=${breach.totalHits} fire=${wallFire(ctx, breach)} trip=${breach.trip} open=${breachOpenIn(ctx, breach, energy, flow)} hold=${holdReady.toInt()} invest=${investReady.toInt()} sim=$sim arrival=$enemyArrival err=${r.error}$trace")
                 }
                 return
             }
         }
-        if (DEBUG_LOG && breach != null && fighterFirst && !alarm && ctx.myCreeps.none { isMelee(it) } && getTicks() % 10 == 0) {
-            println("spawn: breach postponed — enemy arrives in $enemyArrival, guard by breach in ${breachGuardReady(ctx, breach, energy)}, deficit=${deficit.toInt()}")
+        if (DEBUG_LOG && fighterFirst && energy < fullCost && getTicks() % 10 == 0) {
+            println("spawn: fighter first — enemy arrives in $threatIn, hold=${holdReady.toInt()} invest=${investReady.toInt()} deficit=${deficit.toInt()} alarm=$alarm closes=$closesNow flow=${(flow * 10).toInt() / 10.0}")
         }
         // хаулер нужен, пока прогноз притока ниже того, что спавн переваривает, И спавн не насыщен:
         // при полном спавне с грузом в пути приток уже стоит в очереди, и новый хаулер только
@@ -1118,7 +1224,6 @@ object SpawnAndSwamp {
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
         if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return
 
-        val minFighter = cost(RANGED_ATTACK) + cost(MOVE)
         if (energy < minFighter) return
 
         // ЛАГЕРЬ у спавна: враг рядом и сильнее — боец по 300 умирает один (матч 02.09: восемь
@@ -1146,7 +1251,7 @@ object SpawnAndSwamp {
         // гарнизон не держит и энергия не успевает
         val gap = SPAWN_ENERGY_CAPACITY - energy
         if (gap > 0 && bodyValue(full) > bodyValue(body)) {
-            val waitTicks = energyArrivalTicks(ctx, gap, income)
+            val waitTicks = energyArrivalTicks(ctx, gap, flow)
             if (deficit <= 0.0 || enemyArrival > waitTicks) return
             // недомерок — только если САМ закрывает дефицит: тело, которое ничего не меняет, — корм
             // (матч 12: M2R1 и M5R1 по одному против трёх M5R1); под огнём спавна строим, что есть
@@ -2311,64 +2416,66 @@ object SpawnAndSwamp {
     /**
      * Через сколько тиков откроется контейнер пролома: живой бурильщик — его ход до текущей стены по
      * полю (болото по его телу) плюс ломка остатка живыми ATTACK; рождающийся — остаток рождения и ход
-     * от спавна; без бурильщика — рождение оптимального тела под бюджет, ход от спавна и ломка всех стен.
-     * Пролом уже открыт — 0; ломать некому и не на что — «никогда».
+     * от спавна; без бурильщика — накопление на тело под поток (breacherBlocksFor), его рождение, ход от
+     * спавна и ломка всех стен. Пролом уже открыт — 0; ломать некому — «никогда».
      */
-    private fun breachOpenIn(ctx: Ctx, breach: BreachPlan, budget: Int): Int {
+    private fun breachOpenIn(ctx: Ctx, breach: BreachPlan, budget: Int, flow: Double): Int {
         val wall = breach.current() ?: return 0
         val hits = breach.totalHits
         val field = flowTo(ctx, wall)
+        val fire = wallFire(ctx, breach)
         val breacher = ctx.myCreeps.filter { isMelee(it) }.minByOrNull { getRange(it, wall) }
-        val attacks: Int
-        val born: Int
-        val walk: Int
+        val spawnWalk = breachWalk(ctx, breach)
         if (breacher != null) {
-            attacks = breacher.body.count { it.type == ATTACK && it.hits > 0 }
-            born = if (breacher.spawning) ctx.mySpawn.spawning?.remainingTime ?: 0 else 0
-            val fromSpawn = flowNear(field, ctx.mySpawn.x, ctx.mySpawn.y)
-            walk = if (breacher.spawning) (if (fromSpawn < 0) breach.steps else field[fromSpawn])
-            else pathTicks(breacher, field, breacher.x * 100 + breacher.y)
-        } else {
-            val k = plannedBreacherBlocks(budget, hits)
-            if (k <= 0) return Int.MAX_VALUE / 4
-            attacks = k
-            born = 2 * k * CREEP_SPAWN_TIME
-            val fromSpawn = flowNear(field, ctx.mySpawn.x, ctx.mySpawn.y)
-            walk = if (fromSpawn < 0) breach.steps else field[fromSpawn]
+            val attacks = breacher.body.count { it.type == ATTACK && it.hits > 0 }
+            val born = if (breacher.spawning) ctx.mySpawn.spawning?.remainingTime ?: 0 else 0
+            val walk = if (breacher.spawning) spawnWalk else pathTicks(breacher, field, breacher.x * 100 + breacher.y)
+            return breachOpenAt(hits, fire, attacks, if (walk >= Int.MAX_VALUE / 4) walk else born + walk)
         }
-        if (attacks <= 0 || walk >= Int.MAX_VALUE / 4) return Int.MAX_VALUE / 4
-        return born + walk + (hits + attacks * ATTACK_POWER - 1) / (attacks * ATTACK_POWER)
+        val expected = budget + ctx.haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
+        val k = breacherBlocksFor(hits, spawnWalk, breach.steps, expected, flow, fire)
+        if (k == 0) return breachOpenAt(hits, fire, 0, 0)
+        val wait = ceil(maxOf(0.0, (k * (cost(MOVE) + cost(ATTACK)) - expected) / maxOf(flow, 1.0))).toInt()
+        return breachOpenAt(hits, fire, k, wait + 2 * k * CREEP_SPAWN_TIME + spawnWalk)
     }
 
     /**
-     * Через сколько тиков дебют «бурильщик первым» даст ПОЛНОГО бойца — прогон политики самого спавна
-     * (см. spawnIfNeeded) по тикам от нынешнего состояния: бурильщик (если его нет) из энергии спавна,
-     * контейнер пролома становится точкой флота через breachOpenIn, хаулеры покупаются, пока их очередь
-     * (HAULER_LEAD), есть что возить и прогноз притока ниже целевого, остальное копится на полное тело.
-     * Враг, который придёт раньше, встречает пустой спавн — тогда боец из стартовой энергии, а пролом
-     * после (матч 12). Прежняя формула складывала ломку с накоплением по ЦЕЛЕВОМУ притоку (27/тик)
+     * Через сколько тиков ВЛОЖЕНИЕ даст ПОЛНОГО бойца — прогон политики самого спавна (см. spawnIfNeeded)
+     * по тикам от нынешнего состояния: бурильщик по breacherOrderOf (тело под поток, окупаемость, порядок с
+     * хаулером), контейнер пролома становится точкой флота с открытия, хаулеры покупаются, пока их очередь
+     * (HAULER_LEAD), есть что возить и прогноз притока ниже целевого, остальное копится на полное тело. Без
+     * пролома — только хаулеры. Прежняя формула складывала ломку с накоплением по ЦЕЛЕВОМУ притоку (27/тик)
      * сразу после пролома, а флот в тот момент — один хаулер за 200 с притоком 5 и ходом к угловому
-     * контейнеру: «страж к 167-му» против прихода врага на 168-й, и на 167-м спавн держал 278 энергии
-     * без единого стрелка (матч 14).
+     * контейнеру: «страж к 167-му» против прихода врага на 168-й, и на 167-м спавн держал 278 энергии без
+     * единого стрелка (матч 14). Прогон с телом бурильщика не из ветки спавна оставлял симуляции 90
+     * энергии вместо 220 и «страж к 1989-му» (стенд freeze) — тело здесь то же, что в ветке.
      */
-    private fun breachGuardReady(ctx: Ctx, breach: BreachPlan, budget: Int, trace: StringBuilder? = null): Int {
-        val breacherAlive = ctx.myCreeps.any { isMelee(it) }
-        val k = plannedBreacherBlocks(budget, breach.totalHits).coerceAtLeast(1)
-        val breacherCost = if (breacherAlive) 0 else k * (cost(MOVE) + cost(ATTACK))
-        val open = breachOpenIn(ctx, breach, budget)
+    private fun guardReadySim(ctx: Ctx, breach: BreachPlan?, budget: Int, trace: StringBuilder? = null): Int {
         val fighter = fighterBody(SPAWN_ENERGY_CAPACITY)
         val fighterCost = fighter.sumOf { cost(it) }
-        val regen = if (regenSamples > 0) regenSum.toDouble() / regenSamples else 1.0
+        val regen = regenRate()
         val target = targetIncome()
         val points = fleetPoints(ctx, usableSites(ctx))
-        val breachPoint = (breach.container.store[RESOURCE_ENERGY] ?: 0) to breach.trip
         val horizon = arenaInfo.ticksLimit - getTicks()
-        var energy = (budget - breacherCost).toDouble() + ctx.haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
+        val never = Int.MAX_VALUE / 4
+        val block = cost(MOVE) + cost(ATTACK)
+        val walk = if (breach != null) breachWalk(ctx, breach) else 0
+        val fire = if (breach != null) wallFire(ctx, breach) else 0
+        val breachPoint = if (breach != null) (breach.container.store[RESOURCE_ENERGY] ?: 0) to breach.trip else 0 to 0
+        var energy = budget.toDouble() + ctx.haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
         var fleet = ctx.haulers.sumOf { capacityOf(it) }
         var haulers = ctx.myCreeps.count { c -> c.body.any { it.type == CARRY } }
         var spentH = spentHaulers
-        var spentF = spentFighters + breacherCost
-        var busyUntil = if (breacherAlive) 0 else 2 * k * CREEP_SPAWN_TIME
+        var spentF = spentFighters
+        var busyUntil = 0
+        // открытие пролома: живой бурильщик — по его ходу и ударам; иначе огнём стрелков на посту, а прогон
+        // купит бурильщика сам по правилам ветки, если тот ускоряет открытие сильнее своей цены
+        var breacherPending = breach != null && ctx.myCreeps.none { isMelee(it) }
+        var open = when {
+            breach == null -> never
+            !breacherPending -> breachOpenIn(ctx, breach, budget, regen + incomeOf(points, fleet))
+            else -> breachOpenAt(breach.totalHits, fire, 0, 0)
+        }
         var income = 0.0
         var bound = false
         var incomeFleet = -1
@@ -2382,6 +2489,24 @@ object SpawnAndSwamp {
             energy += regen + income
             if (trace != null && t % 50 == 0) trace.append(" $t:e=${energy.toInt()}/f=$fleet/i=${income.toInt()}/h=$haulers/sp=$spentH")
             if (t < busyUntil) continue
+            if (breacherPending && breach != null && t < open) {
+                val hitsLeft = maxOf(1, breach.totalHits - fire * t)
+                val order = breacherOrderOf(breach, hitsLeft, walk, fire, points, fleet, energy.toInt(), regen + income, horizon - t)
+                if (order == null) breacherPending = false // стрелки откроют сами или пролом не стоит бурильщика — только хаулеры
+                else if (order.second) {
+                    val k = order.first
+                    val c = k * block
+                    if (energy >= c) {
+                        energy -= c
+                        spentF += c
+                        busyUntil = t + 2 * k * CREEP_SPAWN_TIME
+                        open = t + breachOpenAt(hitsLeft, fire, k, 2 * k * CREEP_SPAWN_TIME + walk)
+                        breacherPending = false
+                    }
+                    continue // копим на бурильщика или ждём его рождения
+                }
+                // иначе хаулер вперёд
+            }
             if (haulers < MAX_HAULERS && bound && income < target && spentH <= spentF + HAULER_LEAD) {
                 val blocks = minOf(HAULER_BLOCKS_MAX, (energy / blockCost()).toInt())
                 if (blocks >= HAULER_BLOCKS_MIN) {
@@ -2498,7 +2623,7 @@ object SpawnAndSwamp {
         val e = spawn.store[RESOURCE_ENERGY] ?: 0
         // действия применяются в КОНЦЕ тика: сдача, начатая на прошлом тике, видна в энергии сейчас
         // полный спавн прироста не показывает: первая проба на 1000/1000 давала ноль, и до второй пробы
-        // оценка регенерации была 0.0 — прогон дебюта (breachGuardReady) не рос ни на единицу (стенд freeze)
+        // оценка регенерации была 0.0 — прогон дебюта (guardReadySim) не рос ни на единицу (стенд freeze)
         if (lastSpawnEnergy in 0 until SPAWN_ENERGY_CAPACITY && spawn.spawning == null && !deliveringNearby && !deliveringLastTick && getTicks() <= 100) {
             val d = e - lastSpawnEnergy
             if (d >= 0) { regenSamples++; regenSum += d }
