@@ -1189,6 +1189,48 @@ object EscortRun {
     }
 
     /**
+     * Урон, после которого крип теряет ещё один живой MOVE. Части умирают С ГОЛОВЫ тела (хиты раздаются с хвоста,
+     * `_recalc-body.js:10-18`), а в теле эскорта `MTTTT`×10 MOVE стоят первыми — поэтому первые СТО единиц урона
+     * отнимают MOVE и уводят поезд с периода 2 на 3. Считается по живым частям, а не по раскладке «как обычно».
+     */
+    private fun damageToNextMoveLoss(c: Creep): Int {
+        var sum = 0
+        for (p in c.body) {
+            if (p.hits <= 0) continue
+            sum += p.hits
+            if (p.type == MOVE) return sum
+        }
+        return Int.MAX_VALUE / 4
+    }
+
+    /** Тики пути, где с тика `slowAt` ΣMOVE поезда падает до `movesAfter` (замедление наступает по ходу, а не сразу). */
+    private fun routeTicksSlowed(escort: Creep, flow: IntArray, moves: Int, slowAt: Int, movesAfter: Int): Int {
+        var cell = escort.x * 100 + escort.y
+        if (flow[cell] < 0) return Int.MAX_VALUE / 4
+        val weight = bodyWeight(escort)
+        var ticks = 0
+        var steps = 0
+        while (flow[cell] > 0 && steps < 400) {
+            val cx = cell / 100
+            val cy = cell % 100
+            var best = -1
+            var bestFlow = flow[cell]
+            for (dx in -1..1) for (dy in -1..1) {
+                val nx = cx + dx
+                val ny = cy + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val f = flow[nx * 100 + ny]
+                if (f in 0 until bestFlow) { bestFlow = f; best = nx * 100 + ny }
+            }
+            if (best < 0) break
+            cell = best
+            steps++
+            ticks += trainPeriod(weight, if (ticks >= slowAt) movesAfter else moves, DistanceMap.isSwamp(cell / 100, cell % 100))
+        }
+        return ticks
+    }
+
+    /**
      * Клетки цепи вперёд по полю: первая — следующая клетка от точки отсчёта, каждая следующая — от предыдущей.
      * Точка отсчёта — эскорт, а когда он в этот тик шагает — клетка, в которую он шагает: цепь строится там, где
      * эскорт БУДЕТ, иначе тягач целится в клетку, которую эскорт займёт сам, и они спорят за неё каждый тик.
@@ -1584,31 +1626,48 @@ object EscortRun {
             if (d <= 1) h else if (d <= HEAL_RANGE) h * RANGED_HEAL_POWER / HEAL_POWER else 0.0
         }
         val guardFightTicks = if (guards.isEmpty()) 0 else if (ourDps - guardHeal <= 0.0) Int.MAX_VALUE / 4 else (guards.sumOf { it.hits } / (ourDps - guardHeal)).toInt() + 1
-        val killTicks = if (ourDps - enemyHealOnEscort <= 0.0) Int.MAX_VALUE / 4 else (target.hits / (ourDps - enemyHealOnEscort)).toInt() + 1
+        val net = ourDps - enemyHealOnEscort
+        val killTicks = if (net <= 0.0) Int.MAX_VALUE / 4 else (target.hits / net).toInt() + 1
         val total = travel.toLong() + guardFightTicks + killTicks
         val enemyArrival = enemyEscortArrival(ctx)
-        val ourEscortDeath = escortDeathTicks(ctx, minOf(total, Int.MAX_VALUE / 4L).toInt())
+        // Удар окупается ЗАДОЛГО до убийства. Части умирают с головы тела, а у эскорта MOVE стоят первыми, поэтому
+        // первые сто хитов отнимают его поезду MOVE и уводят период с 2 на 3 — весь остаток пути дорожает в полтора
+        // раза. Добить 5000 под лечением стоит десятков тиков огня, снять сотню — одного, и цель удара считается по
+        // тому, что наступает раньше и решает гонку: их приход ПОСЛЕ нашего
+        val slowTicks = if (net <= 0.0) Int.MAX_VALUE / 4 else (damageToNextMoveLoss(target) / net).toInt() + 1
+        val slowTotal = travel.toLong() + guardFightTicks + slowTicks
+        val enemyMoves = trainMoves(target, enemyPullersOf(ctx, target))
+        val enemyArrivalSlowed = if (slowTotal >= Int.MAX_VALUE / 4L || enemyMoves <= 1) enemyArrival
+            else routeTicksSlowed(target, ctx.enemyEscortFlow, enemyMoves, slowTotal.toInt(), enemyMoves - 1)
+        val ours = ourArrival(ctx)
+        val slowWins = slowTotal < enemyArrival && enemyArrivalSlowed > ours
+        val reach = if (total < enemyArrival) total else slowTotal
+        val ourEscortDeath = escortDeathTicks(ctx, minOf(reach, Int.MAX_VALUE / 4L).toInt())
         val powerOk = guards.isEmpty() || powerOf(strikers, guards) >= powerOf(guards, strikers) * STRIKE_RATIO
         // гонка проиграна — удар это единственное, что её меняет, и ждать «запаса» уже не на что
         val lost = raceLost(ctx)
         val margin = if (striking || lost) 0 else STRIKE_MARGIN
-        val feasible = (lost || total < enemyArrival - margin) && total < ourEscortDeath - margin && powerOk
+        val feasible = (lost || total < enemyArrival - margin || slowWins) && reach < ourEscortDeath - margin && powerOk
         val prev = striking
         striking = feasible
         if (striking && !prev) strikeSince = getTicks()
         if (DEBUG_LOG && (striking != prev || getTicks() % BODIES_EVERY == 0)) {
             println("strike t=${getTicks()}: ${if (striking) "GO" else "no"} travel=$travel guards=${guards.size} guardFight=$guardFightTicks kill=$killTicks total=$total " +
+                "slow=$slowTicks(dmg=${damageToNextMoveLoss(target)}) slowTotal=$slowTotal slowedArrival=$enemyArrivalSlowed ourArrival=$ours slowWins=$slowWins " +
                 "enemyArrival=$enemyArrival ourEscortDeath=$ourEscortDeath dps=${ourDps.toInt()} heal=${enemyHealOnEscort.toInt()} powerOk=$powerOk strikers=${strikers.size}")
         }
         return striking
     }
 
+    /** Тягачи врага: его тела из одних MOVE в двух клетках от его эскорта. */
+    private fun enemyPullersOf(ctx: Ctx, target: Creep): List<Creep> =
+        ctx.enemyCreeps.filter { !isEscort(it) && it.body.all { p -> p.type == MOVE } && getRange(it, target) <= 2 }
+
     /** Приход эскорта врага на его флаг — с его поездом: тягачи врага — его тела из одних MOVE в двух клетках от эскорта. */
     private fun enemyEscortArrival(ctx: Ctx): Int {
         val target = ctx.enemyEscort ?: return Int.MAX_VALUE / 4
         val flow = ctx.enemyEscortFlow ?: return Int.MAX_VALUE / 4
-        val enemyPullers = ctx.enemyCreeps.filter { !isEscort(it) && it.body.all { p -> p.type == MOVE } && getRange(it, target) <= 2 }
-        return routeTicks(target, flow, trainMoves(target, enemyPullers))
+        return routeTicks(target, flow, trainMoves(target, enemyPullersOf(ctx, target)))
     }
 
     /**
