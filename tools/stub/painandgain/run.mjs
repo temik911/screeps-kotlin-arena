@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -360,6 +360,13 @@ function enemyTick() {
       const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
       if (threat.length) stepAway(c, threat);
       else stepToward(c, post, 0);
+    } else if (has('roost')) {
+      // 'roost' (match 25): like 'spread', but the creep never leaves the flag — it does not even step away from ours.
+      // The live opponent of match 25 held all seven flags by t=80 and never moved again (our own log reported
+      // `passive=true`, i.e. every combat enemy stationary), and our army then froze eleven cells short of the
+      // nearest of them for a thousand ticks
+      const post = flags[fighters.indexOf(c) % flags.length];
+      stepToward(c, post, 0);
     } else if (has('grab')) {
       // guard own-side flags (x > 60); chase intruders within 6
       const post = flags.filter((f) => f.x > 60).sort((a, b) => range(c, a) - range(c, b))[0] || flags[0];

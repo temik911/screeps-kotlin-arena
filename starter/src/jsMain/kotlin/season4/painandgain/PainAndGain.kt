@@ -252,6 +252,9 @@ object PainAndGain {
      *  болотной полосой и стенным блоком, ждала друг друга по кругу 1500 тиков при 10:11 по очкам (стенд m9 kite);
      *  правила ожидания не видят, кто кого держит, — предохранитель по времени видит. */
     private const val COHESION_PATIENCE = 30
+    // окно «марш не идёт» (см. простой): дольше самого длинного ЗАКОННОГО стояния на марше — ожидания отставших, —
+    // чтобы сплочение не считалось простоем; названного числа здесь нет, оно считается из этих двух
+    private const val MARCH_STALL_TICKS = COHESION_PATIENCE + STALL_TICKS
 
     /** Бегство скаута: от боевого врага ближе SCOUT_FLEE_TRIGGER — прочь, путь бегства ищется до клетки дальше
      *  SCOUT_FLEE_RANGE от ВСЕХ врагов. С дальностью цели 3 ближайшая «безопасная» клетка лежала на два шага глубже в
@@ -824,6 +827,7 @@ object PainAndGain {
     private val NO_FLOW = IntArray(10000) { -1 }
     private val keeperIds = HashMap<String, String>()   // хранитель флага → id флага (см. KEEP_RANGE)
     private val enemyHitsHist = ArrayDeque<Int>()         // сумма хитов врага за STALL_TICKS тиков (чистый урон)
+    private val marchHist = ArrayDeque<Int>()             // клетка центра вооружённой массы за MARCH_STALL_TICKS тиков
     private val ourHitsHist = ArrayDeque<Int>()           // и наша: бьют только нас — это бой, не простой
     private var preyNearTicks = 0                         // тиков подряд с пикетом (см. STALL_PICKET) в досягаемости
     private var stallUntil = 0
@@ -1317,11 +1321,23 @@ object PainAndGain {
         // простоя не даёт (матч 20, t=64)
         val nearArmed = armedEnemies.count { e -> strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
         preyNearTicks = if (nearArmed in 1..STALL_PICKET) preyNearTicks + 1 else 0
+        // ВТОРОЙ вид простоя — марш, который не идёт. Пикет ловит бесплодную погоню, только пока добыча ближе
+        // ENGAGE_RANGE; за этой чертой армия «гналась» и стояла, а простой не считался ни разу. Идущая погоня обязана
+        // двигать центр вооружённой массы: за MARCH_STALL_TICKS тиков он не сдвинулся НИ НА КЛЕТКУ — это не марш.
+        // Матч 25: добыча стояла в 11 клетках, ближе никого, армия 990 тиков дёргалась на месте у (46,34); за весь
+        // матч ни одного урона ни с одной стороны, и проигрыш по очкам 19927:24205 при 12 против 13 в тик
+        val marchCell = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })?.let { it.x * 100 + it.y } ?: -1
+        marchHist.addLast(marchCell)
+        while (marchHist.size > MARCH_STALL_TICKS) marchHist.removeFirst()
+        // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
+        val marchStalled = pushing && marchCell >= 0 && marchHist.size == MARCH_STALL_TICKS &&
+            marchHist.all { it == marchCell } && !inContact(armedEnemies, army)
         // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
         // конца матча (стенд m19 spread, t=600–1600)
-        if (posture != Posture.RETREAT && posture != Posture.EVADE && combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS && !netDamage && now >= stallUntil) {
+        if (posture != Posture.RETREAT && posture != Posture.EVADE && combatEnemies.isNotEmpty() && !netDamage && now >= stallUntil &&
+            (preyNearTicks >= STALL_TICKS || marchStalled)) {
             stallUntil = now + STALL_COOLDOWN
-            if (DEBUG_LOG) println("stall t=$now: picket of $nearArmed armed in reach for $preyNearTicks ticks without damage either way — flags until $stallUntil")
+            if (DEBUG_LOG) println("stall t=$now: ${if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
         }
         val stalled = now < stallUntil
         stalledNow = stalled
