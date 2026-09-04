@@ -211,4 +211,4 @@ run map-match22.txt -      roost
 run map-match20.txt -      roost
 run map-match19.txt match2 roost
 run map-match12.txt match2 roost
-grind map-match18.txt match2 roost
+run map-match18.txt match2 roost

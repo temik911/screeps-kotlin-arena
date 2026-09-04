@@ -1334,8 +1334,10 @@ object PainAndGain {
             marchHist.all { it == marchCell } && !inContact(armedEnemies, army)
         // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
         // конца матча (стенд m19 spread, t=600–1600)
-        if (posture != Posture.RETREAT && posture != Posture.EVADE && combatEnemies.isNotEmpty() && !netDamage && now >= stallUntil &&
-            (preyNearTicks >= STALL_TICKS || marchStalled)) {
+        // боевые враги нужны ПИКЕТУ (он из них и состоит), а простою марша — нет: зачистка идёт ровно тогда, когда
+        // боевых не осталось, и там сетка не сработала ни разу (стенд m18 roost: 1500 тиков погони за двумя скаутами)
+        if (posture != Posture.RETREAT && posture != Posture.EVADE && !netDamage && now >= stallUntil &&
+            ((combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS) || marchStalled)) {
             stallUntil = now + STALL_COOLDOWN
             if (DEBUG_LOG) println("stall t=$now: ${if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
         }
@@ -1350,6 +1352,11 @@ object PainAndGain {
         val ours = ourPowerOf(army, combatEnemies)
         val theirs = enemyPowerOf(combatEnemies, army)
         val nearRange = if (posture == Posture.RETREAT) NEAR_RANGE + NEAR_RELEASE else NEAR_RANGE
+        // ОТВЕРГНУТО стендом: «враг рядом — рядом с МАССОЙ армии, а не с любым нашим крипом» (хранители стоят по
+        // одному на разных концах карты, и висящий у хранителя враг россыпи отменяет цель-флаг у всей армии).
+        // Целевой сценарий m22 spread не сдвинулся вовсе (16622:24323), а m20 spread перешёл из победы в проигрыш
+        // (24337:21666 -> 19400:24328) и m19 block из уничтожения армии врага на 389-м в победу по очкам на 1142-м;
+        // выиграли только россыпи на 12, 19 и 21. Мигание постуры на россыпи — открытая находка
         val enemyNear = armedEnemies.any { e -> army.any { getRange(e, it) <= nearRange } }
         // контакт решает сам: пассивного поста в контакте нет — он отдаёт армию по одному (стенд rush: десять
         // за двоих). Отход из контакта возможен, только если он не бегство: никто из врагов-мили не вплотную
@@ -1384,7 +1391,8 @@ object PainAndGain {
         // (скауты, обломки) добивается без оглядки на «ловимость» (матч 19: последний M1 с 28 хитами сидел у нашего R3
         // пятьсот тиков, армия ходила за флагами и проиграла по очкам)
         val sweep = combatEnemies.isEmpty() && enemyCreeps.isNotEmpty() && strikers.isNotEmpty() && behindOnScore
-        pushing = sweep || (!stalled && huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio))
+        // и зачистка уступает простою: она стояла ВНЕ него, поэтому замерший на месте «дожим» не выключался ничем
+        pushing = !stalled && (sweep || (huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -1521,11 +1529,36 @@ object PainAndGain {
         // только враг, который УЖЕ у нас в руках (в RANGED_RANGE + 2 от своих): стая «в 11 клетках» включала основную
         // массу врага, и контакт с одним забредшим мили увёл армию с дома на неё — бой при 0.97 проигран 12:1 (матч 13)
         val contactPack = combatEnemies.filter { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE + 2 } }
+        // расстояние до КАЖДОГО кандидата в добычу мерилось своим полем BFS, а поля считаются под бюджетом
+        // (см. BFS_BUDGET): сверх него кандидат получает ограниченное (NEAR_FLOW) или устаревшее поле, и «до него
+        // неизвестно» читается как «бесконечно далеко». Сравнения кандидатов при этом нет вовсе — есть сравнение
+        // качества полей. Стенд m18 roost: два скаута по разным углам карты, цель армии мигала (13,49)/(90,8) КАЖДЫЙ
+        // ТИК, армия шагала туда-сюда и простояла так до конца матча — армия врага перебита к 203-му, а матч проигран
+        // по очкам 17683:24331; в живом матче 25 армия ровно так же простояла 990 тиков при добыче в 11 клетках.
+        // ОДНО поле от центра армии меряет всех кандидатов в одних единицах и в один тик — и стоит дешевле, чем поле
+        // на каждого кандидата
+        val preyField by lazy { flowTo(ctx, centroid) }
+        // враг НА клетке вражеского флага недостижим по полю (такая клетка в нём стена) — читаем по соседней: нам
+        // нужно дойти ДО него, а не встать на него
+        fun travelTo(e: Creep): Int {
+            var best = -1
+            for (dx in -1..1) for (dy in -1..1) {
+                val x = e.x + dx; val y = e.y + dy
+                if (x !in 0..99 || y !in 0..99) continue
+                val d = preyField[x * 100 + y]
+                if (d >= 0 && (best < 0 || d < best)) best = d
+            }
+            return if (best < 0) Int.MAX_VALUE / 2 else best
+        }
+        // за недостижимым не гонимся: прежде «недостижим» и «очень далеко» были одним числом, и армия шла на цель,
+        // до которой нет пути
+        fun nearestPrey(list: List<Creep>): Creep? =
+            list.filter { travelTo(it) < Int.MAX_VALUE / 4 }.minByOrNull { travelTo(it) }
         val prey = when {
             posture != Posture.ANNIHILATE -> null
-            sweep -> enemyCreeps.minByOrNull { pathTicksFrom(ctx, centroid, it) }
-            pushing -> huntable.minByOrNull { pathTicksFrom(ctx, centroid, it) }
-            else -> contactPack.filter { catchable(it, chasers) }.minByOrNull { pathTicksFrom(ctx, centroid, it) }
+            sweep -> nearestPrey(enemyCreeps)
+            pushing -> nearestPrey(huntable)
+            else -> nearestPrey(contactPack.filter { catchable(it, chasers) })
         }
         val armedCentroid = centroidOf(mobileArmy.filter { hasWeapon(it) }.ifEmpty { army }) ?: centroid
         // захватчик флага-цели — ближайший к флагу ВООРУЖЁННЫЙ член группы (одной клетки на всех не хватит; лекарь
@@ -2392,13 +2425,6 @@ object PainAndGain {
             ticks += periodAt(creep, cell / 100, cell % 100)
         }
         return ticks
-    }
-
-    /** Тики пути от точки до крипа по полю к нему (болото ×5, тело не учитывается) — для выбора жертвы. */
-    private fun pathTicksFrom(ctx: Ctx, from: Position, to: Creep): Int {
-        val flow = flowTo(ctx, to)
-        val d = flow[from.x * 100 + from.y]
-        return if (d < 0) Int.MAX_VALUE / 2 else d
     }
 
     private fun inContact(enemies: List<Creep>, ours: List<Creep>): Boolean =
