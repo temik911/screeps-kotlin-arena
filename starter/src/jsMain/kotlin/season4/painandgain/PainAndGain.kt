@@ -140,7 +140,16 @@ object PainAndGain {
      *  (ни одного флага — 0:0); 0.95 пускает дешёвые флаги, а 0.85 оставляло армию при 0.83 к пробуждению
      *  «спящего» лагеря (стенд sleeper: победа держалась на удаче кайта). */
     private const val CAPTURE_FLOOR = 1.0
-    private const val CAPTURE_FLOOR_PASSIVE = 0.95
+    /** Доктрина паритета (оператор, 05.09.2026): потеря всех крипов — проигрыш при любом счёте, поэтому копить флаги
+     *  нельзя — армия обязана оставаться примерно равной вражьей, а флагов берём столько, сколько держит НЕБОЛЬШОЙ
+     *  отрыв. Пока не впереди или отрыв не растёт, допустим флаг, после которого у нас не меньше этой доли их мощи —
+     *  цена ровно одного дешёвого флага от равенства (R3 и A3 стоят 3%, D5 и H4 — 4–5%: их только при ослабленном
+     *  враге), без неё отрыва не бывает вовсе; 0.95 пускало два флага, и бой при 0.93–0.95 был разгромом 12:0 против
+     *  победы 12:0 при 1.02 (стенд m9 hunter, m5 rush) — исход боя равных армий круче всего зависит от этих процентов;
+     *  впереди с растущим
+     *  отрывом — только флаг, с которым мы всё ещё не слабее (CAPTURE_FLOOR). Прежнее «не сильнее для добивания —
+     *  берём всё» (v11) дало семь флагов при 0.65–0.76 и три аннигиляции подряд (матчи 11–13). */
+    private const val PARITY_FLOOR = 0.97
     private const val PASSIVE_TICKS = 100
 
     /** В последних тиках матча проигрывающему по счёту флаги нужны любой ценой: бой уже не успеет. */
@@ -242,8 +251,12 @@ object PainAndGain {
     private const val HEALER_W_MELEE = 25.0
 
     /** Вес огня для лекаря, чей подопечный УЖЕ в бою. 0.005 (v9) — только подсказка, лекарь шёл под огонь стрелков в
-     *  первый ряд (матч 9); 0.05 (v10a) держал его на кромке огня в 2–3 клетках всегда, и рубки sleeper были проиграны;
-     *  0.02 — клетка вплотную сзади (мало огня) выигрывает у отступа, клетка под огнём пятерых проигрывает ему. */
+     *  первый ряд (матч 9); 0.05 (v10a) держал его на кромке огня в 2–3 клетках всегда, и рубки sleeper на дебаффах
+     *  0.6–0.75 были проиграны; 0.02 (v10) — клетка вплотную сзади выигрывала у отступа. При паритете (v14) обмен
+     *  равных армий решает ВЫЖИВШИЙ лекарь: обе стороны остаются без оружия, и отрастает та, у которой лекари целы —
+     *  враг держит своих в 2–4 клетках за строем, наши лечили касанием в первом ряду и были расстреляны (матч 13).
+     *  Проверено на восьми боях стенда: 0.05 и 0.02 дали ОДИНАКОВЫЕ исходы до тика — бой решает доля мощи к контакту
+     *  (см. PARITY_FLOOR), а не этот вес; оставлен 0.02, строй лекарей вне досягаемости стрелков — открытая находка. */
     private const val HEALER_W_DAMAGE_FIGHT = 0.02
 
     /** Множитель лечения врага в угрозе при выборе цели: убитый лекарь — единственная потеря, которую враг не вернёт
@@ -434,7 +447,7 @@ object PainAndGain {
         /** Клетки не наших флагов (x*100+y): захват — только назначенным, см. flagBlocked. */
         val flagCells: Set<Int>,
         val flagBlocked: List<Position>,
-        /** Вся боевая армия врага не сделала ни шага PASSIVE_TICKS тиков (см. CAPTURE_FLOOR_PASSIVE). */
+        /** Вся боевая армия врага не сделала ни шага PASSIVE_TICKS тиков (порог захвата один, см. captureAllowed). */
         val passiveEnemy: Boolean,
         val ourCentroid: Position,
         val enemyCentroid: Position?,
@@ -504,6 +517,7 @@ object PainAndGain {
         val ctx = Ctx(home, enemyHome, myCreeps, active, army, runners, enemyCreeps, combatEnemies, blocked, rawDanger, dangerMatrix, flags, flagCells, flagBlocked, passiveEnemy, ourCentroid, enemyCentroid)
 
         enemyArrivalTicks(ctx)
+        plannedCaptures.clear()
         runRunners(ctx)
         runArmy(ctx)
 
@@ -675,8 +689,9 @@ object PainAndGain {
     }
 
     /**
-     * Брать ли этот (не наш) флаг сейчас. Свой — да. Врага в поле нет — да. Иначе — только если армия С ЭТИМ
-     * дебаффом всё ещё не слабее армии врага (CAPTURE_FLOOR; против неподвижной — CAPTURE_FLOOR_PASSIVE):
+     * Брать ли этот (не наш) флаг сейчас. Свой — да. Врага в поле нет — да. Иначе — по паритету (см. PARITY_FLOOR):
+     * армия С ЭТИМ дебаффом не слабее армии врага (CAPTURE_FLOOR), а пока отрыва нет — не меньше PARITY_FLOOR их
+     * мощи:
      * маргинальная цена по Ланчестеру с эффектами ОБЕИХ сторон — у флага стрельбы дешевеет только стрелковая
      * часть урона, у флага лечения растёт чистый урон врага по нам, у флага уязвимости тают хиты, а чужой флаг
      * ещё и возвращает врагу то, что снимал с него. Отставание по счёту флагов больше не открывает: оно
@@ -692,21 +707,39 @@ object PainAndGain {
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
         if (ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return false
-        // не сильнее для добивания (см. EVADE_RANGE) — с такой армией не деремся, а уходим и берём очки: порог «не
-        // слабее» защищал бой, который теперь не наш выбор; четыре равных боя у поста подряд проиграны (матчи 7–10)
-        if (ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * PUSH_RATIO) return true
+        // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
+        // мощи; впереди с растущим отрывом — только не слабее
         val (ours, theirs) = powerAfter(ctx, f)
-        return ours >= theirs * (if (ctx.passiveEnemy) CAPTURE_FLOOR_PASSIVE else CAPTURE_FLOOR)
+        val needed = ourScore <= enemyScore || ourRate <= enemyRate
+        // неподвижный враг — тоже армия: «пассивный» порог 0.95 пустил третий флаг против спящего, тот проснулся, и бой
+        // при 0.96 был проигран (стенд m6 sleeper); порог один
+        val floor = if (needed) PARITY_FLOOR else CAPTURE_FLOOR
+        return ours >= theirs * floor
     }
 
-    /** Мощь сторон, если мы возьмём ещё этот флаг: наша — с его дебаффом; вражья — без него, если флаг был его. */
+    /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
+     *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
+    private val plannedCaptures = HashSet<String>()
+
+    private fun planCapture(ctx: Ctx, step: Position?) {
+        if (step == null) return
+        ctx.flags.firstOrNull { !it.ours && it.pos.x == step.x && it.pos.y == step.y }?.let { plannedCaptures.add(it.id) }
+    }
+
+    /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
+     *  вражья — без них, если флаги были его. */
     private fun powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double> {
-        val nOurs = ctx.flags.count { it.ours && it.type == f.type }
-        val kOurs = stackMul(f.type, nOurs + 1) / stackMul(f.type, nOurs).coerceAtLeast(0.01)
-        val nTheirs = ctx.flags.count { it.theirs && it.type == f.type }
-        val kTheirs = if (f.theirs) stackMul(f.type, nTheirs - 1) / stackMul(f.type, nTheirs).coerceAtLeast(0.01) else 1.0
-        val ourMods = hypoMods(f.type, kOurs)
-        val theirMods = hypoMods(f.type, kTheirs)
+        val taking = HashSet(plannedCaptures); taking.add(f.id)
+        fun mods(mine: Boolean): HypoMods {
+            fun k(type: String): Double {
+                val now = ctx.flags.count { it.mine == mine && it.type == type }
+                val after = ctx.flags.count { it.type == type && (if (mine) (it.ours || it.id in taking) else (it.theirs && it.id !in taking)) }
+                return stackMul(type, after) / stackMul(type, now).coerceAtLeast(0.01)
+            }
+            return HypoMods(ranged = k(EFF_RANGED_ATTACK_MODIFIER), melee = k(EFF_ATTACK_MODIFIER), heal = k(EFF_HEAL_MODIFIER), hits = 1.0 / k(EFF_DAMAGE_TAKEN_MODIFIER))
+        }
+        val ourMods = mods(true)
+        val theirMods = mods(false)
         return powerOf(ctx.army, ctx.combatEnemies, ourMods, theirMods) to powerOf(ctx.combatEnemies, ctx.army, theirMods, ourMods)
     }
 
@@ -756,6 +789,10 @@ object PainAndGain {
                 // стая у флага — охрана рядом И те, кто дойдёт до него раньше нас: скаут шёл к дальнему H4, пока
                 // армия врага шла туда же, и вошёл в неё (матч 3, t=70–87); охраны в 11 клетках было мало
                 if (packAt(ctx, f.pos, flow, ticks).isNotEmpty()) continue
+                // при охотнике (см. escapeFlows) флаг без выхода — карман: три безоружных крипа сидели на угловых флагах,
+                // пока армия врага шла к ним, и были добиты по одному — последний на 545-м тике, аннигиляция при +5000
+                // очков (матч 13)
+                if (escapeFlows.isNotEmpty() && exitMargin(ctx, f.pos, ticks) < 0) continue
                 // свой пустой флаг стоит половину — но СИДЯЩИЙ на нём закрывает клетку от чужих бегунов (матч 2:
                 // центральный D5 забрал вражеский M1, пока армия уходила за соседним флагом, и вернуть его было
                 // некому); чужой — двойной размен; флаг, который порог силы сейчас не разрешает, — пятую часть
@@ -804,6 +841,16 @@ object PainAndGain {
                 dbg(s, "RESERVE", null, step)
                 continue
             }
+            // выход закрывается (см. exitMargin): с флага — в лучшую точку выхода, пока устье открыто
+            if (f != null && escapeFlows.isNotEmpty() && getRange(s, f.pos) <= 2 && exitMargin(ctx, f.pos, 0) < 0) {
+                val to = runnerEscape(ctx, s)
+                if (to != null) {
+                    val step = pathStep(s, to, 1, ctx.dangerMatrix)
+                    if (step != null) TrafficManager.request(s, step, RUNNER_PRIORITY)
+                    dbg(s, "EXIT", f, step)
+                    continue
+                }
+            }
             if (onIt) {
                 dbg(s, if (f.ours) "HOLD" else "HOLD_WAIT", f)
                 continue
@@ -813,7 +860,7 @@ object PainAndGain {
             val range = if (allowed) 0 else 1
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)
             val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, f.pos.x * 100 + f.pos.y)) else null
-            if (step != null) TrafficManager.request(s, step, RUNNER_PRIORITY)
+            if (step != null) { TrafficManager.request(s, step, RUNNER_PRIORITY); planCapture(ctx, step) }
             dbg(s, if (allowed) "TO_FLAG" else "POISED", f, step)
         }
     }
@@ -1044,6 +1091,24 @@ object PainAndGain {
     /** Точка уклонения (см. EVADE_SAFE): из точек выхода — с наибольшим счётом (меньший из запасов прибытия и выхода);
      *  где стоим — только пока счёт не меньше EVADE_SAFE; прежняя держится, пока не хуже лучшей на EVADE_HYSTERESIS;
      *  null — карман, уходить некуда. */
+    /** Точка выхода для одиночного бегуна: лучшая по меньшему из запасов прибытия и выхода на ЕГО пути, не та, где он
+     *  стоит (см. evadePoint для армии). */
+    private fun runnerEscape(ctx: Ctx, s: Creep): Position? {
+        var best: Position? = null
+        var bestScore = Int.MIN_VALUE
+        for (c in escapeCandidates(ctx)) {
+            if (getRange(c, s) <= 2) continue
+            val key = c.x * 100 + c.y
+            val flow = escapeFlows[key] ?: continue
+            val theirs = escapeTheirs[key] ?: continue
+            val ticks = pathTicks(s, flow, s.x * 100 + s.y)
+            if (ticks >= Int.MAX_VALUE / 4) continue
+            val score = minOf(theirs - ticks, exitMargin(ctx, c, ticks))
+            if (best == null || score > bestScore) { bestScore = score; best = c }
+        }
+        return best
+    }
+
     private fun evadePoint(ctx: Ctx, armed: List<Creep>, strikers: List<Creep>): Position? {
         val now = getTicks()
         val cur = evadeTarget
@@ -1153,7 +1218,11 @@ object PainAndGain {
         val annihilate = pushing || contactFight
         // непобедимая армия (см. EVADE_SAFE): с ней не деремся — флаг-цель только с выходом, иначе уклонение на любой
         // дистанции: держимся там, откуда есть выход, и уходим, когда она подходит
-        val cantPush = armedEnemies.isNotEmpty() && strikers.isNotEmpty() && ours < theirs * pushRatio
+        // уклонение — только от ЯВНО сильнейшей армии (см. RETREAT_RATIO): при паритете флагов (v14) бой равный, и бежать
+        // от него на равной скорости — быть пойманным с растянутым хвостом (матчи 11–12); прежнее «не сильнее для
+        // добивания» уводило и от равной армии. Поля выхода нужны и бегунам без армии (см. runnerEscape)
+        val hunted = armedEnemies.isNotEmpty() && strikers.isNotEmpty() && theirs >= ours * RETREAT_RATIO
+        val escapeNeeded = hunted || (armedEnemies.isNotEmpty() && strikers.isEmpty())
         // темп сближения врага (0 — стоит, 1 — идёт на нас): запас выхода даёт ему фору только в этом темпе — фора «идёт
         // к выходу мгновенно» отвергала всякую цель при враге, стоящем дома, и армия весь матч сидела дома (стенд m1 scouts)
         run {
@@ -1161,12 +1230,15 @@ object PainAndGain {
             if (ec != null) { enemyDistHist.addLast(getRange(ec, ctx.ourCentroid)); while (enemyDistHist.size > APPROACH_WINDOW) enemyDistHist.removeFirst() } else enemyDistHist.clear()
             approachRate = if (enemyDistHist.size >= 2) ((enemyDistHist.first() - enemyDistHist.last()).toDouble() / (enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
         }
-        if (cantPush) refreshEscape(ctx, armedEnemies) else { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
+        if (escapeNeeded) refreshEscape(ctx, armedEnemies) else { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
         // враг близко (см. EVADE_RANGE) — уклонение раньше целей; далеко — цели с выходом, иначе безопасная точка
-        val enemyClose = cantPush && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
+        val enemyClose = hunted && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
         val evadeFirst = if (enemyClose && !annihilate && !contact) evadePoint(ctx, armedEnemies, strikers) else null
-        val objective = if (annihilate || evadeFirst != null) null else chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, cantPush)
-        val evadeTo = evadeFirst ?: (if (cantPush && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
+        // враг рядом (см. NEAR_RANGE) без нашего перевеса — не цель, а строй: армия, пошедшая за угловым флагом при
+        // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
+        val holdLine = enemyNear && !pushing && !annihilate
+        val objective = if (annihilate || evadeFirst != null || holdLine) null else chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted)
+        val evadeTo = evadeFirst ?: (if (hunted && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
         val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible
@@ -1265,8 +1337,9 @@ object PainAndGain {
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
         // добить: цель армии — ближайший к центру армии боевой враг (по пути); в бою ПО КОНТАКТУ (без перевеса) —
-        // только из стаи, с которой контакт: контакт с одним стрелком не повод идти на армию врага за полкарты
-        val contactPack = combatEnemies.filter { e -> combatArmy.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
+        // только враг, который УЖЕ у нас в руках (в RANGED_RANGE + 2 от своих): стая «в 11 клетках» включала основную
+        // массу врага, и контакт с одним забредшим мили увёл армию с дома на неё — бой при 0.97 проигран 12:1 (матч 13)
+        val contactPack = combatEnemies.filter { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE + 2 } }
         val prey = when {
             posture != Posture.ANNIHILATE -> null
             pushing -> huntable.minByOrNull { pathTicksFrom(ctx, centroid, it) }
@@ -1561,7 +1634,7 @@ object PainAndGain {
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
                 println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (wounded) " WOUNDED" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
             }
-            if (step != null) TrafficManager.request(creep, step, if (wounded) WOUNDED_PRIORITY else FIGHTER_PRIORITY)
+            if (step != null) { TrafficManager.request(creep, step, if (wounded) WOUNDED_PRIORITY else FIGHTER_PRIORITY); planCapture(ctx, step) }
             lastHits[creep.id] = creep.hits
             lastCell[creep.id] = creep.x * 100 + creep.y
         }
