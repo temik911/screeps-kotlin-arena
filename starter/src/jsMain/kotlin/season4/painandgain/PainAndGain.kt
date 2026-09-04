@@ -108,6 +108,13 @@ object PainAndGain {
     private const val PUSH_RATIO_BEHIND = 1.1
     private const val PUSH_RELEASE_RATIO_BEHIND = 1.05
 
+    /** Отставание, длящееся дольше стольких тиков, — уже не «скаут делает последний шаг к флагу», а пат: враг держит
+     *  на флаг больше, его армия стоит, а наша при 1.01 полторы тысячи тиков ждёт перевеса 1.1 и проигрывает по
+     *  очкам по единице в тик (стенд m3 army: 20252:20028 на 1992-м тике). Тогда в бой при равенстве. */
+    private const val BEHIND_PATIENCE = 200
+    private const val PUSH_RATIO_STALEMATE = 1.0
+    private const val PUSH_RELEASE_RATIO_STALEMATE = 0.95
+
     /** Местный бой (группа против стаи рядом) и продолжение уже начатого: вход при 0.9 — при равных силах никто
      *  не вступал в бой, и рывок врага кончался ничьёй (стенд rush). */
     private const val LOCAL_ENTER_RATIO = 0.9
@@ -117,6 +124,13 @@ object PainAndGain {
      *  матч 3, где 0.77 из четырёх дебаффов стоили всей армии. */
     private const val RETREAT_RATIO = 1.15
     private const val RETREAT_RELEASE_RATIO = 1.05
+
+    /** Перевес врага, при котором армия ВЫХОДИТ из уже идущего боя в контакте, — много выше порога входа в отход:
+     *  первая потеря в ровном бою даёт 1.18, и ОТХОД в тот же тик поставил стрелков «ждать отставших» без единого
+     *  выстрела, пока мили врага резали авангард, а дальше ДОБИТЬ/ОТХОД мигали через тик — размен 1:10 при
+     *  равной силе (матч 6, t=64–100). Из контакта при равной скорости всё равно не уйти; уходим, только когда
+     *  бой проигран явно. */
+    private const val RETREAT_CONTACT_RATIO = 1.5
 
     /** Захват флага допустим, пока армия с его дебаффом НЕ СЛАБЕЕ армии врага — считая ОБЕ стороны: чужой
      *  флаг снимает дебафф с врага. При равных армиях первый флаг берёт тот, кто согласен стать слабее;
@@ -138,8 +152,13 @@ object PainAndGain {
      *  с марша входила в блоб врага по одному — melee_2 один внутри двенадцати, стрелки в 4–5 клетках, лекари
      *  дальше, минус два мили за шесть тиков при равной силе; прежнее «любой напарник в бою снимает ожидание»
      *  и было командой «в атаку по одному». */
-    private const val FORM_RANGE = 3
+    private const val FORM_RANGE = 2
     private const val FORM_SHARE = 0.75
+
+    /** Дольше стольких тиков строй не ждёт: кто мог подойти — подошёл. Без этого готовность могла не наступить
+     *  никогда — в двух клетках от авангарда на кромке огня семерым нет места, и армия 1300 тиков стояла в
+     *  четырёх клетках от лагеря врага в постуре ДОБИТЬ, проигрывая по очкам (стенд m1 grab). */
+    private const val FORM_PATIENCE = 10
 
     /** Ловимость (см. catchable/evasive): окно наблюдения за движением врага, и поводок — дальше стольких клеток от
      *  центра вооружённой армии боец при враге рядом идёт к центру, а не к цели. Уходящего с равной скоростью не
@@ -259,6 +278,8 @@ object PainAndGain {
     private var pushing = false
     /** Точка отхода — одна на весь отход (см. retreatPoint). */
     private var retreatTarget: Position? = null
+    /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
+    private var formWaitSince = -1
     private val aggressiveIds = HashSet<String>()
     private val lastHits = HashMap<String, Int>()
     private val lastCell = HashMap<String, Int>()
@@ -276,6 +297,8 @@ object PainAndGain {
     private var enemyRate = 0
     /** По прогнозу (счёт + темп × остаток) мы проигрываем: очки важнее силы (см. captureAllowed). */
     private var behindOnScore = false
+    /** Сколько тиков подряд отстаём по прогнозу (см. BEHIND_PATIENCE). */
+    private var behindTicks = 0
     private val lastFlagOwner = HashMap<String, Int>()
     private var lastEffectsKey = ""
     private var lastBodiesKey = ""
@@ -544,6 +567,7 @@ object PainAndGain {
         enemyScore += enemyRate
         val remaining = maxOf(0, arenaInfo.ticksLimit - getTicks())
         behindOnScore = ourScore + ourRate * remaining < enemyScore + enemyRate * remaining
+        behindTicks = if (behindOnScore) behindTicks + 1 else 0
         if (DEBUG_LOG && getTicks() % 100 == 0) println("score t=${getTicks()}: our=${ourScore.toInt()} (+$ourRate/t) enemy=${enemyScore.toInt()} (+$enemyRate/t) behind=$behindOnScore lead=${(ourScore - enemyScore).toInt()} maxSwing=${(cap * remaining).toInt()}")
     }
 
@@ -839,15 +863,18 @@ object PainAndGain {
         val atRetreatPoint = retreatTarget?.let { getRange(ctx.ourCentroid, it) <= POST_STANDOFF + ARRIVED_SLACK } ?: false
         val retreatFeasible = !contact || (!meleeAdjacent && ourPeriod <= theirPeriod && !atRetreatPoint)
         val weaker = theirs >= ours * (if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
+        // из идущего боя (см. RETREAT_CONTACT_RATIO) — только при явном проигрыше
+        val weakerContact = theirs >= ours * (if (posture == Posture.ANNIHILATE) RETREAT_CONTACT_RATIO else if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // ДОБИТЬ по перевесу — с гистерезисом; по контакту — пока контакт есть (без гистерезиса: см. PUSH_RELEASE_RATIO)
-        val pushRatio = if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
-        val pushRelease = if (behindOnScore) PUSH_RELEASE_RATIO_BEHIND else PUSH_RELEASE_RATIO
+        val stalemate = behindTicks >= BEHIND_PATIENCE
+        val pushRatio = if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
+        val pushRelease = if (stalemate) PUSH_RELEASE_RATIO_STALEMATE else if (behindOnScore) PUSH_RELEASE_RATIO_BEHIND else PUSH_RELEASE_RATIO
         pushing = huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
         // sleeper при 0.83 это 10:0; «поймали — деремся до конца контакта» дало 2:11, «слабее — только отход» 2:6
-        val contactFight = combatEnemies.isNotEmpty() && strikers.isNotEmpty() && contact && !(retreatFeasible && weaker)
+        val contactFight = combatEnemies.isNotEmpty() && strikers.isNotEmpty() && contact && !(retreatFeasible && weakerContact)
         val annihilate = pushing || contactFight
         val retreat = combatEnemies.isNotEmpty() && !annihilate && enemyNear && weaker && retreatFeasible
         val objective = if (annihilate || retreat) null else chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio)
@@ -866,7 +893,7 @@ object PainAndGain {
             postureLogged = postureKey
             println("posture: $newPosture t=${getTicks()} our=${ours.toInt()} enemy=${theirs.toInt()} near=$enemyNear contact=$contact pushing=$pushing huntable=${huntable.size}/${combatEnemies.size} retreatFeasible=$retreatFeasible strikers=${strikers.size}/${army.size} " +
                 "obj=${objective?.let { "(${it.flag.pos.x},${it.flag.pos.y})${typeChar(it.flag.type)}${it.flag.score} pack=${it.pack.size} travel=${it.travel} v=${(it.value * 100).toInt()}" } ?: "-"} " +
-                "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} post=(${post.x},${post.y}) behind=$behindOnScore hunt=$huntingThreat")
+                "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} post=(${post.x},${post.y}) behind=$behindOnScore/$behindTicks hunt=$huntingThreat")
         }
         posture = newPosture
 
@@ -881,7 +908,11 @@ object PainAndGain {
         // стоявшей за ним армии врага и вошла в бой при 0.77 (матч 3, t=100)
         val raider = ourHalfSoft.minByOrNull { r -> minOf(getRange(r, centroid), ctx.flags.filter { !it.theirs }.minOfOrNull { getRange(r, it.pos) } ?: 99) }
             ?.takeIf { r ->
-                val pack = combatEnemies.filter { getRange(it, r) <= FLAG_GUARD_RANGE }
+                // стая рейдера — и те, кто дойдёт до него не позже нас: скаут в 12 клетках впереди своей армии был
+                // «без охраны», и армия вышла из дома ему навстречу — прямо под удар всей армии врага (матч 6, t=50)
+                val field = flowTo(ctx, r)
+                val ourTravel = chasers.map { pathTicks(it, field, it.x * 100 + it.y) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: Int.MAX_VALUE / 4
+                val pack = packAt(ctx, r, field, ourTravel)
                 catchable(r, chasers) && (pack.isEmpty() || (strikers.isNotEmpty() && ourPowerOf(strikers, pack) >= enemyPowerOf(pack, strikers) * PUSH_RATIO))
             }
         // охота на угрозу на нашей половине — решение группы с гистерезисом: стрелки против всей стаи у угрозы
@@ -949,11 +980,14 @@ object PainAndGain {
         // доля вооружённых в RALLY_RANGE от него, собравшихся в FORM_RANGE; клетки под огнём — в дальности стрелка
         val formers = mobileArmy.filter { hasWeapon(it) }
         val formVan = if (combatEnemies.isEmpty()) null else formers.minWithOrNull(compareBy<Creep>({ f -> combatEnemies.minOf { getRange(f, it) } }, { it.id }))
-        val formationReady = formVan == null || run {
+        val formationGathered = formVan == null || run {
             val near = formers.filter { getRange(it, formVan) <= RALLY_RANGE }
             val needed = maxOf(2, ceil(FORM_SHARE * near.size).toInt())
             near.count { getRange(it, formVan) <= FORM_RANGE } >= needed
         }
+        val formWaiting = formVan != null && !formationGathered && combatEnemies.any { e -> formers.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
+        if (!formWaiting) formWaitSince = -1 else if (formWaitSince < 0) formWaitSince = getTicks()
+        val formationReady = formationGathered || (formWaitSince >= 0 && getTicks() - formWaitSince >= FORM_PATIENCE)
         val fireCells = HashSet<Int>()
         for (e in combatEnemies) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
             val x = e.x + dx; val y = e.y + dy
@@ -1088,8 +1122,14 @@ object PainAndGain {
             // бегство: смертельный урон за два тика; безоружный лекарь — от врага рядом, если рядом нет ни одного
             // вооружённого своего (при нём лекарь стоит и лечит: бегущий лекарь — потерянные 72 в тик, матч 3);
             // невидимый урон
+            // вооружённый бежит, только когда его ДОБИВАЮТ: за прошлый тик снято не меньше половины оставшихся хитов и
+            // осталось меньше трети. Прежнее «весь возможный огонь по клетке за два тика больше хитов» в бою 12 на 12
+            // верно для КАЖДОЙ клетки у вражеского блоба (1260 против 1600), и трое мили с полными хитами
+            // разворачивались спиной в первый тик контакта — их резали в спину, строй рассыпался (стенд sleeper,
+            // t=550; матчи 4–6 в первом размене теряли 1:5 при равной силе)
+            val lostLastTick = lastHits[creep.id]?.let { it - creep.hits } ?: 0
             val mustFlee = (healer && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= HEAL_RANGE }) ||
-                creep.hits < InfluenceMap.netDamageAt(creep.x, creep.y, nearbyEnemies, allies) * 2 ||
+                (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
                 (ghost > 0 && creep.hits <= ghost)
 
             // сплочение: авангард ждёт отставших группы (в тиках ИХ хода), пока сам не под огнём и напарник
@@ -1222,7 +1262,11 @@ object PainAndGain {
         val combatInRange = creepsInRange.filter { c -> val p = InfluenceMap.profileOf(c); p.melee + p.ranged + p.heal > 0.0 }
         val massPool = if (combatInRange.isNotEmpty()) combatInRange else creepsInRange
         val massValue = massPool.sumOf { InfluenceMap.rangedRate(creep.getRangeTo(it)) }
-        if (massValue > 1.0) {
+        // против армии с лекарями — только фокус: веер размазывает урон по трём-пяти целям, и три лекаря (216 в тик)
+        // вылечивают его целиком, пока враг сосредоточенно снимает 540 в тик с одного нашего (стенд sleeper: наш чистый
+        // урон 200 в тик против 540). Веер — когда врагу нечем лечить или он даёт не меньше двух с половиной выстрелов
+        val enemyHeals = enemyCreeps.any { InfluenceMap.profileOf(it).heal > 0.0 }
+        if (massValue > (if (enemyHeals) 2.5 else 1.0)) {
             creep.rangedMassAttack()
         } else {
             // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
