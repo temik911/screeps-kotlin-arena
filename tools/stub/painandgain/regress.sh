@@ -155,3 +155,13 @@ run map-match20.txt -      rush
 run map-match20.txt -      kite
 grind map-match20.txt -      sleeper
 grind map-match20.txt -      spread
+run map-match21.txt match2 wing
+run map-match21.txt match2 hunter
+run map-match21.txt match2 nine
+run map-match21.txt match2 block
+run map-match21.txt match2 army
+run map-match21.txt match2 rush
+run map-match21.txt match2 kite
+run map-match21.txt match2 fourteen
+grind map-match21.txt match2 sleeper
+grind map-match21.txt match2 spread
