@@ -40,6 +40,10 @@ run  map-match1.txt - race
 run  map-match1.txt - melee
 run  map-match1.txt - train
 open map-match1.txt - rush+harvest
+# 'racer' is the match-2 opponent given a head start (its puller is alive at tick 0): the closest thing to the live
+# rival that actually races. It is outside the gate because that head start is worth thirty ticks we cannot recover
+open map-match1.txt - racer
+open - - racer
 run  - - none
 run  - - race
 run  - - melee

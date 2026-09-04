@@ -183,6 +183,9 @@ object EscortRun {
     /** Окно наблюдения за эскортом врага: его темп по маршруту решает, есть ли у нас запас на экономику. Эскорт идёт
      *  клетку за 1–4 тика, так что за полсотни тиков едущий проходит не меньше дюжины клеток, а стоящий — ноль. */
     private const val ESCORT_WATCH = 50
+    /** Сколько тиков ждать первого заказа врага, прежде чем тратить стартовую энергию: заказ первого тика виден на
+     *  втором, так что дольше ждать нечего, а каждый тик ожидания — фора сопернику в гонке. */
+    private const val ENEMY_OPENING_WAIT = 2
 
     // ---------- диагностика ----------
     private const val DEBUG_LOG = true
@@ -895,8 +898,17 @@ object EscortRun {
         if (ctx.harvesters.isEmpty() && ctx.homeSource != null && ctx.homeSource.energy > 0) {
             for (b in intArrayOf(300, 600, fullBudget)) harvesterBody(minOf(b, fullBudget), d)?.let { hb -> if (harvesters.none { it.body.contentEquals(hb) }) harvesters.add(Order(hb, "harvester")) }
         }
+        // ускорение НЕ покупается, пока нет ни одного бойца, а видимая угроза доходит до эскорта раньше, чем он
+        // финиширует: там, где срок обороны срывают все планы, критерий «минимальное опоздание» выбирал доход, деньги
+        // уходили в скорость, и эскорт умирал за пятнадцать тиков до прихода бойца (стенд melee: гибель на 231)
+        // угроза для этого правила — тот, кто идёт К НАМ, а не сопровождает своего: боец, стоящий у вражеского эскорта,
+        // ближе к нему, чем к нашему, и оборона против него не нужна (стенд guard: конвой соперника читался как угроза,
+        // ускорение не покупалось вовсе, и гонка проигрывалась пешком)
+        val comingAtUs = ctx.escort != null && ctx.enemyEscort != null &&
+            (ctx.combatEnemies + ctx.enemyPending.filter { isCombat(it) }).any { getRange(it, ctx.escort) < getRange(it, ctx.enemyEscort) }
+        val defenceFirst = ctx.fighters.isEmpty() && deadline < Int.MAX_VALUE / 8 && comingAtUs && earliestThreatArrival(ctx) < ourArrival(ctx)
         val pullers = ArrayList<Order>()
-        if (USE_PULL && !pullBroken && ctx.pullers.size < MAX_CHAIN) {
+        if (USE_PULL && !pullBroken && !defenceFirst && ctx.pullers.size < MAX_CHAIN) {
             for (n in intArrayOf(PULLER_MIN_MOVE, 10, PULLER_MAX_MOVE)) if (n * cost(MOVE) <= fullBudget) pullers.add(Order(Array(n) { MOVE }, "puller"))
         }
         val fighters = ArrayList<Order>()
@@ -928,17 +940,18 @@ object EscortRun {
             if (DEBUG_PLANS) all.add(p)
             if (better(p)) best = p
         }
-        val groups = listOf(harvesters, pullers, fighters).filter { it.isNotEmpty() }
-        // все перестановки подмножеств ролей (1..3 роли), по одному кандидату из каждой роли
-        fun rec(prefix: List<Order>, used: Set<Int>) {
+        // перестановки заказов: добытчик и боец не больше раза, а ТЯГАЧЕЙ столько, сколько ещё влезает в цепь — два по
+        // десять MOVE обгоняют один на двадцать, потому что первый начинает тянуть вдвое раньше (стенд: приход 230
+        // против 247), и без повтора роли план этого варианта не видел вовсе
+        val pullersLeft = maxOf(0, MAX_CHAIN - ctx.pullers.size)
+        fun rec(prefix: List<Order>, usedHarvester: Boolean, usedFighter: Boolean, pullersRest: Int) {
             if (prefix.isNotEmpty()) consider(prefix)
             if (prefix.size >= 3) return
-            for ((gi, g) in groups.withIndex()) {
-                if (gi in used) continue
-                for (o in g) rec(prefix + o, used + gi)
-            }
+            if (!usedHarvester) for (o in harvesters) rec(prefix + o, true, usedFighter, pullersRest)
+            if (!usedFighter) for (o in fighters) rec(prefix + o, usedHarvester, true, pullersRest)
+            if (pullersRest > 0) for (o in pullers) rec(prefix + o, usedHarvester, usedFighter, pullersRest - 1)
         }
-        rec(emptyList(), emptySet())
+        rec(emptyList(), false, false, pullersLeft)
         if (best.first != null && DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("plan t=${getTicks()}: ${best.desc} arrival=${best.arrival} fighterReady=${best.fighterReady} energy=${best.energy.toInt()} deadline=$deadline cost=${best.cost} sims=$sims (nothing: arrival=${base.arrival} fighter=${base.fighterReady} energy=${base.energyAtArrival.toInt()})")
         if (DEBUG_PLANS && !plansDumped) {
             plansDumped = true
@@ -959,9 +972,12 @@ object EscortRun {
         val fullBudget = minOf(cap, SPAWN_ENERGY_CAPACITY)
         val now = getTicks()
 
-        // дебют: первый заказ врага виден как spawning со второго тика его spawnCreep — ждём его не дольше половины окна
+        // дебют врага виден со ВТОРОГО тика (его spawnCreep на первом), и знать его надо: стартовой энергии хватает на
+        // одно решение, и потраченная до этого знания она уходит в скорость там, где нужен был боец (стенд melee: тягач
+        // на первом тике, эскорт мёртв на 231). Ждём только появления заказа, а не половину окна в десять тиков, как
+        // унаследовано из Spawn and Swamp: те десять тиков — это пять клеток форы сопернику, заказавшему на первом
         val enemyOrderVisible = ctx.enemyPending.isNotEmpty() || ctx.enemyCreeps.any { !isEscort(it) } || (ctx.enemySpawn?.spawning != null)
-        if (ctx.myCreeps.none { !isEscort(it) } && !enemyOrderVisible && now <= APPROACH_WINDOW / 2) return
+        if (ctx.myCreeps.none { !isEscort(it) } && !enemyOrderVisible && now <= ENEMY_OPENING_WAIT) return
 
         val threat = earliestThreatArrival(ctx)
         val inc = income(ctx)
@@ -989,6 +1005,40 @@ object EscortRun {
                 if (energy >= bodyCost(o.body)) { order(spawn, o.body, o.role, "plan ${plan.desc} arrival=${plan.arrival} fighterReady=${plan.fighterReady} threat=$threat income=${inc.toInt()}"); return }
                 if (DEBUG_LOG && now % LOG_EVERY == 0) println("spawn t=$now: saving ${o.role} ${summaryOf(o.body)} e=$energy/${bodyCost(o.body)} plan=${plan.desc} arrival=${plan.arrival} threat=$threat")
                 return
+            }
+        }
+
+        // гонка проиграна по расчёту, и план выше не нашёл, чем её ускорить, — деньги идут в перехватчика: тело,
+        // которое
+        // успевает дойти до их поезда и убить ТЯГАЧА (тысяча хитов, без оружия) прежде, чем их эскорт придёт на флаг.
+        // Смерть тягача возвращает им пеший период — вдвое. Копить на полное тело здесь бессмысленно: в матче 2 бот
+        // держал «saving fighter 980» при доходе 2 в тик, то есть 438 тиков, при матче, который решался за 250
+        if (raceLost(ctx)) {
+            val target = strikeTarget(ctx)
+            val enemyArrival = enemyEscortArrivalObserved(ctx)
+            if (target != null && enemyArrival < Int.MAX_VALUE / 8) {
+                // путь оценивается по Чебышеву от спавна до цели — нижняя граница, поля к ней сейчас может не быть вовсе
+                val walk = getRange(spawn, target)
+                var best: Array<BodyPartType>? = null
+                var bestReady = Int.MAX_VALUE
+                var b = cost(MOVE) + cost(RANGED_ATTACK)
+                while (b <= fullBudget) {
+                    val body = fighterBody(b)
+                    b += 200
+                    if (body == null) continue
+                    val dps = body.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER.toDouble()
+                    if (dps <= 0.0) continue
+                    val ready = ticksToAccumulate(bodyCost(body) - energy, inc) + spawnTicks(body) + walk + (target.hits / dps).toInt()
+                    if (ready < bestReady) { bestReady = ready; best = body }
+                }
+                if (best != null && bestReady < enemyArrival) {
+                    if (energy >= bodyCost(best)) {
+                        order(spawn, best, "fighter", "race lost (ours ${ourArrival(ctx)} vs theirs $enemyArrival) — interceptor for ${bodySummary(target)}h${target.hits}, ready in $bestReady")
+                        return
+                    }
+                    if (DEBUG_LOG && now % LOG_EVERY == 0) println("spawn t=$now: saving interceptor ${summaryOf(best)} e=$energy/${bodyCost(best)} race lost (ours ${ourArrival(ctx)} vs theirs $enemyArrival) ready=$bestReady")
+                    return
+                }
             }
         }
 
@@ -1340,14 +1390,15 @@ object EscortRun {
                 if (step != null) TrafficManager.request(f, step, FIGHTER_PRIORITY)
                 continue
             }
-            val striker = f in strikers && ctx.enemyEscort != null
+            val strikeAt = strikeTarget(ctx)
+            val striker = f in strikers && strikeAt != null
             // перехват: угрозу у эскорта встречают как можно раньше — стрелок при локальном перевесе или против чистого
             // мили (его кайтят с трёх клеток, эскорт кайтить не может: M7A7 снимает 5000 хитов за 24 тика вплотную, а
             // один M8R4 убивает его за 35 — бой надо начать за десятки клеток до эскорта); мили-боец — при перевесе
             val engage = !striker && nearestThreat != null && escort != null && getRange(f, escort) <= THREAT_RANGE &&
                 (aggressive || (hasRanged(f) && hasMelee(nearestThreat) && !hasRanged(nearestThreat)))
-            val target: Position = if (striker) ctx.enemyEscort!! else if (engage) nearestThreat!! else escort ?: ctx.mySpawn ?: continue
-            val flow = if (striker) flowTo("toEnemyEscort", ctx.enemyEscort!!, ctx.blocked, 5, ttl = 1) else if (engage) flowNear(ctx, target) else (ctx.toEscortFlow ?: flowNear(ctx, target))
+            val target: Position = if (striker) strikeAt!! else if (engage) nearestThreat!! else escort ?: ctx.mySpawn ?: continue
+            val flow = if (striker) flowTo("toStrike", strikeAt!!, ctx.blocked, 5, ttl = 1) else if (engage) flowNear(ctx, target) else (ctx.toEscortFlow ?: flowNear(ctx, target))
             val standoff = if (striker || (engage && hasRanged(f))) RANGED_RANGE else if (engage) 1 else GUARD_STANDOFF
             val cover = if (!striker && !engage && nearestThreat != null && escort != null) nearestThreat to escort else null
             val step = bestSingleMove(f, target, flow, standoff, aggressive, inCombat, ctx, local, meleeEnemies, cover)
@@ -1409,8 +1460,21 @@ object EscortRun {
     /** Решение об ударе — расчёт по состоянию: дорога + бой с охраной + добивание 5000 хитов под их лечением должны
      *  уложиться до прихода их эскорта на флаг и до смерти нашего под теми, кто у него сейчас; охрану бьём с перевесом
      *  STRIKE_RATIO. Гистерезис: начатый удар продолжается, пока наш эскорт доживает до его конца. */
+    /**
+     * Цель удара: эскорт врага или его тягач — что быстрее сорвёт их гонку. Тягач стоит убивать, когда он у них есть:
+     * тысяча хитов против пяти тысяч, и его смерть отнимает у них ровно столько же — половину скорости. Возвращает
+     * цель и её хиты; null — целей нет.
+     */
+    private fun strikeTarget(ctx: Ctx): Creep? {
+        val escort = ctx.enemyEscort ?: return null
+        val pullers = enemyPullers(ctx)
+        if (pullers.isEmpty()) return escort
+        // выбираем по хитам: тягач дешевле эскорта во столько же раз, во сколько отнимает скорости
+        return pullers.minByOrNull { it.hits } ?: escort
+    }
+
     private fun decideStrike(ctx: Ctx): Boolean {
-        val target = ctx.enemyEscort
+        val target = strikeTarget(ctx)
         val strikers = ctx.fighters.filter { fullSpeed(it) }
         if (target == null || strikers.isEmpty() || ctx.enemyEscortFlow == null) { striking = false; return false }
         val flow = flowTo("toEnemyEscort", target, ctx.blocked, 5, ttl = 1)
@@ -1429,7 +1493,10 @@ object EscortRun {
         val enemyArrival = enemyEscortArrival(ctx)
         val ourEscortDeath = escortDeathTicks(ctx, minOf(total, Int.MAX_VALUE / 4L).toInt())
         val powerOk = guards.isEmpty() || powerOf(strikers, guards) >= powerOf(guards, strikers) * STRIKE_RATIO
-        val feasible = total < enemyArrival - (if (striking) 0 else STRIKE_MARGIN) && total < ourEscortDeath - (if (striking) 0 else STRIKE_MARGIN) && powerOk
+        // гонка проиграна — удар это единственное, что её меняет, и ждать «запаса» уже не на что
+        val lost = raceLost(ctx)
+        val margin = if (striking || lost) 0 else STRIKE_MARGIN
+        val feasible = (lost || total < enemyArrival - margin) && total < ourEscortDeath - margin && powerOk
         val prev = striking
         striking = feasible
         if (striking && !prev) strikeSince = getTicks()
@@ -1446,6 +1513,44 @@ object EscortRun {
         val flow = ctx.enemyEscortFlow ?: return Int.MAX_VALUE / 4
         val enemyPullers = ctx.enemyCreeps.filter { !isEscort(it) && it.body.all { p -> p.type == MOVE } && getRange(it, target) <= 2 }
         return routeTicks(target, flow, trainMoves(target, enemyPullers))
+    }
+
+    // ⚠️ ОТЛОЖЕНО, не ограничение: клетку вражеского флага можно ЗАНЯТЬ своим крипом — победа засчитывается эскорту,
+    // вставшему на флаг, а на занятую клетку не встать. Стоит это один MOVE (50 энергии) против четырёхсот за
+    // перехватчика и пяти тысяч хитов их эскорта. Механику подтвердил стенд: тягач соперника сам встал на свой флаг и
+    // запер собственный эскорт в двух клетках от победы. Реализация снята из этой версии, потому что блокировщик идёт
+    // до центра тем же узким коридором, что и наш поезд, встаёт на клетку, куда шагает голова, и запирает СВОЙ эскорт
+    // (стенд racer: эскорт простоял в центре сто тиков). Уступка дороги через traffic-приоритет и запрет шага в клетки
+    // цепи проблему не сняли — поезд ходит прямыми интентами мимо TrafficManager и просто ждёт занятую клетку. Чтобы
+    // вернуть приём, блокировщик должен идти маршрутом, не пересекающимся с поездом, либо выходить после его прохода.
+
+    /** Тягачи ВРАГА: тела из одних MOVE рядом с его эскортом — они и держат его скорость. */
+    private fun enemyPullers(ctx: Ctx): List<Creep> {
+        val target = ctx.enemyEscort ?: return emptyList()
+        return ctx.enemyCreeps.filter { !isEscort(it) && it.body.isNotEmpty() && it.body.all { p -> p.type == MOVE } && getRange(it, target) <= JOIN_RANGE }
+    }
+
+    /**
+     * Наш приход на флаг с нынешним поездом (тиков) — та же мера, что и у врага, чтобы их можно было сравнивать.
+     */
+    private fun ourArrival(ctx: Ctx): Int {
+        val escort = ctx.escort ?: return Int.MAX_VALUE / 4
+        val flow = ctx.escortFlow ?: return Int.MAX_VALUE / 4
+        return routeTicks(escort, flow, trainMoves(escort, ctx.pullers))
+    }
+
+    /**
+     * Гонка проиграна по расчёту: их эскорт приходит раньше нашего. Тогда скорость больше ничего не решает, и деньги
+     * должны идти в то, что меняет исход — прежде всего в убийство ИХ ТЯГАЧА: он безоружен, у M10 тысяча хитов против
+     * пяти тысяч у эскорта, а его смерть возвращает их поезду пеший период (у эскорта из сорока TOUGH и десяти MOVE
+     * это 4 тика на клетку вместо 2, вдвое). Матч 2 (04.09.2026) проигран двумя тиками, и всё это время бот копил на
+     * полного бойца, который не успевал ни к чему.
+     */
+    private fun raceLost(ctx: Ctx): Boolean {
+        val ours = ourArrival(ctx)
+        if (ours >= Int.MAX_VALUE / 8) return false
+        val theirs = enemyEscortArrivalObserved(ctx)
+        return theirs < Int.MAX_VALUE / 8 && theirs <= ours
     }
 
     /** История дистанции эскорта врага до его флага: (тик, дистанция по его полю). */

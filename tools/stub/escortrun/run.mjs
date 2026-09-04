@@ -80,6 +80,10 @@ if (MAP) {
   world.objects.push(new StructureContainer(92, 49, 2500, 2500)); world.objects.push(new StructureContainer(92, 50, 2500, 2500));
 }
 world.spawnRegen = [1, has('harvest') ? 11 : 1]; // 'harvest': the enemy economy as if it had a W5 harvester from tick 1
+// 'racer' (match 2, 04.09.2026): the opponent runs a train too and is AHEAD — its puller is already alive at tick 0, so
+// it does not lose the thirty ticks of spawning we lose. That match was lost by two ticks, and the stub needs a rival
+// that actually wins the race to exercise the "race lost" branch at all
+if (has('racer')) { const p = new Creep(theirs.esc.x + 1, theirs.esc.y + 1, 1, Array(10).fill(M)); world.objects.push(p); }
 
 // ---------- enemy AI ----------
 // the stub's searchPath knows terrain only: structures (spawns, sources, walls) go into the cost matrix — the first
@@ -137,7 +141,9 @@ function enemyTick() {
   // next cell, pulls, the escort steps into it (the World scheme)
   if (!has('none') && esc && esc.exists) {
     const pullers = mine.filter(isPuller);
-    if (has('train') && pullers.length) {
+    // near the flag the train has to dissolve, or the puller parks ON the flag cell and blocks its own escort — the
+    // stub's racer did exactly that and stalled two cells short of winning
+    if ((has('train') || has('racer')) && pullers.length && range(esc, theirs.flag) > 2) {
       // the World scheme: the puller stands on the escort's next cell (path computed with the puller NOT an obstacle),
       // pulls every tick, and both move when the puller is rested; the escort waits for a puller within 3 cells
       const p = pullers[0];
