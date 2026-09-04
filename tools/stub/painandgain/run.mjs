@@ -114,7 +114,7 @@ function isRunner(c) { return c.body.every((p) => p.type === M); }
 const healerOf = (o) => live(o, H) > 0 && live(o, A) === 0 && live(o, R) === 0;
 // 'twelve' hunts the way 'nine' does (healers first, single-target fire, its healers behind), after a roam
 // 'fourteen' is 'nine' plus rotation: a fighter below half hits steps back to its healers and returns healed
-const NINE = has('nine') || has('twelve') || has('fourteen');
+const NINE = has('nine') || has('twelve') || has('fourteen') || has('block');
 const ROTATE_OUT = 0.5, ROTATE_IN = 0.9;
 const rotating = new Set();
 const targetKey = (o) => (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
@@ -143,6 +143,44 @@ function rotate(c, fighters, ours) {
   const near = ours.filter((o) => !isRunner(o) && live(o, A) + live(o, R) > 0 && range(c, o) <= 3);
   if (near.length && range(c, h) <= 1) stepAway(c, near); else stepToward(c, h, 1);
   return true;
+}
+function sgn(v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
+function planBlock(fighters, ours, ourCentroid) {
+  const isH = (c) => c.body.some((p) => p.type === H);
+  const isR = (c) => c.body.some((p) => p.type === R);
+  const front = fighters.filter((c) => !isH(c) && !isR(c) && !rotating.has(c.id));
+  const base = front.length ? front : fighters.filter((c) => !isH(c));
+  const anchor = { x: Math.round(base.reduce((s, c) => s + c.x, 0) / base.length), y: Math.round(base.reduce((s, c) => s + c.y, 0) / base.length) };
+  const nearestOur = ours.filter((o) => !isRunner(o)).sort((a, b) => range(anchor, a) - range(anchor, b))[0] || ourCentroid;
+  const dir = { x: sgn(nearestOur.x - anchor.x), y: sgn(nearestOur.y - anchor.y) };
+  return { anchor, dir, nearestOur, isH, isR };
+}
+function blockMove(c, plan, fighters, ours) {
+  const { anchor, dir, isH, isR } = plan;
+  const healers = fighters.filter((o) => o !== c && live(o, H) > 0);
+  if (!isH(c) && rotate(c, fighters, ours)) return;
+  const ourF = ours.filter((o) => !isRunner(o));
+  const nearest = ourF.sort((a, b) => range(c, a) - range(c, b))[0];
+  if (isH(c)) {
+    const mate = fighters.filter((o) => o !== c && live(o, H) === 0 && o.hits < o.hitsMax).sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax))[0];
+    const threat = ourF.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 3);
+    const slot = { x: anchor.x - 3 * dir.x, y: anchor.y - 3 * dir.y };
+    if (threat.length) stepAway(c, threat);
+    else if (mate && range(mate, anchor) > 1 && range(c, mate) > 1) stepToward(c, mate, 1);
+    else if (range(c, slot) > 1) stepToward(c, slot, 1);
+    return;
+  }
+  if (isR(c)) {
+    const slot = { x: anchor.x - 2 * dir.x, y: anchor.y - 2 * dir.y };
+    const close = ourF.filter((o) => live(o, A) > 0 && range(c, o) <= 1);
+    if (close.length) stepAway(c, close);
+    else if (range(c, slot) > 1) stepToward(c, slot, 1);
+    return;
+  }
+  // melee: hold the front row — attack what is adjacent, otherwise advance with the block (never more than two from it)
+  if (nearest && range(c, nearest) <= 1) return;
+  if (range(c, anchor) > 2) stepToward(c, anchor, 1);
+  else if (nearest) stepToward(c, nearest, 1);
 }
 function healAt(c, mine) {
   if (live(c, H) === 0) return;
@@ -178,7 +216,7 @@ function enemyTick() {
   // it sweeps the flags and hunts runners
   let armyMode = null;
   // 'hunter' (match 4 opponent): D5 with the whole army, then straight at our army wherever it is
-  if ((has('army') || has('hunter') || has('nine') || has('twelve') || has('fourteen')) && fighters.length) {
+  if ((has('army') || has('hunter') || has('nine') || has('twelve') || has('fourteen') || has('block')) && fighters.length) {
     const cen = { x: Math.round(fighters.reduce((s, c) => s + c.x, 0) / fighters.length), y: Math.round(fighters.reduce((s, c) => s + c.y, 0) / fighters.length) };
     if (!armyState.waypoints) {
       const south = cen.y > 50;
@@ -194,7 +232,7 @@ function enemyTick() {
     if (has('hunter') && range(cen, armyState.waypoints[0]) <= 2) armyState.hunting = true;
     if (has('twelve') && armyState.phase === armyState.waypoints.length - 1 && range(cen, armyState.waypoints[armyState.phase]) <= 2) armyState.hunting = true;
     // match 9: the whole army walked straight at ours as one blob, no flag on the way; it charges from six cells
-    if (has('nine') || has('fourteen')) { armyState.waypoints = [ourCentroid]; armyState.phase = 0; if (range(cen, ourCentroid) <= 6) armyState.hunting = true; }
+    if (has('nine') || has('fourteen') || has('block')) { armyState.waypoints = [ourCentroid]; armyState.phase = 0; if (range(cen, ourCentroid) <= 6) armyState.hunting = true; }
     if (armyState.hunting) armyState.engaged = true;
     if (ourFighters.length === 0) armyMode = 'sweep';
     else if (armyState.engaged) armyMode = 'fight';
@@ -204,10 +242,15 @@ function enemyTick() {
       armyMode = 'march';
     }
   }
+  // 'block' (matches 14-16): once hunting, the army moves as one block toward our centroid — melee in the front row,
+  // ranged two cells behind the melee anchor, healers three behind — fires at whatever is in range (focus: healers first,
+  // then the lowest hits), and rotates a fighter below half hits back to its healers; melee keep within two of the anchor
+  const blockPlan = has('block') && armyMode === 'fight' ? planBlock(fighters, ours, ourCentroid) : null;
   for (const c of fighters) {
     fireAt(c, ours);
     healAt(c, mine);
     if (has('none') || has('scouts')) continue; // 'scouts': only the enemy runners act, its army idles (match 2)
+    if (blockPlan) { blockMove(c, blockPlan, fighters, ours); continue; }
     const nearestOur = ours.filter((o) => !isRunner(o)).sort((a, b) => range(c, a) - range(c, b))[0];
     if (armyMode) {
       const isHealer = live(c, H) > 0 && live(c, A) === 0 && live(c, R) === 0;
@@ -330,9 +373,14 @@ console.log = (...args) => { const s = args.join(' '); lines.push(s); if (s.star
 const bot = await import(BOT);
 const t0 = Date.now();
 let ended = '';
+let cpuMax = 0, cpuMaxTick = 0, cpuSlow = 0;
 for (let t = 1; t <= ticks; t++) {
   world.perspective = 0;
+  const tLoop = performance.now();
   try { bot.loop(); } catch (e) { loopErrors++; lines.push('loop error (uncaught): ' + (e && e.stack || e)); }
+  const msLoop = performance.now() - tLoop;
+  if (msLoop > cpuMax) { cpuMax = msLoop; cpuMaxTick = t; }
+  if (msLoop > 50) cpuSlow++;
   enemyTick();
   step(Resource);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
@@ -347,6 +395,7 @@ for (let t = 1; t <= ticks; t++) {
   if (Math.abs(world.score[0] - world.score[1]) > world.maxScorePerTick * remaining) { ended = `unreachable lead at t=${world.tick - 1}`; break; }
   if (t % 100 === 0) {
     const flags = world.objects.filter((o) => o.exists && o.kind === 'flag').map((f) => (f.owner === 0 ? '+' : f.owner === 1 ? '-' : '0')).join('');
+    origLog(`cpu t=${t}: max=${cpuMax.toFixed(1)}ms at t=${cpuMaxTick} slow(>50ms)=${cpuSlow}`);
     const sum = (cs) => { const m = {}; for (const c of cs) { const s = c.summary(); m[s] = (m[s] || 0) + 1; } return Object.entries(m).map(([k, v]) => `${k}x${v}`).join(' '); };
     origLog(`t=${t} score=${world.score[0]}/${world.score[1]} flags=${flags} ours(${c0.length}): ${sum(c0)} | enemy(${c1.length}): ${sum(c1)} errors=${loopErrors}`);
   }

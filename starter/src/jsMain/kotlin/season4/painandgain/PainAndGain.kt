@@ -172,6 +172,15 @@ object PainAndGain {
     private const val ROTATE_IN = 0.9
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     private const val USE_INLINE = true       // бросок только в строю (v15)
+    /** Строй рядами в бою по контакту (v17): мили — передний ряд поперёк оси на врага, стрелки — второй ряд в 2 за ним
+     *  (достают на клетку дальше переднего), лекари и раненые — третий в 3 (вне досягаемости их стрелков, стоящих за их
+     *  мили). Так стоит живой противник (матчи 14–16); наш блоб шёл на него вразнобой: мили в их строй, стрелки в 4–6 от
+     *  целей молчали, лекари были либо в огне, либо вне лечения. Ряды считаются от ЦЕНТРА МИЛИ каждый тик (якорь с
+     *  наступлением уезжал от бойцов на 2–5 клеток, и стрелки шли в слоты под ударами толпы — стенд m7 sleeper); мили
+     *  дерутся по прежним правилам строя (бросок в строю, без шипа под огонь), направление — на ближайшую группу врагов с
+     *  боем. Шаг к слоту — локальный, без поля потока: двенадцать разных целей давали бы двенадцать BFS в тик (таймауты
+     *  матча 16). */
+    private const val USE_BLOCK = true
     private const val FORM_SHARE = 0.75
 
     /** Дольше стольких тиков строй не ждёт: кто мог подойти — подошёл. Без этого готовность могла не наступить
@@ -731,6 +740,8 @@ object PainAndGain {
      *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
     private val plannedCaptures = HashSet<String>()
     private val rotatingIds = HashSet<String>()   // бойцы в ротации (см. ROTATE_OUT)
+    private val NO_FLOW = IntArray(10000) { -1 }
+    private val SLOT_ORDER = intArrayOf(0, -1, 1, -2, 2, -3, 3, -4, 4)
 
     private fun planCapture(ctx: Ctx, step: Position?) {
         if (step == null) return
@@ -1403,9 +1414,14 @@ object PainAndGain {
         }
 
         val healersAlive = army.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
+        // строй рядами в бою по контакту (см. USE_BLOCK); при перевесе (добивание) — прежняя охота
+        val slotOf = HashMap<String, Position>()
+        val blockOn = USE_BLOCK && posture == Posture.ANNIHILATE && !pushing && combatEnemies.isNotEmpty() && strikers.isNotEmpty()
+        if (blockOn) planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf)
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
             val healer = !hasWeapon(creep) && hasHeal(creep)
+            val slot = slotOf[creep.id]
             // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
             val wounded = !healer && !hasWeapon(creep)
             // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
@@ -1531,7 +1547,11 @@ object PainAndGain {
             val target: Position
             val standoff: Int
             var avoid = false
+            // в строю (см. USE_BLOCK): мили вплотную к врагу стоит и рубит, остальные — в свой слот
+            val slotHold = slot != null && melee && localEnemies.any { getRange(creep, it) <= 1 }
             when {
+                slotHold -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
+                slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
                 healer && healMate != null -> { target = healMate; standoff = 1 }
@@ -1561,10 +1581,14 @@ object PainAndGain {
                 raider != null && mobile && !support -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
                 else -> { target = post; standoff = POST_STANDOFF; avoid = true }
             }
-            val flow = if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)
+            val flow = if (slot != null) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)
 
             val nearbyEnemies = combatEnemies.filter { getRange(creep, it) <= 12 }
-            val inCombat = combatEnemies.any { creep.getRangeTo(it) <= RANGED_RANGE + 2 }
+            // «в бою», плотность и передний ряд — по врагам С БОЕМ: три безоружных лекаря врага в 4–5 клетках после выигранного
+            // боя держали армию в зоне плотности и не давали толкнуть своего — мили, зажатый своими лекарями, и армия
+            // простояли тысячу тиков в 20 клетках от флага (стенд m16 nine)
+            val inCombat = armedEnemies.any { creep.getRangeTo(it) <= RANGED_RANGE + 2 }
+            val localThreats = localEnemies.filter { threatening(it, enemyCreeps) }
             val underFire = InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) > 0.0 || ghost > 0
             // бегство: смертельный урон за два тика; безоружный лекарь — от врага рядом, если рядом нет ни одного
             // вооружённого своего (при нём лекарь стоит и лечит: бегущий лекарь — потерянные 72 в тик, матч 3);
@@ -1629,6 +1653,7 @@ object PainAndGain {
             val step: Position? = when {
                 !canMove(creep) -> null
                 mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachCells else emptySet())
                 hold -> null
                 else -> {
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
@@ -1638,7 +1663,7 @@ object PainAndGain {
                     // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
                     // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
                     // матча 8 в 4–5 клетках от строя
-                    if (!wounded && localEnemies.isNotEmpty() && posture != Posture.RETREAT && posture != Posture.EVADE && canMove(creep)) {
+                    if (!wounded && localThreats.isNotEmpty() && posture != Posture.RETREAT && posture != Posture.EVADE && canMove(creep)) {
                         val armedMates = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }
                         val myRange = getRange(creep, armedCentroid)
                         val loose = HashSet<Int>()
@@ -1665,7 +1690,7 @@ object PainAndGain {
                     // ряд»), а не уходил (матч 10, healer_2 на (14,10) между двумя мили врага)
                     // лекарь и раненый снаружи досягаемости в неё не входят (см. reachCells)
                     if (support && !inReach && reachCells.isNotEmpty()) myBlocked = myBlocked + reachCells
-                    if (support && localEnemies.isNotEmpty() && localEnemies.none { getRange(creep, it) <= 1 }) {
+                    if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
                         val front = HashSet<Int>()
                         for ((dx, dy) in DIRECTIONS) {
                             if (dx == 0 && dy == 0) continue
@@ -1779,6 +1804,71 @@ object PainAndGain {
             }
             target?.let { creep.rangedAttack(it) }
         }
+    }
+
+    private fun sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0
+
+    /** План строя (см. USE_BLOCK): ряды поперёк оси центр мили → ближайшая группа врагов с боем; слоты — по порядку
+     *  SLOT_ORDER от середины ряда, стены пропускаются; крип берёт ближайший свободный слот своего ряда. Мили слотов не
+     *  получают — они и есть фронт; без мили фронт — стрелки, и тогда слоты только у тыла. */
+    private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
+        val front = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in rotatingIds }
+        val second = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in rotatingIds }
+        val rear = army.filter { c -> front.none { it.id == c.id } && second.none { it.id == c.id } }
+        val base = front.ifEmpty { second }
+        if (base.isEmpty()) return
+        val anchor = centroidOf(base.map { InfluenceMap.cell(it.x, it.y) }) ?: return
+        val threats = armedEnemies.ifEmpty { combatEnemies }
+        val nearest = threats.minByOrNull { getRange(anchor, it) } ?: return
+        val group = threats.filter { getRange(nearest, it) <= ENGAGE_RANGE }
+        val ec = centroidOf(group.map { InfluenceMap.cell(it.x, it.y) }) ?: return
+        val dx0 = sgn(ec.x - anchor.x); val dy = sgn(ec.y - anchor.y)
+        val dx = if (dx0 == 0 && dy == 0) 1 else dx0
+        val px = -dy; val py = dx
+        fun rowCells(back: Int, n: Int): List<Position> {
+            val out = ArrayList<Position>()
+            for (k in SLOT_ORDER) {
+                if (out.size >= n) break
+                val x = anchor.x - back * dx + k * px; val y = anchor.y - back * dy + k * py
+                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
+                out.add(InfluenceMap.cell(x, y))
+            }
+            return out
+        }
+        fun assign(creeps: List<Creep>, cells: List<Position>) {
+            val free = ArrayList(cells)
+            // ближайшие к своему ряду первыми: так слоты не пересекаются
+            for (c in creeps.sortedBy { c -> cells.minOfOrNull { getRange(c, it) } ?: 0 }) {
+                val best = free.minByOrNull { getRange(c, it) } ?: break
+                free.remove(best)
+                slotOf[c.id] = best
+            }
+        }
+        if (front.isNotEmpty()) assign(second, rowCells(2, second.size))
+        assign(rear, rowCells(3, rear.size))
+    }
+
+    /** Шаг к слоту строя без поля потока: соседняя проходимая клетка, ближайшая к слоту (при равенстве — под меньшим
+     *  огнём); занятая своим — через трафик, если только она ближе; клетки banned (досягаемость для лекаря) закрыты. */
+    private fun slotStep(creep: Creep, slot: Position, blockedSet: Set<Int>, enemyPositions: Set<Int>, occupantAt: Map<Int, Creep>, enemies: List<Creep>, banned: Set<Int>): Position? {
+        val here = getRange(creep, slot)
+        if (here == 0) return null
+        var best: Position? = null
+        var bestD = here
+        var bestFire = Double.MAX_VALUE
+        var push: Position? = null
+        var pushD = here
+        for ((dx, dy) in DIRECTIONS) {
+            if (dx == 0 && dy == 0) continue
+            val x = creep.x + dx; val y = creep.y + dy
+            if (!passable(x, y, blockedSet, enemyPositions) || (x * 100 + y) in banned) continue
+            val c = InfluenceMap.cell(x, y)
+            val d = getRange(c, slot)
+            if (occupantAt[x * 100 + y] != null) { if (d < pushD) { pushD = d; push = c }; continue }
+            val fire = InfluenceMap.damageAt(x, y, enemies)
+            if (d < bestD || (d == bestD && fire < bestFire)) { bestD = d; bestFire = fire; best = c }
+        }
+        return best ?: push
     }
 
     private fun bestSingleMove(
