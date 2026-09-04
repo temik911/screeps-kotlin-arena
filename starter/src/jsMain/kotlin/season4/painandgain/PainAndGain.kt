@@ -401,6 +401,8 @@ object PainAndGain {
     private const val WOUNDED_PRIORITY = 1
 
     // ---------- отладка ----------
+    // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
+    private const val BOT_VERSION = "v28"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -666,8 +668,14 @@ object PainAndGain {
 
     private fun probe(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>, home: Position, enemyHome: Position) {
         println(
-            "hello season4 pain-and-gain: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
+            "hello season4 pain-and-gain $BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
                 "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick}"
+        )
+        // подпись сборки: по ней видно, какая версия играет, даже если строку версии забыли поднять
+        println(
+            "tuning: parity=$PARITY_FLOOR/$CAPTURE_FLOOR/$PARITY_FLOOR_STALLED push=$PUSH_RATIO/$PUSH_RATIO_BEHIND " +
+                "stall=$STALL_TICKS/$STALL_PICKET/$STALL_DAMAGE/$STALL_COOLDOWN march=$MARCH_STALL_TICKS " +
+                "mass=$MASS_RANGE leash=$LEASH_RANGE meleeHold=$MELEE_HOLD_RANGE keep=$KEEP_RANGE/$KEEP_PICKET/$KEEP_RELEASE"
         )
         println(
             "pain-and-gain: TICKS_LIMIT=${num(TICKS_LIMIT.asDynamic(), -1.0)} MAX_SCORE_PER_TICK=${num(MAX_SCORE_PER_TICK.asDynamic(), -1.0)} " +
