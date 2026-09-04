@@ -353,6 +353,13 @@ function enemyTick() {
       const intruder = ours.filter((o) => range(c, o) <= 5).sort((a, b) => range(c, a) - range(c, b))[0];
       if (intruder && !isRunner(c)) stepToward(c, intruder, live(c, A) > 0 ? 1 : 2);
       else if (target) stepToward(c, target, c === fighters[0] || fighters.indexOf(c) % 4 === 0 ? 0 : 2);
+    } else if (has('spread')) {
+      // 'spread' (match 19): every creep takes a flag of its own — the i-th creep the i-th flag, two per flag — sits on
+      // it, steps away from our armed creeps within 6 and returns when they leave; it never fights as an army
+      const post = flags[fighters.indexOf(c) % flags.length];
+      const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
+      if (threat.length) stepAway(c, threat);
+      else stepToward(c, post, 0);
     } else if (has('grab')) {
       // guard own-side flags (x > 60); chase intruders within 6
       const post = flags.filter((f) => f.x > 60).sort((a, b) => range(c, a) - range(c, b))[0] || flags[0];

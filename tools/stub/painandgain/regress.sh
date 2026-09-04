@@ -136,3 +136,13 @@ run map-match18.txt match2 hunter
 run map-match18.txt match2 kite
 run map-match18.txt match2 rush
 grind map-match18.txt match2 sleeper
+grind map-match18.txt match2 spread
+run map-match12.txt match2 spread
+grind map-match19.txt match2 spread
+run map-match19.txt match2 block
+run map-match19.txt match2 nine
+run map-match19.txt match2 wing
+run map-match19.txt match2 hunter
+run map-match19.txt match2 kite
+run map-match19.txt match2 rush
+grind map-match19.txt match2 sleeper
