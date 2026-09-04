@@ -103,3 +103,9 @@ run map-match14.txt -      kite
 run map-match14.txt -      rush
 grind map-match14.txt -      sleeper
 run map-match9.txt match2 fourteen
+run map-match15.txt -      nine
+run map-match15.txt -      fourteen
+run map-match15.txt -      hunter
+run map-match15.txt -      kite
+run map-match15.txt -      rush
+grind map-match15.txt -      sleeper

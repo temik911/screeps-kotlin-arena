@@ -1382,6 +1382,20 @@ object PainAndGain {
         val formWaiting = formVan != null && !formationGathered && combatEnemies.any { e -> formers.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
         if (!formWaiting) formWaitSince = -1 else if (formWaitSince < 0) formWaitSince = getTicks()
         val formationReady = formationGathered || (formWaitSince >= 0 && getTicks() - formWaitSince >= FORM_PATIENCE)
+        // досягаемость врага для лекаря и раненого (см. reachCells): стрелок бьёт на 3, мили шагнёт и ударит на 2. Тело
+        // лекаря HHHHHHMMMMMM — лечение впереди, и первое же попадание снимает 12 лечения в тик навсегда; наши лекари
+        // входили в зону огня к подопечному и к 130-му были M6H4/M6H2, лекари врага за строем не получили ни царапины
+        // и отрастили ему армию (матчи 14–15). Лекарь в зону не входит, изнутри уходит; раненые приходят к нему сами.
+        val reachCells = HashSet<Int>()
+        for (e in combatEnemies) {
+            val q = InfluenceMap.profileOf(e)
+            val r = if (q.ranged > 0.0) RANGED_RANGE else if (q.melee > 0.0) 2 else 0
+            if (r == 0) continue
+            for (dx in -r..r) for (dy in -r..r) {
+                val x = e.x + dx; val y = e.y + dy
+                if (x in 0..99 && y in 0..99) reachCells.add(x * 100 + y)
+            }
+        }
         val fireCells = HashSet<Int>()
         for (e in combatEnemies) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
             val x = e.x + dx; val y = e.y + dy
@@ -1508,8 +1522,10 @@ object PainAndGain {
                 else rallyingIds.remove(creep.id)
             } else rallyingIds.remove(creep.id)
             // построение: вне огня и без готовности авангард и собравшиеся у него стоят, остальные идут к нему
+            // в контакте построение окончено: авангард — тот, кто уже дерётся, и «собраться у авангарда с дистанцией 1»
+            // тянуло стрелков за ним внутрь строя врага, а стреляли они с 4–5 клеток впустую (матч 15, t=68–100)
             val forming = formVan != null && !formationReady && !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE &&
-                localEnemies.isNotEmpty() && nearestEnemyRange > RANGED_RANGE
+                localEnemies.isNotEmpty() && nearestEnemyRange > RANGED_RANGE && !contact
             val formHold = forming && (formVan!!.id == creep.id || getRange(creep, formVan) <= FORM_RANGE)
             val formGo = forming && !formHold
             val target: Position
@@ -1560,7 +1576,9 @@ object PainAndGain {
             // t=550; матчи 4–6 в первом размене теряли 1:5 при равной силе)
             val lostLastTick = lastHits[creep.id]?.let { it - creep.hits } ?: 0
             // лекарь и раненый бегут (врассыпную) только в одиночестве: при своём рядом — отход группой по постуре
+            val inReach = (creep.x * 100 + creep.y) in reachCells
             val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
+                (support && inReach) ||
                 (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
                 (ghost > 0 && creep.hits <= ghost)
 
@@ -1610,7 +1628,7 @@ object PainAndGain {
 
             val step: Position? = when {
                 !canMove(creep) -> null
-                mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
                 hold -> null
                 else -> {
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
@@ -1645,6 +1663,8 @@ object PainAndGain {
                     // раненого бойца, и размен шёл без наших ударов — стенд m7 sleeper, 4 убитых врага против 5)
                     // уже вплотную к врагу — блок переднего ряда снят: окружённый лекарь стоял (все соседи «передний
                     // ряд»), а не уходил (матч 10, healer_2 на (14,10) между двумя мили врага)
+                    // лекарь и раненый снаружи досягаемости в неё не входят (см. reachCells)
+                    if (support && !inReach && reachCells.isNotEmpty()) myBlocked = myBlocked + reachCells
                     if (support && localEnemies.isNotEmpty() && localEnemies.none { getRange(creep, it) <= 1 }) {
                         val front = HashSet<Int>()
                         for ((dx, dy) in DIRECTIONS) {
