@@ -131,6 +131,12 @@ object PainAndGain {
     /** Чистый урон за окно, который считается боем: залп пикета с трёх клеток при проходе (60–180 хитов, залечены через
      *  тик) сбрасывал 300-тиковый простой, и цель-флаг пропадала посреди марша (стенд m12 spread, t=431). */
     private const val STALL_DAMAGE = 300
+    /** Масса армии — крипы не дальше этого от центра вооружённых. Оторвавшийся не решает за армию: ни точкой сбора
+     *  (авангард строя выбирается ближайшим к врагу — на марше это самый оторвавшийся, и половина армии шла собираться
+     *  к нему НАВСТРЕЧУ врагу, а половина — назад к посту: матч 23, t=200–211, армия разорвана на 15 клеток), ни
+     *  контактом (его контакт включал ДОБИТЬ всей армии, и та входила в бой по одному — t=211–219 передний мили дрался
+     *  с их строем в одиночку десять тиков). Восемь клеток — поводок (см. LEASH_RANGE), которым его и тянет назад. */
+    private const val MASS_RANGE = 8
     /** Мили в контактном бою без давления держит линию и рубит только то, что подошло на столько клеток: цель «ближайший
      *  враг в ENGAGE_RANGE» — стрелок экрана в трёх клетках — вела мили по одному в объятия мили-резерва за экраном
      *  (−720…−840 в тик, смерть за два тика; матчи 16–18, 20, 21 — пять разгромов 0:12 при 0.97). */
@@ -1058,6 +1064,10 @@ object PainAndGain {
                 // и тот пошёл на полпути (матч 12)
                 if (exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) continue
             }
+            // ⚠️ ПРОБОВАНО И ОТВЕРГНУТО (матч 23): запрет марша длиннее, чем врагу дойти до нашей армии, когда мы впереди
+            // с растущим отрывом. Ни одного проигрыша стенда он не предотвращает, а бот становится пассивен всякий раз,
+            // когда ведёт: m23 rush 23279→21496, m22 wing 23180→21362, m17 wing 23638→21510, m7 sleeper 22462→20033.
+            // Растянутую колонну чинит масса (см. MASS_RANGE), а не отказ от цели
             // стая без урона ничего не охраняет: три лекаря врага, лечащие друг друга, делали цену боя бесконечной для
             // ослабленной армии, и она 1500 тиков держала пост при шести свободных флагах (стенд m2 rush)
             val pack = packAt(ctx, f.pos, flow, travel).filter { threatening(it, ctx.enemyCreeps) }
@@ -1330,7 +1340,10 @@ object PainAndGain {
         // и наш строй не медленнее их самого быстрого — при равной скорости преследователь стреляет в спину
         // каждый тик, а обездвиженные остаются врагу (стенд rush: отход при 1250 против 1619 отдал ещё
         // шестерых). Иначе в контакте — бой всем составом, даже слабее: рубка с фокусом лучше разгрома
-        val contact = inContact(armedEnemies, army)
+        // контакт армии — контакт её МАССЫ (см. MASS_RANGE): один оторвавшийся не переводит армию в бой
+        val massCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
+        val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
+        val contact = inContact(armedEnemies, massArmy)
         val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
         val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
         val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4
@@ -1515,7 +1528,9 @@ object PainAndGain {
         // построение перед контактом (см. FORM_RANGE): авангард — ближайший к врагу ходячий вооружённый; готовность —
         // доля вооружённых в RALLY_RANGE от него, собравшихся в FORM_RANGE; клетки под огнём — в дальности стрелка
         val formers = mobileArmy.filter { hasWeapon(it) }
-        val formVan = if (combatEnemies.isEmpty()) null else formers.minWithOrNull(compareBy<Creep>({ f -> combatEnemies.minOf { getRange(f, it) } }, { it.id }))
+        // авангард — только из массы (см. MASS_RANGE): оторвавшийся крип не точка сбора
+        val formMass = formers.filter { getRange(it, armedCentroid) <= MASS_RANGE }.ifEmpty { formers }
+        val formVan = if (combatEnemies.isEmpty()) null else formMass.minWithOrNull(compareBy<Creep>({ f -> combatEnemies.minOf { getRange(f, it) } }, { it.id }))
         val formationGathered = formVan == null || run {
             val near = formers.filter { getRange(it, formVan) <= RALLY_RANGE }
             val needed = maxOf(2, ceil(FORM_SHARE * near.size).toInt())
