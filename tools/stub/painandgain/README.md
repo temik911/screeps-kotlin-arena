@@ -17,12 +17,14 @@ SLEEP=300 MAP=map-match7.txt START=match2 $NODE --import ./register.mjs run.mjs 
 zsh regress.sh v9                                                               # every scenario, one line each, logs in out/
 ```
 
-Maps `map-match1..8.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
+Maps `map-match1..9.txt` are the `DEBUG_MAP` dumps of the live matches (`#` wall, `~` swamp, `m`/`e` the two armies'
 start cells, `F` the flags). Enemy scripts: `none` (a dead bot), `scouts` (only the two scouts take flags), `grab`
 (the army camps on our side), `rush` (everyone at the nearest of ours), `greedy`, `army` (the match-3 opponent: D5,
 own A3, hover by its corner, engage within 20, healers adjacent, focus the lowest hits, sweep after we die), `hunter`
 (match 4 and 8: D5 with the whole army, then straight at ours), `kite` (match 5: bait melee plus kiting ranged),
-`sleeper` (idle until `SLEEP`, default 500, then rush). Modes combine with `+`.
+`sleeper` (idle until `SLEEP`, default 500, then rush), `nine` (match 9: straight at our army from tick 1, our
+healers shot first, its own healers two cells behind its line and stepping away from our armed creeps). Modes combine
+with `+`.
 
 `tools/land.sh` runs `regress.sh` as the landing gate: every line must say `PASS` with `errors: 0` — the enemy army
 destroyed, or the match ended with our score ahead. A new arena's harness starts as a copy of a sibling directory

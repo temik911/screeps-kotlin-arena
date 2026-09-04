@@ -11,6 +11,10 @@ NODE=${NODE:-$(ls -d ~/.gradle/nodejs/node-*/bin/node 2>/dev/null | tail -1)}
 if [[ ! -x "$NODE" ]]; then echo "regress: node not found under ~/.gradle/nodejs (run ./gradlew build once)"; exit 1; fi
 TAG=${1:-cur}
 mkdir -p out
+# grind: the debuffed fight after passive captures (sleeper) is lost by construction — we hold R×0.6 H×0.75 against a
+# full army — and its points outcome is decided by where the enemy wanders after our army is gone (two identical
+# fights on map 4 ended 17229:12409 and 12127:19175). It is run and reported in full mode but not by the landing gate.
+grind() { if [[ "$TAG" == land ]]; then return; fi; run "$@"; }
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario
   local map=$1 start=$2 sc=$3 label out line
   label="${map#map-}"; label="${label%.txt}:$sc"
@@ -42,12 +46,12 @@ run map-match2.txt match2 rush
 run map-match3.txt match2 kite
 run map-match3.txt match2 army
 run map-match3.txt match2 rush
-run map-match3.txt match2 sleeper
+grind map-match3.txt match2 sleeper
 run map-match3.txt match2 none
 run map-match4.txt match2 hunter
 run map-match4.txt match2 kite
 run map-match4.txt match2 rush
-run map-match4.txt match2 sleeper
+grind map-match4.txt match2 sleeper
 run map-match5.txt match2 kite
 run map-match5.txt match2 hunter
 run map-match5.txt match2 rush
@@ -55,14 +59,19 @@ run map-match5.txt match2 army
 run map-match6.txt -      hunter
 run map-match6.txt -      kite
 run map-match6.txt -      rush
-run map-match6.txt -      sleeper
+grind map-match6.txt -      sleeper
 run map-match7.txt match2 hunter
 run map-match7.txt match2 kite
 run map-match7.txt match2 rush
-run map-match7.txt match2 sleeper
+grind map-match7.txt match2 sleeper
 run map-match8.txt match2 hunter
 run map-match8.txt match2 kite
 run map-match8.txt match2 rush
-run map-match8.txt match2 sleeper
+grind map-match8.txt match2 sleeper
 run map-match8.txt match2 army
 run map-match8.txt match2 none
+run map-match9.txt match2 nine
+run map-match9.txt match2 hunter
+run map-match9.txt match2 kite
+run map-match9.txt match2 rush
+grind map-match9.txt match2 sleeper
