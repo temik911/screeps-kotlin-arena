@@ -4,7 +4,8 @@
 # Run from your worktree, on your session branch. Steps, each of which stops the landing when it fails:
 #   1. the branch is not main, has no uncommitted changes, and is rebased on main (main is an ancestor of HEAD);
 #   2. ./gradlew build;
-#   3. every tools/stub/*/regress.sh — every scenario must end with the enemy spawn destroyed and zero errors;
+#   3. every tools/stub/*/regress.sh — every line must carry the arena's pass marker and zero errors: PASS (the
+#      regress.sh of an arena decides what a win is — Pain and Gain has no spawns) or ENEMY SPAWN DESTROYED;
 #   4. fast-forward main: `git fetch . <branch>:main` when main is checked out nowhere, else `git merge --ff-only`
 #      in the checkout that has main (only if that tree is clean — the one thing a session may do to the root);
 #   5. tag the landed commit if asked;
@@ -35,8 +36,8 @@ if (( stub )); then
     echo "land: stub $r"
     out=$(zsh "$r" land)
     print -r -- "$out"
-    if [[ -z "$out" ]] || print -r -- "$out" | grep -vqE 'ENEMY SPAWN DESTROYED.*errors: 0 '; then
-      echo "land: stub regression failed — a scenario did not destroy the enemy spawn with zero errors"; exit 1
+    if [[ -z "$out" ]] || print -r -- "$out" | grep -vqE '(PASS|ENEMY SPAWN DESTROYED).*errors: 0 '; then
+      echo "land: stub regression failed — a scenario has no PASS / ENEMY SPAWN DESTROYED line with zero errors"; exit 1
     fi
   done
 fi
