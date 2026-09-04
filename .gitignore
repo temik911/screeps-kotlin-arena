@@ -11,3 +11,6 @@ arenas/**/typings
 # per-session tooling
 .claude/worktrees/
 tools/stub/**/out/
+
+# python bytecode from tools/
+__pycache__/
