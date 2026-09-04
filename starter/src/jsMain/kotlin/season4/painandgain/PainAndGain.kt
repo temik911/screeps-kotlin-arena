@@ -186,6 +186,11 @@ object PainAndGain {
      *  мили вплотную» — 2:12 во всех четырёх (стендовый враг бьёт цель с наименьшими хитами). */
     private const val HEALER_W_DAMAGE = 0.05
 
+    /** Вес огня для лекаря, чей подопечный УЖЕ в бою: только разница между клетками равной близости. С весом 0.05
+     *  выстрел пятерых (300) «стоил» 15 против выигрыша шага 10, и лекари вставали на кромке огня в 3–4 клетках
+     *  от строя — за весь бой матча 8 ни одного лечения при 216 в тик у врага (t=59–90: три лекаря, step=stay). */
+    private const val HEALER_W_DAMAGE_FIGHT = 0.005
+
     /** Внутри стольких клеток от цели (Чебышев, сверх standoff) строй не держат: группа уже на месте, а
      *  ожидание «отставших» у самого флага запирало захватчика на тысячу тиков (стенд greedy/grab). */
     private const val ARRIVED_SLACK = 2
@@ -222,6 +227,9 @@ object PainAndGain {
     private const val USE_AVOID = true
     private const val USE_RALLY = true
     private const val USE_LOCAL_ANNIHILATE = true
+    private const val USE_WOUNDED = true        // раненые остаются в армии и идут к лекарям (v9)
+    private const val USE_HEALER_ADJ = true     // лекарь без штрафа за соседей, вес огня в бою — разница (v9)
+    private const val USE_COMPACT_CLOSE = true  // снаружи зоны плотности шаг к центру открыт (v9)
 
     /** Клетки в такой близости от боевого врага поле «в обход» считает стеной (см. flowAvoiding). */
     private const val AVOID_RANGE = RANGED_RANGE + 1
@@ -245,6 +253,8 @@ object PainAndGain {
 
     private const val FIGHTER_PRIORITY = 3
     private const val RUNNER_PRIORITY = 2
+    /** Раненый уступает дорогу всем: его место — за лекарями, а не между ними и строем. */
+    private const val WOUNDED_PRIORITY = 1
 
     // ---------- отладка ----------
     private const val DEBUG_LOG = true
@@ -379,8 +389,13 @@ object PainAndGain {
         }
         logBodies(myCreeps, enemyCreeps)
 
-        val army = active.filter { hasWeapon(it) || hasHeal(it) }
-        val runners = active.filter { !hasWeapon(it) && !hasHeal(it) }
+        // раненый (см. wounded): боец, потерявший всё оружие, остаётся в армии, пока жив хоть один ходячий лекарь —
+        // лечение возвращает части (движок: части живы по сумме хитов, лечение идёт с хвоста тела: в матче 8 melee_1
+        // из M5 с 416 хитами стал M8A8 к 199-му тику у одного лекаря); прежде он уходил «бегуном» за флагами и гиб
+        val healersAlive = active.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
+        fun wounded(c: Creep) = USE_WOUNDED && healersAlive && !hasWeapon(c) && !hasHeal(c) && c.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
+        val army = active.filter { hasWeapon(it) || hasHeal(it) || wounded(it) }
+        val runners = active.filter { !hasWeapon(it) && !hasHeal(it) && !wounded(it) }
         val immobile = active.filter { !canMove(it) }
 
         val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }
@@ -442,7 +457,7 @@ object PainAndGain {
                 "t=${getTicks()} army=${army.size} runners=${runners.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat " +
-                    "our=${ours.toInt()} enemy=${theirs.toInt()} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "our=${ours.toInt()} enemy=${theirs.toInt()} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
@@ -872,7 +887,9 @@ object PainAndGain {
         // из контакта отхода нет: «отход, пока мили не вплотную» мигал ДОБИТЬ/ОТХОД через тик и отдавал армию по одному
         // в матчах 4, 6 и 7 (в седьмом — при 1.53, без единой потери у врага); при равной скорости из контакта не
         // уйти, и единственный способ его кончить — бой строем
-        val retreatFeasible = !contact && !atRetreatPoint
+        // без стрелков строя нет — лекарей и раненых травят, и «в контакте держим строй» держало их у поста, где
+        // стоял враг (стенд m7 sleeper: три лекаря с flee=true разбежались по карте и были добиты поодиночке)
+        val retreatFeasible = (!contact || strikers.isEmpty()) && !atRetreatPoint
         val weaker = theirs >= ours * (if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // из идущего боя (см. RETREAT_CONTACT_RATIO) — только при явном проигрыше
         val weakerContact = theirs >= ours * (if (posture == Posture.ANNIHILATE) RETREAT_CONTACT_RATIO else if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
@@ -944,17 +961,19 @@ object PainAndGain {
         val enemyPositions = enemyCreeps.mapTo(HashSet()) { it.x * 100 + it.y }
         val blockedSet: Set<Int> = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y } + ctx.flagCells
         val meleeEnemies = enemyCreeps.filter { InfluenceMap.profileOf(it).melee > 0.0 }
+        // боеспособные: вооружённые и лекари — фокус, контакт и местные группы считаются по ним, раненые не в счёт
+        val combatArmy = army.filter { hasWeapon(it) || hasHeal(it) }
 
         // фокус-файр: добиваемые за тик -> наибольшая угроза на хит (урон, который враг СЕЙЧАС наносит нам, плюс
         // его лечение, делённые на его хиты: мили вплотную за 1000 хитов снимает 90, стрелок за 800 — 40, лекарь
         // за 600 — 36; «лекари первыми» без учёта хитов вело огонь мимо мили, который резал наш строй)
-        val inFireRange = enemyCreeps.filter { e -> army.any { it.getRangeTo(e) <= RANGED_RANGE } }
+        val inFireRange = enemyCreeps.filter { e -> combatArmy.any { it.getRangeTo(e) <= RANGED_RANGE } }
         val focusPool = inFireRange.filter { e -> combatEnemies.any { it.id == e.id } }.ifEmpty { inFireRange }
         fun fireAvailableAt(e: Creep) = army.filter { it.getRangeTo(e) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged }
         fun threatPerHit(e: Creep): Double {
             val p = InfluenceMap.profileOf(e)
-            val meleeLive = p.melee > 0.0 && army.any { getRange(e, it) <= MELEE_KEEP_RANGE }
-            val rangedLive = p.ranged > 0.0 && army.any { getRange(e, it) <= RANGED_RANGE }
+            val meleeLive = p.melee > 0.0 && combatArmy.any { getRange(e, it) <= MELEE_KEEP_RANGE }
+            val rangedLive = p.ranged > 0.0 && combatArmy.any { getRange(e, it) <= RANGED_RANGE }
             return ((if (meleeLive) p.melee else p.melee * MELEE_KITE_DISCOUNT) + (if (rangedLive) p.ranged else p.ranged * 0.5) + p.heal) / e.hits.coerceAtLeast(1)
         }
         val focusTarget = focusPool.maxWithOrNull(
@@ -967,7 +986,7 @@ object PainAndGain {
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
         // добить: цель армии — ближайший к центру армии боевой враг (по пути); в бою ПО КОНТАКТУ (без перевеса) —
         // только из стаи, с которой контакт: контакт с одним стрелком не повод идти на армию врага за полкарты
-        val contactPack = combatEnemies.filter { e -> army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
+        val contactPack = combatEnemies.filter { e -> combatArmy.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
         val prey = when {
             posture != Posture.ANNIHILATE -> null
             pushing -> huntable.minByOrNull { pathTicksFrom(ctx, centroid, it) }
@@ -1008,8 +1027,11 @@ object PainAndGain {
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
             val healer = !hasWeapon(creep) && hasHeal(creep)
+            // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
+            val wounded = !healer && !hasWeapon(creep)
+            val support = healer || wounded
             val nearestEnemyRange = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
-            val localAllies = army.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
+            val localAllies = combatArmy.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
             val localEnemies = combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE + RANGED_RANGE }
             val ratio = if (creep.id in aggressiveIds) LOCAL_ENTER_RATIO else PUSH_RATIO
             val ghost = run {
@@ -1044,16 +1066,16 @@ object PainAndGain {
                 // отходить к массе есть смысл, только если масса не здесь: когда рядом больше половины армии, это и
                 // есть масса, и «отход к центру» был шагом на месте под ударами (матч 3, t=140–280: армия из
                 // семи-восьми «отходила к центру» сто сорок тиков и потеряла всех по одному, не стреляя в ответ)
-                posture == Posture.ANNIHILATE -> !USE_LOCAL_ANNIHILATE || localEnemies.isEmpty() || localAllies.size * 2 >= army.size ||
+                posture == Posture.ANNIHILATE -> !USE_LOCAL_ANNIHILATE || localEnemies.isEmpty() || localAllies.size * 2 >= combatArmy.size ||
                     ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * (if (creep.id in aggressiveIds) ANNIHILATE_HOLD_RATIO else LOCAL_ENTER_RATIO)
                 localEnemies.isEmpty() -> true
                 else -> ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio &&
                     (fightCost(localEnemies, localAllies) <= localAllies.maxOf { speedSlack(it) } || inContact(localEnemies, localAllies))
             }
             if (localAggressive) aggressiveIds.add(creep.id) else aggressiveIds.remove(creep.id)
-            val engage = if (localAggressive && !healer) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && catchable(it, chasers) }.minByOrNull { getRange(creep, it) } else null
+            val engage = if (localAggressive && !support) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && catchable(it, chasers) }.minByOrNull { getRange(creep, it) } else null
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
-            val leashed = !healer && canMove(creep) && posture != Posture.RETREAT && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
+            val leashed = !support && canMove(creep) && posture != Posture.RETREAT && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
             val melee = isMelee(creep) && !hasRanged(creep)
             val grab = grabberOf[creep.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } }
@@ -1062,17 +1084,25 @@ object PainAndGain {
             // остову за стеной, а строй ждал их у флага (стенд greedy)
             val healMate = if (healer) {
                 val fighters = army.filter { it.id != creep.id && hasWeapon(it) }
-                fighters.filter { getRange(creep, it) <= HEAL_RANGE + 1 }.maxByOrNull { it.hitsMax - it.hits }
+                // подопечные — вооружённые; вне боя рядом — и раненые (они сами идут к лекарю, см. wounded)
+                val patients = army.filter { it.id != creep.id && !(hasHeal(it) && !hasWeapon(it)) }
+                val engagedNear = fighters.any { f -> getRange(creep, f) <= HEAL_RANGE + 1 && combatEnemies.any { getRange(f, it) <= RANGED_RANGE + 1 } }
+                (if (engagedNear) fighters else patients).filter { getRange(creep, it) <= HEAL_RANGE + 1 }.maxByOrNull { it.hitsMax - it.hits }
                     ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
                     ?: fighters.minByOrNull { getRange(creep, it) }
+                    ?: patients.minByOrNull { getRange(creep, it) }
             } else null
+            // раненый идёт к ближайшему лекарю (вплотную — лечение 12 за часть против 4 на дистанции)
+            val healerNear: Creep? = if (wounded) army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }.minByOrNull { getRange(creep, it) } else null
+            // вес огня лекаря: подопечный в бою — только разница между клетками (см. HEALER_W_DAMAGE_FIGHT)
+            val healerFireW = if (USE_HEALER_ADJ && healer && healMate != null && combatEnemies.any { getRange(healMate, it) <= RANGED_RANGE + 1 }) HEALER_W_DAMAGE_FIGHT else HEALER_W_DAMAGE
             // сбор: по полю марша (флаг-цель или пост, в обход врагов) авангард — самый продвинутый из ходячих
             // вооружённых (при равном поле — меньший id); кто дальше RALLY_RANGE от авангарда, идёт к нему
             // только на марше к флагу-цели: в HOLD цель — точка, к ней сходятся и так, а в ANNIHILATE ожидание
             // «далёкого» напарника, занятого своим боем, останавливало армию (стенд greedy)
             // ходячий по canMove, не «полноскоростной»: покалеченный участник, не входящий в сбор, но ждущий
             // далёких, замыкал группу в тупик (стенд rush: 10 против 2 до конца матча)
-            val groupedPre = USE_RALLY && !healer && canMove(creep) && posture == Posture.FLAG
+            val groupedPre = USE_RALLY && !support && canMove(creep) && posture == Posture.FLAG
             val marchTarget: Position? = objective?.flag?.pos
             var rallyTo: Position? = null
             if (groupedPre && marchTarget != null) {
@@ -1094,7 +1124,7 @@ object PainAndGain {
                 else rallyingIds.remove(creep.id)
             } else rallyingIds.remove(creep.id)
             // построение: вне огня и без готовности авангард и собравшиеся у него стоят, остальные идут к нему
-            val forming = formVan != null && !formationReady && !healer && canMove(creep) && posture != Posture.RETREAT &&
+            val forming = formVan != null && !formationReady && !support && canMove(creep) && posture != Posture.RETREAT &&
                 localEnemies.isNotEmpty() && nearestEnemyRange > RANGED_RANGE
             val formHold = forming && (formVan!!.id == creep.id || getRange(creep, formVan) <= FORM_RANGE)
             val formGo = forming && !formHold
@@ -1102,17 +1132,20 @@ object PainAndGain {
             val standoff: Int
             var avoid = false
             when {
+                // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
+                // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
+                healer && healMate != null -> { target = healMate; standoff = 1 }
                 // отход — по обычному полю: поле «в обход» стоящих врагов (а дерущиеся стоят) увело пару в обход
                 // стенного блока на другой край карты (матч 4)
                 posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1 }
                 formGo -> { target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
-                healer && healMate != null -> { target = healMate; standoff = 1 }
+                wounded && healerNear != null -> { target = healerNear; standoff = 1; avoid = true }
                 leashed -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
                 grab != null -> { target = grab.pos; standoff = 0; avoid = true }
                 // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»; без
                 // ловимой добычи (кайтеры) — тоже к массе: стоим строем и стреляем в то, что подойдёт
-                posture == Posture.ANNIHILATE && !healer && (!localAggressive || prey == null) -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
+                posture == Posture.ANNIHILATE && !support && (!localAggressive || prey == null) -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
                 prey != null -> { target = prey; standoff = if (melee) 1 else closeIn }
                 rallyTo != null -> { target = rallyTo; standoff = CLOSE_STANDOFF; avoid = true }
                 objective != null -> {
@@ -1122,7 +1155,7 @@ object PainAndGain {
                     avoid = true
                 }
                 threat != null && huntingThreat && mobile -> { target = threat; standoff = if (melee) 1 else closeIn }
-                raider != null && mobile && !healer -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
+                raider != null && mobile && !support -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
                 else -> { target = post; standoff = POST_STANDOFF; avoid = true }
             }
             val flow = if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)
@@ -1139,14 +1172,15 @@ object PainAndGain {
             // разворачивались спиной в первый тик контакта — их резали в спину, строй рассыпался (стенд sleeper,
             // t=550; матчи 4–6 в первом размене теряли 1:5 при равной силе)
             val lostLastTick = lastHits[creep.id]?.let { it - creep.hits } ?: 0
-            val mustFlee = (healer && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= HEAL_RANGE }) ||
+            // лекарь и раненый бегут (врассыпную) только в одиночестве: при своём рядом — отход группой по постуре
+            val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
                 (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
                 (ghost > 0 && creep.hits <= ghost)
 
             // сплочение: авангард ждёт отставших группы (в тиках ИХ хода), пока сам не под огнём и напарник
             // не в бою; при враге в досягаемости зазор тесный — собираемся ДО входа под огонь
             val myFlow = flow[creep.x * 100 + creep.y]
-            val grouped = !healer && (posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && threat != null && target === threat))
+            val grouped = !support && (posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && threat != null && target === threat))
             // напарники строя — ходячие ВООРУЖЁННЫЕ: у лекаря своя цель (подопечный), и взаимное ожидание «лекарь
             // отстал от флага — боец отстал от подопечного лекаря» запирало группу навсегда (стенд greedy)
             val mates = if (grouped) mobileArmy.filter { it.id != creep.id && hasWeapon(it) } else emptyList()
@@ -1173,7 +1207,7 @@ object PainAndGain {
                 lagging
             }
             // отход строем (см. RETREAT_GAP): ушедший вперёд ждёт самого отставшего вооружённого, пока сам вне огня
-            val retreatHold = posture == Posture.RETREAT && !healer && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
+            val retreatHold = posture == Posture.RETREAT && !support && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
                 val rear = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }.maxOfOrNull { flow[it.x * 100 + it.y] } ?: -1
                 rear >= 0 && rear - myFlow > RETREAT_GAP
             }
@@ -1188,25 +1222,50 @@ object PainAndGain {
                     val designated = grab?.pos ?: objective?.flag?.pos?.takeIf { objectiveCapturer == creep.id }
                     var myBlocked = if (designated != null) blockedSet - (designated.x * 100 + designated.y) else blockedSet
                     // плотность (см. COMPACT_RANGE): при враге в досягаемости — только на клетки строя
-                    if (localEnemies.isNotEmpty() && posture != Posture.RETREAT && canMove(creep)) {
+                    // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
+                    // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
+                    // матча 8 в 4–5 клетках от строя
+                    if (!wounded && localEnemies.isNotEmpty() && posture != Posture.RETREAT && canMove(creep)) {
                         val armedMates = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }
+                        val myRange = getRange(creep, armedCentroid)
                         val loose = HashSet<Int>()
                         for ((dx, dy) in DIRECTIONS) {
                             val x = creep.x + dx; val y = creep.y + dy
                             if (x < 0 || y < 0 || x > 99 || y > 99) continue
                             val c = InfluenceMap.cell(x, y)
-                            val compact = getRange(c, armedCentroid) <= COMPACT_RANGE || armedMates.count { getRange(c, it) <= 1 } >= 2
+                            val r = getRange(c, armedCentroid)
+                            // шаг ВПЕРЁД (по потоку к цели) открыт на клетку в COMPACT_RANGE + 1: иначе авангард не мог
+                            // выйти из зоны, а центр не сдвигался, пока никто не выходил, — блоб 1200 тиков стоял в
+                            // четырёх клетках от последнего лекаря врага и проиграл по очкам (стенд m5 kite); линия
+                            // ползёт гусеницей — впереди не дальше трёх от центра, остальные подтягиваются
+                            val fd = flow[x * 100 + y]
+                            val advancing = myFlow >= 0 && fd in 0 until myFlow
+                            val compact = r <= COMPACT_RANGE || (advancing && r <= COMPACT_RANGE + 1) || armedMates.count { getRange(c, it) <= 1 } >= 2 || (USE_COMPACT_CLOSE && r < myRange)
                             if (!compact) loose.add(x * 100 + y)
                         }
                         if (loose.isNotEmpty()) myBlocked = myBlocked + loose
                     }
-                    bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt)
+                    // передний ряд — вооружённым: лекарь и раненый не встают на клетку вплотную к боевому врагу (она
+                    // нужна нашему мили; трое лекарей без штрафа за соседей заняли ряд перед своими мили у самого
+                    // раненого бойца, и размен шёл без наших ударов — стенд m7 sleeper, 4 убитых врага против 5)
+                    if (support && localEnemies.isNotEmpty()) {
+                        val front = HashSet<Int>()
+                        for ((dx, dy) in DIRECTIONS) {
+                            if (dx == 0 && dy == 0) continue
+                            val x = creep.x + dx; val y = creep.y + dy
+                            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                            val c = InfluenceMap.cell(x, y)
+                            if (localEnemies.any { getRange(c, it) <= 1 }) front.add(x * 100 + y)
+                        }
+                        if (front.isNotEmpty()) myBlocked = myBlocked + front
+                    }
+                    bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
                 }
             }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-                println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
+                println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (wounded) " WOUNDED" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
             }
-            if (step != null) TrafficManager.request(creep, step, FIGHTER_PRIORITY)
+            if (step != null) TrafficManager.request(creep, step, if (wounded) WOUNDED_PRIORITY else FIGHTER_PRIORITY)
             lastHits[creep.id] = creep.hits
             lastCell[creep.id] = creep.x * 100 + creep.y
         }
@@ -1318,12 +1377,13 @@ object PainAndGain {
         blockedSet: Set<Int>,
         enemyPositions: Set<Int>,
         occupantAt: Map<Int, Creep>,
+        healerFireW: Double = HEALER_W_DAMAGE,
     ): Position? {
         val hereDist = flow[creep.x * 100 + creep.y]
         // своя клетка с форой — только ПРИБЫВ (в зазоре standoff): вне боя не дёргаемся ради мелочи (см.
         // STAY_BIAS); на марше форы нет — вместе со штрафом за соседей она съедала выигрыш шага (матч 2)
         val settled = !inCombat && hereDist in 0..(standoff + ARRIVED_SLACK)
-        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies) + (if (settled) STAY_BIAS else 0.0)
+        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies, healerFireW) + (if (settled) STAY_BIAS else 0.0)
         var bx = creep.x; var by = creep.y
         var pushDist = if (hereDist >= 0) hereDist else Int.MAX_VALUE
         var pushX = -1; var pushY = -1
@@ -1337,11 +1397,16 @@ object PainAndGain {
             if (occ != null) {
                 val fd = flow[x * 100 + y]
                 val static = TrafficManager.wasStatic(occ.id) || !canMove(occ)
-                if (fd in 0 until (if (hereDist >= 0) hereDist else Int.MAX_VALUE) && (static || stuck)) blockedByStatic = true
+                // лекарь и раненый уступают и в бою (TrafficManager: заявитель приоритетнее стоящего — swap): раненый,
+                // «прибывший» к лекарю, стоял на единственной клетке между тремя лекарями в кармане у стены и их
+                // подопечным, и лечения не было (стенд m7 sleeper); лекаря толкает только вооружённый
+                val yielding = canMove(occ) && !hasWeapon(occ) && !hasHeal(occ) && hasHeal(creep) && !hasWeapon(creep)
+                if (yielding && fd in 0 until pushDist) { pushDist = fd; pushX = x; pushY = y }
+                else if (fd in 0 until (if (hereDist >= 0) hereDist else Int.MAX_VALUE) && (static || stuck)) blockedByStatic = true
                 else if (!inCombat && fd in 0 until pushDist) { pushDist = fd; pushX = x; pushY = y }
                 continue
             }
-            val s = scoreCell(creep, x, y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies)
+            val s = scoreCell(creep, x, y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies, healerFireW)
             if (s > bestScore) { bestScore = s; bx = x; by = y }
         }
         if (bx != creep.x || by != creep.y) return InfluenceMap.cell(bx, by)
@@ -1362,7 +1427,7 @@ object PainAndGain {
 
     /** Оценка клетки: приблизиться на standoff к цели по реальному пути; в бою — исходящий урон, чистый
      *  входящий (с хилом), влияние, штраф за зону мили, за болото (без перевеса) и цена прижатия. */
-    private fun scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: IntArray, standoff: Int, aggressive: Boolean, inCombat: Boolean, enemyCreeps: List<Creep>, allies: List<Creep>, meleeEnemies: List<Creep>): Double {
+    private fun scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: IntArray, standoff: Int, aggressive: Boolean, inCombat: Boolean, enemyCreeps: List<Creep>, allies: List<Creep>, meleeEnemies: List<Creep>, healerFireW: Double = HEALER_W_DAMAGE): Double {
         val flowDist = flow[x * 100 + y]
         val cheb = getRange(InfluenceMap.cell(x, y), target)
         val firePenalty = when {
@@ -1375,16 +1440,18 @@ object PainAndGain {
         // на марше (вне боя и дальше зазора прибытия) соседи не штрафуются: в колонне клетка впереди почти всегда
         // соседствует с двумя союзниками (−8), и штраф вместе с форой своей клетки (+5) съедал выигрыш шага (10) —
         // двенадцать бойцов простояли 1800 тиков в 12 клетках от цели (матч 2); разрежение нужно на месте и в бою
-        if (!inCombat) return -firePenalty * PAIR_W_DIST - (if (flowDist > standoff + ARRIVED_SLACK) 0.0 else separation)
+        // лекарь и раненый без штрафа за соседей: их место — вплотную к своему (штраф 4 за соседа в зоне прибытия
+        // против выигрыша шага 10 держал лекаря в 3–4 клетках от подопечного, матч 8)
+        if (!inCombat) return -firePenalty * PAIR_W_DIST - (if ((USE_HEALER_ADJ && !hasWeapon(creep)) || flowDist > standoff + ARRIVED_SLACK) 0.0 else separation)
 
         val damage = InfluenceMap.netDamageAt(x, y, enemyCreeps, allies)
         // лекарь: вплотную к подопечному (поле), из клеток равной близости — под меньшим ФАКТИЧЕСКИМ огнём (fireAt:
         // без шага сближения мили — иначе клетка рядом с бойцом, который рубится вплотную, «стоит» 720 и лекарь
         // стоит в трёх клетках; от мили, что действительно подошёл, лекарь отойдёт следующим тиком)
-        if (!hasWeapon(creep) && hasHeal(creep)) {
+        if (!hasWeapon(creep)) {
             val fire = InfluenceMap.fireAt(x, y, enemyCreeps)
             val pinnedHealer = (periodAt(creep, x, y) - 1) * fire * PAIR_W_DAMAGE
-            return -firePenalty * PAIR_W_DIST - fire * HEALER_W_DAMAGE - separation - pinnedHealer
+            return -firePenalty * PAIR_W_DIST - fire * healerFireW - (if (USE_HEALER_ADJ) 0.0 else separation) - pinnedHealer
         }
         val meleeSelf = isMelee(creep) && !hasRanged(creep)
         val meleeWeight = if (aggressive) PAIR_W_MELEE * AGGRO_MELEE_FACTOR else PAIR_W_MELEE
@@ -1520,6 +1587,8 @@ object PainAndGain {
         val p = InfluenceMap.profileOf(unit)
         val raw = p.ranged + p.melee
         val taken = InfluenceMap.takenOf(unit).coerceAtLeast(0.01)
+        // раненый (оружие или лечение в теле мертво) хитов в счёт не даёт: он не в строю и огня на себя не берёт
+        if (raw <= 0.0 && p.heal <= 0.0 && unit.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }) return 0.0
         val share = if (raw <= 0.0) 1.0 else effectiveDps(unit, opponents) / raw
         return unit.hits * share * hitsK / taken
     }
