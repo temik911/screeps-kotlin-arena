@@ -192,11 +192,14 @@ object EscortRun {
      *  при старте матча, поэтому пересобранный бандл попадает в игру только со следующего запуска, и по логу должно
      *  быть видно, какая сборка играла: вопрос «в игре какая версия?» иначе не решается ничем. Поднимать при каждом
      *  выкате в main (тег escort-run-vN). */
-    private const val BOT_VERSION = "v5"
+    private const val BOT_VERSION = "v6"
 
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     private const val LOG_EVERY = 10
+
+    /** До какого тика печатается построчная трасса гонки (см. logRace): дебют решает матч, и мерить надо именно его. */
+    private const val RACE_TRACE_TICKS = 120
     private const val BODIES_EVERY = 50
 
     private val DIRECTIONS = listOf(
@@ -241,6 +244,10 @@ object EscortRun {
 
     /** Поезд: кто в этом тике сдвинут прямыми move (мимо TrafficManager), клетки, которые остальным надо освободить. */
     private val trainMoved = HashSet<String>()
+    private var raceOurCell = -1
+    private var raceTheirCell = -1
+    private var raceOurSteps = 0
+    private var raceTheirSteps = 0
     private var yieldCells: Set<Int> = emptySet()
     private var trainLogLeft = 60
     private var pullBypassTested = false
@@ -404,6 +411,7 @@ object EscortRun {
         aggressiveIds.retainAll { id -> active.any { it.id == id } }
 
         if (DEBUG_LOG) logStuck(active, enemyCreeps)
+        if (DEBUG_LOG) logRace(ctx)
         if (DEBUG_LOG && now % LOG_EVERY == 0) logStatus(ctx)
         if (DEBUG_LOG && now % BODIES_EVERY == 0) logBodies(ctx)
     }
@@ -1180,12 +1188,16 @@ object EscortRun {
         return ticks
     }
 
-    /** Клетки цепи от эскорта вперёд по полю: первая — следующая клетка эскорта, каждая следующая — от предыдущей. */
-    private fun chainCells(ctx: Ctx, flow: IntArray, n: Int): List<Position> {
+    /**
+     * Клетки цепи вперёд по полю: первая — следующая клетка от точки отсчёта, каждая следующая — от предыдущей.
+     * Точка отсчёта — эскорт, а когда он в этот тик шагает — клетка, в которую он шагает: цепь строится там, где
+     * эскорт БУДЕТ, иначе тягач целится в клетку, которую эскорт займёт сам, и они спорят за неё каждый тик.
+     */
+    private fun chainCells(ctx: Ctx, flow: IntArray, n: Int, from: Position? = null): List<Position> {
         val escort = ctx.escort ?: return emptyList()
         val out = ArrayList<Position>()
-        var x = escort.x
-        var y = escort.y
+        var x = from?.x ?: escort.x
+        var y = from?.y ?: escort.y
         for (i in 0 until n) {
             val next = DistanceMap.flowStep(flow, x, y, 0, emptySet(), ctx.enemyPositions) ?: break
             out.add(next)
@@ -1207,7 +1219,8 @@ object EscortRun {
      * встают на клетки цепи впереди эскорта (первый — на его следующую клетку, второй — на следующую от неё); когда все
      * на местах и ни у кого нет усталости, голова шагает дальше по полю, каждый тягач тянет заднего, а задний шагает в
      * его клетку (все интенты — прямые, мимо TrafficManager, и переподаются каждый тик). Пока тягачи строятся, эскорт
-     * ждёт их, если они близко (усталость его должна сойти к нулю к моменту прицепки), иначе идёт сам.
+     * идёт сам, пока шаг дешевле задержки прицепки, которую он этим шагом создаёт (расчёт — в теле метода), и стоит
+     * неподвижно, когда дороже; ожидание «на всякий случай» стоило живых матчей.
      */
     private fun runTrain(ctx: Ctx) {
         trainMoved.clear()
@@ -1250,7 +1263,7 @@ object EscortRun {
             val slot = tailCells.getOrNull(near.size + k) ?: tailCells.lastOrNull() ?: continue
             if (p.x == slot.x && p.y == slot.y) continue
             val f = flowTo("slot", slot, ctx.blocked, 1, ttl = 1)
-            val step = DistanceMap.flowStep(f, p.x, p.y, 0, emptySet(), ctx.enemyPositions)
+            val step = DistanceMap.flowStep(f, p.x, p.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
             if (step != null) TrafficManager.request(p, step, PULLER_PRIORITY)
         }
         if (near.isEmpty()) { selfStep(ctx, escort, flow); return }
@@ -1304,17 +1317,48 @@ object EscortRun {
             }
             return
         }
-        // сбор: близкие тягачи идут на свои клетки (толкая бойцов), эскорт ждёт их (усталость сходит к нулю к прицепке).
-        // Поле к клетке — полное и с болотом по цене равнины: тягач из одних MOVE весит ноль и болота не замечает, а
-        // ограниченное поле (30) не доставало до спавна, и тягач, рождённый при эскорте в сорока клетках, не трогался с места
+        // Сбор цепи. Тягачи идут на свои клетки (толкая бойцов); поле к клетке — полное и с болотом по цене равнины:
+        // тягач из одних MOVE весит ноль и болота не замечает, а ограниченное поле (30) не доставало до спавна, и
+        // тягач, рождённый при эскорте в сорока клетках, не трогался с места.
+        // ЭСКОРТ ПРИ ЭТОМ НЕ СТОИТ ПРОСТО ТАК — стояние тоже имеет цену, и она считается, а не назначается: шаг сейчас
+        // даёт клетку, которую поезд проехал бы за pTrain тиков, и стоит задержки старта поезда на (pSelf − k) тиков,
+        // где k — тиков цепи до её клеток, взятых из того же поля, которым тягачи и ходят. Идём, пока выигрыш больше
+        // задержки; на равнине (pTrain 2, pSelf 4) это значит «идём, пока цепь не соберётся раньше чем через три тика».
+        var chainEta = 0
         for (i in chain.indices) {
             val p = chain[i]
             val slot = cells[i]
             if (p.x == slot.x && p.y == slot.y) continue
             val f = flowTo("slot", slot, ctx.blocked, 1, ttl = 1)
-            val step = DistanceMap.flowStep(f, p.x, p.y, 0, emptySet(), ctx.enemyPositions)
+            val d = f[p.x * 100 + p.y]
+            chainEta = maxOf(chainEta, if (d >= 0) d else JOIN_RANGE * 2)
+        }
+        val ahead = cells.getOrNull(0)
+        var escortStepping = false
+        if (ahead != null && escort.fatigue == 0 && chainEta > 0) {
+            val weight = bodyWeight(escort)
+            val swamp = DistanceMap.isSwamp(ahead.x, ahead.y)
+            val pSelf = trainPeriod(weight, liveMoves(escort), swamp)
+            val pTrain = trainPeriod(weight, trainMoves(escort, chain), swamp)
+            escortStepping = pTrain > maxOf(0, pSelf - chainEta)
+        }
+        // тягач целится туда, где эскорт БУДЕТ: иначе он идёт в клетку, которую эскорт занимает сам, и оба спорят за неё
+        val slotCells = if (escortStepping) chainCells(ctx, flow, chain.size + 1, ahead) else cells
+        for (i in chain.indices) {
+            val p = chain[i]
+            val slot = slotCells.getOrNull(i) ?: cells[i]
+            if (p.x == slot.x && p.y == slot.y) continue
+            val f = flowTo("slot", slot, ctx.blocked, 1, ttl = 1)
+            // занятые клетки — ОБХОДИТЬ: тягач, рождённый позади, шёл к слоту сквозь эскорта и полагался на то, что
+            // диспетчер поменяет их местами, то есть откатит эскорта на клетку назад. Обход стоит тягачу тик, откат
+            // стоит эскорту два, и это его единственная работа в матче
+            val step = DistanceMap.flowStep(f, p.x, p.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
             if (step != null) TrafficManager.request(p, step, PULLER_PRIORITY)
         }
+        if (escortStepping) selfStep(ctx, escort, flow)
+        // а если стоит — то СТОИТ: без этого диспетчер считает неподвижного эскорта свободным и меняет его местами с
+        // тягачом, обходящим его к слоту; в живом матче эскорт так уехал на клетку НАЗАД (t=30 (14,84) -> t=40 (13,85))
+        else trainMoved.add(escort.id)
         // замер обхода World (game/creeps.js:135-142): move(объект крипа) минует ERR_TIRED — в типах Arena этого нет,
         // код возврата в живом матче решит, можно ли тащить усталого эскорта; тягач в этот тик не едет, интент безвреден
         if (!pullBypassTested && escort.fatigue > 0 && getRange(escort, chain[0]) <= 1) {
@@ -1323,7 +1367,7 @@ object EscortRun {
             println("pull bypass test t=${getTicks()}: escort.move(puller) with fatigue=${escort.fatigue} -> $rc (0 = World bypass lives in Arena; -10/-11 = it does not)")
         }
         if (DEBUG_LOG && trainLogLeft > 0 && getTicks() % 5 == 0) {
-            println("train t=${getTicks()}: forming — escort (${escort.x},${escort.y}) f=${escort.fatigue} slots=${cells.joinToString(" ") { "(${it.x},${it.y})" }} " +
+            println("train t=${getTicks()}: forming — escort (${escort.x},${escort.y}) f=${escort.fatigue} stepping=$escortStepping eta=$chainEta slots=${slotCells.joinToString(" ") { "(${it.x},${it.y})" }} " +
                 "pullers=${chain.joinToString(" ") { "${it.id}(${it.x},${it.y})f=${it.fatigue}" }} rested=$rested headNextOcc=${headNextOcc?.id ?: "-"}")
         }
     }
@@ -2076,6 +2120,47 @@ object EscortRun {
         )
         bfsMaxTick = 0
         if (now % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
+    }
+
+    /**
+     * Трасса гонки: строка в тот тик, когда любой из эскортов сменил клетку — позиция, усталость и число сделанных
+     * шагов у обоих. Прибор поставлен под конкретный вопрос: соперник Hardy проводит своего эскорта быстрее, чем
+     * позволяет период тела (4 тика на клетку по равнине при весе 40 и десяти MOVE), и делает это ДО того, как у него
+     * появляется хоть один второй крип. Сводка раз в десять тиков этого не ловит — она даёт только позицию, из которой
+     * период восстанавливается с точностью «между тремя и пятью». Трасса даёт тик каждого шага, то есть период прямо.
+     */
+    private fun logRace(ctx: Ctx) {
+        val now = getTicks()
+        if (now > RACE_TRACE_TICKS) return
+        val ours = ctx.escort
+        val theirs = ctx.enemyEscort
+        val oc = ours?.let { it.x * 100 + it.y } ?: -1
+        val tc = theirs?.let { it.x * 100 + it.y } ?: -1
+        if (oc == raceOurCell && tc == raceTheirCell) return
+        if (raceOurCell >= 0 && oc != raceOurCell) raceOurSteps++
+        if (raceTheirCell >= 0 && tc != raceTheirCell) raceTheirSteps++
+        raceOurCell = oc
+        raceTheirCell = tc
+        println(
+            "race t=$now ours=${ours?.let { "(${it.x},${it.y}) f=${it.fatigue} steps=$raceOurSteps" } ?: "DEAD"} " +
+                "theirs=${theirs?.let { "(${it.x},${it.y}) f=${it.fatigue} steps=$raceTheirSteps" } ?: "none"} " +
+                "theirCreeps=${ctx.enemyCreeps.size}${ctx.enemyCreeps.filter { !isEscort(it) }.joinToString("") { " ${it.id}(${it.x},${it.y})${bodySummary(it)}" }} " +
+                "theirPending=${ctx.enemyPending.size}" +
+                // состав и эффекты чужого эскорта — здесь, а не в зонде первого тика: если он идёт быстрее своего тела,
+                // разница обязана быть видна либо в живых MOVE, либо в эффекте, и оба меняются ПО ХОДУ матча
+                (theirs?.let { " theirBody=${bodySummary(it)} theirMoves=${liveMoves(it)} theirWeight=${bodyWeight(it)} theirEffects=${effectsOf(it)}" } ?: "") +
+                (ours?.let { " ourEffects=${effectsOf(ours)}" } ?: "")
+        )
+    }
+
+    /** Эффекты объекта строкой (тип, конец, множитель) — их может не быть вовсе, поле опционально. */
+    private fun effectsOf(o: GameObject): String {
+        val eff = o.effects ?: return "-"
+        if (eff.isEmpty()) return "-"
+        return eff.joinToString(",") { e ->
+            val d = e.asDynamic()
+            "${d.effect}@end=${d.endTime}x${d.multiplier}"
+        }
     }
 
     private fun logBodies(ctx: Ctx) {

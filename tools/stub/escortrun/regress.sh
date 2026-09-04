@@ -43,6 +43,11 @@ open map-match1.txt - rush+harvest
 # 'racer' is the match-2/3 opponent given a head start (its puller is alive at tick 0): the closest thing to the live
 # rival that actually races. It is IN the gate since the flag blocker — a head start of thirty ticks no longer decides
 run  map-match1.txt - racer
+# the map of matches 4-7 (04.09.2026) against the rival that beat us four times out of four: same layout as match 1
+# (the arena fixes spawns, escorts and flags and randomises only the terrain), different terrain
+run  map-match4.txt - none
+run  map-match4.txt - racer
+run  map-match4.txt - train
 run  - - racer
 run  - - none
 run  - - race
