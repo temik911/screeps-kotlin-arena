@@ -179,21 +179,35 @@ object PainAndGain {
      *  правила ожидания не видят, кто кого держит, — предохранитель по времени видит. */
     private const val COHESION_PATIENCE = 30
 
-    /** Уклонение (поза EVADE): армия, которую мы не можем ДОБИТЬ (наша мощь меньше их × pushRatio), идёт на нас и уже в
-     *  EVADE_RANGE от центра — не драться, а уходить: при равной скорости догнать нельзя, а скауты тем временем берут
-     *  флаги. Четыре равных боя у поста подряд (матчи 7–10) проиграны разменом при 1.0 — противник шёл всей армией
-     *  прямо к нам, свои скауты не двигал и после боя восстанавливал обломки лекарями. Точка уклонения — из флагов,
-     *  домов и углов та, куда мы приходим раньше врага с наибольшим запасом (его ход по его телу вдоль поля), не та,
-     *  где стоим (EVADE_ARRIVED), с гистерезисом EVADE_HYSTERESIS и пересчётом раз в EVADE_EVAL_EVERY (13 полей за
-     *  пересчёт); запас меньше EVADE_MIN_MARGIN — угол, уклонения нет: RETREAT/бой как прежде. */
+    /** Уклонение (поза EVADE): армия, которую мы не можем ДОБИТЬ (наша мощь меньше их × pushRatio), существует — не
+     *  драться с ней, а держаться там, откуда есть выход, и уходить, когда она подходит: при равной скорости догнать
+     *  нельзя, а скауты тем временем берут флаги. Четыре равных боя у поста подряд (матчи 7–10) проиграны разменом
+     *  при 1.0. Точки выхода — семь флагов и два дома (углы — нет: угол при подошедшем враге — смерть, матч 11);
+     *  у точки два запаса — прибытие (ход врага до неё минус наш) и ВЫХОД (лучший из других точек: ход врага до неё
+     *  сейчас минус наше прибытие минус наш путь дальше), счёт точки — меньший из них. Матч 11: армия ушла за флагом
+     *  H4 в угол (8,90) за 52 тика, пока враг шёл на нас с 80 клеток, точка уклонения выбралась там же (прибытие 15,
+     *  выхода нет), враг закрыл карман, и при четырёх дебаффах (0.81) армия была уничтожена. Флаг-цель армии при
+     *  непобедимом враге тоже обязан иметь выход не меньше ESCAPE_MARGIN после прибытия. Стоять на месте можно,
+     *  пока счёт места не меньше EVADE_SAFE; иначе — в лучшую точку, с гистерезисом EVADE_HYSTERESIS и пересчётом
+     *  раз в EVADE_EVAL_EVERY (девять полей); счёт лучшей меньше EVADE_MIN_MARGIN — карман, уклонения нет:
+     *  RETREAT/бой как прежде. */
+    /** Дистанция, с которой уклонение идёт раньше флагов-целей: при враге ближе армия с пятью дебаффами (0.72) меняла
+     *  цели и точки уклонения в разные стороны через каждые 3–6 тиков, в сумме стояла на месте и была догнана
+     *  (стенд m8 army); дальше — цели с выходом, иначе безопасная точка. */
     private const val EVADE_RANGE = 25
     private const val EVADE_ARRIVED = 3
     private const val EVADE_EVAL_EVERY = 5
     private const val EVADE_HYSTERESIS = 4
     private const val EVADE_MIN_MARGIN = 3
+    private const val EVADE_SAFE = 20
+    private const val ESCAPE_MARGIN = 10
 
-    /** Отход строем: убежавший вперёд дальше стольких клеток (по полю отхода) от самого отставшего вооружённого
-     *  ждёт его вне огня — иначе погоня добивает отставших по одному (матч 4: армия рассыпалась по трём углам). */
+    /** Отход строем: когда самый отставший вооружённый отстал (по полю отхода) от ТЕЛА армии — медианы по полю —
+     *  дальше стольких клеток, передняя половина ждёт его вне огня: иначе погоня добивает отставших по одному
+     *  (матч 4: армия рассыпалась по трём углам). Мерить от самого быстрого нельзя: глубина блоба из двенадцати по
+     *  ходу — 3–4 клетки, голова стояла через тик, стоящая голова блокировала колонну за собой (см. bestSingleMove:
+     *  статичный впереди — боковой шаг), хвост отставал ещё больше, и уход от равного по скорости врага шёл на
+     *  0,5 клетки/тик — догнан в 46 тиках при запасе 13 (стенд m11 sleeper). */
     private const val RETREAT_GAP = 3
 
     /** Вес фактического огня в оценке клетки ЛЕКАРЯ: шаг к подопечному (10) стоит двух стрелков (120 → 6), трёх
@@ -335,6 +349,17 @@ object PainAndGain {
     private val impatientIds = HashSet<String>()
     private var evadeTarget: Position? = null
     private var evadeEvaluatedAt = -100
+    private val escapeFlows = HashMap<Int, IntArray>()
+    private val escapeTheirs = HashMap<Int, Int>()
+    private val escapeNearest = HashMap<Int, Int>()   // клетка врага, ближайшего к точке
+    /** Точка, которую покинули (стояли, счёт места ниже EVADE_SAFE): не цель, пока не прибыли в другую — иначе маятник:
+     *  через два шага от неё она уже «не здесь», её счёт (6) выше счёта дома (4), армия возвращается, снова «здесь» —
+     *  три качания за 13 тиков съели восемь тиков запаса при погоне на равной скорости (стенд m11 sleeper). */
+    private var evadeLeft: Position? = null
+    private var escapeAt = -100
+    /** Дистанция центра боевых врагов до нашего за последние тики — темп сближения для запаса выхода. */
+    private val enemyDistHist = ArrayDeque<Int>()
+    private var approachRate = 0.0
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
     private var formWaitSince = -1
     private val aggressiveIds = HashSet<String>()
@@ -832,7 +857,7 @@ object PainAndGain {
         return q.melee + q.ranged > 0.0 || enemyCreeps.any { w -> w.id != e.id && getRange(w, e) <= HEAL_RANGE + 1 && w.body.any { it.type == ATTACK || it.type == RANGED_ATTACK } }
     }
 
-    private fun chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushRatio: Double): Objective? {
+    private fun chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushRatio: Double, escapeNeeded: Boolean = false): Objective? {
         if (group.isEmpty()) return null
         var best: Objective? = null
         for (f in ctx.flags) {
@@ -841,6 +866,9 @@ object PainAndGain {
             val flow = flowTo(ctx, f.pos)
             val travel = group.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
             if (travel >= Int.MAX_VALUE / 4) continue
+            // при непобедимом враге — только флаг с выходом (см. ESCAPE_MARGIN): за H4 в угол (8,90) армия шла 52 тика,
+            // пока враг шёл на неё с 80 клеток, и в углу была уничтожена (матч 11)
+            if (escapeNeeded && exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) continue
             // стая без урона ничего не охраняет: три лекаря врага, лечащие друг друга, делали цену боя бесконечной для
             // ослабленной армии, и она 1500 тиков держала пост при шести свободных флагах (стенд m2 rush)
             val pack = packAt(ctx, f.pos, flow, travel).filter { threatening(it, ctx.enemyCreeps) }
@@ -904,39 +932,140 @@ object PainAndGain {
         return best
     }
 
-    /** Точка уклонения (см. EVADE_RANGE): из флагов, домов и углов — та, куда наши стрелки приходят раньше всех врагов с
-     *  наибольшим запасом тиков; не та, где стоим; прежняя держится, пока не хуже лучшей на EVADE_HYSTERESIS; null —
-     *  угол, уходить некуда. Пересчёт раз в EVADE_EVAL_EVERY тиков или по прибытии (13 полей потока за раз). */
+    /** Точки выхода: семь флагов и оба дома (углы — карманы, их нет; см. EVADE_SAFE). */
+    private fun escapeCandidates(ctx: Ctx): List<Position> = ctx.flags.map { it.pos } + listOf(ctx.home, ctx.enemyHome)
+
+    /** Поля потока к точкам выхода и ход врага до каждой — раз в EVADE_EVAL_EVERY тиков (девять полей). */
+    private fun refreshEscape(ctx: Ctx, armed: List<Creep>) {
+        val now = getTicks()
+        if (now - escapeAt < EVADE_EVAL_EVERY && escapeFlows.isNotEmpty()) return
+        escapeAt = now
+        escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear()
+        for (c in escapeCandidates(ctx)) {
+            val key = c.x * 100 + c.y
+            val flow = flowTo(ctx, c)
+            escapeFlows[key] = flow
+            var bestTicks = Int.MAX_VALUE / 4
+            var bestCell = -1
+            for (e in armed) {
+                val t = pathTicks(e, flow, e.x * 100 + e.y)
+                if (t < bestTicks) { bestTicks = t; bestCell = e.x * 100 + e.y }
+            }
+            escapeTheirs[key] = bestTicks
+            escapeNearest[key] = bestCell
+        }
+    }
+
+    /** Клетка после ticks шагов спуска по полю от start (враг идёт за нами к цели поля). */
+    private fun projectAlong(flow: IntArray, start: Int, ticks: Int): Int {
+        var cell = start
+        var left = ticks
+        while (left > 0 && flow[cell] > 0) {
+            val cx = cell / 100; val cy = cell % 100
+            var next = -1; var nv = flow[cell]
+            for ((dx, dy) in DIRECTIONS) {
+                val x = cx + dx; val y = cy + dy
+                if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                val v = flow[x * 100 + y]
+                if (v in 0 until nv) { nv = v; next = x * 100 + y }
+            }
+            if (next < 0) break
+            cell = next; left--
+        }
+        return cell
+    }
+
+    /** Запас выхода из точки c при нашем прибытии туда через arrive тиков. Преследователь идёт ЗА НАМИ, к c, а не к
+     *  выходам: ближайший к c враг проецируется по полю к c на approachRate × arrive шагов, и от этой клетки считается
+     *  его путь к каждому другому выходу минус наш путь от c туда; лучший из них — запас. Фора «идёт к выходу
+     *  мгновенно» браковала всякую цель при идущем на нас враге, и армия сидела дома до боя в кармане (стенд m10
+     *  hunter, m8 army); без выхода точка — карман (матч 11). */
+    private fun exitMargin(ctx: Ctx, c: Position, arrive: Int): Int {
+        val ckey = c.x * 100 + c.y
+        val flowC = escapeFlows[ckey] ?: return Int.MIN_VALUE / 2
+        val start = escapeNearest[ckey] ?: return Int.MIN_VALUE / 2
+        val theirsC = escapeTheirs[ckey] ?: return Int.MIN_VALUE / 2
+        val pursuer = if (start < 0) -1 else projectAlong(flowC, start, minOf(theirsC, (approachRate * arrive).toInt()))
+        var best = Int.MIN_VALUE / 2
+        for (d in escapeCandidates(ctx)) {
+            if (d.x == c.x && d.y == c.y) continue
+            val flow = escapeFlows[d.x * 100 + d.y] ?: continue
+            val step = flowNear(flow, c)
+            if (step < 0) continue
+            val theirs = if (pursuer < 0) Int.MAX_VALUE / 4 else flowNear(flow, InfluenceMap.cell(pursuer / 100, pursuer % 100)).let { if (it < 0) Int.MAX_VALUE / 4 else it }
+            best = maxOf(best, theirs - step)
+        }
+        return best
+    }
+
+    /** Значение поля в клетке или, если она закрыта (чужой флаг — препятствие в полях потока), в лучшей соседней плюс
+     *  шаг: запас выхода читался в клетке чужого флага и был «нет пути» для всякого флага-цели (стенд m1 scouts). */
+    private fun flowNear(flow: IntArray, p: Position): Int {
+        val here = flow[p.x * 100 + p.y]
+        if (here >= 0) return here
+        var best = -1
+        for ((dx, dy) in DIRECTIONS) {
+            if (dx == 0 && dy == 0) continue
+            val x = p.x + dx; val y = p.y + dy
+            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+            val v = flow[x * 100 + y]
+            if (v >= 0 && (best < 0 || v + 1 < best)) best = v + 1
+        }
+        return best
+    }
+
+    /** Точка уклонения (см. EVADE_SAFE): из точек выхода — с наибольшим счётом (меньший из запасов прибытия и выхода);
+     *  где стоим — только пока счёт не меньше EVADE_SAFE; прежняя держится, пока не хуже лучшей на EVADE_HYSTERESIS;
+     *  null — карман, уходить некуда. */
     private fun evadePoint(ctx: Ctx, armed: List<Creep>, strikers: List<Creep>): Position? {
         val now = getTicks()
         val cur = evadeTarget
         val arrived = cur != null && getRange(ctx.ourCentroid, cur) <= EVADE_ARRIVED
         if (cur != null && !arrived && now - evadeEvaluatedAt < EVADE_EVAL_EVERY) return cur
         evadeEvaluatedAt = now
-        val corners = listOf(InfluenceMap.cell(3, 3), InfluenceMap.cell(3, 96), InfluenceMap.cell(96, 3), InfluenceMap.cell(96, 96))
-        val candidates = ctx.flags.map { it.pos } + listOf(ctx.home, ctx.enemyHome) + corners
+        // прибыли в другую точку — покинутая снова допустима (см. evadeLeft)
+        evadeLeft?.let { l -> if (arrived && cur != null && (cur.x != l.x || cur.y != l.y)) evadeLeft = null }
+        val left = evadeLeft
         var best: Position? = null
-        var bestMargin = Int.MIN_VALUE
-        var curMargin = Int.MIN_VALUE
-        for (c in candidates) {
-            if (getRange(c, ctx.ourCentroid) <= EVADE_ARRIVED) continue
-            val flow = flowTo(ctx, c)
+        var bestScore = Int.MIN_VALUE
+        var bestArrive = 0
+        var bestExit = 0
+        var curScore = Int.MIN_VALUE
+        for (c in escapeCandidates(ctx)) {
+            if (left != null && c.x == left.x && c.y == left.y) continue
+            val key = c.x * 100 + c.y
+            val flow = escapeFlows[key] ?: continue
+            val theirs = escapeTheirs[key] ?: continue
             val ourTicks = strikers.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
             if (ourTicks >= Int.MAX_VALUE / 4) continue
-            val theirTicks = armed.minOf { pathTicks(it, flow, it.x * 100 + it.y) }
-            val margin = theirTicks - ourTicks
-            if (cur != null && c.x == cur.x && c.y == cur.y) curMargin = margin
-            if (best == null || margin > bestMargin) { bestMargin = margin; best = c }
+            val exit = exitMargin(ctx, c, ourTicks)
+            val score = minOf(theirs - ourTicks, exit)
+            if (getRange(c, ctx.ourCentroid) <= EVADE_ARRIVED && score < EVADE_SAFE) { evadeLeft = c; continue }
+            if (cur != null && c.x == cur.x && c.y == cur.y) curScore = score
+            if (best == null || score > bestScore) { bestScore = score; best = c; bestArrive = theirs - ourTicks; bestExit = exit }
         }
-        if (cur != null && !arrived && curMargin >= bestMargin - EVADE_HYSTERESIS) return cur
-        if (best == null || bestMargin <= EVADE_MIN_MARGIN) { evadeTarget = null; return null }
+        if (cur != null && !arrived && curScore >= bestScore - EVADE_HYSTERESIS) return cur
+        if (best == null || bestScore <= EVADE_MIN_MARGIN) { evadeTarget = null; return null }
+        if (cur == null || cur.x != best.x || cur.y != best.y)
+            println("evade: t=$now to=(${best.x},${best.y}) score=$bestScore arrive=$bestArrive exit=$bestExit from=(${ctx.ourCentroid.x},${ctx.ourCentroid.y}) approach=${(approachRate * 100).toInt()}")
         evadeTarget = best
         return best
     }
 
     /** Пост: центр наших флагов (их и держим), без флагов — дом. */
-    private fun postPoint(ctx: Ctx): Position =
-        centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ctx.home
+    private fun postPoint(ctx: Ctx): Position = passableNear(centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ctx.home)
+
+    /** Ближайшая проходимая клетка: центр наших флагов попал в стенной блок, поле к нему было пустым (flow=-1), и
+     *  армия стояла на месте, пока враг подходил (матч 11, t=90–103). */
+    private fun passableNear(p: Position): Position {
+        if (!DistanceMap.isTerrainWall(p.x, p.y)) return p
+        for (r in 1..30) for (dx in -r..r) for (dy in -r..r) {
+            if (maxOf(abs(dx), abs(dy)) != r) continue
+            val x = p.x + dx; val y = p.y + dy
+            if (x in 0..99 && y in 0..99 && !DistanceMap.isTerrainWall(x, y)) return InfluenceMap.cell(x, y)
+        }
+        return p
+    }
 
     private fun runArmy(ctx: Ctx) {
         val army = ctx.army
@@ -995,18 +1124,30 @@ object PainAndGain {
         // sleeper при 0.83 это 10:0; «поймали — деремся до конца контакта» дало 2:11, «слабее — только отход» 2:6
         val contactFight = armedEnemies.isNotEmpty() && strikers.isNotEmpty() && contact && !(retreatFeasible && weakerContact)
         val annihilate = pushing || contactFight
-        // уклонение (см. EVADE_RANGE): армия, которую не добить, идёт на нас — уходим, пока не в контакте и есть куда
-        val evadeTo = if (armedEnemies.isNotEmpty() && strikers.isNotEmpty() && !annihilate && !contact && ours < theirs * pushRatio &&
-            armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }) evadePoint(ctx, armedEnemies, strikers) else null
+        // непобедимая армия (см. EVADE_SAFE): с ней не деремся — флаг-цель только с выходом, иначе уклонение на любой
+        // дистанции: держимся там, откуда есть выход, и уходим, когда она подходит
+        val cantPush = armedEnemies.isNotEmpty() && strikers.isNotEmpty() && ours < theirs * pushRatio
+        // темп сближения врага (0 — стоит, 1 — идёт на нас): запас выхода даёт ему фору только в этом темпе — фора «идёт
+        // к выходу мгновенно» отвергала всякую цель при враге, стоящем дома, и армия весь матч сидела дома (стенд m1 scouts)
+        run {
+            val ec = centroidOf(armedEnemies)
+            if (ec != null) { enemyDistHist.addLast(getRange(ec, ctx.ourCentroid)); while (enemyDistHist.size > APPROACH_WINDOW) enemyDistHist.removeFirst() } else enemyDistHist.clear()
+            approachRate = if (enemyDistHist.size >= 2) ((enemyDistHist.first() - enemyDistHist.last()).toDouble() / (enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
+        }
+        if (cantPush) refreshEscape(ctx, armedEnemies) else { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
+        // враг близко (см. EVADE_RANGE) — уклонение раньше целей; далеко — цели с выходом, иначе безопасная точка
+        val enemyClose = cantPush && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
+        val evadeFirst = if (enemyClose && !annihilate && !contact) evadePoint(ctx, armedEnemies, strikers) else null
+        val objective = if (annihilate || evadeFirst != null) null else chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, cantPush)
+        val evadeTo = evadeFirst ?: (if (cantPush && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
-        val retreat = armedEnemies.isNotEmpty() && !annihilate && !evade && enemyNear && weaker && retreatFeasible
-        val objective = if (annihilate || evade || retreat) null else chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio)
+        val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible
         val newPosture = when {
             annihilate -> Posture.ANNIHILATE
+            objective != null -> Posture.FLAG
             evade -> Posture.EVADE
             retreat -> Posture.RETREAT
-            objective != null -> Posture.FLAG
             else -> Posture.HOLD
         }
         objectiveFlagId = objective?.flag?.id
@@ -1018,7 +1159,7 @@ object PainAndGain {
             postureLogged = postureKey
             println("posture: $newPosture t=${getTicks()} our=${ours.toInt()} enemy=${theirs.toInt()} near=$enemyNear contact=$contact pushing=$pushing huntable=${huntable.size}/${combatEnemies.size} retreatFeasible=$retreatFeasible strikers=${strikers.size}/${army.size} " +
                 "obj=${objective?.let { "(${it.flag.pos.x},${it.flag.pos.y})${typeChar(it.flag.type)}${it.flag.score} pack=${it.pack.size} travel=${it.travel} v=${(it.value * 100).toInt()}" } ?: "-"} " +
-                "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} evadeTo=${evadeTo?.let { "(${it.x},${it.y})" } ?: "-"} post=(${post.x},${post.y}) behind=$behindOnScore/$behindTicks hunt=$huntingThreat")
+                "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} evadeTo=${evadeTo?.let { "(${it.x},${it.y})" } ?: "-"} approach=${(approachRate * 100).toInt()} post=(${post.x},${post.y}) behind=$behindOnScore/$behindTicks hunt=$huntingThreat")
         }
         posture = newPosture
 
@@ -1324,10 +1465,13 @@ object PainAndGain {
                 }
                 lagging
             }
-            // отход строем (см. RETREAT_GAP): ушедший вперёд ждёт самого отставшего вооружённого, пока сам вне огня
+            // отход строем (см. RETREAT_GAP): передняя половина ждёт отставшего от тела армии, пока сама вне огня
             val retreatHold = (posture == Posture.RETREAT || posture == Posture.EVADE) && !support && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
-                val rear = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }.maxOfOrNull { flow[it.x * 100 + it.y] } ?: -1
-                rear >= 0 && rear - myFlow > RETREAT_GAP
+                val flows = mobileArmy.filter { hasWeapon(it) }.map { flow[it.x * 100 + it.y] }.filter { it >= 0 }.sorted()
+                if (flows.isEmpty()) return@run false
+                val rear = flows.last()
+                val median = flows[flows.size / 2]
+                rear - median > RETREAT_GAP && myFlow <= median
             }
             // терпение (см. COHESION_PATIENCE): затянувшееся ожидание снимается до конца отставания
             if (cohesionHold) {

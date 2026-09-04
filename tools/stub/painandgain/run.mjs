@@ -16,6 +16,8 @@ import { readFileSync } from 'node:fs';
 const BOT = process.env.BOT || new URL('../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/painandgain/PainAndGain.export.mjs', import.meta.url).href;
 const MAP = process.env.MAP; // path to a 100-row DEBUG_MAP dump: '#' wall, '~' swamp, anything else plain
 const ticks = parseInt(process.argv[2] || '2000', 10);
+// TRACE=from-to prints every creep's position each tick in that range (see the loop below)
+const TRACE = process.env.TRACE ? process.env.TRACE.split('-').map((v) => parseInt(v, 10)) : null;
 const scenario = (process.argv[3] || 'none').split('+');
 const has = (s) => scenario.includes(s);
 
@@ -311,6 +313,11 @@ for (let t = 1; t <= ticks; t++) {
   enemyTick();
   step(Resource);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
+  if (TRACE && t >= TRACE[0] && t <= TRACE[1]) {
+    // per-tick positions: ours as x,y[/fatigue], the nearest enemy's range and position — for reading a chase
+    const near = (c) => c1.reduce((b, e) => (range(c, e) < range(c, b) ? e : b), c1[0]);
+    origLog(`trace t=${t} ours ${c0.map((c) => `${c.summary().replace(/\s.*/, '')}@${c.x},${c.y}${c.fatigue ? '/' + c.fatigue : ''}`).join(' ')} | enemy ${c1.map((c) => `${c.x},${c.y}`).join(' ')} | gap ${c0.length && c1.length ? Math.min(...c0.map((c) => range(c, near(c)))) : '-'}`);
+  }
   if (c0.length === 0) { ended = `our army destroyed at t=${world.tick - 1}`; break; }
   if (c1.length === 0) { ended = `enemy army destroyed at t=${world.tick - 1}`; break; }
   const remaining = world.ticksLimit - (world.tick - 1);
