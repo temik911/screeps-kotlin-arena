@@ -192,7 +192,7 @@ object EscortRun {
      *  при старте матча, поэтому пересобранный бандл попадает в игру только со следующего запуска, и по логу должно
      *  быть видно, какая сборка играла: вопрос «в игре какая версия?» иначе не решается ничем. Поднимать при каждом
      *  выкате в main (тег escort-run-vN). */
-    private const val BOT_VERSION = "v4"
+    private const val BOT_VERSION = "v5"
 
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
@@ -358,7 +358,8 @@ object EscortRun {
         val harvesters = active.filter { !isEscort(it) && it.body.any { p -> p.type == WORK } }
         val fighters = active.filter { !isEscort(it) && hasWeapon(it) }
         val healers = active.filter { !isEscort(it) && !hasWeapon(it) && hasHeal(it) }
-        val pullers = active.filter { !isEscort(it) && it.body.all { p -> p.type == MOVE } }.sortedWith(compareBy({ it.id.length }, { it.id }))
+        // блокировщик тоже из одних MOVE, но он не тягач: его место на клетке вражеского флага, а не в цепи поезда
+        val pullers = active.filter { !isEscort(it) && it.id !in blockerIds && it.body.all { p -> p.type == MOVE } }.sortedWith(compareBy({ it.id.length }, { it.id }))
         val husks = active.filter { !isEscort(it) && it !in harvesters && it !in fighters && it !in healers && it !in pullers }
 
         val immobile = active.filter { !canMove(it) && !isEscort(it) }
@@ -383,6 +384,9 @@ object EscortRun {
             harvesters, fighters, healers, pullers, husks, blocked, blockedSet, enemyPositions, occupantAt, escortFlow, enemyEscortFlow, toEscortFlow)
 
         measureRegen(ctx)
+        // чистится ЗДЕСЬ, а не после заказа: контекст собран до runSpawn, и крип, рождённый в этом тике, в myCreeps
+        // ещё не попал — очистка в том же тике стирала только что назначенного блокировщика, и бот покупал второго
+        blockerIds.retainAll { id -> myCreeps.any { it.id == id } }
         if (firstEnemySeenTick < 0 && enemyAll.any { !isEscort(it) }) firstEnemySeenTick = now
 
         runSpawn(ctx)
@@ -1019,6 +1023,35 @@ object EscortRun {
             }
         }
 
+        // гонка проиграна, скорость куплена — занимаем клетку ИХ флага: пятьдесят энергии не дают их эскорту
+        // финишировать вовсе, пока они не построят бойца и не убьют блокировщика. Это самый дешёвый способ сорвать
+        // чужую гонку, и три матча подряд она решалась несколькими тиками
+        if (raceLost(ctx) && ctx.pullers.isNotEmpty() && ctx.enemyFlag != null && !flagBlocked(ctx) &&
+            ctx.myCreeps.none { it.id in blockerIds }) {
+            val enemyArrival = enemyEscortArrivalObserved(ctx)
+            val body = blockerBody()
+            // путь считается по ПОЛЮ от клетки, куда крип родится: клетка самого спавна в поле непроходима, а прямая
+            // до их флага на этой карте вдвое короче настоящего пути через центральные коридоры
+            val blockFlow = flowTo("enemyFlag", ctx.enemyFlag, ctx.blocked, 1, ttl = 10)
+            val fromCell = freeNeighbourCell(blockFlow, spawn.x, spawn.y)
+            val walk = if (fromCell < 0) -1 else blockFlow[fromCell]
+            val ready = if (walk < 0) Int.MAX_VALUE / 4 else ticksToAccumulate(bodyCost(body) - energy, inc) + spawnTicks(body) + walk
+            if (ready < enemyArrival) {
+                if (energy >= bodyCost(body)) {
+                    val r = spawn.spawnCreep(body)
+                    if (r.`object` != null) {
+                        spawnedLastTick = true
+                        r.`object`?.let { blockerIds.add(it.id) }
+                        println("spawn t=$now: blocker ${summaryOf(body)} — race lost (ours ${ourArrival(ctx)} vs theirs $enemyArrival), their flag in $walk steps, ready in $ready")
+                        return
+                    }
+                } else {
+                    if (DEBUG_LOG && now % LOG_EVERY == 0) println("spawn t=$now: saving blocker e=$energy/${bodyCost(body)} ready=$ready enemyArrival=$enemyArrival")
+                    return
+                }
+            }
+        }
+
         // гонка проиграна по расчёту, и план выше не нашёл, чем её ускорить, — деньги идут в перехватчика: тело,
         // которое
         // успевает дойти до их поезда и убить ТЯГАЧА (тысяча хитов, без оружия) прежде, чем их эскорт придёт на флаг.
@@ -1362,8 +1395,16 @@ object EscortRun {
     /** Боец без оружия или лекарь без лечения: домой, к спавну, чтобы не занимать клетки конвоя. */
     private fun runHusks(ctx: Ctx) {
         val home = ctx.mySpawn ?: return
+        val enemyFlag = ctx.enemyFlag
         for (h in ctx.husks) {
             if (!canMove(h)) continue
+            if (h.id in blockerIds && enemyFlag != null) {
+                if (h.x == enemyFlag.x && h.y == enemyFlag.y) continue // на месте — стоим намертво
+                val flow = flowTo("enemyFlag", enemyFlag, ctx.blocked, 1, ttl = 10)
+                val step = DistanceMap.flowStep(flow, h.x, h.y, 0, ctx.occupantAt.keys, ctx.enemyPositions)
+                if (step != null) TrafficManager.request(h, step, HUSK_PRIORITY)
+                continue
+            }
             if (getRange(h, home) <= 2) continue
             stepTo(h, home, 2, HUSK_PRIORITY, ctx, swampRatio(h))
         }
@@ -1526,14 +1567,27 @@ object EscortRun {
         return routeTicks(target, flow, trainMoves(target, enemyPullers))
     }
 
-    // ⚠️ ОТЛОЖЕНО, не ограничение: клетку вражеского флага можно ЗАНЯТЬ своим крипом — победа засчитывается эскорту,
-    // вставшему на флаг, а на занятую клетку не встать. Стоит это один MOVE (50 энергии) против четырёхсот за
-    // перехватчика и пяти тысяч хитов их эскорта. Механику подтвердил стенд: тягач соперника сам встал на свой флаг и
-    // запер собственный эскорт в двух клетках от победы. Реализация снята из этой версии, потому что блокировщик идёт
-    // до центра тем же узким коридором, что и наш поезд, встаёт на клетку, куда шагает голова, и запирает СВОЙ эскорт
-    // (стенд racer: эскорт простоял в центре сто тиков). Уступка дороги через traffic-приоритет и запрет шага в клетки
-    // цепи проблему не сняли — поезд ходит прямыми интентами мимо TrafficManager и просто ждёт занятую клетку. Чтобы
-    // вернуть приём, блокировщик должен идти маршрутом, не пересекающимся с поездом, либо выходить после его прохода.
+    /**
+     * Блокировщик: наш крип, стоящий НА клетке вражеского флага. Победа засчитывается эскорту, вставшему на флаг, а на
+     * занятую клетку не встать — механику подтвердил стенд, где тягач соперника сам заперся на своём флаге. Стоит это
+     * один MOVE (50 энергии) против четырёхсот за перехватчика и пяти тысяч хитов их эскорта.
+     *
+     * Покупается ТОЛЬКО после того, как куплена скорость (есть хотя бы один тягач), и только при проигранной гонке:
+     * пятьдесят энергии на старте — это полсотни тиков задержки тягача при доходе в единицу, то есть двадцать пять
+     * клеток эскорта. Порядок важен и по другой причине: пеший крип из одного MOVE идёт клетку в тик, вдвое быстрее
+     * поезда, и, выйдя следом, он обгоняет его и уходит вперёд — а выпущенный до поезда он делит с ним узкий коридор и
+     * запирает собственный эскорт (так первая попытка простояла в центре карты сто тиков).
+     */
+    private fun blockerBody(): Array<BodyPartType> = arrayOf(MOVE)
+
+    /** На клетке вражеского флага уже стоит наш крип. */
+    private fun flagBlocked(ctx: Ctx): Boolean {
+        val flag = ctx.enemyFlag ?: return false
+        return ctx.active.any { it.x == flag.x && it.y == flag.y }
+    }
+
+    /** Крипы, посланные занять вражеский флаг. */
+    private val blockerIds = HashSet<String>()
 
     /** Тягачи ВРАГА: тела из одних MOVE рядом с его эскортом — они и держат его скорость. */
     private fun enemyPullers(ctx: Ctx): List<Creep> {
