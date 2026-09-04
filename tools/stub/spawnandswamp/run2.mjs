@@ -14,7 +14,7 @@ const my=new StructureSpawn(94,49,true,1000); const en=new StructureSpawn(5,50,f
 for(const [cx,cy] of [[88,49],[11,50]]){ new StructureContainer(cx,cy,5000); for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx||dy) new StructureWall(cx+dx,cy+dy,10000); } }
 new StructureContainer(98,1,2500); new StructureContainer(98,98,2500); new StructureContainer(1,1,2500); new StructureContainer(1,98,2500);
 const TICKS=parseInt(process.argv[2]||'900'); const MODES=(process.argv[3]||'none').split('+');
-const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream');
+const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress');
 // STREAM: противник матча 15 — с 280-го тика попеременно M3R3 и M4H2 каждые 40 тиков, каждый идёт к нашему спавну сразу,
 // без сбора в четвёрки (правила движения и стрельбы — как у HEALBALL); подкрепление тянется потоком за первыми
 // RUSH: противник матча 14 — два M5R1 с первого тика через свой спавн, третий на 200-м; идут к нашему спавну, встают в трёх
@@ -26,8 +26,18 @@ let rushQueue = RUSH ? [[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK],[C.
 let harassQueue = HARASS ? [[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK],[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK]] : [];
 // TOWER: башня врага вплотную к его спавну и четыре носильщика M1C1, берущие энергию из спавна врага (матч 11:
 // одна кормленная башня положила четыре M8R4 двух волн, бот её не видел). Башня бьёт ближайшего нашего в 20 клетках.
-let tw=null; if(TOWER){ tw=new StructureTower(7,50,false); tw.store.energy=C.TOWER_CAPACITY; }
-if(TOWER||TOWERSITE){ for(let i=0;i<4;i++){ const f=new Creep(6,47+i,false,[C.MOVE,C.CARRY]); f.feeder=true; } }
+// FORTRESS: ДВЕ кормленные башни у чужого спавна и восемь носильщиков — осада по симуляции долго
+// «проиграна», и бот без срока выхода досиживает матч дома с растущей армией (ничья матча 18).
+// Поток идёт до 1150-го и иссякает — как в матче 18: дальше враг не приходит, наша армия растёт дома,
+// а осада по симуляции всё ещё «проиграна» из-за башен. Версия без срока выхода досиживает до лимита
+const towers=[]; if(TOWER){ towers.push(new StructureTower(7,50,false)); }
+if(FORTRESS){ towers.push(new StructureTower(7,50,false)); towers.push(new StructureTower(6,52,false)); towers.push(new StructureTower(6,48,false)); }
+for(const t of towers) t.store.energy=C.TOWER_CAPACITY;
+let tw=towers[0]||null;
+// носильщики стоят там же, где стояли в TOWER (6,47..50) — сдвиг базы менял мир старых сценариев;
+// крепости добавляются свои, ниже по столбцу
+if(TOWER||TOWERSITE||FORTRESS){ for(let i=0;i<4;i++){ const f=new Creep(6,47+i,false,[C.MOVE,C.CARRY]); f.feeder=true; } }
+if(FORTRESS){ for(let i=0;i<4;i++){ const f=new Creep(5,47+i,false,[C.MOVE,C.CARRY]); f.feeder=true; } }
 // TOWERSITE: площадка башни у спавна врага со 150-го тика, строится по 5 в тик одним M1C1W1 (матч 13: волна ушла
 // при 945/1250 и была отозвана, когда башня встала). Готовая башня — как в TOWER.
 let site=null, builder=null; if(TOWERSITE){ builder=new Creep(6,50,false,[C.MOVE,C.CARRY,C.WORK]); builder.builder=true; }
@@ -55,10 +65,11 @@ for(let t=0;t<TICKS;t++){
   if(site && site.exists){ if(builder&&builder.exists&&range(builder,site)<=3){ site.progress+=C.BUILD_POWER; } if(site.progress>=site.progressTotal){ site.exists=false; tw=new StructureTower(7,50,false); tw.store.energy=C.TOWER_CAPACITY; } }
   if(HEALBALL && t>=280 && (t-280)%60===0){ hbQueue.push(hbBody(hbCount)); }
   if(STREAM && t>=280 && (t-280)%40===0){ hbQueue.push(hbBody(hbCount)); }
+  if(FORTRESS && t>=280 && t<=Number(process.env.FORTRESS_UNTIL||1150) && (t-280)%40===0){ hbQueue.push(hbBody(hbCount)); }
   // HOVER: шар матча 13 у наших ворот — четыре M3R3 и четыре M4H2 ставятся в восьми клетках от нашего спавна на 500-м тике
   // и ходят по правилам HEALBALL (6 клеток от спавна, отход от бойца в двух, выстрел по ближайшему в трёх, лечение)
   if(HOVER && t===500){ for(let i=0;i<8;i++){ const r=new Creep(86+(i%4),40+Math.floor(i/4),false,hbBody(i)); r.hb=99; } }
-  if((HEALBALL||STREAM) && hbQueue.length && !en.spawning){ const r=en.spawnCreep(hbQueue[0]); if(r.object){ r.object.hb=STREAM?hbCount:Math.floor(hbCount/4); hbCount++; hbQueue.shift(); } }
+  if((HEALBALL||STREAM||FORTRESS) && hbQueue.length && !en.spawning){ const r=en.spawnCreep(hbQueue[0]); if(r.object){ r.object.hb=(STREAM||FORTRESS)?hbCount:Math.floor(hbCount/4); hbCount++; hbQueue.shift(); } }
   if(HARASS && harassQueue.length && !en.spawning && t>=1){ const r=en.spawnCreep(harassQueue[0]); if(r.object){ r.object.harasser=true; harassQueue.shift(); } }
   { const t0=performance.now(); loop(); const dt=performance.now()-t0; loopTotal+=dt; if(dt>loopMax) loopMax=dt; }
   if(HARASS){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
@@ -73,16 +84,18 @@ for(let t=0;t<TICKS;t++){
         if(best&&(best.x!==o.x||best.y!==o.y)) world.intents.push({creep:o,x:best.x,y:best.y}); }
       else { const haul=mine.filter(c=>c.body.some(p=>p.type===C.CARRY)).sort((a,b)=>range(a,o)-range(b,o))[0];
         if(haul){ if(range(haul,o)>3) o.moveTo(haul); } else if(range(o,my)>3) o.moveTo(my); } } }
-  if(tw && tw.exists){
-    if(tw.cooldown===0 && tw.store.energy>=C.TOWER_ENERGY_COST){ const tg=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning&&range(q,tw)<=C.TOWER_RANGE).sort((a,b)=>range(a,tw)-range(b,tw))[0]; if(tg) tw.attack(tg); }
-    for(const o of world.objects){ if(o instanceof Creep && !o.my && o.feeder && o.exists){
+  { const live=towers.filter(t=>t&&t.exists);
+    for(const t of live){
+      if(t.cooldown===0 && t.store.energy>=C.TOWER_ENERGY_COST){ const tg=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning&&range(q,t)<=C.TOWER_RANGE).sort((a,b)=>range(a,t)-range(b,t))[0]; if(tg) t.attack(tg); } }
+    if(live.length) for(const o of world.objects){ if(o instanceof Creep && !o.my && o.feeder && o.exists){
+      const need=live.filter(t=>t.store.energy<C.TOWER_CAPACITY).sort((a,b)=>a.store.energy-b.store.energy)[0]||live[0];
       if(o.store.energy<C.TOWER_ENERGY_COST){ if(range(o,en)<=1){ const a=Math.min(o.store.getFreeCapacity(), en.store.energy); en.store.energy-=a; o.store.energy+=a; } else o.moveTo(en); }
-      else { if(range(o,tw)<=1){ if(tw.store.energy<C.TOWER_ENERGY_COST) o.transfer(tw); } else o.moveTo(tw); } } } }
-  if(HEALBALL||HOVER||STREAM){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
+      else { if(range(o,need)<=1){ if(need.store.energy<C.TOWER_CAPACITY) o.transfer(need); } else o.moveTo(need); } } } }
+  if(HEALBALL||HOVER||STREAM||FORTRESS){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
     const fighters=mine.filter(c=>c.body.some(p=>(p.type===C.RANGED_ATTACK||p.type===C.ATTACK)&&p.hits>0));
     const members=world.objects.filter(q=>q instanceof Creep&&!q.my&&q.hb!==undefined&&q.exists&&!q.spawning);
     const R=(a,b)=>Math.max(Math.abs(a.x-b.x),Math.abs(a.y-b.y));
-    for(const o of members){ const grp=members.filter(m=>m.hb===o.hb); const complete=STREAM || grp.length>=4 || o.hb<Math.floor(hbCount/4);
+    for(const o of members){ const grp=members.filter(m=>m.hb===o.hb); const complete=STREAM || FORTRESS || grp.length>=4 || o.hb<Math.floor(hbCount/4);
       if(o.parts(C.HEAL)>0){ const hurt=grp.filter(m=>m.hits<m.hitsMax&&R(m,o)<=3).sort((a,b)=>(a.hitsMax-a.hits)-(b.hitsMax-b.hits)).reverse()[0];
         if(hurt){ if(R(hurt,o)<=1) o.heal(hurt); else o.rangedHeal(hurt); } }
       if(o.parts(C.RANGED_ATTACK)>0){ const inR=mine.filter(c=>R(c,o)<=3); if(inR.length){ if(inR.filter(c=>R(c,o)<=1).length>=2) o.rangedMassAttack(); else o.rangedAttack(inR.sort((a,b)=>a.hits-b.hits)[0]); } else if(R(o,my)<=3) o.rangedAttack(my); }
@@ -111,7 +124,7 @@ for(let t=0;t<TICKS;t++){
       if(o.rangedAttack(tgt)!==0){ const dx=Math.sign(my.x-o.x), dy=Math.sign(my.y-o.y); const nx=o.x+dx, ny=o.y+dy; if(world.terrain[nx*100+ny]!==1) o.moveTo(my); else o.moveTo({x:o.x, y:o.y+(dy||1)}); } } }
   if(t%50===0) lines.push('ENEMIES t='+t+': '+(tw?'TOWER h='+tw.hits+' e='+tw.store.energy+' cd='+tw.cooldown+' exists='+tw.exists+' | ':'')+(site&&site.exists?'SITE '+site.progress+'/'+site.progressTotal+' | ':'')+world.objects.filter(o=>o instanceof Creep&&!o.my).map(c=>'('+c.x+','+c.y+')h='+c.hits).join(' '));
   if(t>=286&&t<=298){ lines.push('INTENTS t='+t+': '+world.intents.map(i=>'h'+i.creep.id+'('+i.creep.x+','+i.creep.y+')->('+i.x+','+i.y+')').join(' ')+' | creeps: '+world.objects.filter(o=>o instanceof Creep&&o.my).map(c=>c.id+'('+c.x+','+c.y+')f='+c.fatigue).join(' ')); }
-  my.store.energy=Math.min(1000,my.store.energy+1); en.store.energy=Math.min(1000,en.store.energy+((HEALBALL||STREAM)?15:1)); // HEALBALL: у врага матча 13 десять хаулеров кормили спавн и башню
+  my.store.energy=Math.min(1000,my.store.energy+1); en.store.energy=Math.min(1000,en.store.energy+((HEALBALL||STREAM||FORTRESS)?15:1)); // HEALBALL: у врага матча 13 десять хаулеров кормили спавн и башню
   endTick();
   if(!my.exists){ origLog('MY SPAWN DESTROYED at',t); break; }
   if(!en.exists){ origLog('ENEMY SPAWN DESTROYED at',t); break; }

@@ -1633,22 +1633,22 @@ object SpawnAndSwamp {
         val ourHalfCombat = combatEnemies.filter { DistanceMap.inOurHalf(it.x, it.y) }
         val ourHalfSoft = enemyCreeps.filter { c -> combatEnemies.none { it.id == c.id } && DistanceMap.inOurHalf(c.x, c.y) }
 
-        // ---- постура: оборона / наступление (гистерезис + последний звонок до ничьей) ----
-        val dps = fighters.sumOf { InfluenceMap.profileOf(it).ranged }
+        // ---- постура: оборона / наступление (гистерезис + срок выхода до ничьей) ----
         // в поле — полноскоростные стрелки (см. fullSpeed): покалеченный ходит вдвое-втрое медленнее
         // и либо тормозит волну, либо отстаёт и гибнет один; дома он полноценный защитник
         val strikers = fighters.filter { fullSpeed(it) && hasRanged(it) }
-        var lastCall = false
+        // ПОДХОД — по ближайшему к цели стрелку (центр масс бывает на стене, где поле = -1): по нему
+        // считается горизонт производства врага, то есть когда осада НАЧНЁТСЯ. Срок, до которого волна
+        // обязана выйти, считается ниже и по всей группе — это разные величины, и прежде их путали
+        // (условие dps > 0 то же, что и было: пока стрелять некому, подход не считается)
+        val dps = fighters.sumOf { InfluenceMap.profileOf(it).ranged }
         var travel = Int.MAX_VALUE / 2
         if (enemySpawn != null && dps > 0.0) {
-            val spawnFlow = flowTo(ctx, enemySpawn)
-            // марш — по ближайшему к цели стрелку волны (центр масс бывает на стене, где поле = -1)
+            val flowToEnemy = flowTo(ctx, enemySpawn)
             travel = strikers.ifEmpty { fighters }
-                .minOf { spawnFlow[it.x * 100 + it.y].let { d -> if (d < 0) Int.MAX_VALUE / 2 else d } }
-            val kill = ((enemySpawn.hits ?: SPAWN_HITS) / dps).toInt()
-            val remaining = arenaInfo.ticksLimit - getTicks()
-            lastCall = remaining <= travel + kill + LATE_MARGIN
+                .minOf { flowToEnemy[it.x * 100 + it.y].let { d -> if (d < 0) Int.MAX_VALUE / 2 else d } }
         }
+        val remaining = arenaInfo.ticksLimit - getTicks()
         // волна собирается ДОМА: полноскоростные стрелки не в волне и в зоне тревоги от спавна. Боец,
         // ушедший на охоту, в волну не зачисляется — в матче 6 волна из двух охотников на севере и
         // новорождённого на юге ушла тремя маршрутами и полегла по одному
@@ -1713,6 +1713,29 @@ object SpawnAndSwamp {
         // осада фронтом ВМЕСТЕ с группой поста: когда волна держит кромку, подкрепление уходит к ней, если
         // сумма выигрывает (с запасом на выход, как siegeStart)
         val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, spawnFlow, extraShots = 1) else SIEGE_LOSE
+        // СРОК ВЫХОДА: штурм успевает, только если группа ещё дойдёт и добьёт до лимита тиков. Ход
+        // группы — по САМОМУ дальнему её бойцу (идут вместе, осада начинается с приходом последнего),
+        // время осады — из её же симуляции. Прежний «последний звонок» брал ход БЛИЖАЙШЕГО бойца и урон
+        // ВСЕЙ армии, включая стоящих дома: в матче 18 он сработал на 1990-м, когда авангард стоял в 51
+        // клетке, а масса армии — в сотне, и матч кончился ничьей при нетронутых 3000 хитов чужого спавна
+        fun budget(travelTicks: Int, siege: SiegeResult) = travelTicks.toLong() + minOf(siege.ticks, SIEGE_LIMIT)
+        val startTravel = travelOf(staging, spawnFlow)
+        val frontTravel = travelOf(waveFront, spawnFlow)
+        val never = Long.MAX_VALUE / 4
+        val goNeed = minOf(
+            if (staging.isEmpty()) never else budget(startTravel, siegeStart),
+            if (waveFront.isEmpty()) never else budget(frontTravel, siegeGo))
+        val lastCall = goNeed < never && remaining <= goNeed + LATE_MARGIN
+        // Может ли враг ещё отнять у нас спавн за остаток: его ближайший боец доходит за enemyApproach и
+        // снимает 3000 хитов своим уроном (рождённый позже карту уже не пересечёт). Пока может — армию
+        // из дома не выгребаем даже в конце: положенная под башню, она обменяла бы ничью на поражение
+        // (матч 9). Не может — ничья и поражение стоят одного, и терять нечего
+        val enemyReach = combatEnemies.minOfOrNull {
+            ctx.enemyApproach[it.x * 100 + it.y].let { d -> if (d < 0) Int.MAX_VALUE / 4 else d }
+        } ?: Int.MAX_VALUE / 4
+        val enemyDps = combatEnemies.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+        val homeAtRisk = enemyDps > 0.0 &&
+            enemyReach + (mySpawn.hits ?: SPAWN_HITS) / enemyDps <= remaining.toDouble()
         val notWeaker = ourOffense >= enemyPower
         // тревога отменяет наступление, только если ДОМАШНИЙ гарнизон с угрозой не справится:
         // разведчик врага у северного выхода отзывал всю армию с южного (02.09, трижды). Гарнизон —
@@ -1766,7 +1789,7 @@ object SpawnAndSwamp {
             (spawnUnderFire || alarm && !guardHolds) && !pushWinsRace(ctx, ourHalfCombat, siegeGo) -> false
             // последний звонок — тоже только с выигрышной осадой: армия, положенная под башню в конце,
             // не приносит ничьей, а дома она её держит
-            lastCall && notWeaker && siegeGo.win -> true
+            lastCall && notWeaker && (siegeGo.win || siegeStart.win || !homeAtRisk) -> true
             strongerNow -> true
             // ушедшую волну не отзываем из-за запаса «ещё одна стычка»: у ворот врага он ей не нужен
             pushing && siegeGo.win -> true
@@ -1783,9 +1806,17 @@ object SpawnAndSwamp {
         // входили снова по одному (стенд tower+stream: спавн врага 300 тиков стоял на 668 хитах)
         val vanguard = waveFront.minByOrNull { spawnFlow[it.x * 100 + it.y] }
         val frontCovered = vanguard != null && coveringTowers(ctx, listOf(vanguard), 0).isNotEmpty()
-        siegeHold = newPushing && !siegeGo.win && waveMembers.isNotEmpty() && !frontCovered
+        // …и только пока подкрепление ЕЩЁ УСПЕВАЕТ дойти и добить вместе с фронтом: держать кромку ради
+        // группы, которая не придёт до конца матча, — это ничья по расписанию (матч 18: hold=true с
+        // 1800-го при двухстах тиках в запасе, подкрепление уходило по одному бойцу и не успело). Ход
+        // подкрепления — от поста, а если поста нет, от спавна: следующий боец родится там
+        val homeTravel = if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
+        else flowNear(spawnFlow, mySpawn.x, mySpawn.y).let { if (it < 0) Int.MAX_VALUE / 4 else spawnFlow[it] }
+        val reinforceTravel = if (staging.isNotEmpty()) startTravel else homeTravel
+        val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN
+        siegeHold = newPushing && !siegeGo.win && waveMembers.isNotEmpty() && !frontCovered && holdInTime
         if (DEBUG_LOG && (newPushing != pushing || getTicks() % (LOG_EVERY * 10) == 0)) {
-            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin hold=$siegeHold front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
+            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
         }
         pushing = newPushing
         lastPushReason = when {
@@ -1803,7 +1834,13 @@ object SpawnAndSwamp {
             // гибнет в поле, а дома он и защита спавна, и пролом; обездвиженный никуда не идёт
             // группа уходит, только если сама выигрывает осаду (см. siegeStart), или по последнему звонку
             // …или к волне, держащей кромку, когда вместе с ней осада выигрывается (см. siegeJoin)
-            if (staging.isNotEmpty() && (strongerNow || lastCall || (siegeHold && siegeJoin.win && guardHolds))) {
+            // на последнем звонке уходят только те, кто ещё УСПЕЕТ дойти, и уходят группой: боец,
+            // отправленный в одиночку за сорок тиков до конца, не доходит никуда, а дома он защитник
+            // (матч 18: волны 4-6 состояли из одного бойца каждая). Одиночка уходит, только если впереди
+            // уже стоит волна, к которой он идёт
+            val lastCallGo = lastCall && remaining > startTravel + LATE_MARGIN / 2 &&
+                (staging.size >= PUSH_MIN_FIGHTERS || waveMembers.isNotEmpty())
+            if (staging.isNotEmpty() && (strongerNow || lastCallGo || (siegeHold && siegeJoin.win && guardHolds))) {
                 waveCounter++
                 staging.forEach { wave[it.id] = waveCounter }
                 if (DEBUG_LOG) println("wave $waveCounter departs: ${staging.size} fighters t=${getTicks()}")
@@ -2548,6 +2585,13 @@ object SpawnAndSwamp {
             ticks += periodAt(creep, cell / 100, cell % 100)
         }
         return ticks
+    }
+
+    /** Тики хода ГРУППЫ до цели по полю потока — по САМОМУ дальнему её бойцу: группа идёт вместе, и
+     *  осада начинается, когда дошёл последний. Пустая группа или пустое поле — «никогда». */
+    private fun travelOf(group: List<Creep>, flow: IntArray): Int {
+        if (group.isEmpty() || flow.isEmpty()) return Int.MAX_VALUE / 4
+        return group.maxOf { flow[it.x * 100 + it.y].let { d -> if (d < 0) Int.MAX_VALUE / 4 else d } }
     }
 
     /** Ближайшая к клетке проходимая клетка поля (сама клетка структуры в поле −1). */
