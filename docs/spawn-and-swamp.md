@@ -1,5 +1,9 @@
 # Spawn and Swamp (season 4) — the bot's rules, history and tooling
 
+The bot names itself in the first line of every match log — `hello season4 spawn-and-swamp vN` plus a `tuning:` line with the
+thresholds that decided that match. `BOT_VERSION` in `SpawnAndSwamp.kt` is that N; it goes up with every behaviour change that
+reaches a live match, and the landing tag `spawn-and-swamp-vN` matches it.
+
 Owner: the Spawn and Swamp session. Code: `starter/src/jsMain/kotlin/season4/spawnandswamp/`. Only this bot's session edits this file (see the parallel-sessions rules in `CLAUDE.md`).
 
 ## Measured rules and design

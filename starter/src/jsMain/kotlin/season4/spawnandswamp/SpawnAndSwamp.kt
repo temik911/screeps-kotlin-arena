@@ -105,6 +105,10 @@ object SpawnAndSwamp {
     private const val PUSH_MIN_FIGHTERS = 2
 
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
+    /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
+     *  Растёт на каждую правку поведения, которая уходит в живой матч. */
+    private const val BOT_VERSION = 21
+
     private const val LATE_MARGIN = 60
 
     /** Радиус тревоги у спавна (в тиках пути врага): боевой враг ближе — спавним бойца немедленно. */
@@ -417,8 +421,14 @@ object SpawnAndSwamp {
         if (!greeted) {
             greeted = true
             println(
-                "hello season4 spawn-and-swamp: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
+                "hello season4 spawn-and-swamp v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
                     "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick}"
+            )
+            // подпись поведения: по ней лог матча читается без диффа — какие пороги решали в ЭТОМ матче
+            println(
+                "tuning: push=$PUSH_RATIO/$PUSH_RELEASE_RATIO defend=$DEFEND_MARGIN late=$LATE_MARGIN " +
+                    "siegeLimit=$SIEGE_LIMIT cohesion=$COHESION_GAP engage=$ENGAGE_RANGE alarm=$SPAWN_ALARM_TICKS " +
+                    "haulers=$HAULER_BLOCKS_MIN..$HAULER_BLOCKS_MAX/$MAX_HAULERS rounds=$FLEET_ROUNDS lead=$HAULER_LEAD"
             )
             println(
                 "constants: SPAWN_HITS=$SPAWN_HITS SPAWN_CAP=$SPAWN_ENERGY_CAPACITY CARRY=$CARRY_CAPACITY " +
