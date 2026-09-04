@@ -1,0 +1,4 @@
+{ "name": "game", "type": "module",
+  "exports": { ".": "./index.mjs", "./utils": "./utils.mjs", "./constants": "./constants.mjs",
+    "./path-finder": "./path-finder.mjs", "./visual": "./visual.mjs",
+    "./prototypes": "./prototypes/index.mjs", "./prototypes/*": "./prototypes/*.mjs" } }

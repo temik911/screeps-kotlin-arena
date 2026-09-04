@@ -1,0 +1,1 @@
+export class Visual { constructor(){ this._n=0; } rect(){this._n++;return this;} text(){this._n++;return this;} poly(){return this;} circle(){return this;} line(){return this;} clear(){return this;} size(){ return this._n*20; } }

@@ -8,3 +8,6 @@ arenas/**/package-lock.json
 arenas/**/typings
 .DS_Store
 **/.DS_Store
+# per-session tooling
+.claude/worktrees/
+tools/stub/**/out/
