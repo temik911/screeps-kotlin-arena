@@ -605,7 +605,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v61"
+    private const val BOT_VERSION = "v62"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2249,7 +2249,13 @@ object PainAndGain {
             // 16 лучше. Прилипший к стрелку мили — дело нашего мили (см. poker в engage), не строя
             // стоячий бой по центрам армий (v47): контакт держится дольше окна терпения, центры вооружённых армий не сближаются,
             // враг не отходит — расстановка; атака (центры сближаются) и погоня (враг отходит) — ряды
-            val standingNow = contact && centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating
+            // ...и это ЛИНИЯ, а не рубка (v62): его вооружённый мили не ближе MELEE_HOLD_RANGE + 1 к нашим вооружённым. Матч 150
+            // (боевой けろびー, армия стёрта к 180-му, форма матча 140): контакт на 70-м, центры не сближались (его мили среди наших),
+            // «стоячий бой» → расстановка ставила стрелков колонной x=81 в 1–3 клетках от его стрелков, к 80-му двое наших стрелков
+            // стояли уже за его линией на клетках, равноудалённых от обоих центров (v61 их не режет); ярусы «подальше от его мили» в
+            // рубке ведут сквозь его строй. Прижим (standoffNow) это условие и так несёт; стоячий бой по центрам (v47) — нет
+            val meleeBrawl = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && mobileArmy.any { hasWeapon(it) && getRange(e, it) <= MELEE_HOLD_RANGE + 1 } }
+            val standingNow = contact && centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating && !meleeBrawl
             val planNow = USE_PLAN && (standoffNow || standingNow)
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget)
