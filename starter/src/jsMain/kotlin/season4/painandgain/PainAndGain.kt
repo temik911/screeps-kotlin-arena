@@ -579,7 +579,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v52c"
+    private const val BOT_VERSION = "v53b"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1580,18 +1580,26 @@ object PainAndGain {
         // положительно; из допустимых — то, где его центр после шага дальше всего
         val margin = minOf(EVADE_RANGE, oc.x, oc.y, 99 - oc.x, 99 - oc.y).coerceAtLeast(0)
         val ax = oc.x - ec.x; val ay = oc.y - ec.y
-        var best: Position? = null
-        var bestD = -1
-        for ((dx, dy) in DIRECTIONS) {
-            if (dx == 0 && dy == 0) continue
-            if (dx * ax + dy * ay <= 0) continue
-            val x = oc.x + dx * EVADE_RANGE; val y = oc.y + dy * EVADE_RANGE
-            if (x < margin || y < margin || x > 99 - margin || y > 99 - margin) continue
-            val c = passableNear(InfluenceMap.cell(x, y))
-            val d = getRange(c, ec)
-            if (d > bestD) { bestD = d; best = c }
+        // ВБОК, когда «прочь» некуда (v53): из домашнего угла каждое направление прочь от его центра уводит за карту — матч 110,
+        // бросок боевого けろびー с 3-го тика, уклонение из угла в угол, контакт у (79,81)–(93,93), армия стёрта к 150-му; тот же
+        // бой в открытом поле выигран пять раз. Направление допустимо, если конец шага не ближе EVADE_RANGE к его центру:
+        // сначала уводящие (скалярное произведение > 0), затем боковые; бой, если придёт, придёт в поле
+        fun pick(away: Boolean): Position? {
+            var best: Position? = null
+            var bestD = -1
+            for ((dx, dy) in DIRECTIONS) {
+                if (dx == 0 && dy == 0) continue
+                val dot = dx * ax + dy * ay
+                if (if (away) dot <= 0 else dot < 0) continue
+                val x = oc.x + dx * EVADE_RANGE; val y = oc.y + dy * EVADE_RANGE
+                if (x < margin || y < margin || x > 99 - margin || y > 99 - margin) continue
+                val c = passableNear(InfluenceMap.cell(x, y))
+                val d = getRange(c, ec)
+                if (d > bestD) { bestD = d; best = c }
+            }
+            return best?.takeIf { getRange(it, ec) >= (if (away) getRange(oc, ec) + 1 else EVADE_RANGE) }
         }
-        return best?.takeIf { getRange(it, ec) > getRange(oc, ec) }
+        return pick(true) ?: pick(false)
     }
 
     /** Ближайшая проходимая клетка: центр наших флагов попал в стенной блок, поле к нему было пустым (flow=-1), и
