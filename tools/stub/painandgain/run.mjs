@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|screen
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|screen (+flagless: the enemy's runners idle)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -278,7 +278,9 @@ function enemyTick() {
   const flags = world.objects.filter((o) => o.exists && o.kind === 'flag');
   const mine = creeps().filter((c) => c.owner === 1);
   const ours = creeps().filter((c) => c.owner === 0);
-  const runners = mine.filter(isRunner);
+  // NORUNNERS=1: the enemy's runners never move — the live opponent of matches 30 and 31 took no flag at all until our
+  // army was dead, so a rush-type script with idle runners is the closest model of it
+  const runners = (process.env.NORUNNERS || has('flagless')) ? [] : mine.filter(isRunner);
   const fighters = mine.filter((c) => !isRunner(c));
   // runners: nearest flag not theirs (sticky), then sit
   for (const [id] of runnerFlag) if (!mine.some((c) => c.id === id)) runnerFlag.delete(id);

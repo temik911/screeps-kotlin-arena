@@ -193,6 +193,20 @@ object PainAndGain {
 
     /** В последних тиках матча проигрывающему по счёту флаги нужны любой ценой: бой уже не успеет. */
     private const val LAST_CALL_TICKS = 300
+    /** Доктрина «первый флаг — их» (v29, по заказу оператора после четырёх потерь армии подряд). Активная армия врага
+     *  БЕЗ ЕДИНОГО ФЛАГА, идущая на нас (см. APPROACH_RUSH), — это ровный бой, проигранный живьём четыре раза из четырёх
+     *  (матчи 27, 29, 30, 31), и каждый раз мы СТОЯЛИ на первом своём флаге, слабее её на 3%. Фатален не флаг, а стояние
+     *  на нём: от сомкнутой (см. enemyMassed) безфлаговой армии не слабее нашей (EVADE_EQUAL_RATIO) УКЛОНЯЕМСЯ, как от
+     *  превосходящей, и флаг ей отдаём — ей остаётся либо гнаться за нами на равной скорости (0:0), либо брать флаги, и
+     *  тогда она слабее нас, и это уже наша драка (матч 28: с семью их флагами мы срезали четырнадцать до шести к
+     *  210-му). Доктрина паритета не отменена, а достроена: паритет держим с врагом, который сам платит за свои флаги.
+     *  ⚠️ ОТВЕРГНУТО стендом: ещё и не брать первый флаг, пока она без флагов (гейт захвата) — россыпи и фермеры первые
+     *  сорок тиков тоже «идут на нас», и ожидание их первого флага проигрывало старт гонки: отказов 12→16, шесть в
+     *  воротах. Последний зов (LAST_CALL_TICKS) при равном счёте открывает флаги: ничья 0:0 отдана не будет. */
+    private const val EVADE_EQUAL_RATIO = 1.0
+    /** Темп сближения (см. approachRate, доля скорости к нам за APPROACH_WINDOW), с которого безфлаговая армия — это
+     *  бросок на нас, а не блуждание: россыпь, идущая по флагам, к нам не идёт. */
+    private const val APPROACH_RUSH = 0.5
 
     /** Построение перед контактом: боец не входит в дальность врага (≤ RANGED_RANGE от боевого врага), пока у
      *  авангарда (ближайшего к врагу ходячего вооружённого) в FORM_RANGE клетках не соберётся доля FORM_SHARE
@@ -402,7 +416,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v28"
+    private const val BOT_VERSION = "v29"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -459,6 +473,7 @@ object PainAndGain {
     /** Дистанция центра боевых врагов до нашего за последние тики — темп сближения для запаса выхода. */
     private val enemyDistHist = ArrayDeque<Int>()
     private var approachRate = 0.0
+    private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
     private var formWaitSince = -1
     private val aggressiveIds = HashSet<String>()
@@ -616,6 +631,11 @@ object PainAndGain {
 
         enemyArrivalTicks(ctx)
         plannedCaptures.clear()
+        // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
+        // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
+        val armedNow = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        val enemyMassed = armedNow.size >= 6 && centroidOf(armedNow)?.let { c -> armedNow.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedNow.size * 2 } == true
+        unflaggedRushNow = !ctx.passiveEnemy && ctx.flags.none { it.theirs } && approachRate >= APPROACH_RUSH && enemyMassed
         runRunners(ctx)
         runArmy(ctx)
 
@@ -653,7 +673,7 @@ object PainAndGain {
             println(
                 "t=${getTicks()} army=${army.size} runners=${runners.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat " +
+                    "posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -674,7 +694,7 @@ object PainAndGain {
         // подпись сборки: по ней видно, какая версия играет, даже если строку версии забыли поднять
         println(
             "tuning: parity=$PARITY_FLOOR/$CAPTURE_FLOOR/$PARITY_FLOOR_STALLED push=$PUSH_RATIO/$PUSH_RATIO_BEHIND " +
-                "stall=$STALL_TICKS/$STALL_PICKET/$STALL_DAMAGE/$STALL_COOLDOWN march=$MARCH_STALL_TICKS " +
+                "stall=$STALL_TICKS/$STALL_PICKET/$STALL_DAMAGE/$STALL_COOLDOWN march=$MARCH_STALL_TICKS rush=$APPROACH_RUSH/$EVADE_EQUAL_RATIO " +
                 "mass=$MASS_RANGE leash=$LEASH_RANGE meleeHold=$MELEE_HOLD_RANGE keep=$KEEP_RANGE/$KEEP_PICKET/$KEEP_RELEASE"
         )
         println(
@@ -811,7 +831,8 @@ object PainAndGain {
     private fun captureAllowed(ctx: Ctx, f: FlagInfo): Boolean {
         if (f.ours) return true
         if (ctx.combatEnemies.isEmpty()) return true
-        if (behindOnScore && arenaInfo.ticksLimit - getTicks() <= LAST_CALL_TICKS) return true
+        // последний зов и при РАВНОМ счёте: ничья 0:0 после уклонения (см. EVADE_EQUAL_RATIO) отдана не будет
+        if ((behindOnScore || ourScore <= enemyScore) && arenaInfo.ticksLimit - getTicks() <= LAST_CALL_TICKS) return true
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -1419,7 +1440,9 @@ object PainAndGain {
         // уклонение — только от ЯВНО сильнейшей армии (см. RETREAT_RATIO): при паритете флагов (v14) бой равный, и бежать
         // от него на равной скорости — быть пойманным с растянутым хвостом (матчи 11–12); прежнее «не сильнее для
         // добивания» уводило и от равной армии. Поля выхода нужны и бегунам без армии (см. runnerEscape)
-        val hunted = armedEnemies.isNotEmpty() && strikers.isNotEmpty() && theirs >= ours * RETREAT_RATIO
+        // от безфлагового броска (см. EVADE_EQUAL_RATIO) уклоняемся уже при равной силе
+        val hunted = armedEnemies.isNotEmpty() && strikers.isNotEmpty() &&
+            (theirs >= ours * RETREAT_RATIO || (unflaggedRushNow && theirs >= ours * EVADE_EQUAL_RATIO))
         val escapeNeeded = hunted || (armedEnemies.isNotEmpty() && strikers.isEmpty())
         // темп сближения врага (0 — стоит, 1 — идёт на нас): запас выхода даёт ему фору только в этом темпе — фора «идёт
         // к выходу мгновенно» отвергала всякую цель при враге, стоящем дома, и армия весь матч сидела дома (стенд m1 scouts)

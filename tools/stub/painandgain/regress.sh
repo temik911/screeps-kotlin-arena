@@ -235,6 +235,10 @@ run map-match31.txt -      farm
 run map-match31.txt -      screen
 grind map-match31.txt -      sleeper
 grind map-match31.txt -      spread
+grind map-match30.txt match2 screen+flagless
+grind map-match31.txt -      screen+flagless
+grind map-match29.txt match2 screen+flagless
+grind map-match25.txt match2 screen+flagless
 run map-match30.txt match2 wing
 run map-match30.txt match2 hunter
 run map-match30.txt match2 block
