@@ -72,7 +72,7 @@ The window matters and the first attempt used the wrong one. Time-to-the-first-c
 
 Second correction in the same version, from the same series: `towerWorth` bought a tower on a **zero tie**. With our fighters dead and his heal above a single fighter's damage, both marginal gains are exactly zero and `0 >= 0` placed a site (match 31, `share=9% surv=17% base=0 tower=0 fighter=0`). A purchase now needs a strictly positive gain — when nothing adds power, nothing is worth buying.
 
-Live: the v25 series went 4-1-1 with **two wins over stachu3478**, the first since the season's top two pulled ahead; the loss was the match with the zero-tie tower. No tower was completed in any live match yet — the criterion is strict by construction, and the two matches where it fired were already lost.
+Live, and the result names its own cause: the v25 series (tower reach + gate, no `homeReady`) went 4-1-1 with two wins over stachu3478; the v26 series went **7-1-1, rating 1102→1120** — four wins over けろびー and three over stachu3478, the two players who had been beating us all season. **No tower was built in a single match of either series**, so the gain is the power-model correction and nothing else: the bot stopped walking into fights its own arithmetic had already lost. The tower machinery is built, proven mechanically on the stub and idle in every live match so far — its criterion is strict by construction, and the only two matches where it fired were already lost. That is where it stands: a capability we did not have, whose value is still unmeasured.
 
 ## Offline stub harness
 
