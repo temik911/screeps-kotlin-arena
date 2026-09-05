@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|screen (+flagless: the enemy's runners idle)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|screen (+flagless: the enemy's runners idle; +weak: a remnant of eight)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -86,7 +86,18 @@ function buildLiveMap(path) {
   // START=match2: we were player 2 (bottom-right), the enemy player 1 — the same two position sets swapped
   const swap = process.env.START === 'match2';
   for (const [x, y, body] of (swap ? MATCH1_ENEMY : MATCH1_OURS)) world.objects.push(new Creep(x, y, 0, body));
-  for (const [x, y, body] of (swap ? MATCH1_OURS : MATCH1_ENEMY)) world.objects.push(new Creep(x, y, 1, body));
+  // +weak: the enemy fields a remnant — two scouts, one melee, three ranged, two healers — the shape the live opponent of
+  // matches 28 and 33 was left with after our hunt (and then farmed the flags behind our back for a points win)
+  const WEAK = (process.argv[3] || '').includes('weak');
+  let nM = 0, nR = 0, nH = 0;
+  for (const [x, y, body] of (swap ? MATCH1_OURS : MATCH1_ENEMY)) {
+    if (WEAK) {
+      if (body === MELEE && ++nM > 1) continue;
+      if (body === RANGED && ++nR > 3) continue;
+      if (body === HEALER && ++nH > 2) continue;
+    }
+    world.objects.push(new Creep(x, y, 1, body));
+  }
 }
 if (MAP) buildLiveMap(MAP); else { buildMap(); placeArmies(); }
 world.spawnRegen = [0, 0];
