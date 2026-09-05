@@ -596,7 +596,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v57"
+    private const val BOT_VERSION = "v58"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1724,7 +1724,9 @@ object PainAndGain {
         val armyDist = ctx.enemyCentroid?.let { getRange(centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: it, it) } ?: -1
         if (posture == Posture.ANNIHILATE && !inContact(armedEnemies, army) && armyDist >= 0) {
             armyDistHist.addLast(armyDist)
-            enemyCentHist.addLast(ctx.enemyCentroid?.let { it.x * 100 + it.y } ?: -1)
+            // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
+            // отряд на 566-м при his_moved=0 по реплею (матч 133, одиннадцатый проигрыш фермеру-лагерю 8346:22771)
+            enemyCentHist.addLast(centroidOf(armedEnemies)?.let { it.x * 100 + it.y } ?: -1)
         } else { armyDistHist.clear(); enemyCentHist.clear() }
         while (armyDistHist.size > CHASE_WINDOW + 1) armyDistHist.removeFirst()
         while (enemyCentHist.size > CHASE_WINDOW + 1) enemyCentHist.removeFirst()
@@ -1895,6 +1897,11 @@ object PainAndGain {
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
         val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible
+        // ОТВЕРГНУТО стендом (v58-опыт): снимать простой, когда паритет не пускает ни к одному флагу (матч 133: «марш не сдвинулся —
+        // флаги до 479» при 1,32 к лагерю на D5, obj=- все 300 тиков, 18 против 7 в тик). На стенде m31 camp снятый на 536-м простой
+        // дал 700 тиков ANNIHILATE pushing при 3679 против 1209 без единого убитого (центры армий в одной клетке, reach 0/5) —
+        // 17133:23618 вместо «стёрт на 776-м», где к нему армию довела ЦЕЛЬ-ФЛАГ D5 (412–536). Толчок к стоящему блобу не
+        // сближается — открытая находка матчей 70 и 133
         val newPosture = when {
             annihilate -> Posture.ANNIHILATE
             objective != null -> Posture.FLAG
