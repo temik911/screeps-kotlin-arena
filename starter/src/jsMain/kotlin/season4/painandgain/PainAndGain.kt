@@ -560,7 +560,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v46b"
+    private const val BOT_VERSION = "v47"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1051,6 +1051,7 @@ object PainAndGain {
     private var standoffTicks = 0                         // тиков подряд стоящей линии врага (см. PRESS_PATIENCE)
     private var pressing = false                          // прижим включён (см. USE_PRESS)
     private val meleeDistHist = ArrayDeque<Int>()         // дистанция их мили до наших вооружённых за окно терпения (см. PRESS_CLOSING)
+    private val centreDistHist = ArrayDeque<Int>()        // дистанция между центрами вооружённых армий за то же окно (см. standingNow)
     private val pressChase = HashMap<String, ArrayDeque<Int>>()  // дистанция от наших мили до цели прижима по тикам (см. PRESS_GIVEUP)
     private val lastArmedRange = HashMap<String, Int>()   // враг → дистанция до ближайшего нашего боеспособного тик назад (см. threatOf)
     private val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
@@ -2028,6 +2029,15 @@ object PainAndGain {
         if (contact) meleeDistHist.addLast(theirMeleeDist) else meleeDistHist.clear()
         while (meleeDistHist.size > PRESS_PATIENCE + 1) meleeDistHist.removeFirst()
         val theirMeleeClosing = meleeDistHist.size > PRESS_PATIENCE && meleeDistHist.first() - meleeDistHist.last() >= PRESS_CLOSING
+        // «армии сближаются» (v47, оператор: «признак по сближению центров армий»): дистанция между центрами ВООРУЖЁННЫХ
+        // армий за окно терпения сократилась не меньше PRESS_CLOSING — атака; стоит — стоячий бой (см. standingNow). Признак
+        // «его мили не вплотную» выключал расстановку ровно в боях с Coldkimchi (его мили лезут вплотную к стрелкам), а
+        // «его мили не идут» (v43f) брал и остановившуюся атаку — центры армий отличают одно от другого
+        val ourArmedC = centroidOf(combatArmy.filter { hasWeapon(it) }.map { InfluenceMap.cell(it.x, it.y) })
+        val theirArmedC = centroidOf(armedEnemies.map { InfluenceMap.cell(it.x, it.y) })
+        if (contact && ourArmedC != null && theirArmedC != null) centreDistHist.addLast(getRange(ourArmedC, theirArmedC)) else centreDistHist.clear()
+        while (centreDistHist.size > PRESS_PATIENCE + 1) centreDistHist.removeFirst()
+        val armiesClosing = centreDistHist.size > PRESS_PATIENCE && centreDistHist.first() - centreDistHist.last() >= PRESS_CLOSING
         // их мили на подходе — в (MELEE_HOLD_RANGE + 2 .. ENGAGE_RANGE] от наших вооружённых — это не стоячая линия и не пустое
         // место: матч 56 (G1N6ERbreadMan) — прижим на 115-м при его мили в 4–7, через три тика они вошли в нашу пачку у своих же
         // стрелков (его 51 удар против наших 24, a→ranged 31), пять наших потеряны за двадцать тиков. Прижим — линии, чьи мили
@@ -2073,7 +2083,10 @@ object PainAndGain {
             // прижим требует «его мили не вплотную», и расстановка была выключена ровно в этом бою): едва атака врага встаёт,
             // бой берёт расстановка, и остаток уходит — 123/125, m28 wing и m31 camp проиграны, против прижима-только 21 хуже /
             // 16 лучше. Прилипший к стрелку мили — дело нашего мили (см. poker в engage), не строя
-            val planNow = USE_PLAN && standoffNow
+            // стоячий бой по центрам армий (v47): контакт держится дольше окна терпения, центры вооружённых армий не сближаются,
+            // враг не отходит — расстановка; атака (центры сближаются) и погоня (враг отходит) — ряды
+            val standingNow = contact && centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating
+            val planNow = USE_PLAN && (standoffNow || standingNow)
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget)
         }
