@@ -375,11 +375,17 @@ object PainAndGain {
      *  (см. PARITY_FLOOR), а не этот вес; оставлен 0.02, строй лекарей вне досягаемости стрелков — открытая находка. */
     private const val HEALER_W_DAMAGE_FIGHT = 0.02
 
-    /** Множитель лечения врага в угрозе при выборе цели: убитый лекарь — единственная потеря, которую враг не вернёт
-     *  лечением (матч 9: четыре обломка снова в полном теле за 50 тиков). Множитель работает только вместе с временем
-     *  убийства (см. killTicks): сам по себе он слал огонь в лекарей за строем, лечивших друг друга быстрее нашего
-     *  огня, и рывок на стенде (карта 2), выигранный без потерь, стал разгромом. */
-    private const val HEALER_VALUE = 3.0
+    /** Множитель лечения врага в угрозе при выборе цели. Был 3.0 («убитый лекарь — единственная потеря, которую враг не
+     *  вернёт лечением», матч 9) — и v31 снимает его до 1.0 по реплею матча 3 серии v30 (けろびー, обе стороны с
+     *  интентами): лекарь у него давал 216 угрозы против 60 у стрелка, и в решающем стрелковом размене (t=80–110) 49 из
+     *  77 наших выстрелов ушли в его лекарей, стоящих вплотную друг к другу (147 событий лечения ×72 = 10 584 — почти
+     *  весь наш урон за бой, 10 440), а 70 из его 131 — в НАШИХ СТРЕЛКОВ: обезоруженный стрелок — минус 60 в тик
+     *  навсегда, лечёный лекарь — ноль. Итог: наши стрелки без оружия 84 крип-тика, его — 8, выстрелов 288 против 174.
+     *  Живая отдача лекаря по реплею равна отдаче стрелка (0,68 × 72 ≈ 0,81 × 60 ≈ 49 в тик), а взаимное лечение
+     *  лекарей уже стоит в killTicks (healOn): при 1.0 стрелок у фронта (60 / 4,8 тика) выше лекаря в куче
+     *  (72 / 7,7 тика), при 3.0 — наоборот. Лекарь без раненого рядом лечит на дистанции (4 за часть против 12) —
+     *  треть, см. threatOf. */
+    private const val HEALER_VALUE = 1.0
 
     /** Внутри стольких клеток от цели (Чебышев, сверх standoff) строй не держат: группа уже на месте, а
      *  ожидание «отставших» у самого флага запирало захватчика на тысячу тиков (стенд greedy/grab). */
@@ -450,7 +456,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v30"
+    private const val BOT_VERSION = "v31"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -737,7 +743,7 @@ object PainAndGain {
         println(
             "tuning: parity=$PARITY_FLOOR/$CAPTURE_FLOOR/$PARITY_FLOOR_STALLED push=$PUSH_RATIO/$PUSH_RATIO_BEHIND " +
                 "stall=$STALL_TICKS/$STALL_PICKET/$STALL_DAMAGE/$STALL_COOLDOWN march=$MARCH_STALL_TICKS rush=$APPROACH_RUSH/$EVADE_EQUAL_RATIO " +
-                "mass=$MASS_RANGE leash=$LEASH_RANGE meleeHold=$MELEE_HOLD_RANGE press=$PRESS_RANGE/$PRESS_PACK/$PRESS_PATIENCE keep=$KEEP_RANGE/$KEEP_PICKET/$KEEP_RELEASE"
+                "mass=$MASS_RANGE leash=$LEASH_RANGE meleeHold=$MELEE_HOLD_RANGE press=$PRESS_RANGE/$PRESS_PACK/$PRESS_PATIENCE healer=$HEALER_VALUE keep=$KEEP_RANGE/$KEEP_PICKET/$KEEP_RELEASE"
         )
         println(
             "pain-and-gain: TICKS_LIMIT=${num(TICKS_LIMIT.asDynamic(), -1.0)} MAX_SCORE_PER_TICK=${num(MAX_SCORE_PER_TICK.asDynamic(), -1.0)} " +
@@ -1602,7 +1608,10 @@ object PainAndGain {
             val p = InfluenceMap.profileOf(e)
             val meleeLive = p.melee > 0.0 && combatArmy.any { getRange(e, it) <= MELEE_KEEP_RANGE }
             val rangedLive = p.ranged > 0.0 && combatArmy.any { getRange(e, it) <= RANGED_RANGE }
-            return (if (meleeLive) p.melee else p.melee * MELEE_KITE_DISCOUNT) + (if (rangedLive) p.ranged else p.ranged * 0.5) + p.heal * HEALER_VALUE
+            // лечение живое, когда есть кого лечить вплотную (12 за часть); иначе — дистанционное (4 за часть), треть
+            val healLive = p.heal > 0.0 && enemyCreeps.any { m -> m.id != e.id && m.hits < m.hitsMax && getRange(e, m) <= 1 }
+            return (if (meleeLive) p.melee else p.melee * MELEE_KITE_DISCOUNT) + (if (rangedLive) p.ranged else p.ranged * 0.5) +
+                (if (healLive) p.heal else p.heal / 3.0) * HEALER_VALUE
         }
         // тики до убийства нашим огнём в дальности за вычетом их лечения на цели; бесконечность — цель не убиваема
         fun killTicks(e: Creep): Double {
