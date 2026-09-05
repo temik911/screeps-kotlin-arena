@@ -49,6 +49,10 @@ N=0
 # full army — and its points outcome is decided by where the enemy wanders after our army is gone (two identical
 # fights on map 4 ended 17229:12409 and 12127:19175). It is run and reported in full mode but not by the landing gate.
 grind() { if [[ "$TAG" == land ]]; then return; fi; run "$@"; }
+# v29 (05.09.2026, the operator's decision): six lines that v28 passed and v29 loses are in the grind as the known cost of
+# the doctrine "the first flag is theirs" — the dispersed and farming opponents (m12/m18 spread, m18/m19/m31 farm) pay for
+# its caution in the first forty ticks, and m28 army is the brawl at 1.0 that flips on a tick either way. The gate keeps
+# the live opponent instead: screen/nine/block+flagless and farm+weak, twelve lines v28 lost four armies to.
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario — collected here, executed in parallel below
   N=$((N + 1)); print -r -- "$N $1 $2 $3 $TAG $PLANDIR" >> "$PLANDIR/plan"
 }
@@ -151,8 +155,8 @@ run map-match18.txt match2 hunter
 run map-match18.txt match2 kite
 run map-match18.txt match2 rush
 grind map-match18.txt match2 sleeper
-run map-match18.txt match2 spread
-run map-match12.txt match2 spread
+grind map-match18.txt match2 spread
+grind map-match12.txt match2 spread
 grind map-match19.txt match2 spread
 run map-match19.txt match2 block
 run map-match19.txt match2 nine
@@ -257,7 +261,7 @@ run map-match31.txt -      rush
 run map-match31.txt -      kite
 run map-match31.txt -      fourteen
 run map-match31.txt -      roost
-run map-match31.txt -      farm
+grind map-match31.txt -      farm
 run map-match31.txt -      screen
 grind map-match31.txt -      sleeper
 grind map-match31.txt -      spread
@@ -305,7 +309,7 @@ run map-match28.txt -      wing
 run map-match28.txt -      hunter
 run map-match28.txt -      block
 run map-match28.txt -      nine
-run map-match28.txt -      army
+grind map-match28.txt -      army
 run map-match28.txt -      rush
 run map-match28.txt -      kite
 run map-match28.txt -      fourteen
@@ -320,8 +324,8 @@ run map-match12.txt match2 roost
 run map-match18.txt match2 roost
 run map-match24.txt match2 farm
 run map-match20.txt -      farm
-run map-match19.txt match2 farm
-run map-match18.txt match2 farm
+grind map-match19.txt match2 farm
+grind map-match18.txt match2 farm
 grind map-match25.txt match2 farm
 grind map-match21.txt match2 farm
 grind map-match12.txt match2 farm
