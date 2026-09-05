@@ -107,7 +107,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 21
+    private const val BOT_VERSION = 22
 
     private const val LATE_MARGIN = 60
 
@@ -1795,7 +1795,20 @@ object SpawnAndSwamp {
         // в журнал — с причиной и счётом: «fight:gates(790/759)» читается без пересчёта
         homeMode = if (homeThreats.isEmpty()) "-" else (if (homeFight) "fight:" + (if (spawnUnderFire) "fire" else if (homeAtGates) "gates" else "wins") else "hold") +
             "(${homeOurs.toInt()}/${homeTheirs.toInt()})"
-        val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds
+        // ДОМ НА ВРЕМЯ ВЫЛАЗКИ. Пока волна ходит — ход группы плюс осада по её же симуляции — до нашего
+        // спавна успевают дойти те приближающиеся, у кого подход меньше этого срока. Держать их должен
+        // гарнизон, то есть те, кто ОСТАНЕТСЯ (homeGuard уже без staging), а не только тот, кто нужен
+        // против стоящих в кольце тревоги. Прежде спрашивали лишь про кольцо в сорок тиков, и матч 20
+        // (05.09.2026) кончился так: на 290-м двое ушли по вердикту «win/208t», пока армия врага в 587
+        // шла к нам и была в 123 тиках; дом опустел, армия пришла на 550-м, спавн снесён на 600-м
+        val sortieTicks = if (startTravel >= Int.MAX_VALUE / 8) Int.MAX_VALUE / 8
+            else startTravel + minOf(siegeStart.ticks, SIEGE_LIMIT)
+        val arrivingHome = combatEnemies.filter {
+            it.id in approachingIds && (arrivalById[it.id] ?: Int.MAX_VALUE / 2) <= sortieTicks
+        }
+        val guardHoldsSortie = arrivingHome.isEmpty() ||
+            ourPowerOf(homeGuard, arrivingHome) >= enemyPowerOf(arrivingHome, homeGuard) * DEFEND_MARGIN
+        val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie
         // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
         if (raidPeakTick < 0 || getTicks() - raidPeakTick > PRODUCTION_WINDOW || maxPack >= raidPeak) { raidPeak = maxPack; raidPeakTick = getTicks() }
         val meleeOpponent = typical != null && typical.dps > 0.0 && typical.melee > typical.dps / 2
@@ -1836,7 +1849,7 @@ object SpawnAndSwamp {
         val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN
         siegeHold = newPushing && !siegeGo.win && waveMembers.isNotEmpty() && !frontCovered && holdInTime
         if (DEBUG_LOG && (newPushing != pushing || getTicks() % (LOG_EVERY * 10) == 0)) {
-            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
+            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds/${guardHoldsSortie}(${arrivingHome.size}@$sortieTicks) home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
         }
         pushing = newPushing
         lastPushReason = when {
@@ -1860,7 +1873,7 @@ object SpawnAndSwamp {
             // уже стоит волна, к которой он идёт
             val lastCallGo = lastCall && remaining > startTravel + LATE_MARGIN / 2 &&
                 (staging.size >= PUSH_MIN_FIGHTERS || waveMembers.isNotEmpty())
-            if (staging.isNotEmpty() && (strongerNow || lastCallGo || (siegeHold && siegeJoin.win && guardHolds))) {
+            if (staging.isNotEmpty() && (strongerNow || lastCallGo || (siegeHold && siegeJoin.win && guardHolds && guardHoldsSortie))) {
                 waveCounter++
                 staging.forEach { wave[it.id] = waveCounter }
                 if (DEBUG_LOG) println("wave $waveCounter departs: ${staging.size} fighters t=${getTicks()}")
