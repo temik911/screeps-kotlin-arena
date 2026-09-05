@@ -327,6 +327,7 @@ object PainAndGain {
      *  крипу. Замер (матч 67 по реплею): наши стрелки в 4+ от цели стояли со свободной клеткой впереди 42 раза против 6 —
      *  ряд «в 3 − d от переднего мили» ставит их на ряд дальше, чем надо; цель в трёх 67 % крип-тиков. */
     private const val USE_PLAN = true
+    private const val USE_PLAN_OUR_SIDE = true   // клетки плана боя только на нашей стороне (v61, см. planFight)
     /** Прижим (v30): в бою по контакту без перевеса (ANNIHILATE без наступления) армия дерётся с линией врага, а не держит
      *  свою. Реплеи шести матчей (arukuka/screeps-arena-tools — интенты ОБЕИХ сторон, см. docs/pain-and-gain-research.md)
      *  показали, где проигрывается ровный бой. Линия врага встаёт ровно в трёх от нашего переднего (гистограмма
@@ -604,7 +605,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v60"
+    private const val BOT_VERSION = "v61"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2870,13 +2871,21 @@ object PainAndGain {
         if (threats.isEmpty()) return
         val theirMelee = threats.filter { InfluenceMap.profileOf(it).melee > 0.0 }
         val enemyAt = enemyCreeps.mapTo(HashSet()) { it.x * 100 + it.y }
-        // клетки-кандидаты: в RANGED_RANGE от любого нашего (дальше — марш, не расстановка), проходимые, не под врагом
+        // клетки-кандидаты: в RANGED_RANGE от любого нашего (дальше — марш, не расстановка), проходимые, не под врагом, и НА
+        // НАШЕЙ СТОРОНЕ (v61): не дальше от центра наших вооружённых, чем от центра его угроз. Матч 145 (Coldkimchi, седьмое
+        // поражение, армия стёрта за сорок тиков при его 16000/16000): его линия стояла в (73–76, 9–13), наш центр в (79,8), и
+        // ярусы «цель в трёх → нет его мили вплотную → нет его мили в двух» выбрали стрелкам клетки (76–80, 15–16) — ЗА его
+        // линией, где его мили не стоят, — и одиннадцать крипов пошли к ним сквозь его строй по одному (so=0 flow=−1 у всех на
+        // 370–380-м): reach 1/3, наш огонь 1,2 в тик против его 4,2
+        val ourC = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })
+        val theirC = centroidOf(threats)
         val cells = HashMap<Int, FightCell>()
         for (c in army) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
             val x = c.x + dx; val y = c.y + dy
             val key = x * 100 + y
             if (key in cells || x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || key in enemyAt) continue
             val p = InfluenceMap.cell(x, y)
+            if (USE_PLAN_OUR_SIDE && ourC != null && theirC != null && getRange(p, ourC) > getRange(p, theirC)) continue
             cells[key] = FightCell(p, key, InfluenceMap.damageAt(x, y, combatEnemies), threats.count { getRange(p, it) <= RANGED_RANGE },
                 focusTarget != null && getRange(p, focusTarget) <= RANGED_RANGE,
                 theirMelee.count { getRange(p, it) <= 1 }, theirMelee.count { getRange(p, it) <= MELEE_KEEP_RANGE },
