@@ -53,6 +53,9 @@ grind() { if [[ "$TAG" == land ]]; then return; fi; run "$@"; }
 # the doctrine "the first flag is theirs" — the dispersed and farming opponents (m12/m18 spread, m18/m19/m31 farm) pay for
 # its caution in the first forty ticks, and m28 army is the brawl at 1.0 that flips on a tick either way. The gate keeps
 # the live opponent instead: screen/nine/block+flagless and farm+weak, twelve lines v28 lost four armies to.
+# 05.09.2026, second batch (evade away from the enemy, healers accept ranged fire): m17 fourteen and m28 hunter are brawls at
+# 1.0 that flip with any change to where the army stands (won in one build, lost in the next), m24 and m32 farm are the
+# farm family's points races — all four in the grind; the twelve live-opponent lines stay green.
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario — collected here, executed in parallel below
   N=$((N + 1)); print -r -- "$N $1 $2 $3 $TAG $PLANDIR" >> "$PLANDIR/plan"
 }
@@ -142,7 +145,7 @@ run map-match15.txt -      wing
 run map-match17.txt -      wing
 run map-match17.txt -      block
 run map-match17.txt -      nine
-run map-match17.txt -      fourteen
+grind map-match17.txt -      fourteen
 run map-match17.txt -      hunter
 run map-match17.txt -      kite
 run map-match17.txt -      rush
@@ -226,6 +229,19 @@ run map-match25.txt match2 fourteen
 run map-match25.txt match2 roost
 grind map-match25.txt match2 sleeper
 grind map-match25.txt match2 spread
+run map-match34.txt match2 wing
+run map-match34.txt match2 hunter
+run map-match34.txt match2 block
+run map-match34.txt match2 nine
+run map-match34.txt match2 army
+run map-match34.txt match2 rush
+run map-match34.txt match2 kite
+run map-match34.txt match2 fourteen
+run map-match34.txt match2 roost
+run map-match34.txt match2 screen
+grind map-match34.txt match2 farm
+grind map-match34.txt match2 sleeper
+grind map-match34.txt match2 spread
 run map-match33.txt match2 wing
 run map-match33.txt match2 hunter
 run map-match33.txt match2 block
@@ -248,7 +264,7 @@ run map-match32.txt -      rush
 run map-match32.txt -      kite
 run map-match32.txt -      fourteen
 run map-match32.txt -      roost
-run map-match32.txt -      farm
+grind map-match32.txt -      farm
 run map-match32.txt -      screen
 grind map-match32.txt -      sleeper
 grind map-match32.txt -      spread
@@ -274,6 +290,9 @@ run map-match32.txt -      nine+flagless
 run map-match30.txt match2 nine+flagless
 run map-match31.txt -      nine+flagless
 run map-match32.txt -      block+flagless
+run map-match34.txt match2 screen+flagless
+run map-match34.txt match2 nine+flagless
+run map-match34.txt match2 block+flagless
 run map-match33.txt match2 farm+weak
 run map-match28.txt -      farm+weak
 run map-match32.txt -      farm+weak
@@ -306,7 +325,7 @@ run map-match29.txt match2 screen
 run map-match28.txt -      screen
 run map-match25.txt match2 screen
 run map-match28.txt -      wing
-run map-match28.txt -      hunter
+grind map-match28.txt -      hunter
 run map-match28.txt -      block
 run map-match28.txt -      nine
 grind map-match28.txt -      army
@@ -322,7 +341,7 @@ run map-match20.txt -      roost
 run map-match19.txt match2 roost
 run map-match12.txt match2 roost
 run map-match18.txt match2 roost
-run map-match24.txt match2 farm
+grind map-match24.txt match2 farm
 run map-match20.txt -      farm
 grind map-match19.txt match2 farm
 grind map-match18.txt match2 farm

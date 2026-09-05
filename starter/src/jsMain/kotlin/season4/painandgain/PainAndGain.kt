@@ -1173,7 +1173,14 @@ object PainAndGain {
     }
 
     /** Точки выхода: семь флагов и оба дома (углы — карманы, их нет; см. EVADE_SAFE). */
-    private fun escapeCandidates(ctx: Ctx): List<Position> = ctx.flags.map { it.pos } + listOf(ctx.home, ctx.enemyHome)
+    /** Точки выхода: флаги, оба дома и ЧЕТЫРЕ угла карты. Флаги стоят между домами — на оси подхода врага, и с одними
+     *  флагами «прочь» не существовало: уклонение от броска шло к R3 навстречу врагу 30 клеток и было поймано у флага
+     *  (матч 34, t=3–57). Углы — то, что всегда лежит в стороне от оси. */
+    private fun escapeCandidates(ctx: Ctx): List<Position> =
+        ctx.flags.map { it.pos } + listOf(ctx.home, ctx.enemyHome) +
+            // углы — только при броске: как постоянные кандидаты они меняли всякое уклонение (102 сценария в одну сторону,
+            // 105 в другую, потеря армии m9 sleeper), а нужны они там, где флаги лежат на оси подхода
+            (if (unflaggedRushNow) listOf(InfluenceMap.cell(3, 3), InfluenceMap.cell(3, 96), InfluenceMap.cell(96, 3), InfluenceMap.cell(96, 96)).map { passableNear(it) } else emptyList())
 
     /** Поля потока к точкам выхода и ход врага до каждой — раз в EVADE_EVAL_EVERY тиков (девять полей). */
     private fun refreshEscape(ctx: Ctx, armed: List<Creep>) {
@@ -1292,8 +1299,12 @@ object PainAndGain {
         var bestArrive = 0
         var bestExit = 0
         var curScore = Int.MIN_VALUE
+        // при броске (см. EVADE_EQUAL_RATIO) выход обязан быть ПРОЧЬ: не ближе к центру вражеской армии, чем мы сейчас.
+        // Запас «мы придём первыми» считал R3 на оси подхода безопасным, и армия шла врагу навстречу (матч 34)
+        val enemyCentre = if (unflaggedRushNow) centroidOf(armed) else null
         for (c in escapeCandidates(ctx)) {
             if (left != null && c.x == left.x && c.y == left.y) continue
+            if (enemyCentre != null && getRange(c, enemyCentre) <= getRange(ctx.ourCentroid, enemyCentre)) continue
             val key = c.x * 100 + c.y
             val flow = escapeFlows[key] ?: continue
             val theirs = escapeTheirs[key] ?: continue
@@ -1964,7 +1975,14 @@ object PainAndGain {
                     // уже вплотную к врагу — блок переднего ряда снят: окружённый лекарь стоял (все соседи «передний
                     // ряд»), а не уходил (матч 10, healer_2 на (14,10) между двумя мили врага)
                     // лекарь и раненый снаружи досягаемости в неё не входят (см. reachCells)
-                    if (support && !inReach && reachNow.isNotEmpty()) myBlocked = myBlocked + reachNow
+                    // лекарь с РАНЕНЫМ подопечным в дальности лечения принимает дальний огонь ради лечения вплотную (72 за часть
+                    // против 24): запреты «не входить в досягаемость» и «не вставать рядом с врагом» держали его в двух-трёх
+                    // клетках от того, кого бьют. Матч 34 (бой 57–550): урона получено поровну (42285 против 41684), вылечено
+                    // 29275 против их 39420, у них вдвое больше событий «+144» (два лекаря вплотную на одном) — 46 против 22;
+                    // наш лекарь стоял вплотную к самому раненому в 13% замеров и дальше трёх клеток — в 32%. Закрытыми
+                    // остаются клетки вплотную к вражескому МИЛИ: там лекарь не лечит, а умирает
+                    val healingNow = healer && healMate != null && healMate.hits < healMate.hitsMax && getRange(creep, healMate) <= HEAL_RANGE + 1
+                    if (support && !inReach && reachNow.isNotEmpty() && !healingNow) myBlocked = myBlocked + reachNow
                     if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
                         val front = HashSet<Int>()
                         for ((dx, dy) in DIRECTIONS) {
@@ -1972,7 +1990,9 @@ object PainAndGain {
                             val x = creep.x + dx; val y = creep.y + dy
                             if (x < 0 || y < 0 || x > 99 || y > 99) continue
                             val c = InfluenceMap.cell(x, y)
-                            if (localEnemies.any { getRange(c, it) <= 1 }) front.add(x * 100 + y)
+                            val byMelee = meleeEnemies.any { getRange(c, it) <= 1 }
+                            val byPatient = healingNow && getRange(c, healMate!!) <= 1
+                            if (localEnemies.any { getRange(c, it) <= 1 } && (byMelee || !byPatient)) front.add(x * 100 + y)
                         }
                         if (front.isNotEmpty()) myBlocked = myBlocked + front
                     }
