@@ -160,7 +160,53 @@ function planBlock(fighters, ours, ourCentroid) {
   const dir = { x: sgn(nearestOur.x - anchor.x), y: sgn(nearestOur.y - anchor.y) };
   return { anchor, dir, nearestOur, isH, isR };
 }
+// 'screen' moves as ONE block in every mode: melee and ranged within one of the anchor (the melee centroid, see
+// planBlock), healers one behind, and the front advances only while every member is within two of the anchor. The
+// live block arrived at our line already formed with its healers adjacent (match 30, t=68); the stub's marched as a
+// column and formed under fire — its healers were eight to twelve cells behind the first creep we hit
+function screenMove(c, plan, fighters, ours) {
+  const { anchor, dir, isH, isR } = plan;
+  const ourF = ours.filter((o) => !isRunner(o));
+  const armed = ourF.filter((o) => live(o, A) + live(o, R) > 0);
+  const nearestArmed = armed.slice().sort((a, b) => range(c, a) - range(c, b))[0];
+  const armedClose = armed.filter((o) => range(c, o) <= 2);
+  // two rows, like the live block (match 29, t=100: R-M-R at x=73, the three healers at x=72 directly behind):
+  // the front row across the axis to our nearest — melee at its middle, ranged at its ends — and the healers one
+  // behind; each creep takes the nearest free cell of its row, so a healer always finds a cell adjacent to the front
+  const px = -dir.y, py = dir.x;
+  const order = [0, -1, 1, -2, 2, -3, 3, -4, 4];
+  const rowCells = (back) => order.map((k) => ({ x: anchor.x - back * dir.x + k * px, y: anchor.y - back * dir.y + k * py }));
+  const front = fighters.filter((o) => !isH(o)).sort((a, b) => (isR(a) ? 1 : 0) - (isR(b) ? 1 : 0));
+  const rear = fighters.filter((o) => isH(o));
+  const slotOf = new Map();
+  for (const [row, cells] of [[front, rowCells(0)], [rear, rowCells(1)]]) {
+    const free = cells.slice();
+    for (const o of row) {
+      let best = null, bd = 99;
+      for (const cell of free) { const d = range(o, cell); if (d < bd) { bd = d; best = cell; } }
+      if (best) { slotOf.set(o.id, best); free.splice(free.indexOf(best), 1); }
+    }
+  }
+  const slot = slotOf.get(c.id) || anchor;
+  const formed = fighters.filter((o) => !isRunner(o)).every((o) => range(o, slotOf.get(o.id) || anchor) <= 2);
+  if (isH(c)) {
+    const mate = fighters.filter((o) => o !== c && live(o, H) === 0 && o.hits < o.hitsMax).sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax))[0];
+    if (mate) { if (range(c, mate) > 1) stepToward(c, mate, 1); return; }
+    if (range(c, slot) > 0) stepToward(c, slot, 0);
+    return;
+  }
+  if (!isR(c)) {
+    const prey = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= 3).sort((a, b) => range(c, a) - range(c, b))[0];
+    if (prey) { stepToward(c, prey, 1); return; }
+  }
+  if (armedClose.length) { stepAway(c, armedClose); return; }
+  if (nearestArmed && range(c, nearestArmed) <= 3) return;
+  if (range(c, slot) > 1) { stepToward(c, slot, 0); return; }
+  if (!formed) { if (range(c, slot) > 0) stepToward(c, slot, 0); return; }
+  if (nearestArmed) stepToward(c, nearestArmed, 3); else stepToward(c, plan.nearestOur, 3);
+}
 function blockMove(c, plan, fighters, ours) {
+  if (has('screen')) return screenMove(c, plan, fighters, ours);
   const { anchor, dir, isH, isR } = plan;
   const healers = fighters.filter((o) => o !== c && live(o, H) > 0);
   const screen = has('screen');
@@ -172,6 +218,9 @@ function blockMove(c, plan, fighters, ours) {
     const threat = ourF.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 3);
     const slot = { x: anchor.x - (screen ? 1 : 3) * dir.x, y: anchor.y - (screen ? 1 : 3) * dir.y };
     if (!screen && threat.length) stepAway(c, threat);
+    // screen: a healer stands ADJACENT to whichever fighter is being hit — the live block healed its front melee at
+    // 216 a tick (M8A5 -> M8A8 in two ticks); a healer in a slot by the block's centre reaches it only at range
+    else if (screen && mate) { if (range(c, mate) > 1) stepToward(c, mate, 1); }
     else if (mate && range(mate, anchor) > 1 && range(c, mate) > 1) stepToward(c, mate, 1);
     else if (range(c, slot) > (screen ? 0 : 1)) stepToward(c, slot, screen ? 0 : 1);
     return;
@@ -182,7 +231,16 @@ function blockMove(c, plan, fighters, ours) {
     const back = (wing && !armedNear) || screen ? 0 : 2;
     const slot = { x: anchor.x - back * dir.x, y: anchor.y - back * dir.y };
     const close = ourF.filter((o) => live(o, A) > 0 && range(c, o) <= 1);
-    if (!screen && close.length) stepAway(c, close);
+    if (screen) {
+      // the live line kept EXACTLY three from our nearest armed creep — every distance at t=80 of match 30 was 3 or 4:
+      // it fires from three and gives ground to a melee that steps to two, so our melee never reach a target
+      const armedClose = ourF.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 2);
+      const nearestArmed = ourF.filter((o) => live(o, A) + live(o, R) > 0).sort((a, b) => range(c, a) - range(c, b))[0];
+      if (armedClose.length) stepAway(c, armedClose);
+      else if (nearestArmed && range(c, nearestArmed) > 3) stepToward(c, nearestArmed, 3);
+      return;
+    }
+    if (close.length) stepAway(c, close);
     else if (range(c, slot) > (back === 0 ? 0 : 1)) stepToward(c, slot, back === 0 ? 0 : 1);
     return;
   }
@@ -192,8 +250,15 @@ function blockMove(c, plan, fighters, ours) {
   // the live block STOOD: once any of ours was within three of its front it waited, and our melee came into it one by
   // one (match 29, t=67-200: their fighting eight never moved off (70-73, 63-65) while four of our melee died there)
   if (screen) {
-    if (nearest && range(c, nearest) <= 2) { stepToward(c, nearest, 1); return; }
-    if (ourF.some((o) => range(anchor, o) <= 3)) return;
+    // its melee engage only what its ranged have already DISARMED (match 30: they stood at three from our melee for
+    // fifteen ticks while five ranged took ten attack parts off ours, and stepped in at t=84 on the hulks)
+    const prey = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= 3).sort((a, b) => range(c, a) - range(c, b))[0];
+    if (prey) { stepToward(c, prey, 1); return; }
+    const armedClose = ourF.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 2);
+    const nearestArmed = ourF.filter((o) => live(o, A) + live(o, R) > 0).sort((a, b) => range(c, a) - range(c, b))[0];
+    if (armedClose.length) { stepAway(c, armedClose); return; }
+    if (nearestArmed && range(c, nearestArmed) <= 3) return;
+    if (nearestArmed) { stepToward(c, nearestArmed, 3); return; }
     if (!healers.some((h) => range(c, h) <= 2)) { if (range(c, anchor) > 1) stepToward(c, anchor, 1); return; }
   }
   if (wing) {
@@ -269,7 +334,7 @@ function enemyTick() {
   // 'wing' (match 17): the block's ranged walk in the FRONT row and the line stops three cells from our nearest creep —
   // the ranged shoot our front for free while the melee hold the line and only hit what steps within two; a ranged
   // with one of our armed creeps within two backs off two rows; healers two behind
-  const blockPlan = (has('block') || has('wing') || has('screen')) && armyMode === 'fight' ? planBlock(fighters, ours, ourCentroid) : null;
+  const blockPlan = ((has('block') || has('wing') || has('screen')) && armyMode === 'fight') || (has('screen') && armyMode === 'march') ? planBlock(fighters, ours, ourCentroid) : null;
   focusAnchor = blockPlan ? blockPlan.anchor : null;
   for (const c of fighters) {
     fireAt(c, ours);

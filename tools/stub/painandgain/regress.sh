@@ -232,7 +232,7 @@ run map-match30.txt match2 kite
 run map-match30.txt match2 fourteen
 run map-match30.txt match2 roost
 grind map-match30.txt match2 farm
-run map-match30.txt match2 screen
+grind map-match30.txt match2 screen
 grind map-match30.txt match2 sleeper
 grind map-match30.txt match2 spread
 run map-match29.txt match2 wing
