@@ -228,6 +228,16 @@ object PainAndGain {
      *  которая не бьёт двадцать тиков с добычей в досягаемости, «примерно равные» — 0.93; первый же удар возвращает 0.97.
      *  ДОПУЩЕНИЕ к доктрине оператора (v14), названо в отчёте. */
     private const val PARITY_FLOOR_STALLED = 0.93
+    /** ПРОИГРАННАЯ ГОНКА с тем, кто ни разу не ударил (v63, ИСКЛЮЧЕНИЕ ИЗ ДОКТРИНЫ ПАРИТЕТА — на решение оператора): отставание
+     *  с меньшим темпом дольше BEHIND_PATIENCE (stalemate) при lastHurtTick == 0 — порог захвата PARITY_FLOOR_LOST вместо
+     *  PARITY_FLOOR. Матч 152 (けろびー-лагерь на D5, тринадцатый проигрыш фермеру 12974:23119): его блоб на флаге уязвимости с 400-го
+     *  до конца, его H4, A3 и R3 стоят ПУСТЫМИ, наш стрелок 1100 тиков POISED в клетке от A3 — при 3618 против 3507 захват давал
+     *  0,88 < 0,97, толчок 0,91 < 1,0, и HOLD 10 против 15 в тик до конца. Паритет страхует от аннигиляции; противник, не сделавший
+     *  ни выстрела за 1500 тиков (и ни в одном из тринадцати матчей), — не та угроза, от которой он страхует, а проигрыш по очкам
+     *  при стоянии — такой же проигрыш. 0,75: две захвата из 3:4 флагов при 0,91 дают 0,77 по числам матча 152, и двух гонке
+     *  хватает (16 против 9 в тик с 400-го). На стенде не срабатывает ни разу: все стендовые фермеры бьют. */
+    private const val USE_LOST_RACE_CAPTURE = true
+    private const val PARITY_FLOOR_LOST = 0.75
     private const val PUSH_RELEASE_RATIO_STALEMATE = 0.95
 
     /** Местный бой (группа против стаи рядом) и продолжение уже начатого: вход при 0.9 — при равных силах никто
@@ -605,7 +615,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v62"
+    private const val BOT_VERSION = "v63"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1086,7 +1096,9 @@ object PainAndGain {
         val needed = ourScore <= enemyScore || ourRate <= enemyRate
         // неподвижный враг — тоже армия: «пассивный» порог 0.95 пустил третий флаг против спящего, тот проснулся, и бой
         // при 0.96 был проигран (стенд m6 sleeper); порог один
-        val floor = if (stalledNow) PARITY_FLOOR_STALLED else if (needed) PARITY_FLOOR else CAPTURE_FLOOR
+        // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
+        val lostRace = USE_LOST_RACE_CAPTURE && stalemateNow && lastHurtTick == 0 && ourScore <= enemyScore && ourRate <= enemyRate
+        val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else if (needed) PARITY_FLOOR else CAPTURE_FLOOR
         return ours >= theirs * floor
     }
 
@@ -1103,6 +1115,7 @@ object PainAndGain {
     private var preyNearTicks = 0                         // тиков подряд с пикетом (см. STALL_PICKET) в досягаемости
     private var stallUntil = 0
     private var stalledNow = false                        // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
+    private var stalemateNow = false                      // отставание с меньшим темпом дольше BEHIND_PATIENCE (см. PARITY_FLOOR_LOST)
     private var standoffTicks = 0                         // тиков подряд стоящей линии врага (см. PRESS_PATIENCE)
     private var pressing = false                          // прижим включён (см. USE_PRESS)
     private val meleeDistHist = ArrayDeque<Int>()         // дистанция их мили до наших вооружённых за окно терпения (см. PRESS_CLOSING)
@@ -1812,6 +1825,7 @@ object PainAndGain {
         val weakerContact = theirs >= ours * (if (posture == Posture.ANNIHILATE) RETREAT_CONTACT_RATIO else if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // ДОБИТЬ по перевесу — с гистерезисом; по контакту — пока контакт есть (без гистерезиса: см. PUSH_RELEASE_RATIO)
         val stalemate = behindTicks >= BEHIND_PATIENCE
+        stalemateNow = stalemate
         val pushRatio = if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
         val pushRelease = if (stalemate) PUSH_RELEASE_RATIO_STALEMATE else if (behindOnScore) PUSH_RELEASE_RATIO_BEHIND else PUSH_RELEASE_RATIO
         // зачистка: у врага не осталось никого с боем, а мы позади по очкам — аннигиляция единственная победа, и остаток
