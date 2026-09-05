@@ -622,7 +622,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v66"
+    private const val BOT_VERSION = "v67"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2910,6 +2910,12 @@ object PainAndGain {
         val threats = armedEnemies.ifEmpty { combatEnemies }
         if (threats.isEmpty()) return
         val theirMelee = threats.filter { InfluenceMap.profileOf(it).melee > 0.0 }
+        // ЦЕЛЬ КЛЕТКИ — ЕГО СТРЕЛОК (v67; как фокус v60): «есть цель в трёх» считало целью и мили-приманку в 2–3, клетка в трёх от
+        // неё держалась памятью расстановки, и стрелки стояли в 4 от его стрелков со свободной клеткой впереди 142 крип-тика,
+        // стреляя в мили «за неимением» (матч 160, девятое поражение Coldkimchi: 79 выстрелов в мили при его стрелках в 3–4,
+        // 3:198 и 4:213 крип-тиков; его 341 выстрел против наших 199, армия стёрта при его 16000/16000). Мили — цель клетки,
+        // только когда стрелков у него нет
+        val shootAt = threats.filter { InfluenceMap.profileOf(it).ranged > 0.0 }.ifEmpty { threats }
         val enemyAt = enemyCreeps.mapTo(HashSet()) { it.x * 100 + it.y }
         // клетки-кандидаты: в RANGED_RANGE от любого нашего (дальше — марш, не расстановка), проходимые, не под врагом, и НА
         // НАШЕЙ СТОРОНЕ (v61): не дальше от центра наших вооружённых, чем от центра его угроз. Матч 145 (Coldkimchi, седьмое
@@ -2926,7 +2932,7 @@ object PainAndGain {
             if (key in cells || x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || key in enemyAt) continue
             val p = InfluenceMap.cell(x, y)
             if (USE_PLAN_OUR_SIDE && ourC != null && theirC != null && getRange(p, ourC) > getRange(p, theirC)) continue
-            cells[key] = FightCell(p, key, InfluenceMap.damageAt(x, y, combatEnemies), threats.count { getRange(p, it) <= RANGED_RANGE },
+            cells[key] = FightCell(p, key, InfluenceMap.damageAt(x, y, combatEnemies), shootAt.count { getRange(p, it) <= RANGED_RANGE },
                 focusTarget != null && getRange(p, focusTarget) <= RANGED_RANGE,
                 theirMelee.count { getRange(p, it) <= 1 }, theirMelee.count { getRange(p, it) <= MELEE_KEEP_RANGE },
                 threats.minOf { getRange(p, it) })
