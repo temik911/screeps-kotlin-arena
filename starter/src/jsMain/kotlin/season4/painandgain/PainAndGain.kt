@@ -482,7 +482,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v33"
+    private const val BOT_VERSION = "v34"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -907,6 +907,12 @@ object PainAndGain {
         if (ctx.combatEnemies.isEmpty()) return true
         // последний зов и при РАВНОМ счёте: ничья 0:0 после уклонения (см. EVADE_EQUAL_RATIO) отдана не будет
         if ((behindOnScore || ourScore <= enemyScore) && arenaInfo.ticksLimit - getTicks() <= LAST_CALL_TICKS) return true
+        // во время броска безфлаговой армии (см. unflaggedRushNow — тот же сигнал, что уводит армию в уклонение) флаг не берёт
+        // НИКТО: бой через двадцать тиков, и дебафф ложится на него. Скаут брал R3 на 42–43-м тике во всех четырёх боях с
+        // けろびー (матчи 38, 43, 44, 45) — −20 % стрелкам в решающем размене, — проходя порог паритета с запасом три очка мощи
+        // (3967 против 3964: модель мощи считает мили полными, а их обезоруживают за первые двадцать тиков). Три очка в тик
+        // за тридцать тиков против пятой части огня на весь бой
+        if (unflaggedRushNow) return false
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -1640,10 +1646,12 @@ object PainAndGain {
             val p = InfluenceMap.profileOf(e)
             val meleeLive = p.melee > 0.0 && combatArmy.any { getRange(e, it) <= MELEE_KEEP_RANGE }
             val rangedLive = p.ranged > 0.0 && combatArmy.any { getRange(e, it) <= RANGED_RANGE }
-            // лечение живое, когда есть кого лечить вплотную (12 за часть); иначе — дистанционное (4 за часть), треть
-            val healLive = p.heal > 0.0 && enemyCreeps.any { m -> m.id != e.id && m.hits < m.hitsMax && getRange(e, m) <= 1 }
+            // лекарь в угрозе — треть лечения ВСЕГДА (24 против 60 у стрелка): «живой» лекарь при раненом соседе весил 72 и
+            // собирал четверть-треть нашего огня (матч 44: 66 из 192, матч 45: 46 из 175, при HEALER_VALUE 1.0), пока けろびー
+            // тратил на лекарей 6–15 % и снимал наших стрелков (96 выстрелов по ним против наших 24 по его). Лекаря бьют,
+            // когда его добить за тик (первый ярус фокуса) или когда в дальности нет вооружённых (focusOrder)
             return (if (meleeLive) p.melee else p.melee * MELEE_KITE_DISCOUNT) + (if (rangedLive) p.ranged else p.ranged * 0.5) +
-                (if (healLive) p.heal else p.heal / 3.0) * HEALER_VALUE
+                p.heal / 3.0 * HEALER_VALUE
         }
         // тики до убийства нашим огнём в дальности за вычетом их лечения на цели; бесконечность — цель не убиваема
         fun killTicks(e: Creep): Double {
