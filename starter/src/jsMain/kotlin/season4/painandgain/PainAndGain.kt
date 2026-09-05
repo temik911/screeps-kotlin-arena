@@ -579,7 +579,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v53b"
+    private const val BOT_VERSION = "v54"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1452,6 +1452,7 @@ object PainAndGain {
         val flowC = escapeFlows[ckey] ?: return Int.MIN_VALUE / 2
         val start = escapeNearest[ckey] ?: return Int.MIN_VALUE / 2
         val theirsC = escapeTheirs[ckey] ?: return Int.MIN_VALUE / 2
+        if (theirsC >= Int.MAX_VALUE / 4) return Int.MIN_VALUE / 2   // его путь неизвестен — выход не подтверждён (v54)
         // при броске (см. EVADE_EQUAL_RATIO) преследователь идёт за нами на ПОЛНОЙ скорости: проекция по замеренному
         // темпу (0.42 в паузе колонны) считала дом безопасным выходом, и армия ушла в свой угол под удар (матч 32)
         val rate = if (unflaggedRushNow) 1.0 else approachRate
@@ -1528,6 +1529,10 @@ object PainAndGain {
             val key = c.x * 100 + c.y
             val flow = escapeFlows[key] ?: continue
             val theirs = escapeTheirs[key] ?: continue
+            // «ему не дойти» — это НЕИЗВЕСТНОСТЬ, не безопасность (v54): поле за бюджетом BFS даёт Int.MAX_VALUE / 4, и точка
+            // получала запас 536870903 — армия ушла в угол (96,3) при его армии в 75 клетках к югу и была там стёрта (матч 114,
+            // Coldkimchi, t=333); бегство вбок (v53) не включилось, потому что «лучшая точка» была положительной
+            if (theirs >= Int.MAX_VALUE / 4) continue
             val ourTicks = strikers.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: continue
             if (ourTicks >= Int.MAX_VALUE / 4) continue
             val exit = exitMargin(ctx, c, ourTicks)
