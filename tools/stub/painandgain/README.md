@@ -54,6 +54,8 @@ reproducible by re-running its scenario).
 
 `errors` counts `loop error` lines and, since 05.09.2026, every crash trace the bot's `runWithSourceMapSupport` prints (one per `at captureStack` frame): a `NoSuchElementException` thrown every tick for 1500 ticks used to be reported as `errors: 0`, because the mapped trace starts with an empty message line, not with `loop error`.
 
+**Three tiers since 05.09.2026.** `run` lines are the gate (120): every line that has ever failed in the recorded runs, every live-opponent script (`screen`, `screen+flagless`, `nine+flagless`, `block+flagless`, `farm+weak`, `twelve`, `grab`, `scouts`, `none`) and every line of the recent maps 28–35. `grind` lines (184) are the generic scripts on the older maps that never failed once, plus the known points races — `zsh regress.sh <tag>` still runs all 304 (~3.5 min), `zsh regress.sh gate` and the landing gate run the 120 (~1.5 min). Fifteen full runs in one day, each reading the same 184 lines that never change, was the operator's prompt; a line that fails in the grind is promoted by moving it back to `run`.
+
 `tools/land.sh` runs `regress.sh` as the landing gate: every line must say `PASS` with `errors: 0` — the enemy army
 destroyed, or the match ended with our score ahead. A new arena's harness starts as a copy of a sibling directory
 (`game/` is arena-agnostic; the runner and `world.mjs` are where the arena rules live).
