@@ -345,6 +345,7 @@ object PainAndGain {
      *  ряд «в 3 − d от переднего мили» ставит их на ряд дальше, чем надо; цель в трёх 67 % крип-тиков. */
     private const val USE_PLAN = true
     private const val USE_PLAN_OUR_SIDE = true   // клетки плана боя только на нашей стороне (v61, см. planFight)
+    private const val USE_RANGED_BEHIND_MELEE = true   // клетка стрелка не впереди фронта мили (v69, см. planFight)
     /** Прижим (v30): в бою по контакту без перевеса (ANNIHILATE без наступления) армия дерётся с линией врага, а не держит
      *  свою. Реплеи шести матчей (arukuka/screeps-arena-tools — интенты ОБЕИХ сторон, см. docs/pain-and-gain-research.md)
      *  показали, где проигрывается ровный бой. Линия врага встаёт ровно в трёх от нашего переднего (гистограмма
@@ -622,7 +623,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v68"
+    private const val BOT_VERSION = "v69"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2978,9 +2979,17 @@ object PainAndGain {
             .thenBy { if (it.targets > 0) minOf(it.dist, RANGED_RANGE) else -it.dist }
             .thenBy { -it.dmg }
             .thenBy { -getRange(c, it.pos) }
+        // СТРЕЛОК НЕ ВПЕРЕДИ МИЛИ (v69): клетка стрелка не ближе к угрозе, чем нынешний фронт мили минус шаг. Матч 169 (stachu3478,
+        // третье поражение при 24 победах): его линия отходила по клетке в тик, клетки «его стрелок в трёх» (v67) уходили за ней,
+        // стрелки шли вперёд, мили (клетки по памяти) отстали на 8–10 клеток, и его мили (в трёх 41 % тиков) съели стрелков по
+        // одному — 19 крип-тиков разоружённых, армия стёрта за сто тиков при его 15435/16000. «Стрелки впереди» отвергнуто ещё
+        // v37 — сюда оно вошло через план
+        val meleeFrontDist = if (USE_RANGED_BEHIND_MELEE) meleeFree.minOfOrNull { m -> threats.minOf { getRange(m, it) } } else null
+        fun behindMelee(cell: FightCell) = meleeFrontDist == null || cell.dist >= meleeFrontDist - 1
         val constrained = rangeds.sortedBy { c -> cells.values.count { it.targets > 0 && it.meleeAdj == 0 && getRange(c, it.pos) <= 1 } }
         for (r in constrained) {
-            val cell = place(r, rangedCmp(r), { it.targets > 0 && it.meleeAdj == 0 && it.meleeNear == 0 }) { true } ?: continue
+            val cell = place(r, rangedCmp(r), { it.targets > 0 && it.meleeAdj == 0 && it.meleeNear == 0 && behindMelee(it) }) { behindMelee(it) }
+                ?: place(r, rangedCmp(r), null) { true } ?: continue
             rangedCells[r.id] = cell
         }
         // мили без врага вплотную — заслон перед стрелком: клетка рядом с клеткой стрелка и ближе к угрозе, чем она; его мили в
