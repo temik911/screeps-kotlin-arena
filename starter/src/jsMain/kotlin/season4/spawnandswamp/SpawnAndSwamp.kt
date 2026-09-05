@@ -107,7 +107,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 22
+    private const val BOT_VERSION = 23
 
     private const val LATE_MARGIN = 60
 
@@ -351,6 +351,14 @@ object SpawnAndSwamp {
     private var spentFighters = 0
 
     /** Замер регена спавна (первые 100 тиков). */
+    /** Сдача в спавн по тикам за окно PRODUCTION_WINDOW: (тик, сколько сдано). Прогноз притока говорит,
+     *  сколько флот МОГ БЫ возить; это — сколько он ВОЗИТ на самом деле. Матч 22 (05.09.2026): по замеру
+     *  повтора противник всадил 133 выстрела в наши безоружные хаулеры, приток упал с 22 до 4, а прогноз
+     *  всё это время видел на земле 5-9 тысяч и звал покупать ещё — флот вырос до одиннадцати. */
+    private val delivered = ArrayDeque<Pair<Int, Int>>()
+    private val haulerStore = HashMap<String, Int>()
+    private var firstHaulerTick = -1
+
     private var lastSpawnEnergy = -1
     private var regenSamples = 0
     private var regenSum = 0
@@ -544,6 +552,7 @@ object SpawnAndSwamp {
 
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
+        measureDelivery(ctx)
         val breach = breachPlan(ctx)
         if (DEBUG_LOG && breach != null && !breachLogged) {
             breachLogged = true
@@ -584,7 +593,7 @@ object SpawnAndSwamp {
             println(
                 "t=${getTicks()} spawnE=${mySpawn.store[RESOURCE_ENERGY]} spawning=${mySpawn.spawning != null} " +
                     "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
-                    "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} " +
+                    "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }} " +
                     "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawnHits=${enemySpawn?.hits}"
             )
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
@@ -1213,7 +1222,15 @@ object SpawnAndSwamp {
         // при полном спавне с грузом в пути приток уже стоит в очереди, и новый хаулер только
         // отодвигает бойца (стенд: целевой приток 27 при теле M8R4 разгонял флот до 15 при спавне,
         // простаивающем полным)
-        val needHauler = allHaulers < MAX_HAULERS &&
+        // ФЛОТ НЕ РАСТЁТ, ПОКА ОН НЕ ВЫВОЗИТ ОБЕЩАННОЕ. Прогноз считает энергию, лежащую на земле,
+        // достижимой; охота на хаулеров, распад точки до приезда и пробки в этот счёт не входят, и в матче 22
+        // флот рос до одиннадцати, пока сдача падала с 22 до 4. Замер (realisedIncome) отвечает на тот же
+        // вопрос фактом; пока он держится у прогноза (с той же гистерезисной долей, что и у наступления),
+        // ёмкость — узкое место и покупка имеет смысл. Ниже — узкое место не ёмкость, и ещё один хаулер
+        // поедет умирать туда же
+        val realised = realisedIncome()
+        val fleetDelivers = realised < 0.0 || realised >= projectedIncome(ctx, usable) * PUSH_RELEASE_RATIO
+        val needHauler = allHaulers < MAX_HAULERS && fleetDelivers &&
             !(energy >= SPAWN_ENERGY_CAPACITY && carried > 0) &&
             capacityBound(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) }, HAULER_BLOCKS_MIN * CARRY_CAPACITY) &&
             projectedIncome(ctx, usable) < targetIncome()
@@ -1234,7 +1251,7 @@ object SpawnAndSwamp {
             if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return
             val r = spawn.spawnCreep(haulerBody(affordable))
             if (r.error == null) spentHaulers += affordable * blockCost()
-            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} spent=$spentHaulers/$spentFighters err=${r.error}")
+            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
             return
         }
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
@@ -1398,6 +1415,17 @@ object SpawnAndSwamp {
             best ?: arrayOf(MOVE, RANGED_ATTACK)
         }
     }
+
+    // ЧАСТИ HEAL В ТЕЛЕ БОЙЦА — ЗАМЕРЕНО И ОТВЕРГНУТО (05.09.2026, после матча 22, где его пара
+    // «стрелок + лекарь» лечила 1469 раз вплотную, а у нас лечения не было вовсе). Ценность лечения
+    // считалась двумя способами: как хиты, которые оно возвращает за бой (heal × хиты врага), и как
+    // множитель живучести enemyDps/(enemyDps − heal). Обе формулы верны для ДУЭЛИ и обе выбрали одно и
+    // то же вырождение — «одна пушка и два лекаря» (mmmmrhhmmm, 10 урона и 24 лечения): против одного
+    // M3R3 с 30 урона два лекаря дают пятикратную живучесть. В групповом бою по одной цели бьют трое, и
+    // лечение делится, а урона у тела нет. Стенд: fortress перестал браться вовсе (было 1381),
+    // tower+stream 1591 против 1015, tower+healball 1285 против 965, tower+hover 1073 против 943.
+    // Настоящий приём противника — не части в теле, а ОТДЕЛЬНЫЙ лекарь рядом с полным стрелком: это
+    // формация из двух крипов, а не тело, и делать её надо как формацию (следующий кандидат).
 
     /** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)
      *  плюс гружёные CARRY (по 50 с хвоста). */
@@ -2226,7 +2254,7 @@ object SpawnAndSwamp {
                 if (closeTarget != null) {
                     creep.heal(closeTarget)
                     healDone[closeTarget.id] = (healDone[closeTarget.id] ?: 0) + healParts * HEAL_POWER
-                    shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget)
+                    shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget, active)
                     continue
                 }
                 val farTarget = candidates.filter { it.hitsMax - it.hits > 0 }.maxByOrNull { need(it) }
@@ -2236,11 +2264,11 @@ object SpawnAndSwamp {
                     continue
                 }
             }
-            shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget)
+            shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget, active)
         }
     }
 
-    private fun shoot(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, stormSpawn: Boolean, wallTarget: StructureWall? = null) {
+    private fun shoot(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, stormSpawn: Boolean, wallTarget: StructureWall? = null, allies: List<Creep> = emptyList()) {
         if (!hasRanged(creep)) return
         val creepsInRange = enemyCreeps.filter { creep.getRangeTo(it) <= RANGED_RANGE }
         val spawnInRange = enemySpawn != null && creep.getRangeTo(enemySpawn) <= RANGED_RANGE
@@ -2270,7 +2298,15 @@ object SpawnAndSwamp {
             val target = when {
                 stormSpawn && spawnInRange -> enemySpawn
                 focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE -> focusTarget
-                creepsInRange.isNotEmpty() -> creepsInRange.minWithOrNull(compareByDescending<Creep> { InfluenceMap.profileOf(it).heal }.thenBy { it.hits })
+                // общей цели не достать — берём ту, по которой УЖЕ могут стрелять остальные наши: так
+                // соседи сходятся на одной цели сами. Прежде каждый выбирал независимо «лекарь, потом самый
+                // раненый», и огонь размазывался: замер повтора матча 22 — 1.6 цели за тик и доля фокуса
+                // 0.73 против 1.04 и 0.98 у противника, 43 наших выстрела из 74 ушли в лекаря, пока его
+                // стрелок жил вооружённым и стрелял
+                creepsInRange.isNotEmpty() -> creepsInRange.minWithOrNull(
+                    compareByDescending<Creep> { e -> allies.count { it.id != creep.id && hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE } }
+                        .thenByDescending { InfluenceMap.profileOf(it).heal }
+                        .thenBy { it.hits })
                 else -> enemySpawn
             }
             target?.let { creep.rangedAttack(it) }
@@ -2696,6 +2732,32 @@ object SpawnAndSwamp {
 
     /** Реген спавна: средний прирост энергии за тик по тикам, когда спавн не рожает и рядом нет
      *  сдающего хаулера (его transfer исказил бы замер). Печатается на 100-м тике. */
+    /** Сколько энергии флот сдал в спавн за тик — по падению груза хаулера рядом со спавном. Это ФАКТ,
+     *  в отличие от projectedIncome: охота на хаулеров, распад точки до приезда и пробки видны только здесь. */
+    private fun measureDelivery(ctx: Ctx) {
+        val now = getTicks()
+        var sum = 0
+        for (h in ctx.haulers) {
+            val store = h.store[RESOURCE_ENERGY] ?: 0
+            val was = haulerStore[h.id]
+            if (was != null && was > store && getRange(h, ctx.mySpawn) <= 1) sum += was - store
+            haulerStore[h.id] = store
+        }
+        haulerStore.keys.retainAll(ctx.haulers.mapTo(HashSet()) { it.id })
+        if (firstHaulerTick < 0 && ctx.haulers.isNotEmpty()) firstHaulerTick = now
+        if (sum > 0) delivered.addLast(now to sum)
+        while (delivered.isNotEmpty() && delivered.first().first < now - PRODUCTION_WINDOW) delivered.removeFirst()
+    }
+
+    /** Замеренный приток (энергии в тик) за окно; -1, пока флот не проработал целое окно и мерить нечего. */
+    private fun realisedIncome(): Double {
+        val now = getTicks()
+        if (firstHaulerTick < 0) return -1.0
+        val span = minOf(PRODUCTION_WINDOW, now - firstHaulerTick)
+        if (span < PRODUCTION_WINDOW) return -1.0
+        return delivered.sumOf { it.second }.toDouble() / span
+    }
+
     private fun measureRegen(spawn: StructureSpawn, deliveringNearby: Boolean) {
         val e = spawn.store[RESOURCE_ENERGY] ?: 0
         // действия применяются в КОНЦЕ тика: сдача, начатая на прошлом тике, видна в энергии сейчас
