@@ -317,6 +317,14 @@ object PainAndGain {
      *  догнать никогда: в матче 5 армия 80 тиков гналась за тремя мили-приманками через всю карту, потом два мили —
      *  40 клеток за одиноким лекарем, и половина армии осталась одна против пяти стрелков с лекарями. */
     private const val CHASE_WINDOW = 8
+    /** Третья сетка простоя — «враг держит дистанцию» (в добивании без контакта дистанция между центрами армий за CHASE_WINDOW
+     *  тиков не сократилась, враг дальше броска → простой → флаги) — ЗАМЕРЕНА И ВЫКЛЮЧЕНА: против живого фермера (матч 51:
+     *  1600 тиков без единого нашего выстрела, 8 в тик против 17) она уводит армию к флагам, но гонку не выигрывает —
+     *  оставленные флаги блуждающий блоб забирает обратно; на стенде семья farm разошлась в обе стороны (+6354 m12, +12871
+     *  m23 spread, −6986 m25, −7742 m33 farm+weak), kite медленнее на 60–100 тиков, m32 farm+weak (живой противник) из
+     *  лидерства на 1557-м в проигрыш по очкам; 283 против 285. Гонка с фермером — открытая находка: нужен не отказ от
+     *  погони, а удержание взятого (гарнизон отвергнут 17→18) или перехват блоба. */
+    private const val USE_KEEPS_DISTANCE_STALL = false
     private const val LEASH_RANGE = 8
 
     /** Плотность строя при враге рядом (см. compact): шаг разрешён только на клетку в COMPACT_RANGE от центра
@@ -486,7 +494,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v35"
+    private const val BOT_VERSION = "v36"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -946,6 +954,7 @@ object PainAndGain {
     private val keeperIds = HashMap<String, String>()   // хранитель флага → id флага (см. KEEP_RANGE)
     private val enemyHitsHist = ArrayDeque<Int>()         // сумма хитов врага за STALL_TICKS тиков (чистый урон)
     private val marchHist = ArrayDeque<Int>()             // клетка центра вооружённой массы за MARCH_STALL_TICKS тиков
+    private val armyDistHist = ArrayDeque<Int>()          // дистанция между центрами армий за CHASE_WINDOW тиков (см. третья сетка)
     private val ourHitsHist = ArrayDeque<Int>()           // и наша: бьют только нас — это бой, не простой
     private var preyNearTicks = 0                         // тиков подряд с пикетом (см. STALL_PICKET) в досягаемости
     private var stallUntil = 0
@@ -1479,6 +1488,16 @@ object PainAndGain {
         // матч ни одного урона ни с одной стороны, и проигрыш по очкам 19927:24205 при 12 против 13 в тик
         val marchCell = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })?.let { it.x * 100 + it.y } ?: -1
         marchHist.addLast(marchCell)
+        // ТРЕТИЙ вид простоя — враг, который держит дистанцию: в добивании без контакта дистанция между центрами армий за
+        // CHASE_WINDOW тиков не сократилась, и враг дальше броска. Матч 48 (けろびー v5, фермер): он взял шесть флагов к 80-му
+        // (сам на 0,75 мощи), парил в 10–28 клетках от нас и не дрался — за 1600 тиков ни одного выстрела с нашей стороны;
+        // пикет не срабатывал (враг дальше ENGAGE_RANGE), марш не «стоял» (армия за ним ходила), и ANNIHILATE держал армию
+        // лицом к нему на двух-трёх флагах против его пяти: 8 в тик против 17, проигрыш 15652:22950 при 16000/16000 у обоих
+        val armyDist = ctx.enemyCentroid?.let { getRange(centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: it, it) } ?: -1
+        if (posture == Posture.ANNIHILATE && !inContact(armedEnemies, army) && armyDist >= 0) armyDistHist.addLast(armyDist) else armyDistHist.clear()
+        while (armyDistHist.size > CHASE_WINDOW + 1) armyDistHist.removeFirst()
+        val keepsDistance = USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && armyDistHist.size > CHASE_WINDOW &&
+            armyDistHist.last() >= armyDistHist.first() && armyDistHist.last() > ENGAGE_RANGE
         while (marchHist.size > MARCH_STALL_TICKS) marchHist.removeFirst()
         // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
         val marchStalled = pushing && marchCell >= 0 && marchHist.size == MARCH_STALL_TICKS &&
@@ -1488,9 +1507,9 @@ object PainAndGain {
         // боевые враги нужны ПИКЕТУ (он из них и состоит), а простою марша — нет: зачистка идёт ровно тогда, когда
         // боевых не осталось, и там сетка не сработала ни разу (стенд m18 roost: 1500 тиков погони за двумя скаутами)
         if (posture != Posture.RETREAT && posture != Posture.EVADE && !netDamage && now >= stallUntil &&
-            ((combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS) || marchStalled)) {
+            ((combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS) || marchStalled || keepsDistance)) {
             stallUntil = now + STALL_COOLDOWN
-            if (DEBUG_LOG) println("stall t=$now: ${if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
+            if (DEBUG_LOG) println("stall t=$now: ${if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else if (keepsDistance) "the enemy keeps its distance (${armyDistHist.first()} -> ${armyDistHist.last()} over $CHASE_WINDOW ticks)" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
         }
         val stalled = now < stallUntil
         stalledNow = stalled
