@@ -237,6 +237,7 @@ object PainAndGain {
      *  при стоянии — такой же проигрыш. 0,75: две захвата из 3:4 флагов при 0,91 дают 0,77 по числам матча 152, и двух гонке
      *  хватает (16 против 9 в тик с 400-го). На стенде не срабатывает ни разу: все стендовые фермеры бьют. */
     private const val USE_LOST_RACE_CAPTURE = true
+    private const val USE_HOLD_OWN_FLAG = true    // пост — свой флаг под ногами при враге рядом (v66)
     private const val PARITY_FLOOR_LOST = 0.75
     private const val PUSH_RELEASE_RATIO_STALEMATE = 0.95
 
@@ -621,7 +622,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v65"
+    private const val BOT_VERSION = "v66"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1953,7 +1954,14 @@ object PainAndGain {
         objectiveFlagId = objective?.flag?.id
         if (newPosture != Posture.RETREAT) retreatTarget = null
         val retreatTo = if (newPosture == Posture.RETREAT) retreatPoint(ctx) else null
-        val post = if (interceptFlag?.ours == true) interceptFlag.pos else postPoint(ctx)
+        // ДЕРЖИ, ЧТО ДЕРЖИШЬ (v66): армия, стоящая на своём флаге при враге рядом, постом считает этот флаг, а не дальний пост.
+        // Матч 159 (けろびー, пятнадцатый проигрыш фермеру 12009:24099): он кайтит вокруг D5 при 4075 против 3084, при huntable 0
+        // армия уходила в HOLD к посту (11,68) за сорок клеток, он возвращался на D5; на 800-м и 1000-м мы стояли на D5 (хранитель
+        // melee_1 на 1009-м снят на 1011-м — девять его вооружённых в десяти клетках не пикет) и снова уходили. «Держать линию,
+        // где стоит» стенд отверг (v42: 58 хуже / 48 лучше — возврат к посту добивает отбитый рывок); здесь — только свой флаг под
+        // ногами
+        val standingFlag = if (USE_HOLD_OWN_FLAG && enemyNear) ctx.flags.firstOrNull { it.ours && getRange(it.pos, ctx.ourCentroid) <= POST_STANDOFF } else null
+        val post = standingFlag?.pos ?: if (interceptFlag?.ours == true) interceptFlag.pos else postPoint(ctx)
         val postureKey = "$newPosture:${objectiveFlagId ?: ""}"
         if (DEBUG_LOG && (postureKey != postureLogged || getTicks() % (LOG_EVERY * 10) == 0)) {
             postureLogged = postureKey
