@@ -615,7 +615,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v63"
+    private const val BOT_VERSION = "v64"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2268,7 +2268,11 @@ object PainAndGain {
             // «стоячий бой» → расстановка ставила стрелков колонной x=81 в 1–3 клетках от его стрелков, к 80-му двое наших стрелков
             // стояли уже за его линией на клетках, равноудалённых от обоих центров (v61 их не режет); ярусы «подальше от его мили» в
             // рубке ведут сквозь его строй. Прижим (standoffNow) это условие и так несёт; стоячий бой по центрам (v47) — нет
-            val meleeBrawl = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && mobileArmy.any { hasWeapon(it) && getRange(e, it) <= MELEE_HOLD_RANGE + 1 } }
+            // РУБКА — его мили ВПЛОТНУЮ, не «в трёх» (v64): линия Coldkimchi держит мили в 2–3 от наших и не рубит (матч 153, восьмое
+            // поражение: 2:699 и 3:1431 крип-тиков его мили, 61 удар за 700 тиков боя) — по «в трёх» v62 расстановка была выключена
+            // весь бой, ряды planBlock ставили стрелков за передним мили, и наш огонь (1611 выстрелов против его 1428) шёл по
+            // разным целям: 4+ в одну цель 9 тиков против его 44 при 216 лечения в тик на цели с обеих сторон
+            val meleeBrawl = theirMeleeIn
             val standingNow = contact && centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating && !meleeBrawl
             val planNow = USE_PLAN && (standoffNow || standingNow)
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
