@@ -259,6 +259,7 @@ object PainAndGain {
      *  берём всё» (v11) дало семь флагов при 0.65–0.76 и три аннигиляции подряд (матчи 11–13). */
     private const val PARITY_FLOOR = 0.97
     private const val PASSIVE_TICKS = 100
+    private const val DETACH_WINDOW = PASSIVE_TICKS / 2   // окно «погоня не сближается» для отряда (v59, см. USE_DETACH)
 
     /** В последних тиках матча проигрывающему по счёту флаги нужны любой ценой: бой уже не успеет. */
     private const val LAST_CALL_TICKS = 300
@@ -596,7 +597,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v58"
+    private const val BOT_VERSION = "v59"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1122,7 +1123,12 @@ object PainAndGain {
         }
         val ourMods = mods(true)
         val theirMods = mods(false)
-        return powerOf(ctx.army, ctx.combatEnemies, ourMods, theirMods) to powerOf(ctx.combatEnemies, ctx.army, theirMods, ourMods)
+        // наша СТОРОНА, не ядро (v59): паритет захвата — страховка от аннигиляции стороны, а отряженные в бегуны (см. USE_DETACH)
+        // живы и вооружены. Ядро без пяти отряжённых стояло в паритете (2918 против 2954), захват был запрещён ВСЕМ, и четверо
+        // отряжённых 800 тиков стояли POISED в клетке от свободных D5, A3, R3 и H4 — 3174:22931, двенадцатый проигрыш фермеру
+        // (матч 139); до отряда, при 1,41, захваты были разрешены и скаутам
+        val side = ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }
+        return powerOf(side, ctx.combatEnemies, ourMods, theirMods) to powerOf(ctx.combatEnemies, side, theirMods, ourMods)
     }
 
     /** Цена флага в силе — доля нашей мощи, которая останется после захвата (1 — бесплатно): флаг лечения
@@ -1728,18 +1734,23 @@ object PainAndGain {
             // отряд на 566-м при his_moved=0 по реплею (матч 133, одиннадцатый проигрыш фермеру-лагерю 8346:22771)
             enemyCentHist.addLast(centroidOf(armedEnemies)?.let { it.x * 100 + it.y } ?: -1)
         } else { armyDistHist.clear(); enemyCentHist.clear() }
-        while (armyDistHist.size > CHASE_WINDOW + 1) armyDistHist.removeFirst()
-        while (enemyCentHist.size > CHASE_WINDOW + 1) enemyCentHist.removeFirst()
-        // ...и это ОН уходит (v57): центр его армии за окно сместился не меньше чем на CHASE_WINDOW / 2 — стоячий лагерь, у
-        // которого замираем мы, дистанцию не «держит»
-        val hisMoved = enemyCentHist.size > CHASE_WINDOW && enemyCentHist.first() >= 0 && enemyCentHist.last() >= 0 && run {
-            val a = enemyCentHist.first(); val b = enemyCentHist.last()
-            maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= CHASE_WINDOW / 2
+        while (armyDistHist.size > DETACH_WINDOW + 1) armyDistHist.removeFirst()
+        while (enemyCentHist.size > DETACH_WINDOW + 1) enemyCentHist.removeFirst()
+        // ...и это ОН уходит (v57): центр его вооружённых за окно сместился не меньше чем на четверть окна — стоячий лагерь, у
+        // которого замираем мы, дистанцию не «держит». Окно отряда — DETACH_WINDOW (v59): по восьми тикам (CHASE_WINDOW) отряд
+        // собрался на 207-м тике матча 139, когда дистанция за сто тиков сократилась с 40 до 12 — армия почти догнала, а
+        // восьмитиковое окно поймало паузу; ядро без пяти встало, он ушёл и запарковался (3174:22931)
+        fun kept(window: Int): Boolean {
+            if (armyDistHist.size <= window || enemyCentHist.size <= window) return false
+            val d0 = armyDistHist.elementAt(armyDistHist.size - 1 - window)
+            val a = enemyCentHist.elementAt(enemyCentHist.size - 1 - window); val b = enemyCentHist.last()
+            if (a < 0 || b < 0) return false
+            val moved = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
+            return armyDistHist.last() >= d0 && armyDistHist.last() > ENGAGE_RANGE && moved >= window / 4
         }
-        val distanceKept = combatEnemies.isNotEmpty() && armyDistHist.size > CHASE_WINDOW &&
-            armyDistHist.last() >= armyDistHist.first() && armyDistHist.last() > ENGAGE_RANGE && hisMoved
+        val distanceKept = combatEnemies.isNotEmpty() && kept(DETACH_WINDOW)
         if (distanceKept) lastDistanceKeptTick = now
-        val keepsDistance = USE_KEEPS_DISTANCE_STALL && distanceKept
+        val keepsDistance = USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)
         while (marchHist.size > MARCH_STALL_TICKS) marchHist.removeFirst()
         // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
         val marchStalled = pushing && marchCell >= 0 && marchHist.size == MARCH_STALL_TICKS &&
