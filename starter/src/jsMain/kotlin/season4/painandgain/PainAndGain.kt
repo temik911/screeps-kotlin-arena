@@ -114,6 +114,11 @@ object PainAndGain {
      *  такого врага снято: наступление — это погоня. Так советуют и внешние разборы (jonwinsley: армия «между врагом и нашим
      *  флагом»; см. docs/pain-and-gain-research.md, §4). */
     private const val USE_INTERCEPT = true
+    /** Флаг перехвата — тот из не его флагов, к которому МЫ успеваем раньше (наш путь + запас ≤ его дистанция), первый в его
+     *  порядке (по близости к нему), и он липкий: держится, пока он его не возьмёт. Первая форма («ближайший к его центру»)
+     *  дребезжала с каждым его шагом — матч 59: армия ходила между (8,90), (31,67), (49,49) и (13,49), по 40–60 клеток, и никуда не
+     *  приходила, пока он фармил 17 в тик (9359:24080). */
+    private const val INTERCEPT_MARGIN = 2
     private const val PUSH_RELEASE_RATIO = 1.1
 
     /** Проигрывая по прогнозу счёта, армия идёт добивать при меньшем перевесе: очки — у того, кто держит больше
@@ -1635,8 +1640,16 @@ object PainAndGain {
         // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
         val holdLine = enemyNear && !pushing && !annihilate && !stalled
         // перехват (см. USE_INTERCEPT): ближайший к центру фермера флаг не из его — туда; свой — пост (см. post ниже), иначе — цель
-        val interceptFlag: FlagInfo? = if (!enemyNotFightingNow || armedEnemies.isEmpty()) null else
-            ctx.enemyCentroid?.let { ec -> ctx.flags.filter { !it.theirs }.minByOrNull { getRange(it.pos, ec) } }
+        val interceptFlag: FlagInfo? = if (!enemyNotFightingNow || armedEnemies.isEmpty()) null else ctx.enemyCentroid?.let { ec ->
+            val group = strikers.ifEmpty { mobileArmy }
+            // липкий: выбранный держим, пока он не его
+            interceptFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id && !it.theirs } }
+                ?: ctx.flags.filter { !it.theirs }.sortedBy { getRange(it.pos, ec) }.firstOrNull { f ->
+                    val flow = flowTo(ctx, f.pos)
+                    val ours = group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0
+                    ours < Int.MAX_VALUE / 4 && ours + INTERCEPT_MARGIN <= getRange(f.pos, ec)
+                }
+        }
         interceptFlagId = interceptFlag?.id
         val interceptObjective: Objective? = interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it) }?.let { f ->
             val group = strikers.ifEmpty { mobileArmy }
