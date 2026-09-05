@@ -99,6 +99,13 @@ object PainAndGain {
      *  0.9 вместе со входом «по контакту» открывал лазейку — контакт с ОДНИМ стрелком включал ДОБИТЬ, а дальше
      *  гистерезис держал его при 0.97, и армия прошла через всю карту к вражескому углу (матч 3, t=60–96). */
     private const val PUSH_RATIO = 1.3
+    /** Наступление окупается: за окно STALL_TICKS с врага снято не меньше, чем с нас (суммы хитов живых, лечение обеих сторон
+     *  внутри), иначе наступление снимается и строй собирается заново. Матч 44 (けろびー v1): к 180-му мы выигрывали
+     *  16000/16000 против 12800/12800, трое его мили мертвы, и при перевесе 1.3 армия пошла в наступление — строй распущен,
+     *  крипы гнались поодиночке за линией стрелков, которая отошла на 18 клеток, стреляя из трёх: 311 его выстрелов против
+     *  наших 175 (68 % крип-тиков с выстрелом против 44 %), r→melee 137 по идущим первыми мили — за 60 тиков размен
+     *  перевернулся, армия потеряна. Ланчестер даёт право наступать, размен говорит, окупается ли оно. */
+    private const val PUSH_EXCHANGE = 1.0
     private const val PUSH_RELEASE_RATIO = 1.1
 
     /** Проигрывая по прогнозу счёта, армия идёт добивать при меньшем перевесе: очки — у того, кто держит больше
@@ -475,7 +482,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v32"
+    private const val BOT_VERSION = "v33"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -760,7 +767,7 @@ object PainAndGain {
         )
         // подпись сборки: по ней видно, какая версия играет, даже если строку версии забыли поднять
         println(
-            "tuning: parity=$PARITY_FLOOR/$CAPTURE_FLOOR/$PARITY_FLOOR_STALLED push=$PUSH_RATIO/$PUSH_RATIO_BEHIND " +
+            "tuning: pushX=$PUSH_EXCHANGE parity=$PARITY_FLOOR/$CAPTURE_FLOOR/$PARITY_FLOOR_STALLED push=$PUSH_RATIO/$PUSH_RATIO_BEHIND " +
                 "stall=$STALL_TICKS/$STALL_PICKET/$STALL_DAMAGE/$STALL_COOLDOWN march=$MARCH_STALL_TICKS rush=$APPROACH_RUSH/$EVADE_EQUAL_RATIO " +
                 "mass=$MASS_RANGE leash=$LEASH_RANGE meleeHold=$MELEE_HOLD_RANGE press=$PRESS_RANGE/$PRESS_PACK/$PRESS_PATIENCE/$PRESS_CLOSING/$PRESS_GIVEUP healer=$HEALER_VALUE keep=$KEEP_RANGE/$KEEP_PICKET/$KEEP_RELEASE"
         )
@@ -1428,6 +1435,9 @@ object PainAndGain {
         enemyHitsHist.addLast(enemyHitsNow); ourHitsHist.addLast(ourHitsNow)
         while (enemyHitsHist.size > STALL_TICKS) enemyHitsHist.removeFirst()
         while (ourHitsHist.size > STALL_TICKS) ourHitsHist.removeFirst()
+        // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
+        val exchangePaying = ourHitsHist.size < STALL_TICKS ||
+            (enemyHitsHist.first() - enemyHitsNow) >= (ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
         val mobileArmy = army.filter { canMove(it) && it.id !in keeperIds }
         val chasers = strikers.ifEmpty { mobileArmy }
         // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
@@ -1514,7 +1524,7 @@ object PainAndGain {
         // пятьсот тиков, армия ходила за флагами и проиграла по очкам)
         val sweep = combatEnemies.isEmpty() && enemyCreeps.isNotEmpty() && strikers.isNotEmpty() && behindOnScore
         // и зачистка уступает простою: она стояла ВНЕ него, поэтому замерший на месте «дожим» не выключался ничем
-        pushing = !stalled && (sweep || (huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
+        pushing = !stalled && (sweep || (exchangePaying && huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -1643,13 +1653,15 @@ object PainAndGain {
         // фокус: добиваемые за тик, затем наибольшая угроза, снимаемая за тик боя (угроза / тики до убийства), и лишь
         // потом угроза на хит — «угроза на хит» слала огонь в лекарей врага за строем, которых лечили друг друга
         // быстрее, чем мы били (стенд m2 rush: выигранный без потерь рывок стал разгромом)
-        val focusTarget = focusPool.maxWithOrNull(
-            compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
-                .thenBy { val t = killTicks(it); if (t.isInfinite()) 0.0 else threatOf(it) / t }
-                .thenBy { threatOf(it) / it.hits.coerceAtLeast(1) }
-                .thenByDescending { it.hits }
-                .thenByDescending { getRange(it, centroid) }
-        )
+        val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+            .thenBy { val t = killTicks(it); if (t.isInfinite()) 0.0 else threatOf(it) / t }
+            .thenBy { threatOf(it) / it.hits.coerceAtLeast(1) }
+            .thenByDescending { it.hits }
+            .thenByDescending { getRange(it, centroid) }
+        val focusTarget = focusPool.maxWithOrNull(focusCmp)
+        // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
+        // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
+        val focusOrder = focusPool.sortedWith(focusCmp.reversed())
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
         // добить: цель армии — ближайший к центру армии боевой враг (по пути); в бою ПО КОНТАКТУ (без перевеса) —
@@ -2136,16 +2148,16 @@ object PainAndGain {
         }
 
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
-        healAndShoot(army, allies, enemyCreeps, focusTarget)
+        healAndShoot(army, allies, enemyCreeps, focusTarget, focusOrder)
     }
 
     /** Удар мили: фокус-цель вплотную, иначе самый раненый сосед. */
-    private fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?) {
+    private fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         if (!hasMelee(creep)) return
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
         val target: Creep? = when {
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
-            adjacent.isNotEmpty() -> adjacent.minByOrNull { it.hits }
+            adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
             else -> null
         }
         target?.let { creep.attack(it) }
@@ -2175,7 +2187,7 @@ object PainAndGain {
         }
     }
 
-    private fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, focusTarget: Creep?) {
+    private fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         val healDone = HashMap<String, Int>()
         val incoming = HashMap<String, Int>()
         fun need(target: Creep): Int {
@@ -2184,7 +2196,7 @@ object PainAndGain {
             return deficit + expected - (healDone[target.id] ?: 0)
         }
         for (creep in active) {
-            strike(creep, enemyCreeps, focusTarget)
+            strike(creep, enemyCreeps, focusTarget, focusOrder)
             val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
             if (healParts > 0) {
                 val candidates = allies.filter { !it.spawning && need(it) > 0 && creep.getRangeTo(it) <= HEAL_RANGE }
@@ -2192,7 +2204,7 @@ object PainAndGain {
                 if (closeTarget != null) {
                     creep.heal(closeTarget)
                     healDone[closeTarget.id] = (healDone[closeTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
-                    shoot(creep, enemyCreeps, focusTarget)
+                    shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
                 }
                 val farTarget = candidates.filter { it.hitsMax - it.hits > 0 }.maxByOrNull { need(it) }
@@ -2202,11 +2214,11 @@ object PainAndGain {
                     continue
                 }
             }
-            shoot(creep, enemyCreeps, focusTarget)
+            shoot(creep, enemyCreeps, focusTarget, focusOrder)
         }
     }
 
-    private fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?) {
+    private fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         if (!hasRanged(creep)) return
         val creepsInRange = enemyCreeps.filter { creep.getRangeTo(it) <= RANGED_RANGE }
         if (creepsInRange.isEmpty()) return
@@ -2223,7 +2235,7 @@ object PainAndGain {
             // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
             val target = when {
                 focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE -> focusTarget
-                else -> massPool.minByOrNull { it.hits }
+                else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE } ?: massPool.minByOrNull { it.hits }
             }
             target?.let { creep.rangedAttack(it) }
         }
