@@ -278,6 +278,8 @@ object PainAndGain {
     private const val ROTATE_OUT = 0.5
     private const val ROTATE_IN = 0.9
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
+    private const val USE_MELEE_COVER = true  // мили бросается только на цель в досягаемости наших стрелков (v55)
+    private const val MELEE_COVER = 2         // стрелков в RANGED_RANGE + 1 от цели, чтобы мили пошёл на неё (v55)
     private const val USE_INLINE = true       // бросок только в строю (v15)
     /** Строй рядами в бою по контакту (v17): мили — передний ряд поперёк оси на врага, стрелки — второй ряд в 2 за ним
      *  (достают на клетку дальше переднего), лекари и раненые — третий в 3 (вне досягаемости их стрелков, стоящих за их
@@ -579,7 +581,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v54"
+    private const val BOT_VERSION = "v55"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1588,7 +1590,12 @@ object PainAndGain {
         // ВБОК, когда «прочь» некуда (v53): из домашнего угла каждое направление прочь от его центра уводит за карту — матч 110,
         // бросок боевого けろびー с 3-го тика, уклонение из угла в угол, контакт у (79,81)–(93,93), армия стёрта к 150-му; тот же
         // бой в открытом поле выигран пять раз. Направление допустимо, если конец шага не ближе EVADE_RANGE к его центру:
-        // сначала уводящие (скалярное произведение > 0), затем боковые; бой, если придёт, придёт в поле
+        // сначала уводящие (скалярное произведение > 0), затем боковые; бой, если придёт, придёт в поле.
+        // НАХОДКА (матч 115, не исправлено): у верхнего края при враге точно к югу «прочь» — за картой, и знак крошечного
+        // бокового смещения его центра решал запад/восток: (5,3) на 56-м, (3,3) на 61-м, (50,6) на 71-м, (57,6) на 76-м —
+        // центр армии за 20 тиков (30,3)→(28,3)→(25,3)→(27,3)→(30,3), контакт на 77-м. Ранжирование по расстоянию с
+        // гистерезисом (v55-опыт) гейт прошло, но 25 строк хуже / 29 лучше — то же дрожание было во всех девятнадцати
+        // победах над тем же соперником, решил не отход, а бой (см. covered)
         fun pick(away: Boolean): Position? {
             var best: Position? = null
             var bestD = -1
@@ -2255,7 +2262,22 @@ object PainAndGain {
                 InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && e.id !in pressGiveUp &&
                     army.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 }
             }.minByOrNull { getRange(creep, it) } else null
-            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) MELEE_HOLD_RANGE else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp }.minByOrNull { getRange(creep, it) } else null
+            // прикрытие (v55): мили бросается на цель в ENGAGE_RANGE, только если её достают наши стрелки — не меньше MELEE_COVER
+            // стрелков в RANGED_RANGE + 1 от неё — или она вплотную к кому-то из наших. Матч 115 (stachu3478, битый до того
+            // девятнадцать раз): его одиночный стрелок подошёл на 2–6 клеток к нашим мили и отступал по клетке в тик; трое мили
+            // без врага в трёх (линию не держат) шли за ним на 5–6 клеток впереди своих стрелков в его блок из четырёх мили и
+            // четырёх стрелков — 1200 хитов за два тика (t=86–87), трое из четырёх мили мертвы к 100-му при равной силе на 77-м;
+            // «под огнём без двух вплотную — назад» срабатывал уже под ударами. В выигранном за пять минут до того матче его
+            // мили сами шли в досягаемость наших стрелков и там гибли. Гейт 125/125 при 19 лучше / 24 хуже (правило боя
+            // всегда перемешивает 20–30 строк: v52c 29/20, v53 29/30; правки вне боя — 0/0). Два сужения ОТВЕРГНУТЫ стендом:
+            // «только цель в блоке» (не меньше двух других вооружённых в RANGED_RANGE от неё) — 124/125, 13 лучше / 24 хуже,
+            // m33 farm+weak красная; «только без толчка» (pushing) — 123/125, 10 лучше / 19 хуже, m28 farm+weak и m29 camp
+            // красные. Строки «стёрт → лидируем» в rush-сценариях — не это правило: там последний крип (лекарь, равная
+            // скорость) уходит от погони при любом варианте, бой окончен на 94-м
+            fun covered(e: Creep) = !USE_MELEE_COVER || holdMelee ||
+                combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
+                army.any { a -> a.id != creep.id && getRange(e, a) <= 1 }
+            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) MELEE_HOLD_RANGE else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp && (!isMelee(creep) || hasRanged(creep) || covered(it)) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
             val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
