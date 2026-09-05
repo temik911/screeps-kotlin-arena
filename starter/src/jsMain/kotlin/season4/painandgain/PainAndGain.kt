@@ -115,6 +115,8 @@ object PainAndGain {
      *  флагом»; см. docs/pain-and-gain-research.md, §4). v42: снято, только пока есть что перехватывать (флаг не наш) или мы
      *  впереди по очкам — фермер, севший на всех флагах, не придёт никуда, и его надо бить (матч 70, см. chaseVeto). */
     private const val USE_INTERCEPT = true
+    private var USE_POST_INSIDE = false
+    private var USE_FLEE_DIRECTION = true
     /** Фокус-огонь (v45; оператор по матчу 78: «нет фокус-файра — каждый рэндж стреляет в своего; держать их вместе и за ход
      *  выбивать максимум из одного», и «цель — та, к которой лекари далеки»). Замер по реплеям: наибольшее число наших выстрелов
      *  в ОДНУ цель за тик — четыре и больше лишь в 1–2 % тиков (матчи 78, 73, 67) против 11 % у Coldkimchi и 14 % у けろびー;
@@ -558,7 +560,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v45"
+    private const val BOT_VERSION = "v46"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1506,7 +1508,18 @@ object PainAndGain {
             if (cur != null && c.x == cur.x && c.y == cur.y) curScore = score
             if (best == null || score > bestScore) { bestScore = score; best = c; bestArrive = theirs - ourTicks; bestExit = exit }
         }
-        if (cur != null && !arrived && curScore >= bestScore - EVADE_HYSTERESIS) return cur
+        if (cur != null && !arrived && curScore >= bestScore - EVADE_HYSTERESIS && curScore > 0) return cur
+        // ни одной точки с запасом — бегство направлением (см. fleePoint); точка с нулевым или отрицательным запасом — это шаг
+        // сквозь преследователя или в угол (матч 80: (3,3) −40, дом 0, (96,96) 0)
+        if (USE_FLEE_DIRECTION && (best == null || bestScore <= 0)) {
+            val flee = fleePoint(ctx, armed)
+            if (flee != null) {
+                if (cur == null || cur.x != flee.x || cur.y != flee.y)
+                    println("evade: t=$now flee=(${flee.x},${flee.y}) best=${best?.let { "(${it.x},${it.y})" } ?: "-"} score=$bestScore from=(${ctx.ourCentroid.x},${ctx.ourCentroid.y}) approach=${(approachRate * 100).toInt()}")
+                evadeTarget = flee
+                return flee
+            }
+        }
         if (best == null) { evadeTarget = null; return null }
         if (cur == null || cur.x != best.x || cur.y != best.y)
             println("evade: t=$now to=(${best.x},${best.y}) score=$bestScore arrive=$bestArrive exit=$bestExit from=(${ctx.ourCentroid.x},${ctx.ourCentroid.y}) approach=${(approachRate * 100).toInt()}")
@@ -1514,8 +1527,37 @@ object PainAndGain {
         return best
     }
 
-    /** Пост: центр наших флагов (их и держим), без флагов — дом. */
-    private fun postPoint(ctx: Ctx): Position = passableNear(centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ctx.home)
+    /** Пост: центр наших флагов (их и держим), без флагов — дом; и НЕ БЛИЖЕ EVADE_RANGE к краю карты (v46). Матчи 78 и 80
+     *  (Coldkimchi, стоячая линия при паритете, из контакта отхода нет): единственный наш флаг — угловой H4 (90,8), пост на
+     *  нём, армия стояла в углу; когда он пошёл на нас, ни одна точка уклонения не имела запаса (лог evade: (96,3) 13, дальше
+     *  (3,3) −40 сквозь него, дом с выходом 0, угол (96,96) с выходом 0) — контакт на 319-м и 510-м, армия стёрта при его
+     *  16000/16000. Флаг остаётся нашим, пока на него не встанет чужой (хранитель встаёт, когда враг подходит, см. KEEP_RANGE);
+     *  стоять на нём армии незачем, а угол — ловушка для равного по скорости. */
+    private fun postPoint(ctx: Ctx): Position {
+        val c = centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ctx.home
+        return if (!USE_POST_INSIDE) passableNear(c) else passableNear(InfluenceMap.cell(c.x.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE), c.y.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE)))
+    }
+
+    /** Бегство направлением (v46): когда ни одна точка выхода не даёт запаса (см. evadePoint), цель — клетка в EVADE_RANGE от
+     *  нашего центра в том из восьми направлений, где после шага центр вооружённого врага дальше всего, среди направлений,
+     *  чья клетка не ближе EVADE_RANGE к краю (у края направлений вдвое меньше, в углу — вчетверо: матчи 78, 80). Точки
+     *  выхода (флаги, дом, углы) при равной скорости преследователя все «за ним» или без выхода, и армия шла в наименее
+     *  плохую — в угол. */
+    private fun fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
+        val ec = centroidOf(armed) ?: return null
+        val oc = ctx.ourCentroid
+        var best: Position? = null
+        var bestD = -1
+        for ((dx, dy) in DIRECTIONS) {
+            if (dx == 0 && dy == 0) continue
+            val x = oc.x + dx * EVADE_RANGE; val y = oc.y + dy * EVADE_RANGE
+            if (x < EVADE_RANGE || y < EVADE_RANGE || x > 99 - EVADE_RANGE || y > 99 - EVADE_RANGE) continue
+            val c = passableNear(InfluenceMap.cell(x, y))
+            val d = getRange(c, ec)
+            if (d > bestD) { bestD = d; best = c }
+        }
+        return best?.takeIf { getRange(it, ec) > getRange(oc, ec) }
+    }
 
     /** Ближайшая проходимая клетка: центр наших флагов попал в стенной блок, поле к нему было пустым (flow=-1), и
      *  армия стояла на месте, пока враг подходил (матч 11, t=90–103). */
