@@ -34,6 +34,14 @@ damage disarms a ranged creep). Restart the client afterwards. Then:
         target choice: for every single-target shot, what role was hit (and whether it was still armed) against the
         best armed enemy the shooter had within 3 at that moment — an armed ranged, only armed melee, or neither.
         Judged on START-of-tick positions. The question it answers: "his ranged was in reach — what did we shoot?"
+    tools/replay.py track <replay.json.gz> [t0 t1] [--step 50]
+        the match without a fight: every `step` ticks both armed centroids, their distance, how far his moved over
+        the step, the flag his centroid is nearest, and his DISPERSION — the largest group of his armed creeps within
+        eight cells of each other and how many are alone; then a timeline of his creeps stepping onto flag cells (one
+        entry per flag per thirty ticks, with the role) and the share of ticks his largest group is at most half of
+        his armed. Match 119 (けろびー's farmer, lost 8404:22531 without a shot): his centroid moved 6–38 cells per
+        fifty ticks, his largest group was 4–7 of nine — a melee on R3, a ranged on D5 and a ranged on A3 in the same
+        tick — and the army chased the centroid of a dispersed farmer. That is v56 (USE_DETACH, FARMER_MOVE).
 
 `t0 t1` is the fight window in ticks (pick it from `tools/match-log.py dump` or the summary's first-action tick).
 What `choice` found on the three losses to standing lines (matches 67, 53, 43): with one of his armed ranged within
@@ -314,11 +322,69 @@ def cmd_choice(args):
         if r_avail: print(f"   with an armed ranged in reach: {r_hit} of {r_avail} shots went into it ({100 * r_hit // r_avail} %)")
 
 
+FLAG_CELLS = {(49, 49): 'D5', (90, 8): 'H4', (8, 90): 'H4', (67, 31): 'A3', (31, 67): 'A3', (13, 49): 'R3', (85, 49): 'R3'}
+
+
+def cmd_track(args):
+    doc, meta, names = load(args.replay)
+    us = our_side(meta, args.us)
+    header(meta, names, us)
+    R = 8
+    armed_roles = ('melee', 'ranged')
+
+    def largest_group(cs):
+        seen, best = set(), 0
+        for i in range(len(cs)):
+            if i in seen: continue
+            stack, n = [i], 0
+            seen.add(i)
+            while stack:
+                j = stack.pop(); n += 1
+                for k2 in range(len(cs)):
+                    if k2 not in seen and rng((cs[j]['x'], cs[j]['y']), (cs[k2]['x'], cs[k2]['y'])) <= R:
+                        seen.add(k2); stack.append(k2)
+            best = max(best, n)
+        return best
+
+    def alone(cs):
+        return sum(1 for c in cs if not any(o is not c and rng((c['x'], c['y']), (o['x'], o['y'])) <= R for o in cs))
+
+    def cen(cs):
+        return (sum(c['x'] for c in cs) / len(cs), sum(c['y'] for c in cs) / len(cs)) if cs else None
+
+    prev_his, visits, last_visit, tot, disp = None, [], {}, 0, 0
+    for k, start, now, acts, raw in ticks(doc):
+        if k < args.t0 or k > args.t1: continue
+        his = [c for c in now.values() if c['side'] != us]
+        his_armed = [c for c in his if c['role'] in armed_roles]
+        ours_armed = [c for c in now.values() if c['side'] == us and c['role'] in armed_roles]
+        for c in his:
+            f = FLAG_CELLS.get((c['x'], c['y']))
+            if f:
+                key = (c['x'], c['y'])
+                if last_visit.get(key, -99) < k - 30: visits.append((k, f, key, c['role']))
+                last_visit[key] = k
+        if his_armed and ours_armed:
+            tot += 1
+            big = largest_group(his_armed)
+            if big * 2 <= len(his_armed): disp += 1
+            if k % args.step == 0:
+                oc, hc = cen(ours_armed), cen(his_armed)
+                moved = rng(hc, prev_his) if prev_his else 0
+                near = min(FLAG_CELLS.items(), key=lambda kv: rng(hc, kv[0]))
+                print(f"t={k:5d} ours=({oc[0]:.0f},{oc[1]:.0f}) his=({hc[0]:.0f},{hc[1]:.0f}) dist={rng(oc, hc):.0f} his_moved={moved:.0f} "
+                      f"his_near={near[1]}({near[0][0]},{near[0][1]})@{rng(hc, near[0]):.0f} his armed={len(his_armed)} largest={big} alone={alone(his_armed)} "
+                      f"| ours armed={len(ours_armed)} largest={largest_group(ours_armed)}")
+                prev_his = hc
+    print(f"ticks with his largest armed group <= half of his armed: {disp}/{tot} ({100 * disp // max(1, tot)} %)")
+    print('his creeps on flag cells (tick:flag(x,y):role):', ' '.join(f"{t}:{f}({x},{y}):{r[0]}" for t, f, (x, y), r in visits[:80]))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     for name, fn, need_window in (('summary', cmd_summary, False), ('silent', cmd_silent, True), ('focus', cmd_focus, True), ('trace', cmd_trace, True),
-                                  ('choice', cmd_choice, False)):
+                                  ('choice', cmd_choice, False), ('track', cmd_track, False)):
         p = sub.add_parser(name)
         p.add_argument('replay')
         if need_window:
@@ -328,6 +394,7 @@ def main():
         p.add_argument('--us', default='temik911', help='username prefix of our side')
         if name == 'silent': p.add_argument('-n', type=int, default=12, help='examples of our own silent armed creep-ticks to print')
         if name == 'trace': p.add_argument('--side', choices=('us', 'them'), default='us')
+        if name == 'track': p.add_argument('--step', type=int, default=50, help='ticks between position lines')
         p.set_defaults(fn=fn)
     args = ap.parse_args()
     args.fn(args)
