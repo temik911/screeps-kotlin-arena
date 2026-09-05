@@ -278,6 +278,11 @@ object InfluenceMap {
     private fun enemyOrigins(enemy: Creep): IntArray = originsCache.getOrPut(enemy.id) {
         val origins = ArrayList<Int>(9)
         origins.add(enemy.x * 100 + enemy.y)
+        // с усталостью шага нет (v48): крип с fatigue > 0 в этот тик не двинется — мили достаёт только вплотную. Матч 90
+        // (けろびー, фермер): четыре его мили и лекарь стояли в болоте с усталостью 16–48 в 4–7 клетках от нашей армии
+        // пятьдесят тиков (t=1120–1170), а армия кралась на 1–2 клетки за 20 тиков — клетки в 2–3 от них считались под
+        // ударом мили «с шагом сближения», которого у застрявшего нет
+        if (enemy.fatigue > 0) return@getOrPut origins.toIntArray()
         for (dx in -1..1) {
             for (dy in -1..1) {
                 if (dx == 0 && dy == 0) continue

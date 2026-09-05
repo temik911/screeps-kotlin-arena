@@ -560,7 +560,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v47"
+    private const val BOT_VERSION = "v48"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1337,7 +1337,9 @@ object PainAndGain {
      *  уходит (см. evasive). Только за ловимым идут стая, охота, добивание и местный бросок (см. CHASE_WINDOW). */
     private fun catchable(e: Creep, armed: List<Creep>): Boolean =
         armed.any { getRange(e, it) <= MELEE_KEEP_RANGE } ||
-            plainPeriod(e) > (armed.minOfOrNull { plainPeriod(it) } ?: 1) ||
+            // медленнее нас ТАМ, ГДЕ СТОИТ (v48): период на его клетке — в болоте тело с половиной MOVE ходит клетку в пять
+            // тиков, и застрявший в болоте ловим, хотя на равнине он равен нам (матч 90, см. InfluenceMap.enemyOrigins)
+            periodAt(e, e.x, e.y) > (armed.minOfOrNull { plainPeriod(it) } ?: 1) ||
             !evasive(e)
 
     private fun retreatPoint(ctx: Ctx): Position {
