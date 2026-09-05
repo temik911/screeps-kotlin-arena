@@ -129,6 +129,12 @@ object PainAndGain {
     private const val USE_FOCUS_STICKY = true
     private const val USE_FOCUS_ROW = false
     private const val USE_FOCUS_NET = false
+    /** Липкость отпускает мили со схлопнувшейся угрозой (v49b, см. focusTarget) — ОТВЕРГНУТО: стенд 125/125, но 13 хуже / 7 лучше,
+     *  и живьём 0:1 — боевой けろびー, которого v45–v47 били четыре раза подряд, стёр армию к 180-му (до 130-го ровно: мы сняли
+     *  троих, он одного, потом наши стрелки 3 → 1 → 0). В рукопашной его мили входят и выходят каждый тик, и отпускание
+     *  перескакивало фокус на каждом выходе — ровно то, от чего липкость спасала. Механизм матча 91 (тычок под лечением)
+     *  остаётся открытым. */
+    private const val USE_FOCUS_RELEASE = false
     /** Флаг перехвата — тот из не его флагов, к которому МЫ успеваем раньше (наш путь + запас ≤ его дистанция), первый в его
      *  порядке (по близости к нему), и он липкий: держится, пока он его не возьмёт. Первая форма («ближайший к его центру»)
      *  дребезжала с каждым его шагом — матч 59: армия ходила между (8,90), (31,67), (49,49) и (13,49), по 40–60 клеток, и никуда не
@@ -560,7 +566,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v49b"
+    private const val BOT_VERSION = "v49c"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1907,7 +1913,7 @@ object PainAndGain {
         // стрелков (35 % при стрелке в трёх, у него 71 %). Мили держится, пока вплотную или идёт (см. threatOf); «отпускать
         // всякую неубиваемую цель, пока есть убиваемая» ОТВЕРГНУТО стендом — фокус перескакивал при каждом шаге его лекаря
         // (125/125, но 19 хуже / 12 лучше: screen+flagless m32 −16145, block+flagless m32 −7640, camp m34 −9294, кайтеры медленнее ×7)
-        val prevDead = focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee > 0.0 && it.ranged == 0.0 } &&
+        val prevDead = USE_FOCUS_RELEASE && focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee > 0.0 && it.ranged == 0.0 } &&
             (lastArmedRange[focusPrev.id] ?: 99).let { r -> r > 1 && !(r <= MELEE_KEEP_RANGE && (prevArmedRange[focusPrev.id] ?: 99) > r) }
         val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
             combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
