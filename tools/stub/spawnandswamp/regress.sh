@@ -15,7 +15,7 @@ report() { # $1 = label, $2 = log file
   ghost=$(grep -c 'ghost' "$2")
   printf '%-18s %-32s | %s | ghost=%s\n' "$1" "${res:-survived (no spawn destroyed)}" "${tr:-(no summary line)}" "$ghost"
 }
-for m in none enemy swarm raider harass tower tower+enemy ball tower+healball towersite healball tower+hover rush camp stream tower+stream fortress; do
+for m in none enemy swarm raider harass tower tower+enemy ball tower+healball towersite healball tower+hover rush camp stream tower+stream fortress pairs tower+pairs; do
   f=out/${TAG}_r2_${m//+/_}.txt
   "$NODE" --import ./register.mjs run2.mjs 2000 "$m" > "$f" 2>&1
   report "run2:$m" "$f"

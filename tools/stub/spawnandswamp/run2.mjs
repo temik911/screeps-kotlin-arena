@@ -14,7 +14,7 @@ const my=new StructureSpawn(94,49,true,1000); const en=new StructureSpawn(5,50,f
 for(const [cx,cy] of [[88,49],[11,50]]){ new StructureContainer(cx,cy,5000); for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx||dy) new StructureWall(cx+dx,cy+dy,10000); } }
 new StructureContainer(98,1,2500); new StructureContainer(98,98,2500); new StructureContainer(1,1,2500); new StructureContainer(1,98,2500);
 const TICKS=parseInt(process.argv[2]||'900'); const MODES=(process.argv[3]||'none').split('+');
-const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped');
+const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped'); const PAIRS=MODES.includes('pairs');
 // STREAM: противник матча 15 — с 280-го тика попеременно M3R3 и M4H2 каждые 40 тиков, каждый идёт к нашему спавну сразу,
 // без сбора в четвёрки (правила движения и стрельбы — как у HEALBALL); подкрепление тянется потоком за первыми
 // RUSH: противник матча 14 — два M5R1 с первого тика через свой спавн, третий на 200-м; идут к нашему спавну, встают в трёх
@@ -46,6 +46,9 @@ let site=null, builder=null; if(TOWERSITE){ builder=new Creep(6,50,false,[C.MOVE
 // отходят от бойца в двух клетках, лечат самого битого, гоняют хаулеров в восьми клетках
 let hbQueue=[]; let hbCount=0;
 function hbBody(i){ return i%2===0 ? [C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK] : [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.HEAL,C.HEAL]; }
+// PAIRS: тела けろびー из лога матча 25 — M5R5 (1000 хитов, 50 урона) и M5H3 (800 хитов, 36 лечения)
+function pairBody(i){ return i%2===0 ? [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK]
+                                     : [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.HEAL,C.HEAL,C.HEAL]; }
 let errors=0; let loopTotal=0, loopMax=0; /* LOOPTIME */ const origLog=console.log; const lines=[]; console.log=(...a)=>{ const s=a.join(' '); lines.push(s); if(/loop error|Error|exception/i.test(s)) errors++; };
 function freeCell(){ for(let i=0;i<100;i++){ const x=2+Math.floor(rnd()*96), y=2+Math.floor(rnd()*96); if(world.terrain[x*100+y]!==1) return [x,y]; } return [50,50]; }
 for(let t=0;t<TICKS;t++){
@@ -69,11 +72,12 @@ for(let t=0;t<TICKS;t++){
   if(site && site.exists){ if(builder&&builder.exists&&range(builder,site)<=3){ site.progress+=C.BUILD_POWER; } if(site.progress>=site.progressTotal){ site.exists=false; tw=new StructureTower(7,50,false); tw.store.energy=C.TOWER_CAPACITY; } }
   if(HEALBALL && t>=280 && (t-280)%60===0){ hbQueue.push(hbBody(hbCount)); }
   if(STREAM && t>=280 && (t-280)%40===0){ hbQueue.push(hbBody(hbCount)); }
+  if(PAIRS && t>=250 && (t-250)%90===0){ hbQueue.push(pairBody(hbCount)); }
   if(FORTRESS && t>=280 && t<=Number(process.env.FORTRESS_UNTIL||1150) && (t-280)%40===0){ hbQueue.push(hbBody(hbCount)); }
   // HOVER: шар матча 13 у наших ворот — четыре M3R3 и четыре M4H2 ставятся в восьми клетках от нашего спавна на 500-м тике
   // и ходят по правилам HEALBALL (6 клеток от спавна, отход от бойца в двух, выстрел по ближайшему в трёх, лечение)
   if(HOVER && t===500){ for(let i=0;i<8;i++){ const r=new Creep(86+(i%4),40+Math.floor(i/4),false,hbBody(i)); r.hb=99; } }
-  if((HEALBALL||STREAM||FORTRESS) && hbQueue.length && !en.spawning){ const r=en.spawnCreep(hbQueue[0]); if(r.object){ r.object.hb=(STREAM||FORTRESS)?hbCount:Math.floor(hbCount/4); hbCount++; hbQueue.shift(); } }
+  if((HEALBALL||STREAM||FORTRESS||PAIRS) && hbQueue.length && !en.spawning){ const r=en.spawnCreep(hbQueue[0]); if(r.object){ r.object.hb=PAIRS?Math.floor(hbCount/2):((STREAM||FORTRESS)?hbCount:Math.floor(hbCount/4)); hbCount++; hbQueue.shift(); } }
   if(HARASS && harassQueue.length && !en.spawning && t>=1){ const r=en.spawnCreep(harassQueue[0]); if(r.object){ r.object.harasser=true; harassQueue.shift(); } }
   { const t0=performance.now(); loop(); const dt=performance.now()-t0; loopTotal+=dt; if(dt>loopMax) loopMax=dt; }
   if(HARASS){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
@@ -95,11 +99,11 @@ for(let t=0;t<TICKS;t++){
       const need=live.filter(t=>t.store.energy<C.TOWER_CAPACITY).sort((a,b)=>a.store.energy-b.store.energy)[0]||live[0];
       if(o.store.energy<C.TOWER_ENERGY_COST){ if(range(o,en)<=1){ const a=Math.min(o.store.getFreeCapacity(), en.store.energy); en.store.energy-=a; o.store.energy+=a; } else o.moveTo(en); }
       else { if(range(o,need)<=1){ if(need.store.energy<C.TOWER_CAPACITY) o.transfer(need); } else o.moveTo(need); } } } }
-  if(HEALBALL||HOVER||STREAM||FORTRESS){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
+  if(HEALBALL||HOVER||STREAM||FORTRESS||PAIRS){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
     const fighters=mine.filter(c=>c.body.some(p=>(p.type===C.RANGED_ATTACK||p.type===C.ATTACK)&&p.hits>0));
     const members=world.objects.filter(q=>q instanceof Creep&&!q.my&&q.hb!==undefined&&q.exists&&!q.spawning);
     const R=(a,b)=>Math.max(Math.abs(a.x-b.x),Math.abs(a.y-b.y));
-    for(const o of members){ const grp=members.filter(m=>m.hb===o.hb); const complete=STREAM || FORTRESS || grp.length>=4 || o.hb<Math.floor(hbCount/4);
+    for(const o of members){ const grp=members.filter(m=>m.hb===o.hb); const complete=STREAM || FORTRESS || PAIRS || grp.length>=4 || o.hb<Math.floor(hbCount/4);
       if(o.parts(C.HEAL)>0){ const hurt=grp.filter(m=>m.hits<m.hitsMax&&R(m,o)<=3).sort((a,b)=>(a.hitsMax-a.hits)-(b.hitsMax-b.hits)).reverse()[0];
         if(hurt){ if(R(hurt,o)<=1) o.heal(hurt); else o.rangedHeal(hurt); } }
       if(o.parts(C.RANGED_ATTACK)>0){ const inR=mine.filter(c=>R(c,o)<=3); if(inR.length){ if(inR.filter(c=>R(c,o)<=1).length>=2) o.rangedMassAttack(); else o.rangedAttack(inR.sort((a,b)=>a.hits-b.hits)[0]); } else if(R(o,my)<=3) o.rangedAttack(my); }
@@ -107,12 +111,14 @@ for(let t=0;t<TICKS;t++){
       if(!complete){ if(R(o,rally)>2) o.moveTo(rally); continue; }
       const leader=grp.slice().sort((a,b)=>a.id-b.id)[0];
       const near=fighters.filter(f=>R(f,o)<=4).sort((a,b)=>R(a,o)-R(b,o));
-      if(near.length && R(near[0],o)<=2){ let best=null,bd=-1; for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ const nx=o.x+dx,ny=o.y+dy; if(terrainAt(nx,ny)===C.TERRAIN_WALL) continue;
+      // PAIRS не кайтят: они пришли стоять у спавна и разменивать урон на лечение
+      if(!PAIRS && near.length && R(near[0],o)<=2){ let best=null,bd=-1; for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ const nx=o.x+dx,ny=o.y+dy; if(terrainAt(nx,ny)===C.TERRAIN_WALL) continue;
           if(world.objects.some(q=>q.exists&&q!==o&&q.x===nx&&q.y===ny&&(q instanceof Creep||q instanceof StructureSpawn||q instanceof StructureWall))) continue;
           const d=Math.min(...near.map(f=>R({x:nx,y:ny},f))); if(d>bd){bd=d;best={x:nx,y:ny};} }
         if(best&&(best.x!==o.x||best.y!==o.y)) world.intents.push({creep:o,x:best.x,y:best.y}); continue; }
       if(o!==leader){ if(R(o,leader)>1) o.moveTo(leader); continue; }
-      if(near.length){ if(R(near[0],o)>=4) o.moveTo(near[0]); continue; }
+      if(!PAIRS && near.length){ if(R(near[0],o)>=4) o.moveTo(near[0]); continue; }
+      if(PAIRS){ if(R(o,my)>3) o.moveTo(my); continue; }
       const haul=mine.filter(c=>c.body.some(p=>p.type===C.CARRY)&&R(c,o)<=8).sort((a,b)=>R(a,o)-R(b,o))[0];
       if(haul){ if(R(haul,o)>3) o.moveTo(haul); continue; }
       if(R(o,my)>6) o.moveTo(my); } }

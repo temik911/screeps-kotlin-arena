@@ -20,10 +20,24 @@ export class StructureSpawn extends OwnedStructure { constructor(x,y,my,energy){
 export class StructureContainer extends OwnedStructure { constructor(x,y,energy,decay){ super(x,y,300,undefined); this.store=new Store(2000); this.store.energy=energy; this.ticksToDecay=decay; } }
 export class StructureExtension extends OwnedStructure {}
 export class StructureTower extends OwnedStructure { constructor(x,y,my){ super(x,y,C.TOWER_HITS,my); this.store=new Store(C.TOWER_CAPACITY); this.cooldown=0; }
+  heal(t){ if(this.cooldown>0) return C.ERR_TIRED; if(this.store.energy<C.TOWER_ENERGY_COST) return C.ERR_NOT_ENOUGH_ENERGY; const r=range(this,t); if(r>C.TOWER_RANGE) return C.ERR_NOT_IN_RANGE;
+    t.hits=Math.min(t.hitsMax, t.hits+Math.max(0, C.TOWER_POWER_HEAL*(1-C.TOWER_FALLOFF*Math.max(0,r-C.TOWER_OPTIMAL_RANGE)/(C.TOWER_FALLOFF_RANGE-C.TOWER_OPTIMAL_RANGE)))); this.store.energy-=C.TOWER_ENERGY_COST; this.cooldown=C.TOWER_COOLDOWN; return 0; }
   attack(t){ if(this.cooldown>0) return C.ERR_TIRED; if(this.store.energy<C.TOWER_ENERGY_COST) return C.ERR_NOT_ENOUGH_ENERGY; const r=range(this,t); if(r>C.TOWER_RANGE) return C.ERR_NOT_IN_RANGE;
     t.hits-=Math.max(0, C.TOWER_POWER_ATTACK*(1-C.TOWER_FALLOFF*Math.max(0,r-C.TOWER_OPTIMAL_RANGE)/(C.TOWER_FALLOFF_RANGE-C.TOWER_OPTIMAL_RANGE))); this.store.energy-=C.TOWER_ENERGY_COST; this.cooldown=C.TOWER_COOLDOWN; return 0; } }
 export class StructureWall extends Structure {} export class StructureRampart extends OwnedStructure {} export class StructureRoad extends Structure {}
-export class ConstructionSite extends GameObject { constructor(x,y,my,total){ super(x,y); this.my=my; this.progress=0; this.progressTotal=total; this.structure=undefined; } } export class Flag extends GameObject {}
+export class ConstructionSite extends GameObject { constructor(x,y,my,total,proto){ super(x,y); this.my=my; this.progress=0; this.progressTotal=total; this._proto=proto;
+    // structure — будущая структура: движок отдаёт её только владельцу площадки, и бот читает по ней тип
+    this.structure = proto ? Object.create(proto.prototype) : undefined; } }
+/** Достроенная площадка становится структурой владельца — как в движке (площадка исчезает, структура на её месте). */
+export function finishSite(site, my){ site.exists=false; const P=site._proto; if(!P) return null;
+  const s = P===StructureTower ? new StructureTower(site.x,site.y,my)
+    : P===StructureRampart ? new StructureRampart(site.x,site.y,C.RAMPART_HITS,my)
+    : P===StructureWall ? new StructureWall(site.x,site.y,C.WALL_HITS)
+    : P===StructureContainer ? new StructureContainer(site.x,site.y,0)
+    : P===StructureExtension ? new StructureExtension(site.x,site.y,C.EXTENSION_HITS,my)
+    : P===StructureSpawn ? new StructureSpawn(site.x,site.y,my,0)
+    : P===StructureRoad ? new StructureRoad(site.x,site.y,C.ROAD_HITS) : null;
+  return s; } export class Flag extends GameObject {}
 export class Source extends GameObject { constructor(x,y){ super(x,y); this.energy=1000; this.energyCapacity=1000; } }
 export class Resource extends GameObject { constructor(x,y,amount){ super(x,y); this.amount=amount; this.resourceType='energy'; } }
 export class Creep extends GameObject { constructor(x,y,my,body){ super(x,y); this.my=my; this.body=body.map(t=>({type:t,hits:100})); this.hits=body.length*100; this.hitsMax=this.hits;
@@ -39,7 +53,12 @@ export class Creep extends GameObject { constructor(x,y,my,body){ super(x,y); th
   withdraw(t){ if(range(this,t)>1) return C.ERR_NOT_IN_RANGE; const a=Math.min(this.store.getFreeCapacity(), t.store.energy); t.store.energy-=a; this.store.energy+=a; return a>0?0:C.ERR_NOT_ENOUGH_RESOURCES; }
   transfer(t){ if(range(this,t)>1) return C.ERR_NOT_IN_RANGE; const a=Math.min(this.store.energy, t.store.getFreeCapacity()); t.store.energy-=0; t.store.energy+=a; this.store.energy-=a; return a>0?0:C.ERR_FULL; }
   pickup(t){ if(range(this,t)>1) return C.ERR_NOT_IN_RANGE; const a=Math.min(this.store.getFreeCapacity(), t.amount); t.amount-=a; this.store.energy+=a; if(t.amount<=0) t.exists=false; return 0; }
-  harvest(){ return 0; } build(){ return 0; } drop(){ return 0; } pull(){ return 0; } }
+  /** Стройка: BUILD_POWER за живую WORK в тик, по энергии из груза, единица прогресса — единица энергии. */
+  build(site){ if(!site||!site.exists) return C.ERR_INVALID_TARGET; const w=this.parts(C.WORK); if(w<=0) return C.ERR_NO_BODYPART;
+    if(range(this,site)>3) return C.ERR_NOT_IN_RANGE; if(this.store.energy<=0) return C.ERR_NOT_ENOUGH_ENERGY;
+    const a=Math.min(C.BUILD_POWER*w, this.store.energy, site.progressTotal-site.progress); if(a<=0) return C.ERR_FULL;
+    site.progress+=a; this.store.energy-=a; if(site.progress>=site.progressTotal) finishSite(site, this.my); return 0; }
+  harvest(){ return 0; } drop(){ return 0; } pull(){ return 0; } }
 export function endTick(){
   // спавн: доводим рождение, ставим крипа на свободную соседнюю клетку
   for(const o of world.objects){ if(o instanceof StructureSpawn && o.spawning){ o.spawning.remainingTime--; if(o.spawning.remainingTime<=0){ const c=o.spawning.creep;
