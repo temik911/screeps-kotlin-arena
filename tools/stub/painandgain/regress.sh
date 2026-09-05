@@ -56,6 +56,11 @@ grind() { if [[ "$TAG" == land ]]; then return; fi; run "$@"; }
 # 05.09.2026, second batch (evade away from the enemy, healers accept ranged fire): m17 fourteen and m28 hunter are brawls at
 # 1.0 that flip with any change to where the army stands (won in one build, lost in the next), m24 and m32 farm are the
 # farm family's points races — all four in the grind; the twelve live-opponent lines stay green.
+# v30 (05.09.2026, the press): m20 farm and m29 farm join the farm family in the grind — their races against the farmer run
+# byte-identical to v29 until t=890 and t=970 and flip on a one-cell difference of the army's centroid at t=900 and t=980,
+# a thousand ticks before the end; the fight logic is not involved (the farmer never fights, and the press first fired at
+# t=1570 in m29). The open finding behind every farm line is the same: a blob that never engages and is never caught
+# out-farms an army that holds parity — see docs/pain-and-gain.md.
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario — collected here, executed in parallel below
   N=$((N + 1)); print -r -- "$N $1 $2 $3 $TAG $PLANDIR" >> "$PLANDIR/plan"
 }
@@ -333,7 +338,7 @@ run map-match29.txt match2 rush
 run map-match29.txt match2 kite
 run map-match29.txt match2 fourteen
 run map-match29.txt match2 roost
-run map-match29.txt match2 farm
+grind map-match29.txt match2 farm
 grind map-match29.txt match2 sleeper
 grind map-match29.txt match2 spread
 run map-match29.txt match2 screen
@@ -357,7 +362,7 @@ run map-match19.txt match2 roost
 run map-match12.txt match2 roost
 run map-match18.txt match2 roost
 grind map-match24.txt match2 farm
-run map-match20.txt -      farm
+grind map-match20.txt -      farm
 grind map-match19.txt match2 farm
 grind map-match18.txt match2 farm
 grind map-match25.txt match2 farm

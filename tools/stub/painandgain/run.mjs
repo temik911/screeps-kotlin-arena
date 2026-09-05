@@ -490,6 +490,10 @@ function enemyTick() {
 // ---------- run ----------
 const lines = [];
 let loopErrors = 0;
+// a crash inside loop() is printed by the bot's runWithSourceMapSupport as the mapped stack trace under an (often empty)
+// message line, so it never starts with 'loop error' — the first frame of every trace counts as one error. Before this
+// the stand reported errors=0 on runs that threw every tick for 1500 ticks (m19 nine, 05.09.2026)
+const isLoopError = (s) => s.startsWith('loop error') || /^\s+at captureStack \(/.test(s);
 const origWrite = process.stdout.write.bind(process.stdout);
 let buf = '';
 process.stdout.write = (chunk) => {
@@ -499,12 +503,12 @@ process.stdout.write = (chunk) => {
     const s = buf.slice(0, i);
     buf = buf.slice(i + 1);
     lines.push(s);
-    if (s.startsWith('loop error')) loopErrors++;
+    if (isLoopError(s)) loopErrors++;
   }
   return true;
 };
 const origLog = (...args) => origWrite(args.join(' ') + '\n');
-console.log = (...args) => { const s = args.join(' '); lines.push(s); if (s.startsWith('loop error')) loopErrors++; };
+console.log = (...args) => { const s = args.join(' '); lines.push(s); if (isLoopError(s)) loopErrors++; };
 const bot = await import(BOT);
 const t0 = Date.now();
 let ended = '';

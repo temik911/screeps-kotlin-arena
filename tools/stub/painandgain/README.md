@@ -52,6 +52,8 @@ the landing of every other arena. Logs still land in `out/`, one file per scenar
 hundred megabytes there, so `out/` is worth emptying between investigations (it is gitignored and every log is
 reproducible by re-running its scenario).
 
+`errors` counts `loop error` lines and, since 05.09.2026, every crash trace the bot's `runWithSourceMapSupport` prints (one per `at captureStack` frame): a `NoSuchElementException` thrown every tick for 1500 ticks used to be reported as `errors: 0`, because the mapped trace starts with an empty message line, not with `loop error`.
+
 `tools/land.sh` runs `regress.sh` as the landing gate: every line must say `PASS` with `errors: 0` — the enemy army
 destroyed, or the match ended with our score ahead. A new arena's harness starts as a copy of a sibling directory
 (`game/` is arena-agnostic; the runner and `world.mjs` are where the arena rules live).
