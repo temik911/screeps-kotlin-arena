@@ -560,7 +560,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v46"
+    private const val BOT_VERSION = "v46b"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1546,12 +1546,19 @@ object PainAndGain {
     private fun fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
         val ec = centroidOf(armed) ?: return null
         val oc = ctx.ourCentroid
+        // отступ от края — не больше нынешнего: у края все направления вдоль края запрещались, оставались только внутрь, и
+        // армия с (29,6) пошла на (52,32) наискосок МИМО его центра (30,30) — перехвачена на 69-м, стёрта к 120-му (матч 83,
+        // けろびー боевой, которого v45 била). Направление обязано уводить: скалярное произведение с вектором «от него к нам»
+        // положительно; из допустимых — то, где его центр после шага дальше всего
+        val margin = minOf(EVADE_RANGE, oc.x, oc.y, 99 - oc.x, 99 - oc.y).coerceAtLeast(0)
+        val ax = oc.x - ec.x; val ay = oc.y - ec.y
         var best: Position? = null
         var bestD = -1
         for ((dx, dy) in DIRECTIONS) {
             if (dx == 0 && dy == 0) continue
+            if (dx * ax + dy * ay <= 0) continue
             val x = oc.x + dx * EVADE_RANGE; val y = oc.y + dy * EVADE_RANGE
-            if (x < EVADE_RANGE || y < EVADE_RANGE || x > 99 - EVADE_RANGE || y > 99 - EVADE_RANGE) continue
+            if (x < margin || y < margin || x > 99 - margin || y > 99 - margin) continue
             val c = passableNear(InfluenceMap.cell(x, y))
             val d = getRange(c, ec)
             if (d > bestD) { bestD = d; best = c }
