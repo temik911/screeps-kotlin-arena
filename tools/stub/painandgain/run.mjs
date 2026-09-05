@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|camp|screen (+flagless: the enemy's runners idle; +weak: a remnant of eight)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|camp|screen (+flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -213,7 +213,11 @@ function screenMove(c, plan, fighters, ours) {
   if (armedClose.length) { stepAway(c, armedClose); return; }
   if (nearestArmed && range(c, nearestArmed) <= 3) return;
   if (range(c, slot) > 1) { stepToward(c, slot, 0); return; }
-  if (!formed) { if (range(c, slot) > 0) stepToward(c, slot, 0); return; }
+  // '+fast' (match 78, Coldkimchi): the live line never waits to form — it walks at our army at full speed and forms on
+  // arrival; the formation gate is what let our evasion outrun the stub's screen (screen+flagless 5241:0 on five maps).
+  // Even fast, the stub's screen loses to the block (m30 destroyed at 199, m31 at 318) while Coldkimchi's line wins 3 of 3
+  // live — the model gap is open (his melee poke and step back, four guns on one target in 11 % of ticks)
+  if (!formed && !has('fast')) { if (range(c, slot) > 0) stepToward(c, slot, 0); return; }
   if (nearestArmed) stepToward(c, nearestArmed, 3); else stepToward(c, plan.nearestOur, 3);
 }
 function blockMove(c, plan, fighters, ours) {

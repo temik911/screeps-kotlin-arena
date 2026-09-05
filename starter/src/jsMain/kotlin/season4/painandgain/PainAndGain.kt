@@ -115,6 +115,18 @@ object PainAndGain {
      *  флагом»; см. docs/pain-and-gain-research.md, §4). v42: снято, только пока есть что перехватывать (флаг не наш) или мы
      *  впереди по очкам — фермер, севший на всех флагах, не придёт никуда, и его надо бить (матч 70, см. chaseVeto). */
     private const val USE_INTERCEPT = true
+    /** Фокус-огонь (v45; оператор по матчу 78: «нет фокус-файра — каждый рэндж стреляет в своего; держать их вместе и за ход
+     *  выбивать максимум из одного», и «цель — та, к которой лекари далеки»). Замер по реплеям: наибольшее число наших выстрелов
+     *  в ОДНУ цель за тик — четыре и больше лишь в 1–2 % тиков (матчи 78, 73, 67) против 11 % у Coldkimchi и 14 % у けろびー;
+     *  доля фокуса 0,74 это скрывала. Три части, каждая измерена порознь на гейте против v43b:
+     *  ЛИПКИЙ ФОКУС (focusTarget) — 125/125, 16 строк хуже / 25 лучше: линии wing/block+flagless из лидерства в уничтожение,
+     *  кайтеры быстрее; ВКЛЮЧЁН. РЯД ВОКРУГ ЦЕЛИ (planBlock: центр ряда стрелков на проекции цели фокуса, ряд в трёх от неё) —
+     *  125, 20 хуже / 17 лучше; ЯРУС ЧИСТОГО УРОНА (focusCmp: огонь по цели минус её лечение выше «угрозы на хит», когда никого
+     *  не убить) — 125, 13 хуже / 8 лучше; втроём — 124/125 (m33 farm+weak), 25 хуже / 23 лучше. Две последние выключены с
+     *  замером: ряд вокруг цели уводит стрелков от мили, и остаток атакующего уходит. */
+    private const val USE_FOCUS_STICKY = true
+    private const val USE_FOCUS_ROW = false
+    private const val USE_FOCUS_NET = false
     /** Флаг перехвата — тот из не его флагов, к которому МЫ успеваем раньше (наш путь + запас ≤ его дистанция), первый в его
      *  порядке (по близости к нему), и он липкий: держится, пока он его не возьмёт. Первая форма («ближайший к его центру»)
      *  дребезжала с каждым его шагом — матч 59: армия ходила между (8,90), (31,67), (49,49) и (13,49), по 40–60 клеток, и никуда не
@@ -546,7 +558,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v43b"
+    private const val BOT_VERSION = "v45"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -834,11 +846,13 @@ object PainAndGain {
             println(
                 "t=${getTicks()} army=${army.size} runners=${runners.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
+                "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
+            concSum = 0; concTicks = 0
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
     }
@@ -1819,10 +1833,26 @@ object PainAndGain {
         // быстрее, чем мы били (стенд m2 rush: выигранный без потерь рывок стал разгромом)
         val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
             .thenBy { val t = killTicks(it); if (t.isInfinite()) 0.0 else threatOf(it) / t }
+            // чистый урон по цели: наш огонь в дальности минус её лечение (вплотную — полное, на дистанции — треть). Когда
+            // никого не убить (лечение везде не меньше огня), «угроза на хит» слала огонь в того, кого лечат три лекаря
+            // вплотную; выше — цель, к которой лекари ДАЛЕКО (оператор, 05.09.2026: «лекари к ней далеки — не вылечат
+            // близким хилом и потеряют ход») и которую достают больше наших стволов
+            .thenBy { if (USE_FOCUS_NET) fireAvailableAt(it) * InfluenceMap.takenOf(it) - healOn(it) else 0.0 }
             .thenBy { threatOf(it) / it.hits.coerceAtLeast(1) }
             .thenByDescending { it.hits }
             .thenByDescending { getRange(it, centroid) }
-        val focusTarget = focusPool.maxWithOrNull(focusCmp)
+        val focusBest = focusPool.maxWithOrNull(focusCmp)
+        // ЛИПКИЙ фокус (v45): цель держится, пока жива с оружием или лечением и в шаге от досягаемости хоть одного нашего стрелка;
+        // сменяется на ту, что добивается за тик. Замер по реплеям (матчи 78, 73, 67): наибольшее число наших выстрелов в ОДНУ
+        // цель за тик — 1 в 57 тиках из 111, 2 в 42, 3 в 10, четыре и больше в 2 (1 %); у Coldkimchi 4+ в 11 % тиков, у けろびー
+        // в 14 %. При 216 лечения в тик пробивают только четыре-пять стволов в одну цель — мы этого не делали почти никогда:
+        // цель фокуса менялась, ряд стоял поперёк оси, каждый стрелок доставал своего (оператор: «нет фокус-файра — каждый
+        // рэндж стреляет в своего соперника»)
+        val focusPrev = focusId?.let { id -> focusPool.firstOrNull { it.id == id } }
+        val killableNow = focusBest != null && focusBest.hits <= fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
+        val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
+            combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
+        focusId = focusTarget?.id
         // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
         // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
         val focusOrder = focusPool.sortedWith(focusCmp.reversed())
@@ -1996,7 +2026,7 @@ object PainAndGain {
             // 16 лучше. Прилипший к стрелку мили — дело нашего мили (см. poker в engage), не строя
             val planNow = USE_PLAN && standoffNow
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
-            else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow)
+            else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget)
         }
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
@@ -2392,6 +2422,7 @@ object PainAndGain {
     }
 
     private fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
+        shotsAt.clear()
         val healDone = HashMap<String, Int>()
         val incoming = HashMap<String, Int>()
         fun need(target: Creep): Int {
@@ -2420,6 +2451,8 @@ object PainAndGain {
             }
             shoot(creep, enemyCreeps, focusTarget, focusOrder)
         }
+        val most = shotsAt.values.maxOrNull() ?: 0
+        if (most > 0) { concSum += most; concTicks++ }
     }
 
     private fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
@@ -2441,7 +2474,7 @@ object PainAndGain {
                 focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE -> focusTarget
                 else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE } ?: massPool.minByOrNull { it.hits }
             }
-            target?.let { creep.rangedAttack(it) }
+            target?.let { creep.rangedAttack(it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1 }
         }
     }
 
@@ -2487,7 +2520,7 @@ object PainAndGain {
      *  ударами (стенд m6 sleeper, армия потеряна). Ряды поперёк оси центр → ближайшая группа врагов с боем; слоты по
      *  порядку SLOT_ORDER от середины ряда, стены и клетки мили пропускаются; крип берёт ближайший свободный слот
      *  своего ряда. */
-    private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>, rangedRow: Boolean = true, standoff: Boolean = false) {
+    private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>, rangedRow: Boolean = true, standoff: Boolean = false, focusTarget: Creep? = null) {
         val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in rotatingIds }
         val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in rotatingIds }
         val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
@@ -2515,11 +2548,11 @@ object PainAndGain {
         val wall = if (!USE_WALL) emptyList() else melees.filter { m -> m.id != pair.first.id && combatEnemies.none { getRange(m, it) <= MELEE_HOLD_RANGE + 1 } }
         val taken = HashSet<Int>()
         for (m in melees) if (wall.none { it.id == m.id } && !standoffLine) taken.add(m.x * 100 + m.y)
-        fun rowCells(back: Int, n: Int): List<Position> {
+        fun rowCells(back: Int, n: Int, k0: Int = 0): List<Position> {
             val out = ArrayList<Position>()
             for (k in SLOT_ORDER) {
                 if (out.size >= n) break
-                val x = anchor.x - back * dx + k * px; val y = anchor.y - back * dy + k * py
+                val x = anchor.x - back * dx + (k + k0) * px; val y = anchor.y - back * dy + (k + k0) * py
                 if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in taken) continue
                 out.add(InfluenceMap.cell(x, y))
             }
@@ -2552,17 +2585,38 @@ object PainAndGain {
             assign(rear, rowCells(backR + 1, rear.size))
             return
         }
-        val back = (RANGED_RANGE - d).coerceIn(0, 2)
+        var back = (RANGED_RANGE - d).coerceIn(0, 2)
+        // фокус-огонь (v45): ряд стрелков строится ВОКРУГ цели фокуса — центром на её проекции на ряд (не дальше двух клеток от
+        // оси, чтобы ряд не уходил от мили) и на том ряду, где центр ряда стоит в RANGED_RANGE от неё: тогда все пять
+        // стрелков достают ОДНУ цель. Ряд поперёк оси на центроид группы ставил каждого стрелка против своего (см. focusTarget)
+        var k0 = 0
+        val focus = if (!USE_FOCUS_ROW) null else focusTarget?.takeIf { f -> getRange(anchor, f) <= ENGAGE_RANGE }
+        if (focus != null) {
+            k0 = ((focus.x - anchor.x) * px + (focus.y - anchor.y) * py).coerceIn(-2, 2)
+            var bestB = -1
+            var bestR = -1
+            for (b in 0..2) {
+                val cx = anchor.x - b * dx + k0 * px; val cy = anchor.y - b * dy + k0 * py
+                if (cx < 0 || cy < 0 || cx > 99 || cy > 99) continue
+                val r = getRange(InfluenceMap.cell(cx, cy), focus)
+                if (r <= RANGED_RANGE && r > bestR) { bestR = r; bestB = b }
+            }
+            if (bestB >= 0) back = bestB
+        }
         if (wall.isNotEmpty()) assign(wall, rowCells(0, wall.size))
-        if (melees.isNotEmpty() && rangedRow) assign(rangeds, rowCells(back, rangeds.size))
+        if (melees.isNotEmpty() && rangedRow) assign(rangeds, rowCells(back, rangeds.size, k0))
         // тыл — всегда сразу за фронтом: ряд «за стрелками» при враге вплотную (back=2) ставил лекарей в трёх клетках
         // от мили, лечение 4 за часть вместо 12 (матч 22, t=110–130: лекари в 2–3 клетках от дерущихся мили)
-        assign(rear, rowCells(1, rear.size))
+        assign(rear, rowCells(1, rear.size, k0))
     }
 
     private class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
                             val meleeAdj: Int, val meleeNear: Int, val dist: Int)
     private val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
+    private var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
+    private val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
+    private var concSum = 0                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
+    private var concTicks = 0                        // тиков с выстрелами с прошлой строки t=
 
     /** Расстановка боя (см. USE_PLAN): клетки с признаками, роли по порядку признаков, жадное назначение. Выход — slotOf,
      *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
@@ -2614,10 +2668,10 @@ object PainAndGain {
         // досягаемости стоял на месте, пока кайтер отходил на клетку в тик и бил идущих за ним мили: m28 kite, reach=0/5 сто
         // тиков, армия потеряна) → меньше урона → ближе к себе
         val rangedCells = HashMap<String, FightCell>()
-        fun rangedCmp(c: Creep) = compareBy<FightCell> { if (it.targets > 0) 1 else 0 }
+        fun rangedCmp(c: Creep) = compareBy<FightCell> { if (it.focusIn) 1 else 0 }   // цель фокуса в трёх — первое (v45)
+            .thenBy { if (it.targets > 0) 1 else 0 }
             .thenBy { if (it.meleeAdj == 0) 1 else 0 }
             .thenBy { if (it.meleeNear == 0) 1 else 0 }
-            .thenBy { if (it.focusIn) 1 else 0 }
             .thenBy { if (it.targets > 0) minOf(it.dist, RANGED_RANGE) else -it.dist }
             .thenBy { -it.dmg }
             .thenBy { -getRange(c, it.pos) }
