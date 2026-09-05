@@ -3,7 +3,7 @@
 The client is an Electron app that authenticates with a Steam session ticket, so its API cannot be
 called from outside; but it does not disable remote debugging, so starting it as
 
-    cd "<app>/Contents" && SteamAppId=1137320 ./MacOS/screeps_arena --remote-debugging-port=9222
+    cd "<app>/Contents" && SteamAppId=1137320 "<app>/Contents/MacOS/screeps_arena" --remote-debugging-port=9222
 
 exposes the page, and JavaScript evaluated there runs with the session already authenticated. That
 is what `tools/play.py` uses to start matches and read logs. Steam must be running.
@@ -15,8 +15,11 @@ import base64, json, os, socket, struct, urllib.error, urllib.request
 PORT = 9222
 APP = ("/Users/zakharchukart/Library/Application Support/Steam/steamapps/common/ScreepsArena/"
        "screeps_arena.app/Contents")
+# The executable by its ABSOLUTE path: arukuka/screeps-arena-tools (replays with both sides' attacks and heals, see
+# docs/pain-and-gain-research.md) finds the client with `ps … | grep screeps_arena.app/Contents/MacOS/screeps_arena`,
+# and a client started as `./MacOS/screeps_arena` is invisible to it ("Screeps: Arena is not running", 05.09.2026).
 LAUNCH_HINT = (f"start the client with remote debugging:\n"
-               f'    cd "{APP}" && SteamAppId=1137320 nohup ./MacOS/screeps_arena '
+               f'    cd "{APP}" && SteamAppId=1137320 nohup "{APP}/MacOS/screeps_arena" '
                f"--remote-debugging-port={PORT} >/tmp/arena_client.log 2>&1 &")
 
 
