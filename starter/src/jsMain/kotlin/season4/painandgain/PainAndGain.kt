@@ -560,7 +560,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v48"
+    private const val BOT_VERSION = "v49b"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1902,7 +1902,14 @@ object PainAndGain {
         // рэндж стреляет в своего соперника»)
         val focusPrev = focusId?.let { id -> focusPool.firstOrNull { it.id == id } }
         val killableNow = focusBest != null && focusBest.hits <= fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
-        val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
+        // …и не к мили, чья угроза схлопнулась (v49): матч 91 (Coldkimchi, 430 тиков боя) — его мили тычет вплотную (угроза 240,
+        // фокус на нём), отходит к лекарям, и фокус на нём держится: 395 выстрелов в мили под 727 его лечений вплотную, 101 в
+        // стрелков (35 % при стрелке в трёх, у него 71 %). Мили держится, пока вплотную или идёт (см. threatOf); «отпускать
+        // всякую неубиваемую цель, пока есть убиваемая» ОТВЕРГНУТО стендом — фокус перескакивал при каждом шаге его лекаря
+        // (125/125, но 19 хуже / 12 лучше: screen+flagless m32 −16145, block+flagless m32 −7640, camp m34 −9294, кайтеры медленнее ×7)
+        val prevDead = focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee > 0.0 && it.ranged == 0.0 } &&
+            (lastArmedRange[focusPrev.id] ?: 99).let { r -> r > 1 && !(r <= MELEE_KEEP_RANGE && (prevArmedRange[focusPrev.id] ?: 99) > r) }
+        val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
             combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
         focusId = focusTarget?.id
         // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
