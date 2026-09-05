@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 25
+    private const val BOT_VERSION = 26
 
     private const val LATE_MARGIN = 60
 
@@ -1892,10 +1892,27 @@ object SpawnAndSwamp {
         // лекарями (матч 11), а бурильщик перед тем 60 тиков бегал за кайтером и умер, не ударив.
         // Правило матча 9 («враг у дома — дерёмся всем составом») живёт в homeAtGates.
         val homeAll = fighters.filter { it.id !in wave && hasWeapon(it) }
+        // КТО В БОЮ, А НЕ КТО ЖИВ. Их огонь убивает одного нашего за killTicks; тот, кому идти дольше,
+        // в ЭТОМ бою не стреляет — он придёт к следующему, уже в меньшинстве. Матч 26 (05.09.2026):
+        // шестеро при 1794 против 1272 пошли навстречу стае у угловой точки, в дальности одновременно
+        // стояли трое, и за сорок тиков мы отдали двоих, не убив никого. Порог — не число: это время
+        // жизни нашего строя под их уроном, посчитанное из их урона и наших хитов, и путь каждого
+        // считается его собственным телом по болоту (pathTicks)
+        val homeAnchor = homeThreats.minByOrNull { ctx.enemyApproach[it.x * 100 + it.y] }
+        val homeReady = if (homeAnchor == null) homeAll else {
+            // окно — время жизни ВСЕГО строя под их огнём, а не до первой смерти: бой идёт, пока есть
+            // кому стрелять, и подкрепление, успевшее к середине, в нём участвует. По короткому окну
+            // (до первой смерти) отряд переставал выходить навстречу вовсе: ball 664→897 на стенде
+            val theirDps = homePack.sumOf { effectiveDps(it, homeAll, homeSpawnPos) }
+            val ourHits = homeAll.sumOf { it.hits }
+            val fightTicks = if (theirDps <= 0.0) Int.MAX_VALUE / 4 else (ourHits / theirDps).toInt()
+            val toThreat = flowTo(ctx, homeAnchor)
+            homeAll.filter { pathTicks(it, toThreat, it.x * 100 + it.y) <= maxOf(fightTicks, RANGED_RANGE) }
+        }
         // с гистерезисом, как охота: начатый бой продолжаем при 0.9 — иначе первые потери переключали
         // «дерёмся» в «пост», и отряд разворачивался под огнём
-        val homeOurs = ourPowerOf(homeAll, homePack)
-        val homeTheirs = enemyPowerOf(homePack, homeAll)
+        val homeOurs = ourPowerOf(homeReady, homePack)
+        val homeTheirs = enemyPowerOf(homePack, homeReady)
         val homeWins = homeThreats.isNotEmpty() &&
             homeOurs >= homeTheirs * (if (homeFight) PUSH_RELEASE_RATIO else DEFEND_MARGIN)
         // «у ворот» — ВНУТРИ поста, а не в семи клетках: шар из двух M3R3 и двух M4H2 ходил в 6-8 клетках
@@ -1908,7 +1925,7 @@ object SpawnAndSwamp {
         homeFight = homeThreats.isNotEmpty() && (spawnUnderFire || homeAtGates || homeWins)
         // в журнал — с причиной и счётом: «fight:gates(790/759)» читается без пересчёта
         homeMode = if (homeThreats.isEmpty()) "-" else (if (homeFight) "fight:" + (if (spawnUnderFire) "fire" else if (homeAtGates) "gates" else "wins") else "hold") +
-            "(${homeOurs.toInt()}/${homeTheirs.toInt()})"
+            "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}])"
         // ДОМ НА ВРЕМЯ ВЫЛАЗКИ. Пока волна ходит — ход группы плюс осада по её же симуляции — до нашего
         // спавна успевают дойти те приближающиеся, у кого подход меньше этого срока. Держать их должен
         // гарнизон, то есть те, кто ОСТАНЕТСЯ (homeGuard уже без staging), а не только тот, кто нужен
@@ -2944,7 +2961,9 @@ object SpawnAndSwamp {
         val gainFighter = (withFighter - base) * survival / fighterPrice
         trace?.append(" share=${(share * 100).toInt()}% surv=${(survival * 100).toInt()}% base=${base.toInt()} " +
             "tower=${withTower.toInt()}/$towerPrice=${(gainTower * 1000).toInt()} fighter=${withFighter.toInt()}/$fighterPrice=${(gainFighter * 1000).toInt()}")
-        return gainTower >= gainFighter
+        // прибавка должна быть ПОЛОЖИТЕЛЬНОЙ: при выбитых бойцах и лечении врага выше урона одиночки
+        // обе прибавки — ноль, и ничья «0 >= 0» покупала башню там, где покупать нечего вовсе
+        return gainTower > 0.0 && gainTower >= gainFighter
     }
 
     /** Огонь НАШИХ башен по этой группе. Это геометрия, а не число: выстрел падает на 50 за клетку и
