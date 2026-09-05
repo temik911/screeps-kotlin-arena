@@ -276,6 +276,12 @@ object PainAndGain {
      *  берём всё» (v11) дало семь флагов при 0.65–0.76 и три аннигиляции подряд (матчи 11–13). */
     private const val PARITY_FLOOR = 0.97
     private const val PASSIVE_TICKS = 100
+    /** ТИШИНА фермера (v65): «ни разу не ударил» (v57) обнулял отряды и порог проигранной гонки (v63) на весь матч по одному
+     *  размену — матч 158 (けろびー-фермер, четырнадцатый проигрыш 5402:23167): его блоб наткнулся на ядро у R3 на 254–259-м,
+     *  потерял троих, и следующие 940 тиков фармил 18–22 в тик без единого удара, пока армия при 2:1 (4179 против 1981) гналась
+     *  и не догоняла. Стендовый кайтер (m31 kite) возвращается за разделённым ядром через 160 тиков после укуса приманки
+     *  (84 → 246). Порог между ними — три окна PASSIVE_TICKS. */
+    private const val FARMER_QUIET = PASSIVE_TICKS * 3
     private const val DETACH_WINDOW = PASSIVE_TICKS / 2   // окно «погоня не сближается» для отряда (v59, см. USE_DETACH)
 
     /** В последних тиках матча проигрывающему по счёту флаги нужны любой ценой: бой уже не успеет. */
@@ -615,7 +621,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v64"
+    private const val BOT_VERSION = "v65"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1097,7 +1103,8 @@ object PainAndGain {
         // неподвижный враг — тоже армия: «пассивный» порог 0.95 пустил третий флаг против спящего, тот проснулся, и бой
         // при 0.96 был проигран (стенд m6 sleeper); порог один
         // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
-        val lostRace = USE_LOST_RACE_CAPTURE && stalemateNow && lastHurtTick == 0 && ourScore <= enemyScore && ourRate <= enemyRate
+        val quiet = lastHurtTick == 0 || getTicks() - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
+        val lostRace = USE_LOST_RACE_CAPTURE && stalemateNow && quiet && ourScore <= enemyScore && ourRate <= enemyRate
         val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else if (needed) PARITY_FLOOR else CAPTURE_FLOOR
         return ours >= theirs * floor
     }
@@ -1863,7 +1870,8 @@ object PainAndGain {
             // подпускает, в паритете по Ланчестеру считается полностью), m28 kite при наборе из мили — 4970:23907. Живой фермер
             // (матчи 119, 126) не ударил ни разу за 1300–1600 тиков. Первый удар отзывает отряд навсегда
             val chaseDry = now - lastDistanceKeptTick <= PASSIVE_TICKS
-            val farmer = armedEnemies.isNotEmpty() && lastHurtTick == 0 && lastReachTick >= 0 && (chaseDry || detachedIds.isNotEmpty())
+            val quiet = lastHurtTick == 0 || now - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
+            val farmer = armedEnemies.isNotEmpty() && quiet && lastReachTick >= 0 && (chaseDry || detachedIds.isNotEmpty())
             val detachedBefore = detachedIds.size
             if (!farmer) detachedIds.clear()
             else if (!contact) {
