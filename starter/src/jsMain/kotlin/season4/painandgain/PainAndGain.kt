@@ -157,6 +157,13 @@ object PainAndGain {
     private const val USE_FOCUS_STICKY = true
     private const val USE_FOCUS_ROW = false
     private const val USE_FOCUS_NET = false
+    /** СТРЕЛКИ ПЕРВЫМИ (v60; оператор по матчу 140: «фокус на его стрелков первыми, как он на наших»): ярус фокуса сразу после
+     *  «добиваемый за тик» — его вооружённый стрелок выше любой другой цели, и липкий фокус отпускает мили ради вошедшего в
+     *  дальность стрелка. Матч 140 (боевой けろびー, армия стёрта к 160-му при паритете): он бил наших стрелков 120 раз и
+     *  разоружённых стрелков ещё 60, мы — его мили 67 и разоружённых мили 26, которых его лекари вооружали обратно за десять
+     *  тиков; наши стрелки молчали разоружёнными 78 крип-тиков против 9 у него. Стрелок — то, что убивает (369 выстрелов
+     *  против 150), и то, что снимается быстрее всего: 600 хитов до разоружения против 800 у мили. */
+    private const val USE_FOCUS_RANGED_FIRST = true
     /** Липкость отпускает мили со схлопнувшейся угрозой (v49b, см. focusTarget) — ОТВЕРГНУТО: стенд 125/125, но 13 хуже / 7 лучше,
      *  и живьём 0:1 — боевой けろびー, которого v45–v47 били четыре раза подряд, стёр армию к 180-му (до 130-го ровно: мы сняли
      *  троих, он одного, потом наши стрелки 3 → 1 → 0). В рукопашной его мили входят и выходят каждый тик, и отпускание
@@ -597,7 +604,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v59"
+    private const val BOT_VERSION = "v60"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2025,7 +2032,10 @@ object PainAndGain {
         // фокус: добиваемые за тик, затем наибольшая угроза, снимаемая за тик боя (угроза / тики до убийства), и лишь
         // потом угроза на хит — «угроза на хит» слала огонь в лекарей врага за строем, которых лечили друг друга
         // быстрее, чем мы били (стенд m2 rush: выигранный без потерь рывок стал разгромом)
+        fun armedRanged(e: Creep?) = e != null && InfluenceMap.profileOf(e).ranged > 0.0
         val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+            // стрелки первыми (v60, см. USE_FOCUS_RANGED_FIRST)
+            .thenBy { if (USE_FOCUS_RANGED_FIRST && armedRanged(it)) 1 else 0 }
             .thenBy { val t = killTicks(it); if (t.isInfinite()) 0.0 else threatOf(it) / t }
             // чистый урон по цели: наш огонь в дальности минус её лечение (вплотную — полное, на дистанции — треть). Когда
             // никого не убить (лечение везде не меньше огня), «угроза на хит» слала огонь в того, кого лечат три лекаря
@@ -2051,7 +2061,9 @@ object PainAndGain {
         // (125/125, но 19 хуже / 12 лучше: screen+flagless m32 −16145, block+flagless m32 −7640, camp m34 −9294, кайтеры медленнее ×7)
         val prevDead = USE_FOCUS_RELEASE && focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee > 0.0 && it.ranged == 0.0 } &&
             (lastArmedRange[focusPrev.id] ?: 99).let { r -> r > 1 && !(r <= MELEE_KEEP_RANGE && (prevArmedRange[focusPrev.id] ?: 99) > r) }
-        val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
+        // липкость уступает стрелку (v60): прежняя цель не стрелок, а лучшая — вооружённый стрелок
+        val rangedNow = USE_FOCUS_RANGED_FIRST && armedRanged(focusBest) && !armedRanged(focusPrev)
+        val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && !rangedNow && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
             combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
         focusId = focusTarget?.id
         // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
