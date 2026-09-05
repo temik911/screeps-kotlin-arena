@@ -164,6 +164,14 @@ object PainAndGain {
      *  тиков; наши стрелки молчали разоружёнными 78 крип-тиков против 9 у него. Стрелок — то, что убивает (369 выстрелов
      *  против 150), и то, что снимается быстрее всего: 600 хитов до разоружения против 800 у мили. */
     private const val USE_FOCUS_RANGED_FIRST = true
+    /** БОЛЬШЕ СТВОЛОВ (v70): среди целей одного яруса — та, которую достают больше наших стрелков, и липкость уступает цели,
+     *  которую достают на FOCUS_GUNS_SWITCH стволов больше. Матч 173 (боевой けろびー, армия стёрта к 260-му): его 4+ выстрелов в одну
+     *  цель в 13 % тиков, наши — 0 %; за двадцать тиков (220–240) четверо наших стрелков из пяти и все лекари разоружены, наши
+     *  стрелки молчали разоружёнными 48 крип-тиков, его — 0. Его механизм прост: все пятеро бьют нашего самого переднего — того,
+     *  кого достают все; наш фокус брал его стрелка по угрозе, и его доставали один-два наших. Концентрация — это цель, до
+     *  которой дотягиваются, а не цель, которую хочется */
+    private const val USE_FOCUS_GUNS = true
+    private const val FOCUS_GUNS_SWITCH = 2
     /** Липкость отпускает мили со схлопнувшейся угрозой (v49b, см. focusTarget) — ОТВЕРГНУТО: стенд 125/125, но 13 хуже / 7 лучше,
      *  и живьём 0:1 — боевой けろびー, которого v45–v47 били четыре раза подряд, стёр армию к 180-му (до 130-го ровно: мы сняли
      *  троих, он одного, потом наши стрелки 3 → 1 → 0). В рукопашной его мили входят и выходят каждый тик, и отпускание
@@ -623,7 +631,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v69"
+    private const val BOT_VERSION = "v70"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2073,9 +2081,13 @@ object PainAndGain {
         // потом угроза на хит — «угроза на хит» слала огонь в лекарей врага за строем, которых лечили друг друга
         // быстрее, чем мы били (стенд m2 rush: выигранный без потерь рывок стал разгромом)
         fun armedRanged(e: Creep?) = e != null && InfluenceMap.profileOf(e).ranged > 0.0
+        // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
+        fun gunsAt(e: Creep?) = if (e == null) 0 else combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
         val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
             // стрелки первыми (v60, см. USE_FOCUS_RANGED_FIRST)
             .thenBy { if (USE_FOCUS_RANGED_FIRST && armedRanged(it)) 1 else 0 }
+            // больше стволов (v70)
+            .thenBy { if (USE_FOCUS_GUNS) gunsAt(it) else 0 }
             .thenBy { val t = killTicks(it); if (t.isInfinite()) 0.0 else threatOf(it) / t }
             // чистый урон по цели: наш огонь в дальности минус её лечение (вплотную — полное, на дистанции — треть). Когда
             // никого не убить (лечение везде не меньше огня), «угроза на хит» слала огонь в того, кого лечат три лекаря
@@ -2103,7 +2115,9 @@ object PainAndGain {
             (lastArmedRange[focusPrev.id] ?: 99).let { r -> r > 1 && !(r <= MELEE_KEEP_RANGE && (prevArmedRange[focusPrev.id] ?: 99) > r) }
         // липкость уступает стрелку (v60): прежняя цель не стрелок, а лучшая — вооружённый стрелок
         val rangedNow = USE_FOCUS_RANGED_FIRST && armedRanged(focusBest) && !armedRanged(focusPrev)
-        val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && !rangedNow && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
+        // липкость уступает цели, которую достают на FOCUS_GUNS_SWITCH стволов больше (v70)
+        val moreGuns = USE_FOCUS_GUNS && focusBest != null && focusPrev != null && gunsAt(focusBest) >= gunsAt(focusPrev) + FOCUS_GUNS_SWITCH
+        val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && !rangedNow && !moreGuns && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
             combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
         focusId = focusTarget?.id
         // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
