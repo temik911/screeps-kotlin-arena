@@ -66,6 +66,9 @@ grind() { if [[ "$TAG" == land || "$TAG" == gate ]]; then return; fi; run "$@"; 
 # line that has ever failed in 86 recorded runs, every live-opponent script (screen, nine/block/screen+flagless, farm+weak,
 # twelve, grab, scouts, none) and every line of the recent maps 28–35; the generic scripts (rush, kite, hunter, sleeper,
 # nine, fourteen, block, wing, army, roost) on maps 1–25 that never failed once are in the grind — still run in full
+# v42 (05.09.2026, match 70): `camp` — the farmer that takes what it can and then parks the whole blob on the centre flag —
+# on the five maps where it actually parks (29, 30, 31, 33, 34); on 28, 32 and 35 our army leaves flags unoccupied, the
+# blob keeps walking back onto them and the line is the farm race again, so those three are not listed twice
 # mode (`zsh regress.sh <tag>`), never by the landing gate. `zsh regress.sh gate` runs the gate only (~1.5 min).
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario — collected here, executed in parallel below
   N=$((N + 1)); print -r -- "$N $1 $2 $3 $TAG $PLANDIR" >> "$PLANDIR/plan"
@@ -262,6 +265,7 @@ run map-match34.txt match2 rush
 run map-match34.txt match2 kite
 run map-match34.txt match2 fourteen
 run map-match34.txt match2 roost
+run map-match34.txt match2 camp
 run map-match34.txt match2 screen
 grind map-match34.txt match2 farm
 grind map-match34.txt match2 sleeper
@@ -275,6 +279,7 @@ run map-match33.txt match2 rush
 run map-match33.txt match2 kite
 run map-match33.txt match2 fourteen
 run map-match33.txt match2 roost
+run map-match33.txt match2 camp
 grind map-match33.txt match2 farm
 run map-match33.txt match2 screen
 grind map-match33.txt match2 sleeper
@@ -301,6 +306,7 @@ run map-match31.txt -      rush
 run map-match31.txt -      kite
 run map-match31.txt -      fourteen
 run map-match31.txt -      roost
+run map-match31.txt -      camp
 grind map-match31.txt -      farm
 run map-match31.txt -      screen
 grind map-match31.txt -      sleeper
@@ -331,6 +337,7 @@ run map-match30.txt match2 rush
 run map-match30.txt match2 kite
 run map-match30.txt match2 fourteen
 run map-match30.txt match2 roost
+run map-match30.txt match2 camp
 grind map-match30.txt match2 farm
 grind map-match30.txt match2 screen
 grind map-match30.txt match2 sleeper
@@ -344,6 +351,7 @@ run map-match29.txt match2 rush
 run map-match29.txt match2 kite
 run map-match29.txt match2 fourteen
 run map-match29.txt match2 roost
+run map-match29.txt match2 camp
 grind map-match29.txt match2 farm
 grind map-match29.txt match2 sleeper
 grind map-match29.txt match2 spread

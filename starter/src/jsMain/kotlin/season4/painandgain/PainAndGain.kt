@@ -112,7 +112,8 @@ object PainAndGain {
      *  и стоит там — на своём флаге постом, на ничьём или его — захватом (гейты боя открыты только для этого флага; полное
      *  снятие гейтов — v39 — рассыпало армию по флагам до паритета с его полной армией и проиграло больше). Наступление на
      *  такого врага снято: наступление — это погоня. Так советуют и внешние разборы (jonwinsley: армия «между врагом и нашим
-     *  флагом»; см. docs/pain-and-gain-research.md, §4). */
+     *  флагом»; см. docs/pain-and-gain-research.md, §4). v42: снято, только пока есть что перехватывать (флаг не наш) или мы
+     *  впереди по очкам — фермер, севший на всех флагах, не придёт никуда, и его надо бить (матч 70, см. chaseVeto). */
     private const val USE_INTERCEPT = true
     /** Флаг перехвата — тот из не его флагов, к которому МЫ успеваем раньше (наш путь + запас ≤ его дистанция), первый в его
      *  порядке (по близости к нему), и он липкий: держится, пока он его не возьмёт. Первая форма («ближайший к его центру»)
@@ -531,7 +532,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v41"
+    private const val BOT_VERSION = "v42"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1284,7 +1285,12 @@ object PainAndGain {
     /** Точка отхода: дом и углы НАШЕЙ половины — достижимая и самая дальняя от центра армии врага (отход в
      *  дальний угол через всю карту вёл сквозь врага, и армию добивали по одному — стенд rush). */
     /** Враг уходит: за CHASE_WINDOW тиков отдалился от ТОГДАШНЕГО центра нашей армии больше чем на клетку. Кайтер
-     *  держит дистанцию, и «дистанция до нас не растёт» его не выдаёт — выдаёт движение прочь от места, где мы были. */
+     *  держит дистанцию, и «дистанция до нас не растёт» его не выдаёт — выдаёт движение прочь от места, где мы были.
+     *  Порог делает уходящим и блоб, шагнувший назад на две клетки: все двенадцать «неловимы» восемь тиков, huntable 0/12,
+     *  наступление снято, армия к посту (матч 70, t=196–207, 223, 234, 554). ОТВЕРГНУТО стендом: порог «больше половины окна»
+     *  (уходил дольше, чем стоял) — 66 строк хуже / 44 лучше: кайтеры добиваются медленнее на десятке карт (за ними гонятся
+     *  дольше), россыпи m12/m19/m24/m29/m30 spread и m29/m30 farm из победы в проигрыш; гистерезис в самом наступлении —
+     *  тоже (см. pushing). Открытая находка. */
     private fun evasive(e: Creep): Boolean {
         val h = enemyCellHist[e.id] ?: return false
         if (h.size < CHASE_WINDOW || ourCentroidHist.size < CHASE_WINDOW) return false
@@ -1618,7 +1624,33 @@ object PainAndGain {
         // пятьсот тиков, армия ходила за флагами и проиграла по очкам)
         val sweep = combatEnemies.isEmpty() && enemyCreeps.isNotEmpty() && strikers.isNotEmpty() && behindOnScore
         // и зачистка уступает простою: она стояла ВНЕ него, поэтому замерший на месте «дожим» не выключался ничем
-        pushing = !stalled && (sweep || (exchangePaying && !enemyNotFightingNow && huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
+        // перехват (см. USE_INTERCEPT): ближайший к центру фермера флаг не из его — туда; свой — пост (см. post ниже); считается до наступления — см. chaseVeto, иначе — цель
+        val interceptFlag: FlagInfo? = if (!enemyNotFightingNow || armedEnemies.isEmpty()) null else ctx.enemyCentroid?.let { ec ->
+            val group = strikers.ifEmpty { mobileArmy }
+            // липкий: выбранный держим, пока он не его
+            interceptFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id && !it.theirs } }
+                ?: ctx.flags.filter { !it.theirs }.sortedBy { getRange(it.pos, ec) }.firstOrNull { f ->
+                    val flow = flowTo(ctx, f.pos)
+                    val ours = group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0
+                    ours < Int.MAX_VALUE / 4 && ours + INTERCEPT_MARGIN <= getRange(f.pos, ec)
+                }
+        }
+        interceptFlagId = interceptFlag?.id
+        // перехват снимает наступление, только пока есть ЧТО перехватывать — флаг не наш, за которым фермер придёт; когда все
+        // флаги его, «перехват» — пост у своего флага, а за ним он не придёт при 22 очках в тик. Матч 70 (けろびー v5): он сел
+        // на D5 двенадцатью при 0,6 мощи (2954 против наших 4179), и армия 1000 тиков дёргалась в 10–13 клетках от него между
+        // ДОБИТЬ и постом в 35 клетках позади (noFire ≥ 20 и «в досягаемости броска» мигали на границе 8 клеток, поза
+        // переключалась каждые 1–4 тика) — 3174:22934 без единого выстрела с обеих сторон. Позади по очкам против врага,
+        // который не дерётся и которому нечего перехватывать, стоять — проиграть наверняка; впереди — стоять верно (v42)
+        val interceptDenies = interceptFlag != null && !interceptFlag.ours
+        val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)
+        // ОТКРЫТАЯ НАХОДКА (матч 70): второй источник мигания — «ловимых нет»: блоб, шагнувший назад на две клетки, делает
+        // «уходящими» всех двенадцать на восемь тиков (см. evasive), и наступление снимается на эти тики, армия к посту.
+        // Два устранения ОТВЕРГНУТЫ стендом: гистерезис по ловимости (наступление снимается лишь после целого CHASE_WINDOW без
+        // ловимых) — 51 хуже / 51 лучше, гейтовые m28 farm+weak и m30 camp красные, кайтеры добиваются позже на десятке карт,
+        // m16 kite проигран; порог evasive «больше половины окна» — 66 хуже / 44 лучше. Быстрое снятие наступления, когда
+        // ловимых нет, — то, чем армия не гонится за кайтером; цена — эти тики против блоба, который отступает и возвращается
+        pushing = !stalled && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -1648,18 +1680,6 @@ object PainAndGain {
         // враг рядом (см. NEAR_RANGE) без нашего перевеса — не цель, а строй: армия, пошедшая за угловым флагом при
         // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
         val holdLine = enemyNear && !pushing && !annihilate && !stalled
-        // перехват (см. USE_INTERCEPT): ближайший к центру фермера флаг не из его — туда; свой — пост (см. post ниже), иначе — цель
-        val interceptFlag: FlagInfo? = if (!enemyNotFightingNow || armedEnemies.isEmpty()) null else ctx.enemyCentroid?.let { ec ->
-            val group = strikers.ifEmpty { mobileArmy }
-            // липкий: выбранный держим, пока он не его
-            interceptFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id && !it.theirs } }
-                ?: ctx.flags.filter { !it.theirs }.sortedBy { getRange(it.pos, ec) }.firstOrNull { f ->
-                    val flow = flowTo(ctx, f.pos)
-                    val ours = group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0
-                    ours < Int.MAX_VALUE / 4 && ours + INTERCEPT_MARGIN <= getRange(f.pos, ec)
-                }
-        }
-        interceptFlagId = interceptFlag?.id
         val interceptObjective: Objective? = interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it) }?.let { f ->
             val group = strikers.ifEmpty { mobileArmy }
             val flow = flowTo(ctx, f.pos)
@@ -2143,6 +2163,11 @@ object PainAndGain {
                 }
                 threat != null && huntingThreat && mobile -> { target = threat; standoff = if (melee) 1 else closeIn }
                 raider != null && mobile && !support -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
+                // ОТВЕРГНУТО стендом (v42): «держать линию там, где она стоит» (holdLine → armedCentroid вместо поста) — в матче 70
+                // пост при враге рядом был точкой в 35 клетках позади, и каждый тик ДЕРЖАТЬ между тиками ДОБИТЬ разворачивал
+                // армию к нему. Но возврат к посту делает работу в десятках сценариев (после отбитого рывка остаток добивается у
+                // поста): 58 строк хуже / 48 лучше, гейтовая m33 farm+weak и m29 farm красные. Мигание лечится у корня — см.
+                // chaseVeto и evasive
                 else -> { target = post; standoff = POST_STANDOFF; avoid = true }
             }
             val flow0 = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep, nearFlow) else flowTo(ctx, target, near = nearFlow)

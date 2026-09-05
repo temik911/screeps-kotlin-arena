@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|screen (+flagless: the enemy's runners idle; +weak: a remnant of eight)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|camp|screen (+flagless: the enemy's runners idle; +weak: a remnant of eight)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -452,14 +452,21 @@ function enemyTick() {
       const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
       if (threat.length) stepAway(c, threat);
       else stepToward(c, post, 0);
-    } else if (has('farm')) {
+    } else if (has('farm') || has('camp')) {
       // 'farm' (live match 26): the army moves as ONE blob to the flag nearest the blob that it does not already own,
       // and never engages — a creep with one of our armed creeps within six steps away and comes back after. Its two
       // runners each sit on a flag of their own. That match ended with both armies at full strength — 902 hits of
       // damage in 1500 ticks and not one death — and it won on points 23408:12721 while our army chased the one
       // catchable straggler around the middle and let everything it captured be walked back onto
+      // 'camp' (live match 70, けろびー v5 again): the same farmer until every flag it can take is its own — then the whole
+      // blob parks on the centre flag and never moves again, not even away from our armed creeps. Live it sat there with
+      // twelve at 0.6 of its power (2954 against our 4179) for a thousand ticks while our army stood ten to thirteen cells
+      // away: the intercept's "a farmer is not chased" had nothing left to intercept, and the push flickered with the
+      // eight-cell reach boundary — 3174:22934 without a shot from either side
+      const takeable = flags.filter((f) => f.owner !== 1 && !ours.some((o) => o.x === f.x && o.y === f.y));
+      const camping = has('camp') && takeable.length === 0;
       const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
-      if (threat.length) stepAway(c, threat);
+      if (threat.length && !camping) stepAway(c, threat);
       else if (isRunner(c)) {
         const free = flags.filter((f) => f.owner !== 1).sort((a, b) => range(c, a) - range(c, b));
         const post = free[Math.min(runners.indexOf(c), free.length - 1)];
@@ -467,7 +474,8 @@ function enemyTick() {
       } else if (fighters.length) {
         const blob = { x: Math.round(fighters.reduce((s, f) => s + f.x, 0) / fighters.length),
                        y: Math.round(fighters.reduce((s, f) => s + f.y, 0) / fighters.length) };
-        const post = flags.filter((f) => f.owner !== 1).sort((a, b) => range(blob, a) - range(blob, b))[0];
+        const centre = flags.slice().sort((a, b) => range(a, { x: 49, y: 49 }) - range(b, { x: 49, y: 49 }))[0];
+        const post = camping ? centre : flags.filter((f) => f.owner !== 1).sort((a, b) => range(blob, a) - range(blob, b))[0];
         if (post) stepToward(c, post, fighters.indexOf(c) === 0 ? 0 : 2);
       }
     } else if (has('roost')) {
