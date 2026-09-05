@@ -546,7 +546,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v43"
+    private const val BOT_VERSION = "v43b"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1989,7 +1989,13 @@ object PainAndGain {
             // атакующего уходил, а кайтер добивался позже (гейт v43c: block/nine/rush «уничтожение → лидерство» ×10, кайтеры
             // медленнее ×7 при wing ×4, block+flagless ×2 и farm+weak m33 +7561 лучше)
             val standoffNow = pressOn && !enemyRetreating
-            if (USE_PLAN && standoffNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
+            // ОТВЕРГНУТО: расстановка и в контакте, пока его мили не идут на нас (!theirMeleeClosing) — ради матча 73 (Coldkimchi:
+            // его мили подходили к нашим стрелкам и лекарям вплотную, били по 240 и отходили — 46 ударов против наших 7, а
+            // прижим требует «его мили не вплотную», и расстановка была выключена ровно в этом бою): едва атака врага встаёт,
+            // бой берёт расстановка, и остаток уходит — 123/125, m28 wing и m31 camp проиграны, против прижима-только 21 хуже /
+            // 16 лучше. Прилипший к стрелку мили — дело нашего мили (см. poker в engage), не строя
+            val planNow = USE_PLAN && standoffNow
+            if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow)
         }
         for (creep in army) {
@@ -2075,7 +2081,15 @@ object PainAndGain {
             val pressRanged = USE_PRESS_RING && pressOn && hasRanged(creep) && !rotating && localAggressive
             val holdMelee = isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
-            val engage = if (pressTarget != null) pressTarget else if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) MELEE_HOLD_RANGE else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp }.minByOrNull { getRange(creep, it) } else null
+            // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
+            // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
+            // били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7, наши мили держали линию в 2–3 от его линии и не
+            // доставали; стрельба при трёх лекарях с обеих сторон вылечена целиком, армия потеряна к 240-му при его 16000/16000
+            val poker: Creep? = if (isMelee(creep) && !hasRanged(creep) && !support && !rotating && !stalled) combatEnemies.filter { e ->
+                InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && e.id !in pressGiveUp &&
+                    army.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 }
+            }.minByOrNull { getRange(creep, it) } else null
+            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) MELEE_HOLD_RANGE else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
             val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
@@ -2578,13 +2592,18 @@ object PainAndGain {
         val taken = HashSet<Int>()
         val meleeFree = melees.filter { m -> combatEnemies.none { getRange(m, it) <= 1 } }
         for (m in melees) if (meleeFree.none { it.id == m.id }) taken.add(m.x * 100 + m.y)
+        // клетка под своим — только его: без этого стрелкам назначались клетки друг друга (матч 73, t=120: ranged_1 → клетка
+        // ranged_3, ranged_3 → клетка ranged_1, ranged_2 → клетка ranged_3), и строй крутился на месте под огнём
+        val ownAt = HashMap<Int, String>()
+        for (c in army) ownAt[c.x * 100 + c.y] = c.id
         // память расстановки: клетка прошлого тика остаётся, пока держит верхние ярусы своей роли (keep) — без памяти «лучшая»
         // клетка менялась каждый тик (урон, фланги), стрелки блуждали вбок вместо шага за фронтом, и кайтер стенда бил идущих
         // за ним мили при reach=0/5 (m28 kite, армия потеряна); ряд строя двигался вместе с передним мили и потому успевал
         val plan = HashMap<String, Int>()
         fun place(c: Creep, cmp: Comparator<FightCell>, keep: ((FightCell) -> Boolean)?, ok: (FightCell) -> Boolean): FightCell? {
-            val prev = keep?.let { k -> lastPlan[c.id]?.let { cells[it] }?.takeIf { it.key !in taken && k(it) } }
-            val best = prev ?: cells.values.filter { it.key !in taken && ok(it) }.maxWithOrNull(cmp) ?: return null
+            fun free(cell: FightCell) = cell.key !in taken && (ownAt[cell.key] ?: c.id) == c.id
+            val prev = keep?.let { k -> lastPlan[c.id]?.let { cells[it] }?.takeIf { free(it) && k(it) } }
+            val best = prev ?: cells.values.filter { free(it) && ok(it) }.maxWithOrNull(cmp) ?: return null
             slotOf[c.id] = best.pos
             taken.add(best.key)
             plan[c.id] = best.key
