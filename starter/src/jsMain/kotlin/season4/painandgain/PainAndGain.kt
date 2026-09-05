@@ -122,8 +122,12 @@ object PainAndGain {
      *  котором не стоит наш, — пока ядро армии не слабее его по паритету; бегуны берут и держат флаги логикой скаутов
      *  (паросочетание по ценности, бегство от охотника) и стреляют по тому, что в дальности. Распускаются в тот тик, когда он
      *  выстрелит. Первая форма (v44b, набор по запасу наступления, без сигнала фермера) отвергнута: 121 строка хуже — отряды
-     *  уходили в карту во время боя и построения. */
-    private const val USE_DETACH = true
+     *  уходили в карту во время боя и построения. ВЫКЛЮЧЕНО после двух замеров сигнала: по noFireTicks ≥ PASSIVE_TICKS (v52)
+     *  гейт чист и farm m21/m25/m33/m34 зеленеют, но живьём (матч 108, 1800 тиков) не включилось ни разу — счётчик сбрасывался,
+     *  когда блоб отходил дальше NEAR_RANGE; по «сто тиков без хита с последней досягаемости» (v52b) включается и против сидящего
+     *  лагерем — три гейтовые строки красные (farm+weak m32 4502:18848, camp m29/m30): ядро без трёх крипов идёт на его блоб и не
+     *  добивает. Нужен признак «фермер, а не лагерь» — движение блоба; открыто. */
+    private const val USE_DETACH = false
     private var USE_POST_INSIDE = false
     private var USE_FLEE_DIRECTION = true
     /** Фокус-огонь (v45; оператор по матчу 78: «нет фокус-файра — каждый рэндж стреляет в своего; держать их вместе и за ход
@@ -575,7 +579,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v52"
+    private const val BOT_VERSION = "v52c"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -637,6 +641,8 @@ object PainAndGain {
     private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     private var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     private val detachedIds = HashSet<String>()           // отряды: вооружённые, зачисленные в бегуны (см. USE_DETACH)
+    private var lastHurtTick = 0                          // последний тик, когда враг снял с нас хиты (см. farmer в runArmy)
+    private var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
     private var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
     private var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
@@ -828,6 +834,8 @@ object PainAndGain {
         // (m31 screen: 16000/16000 у обоих 800 тиков, проигрыш по очкам); враг в ENGAGE_RANGE — это бой, не перехват
         val enemyWithinReach = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
         enemyNotFightingNow = USE_INTERCEPT && noFireTicks >= STALL_TICKS && !enemyWithinReach
+        if (hurt) lastHurtTick = getTicks()
+        if (enemyWithinReach) lastReachTick = getTicks()
         runRunners(ctx)
         runArmy(ctx)
 
@@ -1747,7 +1755,11 @@ object PainAndGain {
         // который не дерётся и которому нечего перехватывать, стоять — проиграть наверняка; впереди — стоять верно (v42)
         // отряды (см. USE_DETACH): решение на следующий тик — Ctx строится до мощей
         if (USE_DETACH) {
-            val farmer = noFireTicks >= PASSIVE_TICKS && armedEnemies.isNotEmpty()
+            // фермер: сто тиков (PASSIVE_TICKS) без единого снятого с нас хита с тех пор, как он последний раз был в досягаемости
+            // броска, и был в ней не дальше ста тиков назад. Счётчик «рядом и не стреляет» по тикам (noFireTicks) сбрасывался
+            // всякий раз, когда блоб отходил дальше NEAR_RANGE, и за 1800 тиков матча 108 не дошёл до ста ни разу (0 detached)
+            val farmer = armedEnemies.isNotEmpty() && now - lastHurtTick >= PASSIVE_TICKS && lastReachTick > lastHurtTick &&
+                now - lastReachTick <= PASSIVE_TICKS
             if (!farmer) detachedIds.clear()
             else if (!contact) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
