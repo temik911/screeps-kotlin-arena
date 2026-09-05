@@ -106,13 +106,14 @@ object PainAndGain {
      *  наших 175 (68 % крип-тиков с выстрелом против 44 %), r→melee 137 по идущим первыми мили — за 60 тиков размен
      *  перевернулся, армия потеряна. Ланчестер даёт право наступать, размен говорит, окупается ли оно. */
     private const val PUSH_EXCHANGE = 1.0
-    /** Гейты боя в captureAllowed («в контакте», «бой близко») не применяются к врагу, чей огонь STALL_TICKS тиков подряд не
-     *  снял с нас ни хита (фермер) — ЗАМЕРЕНО И ВЫКЛЮЧЕНО: на стенде фермер тоже не стреляет, гейты снимаются, армия берёт флаги
-     *  до паритета с ЕГО полной армией (то есть дебаффится до 0,97 его) и рассыпается по флагам, которые он забирает обратно —
-     *  m33 и m28 farm+weak (живые строки) из зелёных в красные, m29 farm 23825:19258 → 19386:23822, m24 farm 20033 → 8958.
-     *  Гонку с фермером решает не снятие гейтов (v36: не сетка простоя, v39: не гейты), а погоня, из которой он не выходит:
-     *  зажать к стене, идти веером, делить отряд — пункты исследования (docs/pain-and-gain-research.md). */
-    private const val USE_NOFIRE_GATE = false
+    /** Перехват (v40): враг с боем рядом, чей огонь STALL_TICKS тиков подряд не снял с нас ни хита, — фермер (けろびー v5, матчи
+     *  51 и 57: шесть флагов к 82-му, 1400 тиков рядом без выстрела, 8 в тик против 17). Его не догнать на равной скорости, и
+     *  ему не нужно драться — но флаг он берёт, только встав на клетку флага, и идёт за ближайшим не своим: армия идёт ТУДА
+     *  и стоит там — на своём флаге постом, на ничьём или его — захватом (гейты боя открыты только для этого флага; полное
+     *  снятие гейтов — v39 — рассыпало армию по флагам до паритета с его полной армией и проиграло больше). Наступление на
+     *  такого врага снято: наступление — это погоня. Так советуют и внешние разборы (jonwinsley: армия «между врагом и нашим
+     *  флагом»; см. docs/pain-and-gain-research.md, §4). */
+    private const val USE_INTERCEPT = true
     private const val PUSH_RELEASE_RATIO = 1.1
 
     /** Проигрывая по прогнозу счёта, армия идёт добивать при меньшем перевесе: очки — у того, кто держит больше
@@ -517,7 +518,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v39"
+    private const val BOT_VERSION = "v40"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -576,7 +577,9 @@ object PainAndGain {
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     private var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
-    private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. captureAllowed)
+    private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
+    private var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
+    private var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
     private var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
     private var formWaitSince = -1
@@ -761,6 +764,11 @@ object PainAndGain {
         lastOurHits = ourHitsSum
         val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
         noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
+        // фермер — не только «не стреляет», но и «держится дальше броска»: стоящий в 3–6 экран стенда тоже не стрелял, пока
+        // мы стояли на своём флаге, и перехват превратил бой, который v38 выигрывала на 439-м, в стояние до конца матча
+        // (m31 screen: 16000/16000 у обоих 800 тиков, проигрыш по очкам); враг в ENGAGE_RANGE — это бой, не перехват
+        val enemyWithinReach = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
+        enemyNotFightingNow = USE_INTERCEPT && noFireTicks >= STALL_TICKS && !enemyWithinReach
         runRunners(ctx)
         runArmy(ctx)
 
@@ -963,14 +971,15 @@ object PainAndGain {
         // けろびー (матчи 38, 43, 44, 45) — −20 % стрелкам в решающем размене, — проходя порог паритета с запасом три очка мощи
         // (3967 против 3964: модель мощи считает мили полными, а их обезоруживают за первые двадцать тиков). Три очка в тик
         // за тридцать тиков против пятой части огня на весь бой
-        val enemyNotFighting = USE_NOFIRE_GATE && noFireTicks >= STALL_TICKS
-        if (fightImminentNow && !enemyNotFighting) return false
+        // флаг перехвата (см. USE_INTERCEPT) открыт и в контакте с фермером, и при «бое близко»; остальные — нет
+        val intercept = enemyNotFightingNow && f.id == interceptFlagId
+        if (fightImminentNow && !intercept) return false
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
         // при бесплодной охоте (см. STALL_TICKS) контакт мнимый — висящие в трёх-шести клетках крипы россыпи мигали
         // контактом, и цель-флаг пропадала через тик после назначения (стенд m19 spread)
-        if (!stalledNow && !enemyNotFighting && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return false
+        if (!stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return false
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
         val (ours, theirs) = powerAfter(ctx, f)
@@ -1595,7 +1604,7 @@ object PainAndGain {
         // пятьсот тиков, армия ходила за флагами и проиграла по очкам)
         val sweep = combatEnemies.isEmpty() && enemyCreeps.isNotEmpty() && strikers.isNotEmpty() && behindOnScore
         // и зачистка уступает простою: она стояла ВНЕ него, поэтому замерший на месте «дожим» не выключался ничем
-        pushing = !stalled && (sweep || (exchangePaying && huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
+        pushing = !stalled && (sweep || (exchangePaying && !enemyNotFightingNow && huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -1625,7 +1634,16 @@ object PainAndGain {
         // враг рядом (см. NEAR_RANGE) без нашего перевеса — не цель, а строй: армия, пошедшая за угловым флагом при
         // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
         val holdLine = enemyNear && !pushing && !annihilate && !stalled
-        val objective = if (annihilate || evadeFirst != null || holdLine) null else chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted)
+        // перехват (см. USE_INTERCEPT): ближайший к центру фермера флаг не из его — туда; свой — пост (см. post ниже), иначе — цель
+        val interceptFlag: FlagInfo? = if (!enemyNotFightingNow || armedEnemies.isEmpty()) null else
+            ctx.enemyCentroid?.let { ec -> ctx.flags.filter { !it.theirs }.minByOrNull { getRange(it.pos, ec) } }
+        interceptFlagId = interceptFlag?.id
+        val interceptObjective: Objective? = interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it) }?.let { f ->
+            val group = strikers.ifEmpty { mobileArmy }
+            val flow = flowTo(ctx, f.pos)
+            Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0)
+        }
+        val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted)
         val evadeTo = evadeFirst ?: (if (hunted && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
@@ -1640,7 +1658,7 @@ object PainAndGain {
         objectiveFlagId = objective?.flag?.id
         if (newPosture != Posture.RETREAT) retreatTarget = null
         val retreatTo = if (newPosture == Posture.RETREAT) retreatPoint(ctx) else null
-        val post = postPoint(ctx)
+        val post = if (interceptFlag?.ours == true) interceptFlag.pos else postPoint(ctx)
         val postureKey = "$newPosture:${objectiveFlagId ?: ""}"
         if (DEBUG_LOG && (postureKey != postureLogged || getTicks() % (LOG_EVERY * 10) == 0)) {
             postureLogged = postureKey
