@@ -283,10 +283,14 @@ object PainAndGain {
      *  к ближайшему мили-напарнику (см. aloneInFire). Оставлена выключенной как замер. */
     private const val USE_WALL = false
     /** Сбор пачки — одинокий мили под огнём идёт вплотную к ближайшему мили-напарнику вместо «к центру» (матч 43: «к центру
-     *  в двух» было выполнено в двух клетках впереди массы, и мили стоял под пятью стрелками) — ОТВЕРГНУТ стендом: мили,
-     *  добивавший в одиночку убегающий остаток, теперь бежал к напарнику, и остаток уходил (rush/block «уничтожение →
-     *  лидерство», m34 farm 21744 → 9237, 48 строк хуже, 286 против 288). Оставлен выключенным как замер. */
-    private const val USE_REGROUP = false
+     *  в двух» было выполнено в двух клетках впереди массы, и мили стоял под пятью стрелками). Безусловный вариант
+     *  ОТВЕРГНУТ стендом: мили, добивавший в одиночку убегающий остаток, бежал к напарнику, и остаток уходил (rush/block
+     *  «уничтожение → лидерство», m34 farm 21744 → 9237, 48 строк хуже, 286 против 288). v35 — условие вычислимое: огонь
+     *  врага по его клетке за REGROUP_TICKS тиков не меньше его хитов, то есть в одиночку он не проживёт и пяти тиков; остаток
+     *  такого огня не даёт, линия из пяти стрелков — даёт (матч 47: e_1 один в двух от линии 1300 → 400 за четыре тика,
+     *  затем e_2 и e_3 по очереди, e_4 всё это время в пяти клетках позади). */
+    private const val USE_REGROUP = true
+    private const val REGROUP_TICKS = 5
     private const val PRESS_GIVEUP = 20
     /** Кольцо стрелков в прижиме (см. USE_PRESS) — ОТВЕРГНУТО стендом: стрелки, каждый в своей клетке ровно в трёх от цели
      *  фокуса, расходились, и у каждого мили врага находилась своя ближайшая цель — урон врага размазывался по шести нашим
@@ -482,7 +486,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v34"
+    private const val BOT_VERSION = "v35"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -540,6 +544,7 @@ object PainAndGain {
     private val enemyDistHist = ArrayDeque<Int>()
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
+    private var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
     private var formWaitSince = -1
     private val aggressiveIds = HashSet<String>()
@@ -710,6 +715,10 @@ object PainAndGain {
         val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
             (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
         unflaggedRushNow = rushSignal || rushHold
+        // бой близко — для ЗАХВАТОВ флаг врага не в счёт: «безфлаговый» бросок кончился на 39-м тике, когда его армия по пути
+        // взяла D5, и скаут взял R3 на 42-м (матч 47, пятый бой с けろびー подряд с R×0.8); уклонение по-прежнему только от
+        // безфлагового (флагованный слабее — с ним дерёмся), а дебафф перед боем не берём ни от кого
+        fightImminentNow = unflaggedRushNow || (!ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed)
         runRunners(ctx)
         runArmy(ctx)
 
@@ -912,7 +921,7 @@ object PainAndGain {
         // けろびー (матчи 38, 43, 44, 45) — −20 % стрелкам в решающем размене, — проходя порог паритета с запасом три очка мощи
         // (3967 против 3964: модель мощи считает мили полными, а их обезоруживают за первые двадцать тиков). Три очка в тик
         // за тридцать тиков против пятой части огня на весь бой
-        if (unflaggedRushNow) return false
+        if (fightImminentNow) return false
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -1986,8 +1995,8 @@ object PainAndGain {
                 formGo -> { target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
                 wounded && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
                 rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
-                // сбор пачки (см. USE_REGROUP, отвергнут): одинокий мили под огнём — к ближайшему мили-напарнику
-                USE_REGROUP && aloneInFire && melee && meleeMate != null -> { target = meleeMate; standoff = 1; avoid = true; nearFlow = true }
+                // сбор пачки (см. USE_REGROUP, REGROUP_TICKS): одинокий мили под смертельным огнём — к ближайшему мили-напарнику
+                USE_REGROUP && aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) * REGROUP_TICKS >= creep.hits -> { target = meleeMate; standoff = 1; avoid = true; nearFlow = true }
                 aloneInFire -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 leashed -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // прижим стрелка (см. USE_PRESS): кольцо ровно в RANGED_RANGE от цели фокуса, не ряд
