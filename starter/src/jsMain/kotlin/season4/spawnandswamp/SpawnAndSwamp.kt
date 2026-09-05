@@ -41,6 +41,12 @@ import screeps.api.TOWER_POWER_HEAL
 import screeps.api.TOWER_RANGE
 import screeps.api.WALL_HITS
 import screeps.api.WORK
+import screeps.api.EXTENSION_ENERGY_CAPACITY
+import screeps.api.EXTENSION_HITS
+import screeps.api.MAX_CONSTRUCTION_SITES
+import screeps.api.OBSTACLE_OBJECT_TYPES
+import screeps.api.RAMPART_HITS
+import screeps.api.createConstructionSite
 import screeps.api.arenaInfo
 import screeps.api.get
 import screeps.api.getObjectsByPrototype
@@ -107,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 23
+    private const val BOT_VERSION = 24
 
     private const val LATE_MARGIN = 60
 
@@ -194,6 +200,15 @@ object SpawnAndSwamp {
     /** Хвост распада контейнера, который не берём: доехать и успеть забрать надо с запасом. */
     private const val DECAY_MARGIN = 3
 
+    // ---------- стройка ----------
+    /** Кольцо, в котором ставится башня: ровно вторая клетка от спавна. Ближе — занимает клетку, на
+     *  которую выходят новорождённые; дальше — теряет по 50 урона за клетку по всем, кто бьёт спавн,
+     *  и между башней и спавном не остаётся клетки, с которой смотритель достаёт до обоих. */
+    private const val TOWER_RING = 2
+
+    /** Дальность стройки в движке: строить можно с трёх клеток. */
+    private const val BUILD_RANGE = 3
+
     /** Цена клетки стены в поиске пролома: сначала меньше стен, при равном числе — слабее. */
     private const val WALL_STEP_COST = 1000
 
@@ -247,6 +262,21 @@ object SpawnAndSwamp {
 
     /** Наш спавн в этом тике — мили врага вплотную к нему бьёт в полную силу (см. meleeFactor). */
     private var homeSpawnPos: Position? = null
+
+    /** Наши живые башни в этом тике — их огонь входит в счёт мощи (см. ourTowerDps). */
+    private var myTowers: List<StructureTower> = emptyList()
+
+    /** Тики тревоги за окно PRODUCTION_WINDOW: доля времени, когда бой идёт ДОМА. Башня работает
+     *  только дома, и её ценность считается по этой доле, а не по вере в то, что враг придёт. */
+    private val alarmTicks = ArrayDeque<Int>()
+
+    /** «Боец первым» прошлого тика: пока он верен, энергия спавна принадлежит бойцу, и смотритель
+     *  башни из спавна не берёт. */
+    private var lastFighterFirst = false
+
+    /** Потрачено на стройку (смотритель): считается отдельно от бойцов — иначе замер смертности
+     *  бойцов (survivalOfFighters) припишет им энергию, которая в бой и не шла. */
+    private var spentBuild = 0
 
     /** Пик мощи набега (самая сильная идущая к нам группа) за PRODUCTION_WINDOW — под него строится
      *  домашний мили-гарнизон, когда противник сам мили (см. guardNeeded). */
@@ -405,6 +435,7 @@ object SpawnAndSwamp {
         val active: List<Creep>,
         val haulers: List<Creep>,
         val fighters: List<Creep>,
+        val builders: List<Creep>,      // крипы с WORK: площадка и кормление башни, ни возка, ни бой
         val enemyCreeps: List<Creep>,
         val combatEnemies: List<Creep>,
         val blocked: List<Position>,
@@ -418,6 +449,8 @@ object SpawnAndSwamp {
         val ramparts: List<StructureRampart>,
         val pendingEnemies: List<Creep>,   // боевые крипы врага, ещё рождающиеся в его спавне (разведка)
         val pendingTowers: List<PendingTower>, // площадки башен врага с оценкой достройки
+        val myTowers: List<StructureTower>,    // наши живые башни
+        val mySites: List<ConstructionSite>,   // наши недостроенные площадки
     )
 
     fun tick() {
@@ -452,6 +485,13 @@ object SpawnAndSwamp {
             )
             println("my spawn=(${mySpawn.x},${mySpawn.y}) energy=${mySpawn.store[RESOURCE_ENERGY]} hits=${mySpawn.hits}/${mySpawn.hitsMax} " +
                 "enemy spawn=${enemySpawn?.let { "(${it.x},${it.y})" } ?: "none"}")
+            // ЧТО ЕЩЁ МОЖНО ПОСТАВИТЬ: рампарт непроходим для врага и рождается сразу с полными хитами,
+            // расширения поднимают потолок тела. Печатаем то, что отдаёт САМА арена, — d.ts клиента устаревает
+            // (в нём TOWER_FALLOFF_RANGE=20, а рантайм говорит 21)
+            println(
+                "structures: rampartHits=$RAMPART_HITS wallHits=$WALL_HITS extension=$EXTENSION_ENERGY_CAPACITY/$EXTENSION_HITS " +
+                    "maxSites=$MAX_CONSTRUCTION_SITES obstacles=${JSON.stringify(OBSTACLE_OBJECT_TYPES)}"
+            )
             val empty = getObjectsByPrototype(StructureContainer::class).filter { (it.store[RESOURCE_ENERGY] ?: 0) <= 0 }
             if (empty.isNotEmpty()) println("empty containers: " + empty.joinToString(" ") { "(${it.x},${it.y})cap=${it.store.getCapacity(RESOURCE_ENERGY)}my=${it.my}" })
         }
@@ -464,8 +504,11 @@ object SpawnAndSwamp {
         val enemyCreeps = getObjectsByPrototype(Creep::class).filter { !it.my && it.exists && !it.spawning }
         val active = myCreeps.filter { !it.spawning }
 
-        val haulers = active.filter { c -> c.body.any { it.type == CARRY } }
-        val fighters = active.filter { c -> c.body.none { it.type == CARRY } }
+        // СТРОИТЕЛЬ — крип с WORK: он не возит в спавн и не воюет. Тип по телу, а не по живым частям:
+        // с выбитыми WORK он всё ещё не хаулер (маршрут у него свой), и кормить башню он может дальше
+        val builders = active.filter { c -> c.body.any { it.type == WORK } }
+        val haulers = active.filter { c -> c.body.any { it.type == CARRY } && c.body.none { it.type == WORK } }
+        val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } }
         // армия врага — И лекари: M4H2 без оружия считался «мягкой» целью, как хаулер, и бойцы шли за ним
         // как за рейдером — прямо в его конвой из четырёх M3R3 (матч 13, t=1150); в локальном перевесе его
         // лечения не было вовсе, и пара лезла в шар с тремя лекарями (t=1060). Лекарь без урона — тоже
@@ -479,6 +522,8 @@ object SpawnAndSwamp {
             println("enemy creeps t=${getTicks()}: " + enemyCreeps.joinToString(" ") { "(${it.x},${it.y})${bodySummary(it)}h=${it.hits}/${it.hitsMax}" })
         }
         // башни врага — источник огня (см. InfluenceMap: урон, влияние, опасность), не только препятствие
+        myTowers = getObjectsByPrototype(StructureTower::class).filter { it.exists && it.my == true && (it.hits ?: 0) > 0 }
+        val mySites = getObjectsByPrototype(ConstructionSite::class).filter { it.exists && it.my == true }
         val enemyTowers = getObjectsByPrototype(StructureTower::class)
             .filter { it.exists && it.my != true && (it.hits ?: 0) > 0 }
             .map { TowerInfo(it, towerFed(it, enemyCreeps), it.cooldown, it) }
@@ -548,7 +593,7 @@ object SpawnAndSwamp {
         val enemyLoaded = enemySpawn?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
 
         val sites = collectSites(combatEnemies, loadedToSpawn, enemyLoaded)
-        val ctx = Ctx(mySpawn, enemySpawn, myCreeps, active, haulers, fighters, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers)
+        val ctx = Ctx(mySpawn, enemySpawn, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, mySites)
 
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
@@ -575,8 +620,11 @@ object SpawnAndSwamp {
         val threatsSoon = combatEnemies + enemyPending
         val enemyArrival = enemyArrivalTicks(ctx)
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
+        measureAlarm(alarm)
         spawnIfNeeded(ctx, defenders, threatsSoon, alarm, enemyArrival, spawnUnderFire)
+        runTowers(ctx)
         runHaulers(ctx)
+        runBuilders(ctx)
         val ourOffense = runFighters(ctx, enemyPower, alarm)
 
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
@@ -594,7 +642,8 @@ object SpawnAndSwamp {
                 "t=${getTicks()} spawnE=${mySpawn.store[RESOURCE_ENERGY]} spawning=${mySpawn.spawning != null} " +
                     "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                     "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }} " +
-                    "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawnHits=${enemySpawn?.hits}"
+                    "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawnHits=${enemySpawn?.hits} " +
+                    "mine=${myTowers.joinToString(",") { "T(${it.x},${it.y})h=${it.hits}e=${it.store[RESOURCE_ENERGY]}" }.ifEmpty { "-" }}${ctx.mySites.joinToString("") { "+site(${it.x},${it.y})${it.progress}/${it.progressTotal}" }} home=${(homeShare() * 100).toInt()}%"
             )
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
@@ -1153,7 +1202,7 @@ object SpawnAndSwamp {
 
         val usable = usableSites(ctx)
         // включая рождающихся; остов без живых CARRY флот не пополняет — место в лимите свободно
-        val allHaulers = ctx.myCreeps.count { c -> c.body.any { it.type == CARRY && it.hits > 0 } }
+        val allHaulers = ctx.myCreeps.count { c -> c.body.none { it.type == WORK } && c.body.any { it.type == CARRY && it.hits > 0 } }
 
         // ПРОЛОМ: контейнер за стеной у спавна (5000 в девяти клетках против 2500 в сорока восьми) —
         // мили-бурильщик первым: ATTACK бьёт структуры впятеро дешевле RANGED. Хаулеру оставляем
@@ -1215,6 +1264,7 @@ object SpawnAndSwamp {
                 return
             }
         }
+        lastFighterFirst = fighterFirst
         if (DEBUG_LOG && fighterFirst && energy < fullCost && getTicks() % 10 == 0) {
             println("spawn: fighter first — enemy arrives in $threatIn, hold=${holdReady.toInt()} invest=${investReady.toInt()} deficit=${deficit.toInt()} alarm=$alarm closes=$closesNow flow=${(flow * 10).toInt() / 10.0}")
         }
@@ -1241,7 +1291,7 @@ object SpawnAndSwamp {
         // дефицит (тел × максимум из времени рождения и накопления энергии). Два разведчика врага
         // на другом краю карты 170 тиков держали спавн на «боец первым» при притоке 10/23 (02.09).
         // (income, deficit, fighterFirst — выше, до ветки бурильщика)
-        val haulerTurn = needHauler && !fighterFirst && spentHaulers <= spentFighters + HAULER_LEAD
+        val haulerTurn = needHauler && !fighterFirst && spentHaulers <= spentFighters + spentBuild + HAULER_LEAD
 
         if (haulerTurn) {
             val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
@@ -1258,6 +1308,34 @@ object SpawnAndSwamp {
         if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return
 
         if (energy < minFighter) return
+
+        // БАШНЯ ДОМА. Площадка ничего не стоит, поэтому ставится сразу, как только счёт (towerWorth)
+        // говорит, что дома она даёт больше бойца за ту же энергию. Смотритель — часть цены башни:
+        // без него площадку некому строить, а готовая башня молчит (ёмкость — один выстрел)
+        if (ctx.myTowers.isEmpty() && ctx.mySites.isEmpty()) {
+            val trace = StringBuilder()
+            val worth = towerWorth(defenders, threats, flow, trace)
+            if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && trace.isNotEmpty()) println("tower: worth=$worth$trace")
+            if (!fighterFirst && worth) {
+                val spot = towerSpot(ctx)
+                if (spot != null) {
+                    val r = createConstructionSite(spot.x, spot.y, StructureTower::class.js)
+                    if (DEBUG_LOG) println("tower: site at (${spot.x},${spot.y})$trace flow=${(flow * 10).toInt() / 10.0} err=${r.error}")
+                }
+            }
+        }
+        if (!fighterFirst && ctx.builders.isEmpty() && (ctx.mySites.isNotEmpty() || ctx.myTowers.isNotEmpty())) {
+            val builder = builderBody(builderWork(flow))
+            val builderCost = builder.sumOf { cost(it) }
+            if (energy < builderCost) {
+                if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: saving for builder cost=$builderCost energy=$energy")
+                return
+            }
+            val r = spawn.spawnCreep(builder)
+            if (r.error == null) spentBuild += builderCost
+            if (DEBUG_LOG) println("spawn: builder work=${builder.count { it == WORK }} cost=$builderCost energy=$energy err=${r.error}")
+            return
+        }
 
         // ЛАГЕРЬ у спавна: враг рядом и сильнее — боец по 300 умирает один (матч 02.09: восемь
         // подряд). Копим на полное тело — но только пока СПАВН ДОЖИВАЕТ до него: 3000 хитов, делённые
@@ -2497,7 +2575,7 @@ object SpawnAndSwamp {
         return unit.hits * effectiveDps(unit, opponents, structure) / raw
     }
     private fun ourPowerOf(ours: List<Creep>, theirs: List<Creep>): Double {
-        val dps = ours.sumOf { effectiveDps(it, theirs, null) }
+        val dps = ours.sumOf { effectiveDps(it, theirs, null) } + ourTowerDps(theirs)
         val heal = theirs.sumOf { InfluenceMap.profileOf(it).heal }
         return lanchester(dps, heal, ours.sumOf { weightedHits(it, theirs, null) }.toInt())
     }
@@ -2512,7 +2590,7 @@ object SpawnAndSwamp {
 
     /** Закроет ли это тело дефицит обороны вместе с нынешними защитниками (по Ланчестеру с лечением врага). */
     private fun closesDeficit(body: Array<BodyPartType>, defenders: List<Creep>, threats: List<Creep>): Boolean {
-        val dps = defenders.sumOf { effectiveDps(it, threats, null) } +
+        val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats) +
             body.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER + body.count { it == ATTACK } * ATTACK_POWER
         val hits = defenders.sumOf { weightedHits(it, threats, null) } + body.size * 100
         val heal = threats.sumOf { InfluenceMap.profileOf(it).heal }
@@ -2756,6 +2834,179 @@ object SpawnAndSwamp {
         val span = minOf(PRODUCTION_WINDOW, now - firstHaulerTick)
         if (span < PRODUCTION_WINDOW) return -1.0
         return delivered.sumOf { it.second }.toDouble() / span
+    }
+
+    // ==================== стройка ====================
+
+    /** Цена структуры — из константы арены, а не числом (площадка врага на 1000 в матче 25 — это спавн). */
+    private fun buildCost(name: String): Int = CONSTRUCTION_COST[name] ?: 0
+
+    private fun measureAlarm(alarm: Boolean) {
+        val now = getTicks()
+        if (alarm) alarmTicks.addLast(now)
+        while (alarmTicks.isNotEmpty() && alarmTicks.first() < now - PRODUCTION_WINDOW) alarmTicks.removeFirst()
+    }
+
+    /** Доля последнего окна, когда бой шёл ДОМА (тревога). Башня бьёт только тех, кто пришёл к спавну,
+     *  поэтому это и есть её КПД — замеренный, а не назначенный: в матчах, где мы выигрывали в поле,
+     *  тревоги не было почти ни разу, и башня там не окупается. */
+    private fun homeShare(): Double {
+        val span = minOf(PRODUCTION_WINDOW, getTicks() + 1)
+        return if (span <= 0) 0.0 else alarmTicks.size.toDouble() / span
+    }
+
+    /** Клетка башни: второе кольцо от спавна (ближе — занимает клетку выхода новорождённых, дальше —
+     *  теряет по 50 урона за клетку и не оставляет клетки, с которой смотритель достаёт до обоих),
+     *  проходимая и свободная, из таких — ближайшая к спавну врага: оттуда приходят. */
+    private fun towerSpot(ctx: Ctx): Position? {
+        val spawn = ctx.mySpawn
+        val enemy: Position = ctx.enemySpawn ?: spawn
+        val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
+        var best: Position? = null
+        var bestScore = Int.MAX_VALUE
+        for (dx in -TOWER_RING..TOWER_RING) for (dy in -TOWER_RING..TOWER_RING) {
+            if (maxOf(abs(dx), abs(dy)) != TOWER_RING) continue
+            val x = spawn.x + dx
+            val y = spawn.y + dy
+            if (x < 1 || y < 1 || x > 98 || y > 98) continue
+            val pos = InfluenceMap.cell(x, y)
+            if (getTerrainAt(pos) == TERRAIN_WALL) continue
+            if (x * 100 + y in busy) continue
+            val score = getRange(pos, enemy)
+            if (score < bestScore) { bestScore = score; best = pos }
+        }
+        return best
+    }
+
+    /** Сколько WORK у смотрителя. Время до готовой башни — накопление её цены по потоку плюс стройка
+     *  (BUILD_POWER за WORK в тик); лишняя WORK ускоряет вторую половину и удлиняет первую. Минимум
+     *  суммы: k = √(цена × поток / (BUILD_POWER × цена WORK)) — из потока, а не назначено. */
+    private fun builderWork(flow: Double): Int {
+        val k = sqrt(buildCost("StructureTower") * maxOf(flow, 0.5) / (BUILD_POWER * cost(WORK)))
+        return k.toInt().coerceIn(1, (MAX_CREEP_SIZE - 4) / 2)
+    }
+
+    /** Тело смотрителя [MOVE×2, CARRY×2, WORK×k]: WORK в хвосте — урон снимает части спереди, и
+     *  разоружённый смотритель ещё возит выстрелы в башню; двух MOVE хватает на три клетки у ворот,
+     *  двух CARRY — на десять выстрелов без возврата к спавну. */
+    private fun builderBody(k: Int): Array<BodyPartType> {
+        val body = ArrayList<BodyPartType>(4 + k)
+        repeat(2) { body.add(MOVE) }
+        repeat(2) { body.add(CARRY) }
+        repeat(k) { body.add(WORK) }
+        return body.toTypedArray()
+    }
+
+    /** Доля вложенного в бойцов, которая ЖИВА: цена уцелевших частей всех живых бойцов к потраченному
+     *  на бойцов. Боец — расходник, и это единственная разница между ним и башней, которую снимок
+     *  «урон×хиты» не видит вовсе: за матч 25 мы вложили в бойцов 6780 и к 690-му тику держали пятерых.
+     *  Пока никого не потеряли — единица, и башня честно проигрывает бойцу. */
+    private fun survivalOfFighters(fighters: List<Creep>): Double {
+        if (spentFighters <= 0) return 1.0
+        val alive = fighters.sumOf { c -> c.body.sumOf { if (it.hits > 0) cost(it.type) else 0 } }
+        return (alive.toDouble() / spentFighters).coerceIn(0.0, 1.0)
+    }
+
+    /** Окупается ли башня против бойца за ту же энергию. Мера одна и та же — ПРИБАВКА к мощи обороны
+     *  против тех же врагов, с их лечением (см. lanchester): против пары «стрелок + лекарь» непрерывный
+     *  урон бойца съедается лечением, а выстрел башни — 1000 разом — нет, и это видно только если
+     *  считать против реального врага, а не против абстрактного тела.
+     *  Башня работает лишь дома, поэтому её урон и хиты умножены на замеренную долю боя дома (homeShare);
+     *  бойцу — скидка на смертность (survivalOfFighters): купленный боец гибнет, поставленная башня стоит.
+     *  Цена башни — вместе со смотрителем: без него площадку некому строить, а готовая башня молчит. */
+    private fun towerWorth(defenders: List<Creep>, threats: List<Creep>, flow: Double, trace: StringBuilder? = null): Boolean {
+        val share = homeShare()
+        if (share <= 0.0 || threats.isEmpty()) return false
+        val heal = threats.sumOf { InfluenceMap.profileOf(it).heal }
+        val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats)
+        val hits = defenders.sumOf { weightedHits(it, threats, null) }
+        val base = lanchester(dps, heal, hits.toInt())
+        // враг бьёт спавн с трёх клеток, башня стоит во втором кольце — худший случай по дальности
+        val towerDps = InfluenceMap.towerShot(TOWER_RING + RANGED_RANGE) / InfluenceMap.towerCooldown
+        val towerPrice = buildCost("StructureTower") + builderBody(builderWork(flow)).sumOf { cost(it) }
+        val withTower = lanchester(dps + towerDps * share, heal, (hits + TOWER_HITS * share).toInt())
+        val body = fighterBody(SPAWN_ENERGY_CAPACITY)
+        val bodyDps = (body.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER + body.count { it == ATTACK } * ATTACK_POWER).toDouble()
+        val fighterPrice = body.sumOf { cost(it) }
+        if (towerPrice <= 0 || fighterPrice <= 0) return false
+        val survival = survivalOfFighters(defenders)
+        val withFighter = lanchester(dps + bodyDps, heal, (hits + body.size * 100).toInt())
+        val gainTower = (withTower - base) / towerPrice
+        val gainFighter = (withFighter - base) * survival / fighterPrice
+        trace?.append(" share=${(share * 100).toInt()}% surv=${(survival * 100).toInt()}% base=${base.toInt()} " +
+            "tower=${withTower.toInt()}/$towerPrice=${(gainTower * 1000).toInt()} fighter=${withFighter.toInt()}/$fighterPrice=${(gainFighter * 1000).toInt()}")
+        return gainTower >= gainFighter
+    }
+
+    /** Огонь НАШИХ башен по этой группе. Это геометрия, а не число: выстрел падает на 50 за клетку и
+     *  за TOWER_FALLOFF_RANGE не долетает вовсе, поэтому в осаде у чужого спавна домашняя башня даёт
+     *  ноль, а по лагерю у наших ворот — почти полный урон. Хиты башни в счёт НЕ идут: они наш ресурс
+     *  только тогда, когда враг стреляет именно в неё. */
+    private fun ourTowerDps(theirs: List<Creep>): Double {
+        if (theirs.isEmpty() || myTowers.isEmpty()) return 0.0
+        return myTowers.sumOf { t ->
+            if ((t.store[RESOURCE_ENERGY] ?: 0) < TOWER_ENERGY_COST) 0.0
+            else InfluenceMap.towerShot(theirs.minOf { getRange(t, it) }) / InfluenceMap.towerCooldown
+        }
+    }
+
+    /** Башня стреляет раз в кулдаун: сначала в того, кого этим выстрелом убьёт (выстрел не делится),
+     *  иначе в самого опасного из достижимых. Некого бить — лечит самого израненного своего: 600 за
+     *  выстрел, полсотни частей HEAL. Пустая башня молчит — кормит её смотритель. */
+    private fun runTowers(ctx: Ctx) {
+        for (t in ctx.myTowers) {
+            if (t.cooldown > 0) continue
+            if ((t.store[RESOURCE_ENERGY] ?: 0) < TOWER_ENERGY_COST) continue
+            val target = ctx.combatEnemies.filter { InfluenceMap.towerShot(getRange(t, it)) > 0.0 }
+                .minWithOrNull(
+                    compareByDescending<Creep> { InfluenceMap.towerShot(getRange(t, it)) >= it.hits }
+                        .thenByDescending { effectiveDps(it, ctx.fighters, homeSpawnPos) }
+                        .thenBy { getRange(t, it) })
+            if (target != null) {
+                t.attack(target)
+                if (DEBUG_LOG) println("  tower (${t.x},${t.y}) -> (${target.x},${target.y}) r=${getRange(t, target)} dmg=${InfluenceMap.towerShot(getRange(t, target)).toInt()} hits=${target.hits}")
+                continue
+            }
+            val hurt = ctx.active.filter { it.hits < it.hitsMax && InfluenceMap.towerShot(getRange(t, it)) > 0.0 }
+                .minByOrNull { it.hits * 100 / maxOf(it.hitsMax, 1) }
+            if (hurt != null) t.heal(hurt)
+        }
+    }
+
+    /** Смотритель: пока есть площадка — возит в неё энергию из спавна и строит, башня готова — держит
+     *  в ней выстрел. Он безоружен и от огня уходит, как хаулер, продолжая работать на ходу (стройка и
+     *  передача — интенты, шагу они не мешают). Энергию спавна берёт, только когда она не нужна бойцу
+     *  прямо сейчас: под «бойцом первым» тысяча в спавне принадлежит бойцу. */
+    private fun runBuilders(ctx: Ctx) {
+        if (ctx.builders.isEmpty()) return
+        val spawn = ctx.mySpawn
+        val site = ctx.mySites.minByOrNull { getRange(spawn, it) }
+        val tower = ctx.myTowers.filter { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }.minByOrNull { getRange(spawn, it) }
+        for (b in ctx.builders) {
+            val carrying = b.store[RESOURCE_ENERGY] ?: 0
+            val free = b.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
+            val goal: Position? = site ?: tower
+            val reach = if (site != null) BUILD_RANGE else 1
+            val canAct = goal != null && getRange(b, goal) <= reach
+            val mayTake = !lastFighterFirst && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
+            if (canAct && carrying > 0) {
+                if (site != null) b.build(site) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
+            }
+            if (mayTake && free > 0) b.withdraw(spawn, RESOURCE_ENERGY)
+            val incoming = InfluenceMap.damageAt(b.x, b.y, ctx.combatEnemies)
+            val step = when {
+                incoming > 0.0 -> fleeStep(b, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(b, spawn, 1, ctx.dangerMatrix)
+                goal == null -> if (getRange(b, spawn) > PARK_RANGE) pathStep(b, spawn, PARK_RANGE, ctx.dangerMatrix) else null
+                carrying <= 0 && !mayTake -> pathStep(b, spawn, 1, ctx.dangerMatrix)
+                !canAct -> pathStep(b, goal, reach, ctx.dangerMatrix)
+                else -> null
+            }
+            if (step != null && canMove(b)) TrafficManager.request(b, step, HAULER_LOADED_PRIORITY)
+            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
+                println("  b${b.id} (${b.x},${b.y}) carry=$carrying/${capacityOf(b)} work=${b.body.count { it.type == WORK && it.hits > 0 }} " +
+                    "goal=${goal?.let { "(${it.x},${it.y})" } ?: "-"}${if (site != null) "site" else "feed"} act=$canAct take=$mayTake fire=${incoming.toInt()} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
+            }
+        }
     }
 
     private fun measureRegen(spawn: StructureSpawn, deliveringNearby: Boolean) {
