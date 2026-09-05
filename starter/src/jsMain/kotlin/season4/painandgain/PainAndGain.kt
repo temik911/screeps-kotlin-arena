@@ -635,7 +635,15 @@ object PainAndGain {
         // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
         val armedNow = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
         val enemyMassed = armedNow.size >= 6 && centroidOf(armedNow)?.let { c -> armedNow.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedNow.size * 2 } == true
-        unflaggedRushNow = !ctx.passiveEnemy && ctx.flags.none { it.theirs } && approachRate >= APPROACH_RUSH && enemyMassed
+        // с гистерезисом: темп сближения ходит вокруг порога (колонна на марше то растягивается шире MASS_RANGE, то
+        // замедляется), и без него уклонение сменялось стоянием каждые десять-тридцать тиков, пока враг шёл — матч 32:
+        // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.
+        // Начатый бросок кончается, когда враг взял флаг, замер, разошёлся или ушёл дальше EVADE_RANGE и не приближается
+        val noEnemyFlag = ctx.flags.none { it.theirs }
+        val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed
+        val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
+            (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
+        unflaggedRushNow = rushSignal || rushHold
         runRunners(ctx)
         runArmy(ctx)
 
@@ -1217,7 +1225,10 @@ object PainAndGain {
         val flowC = escapeFlows[ckey] ?: return Int.MIN_VALUE / 2
         val start = escapeNearest[ckey] ?: return Int.MIN_VALUE / 2
         val theirsC = escapeTheirs[ckey] ?: return Int.MIN_VALUE / 2
-        val pursuer = if (start < 0) -1 else projectAlong(flowC, start, minOf(theirsC, (approachRate * arrive).toInt() + REACTION_LAG))
+        // при броске (см. EVADE_EQUAL_RATIO) преследователь идёт за нами на ПОЛНОЙ скорости: проекция по замеренному
+        // темпу (0.42 в паузе колонны) считала дом безопасным выходом, и армия ушла в свой угол под удар (матч 32)
+        val rate = if (unflaggedRushNow) 1.0 else approachRate
+        val pursuer = if (start < 0) -1 else projectAlong(flowC, start, minOf(theirsC, (rate * arrive).toInt() + REACTION_LAG))
         var best = Int.MIN_VALUE / 2
         for (d in escapeCandidates(ctx)) {
             if (d.x == c.x && d.y == c.y) continue
