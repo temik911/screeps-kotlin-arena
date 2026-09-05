@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 27
+    private const val BOT_VERSION = 28
 
     private const val LATE_MARGIN = 60
 
@@ -275,14 +275,15 @@ object SpawnAndSwamp {
      *  каждая единица в спавне принадлежит бойцу, и смотритель из спавна не берёт. */
     private var lastHomeCritical = false
 
-    /** РАЗМЕН в идущем бою у дома: чистая потеря хитов с тика его начала, по обе стороны. Чистая —
-     *  значит с вычетом лечения: отбитый и залеченный хит прогрессом не является, а именно им счёт и
-     *  обманывается. Погибший считается своими последними хитами целиком. */
+    /** РАЗМЕН за последнее окно: чистая потеря хитов по обе стороны, по тикам. Чистая — значит с
+     *  вычетом лечения: отбитый и залеченный хит прогрессом не является, а именно им счёт и обманывается.
+     *  Погибший считается своими последними хитами целиком. Окно, а не «с начала боя»: враг шагает в
+     *  кольцо тревоги и обратно каждые несколько тиков, и счёт «с начала» стирался раньше, чем успевал
+     *  накопиться (матч 34: x100/56 → x0/0 → x20/144, а между этими строками мы отдали двух бойцов). */
     private val ourHitsSeen = HashMap<String, Int>()
     private val theirHitsSeen = HashMap<String, Int>()
-    private var fightSince = -1
-    private var fightOurLost = 0.0
-    private var fightTheirLost = 0.0
+    private val ourLostWindow = ArrayDeque<Pair<Int, Double>>()
+    private val theirLostWindow = ArrayDeque<Pair<Int, Double>>()
 
     /** Потрачено на стройку (смотритель): считается отдельно от бойцов — иначе замер смертности
      *  бойцов (survivalOfFighters) припишет им энергию, которая в бой и не шла. */
@@ -1932,8 +1933,12 @@ object SpawnAndSwamp {
         val ourNet = homeReady.sumOf { effectiveDps(it, homePack, null) } - homePack.sumOf { InfluenceMap.profileOf(it).heal }
         val theirNet = homePack.sumOf { effectiveDps(it, homeReady, homeSpawnPos) }
         val predicted = if (ourNet <= 0.0) Double.MAX_VALUE else theirNet / ourNet
-        val decided = fightSince >= 0 && fightOurLost >= (homeAll.minOfOrNull { it.hitsMax } ?: Int.MAX_VALUE)
-        val exchangeOk = !decided || (predicted < Double.MAX_VALUE && fightOurLost <= predicted * fightTheirLost * DEFEND_MARGIN)
+        val ourLost = exchangeOurLost()
+        val theirLost = exchangeTheirLost()
+        // свидетельство считается достаточным, когда мы отдали хиты целого бойца: это не порог по вкусу,
+        // а единица размена — цена одного нашего тела
+        val decided = ourLost >= (homeAll.minOfOrNull { it.hitsMax } ?: Int.MAX_VALUE)
+        val exchangeOk = !decided || (predicted < Double.MAX_VALUE && ourLost <= predicted * theirLost * DEFEND_MARGIN)
         val homeWins = homeThreats.isNotEmpty() && exchangeOk &&
             homeOurs >= homeTheirs * (if (homeFight) PUSH_RELEASE_RATIO else DEFEND_MARGIN)
         // «у ворот» — ВНУТРИ поста, а не в семи клетках: шар из двух M3R3 и двух M4H2 ходил в 6-8 клетках
@@ -1947,7 +1952,7 @@ object SpawnAndSwamp {
         // в журнал — с причиной и счётом: «fight:gates(790/759)» читается без пересчёта
         homeMode = if (homeThreats.isEmpty()) "-" else (if (homeFight) "fight:" + (if (spawnUnderFire) "fire" else if (homeAtGates) "gates" else "wins") else "hold") +
             "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}]" +
-            (if (fightSince < 0) ")" else "x${fightOurLost.toInt()}/${fightTheirLost.toInt()}~${(predicted * 100).toInt()}${if (exchangeOk) "" else "!"})")
+            "x${ourLost.toInt()}/${theirLost.toInt()}~${(predicted * 100).toInt()}${if (exchangeOk) "" else "!"})"
         // ДОМ НА ВРЕМЯ ВЫЛАЗКИ. Пока волна ходит — ход группы плюс осада по её же симуляции — до нашего
         // спавна успевают дойти те приближающиеся, у кого подход меньше этого срока. Держать их должен
         // гарнизон, то есть те, кто ОСТАНЕТСЯ (homeGuard уже без staging), а не только тот, кто нужен
@@ -2903,20 +2908,20 @@ object SpawnAndSwamp {
         return lost
     }
 
-    /** Размен идущего боя у дома. Бой кончился — счёт обнуляется: следующий бой судится сам по себе. */
+    /** Размен за окно. Считается КАЖДЫЙ тик по всем вооружённым с обеих сторон — фильтр «у дома» здесь
+     *  вреден: крип, вышедший из кольца, исчез бы из списка живых и был бы засчитан как убитый. */
     private fun measureExchange(ctx: Ctx) {
-        if (!homeFight) {
-            fightSince = -1; fightOurLost = 0.0; fightTheirLost = 0.0
-            ourHitsSeen.clear(); theirHitsSeen.clear()
-            return
-        }
-        if (fightSince < 0) {
-            fightSince = getTicks(); fightOurLost = 0.0; fightTheirLost = 0.0
-            ourHitsSeen.clear(); theirHitsSeen.clear()
-        }
-        fightOurLost += sideLoss(ourHitsSeen, ctx.fighters.filter { hasWeapon(it) })
-        fightTheirLost += sideLoss(theirHitsSeen, ctx.combatEnemies)
+        val now = getTicks()
+        val ourLost = sideLoss(ourHitsSeen, ctx.fighters.filter { hasWeapon(it) })
+        val theirLost = sideLoss(theirHitsSeen, ctx.combatEnemies)
+        if (ourLost != 0.0) ourLostWindow.addLast(now to ourLost)
+        if (theirLost != 0.0) theirLostWindow.addLast(now to theirLost)
+        while (ourLostWindow.isNotEmpty() && ourLostWindow.first().first < now - PRODUCTION_WINDOW) ourLostWindow.removeFirst()
+        while (theirLostWindow.isNotEmpty() && theirLostWindow.first().first < now - PRODUCTION_WINDOW) theirLostWindow.removeFirst()
     }
+
+    private fun exchangeOurLost(): Double = ourLostWindow.sumOf { it.second }
+    private fun exchangeTheirLost(): Double = theirLostWindow.sumOf { it.second }
 
     /** Замер КПД башни: был ли в этот тик враг там, куда башня достаёт. */
     private fun measureHomeFight(ctx: Ctx) {
