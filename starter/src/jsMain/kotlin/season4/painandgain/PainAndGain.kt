@@ -622,7 +622,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v67"
+    private const val BOT_VERSION = "v68"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -688,6 +688,7 @@ object PainAndGain {
     private val enemyCentHist = ArrayDeque<Int>()         // клетка центра его армии по тикам погони (рядом с armyDistHist)
     private var lastHurtTick = 0                          // последний тик, когда враг снял с нас хиты (см. farmer в runArmy)
     private var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
+    private var firstReachTick = -1                       // первый такой тик (см. USE_DETACH, v68: тишина считается от него)
     private var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
     private var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
@@ -882,7 +883,7 @@ object PainAndGain {
         val enemyWithinReach = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
         enemyNotFightingNow = USE_INTERCEPT && noFireTicks >= STALL_TICKS && !enemyWithinReach
         if (hurt) lastHurtTick = getTicks()
-        if (enemyWithinReach) lastReachTick = getTicks()
+        if (enemyWithinReach) { lastReachTick = getTicks(); if (firstReachTick < 0) firstReachTick = getTicks() }
         runRunners(ctx)
         runArmy(ctx)
 
@@ -1872,7 +1873,14 @@ object PainAndGain {
             // (матчи 119, 126) не ударил ни разу за 1300–1600 тиков. Первый удар отзывает отряд навсегда
             val chaseDry = now - lastDistanceKeptTick <= PASSIVE_TICKS
             val quiet = lastHurtTick == 0 || now - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
-            val farmer = armedEnemies.isNotEmpty() && quiet && lastReachTick >= 0 && (chaseDry || detachedIds.isNotEmpty())
+            // второй вход (v68): противник тих FARMER_QUIET с ПЕРВОЙ досягаемости (бросок на сотом тике — не фермер) и гонка проиграна
+            // (отстаём с меньшим темпом) — отряд собирается без сухой погони. Матч 161 (шестнадцатый проигрыш фермеру 19771:23843):
+            // отряд вышел на 806-м, когда толчок наконец не сближал, и с 900-го мы вели 14 против 11 в тик, а 800 тиков до того
+            // были проиграны 3–13 против 12–22 — качели «взяли флаги → слабее → уклонение → потеряли → сильнее → толчок»
+            val quietSinceFirstReach = firstReachTick >= 0 && now - firstReachTick >= FARMER_QUIET
+            val lostRaceNow = behindOnScore && ourRate <= enemyRate
+            val farmer = armedEnemies.isNotEmpty() && quiet && lastReachTick >= 0 &&
+                (chaseDry || detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
             val detachedBefore = detachedIds.size
             if (!farmer) detachedIds.clear()
             else if (!contact) {
