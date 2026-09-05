@@ -510,7 +510,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v37"
+    private const val BOT_VERSION = "v38"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1120,7 +1120,9 @@ object PainAndGain {
             val allowed = captureAllowed(ctx, f)
             val range = if (allowed) 0 else 1
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)
-            val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, f.pos.x * 100 + f.pos.y)) else null
+            // при запрете захвата клетка флага — стена и для его же бегуна: путь к «зазору 1» шёл ЧЕРЕЗ флаг, и скаут брал R3
+            // на 49-м при уклонении с 3-го (матч 56), как и в четырёх боях с けろびー до правила v34/v35
+            val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.x * 100 + f.pos.y else -1)) else null
             if (step != null) { TrafficManager.request(s, step, RUNNER_PRIORITY); planCapture(ctx, step) }
             dbg(s, if (allowed) "TO_FLAG" else "POISED", f, step)
         }
@@ -1837,7 +1839,15 @@ object PainAndGain {
         if (contact) meleeDistHist.addLast(theirMeleeDist) else meleeDistHist.clear()
         while (meleeDistHist.size > PRESS_PATIENCE + 1) meleeDistHist.removeFirst()
         val theirMeleeClosing = meleeDistHist.size > PRESS_PATIENCE && meleeDistHist.first() - meleeDistHist.last() >= PRESS_CLOSING
-        standoffTicks = if (contact && underTheirFire && !theirMeleeIn && !theirMeleeClosing) standoffTicks + 1 else 0
+        // их мили на подходе — в (MELEE_HOLD_RANGE + 2 .. ENGAGE_RANGE] от наших вооружённых — это не стоячая линия и не пустое
+        // место: матч 56 (G1N6ERbreadMan) — прижим на 115-м при его мили в 4–7, через три тика они вошли в нашу пачку у своих же
+        // стрелков (его 51 удар против наших 24, a→ranged 31), пять наших потеряны за двадцать тиков. Прижим — линии, чьи мили
+        // либо у неё (Kero v2, Coldkimchi: в 2–3 и не бьют), либо далеко; подходящих строй ждёт — они входят в его фокус сами
+        val theirMeleeMid = combatEnemies.any { e ->
+            InfluenceMap.profileOf(e).melee > 0.0 &&
+                (combatArmy.filter { hasWeapon(it) }.minOfOrNull { getRange(e, it) } ?: 99).let { it > MELEE_HOLD_RANGE + 2 && it <= ENGAGE_RANGE }
+        }
+        standoffTicks = if (contact && underTheirFire && !theirMeleeIn && !theirMeleeClosing && !theirMeleeMid) standoffTicks + 1 else 0
         pressing = USE_PRESS && blockOn && contact && (standoffTicks >= PRESS_PATIENCE || pressing)
         val pressOn = pressing
         // «цель уходит» (см. PRESS_GIVEUP): за два тика прижима дистанция от наших мили до неё не сократилась
