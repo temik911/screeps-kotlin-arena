@@ -115,6 +115,15 @@ object PainAndGain {
      *  флагом»; см. docs/pain-and-gain-research.md, §4). v42: снято, только пока есть что перехватывать (флаг не наш) или мы
      *  впереди по очкам — фермер, севший на всех флагах, не придёт никуда, и его надо бить (матч 70, см. chaseVeto). */
     private const val USE_INTERCEPT = true
+    /** Отряды против фермера (v52; матчи 72, 87, 90, 101, 107 — семь проигрышей けろびー v5 по очкам при целых армиях): он
+     *  ходит блобом по флагам и никогда не стреляет, а одна армия не может и гнать его, и стоять на пяти флагах — он держит
+     *  4–5, мы 2–3, 13098:23022. Сигнал фермера — тот же, что у перехвата, но выдержанный: враг рядом PASSIVE_TICKS тиков и не
+     *  снял с нас ни хита (боец так не делает). Тогда слабейшие вооружённые уходят в БЕГУНЫ — по одному на каждый флаг, на
+     *  котором не стоит наш, — пока ядро армии не слабее его по паритету; бегуны берут и держат флаги логикой скаутов
+     *  (паросочетание по ценности, бегство от охотника) и стреляют по тому, что в дальности. Распускаются в тот тик, когда он
+     *  выстрелит. Первая форма (v44b, набор по запасу наступления, без сигнала фермера) отвергнута: 121 строка хуже — отряды
+     *  уходили в карту во время боя и построения. */
+    private const val USE_DETACH = true
     private var USE_POST_INSIDE = false
     private var USE_FLEE_DIRECTION = true
     /** Фокус-огонь (v45; оператор по матчу 78: «нет фокус-файра — каждый рэндж стреляет в своего; держать их вместе и за ход
@@ -566,7 +575,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v50"
+    private const val BOT_VERSION = "v52"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -627,6 +636,7 @@ object PainAndGain {
     private var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
     private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     private var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
+    private val detachedIds = HashSet<String>()           // отряды: вооружённые, зачисленные в бегуны (см. USE_DETACH)
     private var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
     private var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
@@ -752,8 +762,9 @@ object PainAndGain {
         // из M5 с 416 хитами стал M8A8 к 199-му тику у одного лекаря); прежде он уходил «бегуном» за флагами и гиб
         val healersAlive = active.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
         fun wounded(c: Creep) = USE_WOUNDED && healersAlive && !hasWeapon(c) && !hasHeal(c) && c.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
-        val army = active.filter { hasWeapon(it) || hasHeal(it) || wounded(it) }
-        val runners = active.filter { !hasWeapon(it) && !hasHeal(it) && !wounded(it) }
+        detachedIds.retainAll { id -> active.any { it.id == id && hasWeapon(it) && canMove(it) } }
+        val army = active.filter { (hasWeapon(it) || hasHeal(it) || wounded(it)) && it.id !in detachedIds }
+        val runners = active.filter { (!hasWeapon(it) && !hasHeal(it) && !wounded(it)) || it.id in detachedIds }
         val immobile = active.filter { !canMove(it) }
 
         val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }
@@ -852,7 +863,7 @@ object PainAndGain {
             val ours = ourPowerOf(army, combatEnemies)
             val theirs = enemyPowerOf(combatEnemies, army)
             println(
-                "t=${getTicks()} army=${army.size} runners=${runners.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
+                "t=${getTicks()} army=${army.size} runners=${runners.size}(${detachedIds.size} detached) enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
@@ -1734,6 +1745,24 @@ object PainAndGain {
         // ДОБИТЬ и постом в 35 клетках позади (noFire ≥ 20 и «в досягаемости броска» мигали на границе 8 клеток, поза
         // переключалась каждые 1–4 тика) — 3174:22934 без единого выстрела с обеих сторон. Позади по очкам против врага,
         // который не дерётся и которому нечего перехватывать, стоять — проиграть наверняка; впереди — стоять верно (v42)
+        // отряды (см. USE_DETACH): решение на следующий тик — Ctx строится до мощей
+        if (USE_DETACH) {
+            val farmer = noFireTicks >= PASSIVE_TICKS && armedEnemies.isNotEmpty()
+            if (!farmer) detachedIds.clear()
+            else if (!contact) {
+                val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
+                val unmanned = ctx.flags.count { f -> f.occupant?.my != true }
+                val pool = armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
+                var remaining = army.filter { it.id !in detachedIds }
+                for (c in pool) {
+                    if (detachedIds.size >= unmanned) break
+                    val without = remaining.filter { it.id != c.id }
+                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirs * PARITY_FLOOR) break
+                    detachedIds.add(c.id)
+                    remaining = without
+                }
+            }
+        } else detachedIds.clear()
         val interceptDenies = interceptFlag != null && !interceptFlag.ours
         val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)
         // ОТКРЫТАЯ НАХОДКА (матч 70): второй источник мигания — «ловимых нет»: блоб, шагнувший назад на две клетки, делает
@@ -2464,7 +2493,7 @@ object PainAndGain {
         }
 
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
-        healAndShoot(army, allies, enemyCreeps, focusTarget, focusOrder)
+        healAndShoot(army + ctx.runners.filter { hasWeapon(it) }, allies, enemyCreeps, focusTarget, focusOrder)
     }
 
     /** Удар мили: фокус-цель вплотную, иначе самый раненый сосед. */
