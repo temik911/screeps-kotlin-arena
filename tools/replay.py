@@ -30,8 +30,15 @@ damage disarms a ranged creep). Restart the client afterwards. Then:
         fire quality: shots at already-disarmed creeps, distinct targets per tick, focus share
     tools/replay.py trace <replay.json.gz> t0 t1 [--side them]
         per-tick positions of one side's melee against the other side, with action counters per tick
+    tools/replay.py choice <replay.json.gz> [t0 t1]
+        target choice: for every single-target shot, what role was hit (and whether it was still armed) against the
+        best armed enemy the shooter had within 3 at that moment — an armed ranged, only armed melee, or neither.
+        Judged on START-of-tick positions. The question it answers: "his ranged was in reach — what did we shoot?"
 
 `t0 t1` is the fight window in ticks (pick it from `tools/match-log.py dump` or the summary's first-action tick).
+What `choice` found on the three losses to standing lines (matches 67, 53, 43): with one of his armed ranged within
+three, our ranged shot it 39 / 36 / 46 % of the time and a melee standing at two or a healer the rest; his shot ours
+65 / 70 / 62 % — his ranged lived armed twice as long as ours and fired twice as often. That is v41 (threatOf).
 `--us` is the username prefix that marks our side (default temik911). What it found the first time it ran, on six
 matches: our fire discipline and focus are as good as the winners' — every "silent with a target" ranged of ours was
 already disarmed — and the losses are in geometry: the enemy line stands at exactly three from our front, its melee
@@ -274,10 +281,44 @@ def cmd_trace(args):
               f"enemy ranged={[(c['x'], c['y']) for _, c in enemy if c['role'] == 'ranged']}")
 
 
+def cmd_choice(args):
+    doc, meta, names = load(args.replay)
+    us = our_side(meta, args.us)
+    header(meta, names, us)
+    mat = {s: Counter() for s in (0, 1)}
+    shots = {s: 0 for s in (0, 1)}
+    armed = lambda c: c['role'] in ('melee', 'ranged') and c['hits'] > 100 * c['tail']
+    for k, start, now, acts, raw in ticks(doc):
+        if k < args.t0 or k > args.t1 or not start: continue
+        at = {(c['x'], c['y']): cid for cid, c in start.items()}
+        for a in raw:
+            cid, code = a[0], a[1]
+            if cid not in start or code != 'r' or len(a) < 4: continue
+            shooter = start[cid]; s = shooter['side']
+            tid = at.get((a[2], a[3]))
+            if tid is None or tid not in start or start[tid]['side'] == s: continue
+            target = start[tid]
+            reach = [c for c in start.values() if c['side'] != s and rng((c['x'], c['y']), (shooter['x'], shooter['y'])) <= RANGED_RANGE]
+            avail = 'R' if any(c['role'] == 'ranged' and armed(c) for c in reach) else 'M' if any(c['role'] == 'melee' and armed(c) for c in reach) else '-'
+            hit = target['role'] + ('' if armed(target) or target['role'] not in ('melee', 'ranged') else '-disarmed')
+            mat[s][(hit, avail)] += 1
+            shots[s] += 1
+    for s in (us, 1 - us):
+        tag = 'OURS ' if s == us else 'ENEMY'
+        print(f"{tag} {names[s]}: single-target shots {shots[s]} — rows: what was hit; columns: best ARMED enemy within {RANGED_RANGE} of the shooter")
+        print(f"   {'hit':16s} {'ranged avail':>13s} {'melee only':>11s} {'neither':>8s}")
+        for h in sorted({h for h, _ in mat[s]}):
+            print(f"   {h:16s} {mat[s][(h, 'R')]:13d} {mat[s][(h, 'M')]:11d} {mat[s][(h, '-')]:8d}")
+        r_avail = sum(v for (h, av), v in mat[s].items() if av == 'R')
+        r_hit = mat[s][('ranged', 'R')]
+        if r_avail: print(f"   with an armed ranged in reach: {r_hit} of {r_avail} shots went into it ({100 * r_hit // r_avail} %)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
-    for name, fn, need_window in (('summary', cmd_summary, False), ('silent', cmd_silent, True), ('focus', cmd_focus, True), ('trace', cmd_trace, True)):
+    for name, fn, need_window in (('summary', cmd_summary, False), ('silent', cmd_silent, True), ('focus', cmd_focus, True), ('trace', cmd_trace, True),
+                                  ('choice', cmd_choice, False)):
         p = sub.add_parser(name)
         p.add_argument('replay')
         if need_window:
