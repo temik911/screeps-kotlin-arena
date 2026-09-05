@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 24
+    private const val BOT_VERSION = 25
 
     private const val LATE_MARGIN = 60
 
@@ -266,13 +266,14 @@ object SpawnAndSwamp {
     /** Наши живые башни в этом тике — их огонь входит в счёт мощи (см. ourTowerDps). */
     private var myTowers: List<StructureTower> = emptyList()
 
-    /** Тики тревоги за окно PRODUCTION_WINDOW: доля времени, когда бой идёт ДОМА. Башня работает
-     *  только дома, и её ценность считается по этой доле, а не по вере в то, что враг придёт. */
-    private val alarmTicks = ArrayDeque<Int>()
+    /** Тики, когда враг стоял ПОД ВЫСТРЕЛОМ башни (в TOWER_FALLOFF_RANGE от спавна), за окно
+     *  PRODUCTION_WINDOW. Это КПД башни, замеренный её же геометрией: в матче 26 бой шёл в тридцати
+     *  пяти клетках от спавна, тревога держалась 81%, а башня не достала бы ни до кого. */
+    private val homeFightTicks = ArrayDeque<Int>()
 
-    /** «Боец первым» прошлого тика: пока он верен, энергия спавна принадлежит бойцу, и смотритель
-     *  башни из спавна не берёт. */
-    private var lastFighterFirst = false
+    /** Дом в критическом положении в прошлом тике: враг бьёт спавн и гарнизон не держит. Пока так,
+     *  каждая единица в спавне принадлежит бойцу, и смотритель из спавна не берёт. */
+    private var lastHomeCritical = false
 
     /** Потрачено на стройку (смотритель): считается отдельно от бойцов — иначе замер смертности
      *  бойцов (survivalOfFighters) припишет им энергию, которая в бой и не шла. */
@@ -620,7 +621,7 @@ object SpawnAndSwamp {
         val threatsSoon = combatEnemies + enemyPending
         val enemyArrival = enemyArrivalTicks(ctx)
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
-        measureAlarm(alarm)
+        measureHomeFight(ctx)
         spawnIfNeeded(ctx, defenders, threatsSoon, alarm, enemyArrival, spawnUnderFire)
         runTowers(ctx)
         runHaulers(ctx)
@@ -1264,7 +1265,7 @@ object SpawnAndSwamp {
                 return
             }
         }
-        lastFighterFirst = fighterFirst
+        lastHomeCritical = alarm && ourPower < enemyPower && spawnUnderFire
         if (DEBUG_LOG && fighterFirst && energy < fullCost && getTicks() % 10 == 0) {
             println("spawn: fighter first — enemy arrives in $threatIn, hold=${holdReady.toInt()} invest=${investReady.toInt()} deficit=${deficit.toInt()} alarm=$alarm closes=$closesNow flow=${(flow * 10).toInt() / 10.0}")
         }
@@ -1316,7 +1317,11 @@ object SpawnAndSwamp {
             val trace = StringBuilder()
             val worth = towerWorth(defenders, threats, flow, trace)
             if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && trace.isNotEmpty()) println("tower: worth=$worth$trace")
-            if (!fighterFirst && worth) {
+            // СЧЁТ УЖЕ ОТВЕТИЛ. towerWorth сравнил башню с бойцом против тех же врагов и с замеренной
+            // смертностью бойцов; спрашивать сверх этого «а не купить ли всё-таки бойца» (fighterFirst)
+            // значит запретить башню ровно там, где она и нужна, — враг у ворот (матч 26: worth=true
+            // трижды, площадка не поставлена ни разу). Остаются только часы: спавн должен дожить
+            if (worth) {
                 val spot = towerSpot(ctx)
                 if (spot != null) {
                     val r = createConstructionSite(spot.x, spot.y, StructureTower::class.js)
@@ -1324,10 +1329,13 @@ object SpawnAndSwamp {
                 }
             }
         }
-        if (!fighterFirst && ctx.builders.isEmpty() && (ctx.mySites.isNotEmpty() || ctx.myTowers.isNotEmpty())) {
+        if (ctx.builders.isEmpty() && (ctx.mySites.isNotEmpty() || ctx.myTowers.isNotEmpty())) {
             val builder = builderBody(builderWork(flow))
             val builderCost = builder.sumOf { cost(it) }
             if (energy < builderCost) {
+                // копим на смотрителя, только пока спавн доживает до него — те же часы, что у правила
+                // лагеря ниже: копить под сносимым спавном нельзя ни на что
+                if (spawnLife <= energyArrivalTicks(ctx, builderCost - energy, flow)) return
                 if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: saving for builder cost=$builderCost energy=$energy")
                 return
             }
@@ -2841,18 +2849,19 @@ object SpawnAndSwamp {
     /** Цена структуры — из константы арены, а не числом (площадка врага на 1000 в матче 25 — это спавн). */
     private fun buildCost(name: String): Int = CONSTRUCTION_COST[name] ?: 0
 
-    private fun measureAlarm(alarm: Boolean) {
+    /** Замер КПД башни: был ли в этот тик враг там, куда башня достаёт. */
+    private fun measureHomeFight(ctx: Ctx) {
         val now = getTicks()
-        if (alarm) alarmTicks.addLast(now)
-        while (alarmTicks.isNotEmpty() && alarmTicks.first() < now - PRODUCTION_WINDOW) alarmTicks.removeFirst()
+        val underFire = ctx.combatEnemies.any { InfluenceMap.towerShot(getRange(ctx.mySpawn, it)) > 0.0 }
+        if (underFire) homeFightTicks.addLast(now)
+        while (homeFightTicks.isNotEmpty() && homeFightTicks.first() < now - PRODUCTION_WINDOW) homeFightTicks.removeFirst()
     }
 
-    /** Доля последнего окна, когда бой шёл ДОМА (тревога). Башня бьёт только тех, кто пришёл к спавну,
-     *  поэтому это и есть её КПД — замеренный, а не назначенный: в матчах, где мы выигрывали в поле,
-     *  тревоги не было почти ни разу, и башня там не окупается. */
+    /** Доля последнего окна, когда враг стоял под выстрелом башни. Башня бьёт только их, поэтому это и
+     *  есть её КПД — замеренный её собственной геометрией, а не верой в то, что враг придёт. */
     private fun homeShare(): Double {
         val span = minOf(PRODUCTION_WINDOW, getTicks() + 1)
-        return if (span <= 0) 0.0 else alarmTicks.size.toDouble() / span
+        return if (span <= 0) 0.0 else homeFightTicks.size.toDouble() / span
     }
 
     /** Клетка башни: второе кольцо от спавна (ближе — занимает клетку выхода новорождённых, дальше —
@@ -2988,7 +2997,7 @@ object SpawnAndSwamp {
             val goal: Position? = site ?: tower
             val reach = if (site != null) BUILD_RANGE else 1
             val canAct = goal != null && getRange(b, goal) <= reach
-            val mayTake = !lastFighterFirst && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
+            val mayTake = !lastHomeCritical && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
             }
