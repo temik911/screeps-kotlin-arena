@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 26
+    private const val BOT_VERSION = 27
 
     private const val LATE_MARGIN = 60
 
@@ -274,6 +274,15 @@ object SpawnAndSwamp {
     /** Дом в критическом положении в прошлом тике: враг бьёт спавн и гарнизон не держит. Пока так,
      *  каждая единица в спавне принадлежит бойцу, и смотритель из спавна не берёт. */
     private var lastHomeCritical = false
+
+    /** РАЗМЕН в идущем бою у дома: чистая потеря хитов с тика его начала, по обе стороны. Чистая —
+     *  значит с вычетом лечения: отбитый и залеченный хит прогрессом не является, а именно им счёт и
+     *  обманывается. Погибший считается своими последними хитами целиком. */
+    private val ourHitsSeen = HashMap<String, Int>()
+    private val theirHitsSeen = HashMap<String, Int>()
+    private var fightSince = -1
+    private var fightOurLost = 0.0
+    private var fightTheirLost = 0.0
 
     /** Потрачено на стройку (смотритель): считается отдельно от бойцов — иначе замер смертности
      *  бойцов (survivalOfFighters) припишет им энергию, которая в бой и не шла. */
@@ -622,6 +631,7 @@ object SpawnAndSwamp {
         val enemyArrival = enemyArrivalTicks(ctx)
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
         measureHomeFight(ctx)
+        measureExchange(ctx)
         spawnIfNeeded(ctx, defenders, threatsSoon, alarm, enemyArrival, spawnUnderFire)
         runTowers(ctx)
         runHaulers(ctx)
@@ -1913,7 +1923,18 @@ object SpawnAndSwamp {
         // «дерёмся» в «пост», и отряд разворачивался под огнём
         val homeOurs = ourPowerOf(homeReady, homePack)
         val homeTheirs = enemyPowerOf(homePack, homeReady)
-        val homeWins = homeThreats.isNotEmpty() &&
+        // ЗАМЕР ВМЕСТО ВЕРЫ. Модель предсказывает размен: сколько НАШИХ хитов уходит на один ЕГО —
+        // это его урон, делённый на наш чистый (за вычетом его лечения). Замер (measureExchange) говорит,
+        // сколько уходит на самом деле. Пока свидетельств мало, судит модель; как только мы отдали
+        // целого бойца, судит замер — и если он хуже предсказанного больше чем на DEFEND_MARGIN, модель
+        // здесь неверна, и продолжать бой по её слову значит кормить врага по одному. Матч 33: счёт
+        // 1081/616 при [5/5], три бойца из пяти отданы, его потери — ноль
+        val ourNet = homeReady.sumOf { effectiveDps(it, homePack, null) } - homePack.sumOf { InfluenceMap.profileOf(it).heal }
+        val theirNet = homePack.sumOf { effectiveDps(it, homeReady, homeSpawnPos) }
+        val predicted = if (ourNet <= 0.0) Double.MAX_VALUE else theirNet / ourNet
+        val decided = fightSince >= 0 && fightOurLost >= (homeAll.minOfOrNull { it.hitsMax } ?: Int.MAX_VALUE)
+        val exchangeOk = !decided || (predicted < Double.MAX_VALUE && fightOurLost <= predicted * fightTheirLost * DEFEND_MARGIN)
+        val homeWins = homeThreats.isNotEmpty() && exchangeOk &&
             homeOurs >= homeTheirs * (if (homeFight) PUSH_RELEASE_RATIO else DEFEND_MARGIN)
         // «у ворот» — ВНУТРИ поста, а не в семи клетках: шар из двух M3R3 и двух M4H2 ходил в 6-8 клетках
         // от спавна, и на каждом заходе рывок «всем составом» делал один свежий боец (прочие — остовы без
@@ -1925,7 +1946,8 @@ object SpawnAndSwamp {
         homeFight = homeThreats.isNotEmpty() && (spawnUnderFire || homeAtGates || homeWins)
         // в журнал — с причиной и счётом: «fight:gates(790/759)» читается без пересчёта
         homeMode = if (homeThreats.isEmpty()) "-" else (if (homeFight) "fight:" + (if (spawnUnderFire) "fire" else if (homeAtGates) "gates" else "wins") else "hold") +
-            "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}])"
+            "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}]" +
+            (if (fightSince < 0) ")" else "x${fightOurLost.toInt()}/${fightTheirLost.toInt()}~${(predicted * 100).toInt()}${if (exchangeOk) "" else "!"})")
         // ДОМ НА ВРЕМЯ ВЫЛАЗКИ. Пока волна ходит — ход группы плюс осада по её же симуляции — до нашего
         // спавна успевают дойти те приближающиеся, у кого подход меньше этого срока. Держать их должен
         // гарнизон, то есть те, кто ОСТАНЕТСЯ (homeGuard уже без staging), а не только тот, кто нужен
@@ -2865,6 +2887,36 @@ object SpawnAndSwamp {
 
     /** Цена структуры — из константы арены, а не числом (площадка врага на 1000 в матче 25 — это спавн). */
     private fun buildCost(name: String): Int = CONSTRUCTION_COST[name] ?: 0
+
+    /** Чистая потеря хитов стороны за тик: разница с прошлым тиком по живым (отрицательная, если
+     *  залечили) плюс полные последние хиты тех, кого не стало. */
+    private fun sideLoss(seen: HashMap<String, Int>, live: List<Creep>): Double {
+        var lost = 0.0
+        val ids = HashSet<String>()
+        for (c in live) {
+            ids.add(c.id)
+            val prev = seen[c.id]
+            if (prev != null) lost += (prev - c.hits).toDouble()
+            seen[c.id] = c.hits
+        }
+        for (id in seen.keys.toList()) if (id !in ids) { lost += (seen[id] ?: 0).toDouble(); seen.remove(id) }
+        return lost
+    }
+
+    /** Размен идущего боя у дома. Бой кончился — счёт обнуляется: следующий бой судится сам по себе. */
+    private fun measureExchange(ctx: Ctx) {
+        if (!homeFight) {
+            fightSince = -1; fightOurLost = 0.0; fightTheirLost = 0.0
+            ourHitsSeen.clear(); theirHitsSeen.clear()
+            return
+        }
+        if (fightSince < 0) {
+            fightSince = getTicks(); fightOurLost = 0.0; fightTheirLost = 0.0
+            ourHitsSeen.clear(); theirHitsSeen.clear()
+        }
+        fightOurLost += sideLoss(ourHitsSeen, ctx.fighters.filter { hasWeapon(it) })
+        fightTheirLost += sideLoss(theirHitsSeen, ctx.combatEnemies)
+    }
 
     /** Замер КПД башни: был ли в этот тик враг там, куда башня достаёт. */
     private fun measureHomeFight(ctx: Ctx) {
