@@ -608,6 +608,22 @@ object PainAndGain {
      *  (равная скорость): цель исключена из прижима на PRESS_GIVEUP тиков — экран стенда (m35 screen), отступающий от наших
      *  на двух клетках, превращал прижим в погоню под огнём стрелков и стоил армии. */
     private const val PRESS_CLOSING = 2
+    /** ЦЕЛЬ УХОДИТ — ЭТО ОНА УХОДИТ (v96, матч 238 — けろびー блобом с первого тика, зеркальные армии 4087:4087, наша стёрта к
+     *  125-му при его 15492/16000): «за три тика дистанция от наших мили до цели не сократилась» ставило отказ и тому, кто ШЁЛ
+     *  на нас, пока наши мили пятились по слотам расстановки, — все четыре его мили помечены на t=79–80 на двадцать тиков и
+     *  помечались снова каждые три (74 строки press за бой), а помеченного не берут ни бросок, ни прилипший (engage/poker:
+     *  it.id !in pressGiveUp): наши мили 11 ударов против его 77, его мили вплотную 31 % крип-тиков против наших 17 %. Отказ —
+     *  только если цель САМА отдалилась от места, где стоял наш ближайший мили в начале окна (экран стенда m35 отходит и
+     *  отдаляется; идущий следом за нашим отходом — приближается к тому месту). */
+    private const val USE_GIVEUP_HE_LEAVES = true
+    /** СТОЯЧИЙ БОЙ — ЭТО КОГДА СТОИМ И МЫ (v96, тот же матч): «центры не сближаются, враг не отходит, его мили не вплотную»
+     *  (standingNow, v47/v64) верно и для боя, в котором наша линия отступает на клетку в тик, а его блоб идёт следом в двух:
+     *  расстановка выбирала стрелкам клетки «цель в трёх, его мили не в двух», те уезжали от идущих мили каждый тик, заслон и
+     *  лекари шли за стрелками, а его мили в двух не становились вплотную (равная скорость) и не выключали расстановку —
+     *  наш центр (13,32) → (8,18) за t=80–125 при его в 3–4, огонь только его (249 выстрелов против 120). Расстановка — пока
+     *  наш центр вооружённых за окно терпения не отдалился от его нынешнего центра на PRESS_CLOSING; отступающий бой — ряды за
+     *  передним мили, который держит клетку (holdMelee) и рубит подошедшее в две. */
+    private const val USE_STANDING_LINE_HOLDS = true
     /** Стена — мили без врага в MELEE_HOLD_RANGE + 1 в слотах ряда анкера, чтобы четверо выходили линией (матч 43: мили
      *  выходили по одному и снимались по одному) — ОТВЕРГНУТА стендом: слот замораживал мили в строю всякий раз, когда врага
      *  нет в трёх, и остаток переставал добиваться (rush/block/nine «уничтожение → лидерство» десятками, m3 sleeper — армия
@@ -859,7 +875,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v95"
+    private const val BOT_VERSION = "v96"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1386,7 +1402,11 @@ object PainAndGain {
     private var pressing = false                          // прижим включён (см. USE_PRESS)
     private val meleeDistHist = ArrayDeque<Int>()         // дистанция их мили до наших вооружённых за окно терпения (см. PRESS_CLOSING)
     private val centreDistHist = ArrayDeque<Int>()        // дистанция между центрами вооружённых армий за то же окно (см. standingNow)
-    private val pressChase = HashMap<String, ArrayDeque<Int>>()  // дистанция от наших мили до цели прижима по тикам (см. PRESS_GIVEUP)
+    /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
+    private class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
+    private val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
+    private val ourCentreHist = ArrayDeque<Int>()        // клетка центра наших вооружённых за окно терпения (см. USE_STANDING_LINE_HOLDS)
+    private var yieldingTick = -1                        // последний тик, когда наша линия отступала (лог v96)
     private val lastArmedRange = HashMap<String, Int>()   // враг → дистанция до ближайшего нашего боеспособного тик назад (см. threatOf)
     private val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
     private val SLOT_ORDER = intArrayOf(0, -1, 1, -2, 2, -3, 3, -4, 4)
@@ -2630,6 +2650,14 @@ object PainAndGain {
         if (contact && ourArmedC != null && theirArmedC != null) centreDistHist.addLast(getRange(ourArmedC, theirArmedC)) else centreDistHist.clear()
         while (centreDistHist.size > PRESS_PATIENCE + 1) centreDistHist.removeFirst()
         val armiesClosing = centreDistHist.size > PRESS_PATIENCE && centreDistHist.first() - centreDistHist.last() >= PRESS_CLOSING
+        // наша линия отступает (v96, USE_STANDING_LINE_HOLDS): центр наших вооружённых за окно терпения отдалился от его
+        // НЫНЕШНЕГО центра на PRESS_CLOSING и больше — бой не стоячий, это отход под огнём, и расстановке в нём места нет
+        if (contact && ourArmedC != null) ourCentreHist.addLast(ourArmedC.x * 100 + ourArmedC.y) else ourCentreHist.clear()
+        while (ourCentreHist.size > PRESS_PATIENCE + 1) ourCentreHist.removeFirst()
+        val ourYielding = USE_STANDING_LINE_HOLDS && theirArmedC != null && ourCentreHist.size > PRESS_PATIENCE && run {
+            val was = ourCentreHist.first(); val now0 = ourCentreHist.last()
+            getRange(InfluenceMap.cell(now0 / 100, now0 % 100), theirArmedC) - getRange(InfluenceMap.cell(was / 100, was % 100), theirArmedC) >= PRESS_CLOSING
+        }
         // их мили на подходе — в (MELEE_HOLD_RANGE + 2 .. ENGAGE_RANGE] от наших вооружённых — это не стоячая линия и не пустое
         // место: матч 56 (G1N6ERbreadMan) — прижим на 115-м при его мили в 4–7, через три тика они вошли в нашу пачку у своих же
         // стрелков (его 51 удар против наших 24, a→ranged 31), пять наших потеряны за двадцать тиков. Прижим — линии, чьи мили
@@ -2645,12 +2673,18 @@ object PainAndGain {
         if (blockOn) {
             val ourMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) && hasMelee(it) }
             for (e in combatEnemies) {
-                val d = ourMelee.minOfOrNull { getRange(e, it) } ?: continue
+                val near = ourMelee.minByOrNull { getRange(e, it) } ?: continue
+                val d = getRange(e, near)
                 if (d > PRESS_RANGE + 1) { pressChase.remove(e.id); continue }
                 val h = pressChase.getOrPut(e.id) { ArrayDeque() }
-                h.addLast(d)
+                h.addLast(ChaseSample(d, e.x * 100 + e.y, near.x * 100 + near.y))
                 while (h.size > 3) h.removeFirst()
-                if (h.size == 3 && d > 1 && h.last() >= h.first()) {
+                // цель ушла (v96, USE_GIVEUP_HE_LEAVES): САМА отдалилась от места, где стоял наш ближайший мили в начале окна, —
+                // а не «мы к ней не приблизились»: идущий за нашим отходом к тому месту приближается
+                val first = h.first()
+                val from = InfluenceMap.cell(first.meleeCell / 100, first.meleeCell % 100)
+                val left = !USE_GIVEUP_HE_LEAVES || getRange(e, from) > getRange(InfluenceMap.cell(first.eCell / 100, first.eCell % 100), from)
+                if (h.size == 3 && d > 1 && h.last().d >= first.d && left) {
                     pressGiveUp[e.id] = getTicks() + PRESS_GIVEUP
                     h.clear()
                     if (DEBUG_LOG) println("press t=${getTicks()}: ${e.id} keeps its distance — not pressed for $PRESS_GIVEUP ticks")
@@ -2687,7 +2721,9 @@ object PainAndGain {
             // весь бой, ряды planBlock ставили стрелков за передним мили, и наш огонь (1611 выстрелов против его 1428) шёл по
             // разным целям: 4+ в одну цель 9 тиков против его 44 при 216 лечения в тик на цели с обеих сторон
             val meleeBrawl = theirMeleeIn
-            val standingNow = contact && centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating && !meleeBrawl
+            val standingNow = contact && centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating && !meleeBrawl && !ourYielding
+            if (DEBUG_LOG && ourYielding && contact && !armiesClosing && !enemyRetreating && !meleeBrawl && yieldingTick != getTicks() - 1) println("plan t=${getTicks()}: our line has yielded ${PRESS_CLOSING}+ cells over $PRESS_PATIENCE ticks — rows behind the front melee, not the plan")
+            if (ourYielding) yieldingTick = getTicks()
             val planNow = USE_PLAN && (standoffNow || standingNow)
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget)
