@@ -678,6 +678,14 @@ object PainAndGain {
      *  только если цель САМА отдалилась от места, где стоял наш ближайший мили в начале окна (экран стенда m35 отходит и
      *  отдаляется; идущий следом за нашим отходом — приближается к тому месту). */
     private const val USE_GIVEUP_HE_LEAVES = true
+    /** ОТКАЗ — ТОЛЬКО ЦЕЛИ ДАЛЬШЕ УДАРА (v104, пункт 2 плана оператора по матчу 251 — けろびー блобом третий раз за день, стёрты к
+     *  200-му): по реплею выстрелы почти равны (254 против 272), лечение наше больше (15984 против 12960), а весь разрыв урона —
+     *  37 ударов мили (8880 из 9960): его мили вплотную 61 крип-тик, наши 20, при 117 крип-тиках наших мили НА ДВУХ от врага —
+     *  они не шагали. 67 отказов прижима за бой: дрожащий блоб (шаг назад и вперёд при d = 2) каждые три тика помечался «держит
+     *  дистанцию» (v96 требует только, чтобы цель отдалилась от места нашего мили), а помеченного не берёт бросок. Цель в
+     *  MELEE_HOLD_RANGE бьётся следующим тиком — она не держит дистанцию ни в каком смысле; отказ ставится только цели, стоящей
+     *  дальше MELEE_HOLD_RANGE (экран m35 отходит на 3 и помечается по-прежнему). */
+    private const val USE_GIVEUP_BEYOND_REACH = true
     /** СТОЯЧИЙ БОЙ — ЭТО КОГДА СТОИМ И МЫ (v96, тот же матч): «центры не сближаются, враг не отходит, его мили не вплотную»
      *  (standingNow, v47/v64) верно и для боя, в котором наша линия отступает на клетку в тик, а его блоб идёт следом в двух:
      *  расстановка выбирала стрелкам клетки «цель в трёх, его мили не в двух», те уезжали от идущих мили каждый тик, заслон и
@@ -972,7 +980,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v102"
+    private const val BOT_VERSION = "v104"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2805,7 +2813,7 @@ object PainAndGain {
                 val first = h.first()
                 val from = InfluenceMap.cell(first.meleeCell / 100, first.meleeCell % 100)
                 val left = !USE_GIVEUP_HE_LEAVES || getRange(e, from) > getRange(InfluenceMap.cell(first.eCell / 100, first.eCell % 100), from)
-                if (h.size == 3 && d > 1 && h.last().d >= first.d && left) {
+                if (h.size == 3 && d > (if (USE_GIVEUP_BEYOND_REACH) MELEE_HOLD_RANGE else 1) && h.last().d >= first.d && left) {
                     pressGiveUp[e.id] = getTicks() + PRESS_GIVEUP
                     h.clear()
                     if (DEBUG_LOG) println("press t=${getTicks()}: ${e.id} keeps its distance — not pressed for $PRESS_GIVEUP ticks")
