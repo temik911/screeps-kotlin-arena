@@ -395,6 +395,14 @@ object PainAndGain {
      *  из уничтожения в проигрыш по очкам), «HOLD без ловимых» — на 113-м тике у поста, пока его блоб фармил в 45 клетках
      *  (124/125, m31 camp 7520:23669): дистанция «держалась», но никто не гнался. */
     private const val USE_CHASE_WINDOW_HOLD = true
+    /** ТОЛЧОК НЕ БРОСАЕТ ФЛАГ (v77, матч 187 — MetalicaX второй раз, 17152:23682, ни одной строки сеток за 1700 тиков): его
+     *  блоб из девяти держался в 5–9 клетках (окно «держит дистанцию» требует > ENGAGE_RANGE), мы при 1,1 (допуск «отстаём»)
+     *  толкали весь матч — четыре убитых за 1700 тиков, — и каждый раз, когда армия уходила с D5 за блобом, его скаут забирал
+     *  флаг: D5 терялся пять раз (484, 641, 704, 1057, 1418), последние триста тиков 8:17 вместо 13:12 при армии на флаге.
+     *  Допуск ниже PUSH_RATIO (1,1 при отставании, 1,0 в тупике) существует ради очков — и он же их отдаёт, когда армия держит
+     *  флаг присутствием (см. USE_HOLD_OWN_FLAG): пока обмена нет (fightOn), с флага не уходят ради толчка, который не
+     *  сближается; при перевесе PUSH_RATIO толчок идёт как прежде. */
+    private const val USE_PUSH_KEEPS_FLAG = true
     /** Стая у флага не преграда для ТИХОГО фермера (v72, см. chooseFlagObjective): противник, не стрелявший FARMER_QUIET тиков
      *  с первой досягаемости, отходит от наших (стенд camp+shy, живые 133/152/159) — «цена боя» за его флаг с двенадцатью на нём
      *  бесконечна на бумаге и нулевая на деле, и ядро при паритете уходило к угловым флагам за сорок клеток (m31: (85,27) →
@@ -677,7 +685,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v76"
+    private const val BOT_VERSION = "v77"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1902,7 +1910,9 @@ object PainAndGain {
         // ДОБИТЬ по перевесу — с гистерезисом; по контакту — пока контакт есть (без гистерезиса: см. PUSH_RELEASE_RATIO)
         val stalemate = behindTicks >= BEHIND_PATIENCE
         stalemateNow = stalemate
-        val pushRatio = if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
+        val holdingFlag = USE_PUSH_KEEPS_FLAG && USE_HOLD_OWN_FLAG && !fightOn &&
+            ctx.flags.any { it.ours && getRange(it.pos, ctx.ourCentroid) <= POST_STANDOFF }
+        val pushRatio = if (holdingFlag) PUSH_RATIO else if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
         val pushRelease = if (stalemate) PUSH_RELEASE_RATIO_STALEMATE else if (behindOnScore) PUSH_RELEASE_RATIO_BEHIND else PUSH_RELEASE_RATIO
         // зачистка: у врага не осталось никого с боем, а мы позади по очкам — аннигиляция единственная победа, и остаток
         // (скауты, обломки) добивается без оглядки на «ловимость» (матч 19: последний M1 с 28 хитами сидел у нашего R3
