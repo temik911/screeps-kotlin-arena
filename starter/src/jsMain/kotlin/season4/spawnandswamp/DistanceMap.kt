@@ -135,13 +135,21 @@ object DistanceMap {
      * По нему крип спускается по градиенту к цели, гарантированно огибая любые препятствия —
      * в отличие от searchPath, который на длинном обходе может упереться в стену.
      */
-    fun flowFieldTo(target: Position, extraBlocked: List<Position>, swampCost: Int = SWAMP_COST): IntArray {
+    /** Поле пути к цели. `fire` — необязательная цена клетки сверх хода: урон в тик, который там
+     *  получают (см. SpawnAndSwamp.towerFireField). С ним поле минимизирует не длину, а ПОЛУЧЕННЫЙ
+     *  УРОН — тик в клетке под огнём стоит столько, сколько там снимают, — и волна обходит круг чужой
+     *  башни там, где обход есть, а где нет — проходит его по равнине, а не по болоту. */
+    fun flowFieldTo(target: Position, extraBlocked: List<Position>, swampCost: Int = SWAMP_COST, fire: IntArray? = null): IntArray {
         ensureStaticBlocked()
         val block = staticBlocked!!.copyOf()
         for (p in extraBlocked) if (inBounds(p.x, p.y)) block[index(p.x, p.y)] = true
         if (inBounds(target.x, target.y)) block[index(target.x, target.y)] = false // цель всегда достижима
-        return bfs(target.x, target.y, block, swampCost)
+        return bfs(target.x, target.y, block, swampCost, fire)
     }
+
+    /** Потолок цены огня в клетке: выстрел в упор — сто в тик, дальше различать нечего. Он же задаёт
+     *  число колец в очереди Дейкстры, поэтому это предел размера, а не порог поведения. */
+    const val FIRE_CAP = 100
 
     /** Поле в ШАГАХ (болото = равнина): пустой CARRY усталости не даёт, пустой хаулер идёт по болоту
      *  как по суше — его дорогу к энергии считаем этим полем, обратную (с грузом) — обычным. */
@@ -344,18 +352,20 @@ object DistanceMap {
      * болото SWAMP_COST. Расстояние — в тиках пути, -1 = недостижимо. Дейкстра кольцевыми
      * корзинами (Dial): цены целые и малые, куча не нужна.
      */
-    private fun bfs(startX: Int, startY: Int, blocked: BooleanArray, swampCost: Int = SWAMP_COST): IntArray {
+    private fun bfs(startX: Int, startY: Int, blocked: BooleanArray, swampCost: Int = SWAMP_COST, fire: IntArray? = null): IntArray {
         val dist = IntArray(FIELD * FIELD) { -1 }
         if (!inBounds(startX, startY)) return dist
         val swamp = ensureSwamp()
-        val buckets = Array(swampCost + 1) { ArrayDeque<Int>() }
+        // колец столько, сколько стоит самое дорогое ребро: болото под выстрелом в упор
+        val span = if (fire == null) swampCost + 1 else swampCost * (1 + FIRE_CAP) + 1
+        val buckets = Array(span) { ArrayDeque<Int>() }
         dist[index(startX, startY)] = 0
         buckets[0].addLast(index(startX, startY))
         var current = 0
         var queued = 1
 
         while (queued > 0) {
-            val bucket = buckets[current % (swampCost + 1)]
+            val bucket = buckets[current % span]
             if (bucket.isEmpty()) {
                 current++
                 continue
@@ -374,10 +384,11 @@ object DistanceMap {
                     if (!inBounds(nx, ny)) continue
                     val ni = index(nx, ny)
                     if (blocked[ni]) continue
-                    val next = current + if (swamp[ni]) swampCost else 1
+                    val step = if (swamp[ni]) swampCost else 1
+                    val next = current + step * (1 + (fire?.get(ni) ?: 0))
                     if (dist[ni] < 0 || next < dist[ni]) {
                         dist[ni] = next
-                        buckets[next % (swampCost + 1)].addLast(ni)
+                        buckets[next % span].addLast(ni)
                         queued++
                     }
                 }

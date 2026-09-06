@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 32
+    private const val BOT_VERSION = 33
 
     private const val LATE_MARGIN = 60
 
@@ -412,6 +412,9 @@ object SpawnAndSwamp {
     /** упакованная клетка цели -> поле потока к ней (гружёный/боец, болото ×5). */
     private val flowCache = HashMap<Int, IntArray>()
 
+    /** Поле подхода под огнём — свой кэш на тик (см. assaultTo). */
+    private val assaultCache = HashMap<Int, IntArray>()
+
     // ---------- модель ----------
 
     /** Точка энергии: контейнер или куча на земле. */
@@ -469,6 +472,7 @@ object SpawnAndSwamp {
         val enemySpawn = getObjectsByPrototype(StructureSpawn::class).firstOrNull { it.my == false && it.exists }
         siteStepsCache.clear()
         flowCache.clear()
+        assaultCache.clear()
 
         if (!greeted) {
             greeted = true
@@ -1777,6 +1781,38 @@ object SpawnAndSwamp {
     private fun flowTo(ctx: Ctx, target: Position): IntArray =
         flowCache.getOrPut(target.x * 100 + target.y) { DistanceMap.flowFieldTo(target, ctx.blocked) }
 
+    /** Урон кормленных чужих башен по клеткам — цена клетки в поле подхода. Заполняются только клетки
+     *  в круге каждой башни: за TOWER_FALLOFF_RANGE выстрел не долетает вовсе. */
+    private fun towerFireField(ctx: Ctx): IntArray? {
+        val fed = ctx.enemyTowers.filter { it.fed }
+        if (fed.isEmpty()) return null
+        val fire = IntArray(10000)
+        for (t in fed) {
+            for (dx in -TOWER_FALLOFF_RANGE..TOWER_FALLOFF_RANGE) for (dy in -TOWER_FALLOFF_RANGE..TOWER_FALLOFF_RANGE) {
+                val x = t.pos.x + dx
+                val y = t.pos.y + dy
+                if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                val shot = InfluenceMap.towerShot(maxOf(abs(dx), abs(dy))) / InfluenceMap.towerCooldown
+                if (shot <= 0.0) continue
+                val i = x * 100 + y
+                fire[i] = minOf(DistanceMap.FIRE_CAP, fire[i] + ceil(shot).toInt())
+            }
+        }
+        return fire
+    }
+
+    /** ПОЛЕ ПОДХОДА к чужому спавну: то же поле пути, но цена клетки — полученный там урон (см.
+     *  flowFieldTo). Им ходит волна и по нему же шагает симуляция осады, поэтому её приговор относится
+     *  к тому маршруту, которым волна действительно пойдёт. Башен нет — это обычное поле, клетка в
+     *  клетку прежнее. Часы (travelOf, homeTravel) остаются на обычном поле: они меряют ход, а не
+     *  урон, и обход в них не входит — оценка выхода становится оптимистичнее на длину обхода. */
+    private fun assaultTo(ctx: Ctx, target: Position): IntArray {
+        val fire = towerFireField(ctx) ?: return flowTo(ctx, target)
+        return assaultCache.getOrPut(target.x * 100 + target.y) {
+            DistanceMap.flowFieldTo(target, ctx.blocked, DistanceMap.SWAMP_COST, fire)
+        }
+    }
+
     /** Армия. Возвращает мощь наступления (ушедшие волны плюс готовые уйти с поста) — для журнала. */
     private fun runFighters(ctx: Ctx, enemyPower: Double, alarm: Boolean): Double {
         val fighters = ctx.fighters
@@ -1862,6 +1898,8 @@ object SpawnAndSwamp {
         // продолжение — ушедшие волны
         val waveMembers = fighters.filter { it.id in wave && hasWeapon(it) }
         val spawnFlow = if (enemySpawn != null) flowTo(ctx, enemySpawn) else IntArray(0)
+        // маршрут волны — по урону; часы (startTravel, homeTravel, сплочение) остаются на spawnFlow
+        val assaultFlow = if (enemySpawn != null) assaultTo(ctx, enemySpawn) else IntArray(0)
         // ФРОНТ волны — те, кто держится вместе: в зазоре сплочения марша от авангарда по полю к спавну
         // врага. Осада на продолжение считается по фронту, а не по всем ушедшим: подкрепление в полутора
         // сотнях клеток позади в осаде не участвует, и «выигрыш» с ним отправил бы авангард под башню одного
@@ -1869,11 +1907,11 @@ object SpawnAndSwamp {
             val van = waveMembers.mapNotNull { m -> spawnFlow[m.x * 100 + m.y].takeIf { it >= 0 } }.minOrNull() ?: 0
             waveMembers.filter { m -> spawnFlow[m.x * 100 + m.y].let { it >= 0 && it - van <= COHESION_GAP } }
         } else waveMembers
-        val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, spawnFlow, extraShots = 1) else SIEGE_LOSE
-        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, spawnFlow) else SIEGE_LOSE
+        val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
+        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow) else SIEGE_LOSE
         // осада фронтом ВМЕСТЕ с группой поста: когда волна держит кромку, подкрепление уходит к ней, если
         // сумма выигрывает (с запасом на выход, как siegeStart)
-        val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, spawnFlow, extraShots = 1) else SIEGE_LOSE
+        val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
         // СРОК ВЫХОДА: штурм успевает, только если группа ещё дойдёт и добьёт до лимита тиков. Ход
         // группы — по САМОМУ дальнему её бойцу (идут вместе, осада начинается с приходом последнего),
         // время осады — из её же симуляции. Прежний «последний звонок» брал ход БЛИЖАЙШЕГО бойца и урон
@@ -2217,7 +2255,8 @@ object SpawnAndSwamp {
                 wallTarget != null -> { target = wallTarget; standoff = if (melee) 1 else RANGED_RANGE }
                 else -> { target = mySpawn; standoff = HOME_STANDOFF }
             }
-            val flow = flowTo(ctx, target)
+            // к чужому спавну идём полем подхода (по урону), ко всему прочему — обычным
+            val flow = if (enemySpawn != null && target.x == enemySpawn.x && target.y == enemySpawn.y) assaultFlow else flowTo(ctx, target)
             val breaching = marching && target === enemySpawn
 
             val nearbyEnemies = combatEnemies.filter { getRange(creep, it) <= 12 }
