@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 30
+    private const val BOT_VERSION = 31
 
     private const val LATE_MARGIN = 60
 
@@ -1918,7 +1918,17 @@ object SpawnAndSwamp {
             val ourHits = homeAll.sumOf { it.hits }
             val fightTicks = if (theirDps <= 0.0) Int.MAX_VALUE / 4 else (ourHits / theirDps).toInt()
             val toThreat = flowTo(ctx, homeAnchor)
-            homeAll.filter { pathTicks(it, toThreat, it.x * 100 + it.y) <= maxOf(fightTicks, RANGED_RANGE) }
+            homeAll.filter { f ->
+                // ДОСТАЁТ ИЛИ ДОГОНИТ. Стрелок, который не достаёт до ближайшего из стаи и не может её
+                // догнать (она уходит и не медленнее его — см. catchable, замер по прошлому тику), в этом
+                // бою не выстрелит ни разу: он будет идти за ней и получать. Такой бой не доводится, а
+                // недоведённый бой против пары с лекарем — чистый убыток: наши хиты не возвращаются, его
+                // возвращаются по 72 в тик. Ждать их дома дешевле — спавн не отходит, и прийти к нему
+                // им всё равно придётся (тогда они не отходят, и catchable верен сам собой)
+                val near = homePack.minByOrNull { getRange(f, it) }
+                val reachable = near == null || getRange(f, near) <= RANGED_RANGE || catchable(f, near)
+                reachable && pathTicks(f, toThreat, f.x * 100 + f.y) <= maxOf(fightTicks, RANGED_RANGE)
+            }
         }
         // с гистерезисом, как охота: начатый бой продолжаем при 0.9 — иначе первые потери переключали
         // «дерёмся» в «пост», и отряд разворачивался под огнём
