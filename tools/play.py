@@ -11,6 +11,13 @@ the client itself runs up to three series at once and the server keeps one match
     tools/play.py spawn-and-swamp                          # one rating match, wait, print result
     tools/play.py spawn-and-swamp -n 20 --stop-on-defeat    # a series, stopping at the first loss
     tools/play.py spawn-and-swamp -n 5 --logs runs/         # keep every match's console
+    tools/play.py pain-and-gain --history 20                # the arena's last matches FROM THE SERVER: id, opponent, result, rating
+
+`--history` is the dedicated way to read results — the client's cache (`match-log.py list`) holds only the matches the
+client displayed, and a series played from the client's own UI, or watched on another machine, is not in it; the
+server's `/api/arena/<id>/rating-history` has every rating match. What the server does not know is which build played
+it: that is the bot's greeting line in the console, so `--history` shows the code version the server assigned (a
+counter per upload) and the console's greeting comes from `match-log.py` or the replay.
 
 Rating matches move your rating; that is the point of playing them. Landing first is NOT required
 (rule 5 in CLAUDE.md): what a match needs is that the code being played is committed on your branch
@@ -132,6 +139,36 @@ def start(c, arena_id):
     }})()""")
 
 
+def history(c, arena_id, limit, us):
+    """The arena's last rating matches from the server (`/api/arena/<id>/rating-history`), newest first."""
+    rows = c.json_eval(f"""(async () => {{
+      const r = await fetch('{API}/arena/{arena_id}/rating-history?limit={int(limit)}&offset=0', {{credentials: 'include'}});
+      const j = await r.json();
+      return JSON.stringify((j.history || []).map(h => {{
+        const g = h.game || {{}};
+        return {{id: g._id || h._id, created: g.createdAt || h.createdAt, ticks: (g.meta && g.meta.ticks) || g.ticks || 0,
+                winner: g.result ? g.result.winner : null, draw: !!(g.result && g.result.draw),
+                users: (h.users || []).map(u => ({{id: u._id, name: u.username}})),
+                codes: (h.codes || []).map(x => ({{user: x.user, version: x.version}})),
+                rating: h.ratingHistory ? [h.ratingHistory.previousRating, h.ratingHistory.rating, h.ratingHistory.rank] : null}};
+      }}));
+    }})()""")
+    out = []
+    for h in rows:
+        me = next((u["id"] for u in h["users"] if (u["name"] or "").startswith(us)), None)
+        w = h["winner"]
+        if h["draw"] or w is None or w == -1:
+            res = "draw"
+        elif isinstance(w, int) and 0 <= w < len(h["codes"]):
+            res = "won" if h["codes"][w]["user"] == me else "lost"
+        else:
+            res = str(w)
+        foes = ", ".join(u["name"] for u in h["users"] if u["id"] != me)
+        ver = next((c["version"] for c in h["codes"] if c["user"] == me), None)
+        out.append(dict(id=h["id"], created=h["created"], ticks=h["ticks"], result=res, opponent=foes, rating=h["rating"], code=ver))
+    return out
+
+
 def state(c, gid):
     return c.json_eval(f"""(async () => {{
       const r = await fetch('{API}/game/{gid}', {{credentials: 'include'}});
@@ -195,6 +232,8 @@ def main():
     ap.add_argument("--stop-on-non-win", action="store_true", help="stop at the first loss or draw")
     ap.add_argument("--logs", metavar="DIR", help="write each match's console into this directory")
     ap.add_argument("--list", action="store_true", help="list arenas with their ids, folders and slots")
+    ap.add_argument("--history", type=int, metavar="N", help="print the arena's last N rating matches from the server and exit")
+    ap.add_argument("--us", default="temik911", help="our username prefix (for --history)")
     a = ap.parse_args()
 
     c = CDP()
@@ -212,6 +251,17 @@ def main():
         return
 
     arena = pick(c, a.arena)
+    if a.history:
+        for h in reversed(history(c, arena["id"], a.history, a.us)):
+            t = h["created"] or ""
+            try:
+                when = time.strftime('%d.%m %H:%M', time.localtime(time.mktime(time.strptime(t[:19], '%Y-%m-%dT%H:%M:%S')) - time.timezone + (3600 if time.localtime().tm_isdst else 0)))
+            except ValueError:
+                when = t[:16]
+            r = h["rating"]
+            rating = f"{r[0]}->{r[1]} #{r[2]}" if r else "-"
+            print(f"{when}  {h['id']}  {h['result']:<5} {h['ticks']:>5}t  {rating:<16} code {h['code']}  vs {h['opponent']}")
+        return
     folder = folder_for(arena["name"])
     s = slot(c, arena["id"])
     if s["game"] and s["status"] != "finished":
