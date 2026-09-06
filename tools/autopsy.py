@@ -104,7 +104,7 @@ def _ratio(s):
 def parse_log(text):
     L = dict(version=None, tuning=None, samples=[], postures=[], evades=[], stalls=[], detaches=[], keepers=[],
              plans=[], flags=[], ghosts=[], giveups=[], press_in=[], runners=defaultdict(list), armies=[],
-             errors=Counter(), lines=0, why_ticks=0, why_creep_ticks=0, why_reasons=Counter(), why_did=Counter(), why_by=Counter(),
+             errors=Counter(), stuck=0, lines=0, why_ticks=0, why_creep_ticks=0, why_reasons=Counter(), why_did=Counter(), why_by=Counter(),
              why_first=None, why_last=None)
     tick = 0
     for line in text.splitlines():
@@ -117,7 +117,7 @@ def parse_log(text):
                 run = re.search(r'runners=(\d+)\((\d+) detached\)', m.group(2)) or re.search(r'runners=(\d+)()', m.group(2))
                 s = dict(t=tick, army=int(d['army']), runners=int(run.group(1)), detached=int(run.group(2) or 0),
                          enemies=_ratio(d['enemies'])[0], combat=_ratio(d['enemies'])[1],
-                         reach=_ratio(d['reach'])[0], reachable=_ratio(d['reach'])[1],
+                         reach=_ratio(d.get('reach', '0/0'))[0], reachable=_ratio(d.get('reach', '0/0'))[1],   # no reach= before v20
                          score=_ratio(d['score']), rate=_ratio(d['rate']), behind=d.get('behind') == 'true',
                          posture=d.get('posture'), obj=d.get('obj'), hunt=d.get('hunt') == 'true', rush=d.get('rush') == 'true',
                          our=int(d['our']), enemy=int(d['enemy']), ledger=int(d.get('ledger', 0)), wounded=int(d.get('wounded', 0)),
@@ -190,7 +190,7 @@ def parse_log(text):
         elif 'timed out' in line:
             L['errors']['timed out'] += 1
         elif line.startswith('stuck '):
-            L['errors']['stuck'] += 1
+            L['stuck'] += 1
     return L
 
 
@@ -463,9 +463,20 @@ def outcome_form(L, R, meta_result, ticks):
         return 'annihilated', f"our last creep died at t={ours_gone}"
     if meta_result == 'won' and his_gone is not None:
         return 'annihilation', f"his last creep died at t={his_gone}"
-    if ticks and ticks < 2000:
-        return 'early on points', f"ended at t={ticks}, both armies alive — an unreachable lead"
-    return 'points at the limit', f"t={ticks}"
+    if ticks and ticks >= 2000:
+        return 'points at the limit', f"t={ticks}"
+    # an early end is either an unreachable lead (|score gap| > 25 per remaining tick) or an annihilation the ten-tick
+    # samples missed — the last creep died between two t= lines; the arena has no third way to end early
+    last = S[-1] if S else None
+    if last:
+        gap = abs(last['score'][0] - last['score'][1])
+        if gap <= 25 * (2000 - last['t']):
+            if meta_result == 'won':
+                return 'annihilation', f"his army gone after t={last['t']} (lead {gap} was reachable, the end came between samples)"
+            if meta_result == 'lost':
+                return 'annihilated', f"our army gone after t={last['t']} (his lead {gap} was reachable, the end came between samples)"
+        return 'early on points', f"ended after t={last['t']} with a lead of {gap} — unreachable"
+    return 'early', f"ended at t={ticks}, no t= samples to say how"
 
 
 def divergence(L):
@@ -684,7 +695,7 @@ def render(L, R, info, history, step):
         p(f"  deaths his  ({len(hd)}): {' '.join(f'{t}:{r[0]}' for t, r in hd[:16])}")
     p('')
     p(f"nets: stalls {len(L['stalls'])} detach {len(L['detaches'])} keepers {len(L['keepers'])} plan-yields {len(L['plans'])} press-in {len(L['press_in'])} "
-      f"give-ups {len(L['giveups'])} evades {len(L['evades'])} flag-events {len(L['flags'])} ghost-damage {len(L['ghosts'])}")
+      f"give-ups {len(L['giveups'])} evades {len(L['evades'])} flag-events {len(L['flags'])} ghost-damage {len(L['ghosts'])} stuck {L['stuck']}")
     for x in L['stalls'][:6]:
         p(f"  stall t={x['t']}: {x['text'][:110]}")
     for x in L['detaches'][:6]:

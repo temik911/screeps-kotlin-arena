@@ -28,7 +28,7 @@ LOG_URL = re.compile(rb"https://arena\.screeps\.com/api/game/([0-9a-f]{24})/log/
 GAME_URL = re.compile(rb"https://arena\.screeps\.com/api/game/([0-9a-f]{24})(?:[^/\x21-\x7e]|$)")
 # every season-4 bot greets as "hello <season> <arena> [v]<N>: ..." — spawn-and-swamp writes "v43",
 # pain-and-gain and escort-run write a bare number
-GREETING = re.compile(r"hello (\w+) ([\w-]+) v?(\d+)")
+GREETING = re.compile(r"hello (\w+) ([\w-]+)(?: v?(\d+))?")
 
 
 def decompress(path):
@@ -130,10 +130,12 @@ def describe(game, logs, metas):
     first = chunk_text(chunks[min(chunks)]) if chunks else {}
     greet, version, tuning = "", None, ""
     if first:
-        head = first[min(first)]
-        m = GREETING.search(head[:200])
+        # the greeting can sit behind an effects line or a map dump, and a pre-version bot greets without a number
+        # ("hello season4 pain-and-gain: 4 - …" up to v27 of pain-and-gain) — read the whole first chunk, version optional
+        head = "\n".join(first[t] for t in sorted(first))[:20000]
+        m = GREETING.search(head)
         if m:
-            greet, version = f"{m.group(1)}/{m.group(2)}", int(m.group(3))
+            greet, version = f"{m.group(1)}/{m.group(2)}", int(m.group(3)) if m.group(3) else None
         for line in head.split("\n"):
             if line.startswith("tuning:"):
                 tuning = line[len("tuning:"):].strip()

@@ -2,6 +2,9 @@
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
 //   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
+//   REPLAY=<id>.replay.json.gz + scenario `ghost`: the map, flags, bodies and start cells come from a live replay (arukuka's tool,
+//   see tools/replay.py) and the enemy's creeps walk the cells the replay recorded, tick for tick, while our bot plays live —
+//   the only stand where the opponent's formation, tempo and entry points are the real ones (tool 3 of the analysis set)
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { world, process as step, idx, inBounds, range, creeps, live, creepAt } from './world.mjs';
@@ -12,6 +15,7 @@ import { CostMatrix, searchPath } from './game/path-finder.mjs';
 import { getDirection } from './game/utils.mjs';
 
 import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 // the bundle of THIS worktree's build (see the parallel-sessions rules: the stub tests what the worktree built)
 const BOT = process.env.BOT || new URL('../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/painandgain/PainAndGain.export.mjs', import.meta.url).href;
 const MAP = process.env.MAP; // path to a 100-row DEBUG_MAP dump: '#' wall, '~' swamp, anything else plain
@@ -20,6 +24,16 @@ const ticks = parseInt(process.argv[2] || '2000', 10);
 const TRACE = process.env.TRACE ? process.env.TRACE.split('-').map((v) => parseInt(v, 10)) : null;
 const scenario = (process.argv[3] || 'none').split('+');
 const has = (s) => scenario.includes(s);
+// ---------- ghost: a live replay drives the enemy ----------
+// REPLAY=<file> — the `.replay.json.gz` of arukuka/screeps-arena-tools (format: its docs/FORMAT.md): `terrain` is a run-length
+// string of w/p/s cells in ROW order (y-major; checked on match 273: 1 849 recorded cells, none on a wall read row-wise, 172
+// read column-wise), `objects` the seven flags by id, tick 0's `n` both armies with bodies as `a8m8`, and every tick's `u`
+// the positions after it. Our side is the player whose name starts with US (default temik911).
+const REPLAY = process.env.REPLAY ? JSON.parse(gunzipSync(readFileSync(process.env.REPLAY)).toString('utf8')) : null;
+const ghostPos = new Map();   // replay creep id -> dense [tick] -> {x, y} while it lived; nothing after its recorded death
+const ghostMeta = { us: 0, ticks: 0, winner: '', deaths: [0, 0], id: '', off: 0, on: 0, outlived: 0, firstContact: null, recContact: null, recHits: [[], []], stubHits: [], ourOff: 0, ourOn: 0, ourDev: null, ourDevWhere: '' };
+const PART = { a: 'attack', r: 'ranged_attack', h: 'heal', m: 'move', t: 'tough', w: 'work', c: 'carry' };
+function expandBody(str) { const out = []; for (const [, ch, n] of str.matchAll(/([a-z])(\d+)/g)) for (let i = 0; i < +n; i++) out.push(PART[ch] || 'move'); return out; }
 
 // ---------- map (point-symmetric: (x,y) <-> (99-x, 99-y)) ----------
 function rect(x0, y0, x1, y1, v) { for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) if (inBounds(x, y)) world.terrain[idx(x, y)] = v; }
@@ -99,7 +113,36 @@ function buildLiveMap(path) {
     world.objects.push(new Creep(x, y, 1, body));
   }
 }
-if (MAP) buildLiveMap(MAP); else { buildMap(); placeArmies(); }
+function buildFromReplay(doc) {
+  let i = 0;
+  for (const [, ch, n] of doc.terrain.matchAll(/([wps])(\d+)/g)) for (let k = 0; k < +n; k++, i++) world.terrain[idx(i % 100, Math.floor(i / 100))] = ch === 'w' ? 1 : ch === 's' ? 2 : 0;
+  if (i !== 10000) throw new Error(`replay terrain has ${i} cells`);
+  const TYPE = { vulnerability: ['eff_damage_taken_modifier', 5], heal_reduction: ['eff_heal_modifier', 4], attack_reduction: ['eff_attack_modifier', 3], ranged_attack_reduction: ['eff_ranged_attack_modifier', 3] };
+  for (const o of doc.objects) if (o.kind === 'flag') { const [t, sc] = TYPE[o.id.replace(/^pg_flag_/, '').replace(/_[ab]$/, '')]; world.objects.push(new ScoreFlag(o.x, o.y, t, sc)); }
+  const us = (doc.meta.players.find((pl) => pl.username.startsWith(process.env.US || 'temik911')) || { side: 0 }).side;
+  ghostMeta.us = us; ghostMeta.ticks = doc.meta.ticks; ghostMeta.winner = doc.meta.result.winnerName; ghostMeta.id = doc.meta.shortId;
+  // the record's hits per side per tick and its first contact (a fighter of each side within three) — the entry measure
+  // printed at the end compares the exchange of the first 20/50/100 ticks after contact here against the record's
+  const last = new Map(), sideOf = new Map(), hits = new Map(), scout = new Set();
+  for (const tk of doc.ticks) {
+    for (const [id, side, x, y, h, , body] of tk.n || []) {
+      if (tk.k === 0) { const c = new Creep(x, y, side === us ? 0 : 1, expandBody(body)); c.ghostId = id; world.objects.push(c); }
+      sideOf.set(id, side); last.set(id, { x, y }); hits.set(id, h); if (body === 'm1') scout.add(id); if (!ghostPos.has(id)) ghostPos.set(id, []);
+    }
+    for (const [id, x, y, h] of tk.u || []) { last.set(id, { x, y }); hits.set(id, h); }
+    for (const id of tk.x || []) { last.delete(id); hits.delete(id); ghostMeta.deaths[sideOf.get(id) === us ? 0 : 1]++; }
+    for (const [id, pos] of last) ghostPos.get(id)[tk.k] = pos;
+    const sum = [0, 0];
+    for (const [id, h] of hits) sum[sideOf.get(id) === us ? 0 : 1] += h;
+    ghostMeta.recHits[0][tk.k] = sum[0]; ghostMeta.recHits[1][tk.k] = sum[1];
+    if (ghostMeta.recContact === null) {
+      const o = [...last].filter(([id]) => sideOf.get(id) === us && !scout.has(id)).map(([, p]) => p);
+      const e = [...last].filter(([id]) => sideOf.get(id) !== us && !scout.has(id)).map(([, p]) => p);
+      if (o.some((a) => e.some((b) => range(a, b) <= 3))) ghostMeta.recContact = tk.k;
+    }
+  }
+}
+if (REPLAY) buildFromReplay(REPLAY); else if (MAP) buildLiveMap(MAP); else { buildMap(); placeArmies(); }
 world.spawnRegen = [0, 0];
 
 // ---------- enemy AI ----------
@@ -150,7 +193,8 @@ const rotating = new Set();
 let focusAnchor = null;
 // brawl: an armed ranged of ours first (r->ranged 152 of 367 in match 249 — our ranged were disarmed 113 creep-ticks against
 // his 42), then the lowest hits
-const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : has('brawl') ? (live(o, R) > 0 ? 0 : 1) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
+// ghost: the same key — the recorded lines and blobs both put half their fire into our ranged (match 273: 575 of 1 139 shots)
+const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : (has('brawl') || has('ghost')) ? (live(o, R) > 0 ? 0 : 1) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
 // the enemy's fire concentration, as tools/replay.py's conc counts it live: per tick the largest number of its single-target
 // shots on one of ours; reported at the end as a histogram (matches 140–179: the live lines put four or more on one creep in
 // 11–28 % of their firing ticks, the bot 0–3 %)
@@ -163,7 +207,7 @@ function fireAt(c, ours) {
   const inRange = ours.filter((o) => range(c, o) <= 3);
   if (live(c, R) > 0 && inRange.length) {
     const close = inRange.filter((o) => range(c, o) <= 2);
-    if (close.length >= 2 && !NINE && !has('brawl')) c.rangedMassAttack();   // brawl: single-target fire (mass 6 of 412 shots in match 249)
+    if (close.length >= 2 && !NINE && !has('brawl') && !has('ghost')) c.rangedMassAttack();   // brawl, ghost: single-target fire (mass 6 of 412 shots in match 249)
     else { const t = inRange.sort((a, b) => targetKey(a) - targetKey(b))[0]; c.rangedAttack(t); eShots.set(t.id, (eShots.get(t.id) || 0) + 1); }
   }
   if (live(c, A) > 0) {
@@ -351,11 +395,56 @@ function healAt(c, mine) {
   if (!hurt) return;
   if (range(c, hurt) <= 1) c.heal(hurt); else c.rangedHeal(hurt);
 }
+// ghost: every enemy creep walks to the cell the replay recorded for this tick — adjacent, so one move intent, which the engine
+// resolves as it would live: a creep of ours on that cell refuses the move and the ghost catches up when the cell frees (a path
+// step when it fell two or more behind). Fatigue is not modelled for ghosts — the recording already paid it. Fire and healing are
+// by rule, not by record: the recorded targets stood where OUR recorded army stood, and the live bot is somewhere else —
+// single-target at the lowest hits within three (mass fire is what the live blobs do not do), melee at the adjacent lowest,
+// healers on the most wounded mate within three. A ghost that outlives its recording (the live bot killed it later than the
+// record did, or not at all) stands where its record ended and keeps firing; a ghost the live bot kills earlier is simply gone.
+// ghost+shy: the one reaction every recorded line and blob shares — a ranged or a healer with one of our armed melee within two
+// steps back from it instead of taking the recorded step (the record's step-backs happened when OUR recorded melee pressed, not
+// when the live ones do; without this our melee walk into a line that never dodges — match 273's ghost: 20 swings in the first
+// twenty ticks against the record's 5, and his line lost 3 774 hits against 1 081). ghost+nurse: a healer with a wounded mate
+// within three and none adjacent steps to the most wounded (the recorded healers stood adjacent to the RECORD's wounded, which
+// are not the stand's; 72 a tick adjacent against 24 at range). Both resync to the record when the reason is gone.
+function ghostTick(mine, ours) {
+  if (ghostMeta.firstContact === null && mine.some((c) => !isRunner(c) && ours.some((o) => !isRunner(o) && range(c, o) <= 3))) ghostMeta.firstContact = world.tick;
+  ghostMeta.stubHits[world.tick - 1] = [ours.reduce((a, c) => a + c.hits, 0), mine.reduce((a, c) => a + c.hits, 0)];
+  const ourMelee = ours.filter((o) => live(o, A) > 0);
+  // our own creeps against OUR record: the same bot against the same enemy cells should walk the same cells — the first tick it
+  // does not is where the stand's engine (or the build) parts from the live one, and that is measured, not assumed
+  for (const o of ours) {
+    const rec = ghostPos.get(o.ghostId), prev = rec && rec[world.tick - 1];
+    if (!prev) continue;
+    ghostMeta.ourOn++;
+    if (prev.x !== o.x || prev.y !== o.y) { ghostMeta.ourOff++; if (ghostMeta.ourDev === null) { ghostMeta.ourDev = world.tick - 1; ghostMeta.ourDevWhere = `${o.summary()} at (${o.x},${o.y}) recorded (${prev.x},${prev.y})`; } }
+  }
+  for (const c of mine) {
+    c.fatigue = 0;
+    const rec = ghostPos.get(c.ghostId);
+    const prev = rec && rec[world.tick - 1];
+    if (prev) { ghostMeta.on++; if (prev.x !== c.x || prev.y !== c.y) ghostMeta.off++; } else ghostMeta.outlived++;
+    fireAt(c, ours);
+    healAt(c, mine);
+    if (has('shy') && live(c, A) === 0 && !isRunner(c)) {
+      const close = ourMelee.filter((o) => range(c, o) <= 2);
+      if (close.length) { if (!stepBack(c, close)) stepAway(c, close); continue; }
+    }
+    if (has('nurse') && live(c, H) > 0 && live(c, A) === 0 && live(c, R) === 0) {
+      const hurt = mine.filter((o) => o !== c && o.hits < o.hitsMax && range(c, o) <= 3).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits))[0];
+      if (hurt && range(c, hurt) > 1) { stepToward(c, hurt, 1); continue; }
+    }
+    const p = rec && rec[world.tick];
+    if (p && (p.x !== c.x || p.y !== c.y)) { if (range(c, p) <= 1) c.move(getDirection(p.x - c.x, p.y - c.y)); else stepToward(c, p, 0); }
+  }
+}
 function enemyTick() {
   eConcTick();
   const flags = world.objects.filter((o) => o.exists && o.kind === 'flag');
   const mine = creeps().filter((c) => c.owner === 1);
   const ours = creeps().filter((c) => c.owner === 0);
+  if (has('ghost')) { ghostTick(mine, ours); return; }
   // NORUNNERS=1: the enemy's runners never move — the live opponent of matches 30 and 31 took no flag at all until our
   // army was dead, so a rush-type script with idle runners is the closest model of it
   const runners = (process.env.NORUNNERS || has('flagless')) ? [] : mine.filter(isRunner);
@@ -711,6 +800,12 @@ for (let t = 1; t <= ticks; t++) {
   if (msLoop > cpuMax) { cpuMax = msLoop; cpuMaxTick = t; }
   if (msLoop > 50) cpuSlow++;
   enemyTick();
+  // ghost: the first thirty ticks of contact, intent by intent — what each side fired and healed while the entry was decided
+  if (has('ghost') && ghostMeta.firstContact !== null && t <= ghostMeta.firstContact + 30) {
+    const cnt = (owner) => { const o = { shots: 0, mass: 0, swings: 0, heal: 0, rheal: 0, hits: 0, adjH: 0 }; for (const c of creeps()) { if (c.owner !== owner) continue; o.hits += c.hits; const m = world.intents.get(c.id) || {}; if (m.ranged && m.ranged.type === 'attack') o.shots++; if (m.ranged && m.ranged.type === 'mass') o.mass++; if (m.ranged && m.ranged.type === 'heal') o.rheal++; if (m.melee) o.swings++; if (m.heal) o.heal++; } return o; };
+    const a = cnt(0), b = cnt(1);
+    origLog(`entry t=${t}: ours shots=${a.shots}+${a.mass}m swings=${a.swings} heals=${a.heal}/${a.rheal} hits=${a.hits} | his shots=${b.shots}+${b.mass}m swings=${b.swings} heals=${b.heal}/${b.rheal} hits=${b.hits}`);
+  }
   step(Resource);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
   if (TRACE && t >= TRACE[0] && t <= TRACE[1]) {
@@ -731,11 +826,20 @@ for (let t = 1; t <= ticks; t++) {
 }
 const outDir = fileURLToPath(new URL('out/', import.meta.url));
 mkdirSync(outDir, { recursive: true });
-const log = `${outDir}run-${process.env.LOGTAG || ""}${scenario.join('+')}${process.env.SLEEP ? '-' + process.env.SLEEP : ''}.log`;
+const log = `${outDir}run-${process.env.LOGTAG || ""}${scenario.join('+')}${process.env.SLEEP ? '-' + process.env.SLEEP : ''}${REPLAY ? '-' + ghostMeta.id.slice(-6) : ''}.log`;
 writeFileSync(log, lines.join('\n') + '\n\n=== EVENTS ===\n' + world.events.join('\n') + '\n');
 const c0 = creeps().filter((c) => c.owner === 0).length, c1 = creeps().filter((c) => c.owner === 1).length;
 origLog(`done: ${ended || `${ticks} ticks`} score=${world.score[0]}/${world.score[1]} alive=${c0}/${c1} errors=${loopErrors} time=${((Date.now() - t0) / 1000).toFixed(1)}s log=${log}`);
 const pc = (a, b) => `${a}/${b} (${b ? Math.round(100 * a / b) : 0}%)`;
+if (has('ghost')) {
+  origLog(`ghost ${ghostMeta.id}: recorded ${ghostMeta.winner} won in ${ghostMeta.ticks} ticks, deaths ours=${ghostMeta.deaths[0]} his=${ghostMeta.deaths[1]} (we were side ${ghostMeta.us}); replayed ${ended || `${ticks} ticks`} score=${world.score[0]}/${world.score[1]} alive=${c0}/${c1}; ghosts off their recorded cell ${ghostMeta.off} of ${ghostMeta.on} creep-ticks, outlived the record ${ghostMeta.outlived}; OURS off our recorded cell ${ghostMeta.ourOff} of ${ghostMeta.ourOn}, first at t=${ghostMeta.ourDev} (${ghostMeta.ourDevWhere})`);
+  // the entry: hits lost by each side over the first 20/50/100 ticks after the first contact, stand against record
+  const lost = (arr, t0, d, i) => { const a = arr[t0], b = arr[Math.min(t0 + d, arr.length - 1)]; return a === undefined || b === undefined ? '?' : (i === undefined ? a - b : a[i] - b[i]); };
+  const sc = ghostMeta.firstContact, rc = ghostMeta.recContact;
+  const stub = (d) => sc === null ? '-' : `${lost(ghostMeta.stubHits, sc - 1, d, 0)}/${lost(ghostMeta.stubHits, sc - 1, d, 1)}`;
+  const rec = (d) => rc === null ? '-' : `${lost(ghostMeta.recHits[0], rc, d)}/${lost(ghostMeta.recHits[1], rc, d)}`;
+  origLog(`ghost entry (hits lost ours/his): stand contact t=${sc} +20 ${stub(20)} +50 ${stub(50)} +100 ${stub(100)} | record contact t=${rc} +20 ${rec(20)} +50 ${rec(50)} +100 ${rec(100)}`);
+}
 origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach)`);
 origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
