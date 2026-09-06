@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 31
+    private const val BOT_VERSION = 32
 
     private const val LATE_MARGIN = 60
 
@@ -1428,6 +1428,10 @@ object SpawnAndSwamp {
         var melee = body.count { it == ATTACK }
         var value = 0
         for (part in body) {
+            // обрыв держит TOUGH в узде: снятый, он делает броню лучшей частью тела (замерено 06.09.2026 —
+            // состав выродился в ttttt mmmmmmmmmm rrr, три ствола на восемнадцать частей, harass перестал
+            // брать чужой спавн). ЭТА функция отвечает на вопрос «сколько чего брать»; на вопрос
+            // «что терять первым» отвечает порядок частей в fighterBody, и он от неё независим
             if (moves < weight) break // скорость потеряна — дальше тело волне не нужно
             value += (ranged * RANGED_ATTACK_POWER + melee * ATTACK_POWER) * 100 // сто хитов этой части боец бьёт с текущим уроном
             when (part) {
@@ -1457,11 +1461,14 @@ object SpawnAndSwamp {
                 val maxExtra = minOf((cap - a * block) / cost(MOVE), MAX_CREEP_SIZE - 2 * a)
                 for (e in 0..maxExtra) {
                     val body = ArrayList<BodyPartType>(2 * a + e)
-                    repeat(e) { body.add(MOVE) }
+                    val scored = ArrayList<BodyPartType>(2 * a + e)
+                    repeat(e) { scored.add(MOVE) }
+                    repeat(a) { scored.add(ATTACK) }
+                    repeat(a) { scored.add(MOVE) }
+                    repeat(e + a) { body.add(MOVE) }
                     repeat(a) { body.add(ATTACK) }
-                    repeat(a) { body.add(MOVE) }
                     val arr = body.toTypedArray()
-                    val value = bodyValue(arr).toDouble() / (if (spawnLimited) arr.size * CREEP_SPAWN_TIME else 1)
+                    val value = bodyValue(scored.toTypedArray()).toDouble() / (if (spawnLimited) arr.size * CREEP_SPAWN_TIME else 1)
                     if (value > bestValue) { bestValue = value; best = arr }
                 }
                 a++
@@ -1497,12 +1504,21 @@ object SpawnAndSwamp {
                     val maxExtra = minOf((cap - spent) / cost(MOVE), MAX_CREEP_SIZE - 2 * (r + t))
                     for (e in 0..maxExtra) {
                         val body = ArrayList<BodyPartType>(2 * (r + t) + e)
+                        // СОСТАВ считается по прежней раскладке (bodyValue и её обрыв рассуждают о
+                        // скорости, а не о порядке), а ВЫПУСКАЕТСЯ тело стволами назад: урон снимает части
+                        // спереди, и матч 40 кончился тремя остовами с целыми ногами и сбитым оружием, тогда
+                        // как его M5R5 — это [MOVE×5, RANGED×5] и в логе виден как «M1R5 564/1000»:
+                        // одна живая нога и ВСЕ пять стволов
+                        val scored = ArrayList<BodyPartType>(2 * (r + t) + e)
+                        repeat(t) { scored.add(TOUGH) }
+                        repeat(e) { scored.add(MOVE) }
+                        repeat(r) { scored.add(RANGED_ATTACK) }
+                        repeat(r + t) { scored.add(MOVE) }
                         repeat(t) { body.add(TOUGH) }
-                        repeat(e) { body.add(MOVE) }
+                        repeat(e + r + t) { body.add(MOVE) }
                         repeat(r) { body.add(RANGED_ATTACK) }
-                        repeat(r + t) { body.add(MOVE) }
                         val arr = body.toTypedArray()
-                        val value = bodyValue(arr).toDouble() / (if (spawnLimited) arr.size * CREEP_SPAWN_TIME else 1)
+                        val value = bodyValue(scored.toTypedArray()).toDouble() / (if (spawnLimited) arr.size * CREEP_SPAWN_TIME else 1)
                         if (value > bestValue || (value == bestValue && r > bestRanged)) { bestValue = value; best = arr; bestRanged = r }
                     }
                     t++
