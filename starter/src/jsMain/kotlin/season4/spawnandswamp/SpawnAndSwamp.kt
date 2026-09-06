@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 43
+    private const val BOT_VERSION = 44
 
     private const val LATE_MARGIN = 60
 
@@ -307,6 +307,12 @@ object SpawnAndSwamp {
 
     /** id площадки башни врага -> (тик первого наблюдения, прогресс тогда) — темп стройки. */
     private val siteSeen = HashMap<String, Pair<Int, Int>>()
+
+    /** Успеет ли домашняя башня стать башней: площадку ставят, смотрителя покупают и недострой кормят
+     *  по ОДНИМ часам (towerReadyTicks против жизни спавна и остатка матча). Считается раз в тик в
+     *  spawnIfNeeded; пока спавн рождает крипа, тот выходит раньше и признак остаётся с прошлого тика —
+     *  он про экономику и меняется медленно. */
+    private var siteInTime = false
 
     /** Гистерезис решений «охотимся на угрозу на нашей половине» (группой) и локальной агрессии
      *  (на бойца): пороговое решение без памяти дрожит на границе радиуса — два бойца 300 тиков
@@ -570,7 +576,8 @@ object SpawnAndSwamp {
             val rate = if (observed >= 0.0) observed else builders * BUILD_POWER.toDouble()
             if (rate <= 0.0) null else PendingTower(TowerInfo(site, true, 0), ceil(((site.progressTotal ?: 0) - progress) / rate).toInt())
         }
-        siteSeen.keys.retainAll { id -> enemySites.any { it.id == id } }
+        // темп меряется и у СВОЕЙ площадки (towerReadyTicks): прибор один на обе стороны
+        siteSeen.keys.retainAll { id -> enemySites.any { it.id == id } || mySites.any { it.id == id } }
         // РАЗВЕДКА: рождающийся крип врага виден со второго тика его spawnCreep — его тело и есть дебют
         // противника. Матч 12: два M5R1 за 800 родились на 1-м и 20-м тиках, а мы узнали о них, когда они
         // пришли на 150-м, потратив стартовую тысячу на бурильщика и хаулера
@@ -1253,6 +1260,12 @@ object SpawnAndSwamp {
         // пока спавн сносили (матч 19: 904 энергии в банке, ноль крипов, снесён на 1000-м)
         val spawnFire = InfluenceMap.fireAt(spawn.x, spawn.y, threats)
         val spawnLife = if (spawnFire > 0.0) (spawn.hits ?: SPAWN_HITS) / spawnFire else Double.MAX_VALUE
+        // ЧАСЫ ПЛОЩАДКИ. Готовая башня в сроке не нуждается — её надо только кормить; недостроенная
+        // становится башней, лишь когда на неё довезут остаток, и при мёртвой экономике это «никогда»
+        val siteNow = ctx.mySites.minByOrNull { getRange(spawn, it) }
+        siteInTime = ctx.myTowers.isNotEmpty() ||
+            towerReadyTicks(ctx, siteNow, siteNow?.let { s -> ((s.progressTotal ?: 0) - (s.progress ?: 0)).coerceAtLeast(0) } ?: -1, flow, energy) <
+            minOf(spawnLife, (arenaInfo.ticksLimit - getTicks()).toDouble())
         val minFighter = cost(RANGED_ATTACK) + cost(MOVE)
         // БОЕЦ ПЕРВЫМ — держать энергию под полное тело, не покупая ничего, — только когда так боец
         // приходит раньше. «Держать» — полный боец из того, что в спавне и едет, при нынешнем потоке;
@@ -1363,8 +1376,17 @@ object SpawnAndSwamp {
             val site = ctx.mySites.minByOrNull { getRange(spawn, it) }
             val left = if (site == null) -1 else ((site.progressTotal ?: 0) - (site.progress ?: 0)).coerceAtLeast(0)
             val trace = StringBuilder()
-            val worth = towerWorth(defenders, threats, flow, left, trace)
-            if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && trace.isNotEmpty()) println("tower: worth=$worth$trace")
+            // ЧАСЫ. towerWorth считает прибавку на энергию и ничего не знает о времени: боец рождается
+            // за десятки тиков, а площадка становится башней только когда на неё довезут остаток. При
+            // притоке 1-2 в тик это «никогда», и энергия уходит в недостроенное — три поражения из пяти
+            // (06.09.2026) держали площадку 220-863 из 1250 до конца матча. Горизонт — уже существующие
+            // сроки: жизнь спавна под нынешним огнём и остаток матча
+            val worth = siteInTime && towerWorth(defenders, threats, flow, left, trace)
+            if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && (trace.isNotEmpty() || site != null)) {
+                val ready = towerReadyTicks(ctx, site, left, flow, energy)
+                println("tower: worth=$worth inTime=$siteInTime ready=${if (ready >= Double.MAX_VALUE / 2) "never" else ready.toInt().toString()} " +
+                    "horizon=${minOf(spawnLife, (arenaInfo.ticksLimit - getTicks()).toDouble()).toInt()} left=$left$trace")
+            }
             // СЧЁТ УЖЕ ОТВЕТИЛ. towerWorth сравнил башню с бойцом против тех же врагов и с замеренной
             // смертностью бойцов; спрашивать сверх этого «а не купить ли всё-таки бойца» (fighterFirst)
             // значит запретить башню ровно там, где она и нужна, — враг у ворот (матч 26: worth=true
@@ -1377,7 +1399,10 @@ object SpawnAndSwamp {
                 }
             }
         }
-        if (ctx.builders.isEmpty() && (ctx.mySites.isNotEmpty() || ctx.myTowers.isNotEmpty())) {
+        // СМОТРИТЕЛЬ — ЧАСТЬ ЦЕНЫ БАШНИ, И ЧАСЫ У НЕГО ТЕ ЖЕ. Под площадку, которая не достроится
+        // в срок, он не покупается: в проигранном матче 22:22 он стоил 700 при притоке 2 в тик и
+        // достроил 95 из 482 оставшихся. У готовой башни срока нет — её надо только кормить
+        if (ctx.builders.isEmpty() && siteInTime && (ctx.mySites.isNotEmpty() || ctx.myTowers.isNotEmpty())) {
             val builder = builderBody(builderWork(flow))
             val builderCost = builder.sumOf { cost(it) }
             if (energy < builderCost) {
@@ -3230,6 +3255,42 @@ object SpawnAndSwamp {
      *  ничего — ни как урон, ни как хиты, — и в сравнении сил считать её нельзя. */
     private fun liveCost(creep: Creep): Int = creep.body.sumOf { if (it.hits > 0) cost(it.type) else 0 }
 
+    /** Через сколько тиков у нас будет ГОТОВАЯ башня: довезти остаток её цены при нынешнем потоке и
+     *  превратить его в прогресс руками смотрителя — срок задаёт та половина, что медленнее. Пока
+     *  смотрителя нет, в срок входят и его цена, и его рождение. Как только он работает и прошло
+     *  полокна, вопрос перестаёт быть модельным: темп площадки ВИДЕН, и берётся он — тем же прибором,
+     *  которым бот меряет ЧУЖУЮ площадку (siteSeen/pendingTowers), потому что своя ничем не отличается.
+     *  Стоящая площадка не «строится долго», а не достроится никогда. */
+    private fun towerReadyTicks(ctx: Ctx, site: ConstructionSite?, left: Int, flow: Double, energy: Int): Double {
+        val siteLeft = if (site == null) buildCost("StructureTower") else left
+        if (siteLeft <= 0) return 0.0
+        val work = ctx.builders.sumOf { b -> b.body.count { it.type == WORK && it.hits > 0 } }
+        if (site != null && work > 0) {
+            val progress = site.progress ?: 0
+            val (t0, p0) = siteSeen.getOrPut(site.id) { getTicks() to progress }
+            val seen = getTicks() - t0
+            if (seen >= APPROACH_WINDOW / 2) {
+                val observed = (progress - p0).toDouble() / seen
+                // ноль — это ещё не «никогда»: смотритель мог не дойти, а спавн стоять пустым. Замер
+                // отвечает, только когда он что-то видел; про причину простоя говорит поток, и на него
+                // отвечает модель ниже. Своя первая проба этого правила молча замораживала площадку
+                // через десять тиков после покупки смотрителя — тот ещё шёл (стенд siege: 0/1250)
+                if (observed > 0.0) return siteLeft / observed
+            }
+        }
+        val keeper = builderBody(builderWork(flow))
+        val hasKeeper = ctx.builders.isNotEmpty()
+        val need = siteLeft + (if (hasKeeper) 0 else keeper.sumOf { cost(it) })
+        val rate = (if (work > 0) work else builderWork(flow)) * BUILD_POWER.toDouble()
+        val born = if (hasKeeper) 0 else keeper.size * CREEP_SPAWN_TIME
+        // поток здесь — ЗАМЕРЕННЫЙ (realisedIncome, среднее за окно производства), а не прогноз этого
+        // тика: вопрос «довезут ли остаток» — про устойчивую скорость, а не про рябь. С прогнозом
+        // вердикт переключался на каждом провале, смотритель то бросал площадку, то возвращался, и
+        // осада выигрывалась на 270 тиков позже (стенд siege: 1631 против 1361)
+        val steady = realisedIncome().let { if (it < 0.0) flow else it + regenRate() }
+        return maxOf(energyArrivalTicks(ctx, maxOf(0, need - energy), steady), siteLeft / rate) + born
+    }
+
     /** Окупается ли башня против бойца за ту же энергию. Мера одна и та же — ПРИБАВКА к мощи обороны
      *  против тех же врагов, с их лечением (см. lanchester): против пары «стрелок + лекарь» непрерывный
      *  урон бойца съедается лечением, а выстрел башни — 1000 разом — нет, и это видно только если
@@ -3316,7 +3377,11 @@ object SpawnAndSwamp {
     private fun runBuilders(ctx: Ctx) {
         if (ctx.builders.isEmpty()) return
         val spawn = ctx.mySpawn
-        val site = ctx.mySites.minByOrNull { getRange(spawn, it) }
+        // НЕДОСТРОЙ НЕ КОРМЯТ. Площадка, которую при нынешнем притоке не успеть достроить, не «строится
+        // долго» — она мертва, и каждая ходка смотрителя уносит в неё энергию, которой не хватает на тело
+        // (матч 06.09 22:22: 863 из 1250 к концу матча при притоке 1-2 в тик). Часы те же, что у
+        // постановки площадки и у покупки смотрителя, — siteInTime
+        val site = if (siteInTime) ctx.mySites.minByOrNull { getRange(spawn, it) } else null
         val tower = ctx.myTowers.filter { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }.minByOrNull { getRange(spawn, it) }
         for (b in ctx.builders) {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
@@ -3328,6 +3393,8 @@ object SpawnAndSwamp {
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
             }
+            // кормить нечего — груз возвращается в спавн, а не лежит в смотрителе до конца матча
+            if (goal == null && carrying > 0 && getRange(b, spawn) <= 1) b.transfer(spawn, RESOURCE_ENERGY)
             if (mayTake && free > 0) b.withdraw(spawn, RESOURCE_ENERGY)
             val incoming = InfluenceMap.damageAt(b.x, b.y, ctx.combatEnemies)
             val step = when {
