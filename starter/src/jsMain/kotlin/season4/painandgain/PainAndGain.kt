@@ -811,6 +811,12 @@ object PainAndGain {
      *  сработал). Пауза погони (pausedChase) считается, пока его вооружённый в 2 × ENGAGE_RANGE от наших: окно живёт сквозь
      *  мигание, и «дистанция не сократилась за 50 тиков» ловит гастроль. */
     private const val USE_CHASE_WINDOW_WIDE = true
+    /** ТРАССА РЕШЕНИЙ (v108, инструмент 2 разбора): мили без цели при враге в ENGAGE_RANGE печатает, какой фильтр снял бросок.
+     *  Прежде лог говорил, что крип сделал (f-строка раз в десять тиков), но не почему: «наши мили 117 тиков стояли на двух»
+     *  (матч 251) отвечалось счётчиком отказов и догадкой. Одна строка `why t=N:` на тик со всеми праздными мили —
+     *  `melee_1@(x,y)d2>ranged_3[hold:d2>2,!covered]holdMelee/stay` — и сводка `why-sum t=N:` раз в сто тиков по причинам;
+     *  читает tools/autopsy.py (строка «melee idle» и диагноз). Объём — не больше строки на контактный тик. */
+    private const val TRACE_WHY = true
     private const val LEASH_RANGE = 8
 
     /** Плотность строя при враге рядом (см. compact): шаг разрешён только на клетку в COMPACT_RANGE от центра
@@ -1004,7 +1010,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v106"
+    private const val BOT_VERSION = "v108"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1046,6 +1052,8 @@ object PainAndGain {
     private var retreatTarget: Position? = null
     /** Кто на прошлом тике шёл на личную цель (engage): такого не ждут по сплочению. */
     private val engagingIds = HashSet<String>()
+    private val whyLines = ArrayList<String>()             // трасса решений мили за тик (см. TRACE_WHY)
+    private val whySum = HashMap<String, Int>()             // причины за сто тиков
     private val holdSince = HashMap<String, Int>()
     private val impatientIds = HashSet<String>()
     private var evadeTarget: Position? = null
@@ -3256,6 +3264,48 @@ object PainAndGain {
                     bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
                 }
             }
+            if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
+                // только враг «с боем» (см. threatening): праздность при небоевых остатках после выигранного боя — не находка
+                val near = combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && threatening(it, enemyCreeps) }.minByOrNull { getRange(creep, it) }
+                if (near != null) {
+                    val r = ArrayList<String>()
+                    if (support) r.add("support")
+                    if (rotating) r.add("rotating")
+                    if (stalled) r.add("stalled")
+                    if (!localAggressive) r.add("!aggr")
+                    if (!inLine) r.add("!inLine")
+                    val d = getRange(creep, near)
+                    if (holdMelee && d > holdReach(near)) r.add("hold:d$d>${holdReach(near)}")
+                    if (!catchable(near, chasers)) r.add("!catchable")
+                    if (near.id in pressGiveUp) r.add("giveup")
+                    if (!covered(near)) r.add("!covered")
+                    if (!withPrey(near)) r.add("!withPrey")
+                    if (!paired(near)) r.add("!paired")
+                    if (r.isEmpty()) r.add("?")
+                    val did = when {
+                        keeper -> "keeper"
+                        slotHold -> "slotHold"
+                        slot != null -> "slot"
+                        formGo -> "formGo"
+                        rotating && healerNear != null -> "rotate"
+                        aloneInFire -> "aloneInFire"
+                        leashed -> "leash"
+                        holdMelee -> "holdMelee"
+                        grab != null -> "grab"
+                        posture == Posture.ANNIHILATE && (!localAggressive || prey == null) -> "toCentroid"
+                        prey != null -> "prey"
+                        rallyTo != null -> "rally"
+                        objective != null -> "objective"
+                        threat != null && huntingThreat && mobile -> "threat"
+                        raider != null && mobile -> "raider"
+                        else -> "post"
+                    }
+                    val short = { id: String -> id.replace(Regex("^pg_player\\d_"), "") }
+                    whyLines.add("${short(creep.id)}@(${creep.x},${creep.y})d$d>${short(near.id)}[${r.joinToString(",")}]$did${if (hold) "+hold" else ""}/${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
+                    for (k in r) whySum[k] = (whySum[k] ?: 0) + 1
+                    whySum["idle"] = (whySum["idle"] ?: 0) + 1
+                }
+            }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
                 println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (wounded) " WOUNDED" else ""}${if (pressTarget != null || pressRanged) " PRESS" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
             }
@@ -3264,6 +3314,11 @@ object PainAndGain {
             lastCell[creep.id] = creep.x * 100 + creep.y
         }
 
+        if (TRACE_WHY && DEBUG_LOG && whyLines.isNotEmpty()) { println("why t=${getTicks()}: " + whyLines.joinToString(" ")); whyLines.clear() }
+        if (TRACE_WHY && DEBUG_LOG && getTicks() % (LOG_EVERY * 10) == 0 && whySum.isNotEmpty()) {
+            println("why-sum t=${getTicks()}: " + whySum.entries.sortedByDescending { it.value }.joinToString(" ") { "${it.key}=${it.value}" })
+            whySum.clear()
+        }
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
         healAndShoot(army + ctx.runners.filter { hasWeapon(it) }, allies, enemyCreeps, focusTarget, focusOrder)
     }

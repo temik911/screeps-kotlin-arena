@@ -152,11 +152,22 @@ def cmd_dump(args):
         sys.exit(f"{'no' if not hits else len(hits)} matches for id prefix {args.game!r}")
     game = hits[0]
     info = describe(game, logs, metas)
-    lines = [f"# {game} {info['arena']} {time.strftime('%d.%m.%Y %H:%M', time.localtime(info['when']))} "
-             f"{info['result']} rating {info['rating']} vs {', '.join(u for u in info['users'] if u)}"]
+    head = (f"# {game} {info['arena']} {time.strftime('%d.%m.%Y %H:%M', time.localtime(info['when']))} "
+            f"{info['result']} rating {info['rating']} vs {', '.join(u for u in info['users'] if u)}\n")
+    out = head + full_log(game, logs)
+    if args.out:
+        open(args.out, 'w', encoding='utf-8').write(out)
+        print(f"{args.out}: {len(out)} bytes, {info['chunks']} chunks, last tick {info['last']}")
+    else:
+        sys.stdout.write(out)
+
+
+def full_log(game, logs):
+    """One match's console as text in tick order, gaps marked — what `dump` writes, for other tools to read."""
     ticks, expected = {}, sorted(logs[game])
     for t in expected:
         ticks.update(chunk_text(logs[game][t]))
+    lines = []
     # a chunk covers the 100 ticks ending at its key; a hole means the client never fetched it
     for prev, cur in zip([0] + expected, expected):
         if cur - prev > 100:
@@ -165,24 +176,24 @@ def cmd_dump(args):
         text = ticks[t].rstrip("\n")
         if text:
             lines.append(text)
-    out = "\n".join(lines) + "\n"
-    if args.out:
-        open(args.out, 'w', encoding='utf-8').write(out)
-        print(f"{args.out}: {len(out)} bytes, ticks {min(ticks, default=0)}..{max(ticks, default=0)}")
-    else:
-        sys.stdout.write(out)
+    return "\n".join(lines) + "\n"
 
 
-ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-sub = ap.add_subparsers(dest="cmd", required=True)
-p = sub.add_parser("list", help="list cached matches, newest last")
-p.add_argument("--arena", help="substring of the arena name, e.g. spawn-and-swamp")
-p.add_argument("--limit", type=int, default=20)
-p.add_argument("--all", action="store_true")
-p.set_defaults(func=cmd_list)
-p = sub.add_parser("dump", help="print one match's full console log")
-p.add_argument("game", help="game id or a unique prefix of it")
-p.add_argument("--out", help="write to this file instead of stdout")
-p.set_defaults(func=cmd_dump)
-args = ap.parse_args()
-args.func(args)
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("list", help="list cached matches, newest last")
+    p.add_argument("--arena", help="substring of the arena name, e.g. spawn-and-swamp")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(func=cmd_list)
+    p = sub.add_parser("dump", help="print one match's full console log")
+    p.add_argument("game", help="game id or a unique prefix of it")
+    p.add_argument("--out", help="write to this file instead of stdout")
+    p.set_defaults(func=cmd_dump)
+    args = ap.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
