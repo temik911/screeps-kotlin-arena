@@ -391,6 +391,16 @@ object PainAndGain {
     private const val ROTATE_OUT = 0.5
     private const val ROTATE_IN = 0.9
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
+    /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
+     *  назад» (v15) на входе в рубку уводит наших мили сквозь свой строй, а его мили идут следом и рубят наших стрелков и лекарей.
+     *  Трасса решений в призраке матча 267 (наш бот против записанного блоба けろびー): t=44–46 трое из четырёх мили — aloneInFire
+     *  при его мили в двух-трёх, потом слоты и отказы; в записи его мили за первые 22 тика контакта 9 ударов (2160 урона) против
+     *  наших 0, смежность за бой 42 крип-тика против 14. Отходящий мили не бьёт, а догоняющий его — бьёт: при его вооружённом мили
+     *  в MELEE_HOLD_RANGE + 1 отход по aloneInFire снят (сбор пачки, см. USE_REGROUP, — тоже).
+     *  ОТВЕРГНУТО: призрак 267 (наш бот против записанного блоба) — потери на входе 3302 против 2846 у v108, наших ударов
+     *  за первые 30 тиков 8 против 30 (мили без отхода стояли в holdMelee на 2–3 от его мили, `!inLine`, и не били никого);
+     *  таблица входов — хуже в 7, лучше в 3 (m31/m32 brawl лучше: живых 11 → 13, m29/m34/m35 brawl хуже); гейт 131/131, 13/15. */
+    private const val USE_ALONE_FIRE_NOT_FROM_MELEE = false
     private const val USE_MELEE_COVER = true  // мили бросается только на цель в досягаемости наших стрелков (v55)
     /** МИЛИ ВХОДИТ ПАРОЙ (v101, пункт 2 плана оператора — «одинокий мили в двух впереди массы», открыт с v31; матч 249, けろびー
      *  блобом: на 44-м melee_4 один шагнул на два к его melee (цель в MELEE_HOLD_RANGE, catchable, covered через holdMelee), трое
@@ -703,6 +713,12 @@ object PainAndGain {
      *  MELEE_HOLD_RANGE бьётся следующим тиком — она не держит дистанцию ни в каком смысле; отказ ставится только цели, стоящей
      *  дальше MELEE_HOLD_RANGE (экран m35 отходит на 3 и помечается по-прежнему). */
     private const val USE_GIVEUP_BEYOND_REACH = true
+    /** ВЕРНУВШИЙСЯ — СНОВА ЦЕЛЬ (v111, вход в рубку с блобом): отказ от цели прижима на PRESS_GIVEUP тиков (v32) снимается, как только
+     *  она сама вернулась в MELEE_HOLD_RANGE + 1 от этого мили. Блоб けろびー делает финт на первом контакте (три тика назад, потом
+     *  вперёд — стенд `brawl` так и построен по матчам 238/249): наши мили отказываются от его мили на двадцать тиков, встают в слоты
+     *  (трасса призрака 267: с 49-го тика у всех четырёх `giveup`, `slot`), а он возвращается и рубит — 9 ударов за первые 22 тика
+     *  против наших 0 в записи 267, 32 против 6 за бой. Отказ остаётся для ушедшего; вернувшийся в три бьётся сразу. */
+    private const val USE_GIVEUP_RETURNS = true
     /** СТОЯЧИЙ БОЙ — ЭТО КОГДА СТОИМ И МЫ (v96, тот же матч): «центры не сближаются, враг не отходит, его мили не вплотную»
      *  (standingNow, v47/v64) верно и для боя, в котором наша линия отступает на клетку в тик, а его блоб идёт следом в двух:
      *  расстановка выбирала стрелкам клетки «цель в трёх, его мили не в двух», те уезжали от идущих мили каждый тик, заслон и
@@ -981,6 +997,26 @@ object PainAndGain {
     private const val USE_LOCAL_ANNIHILATE = true
     private const val USE_WOUNDED = true        // раненые остаются в армии и идут к лекарям (v9)
     private const val USE_HEALER_ADJ = true     // лекарь без штрафа за соседей, вес огня в бою — разница (v9)
+    /** ЛЕЧИТЬ ТОГО, КОГО БЬЮТ (v109, первый пункт сводки ledger.py «аптайм против блоба» — само правило uptime оказалось артефактом
+     *  счёта частей с хвоста и снято; настоящий предмет измерен entry-heal.py по пяти боям с блобом и линии 273): наши лекари лечат
+     *  не того, кого бьют. Матч 267, вход t=41–62: самый обстреливаемый крип получал лечение в 2 из 19 тиков урона (у него — в 10
+     *  из 20); из 57 намерений лечения 31 — раненым НЕ под огнём, 19 — целым, 7 — под огнём; 264 и 259 (победы над тем же блобом)
+     *  — 0 и 1 из 20; 273 за весь бой — 24 % под огнём против его 37 %. Причина: подопечный лекаря — «самый раненый вооружённый
+     *  в четырёх», а фокус блоба (2–5 выстрелов в тик, 300 в тик) раздевает целого за два тика — тот сразу «раненый без оружия»
+     *  и из подопечных выбывает, лекарь остаётся у прошлой жертвы. Движок кладёт лечение ПОСЛЕ урона того же тика (реплей 273:
+     *  667 случаев «после», 0 «впустую»), так что лечить целого под огнём осмысленно. Правило: подопечный лекаря и цель лечения —
+     *  крип, ТЕРЯВШИЙ хиты в прошлый тик (lostTick), по величине потери; без таких — как прежде, самый раненый.
+     *  ОТВЕРГНУТО ТАБЛИЦЕЙ ВХОДОВ СТЕНДА (26 боевых сценариев, потери за первые 20 тиков контакта против v108): v109b
+     *  (подопечный + цель) — хуже в 13, лучше в 5 (лекари шли вперёд, в досягаемость его стрелков: m28 nine 1714 → 3010,
+     *  m34 nine 3504 → 4400); v109c (только цель, запас «дефицит + 2×потеря») — хуже в 8, лучше в 0, сумма наших потерь
+     *  75011 → 79738 при его 245409 → 244855; доля «его фокус-цель вылечена» росла (медиана 22 % → 37 %), исход — нет.
+     *  Гипотеза не подтвердилась и в записи: в 267 наше эффективное лечение на входе 1812 против его 1588 — разрыв 4310:1930
+     *  в его 9 ударах мили против наших 0 и в наших стрелках без цели в 3 (50 крип-тиков из 100 против его 61). Гейты 131/131,
+     *  25/17 и 22/25. Тумблеры выключены, счётчики стенда (`entry:`, «его фокус-цель вылечена») остаются инструментами. */
+    private const val USE_HEAL_UNDER_FIRE = false
+    private const val USE_WARD_UNDER_FIRE = false   // v109b: подопечный лекаря — терявший хиты; отвергнуто (см. healMate)
+    private const val HEAL_FIRE_RANK = 100000   // ранг, не величина: под огнём — впереди любого дефицита
+    private const val HEAL_FIRE_ROOM = 2        // запас под огнём: дефицит + столько потерь прошлого тика (фокус растёт, 2–5 выстрелов в тик)
     private const val USE_COMPACT_CLOSE = true  // снаружи зоны плотности шаг к центру открыт (v9)
 
     /** Клетки в такой близости от боевого врага поле «в обход» считает стеной (см. flowAvoiding). */
@@ -1010,7 +1046,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v108"
+    private const val BOT_VERSION = "v111"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1096,6 +1132,7 @@ object PainAndGain {
     private var formWaitSince = -1
     private val aggressiveIds = HashSet<String>()
     private val lastHits = HashMap<String, Int>()
+    private val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
     private val lastCell = HashMap<String, Int>()
     private val ghostLogged = HashMap<String, Int>()
     private class Shooter(val cell: Int, val ranged: Double, val melee: Double)
@@ -2892,6 +2929,9 @@ object PainAndGain {
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget)
         }
+        // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
+        lostTick.clear()
+        for (c in army) lostTick[c.id] = ((lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
             val healer = !hasWeapon(creep) && hasHeal(creep)
@@ -2969,9 +3009,11 @@ object PainAndGain {
             val pack = pressOn && isMelee(creep) && !hasRanged(creep) && hasMelee(creep) && !rotating && localAggressive &&
                 (combatArmy.any { it.id != creep.id && isMelee(it) && !hasRanged(it) && hasMelee(it) && getRange(creep, it) <= PRESS_PACK } ||
                     localEnemies.any { getRange(creep, it) <= 1 })
+            // отказ (см. PRESS_GIVEUP) действует, пока цель не вернулась в три (v111, USE_GIVEUP_RETURNS)
+            fun givenUp(e: Creep) = e.id in pressGiveUp && !(USE_GIVEUP_RETURNS && getRange(creep, e) <= MELEE_HOLD_RANGE + 1)
             val pressTarget: Creep? = if (!pack) null else
-                focusTarget?.takeIf { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && it.id !in pressGiveUp }
-                    ?: localEnemies.filter { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp }.minByOrNull { getRange(creep, it) }
+                focusTarget?.takeIf { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && !givenUp(it) }
+                    ?: localEnemies.filter { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) }.minByOrNull { getRange(creep, it) }
             val pressRanged = USE_PRESS_RING && pressOn && hasRanged(creep) && !rotating && localAggressive
             val holdMelee = isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
@@ -2980,7 +3022,7 @@ object PainAndGain {
             // били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7, наши мили держали линию в 2–3 от его линии и не
             // доставали; стрельба при трёх лекарях с обеих сторон вылечена целиком, армия потеряна к 240-му при его 16000/16000
             val poker: Creep? = if (isMelee(creep) && !hasRanged(creep) && !support && !rotating && !stalled) combatEnemies.filter { e ->
-                InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && e.id !in pressGiveUp &&
+                InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && !givenUp(e) &&
                     army.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 }
             }.minByOrNull { getRange(creep, it) } else null
             // прикрытие (v55): мили бросается на цель в ENGAGE_RANGE, только если её достают наши стрелки — не меньше MELEE_COVER
@@ -3010,7 +3052,7 @@ object PainAndGain {
             fun paired(e: Creep) = !USE_MELEE_PAIR_GATE || !meleeOnly || army.any { a -> a.id != creep.id && getRange(e, a) <= 1 } || mateNear(e, MELEE_HOLD_RANGE + 1)
             // ...и присоединяется к напарнику, уже стоящему в MELEE_HOLD_RANGE от цели: досягаемость на клетку больше
             fun holdReach(e: Creep) = if (USE_MELEE_PAIR_ENGAGE && meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
-            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
+            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
             val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
@@ -3028,7 +3070,13 @@ object PainAndGain {
                 // подопечные — вооружённые; вне боя рядом — и раненые (они сами идут к лекарю, см. wounded)
                 val patients = army.filter { it.id != creep.id && !(hasHeal(it) && !hasWeapon(it)) }
                 val engagedNear = fighters.any { f -> getRange(creep, f) <= HEAL_RANGE + 1 && combatEnemies.any { getRange(f, it) <= RANGED_RANGE + 1 } }
-                (if (engagedNear) fighters else patients).filter { getRange(creep, it) <= HEAL_RANGE + 1 }.maxByOrNull { it.hitsMax - it.hits }
+                val near = (if (engagedNear) fighters else patients).filter { getRange(creep, it) <= HEAL_RANGE + 1 }
+                // подопечный под огнём (v109b, USE_WARD_UNDER_FIRE) ОТВЕРГНУТ таблицей входов стенда: лекари шли к терявшему хиты
+                // ВПЕРЁД, в досягаемость его стрелков — за первые 20 тиков контакта потери выше v108 в 13 сценариях из 26 (nine,
+                // hunter, fourteen, screen+focus: скрипты «лекари первыми»), ниже в 5; m28 nine 1714 → 3010, m34 nine 3504 → 4400.
+                // Остаётся выбор ЦЕЛИ лечения под огнём (см. rank в healAndShoot); подопечный — самый раненый вооружённый, как прежде
+                (if (USE_WARD_UNDER_FIRE && engagedNear) near.filter { (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 } else null)
+                    ?: near.maxByOrNull { it.hitsMax - it.hits }
                     ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
                     ?: fighters.minByOrNull { getRange(creep, it) }
                     ?: patients.minByOrNull { getRange(creep, it) }
@@ -3039,6 +3087,7 @@ object PainAndGain {
             // вплотную, не «в двух клетках»: со счётом союзников в двух клетках мили под огнём не отходили и ныряли в блоб
             // врага по одному — три мили за восемь тиков при одном убитом (стенд m5 army, v22, t=300–308)
             val aloneInFire = USE_ALONE_FIRE && !support && !wounded && posture == Posture.ANNIHILATE && !pushing && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) > 0.0 &&
+                !(USE_ALONE_FIRE_NOT_FROM_MELEE && isMelee(creep) && !hasRanged(creep) && meleeEnemies.any { hasWeapon(it) && getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }) &&
                 combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= 1 } < 2 && pressTarget == null && !pressRanged
             // вес огня лекаря: подопечный в бою — только разница между клетками (HEALER_W_DAMAGE_FIGHT); место за
             // подопечным и шаг от мили задают HEALER_W_FRONT и HEALER_W_MELEE, а вес 0.05 в бою держал лекаря на кромке
@@ -3277,7 +3326,7 @@ object PainAndGain {
                     val d = getRange(creep, near)
                     if (holdMelee && d > holdReach(near)) r.add("hold:d$d>${holdReach(near)}")
                     if (!catchable(near, chasers)) r.add("!catchable")
-                    if (near.id in pressGiveUp) r.add("giveup")
+                    if (givenUp(near)) r.add("giveup")
                     if (!covered(near)) r.add("!covered")
                     if (!withPrey(near)) r.add("!withPrey")
                     if (!paired(near)) r.add("!paired")
@@ -3368,19 +3417,29 @@ object PainAndGain {
             val expected = incoming.getOrPut(target.id) { InfluenceMap.damageAt(target.x, target.y, enemyCreeps).toInt() }
             return deficit + expected - (healDone[target.id] ?: 0)
         }
+        // под огнём (v109): терявший хиты в прошлый тик — впереди любого дефицита (см. USE_HEAL_UNDER_FIRE), но только пока не покрыт
+        // его запас «дефицит + HEAL_FIRE_ROOM × потеря»: первый срез слал всех троих на потерявшего 60 (216 лечения в дефицит 60),
+        // и призрак 273 терял на входе 2710 против 1688 у v108 — покрытый возвращается к обычному выбору по need
+        fun rank(target: Creep): Int {
+            val n = need(target)
+            val lost = lostTick[target.id] ?: 0
+            if (!USE_HEAL_UNDER_FIRE || lost <= 0) return n
+            val fireRoom = (target.hitsMax - target.hits) + HEAL_FIRE_ROOM * lost - (healDone[target.id] ?: 0)
+            return if (fireRoom > 0) HEAL_FIRE_RANK + fireRoom else n
+        }
         for (creep in active) {
             strike(creep, enemyCreeps, focusTarget, focusOrder)
             val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
             if (healParts > 0) {
                 val candidates = allies.filter { !it.spawning && need(it) > 0 && creep.getRangeTo(it) <= HEAL_RANGE }
-                val closeTarget = candidates.filter { creep.getRangeTo(it) <= 1 }.maxByOrNull { need(it) }
+                val closeTarget = candidates.filter { creep.getRangeTo(it) <= 1 }.maxByOrNull { rank(it) }
                 if (closeTarget != null) {
                     creep.heal(closeTarget)
                     healDone[closeTarget.id] = (healDone[closeTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
                 }
-                val farTarget = candidates.filter { it.hitsMax - it.hits > 0 }.maxByOrNull { need(it) }
+                val farTarget = candidates.filter { it.hitsMax - it.hits > 0 || (USE_HEAL_UNDER_FIRE && (lostTick[it.id] ?: 0) > 0) }.maxByOrNull { rank(it) }
                 if (farTarget != null) {
                     creep.rangedHeal(farTarget)
                     healDone[farTarget.id] = (healDone[farTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt()

@@ -55,6 +55,10 @@ QUIET_TICKS = 500        # consecutive ticks without a target in reach while beh
 GIVEUP_PER_100 = 15      # press give-ups per 100 contact ticks
 RUNNER_STAND = 300       # a runner on one cell this long with the flag not ours
 MELEE_IDLE = 50          # idle melee creep-ticks with an enemy within engage range (the bot's `why` trace, v108)
+STRIPPED_X = 3.0         # our stripped creep-ticks in his reach this many times his (a stripped creep has no weapon or heal part left)
+STRIPPED_MIN = 30
+ENTRY_TICKS = 20         # the entry: this many ticks from the first contact
+ENTRY_X = 1.5            # hits we lost in the entry this many times what he lost
 UPTIME_LOW = 0.85        # our uptime in a role below this while his is above UPTIME_HIGH
 UPTIME_HIGH = 0.90
 ADJACENCY_X = 2.0        # his melee adjacent creep-ticks this many times ours
@@ -204,13 +208,22 @@ def expand(body):
 
 
 def live_parts(c, t):
+    """Live parts of type t: the engine takes damage FRONT to back, so part i (0 = front) is dead once the damage
+    taken reaches 100 * (i + 1) — the last part lives as long as the creep does. (The first cut counted from the
+    back — `hits > i * 100` — which called a melee at 700 of 1 600 an eight-ATTACK creep; it is a bare-MOVE one.)"""
     parts = expand(c['body'])
+    n = len(parts)
     hits = c['hits']
-    return sum(1 for i, p in enumerate(parts) if p == t and hits > i * 100)
+    return sum(1 for i, p in enumerate(parts) if p == t and hits > 100 * (n - i - 1))
 
 
 def armed(c):
     return c['role'] in ('melee', 'ranged') and c['hits'] > 100 * c['tail']
+
+
+def stripped(c):
+    """No weapon or heal part left — a melee, ranged or healer reduced to its MOVE tail (hits <= 100 * tail)."""
+    return c['role'] != 'scout' and c['hits'] <= 100 * c['tail']
 
 
 def centroid(cs):
@@ -339,7 +352,8 @@ def analyse_replay(doc, us):
     R['window'] = win
     F = {s: dict(shots=0, mass=0, swings=0, heals=0, rheals=0, exp_dmg=0, exp_heal=0, obs_lost=0, obs_gain=0,
                  h_can=0, h_did=0, m_can=0, m_did=0, r_can=0, r_did=0, m_adj=0, r_in3=0, r_ticks=0, m_ticks=0,
-                 shots_by_role=Counter(), r_dist=Counter(), first5=0) for s in (0, 1)}
+                 shots_by_role=Counter(), r_dist=Counter(), first5=0, stripped_in_reach=0, stripped_ticks=0,
+                 e_shots=0, e_swings=0, e_heals=0, e_lost=0, e_stripped=0, e_deaths=0, e_r_in3=0) for s in (0, 1)}
     if win:
         for k, start, now, acts, raw in rp.ticks(doc):
             if k < win[0] or k > win[1]:
@@ -370,6 +384,11 @@ def analyse_replay(doc, us):
                 elif code == 'H':
                     A['rheals'] += 1
                     A['exp_heal'] += 4 * live_parts(c, 'h')
+                if k <= win[0] + ENTRY_TICKS:
+                    if code in ('a', 'r', 'R'):
+                        A['e_shots' if code != 'a' else 'e_swings'] += 1
+                    elif code in ('h', 'H'):
+                        A['e_heals'] += 1
                 if code in ('a', 'r'):
                     if k <= win[0] + 5:
                         A['first5'] += 1
@@ -380,16 +399,24 @@ def analyse_replay(doc, us):
                     A['shots_by_role'][tgt['role'] if tgt else '?'] += 1
                 elif code == 'R' and k <= win[0] + 5:
                     A['first5'] += 1
+            entry = k <= win[0] + ENTRY_TICKS
             for cid, c in now.items():
                 if cid in start:
                     d = c['hits'] - start[cid]['hits']
                     if d < 0:
                         F[c['side']]['obs_lost'] += -d
+                        if entry:
+                            F[c['side']]['e_lost'] += -d
                     else:
                         F[c['side']]['obs_gain'] += d
+                    if entry and c['role'] != 'scout' and stripped(c) and not stripped(start[cid]):
+                        F[c['side']]['e_stripped'] += 1
             for cid, c in start.items():
                 if cid not in now:
                     F[c['side']]['obs_lost'] += c['hits']
+                    if entry:
+                        F[c['side']]['e_lost'] += c['hits']
+                        F[c['side']]['e_deaths'] += 1
             for cid, c in start.items():
                 s = c['side']
                 U = F[s]
@@ -399,6 +426,11 @@ def analyse_replay(doc, us):
                     continue
                 d = min(rng((c['x'], c['y']), (o['x'], o['y'])) for o in foes)
                 my = codes.get(cid, set())
+                if c['role'] != 'scout' and stripped(c):
+                    U['stripped_ticks'] += 1
+                    if any(armed(o) and rng((c['x'], c['y']), (o['x'], o['y'])) <= RANGED_RANGE for o in foes):
+                        U['stripped_in_reach'] += 1
+                    continue
                 if live_parts(c, 'h') > 0 and live_parts(c, 'a') == 0 and live_parts(c, 'r') == 0:
                     if any(o['hits'] < o['hitsMax'] and rng((c['x'], c['y']), (o['x'], o['y'])) <= 1 for o in mates):
                         U['h_can'] += 1
@@ -416,6 +448,8 @@ def analyse_replay(doc, us):
                         U['r_can'] += 1
                         U['r_in3'] += 1
                         U['r_did'] += 1 if my & {'r', 'R'} else 0
+                        if k <= win[0] + ENTRY_TICKS:
+                            U['e_r_in3'] += 1
     R['fight'] = F
     return R
 
@@ -606,6 +640,12 @@ def diagnose(L, R, info):
                 ou, hu = o[did] / o[can], h[did] / h[can]
                 if ou < UPTIME_LOW and hu >= UPTIME_HIGH:
                     D.append(('uptime', f"our {role} uptime {ou * 100:.0f}% against his {hu * 100:.0f}% ({pct(o[did], o[can])} vs {pct(h[did], h[can])}) — they had the chance and did not act"))
+        if o['stripped_in_reach'] >= STRIPPED_MIN and o['stripped_in_reach'] >= STRIPPED_X * max(1, h['stripped_in_reach']):
+            D.append(('stripped in reach', f"our creeps with no weapon or heal part left stood within 3 of his armed {o['stripped_in_reach']} creep-ticks "
+                                           f"(of {o['stripped_ticks']} stripped), his {h['stripped_in_reach']} of {h['stripped_ticks']} — he pulls the stripped out, we leave them in the fire"))
+        if o['e_lost'] >= 1000 and o['e_lost'] >= ENTRY_X * max(1, h['e_lost']):
+            D.append(('entry lost', f"in the first {ENTRY_TICKS} ticks of contact we lost {o['e_lost']} hits to his {h['e_lost']} (shots {o['e_shots']}:{h['e_shots']}, "
+                                    f"armed ranged in 3 {o['e_r_in3']}:{h['e_r_in3']}, stripped {o['e_stripped']}:{h['e_stripped']}) — the entry was his"))
         if h['m_adj'] >= 20 and h['m_adj'] >= ADJACENCY_X * max(1, o['m_adj']):
             D.append(('melee adjacency', f"his melee were adjacent {h['m_adj']} creep-ticks against our {o['m_adj']} ({h['swings']} vs {o['swings']} swings) — his melee found targets, ours held a line nobody attacked"))
         if h['first5'] >= 6 and h['first5'] >= VOLLEY_X * max(1, o['first5']):
@@ -690,6 +730,12 @@ def render(L, R, info, history, step):
             p(f"       uptime healers {pct(A['h_did'], A['h_can'])} melee {pct(A['m_did'], A['m_can'])} ranged {pct(A['r_did'], A['r_can'])}; "
               f"melee adjacent {A['m_adj']} of {A['m_ticks']} creep-ticks; ranged in 3: {pct(A['r_in3'], A['r_ticks'])}; "
               f"shots by target {dict(A['shots_by_role'].most_common(4))}; ranged dist hist {' '.join(f'{d}:{n}' for d, n in sorted(A['r_dist'].items()))}")
+        o, h = F[us], F[1 - us]
+        p(f"  entry (first {ENTRY_TICKS} ticks from t={R['window'][0]}): hits lost ours {o['e_lost']} his {h['e_lost']}; shots ours {o['e_shots']} his {h['e_shots']}; "
+          f"swings {o['e_swings']}:{h['e_swings']}; heals {o['e_heals']}:{h['e_heals']}; armed ranged creep-ticks in 3: ours {o['e_r_in3']} his {h['e_r_in3']}; "
+          f"stripped ours {o['e_stripped']} his {h['e_stripped']}; deaths ours {o['e_deaths']} his {h['e_deaths']}")
+        p(f"  stripped creeps (no weapon or heal part) still within 3 of an armed enemy: ours {o['stripped_in_reach']} of {o['stripped_ticks']} stripped creep-ticks, "
+          f"his {h['stripped_in_reach']} of {h['stripped_ticks']}")
         od, hd = R['deaths'][us], R['deaths'][1 - us]
         p(f"  deaths ours ({len(od)}): {' '.join(f'{t}:{r[0]}' for t, r in od[:16])}")
         p(f"  deaths his  ({len(hd)}): {' '.join(f'{t}:{r[0]}' for t, r in hd[:16])}")

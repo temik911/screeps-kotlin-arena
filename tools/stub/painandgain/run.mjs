@@ -789,6 +789,37 @@ function oursAct() {
     else if (live(c, R) > 0) { oAct.r_ticks++; if (c1.some((e) => range(c, e) <= 3)) { oAct.r_can++; if (m.ranged) oAct.r_did++; } }
   }
 }
+// the enemy's focus and our healers (v109): per tick the creep of ours the enemy's single-target intents put the most damage on
+// — did a heal of ours land on it, and was a healer of ours adjacent to it. Live (entry-heal.py on the replays): the most-hit
+// creep of ours got any heal in 2 of 19 damage ticks of match 267's entry, 0 of 20 in 264, 1 of 20 in 259; his in 10 of 20
+const oFocus = { ticks: 0, healed: 0, adjacent: 0 };
+function focusAct() {
+  const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
+  const dmg = new Map();
+  for (const e of c1) {
+    const m = world.intents.get(e.id) || {};
+    if (m.ranged && m.ranged.type === 'attack' && m.ranged.target) dmg.set(m.ranged.target.id, (dmg.get(m.ranged.target.id) || 0) + 10 * live(e, R));
+    if (m.melee && m.melee.target) dmg.set(m.melee.target.id, (dmg.get(m.melee.target.id) || 0) + 30 * live(e, A));
+  }
+  let most = null, md = 0;
+  for (const [id, d] of dmg) if (d > md) { md = d; most = id; }
+  if (most === null) return;
+  const t = c0.find((c) => c.id === most);
+  if (!t) return;
+  oFocus.ticks++;
+  const healsIt = (c) => { const m = world.intents.get(c.id) || {}; return (m.heal && m.heal.target && m.heal.target.id === most) || (m.ranged && m.ranged.type === 'heal' && m.ranged.target && m.ranged.target.id === most); };
+  if (c0.some(healsIt)) oFocus.healed++;
+  if (c0.some((c) => c !== t && live(c, H) > 0 && live(c, A) === 0 && live(c, R) === 0 && range(c, t) <= 1)) oFocus.adjacent++;
+}
+// the entry of every scenario (v109): the first tick a fighter of each side stands within three of the other's, and the hits each
+// side lost over the next 20/50/100 ticks — the fight's quality as a number the outcome does not carry (the stand's blobs always
+// die; how much they cost is what a fight rule changes). Same measure as the ghost's `ghost entry` against a record
+const entry = { contact: null, hits: [] };
+function entryAct() {
+  const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
+  entry.hits[world.tick] = [c0.reduce((a, c) => a + c.hits, 0), c1.reduce((a, c) => a + c.hits, 0)];
+  if (entry.contact === null && c0.some((o) => !isRunner(o) && c1.some((e) => !isRunner(e) && range(o, e) <= 3))) entry.contact = world.tick;
+}
 let ended = '';
 let cpuMax = 0, cpuMaxTick = 0, cpuSlow = 0;
 for (let t = 1; t <= ticks; t++) {
@@ -800,6 +831,8 @@ for (let t = 1; t <= ticks; t++) {
   if (msLoop > cpuMax) { cpuMax = msLoop; cpuMaxTick = t; }
   if (msLoop > 50) cpuSlow++;
   enemyTick();
+  focusAct();
+  entryAct();
   // ghost: the first thirty ticks of contact, intent by intent — what each side fired and healed while the entry was decided
   if (has('ghost') && ghostMeta.firstContact !== null && t <= ghostMeta.firstContact + 30) {
     const cnt = (owner) => { const o = { shots: 0, mass: 0, swings: 0, heal: 0, rheal: 0, hits: 0, adjH: 0 }; for (const c of creeps()) { if (c.owner !== owner) continue; o.hits += c.hits; const m = world.intents.get(c.id) || {}; if (m.ranged && m.ranged.type === 'attack') o.shots++; if (m.ranged && m.ranged.type === 'mass') o.mass++; if (m.ranged && m.ranged.type === 'heal') o.rheal++; if (m.melee) o.swings++; if (m.heal) o.heal++; } return o; };
@@ -831,6 +864,10 @@ writeFileSync(log, lines.join('\n') + '\n\n=== EVENTS ===\n' + world.events.join
 const c0 = creeps().filter((c) => c.owner === 0).length, c1 = creeps().filter((c) => c.owner === 1).length;
 origLog(`done: ${ended || `${ticks} ticks`} score=${world.score[0]}/${world.score[1]} alive=${c0}/${c1} errors=${loopErrors} time=${((Date.now() - t0) / 1000).toFixed(1)}s log=${log}`);
 const pc = (a, b) => `${a}/${b} (${b ? Math.round(100 * a / b) : 0}%)`;
+{
+  const lost = (d, i) => { const a = entry.hits[entry.contact - 1] || entry.hits[entry.contact], b = entry.hits[Math.min(entry.contact + d, entry.hits.length - 1)]; return a && b ? Math.round(a[i] - b[i]) : '?'; };
+  origLog(entry.contact === null ? 'entry: no contact' : `entry: contact t=${entry.contact} hits lost ours/his +20 ${lost(20, 0)}/${lost(20, 1)} +50 ${lost(50, 0)}/${lost(50, 1)} +100 ${lost(100, 0)}/${lost(100, 1)}`);
+}
 if (has('ghost')) {
   origLog(`ghost ${ghostMeta.id}: recorded ${ghostMeta.winner} won in ${ghostMeta.ticks} ticks, deaths ours=${ghostMeta.deaths[0]} his=${ghostMeta.deaths[1]} (we were side ${ghostMeta.us}); replayed ${ended || `${ticks} ticks`} score=${world.score[0]}/${world.score[1]} alive=${c0}/${c1}; ghosts off their recorded cell ${ghostMeta.off} of ${ghostMeta.on} creep-ticks, outlived the record ${ghostMeta.outlived}; OURS off our recorded cell ${ghostMeta.ourOff} of ${ghostMeta.ourOn}, first at t=${ghostMeta.ourDev} (${ghostMeta.ourDevWhere})`);
   // the entry: hits lost by each side over the first 20/50/100 ticks after the first contact, stand against record
@@ -840,7 +877,7 @@ if (has('ghost')) {
   const rec = (d) => rc === null ? '-' : `${lost(ghostMeta.recHits[0], rc, d)}/${lost(ghostMeta.recHits[1], rc, d)}`;
   origLog(`ghost entry (hits lost ours/his): stand contact t=${sc} +20 ${stub(20)} +50 ${stub(50)} +100 ${stub(100)} | record contact t=${rc} +20 ${rec(20)} +50 ${rec(50)} +100 ${rec(100)}`);
 }
-origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach)`);
+origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}`);
 origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
 if (errs.length) origLog('first error:\n' + errs.slice(0, 2).join('\n'));

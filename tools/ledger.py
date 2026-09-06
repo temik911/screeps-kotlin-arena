@@ -81,6 +81,16 @@ def measure(g, logs, metas, args):
                score=f"{fin['score'][0]}:{fin['score'][1]}" if fin else '-', contact=R['contact_t'] if R else '-',
                corner=round(R['corner_ticks'] / R['contact_ticks'], 2) if R and R['contact_ticks'] else '-',
                first5=f"{R['fight'][R['us']]['first5']}:{R['fight'][1 - R['us']]['first5']}" if R and R['window'] else '-',
+               entry_lost=f"{R['fight'][R['us']]['e_lost']}:{R['fight'][1 - R['us']]['e_lost']}" if R and R['window'] else '-',
+               entry_shots=f"{R['fight'][R['us']]['e_shots']}:{R['fight'][1 - R['us']]['e_shots']}" if R and R['window'] else '-',
+               entry_in3=f"{R['fight'][R['us']]['e_r_in3']}:{R['fight'][1 - R['us']]['e_r_in3']}" if R and R['window'] else '-',
+               entry_stripped=f"{R['fight'][R['us']]['e_stripped']}:{R['fight'][1 - R['us']]['e_stripped']}" if R and R['window'] else '-',
+               stripped=f"{R['fight'][R['us']]['stripped_in_reach']}:{R['fight'][1 - R['us']]['stripped_in_reach']}" if R and R['window'] else '-',
+               our_moved=round(R['first']['our_moved'], 0) if R and R.get('first') and R['first']['our_moved'] is not None else '-',
+               his_moved=round(R['first']['his_moved'], 0) if R and R.get('first') and R['first']['his_moved'] is not None else '-',
+               our_comp=round(R['first']['ocomp'][0], 1) if R and R.get('first') else '-',
+               his_comp=round(R['first']['hcomp'][0], 1) if R and R.get('first') else '-',
+               our_edge=R['first']['oedge'] if R and R.get('first') else '-',
                melee_idle=L['why_creep_ticks'], replay=bool(R), samples=len(L['samples']))
     return row
 
@@ -149,7 +159,8 @@ def report(rows, args):
         print('\nrows (when id version opponent result ticks delta form his-form c=contact e=corner v=first5 f=flicker q=quiet g=giveups i=idle tags):')
         for r in rows:
             print(f"  {r['when']} {r['id'][-6:]} {r['version']:5s} {r['opponent'][:14]:14s} {r['result'][0].upper()} {r['ticks']:5d} {r['delta'] if r['delta'] is not None else '?':>4} "
-                  f"{r['form'][:12]:12s} {r['his_form']:8s} c={r['contact']!s:>4} e={r['corner']!s:>4} v={r['first5']:>5} f={r['flicker']:2d} q={r['quiet']:4d} g={r['giveups']:3d} i={r['melee_idle']:4d} {r['tags'].replace('|', ', ')}")
+                  f"{r['form'][:12]:12s} {r['his_form']:8s} c={r['contact']!s:>4} e={r['corner']!s:>4} v={r['first5']:>5} f={r['flicker']:2d} q={r['quiet']:4d} g={r['giveups']:3d} i={r['melee_idle']:4d} "
+                  f"E={r['entry_lost']:>10} s={r['entry_shots']:>6} in3={r['entry_in3']:>6} st={r['entry_stripped']:>4} S={r['stripped']:>8} mv={r['our_moved']}/{r['his_moved']} cp={r['our_comp']}/{r['his_comp']} {r['tags'].replace('|', ', ')}")
     # by opponent
     by = defaultdict(list)
     for r in rows:
