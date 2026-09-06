@@ -765,6 +765,16 @@ object PainAndGain {
      *  своим; ширина не мешает стрелять, проигрыш — в выборе цели (см. threatOf, мили в двух). Строй сохранён под
      *  выключателем. */
     private const val USE_RANGED_FRONT = false
+    /** СТРЕЛКИ ВРОВЕНЬ С МИЛИ ПРОТИВ БЛОБА СО СТРЕЛКАМИ В ПЕРВОМ РЯДУ (v113, матчи 275–276 — けろびー, стёрты за 300 и 200 тиков):
+     *  по реплеям его стрелки идут первым рядом (в 275 на 43-м: (56,52), (54,53), (56,53) ближе к нам, чем его мили), наши мили
+     *  впереди в трёх от них, наши стрелки рядом позади — в пяти: за первые 20 тиков контакта его стрелки с целью в трёх 63 и
+     *  73 крип-тика против наших 30 и 43, первые пять тиков 15:8 и 17:4 выстрелов, потери 3956:1003 и 4106:2269. Ряд стрелков
+     *  «в 3 − d» от переднего мили ставит их на ряд дальше его стрелков (см. USE_ROW_TO_RANGED, v81/v83, и USE_RANGED_FRONT, v37 —
+     *  обе формы отвергались против кайтера и линии с мили-тычком). Признак здесь другой: его БЛИЖАЙШИЙ к нашему фронту
+     *  вооружённый — стрелок без мили-частей. Тогда один ряд: стрелки в середине, мили по флангам, в RANGED_RANGE от него. */
+    private const val USE_RANGED_FRONT_VS_RANGED = true
+    private const val RANGED_FRONT_GROUP = 6   // блоб: столько его вооружённых в ENGAGE_RANGE от ближайшего (россыпь — 1–3)
+    private var rangedLevelLatched = false     // ряд вровень защёлкнут контактом с подходящим блобом; снимается, когда никого в ENGAGE_RANGE
     private const val REGROUP_TICKS = 5
     private const val PRESS_GIVEUP = 20
     /** Кольцо стрелков в прижиме (см. USE_PRESS) — ОТВЕРГНУТО стендом: стрелки, каждый в своей клетке ровно в трёх от цели
@@ -1054,7 +1064,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v112"
+    private const val BOT_VERSION = "v113"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1112,6 +1122,7 @@ object PainAndGain {
     private var escapeAt = -100
     /** Дистанция центра боевых врагов до нашего за последние тики — темп сближения для запаса выхода. */
     private val enemyDistHist = ArrayDeque<Int>()
+    private val hisCentHist = ArrayDeque<Int>()   // клетка центра его вооружённых за APPROACH_WINDOW (v113: ПОДХОДИТ ОН, не мы)
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     private var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
@@ -2539,6 +2550,8 @@ object PainAndGain {
         run {
             val ec = centroidOf(armedEnemies)
             if (ec != null) { enemyDistHist.addLast(getRange(ec, ctx.ourCentroid)); while (enemyDistHist.size > APPROACH_WINDOW) enemyDistHist.removeFirst() } else enemyDistHist.clear()
+            val ac = centroidOf(armedEnemies)
+            if (ac != null) { hisCentHist.addLast(ac.x * 100 + ac.y); while (hisCentHist.size > APPROACH_WINDOW) hisCentHist.removeFirst() } else hisCentHist.clear()
             approachRate = if (enemyDistHist.size >= 2) ((enemyDistHist.first() - enemyDistHist.last()).toDouble() / (enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
         }
         if (escapeNeeded) refreshEscape(ctx, armedEnemies) else { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
@@ -3536,7 +3549,27 @@ object PainAndGain {
         // ни одного их мили в MELEE_HOLD_RANGE + 1 — ряд ведут стрелки. Признак «их мили не идут» сам по себе включал этот
         // строй и против убегающего остатка, и мили переставали догонять (71 строка хуже, m28 farm+weak красный)
         val theirMeleeIn = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && armed.any { getRange(e, it) <= MELEE_HOLD_RANGE + 1 } }
-        val standoffLine = USE_RANGED_FRONT && standoff && !theirMeleeIn && rangeds.isNotEmpty()
+        // его первый ряд — стрелки (v113, USE_RANGED_FRONT_VS_RANGED): ближайший к нашему фронту его вооружённый — стрелок без мили,
+        // и это БЛОБ — не меньше RANGED_FRONT_GROUP его вооружённых в ENGAGE_RANGE от него (первый срез без этого условия включал
+        // ряд вровень против гарнизона-стрелка россыпи: гейт m30 scatter 21613:24313 красный)
+        // ...и блоб ПОДХОДИТ САМ — его темп к нам за окно подхода не ниже темпа броска (approachRate, см. APPROACH_RUSH) — либо ряд уже
+        // защёлкнут этим контактом: стоящий у флага лагерь (гейт m31 camp 15105:22908 красный при ряде вровень против любого блоба,
+        // и тот же счёт при «дистанция сократилась» — она сокращается и от нашего марша к лагерю) — не вход в рубку, там игра на очки
+        // approachRate — темп сокращения дистанции центров, он растёт и от НАШЕГО марша к стоящему лагерю (m31 camp красный при
+        // «сокращается» и при approachRate): нужен сдвиг ЕГО центра за окно — не меньше четверти окна (v57: «это он уходит»)
+        val hisMoved = hisCentHist.size >= 2 && run {
+            val a = hisCentHist.first(); val b = hisCentHist.last()
+            maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= APPROACH_WINDOW / 4
+        }
+        val closing = approachRate >= APPROACH_RUSH && hisMoved
+        val inReach = threats.any { e -> armed.any { getRange(it, e) <= ENGAGE_RANGE } }
+        if (!inReach) rangedLevelLatched = false
+        // ...и это уже ВХОД: его ближайший в RANGED_RANGE + 1 от нашего фронта — проходящий мимо на 5–8 блоб-фермер (m31 camp,
+        // тот же счёт при любом признаке подхода) ряда не получает
+        val hisFrontRanged = USE_RANGED_FRONT_VS_RANGED && (closing || rangedLevelLatched) && threats.minByOrNull { e -> armed.minOf { getRange(it, e) } }
+            ?.let { n -> val pr = InfluenceMap.profileOf(n); pr.ranged > 0.0 && pr.melee <= 0.0 && armed.minOf { getRange(it, n) } <= RANGED_RANGE + 1 && threats.count { getRange(n, it) <= ENGAGE_RANGE } >= RANGED_FRONT_GROUP } == true
+        if (hisFrontRanged && inReach) rangedLevelLatched = true
+        val standoffLine = rangeds.isNotEmpty() && ((USE_RANGED_FRONT && standoff && !theirMeleeIn) || hisFrontRanged)
         val front = if (standoffLine) rangeds else melees.ifEmpty { rangeds }
         // якорь — ПЕРЕДНИЙ боец (ближайший к врагу), не центроид: центроид мили отстаёт от фронта на 1–2 клетки, и ряд
         // стрелков «в 3 − d» от него стоял в 4–5 от линии врага, вставшей в 3 от нашего переднего (матч 18)
