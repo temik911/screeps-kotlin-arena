@@ -800,6 +800,13 @@ object PainAndGain {
      *  под окно не попадает (дистанция не больше ENGAGE_RANGE); марш к нему сокращает дистанцию. Для ОТРЯДА (distanceKept →
      *  quietChain) требование сдвига остаётся (v57/v59). */
     private const val USE_KEEPS_DISTANCE_ANY_MOVE = true
+    /** ОКНО ДИСТАНЦИИ ПЕРЕЖИВАЕТ МИГАНИЕ ТОЛЧКА (v106, матч 258 — MetalicaX гастролью, 14722:20189, ни одного простоя за 1700
+     *  тиков): толчок при 1,14 шёл за блобом с 300-го по 1300-й на 9–14 клетках, но постура мигала ANNIHILATE ↔ HOLD каждые
+     *  10–30 тиков (huntable 0/12 от «уходящих», см. evasive), а окно armyDistHist копится в ANNIHILATE и стирается на HOLD, если
+     *  его блоб дальше ENGAGE_RANGE + RANGED_RANGE (11) — он был на 12–14, и 50 тиков подряд не набралось ни разу (v98 не
+     *  сработал). Пауза погони (pausedChase) считается, пока его вооружённый в 2 × ENGAGE_RANGE от наших: окно живёт сквозь
+     *  мигание, и «дистанция не сократилась за 50 тиков» ловит гастроль. */
+    private const val USE_CHASE_WINDOW_WIDE = true
     private const val LEASH_RANGE = 8
 
     /** Плотность строя при враге рядом (см. compact): шаг разрешён только на клетку в COMPACT_RANGE от центра
@@ -993,7 +1000,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v105"
+    private const val BOT_VERSION = "v106"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2205,8 +2212,9 @@ object PainAndGain {
         // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
         val exchangeRecent = now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && now - lastHurtTick <= STALL_TICKS)
         val fightOn = inContact(armedEnemies, army) && (!USE_COLD_CONTACT || exchangeRecent)
+        val pauseReach = if (USE_CHASE_WINDOW_WIDE) 2 * ENGAGE_RANGE else ENGAGE_RANGE + RANGED_RANGE   // v106: окно сквозь мигание
         val pausedChase = USE_CHASE_WINDOW_HOLD && posture == Posture.HOLD && huntable.isEmpty() &&
-            armedEnemies.any { e -> army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
+            armedEnemies.any { e -> army.any { getRange(e, it) <= pauseReach } }
         if ((posture == Posture.ANNIHILATE || pausedChase) && !fightOn && armyDist >= 0) {
             armyDistHist.addLast(armyDist)
             // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
