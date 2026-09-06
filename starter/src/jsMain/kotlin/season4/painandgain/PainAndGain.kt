@@ -190,6 +190,13 @@ object PainAndGain {
      *  равенстве: оценка мощи шумит на ±5%, а прогноз счёта на 41-м тике («отстаём» на пять очков, пока скаут
      *  делает последний шаг к флагу) — не повод для решающего боя (стенд army). */
     private const val PUSH_RATIO_BEHIND = 1.1
+    /** ДОПУСК НИЖЕ PUSH_RATIO — ТОЛЬКО ПРИ ПОЛОЖИТЕЛЬНОМ ЛЕДЖЕ РАЗМЕНА (v87, решение оператора 06.09.2026): толчок при
+     *  1,1–1,13 в блоб MetalicaX стоил девять (193), три (199) и четыре (208) крипа при нуле у него. Допуск «отстаём»
+     *  существует, чтобы что-то делать при отставании, но против линии, ни разу не проигравшей нам размен, это худшая
+     *  ставка: проигранный бой — проигранный матч, гонка при +5 в тик хотя бы открыта. Ледж — снятые с него хиты минус
+     *  снятые с нас за весь матч (по падениям сумм хитов за тик, лечение внутри тика вычитается само); ниже PUSH_RATIO
+     *  толкаем, только пока ледж положителен, иначе отставание закрывает доктрина флагов (v63/v80). */
+    private const val USE_PUSH_LEDGER = true
     private const val PUSH_RELEASE_RATIO_BEHIND = 1.05
 
     /** Отставание, длящееся дольше стольких тиков, — уже не «скаут делает последний шаг к флагу», а пат: враг держит
@@ -305,7 +312,14 @@ object PainAndGain {
      *  ⚠️ ОТВЕРГНУТО стендом: ещё и не брать первый флаг, пока она без флагов (гейт захвата) — россыпи и фермеры первые
      *  сорок тиков тоже «идут на нас», и ожидание их первого флага проигрывало старт гонки: отказов 12→16, шесть в
      *  воротах. Последний зов (LAST_CALL_TICKS) при равном счёте открывает флаги: ничья 0:0 отдана не будет. */
-    private const val EVADE_EQUAL_RATIO = 1.0
+    /** УКЛОНЕНИЕ ОТ БЕЗФЛАГОВОГО БРОСКА ПРИ ПАРИТЕТЕ СНЯТО (v87, решение оператора 06.09.2026 по рекомендации): правило v29
+     *  мерилось против экрана стенда, который не берёт флагов, и живого соперника матчей 30–31; за день 06.09 оно стоило шесть
+     *  дебютов MetalicaX (−1500…−2558 к 200–500-му: уклонение в угол в первые 40 тиков, до его первого флага, а его блоб за это
+     *  время берёт наши R3 и H4) и четыре угловых боя (Coldkimchi ×3 — 191, 195, 198; G1N6ERbreadMan — 206): из угла при
+     *  равной скорости он выигрывает гонку к любой точке, кроме угла за нашей спиной, а угол — худшая земля. Уклонение —
+     *  только от явно сильнейшего (RETREAT_RATIO), как везде; при паритете армия стоит у своего флага (пост v66) и встречает
+     *  бросок в поле. Цена на стенде (v79 в той же роли): screen+flagless m32 21339:1215 → 17079:13627 — маржа, не исход. */
+    private const val EVADE_EQUAL_RATIO = 1.0   // снятие целиком (= RETREAT_RATIO, v87a) — гейт 124/125 (m31 camp), camp+shy 0/5: см. USE_EVADE_NO_LOSING_RACE
     /** Темп сближения (см. approachRate, доля скорости к нам за APPROACH_WINDOW), с которого безфлаговая армия — это
      *  бросок на нас, а не блуждание: россыпь, идущая по флагам, к нам не идёт. */
     private const val APPROACH_RUSH = 0.5
@@ -475,8 +489,13 @@ object PainAndGain {
      *  модель безфлагового Coldkimchi матчей 30–31, на которой стоит уклонение v29, — 21339:1215 → 17079:13627 (−16672):
      *  без точки армия стоит у поста, и линия приходит к ней; camp+shy m31/m29 из победы в поражение (spread m19/m30 —
      *  в победу). Для матча 191 это ничего не меняло: из угла при равной скорости он выигрывает гонку к любой точке, кроме
-     *  угла за нашей спиной, и выбор — бой в углу или марш в него; решает качество боя (см. USE_ROW_TO_RANGED). */
-    private const val USE_EVADE_NO_LOSING_RACE = false
+     *  угла за нашей спиной, и выбор — бой в углу или марш в него; решает качество боя (см. USE_ROW_TO_RANGED).
+     *  ВКЛЮЧЕНО СНОВА И ДОСТРОЕНО (v87, решение оператора по четырём угловым боям дня — 191, 195, 198, 206): точка уклонения
+     *  обязана быть достижимой раньше него (arrive ≥ 0) И иметь выход (exit > 0) — угол-карман (96,96) с выходом 0 больше не
+     *  точка; нет ни одной такой и нет направления бегства — evadeTo пуст, армия стоит у поста (свой флаг, v66) и встречает
+     *  бросок в поле, а не у стены. Снятие уклонения при паритете целиком (EVADE_EQUAL_RATIO = RETREAT_RATIO) замерено и
+     *  отвергнуто: гейт 124/125 (m31 camp 15278:23521), 29 хуже / 27 лучше, camp+shy 0 из 5. */
+    private const val USE_EVADE_NO_LOSING_RACE = true
     /** ПОСЛЕДНИЙ ЗОВ — ПО ПРОЕКЦИИ (v80, матч 193 — MetalicaX четвёртый раз, 22138:23728 и девять наших стёрты к 1900-му):
      *  с 900-го по 1700-й армия стояла при паритете 3507:3679 с темпом 15:10 и отыгрывала с −5300 до −1374 — по проекции к
      *  концу +126; на 1700-м последний зов (LAST_CALL_TICKS при ourScore ≤ enemyScore, без проекции) открыл захват при 0,95,
@@ -766,7 +785,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v86"
+    private const val BOT_VERSION = "v87"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -843,6 +862,9 @@ object PainAndGain {
     private var firstNearTick = -1                        // первый тик с его вооружённым в ENGAGE_RANGE + RANGED_RANGE (v72: признаки фермера — от него)
     private var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
     private var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
+    private var ourDamageTaken = 0                        // снято с нас за матч (см. USE_PUSH_LEDGER)
+    private var enemyDamageTaken = 0                      // снято с него за матч
+    private var lastEnemyHitsTotal = -1
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
     private var formWaitSince = -1
     private val aggressiveIds = HashSet<String>()
@@ -1026,6 +1048,7 @@ object PainAndGain {
         // на следующий же тик (стенд m28 farm+weak: 6 detached на 100-м, 0 на 101-м с hurt=0, трижды за матч)
         val ourHitsSum = ctx.myCreeps.sumOf { it.hits }
         val hurt = lastOurHits >= 0 && ourHitsSum < lastOurHits
+        if (hurt) ourDamageTaken += lastOurHits - ourHitsSum
         lastOurHits = ourHitsSum
         val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
         noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
@@ -1080,7 +1103,7 @@ object PainAndGain {
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "our=${ours.toInt()} enemy=${theirs.toInt()} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             concSum = 0; concTicks = 0
@@ -1766,8 +1789,9 @@ object PainAndGain {
             if (theirs >= Int.MAX_VALUE / 4) continue
             val ourTicks = strikers.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: continue
             if (ourTicks >= Int.MAX_VALUE / 4) continue
-            if (USE_EVADE_NO_LOSING_RACE && theirs - ourTicks < 0) continue   // он там раньше нас — это марш в него (v79)
             val exit = exitMargin(ctx, c, ourTicks)
+            // он там раньше нас — это марш в него (v79); выход нулевой — это карман (v87)
+            if (USE_EVADE_NO_LOSING_RACE && (theirs - ourTicks < 0 || exit <= 0)) continue
             val score = minOf(theirs - ourTicks, exit)
             if (getRange(c, ctx.ourCentroid) <= EVADE_ARRIVED && score < EVADE_SAFE) { evadeLeft = c; continue }
             if (cur != null && c.x == cur.x && c.y == cur.y) curScore = score
@@ -1877,6 +1901,8 @@ object PainAndGain {
         // нет — стенд m3 army: пауза на подходе выключала давление, и обе армии простояли до конца)
         val now = getTicks()
         val enemyHitsNow = enemyCreeps.sumOf { it.hits }
+        if (lastEnemyHitsTotal >= 0 && enemyHitsNow < lastEnemyHitsTotal) enemyDamageTaken += lastEnemyHitsTotal - enemyHitsNow
+        lastEnemyHitsTotal = enemyHitsNow
         val ourHitsNow = army.sumOf { it.hits }
         enemyHitsHist.addLast(enemyHitsNow); ourHitsHist.addLast(ourHitsNow)
         while (enemyHitsHist.size > STALL_TICKS) enemyHitsHist.removeFirst()
@@ -2008,7 +2034,11 @@ object PainAndGain {
         stalemateNow = stalemate
         val holdingFlag = USE_PUSH_KEEPS_FLAG && USE_HOLD_OWN_FLAG && !fightOn &&
             ctx.flags.any { it.ours && getRange(it.pos, ctx.ourCentroid) <= POST_STANDOFF }
-        val pushRatio = if (holdingFlag) PUSH_RATIO else if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
+        val exchangeLedger = enemyDamageTaken - ourDamageTaken
+        // нулевой ледж (обмена ещё не было) допуск не закрывает — иначе толчок в стоящий лагерь стенда не начинался
+        // (v87b: spread m33 24314 → 7298, 14 хуже); закрывает только проигранный размен
+        val ledgerOk = !USE_PUSH_LEDGER || exchangeLedger >= 0
+        val pushRatio = if (holdingFlag || !ledgerOk) PUSH_RATIO else if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
         val pushRelease = if (stalemate) PUSH_RELEASE_RATIO_STALEMATE else if (behindOnScore) PUSH_RELEASE_RATIO_BEHIND else PUSH_RELEASE_RATIO
         // зачистка: у врага не осталось никого с боем, а мы позади по очкам — аннигиляция единственная победа, и остаток
         // (скауты, обломки) добивается без оглядки на «ловимость» (матч 19: последний M1 с 28 хитами сидел у нашего R3
