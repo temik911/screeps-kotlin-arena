@@ -635,6 +635,19 @@ object PainAndGain {
      *  бесконечна на бумаге и нулевая на деле, и ядро при паритете уходило к угловым флагам за сорок клеток (m31: (85,27) →
      *  (84,15) → (11,49) → (9,81)), пока он сидел на D5 в 5 очков. */
     private const val USE_FARMER_PACK_FREE = true
+    /** ТИХИЙ ФЕРМЕР НЕ ДЕРЖИТ ЛИНИЮ И НЕ ПУГАЕТ БЕГУНА (v105, матч 256 — ricardo18informatica2020 россыпью, 17438:23608, обе армии
+     *  целы, ни одного его выстрела за 1700 тиков): он держал четыре флага с восьмёркой у D5 в тринадцати клетках от нашей армии,
+     *  мы три при 3436:3507, и 1350 тиков HOLD — цель D5 (порог проигранной гонки 0,75 её пускал, стая по тишине фермера тоже)
+     *  снималась «враг рядом — не цель, а строй» (holdLine) 614 раз, а бегун не шёл на H4 (90,8) с его M1: стая у флага —
+     *  весь его блоб, который к H4 ближе. Против фермера, тихого с первой досягаемости (farmerQuietNow, v65), линия держится
+     *  против никого, и стая, которая не стреляет, бегуну не стая: оба гейта сняты по тому же признаку, по которому армия уже
+     *  идёт мимо его стаи к флагу (USE_FARMER_PACK_FREE). Первый же его выстрел возвращает оба. Замер порознь (plan-ворктри
+     *  поверх v104): линия одна — гейт 131/131 при 3 хуже / 3 лучше (scatter m30/m31 запас −1500/−2800, camp m31 из
+     *  уничтожения в лидерство; block m29 +4356, camp m33 в уничтожение, farm+weak m33 +4631), scatter 6/6; стая бегуна одна —
+     *  129/131 (scatter m19 20729:24318, farm+weak m32 21155:22496 проиграны) при scatter m31 +2841 — бегун уходит к дальнему
+     *  флагу мимо стаи, которая на стенде всё же ходит за ним. Линия принята, стая бегуна ОТВЕРГНУТА и выключена. */
+    private const val USE_FARMER_LINE_FREE = true
+    private const val USE_FARMER_RUNNER_PACK_FREE = false
     /** Прижим (v30): в бою по контакту без перевеса (ANNIHILATE без наступления) армия дерётся с линией врага, а не держит
      *  свою. Реплеи шести матчей (arukuka/screeps-arena-tools — интенты ОБЕИХ сторон, см. docs/pain-and-gain-research.md)
      *  показали, где проигрывается ровный бой. Линия врага встаёт ровно в трёх от нашего переднего (гистограмма
@@ -980,7 +993,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v104"
+    private const val BOT_VERSION = "v105"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1613,7 +1626,9 @@ object PainAndGain {
                 // армия врага шла туда же, и вошёл в неё (матч 3, t=70–87); охраны в 11 клетках было мало.
                 // Для вооружённого бегуна стая — только та, что сильнее его (v57)
                 val pack = packAt(ctx, f.pos, flow, ticks)
-                if (pack.isNotEmpty() && (!armedRunner || enemyPowerOf(pack, listOf(s)) >= ourPowerOf(listOf(s), pack))) continue
+                // тихий фермер бегуну не стая (v105, USE_FARMER_RUNNER_PACK_FREE); безоружному скауту — по-прежнему стая
+                if (pack.isNotEmpty() && !(USE_FARMER_RUNNER_PACK_FREE && farmerQuietNow && armedRunner) &&
+                    (!armedRunner || enemyPowerOf(pack, listOf(s)) >= ourPowerOf(listOf(s), pack))) continue
                 // при охотнике (см. escapeFlows) флаг без выхода — карман: три безоружных крипа сидели на угловых флагах,
                 // пока армия врага шла к ним, и были добиты по одному — последний на 545-м тике, аннигиляция при +5000
                 // очков (матч 13)
@@ -2467,7 +2482,7 @@ object PainAndGain {
         val evadeFirst = if (enemyClose && !annihilate && !contact) evadePoint(ctx, armedEnemies, strikers) else null
         // враг рядом (см. NEAR_RANGE) без нашего перевеса — не цель, а строй: армия, пошедшая за угловым флагом при
         // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
-        val holdLine = enemyNear && !pushing && !annihilate && !stalled
+        val holdLine = enemyNear && !pushing && !annihilate && !stalled && !(USE_FARMER_LINE_FREE && farmerQuietNow)   // тихий фермер линии не стоит (v105)
         val interceptObjective: Objective? = interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it) }?.let { f ->
             val group = strikers.ifEmpty { mobileArmy }
             val flow = flowTo(ctx, f.pos)
