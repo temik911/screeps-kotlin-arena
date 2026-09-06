@@ -366,6 +366,18 @@ object PainAndGain {
     private const val ROTATE_IN = 0.9
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     private const val USE_MELEE_COVER = true  // мили бросается только на цель в досягаемости наших стрелков (v55)
+    /** МИЛИ ВХОДИТ ПАРОЙ (v101, пункт 2 плана оператора — «одинокий мили в двух впереди массы», открыт с v31; матч 249, けろびー
+     *  блобом: на 44-м melee_4 один шагнул на два к его melee (цель в MELEE_HOLD_RANGE, catchable, covered через holdMelee), трое
+     *  других стояли на 3–4 без цели в двух, и его три стрелка с melee сняли его 1600 → 0 за восемь тиков; в 238 то же с
+     *  melee_1 на 75–79-м). По реплеям его melee вплотную к нашим 59–75 крип-тиков за бой, наши 18–23 — и половина наших
+     *  смежных тиков одиночные. ПРИСОЕДИНЕНИЕ: мили, у которого другой наш мили уже в MELEE_HOLD_RANGE от цели, входит к ней сам
+     *  с MELEE_HOLD_RANGE + 1 — двое оказываются у цели вместе. Запрет одиночке (цель в двух берётся только при напарнике в трёх)
+     *  пробован в двух формах и отвергнут гейтом: один запрет (v101a) — 130/131 (m30 camp 23283:23793) при 12 хуже / 9 лучше,
+     *  запрет с присоединением (v101b) — 130/131 при 16 хуже / 15 лучше; в обоих m34 camp/rush и m31 nine из уничтожения в победу
+     *  по очкам — стенд бьёт свои блобы одиночными входами мили, а сдерживание отдаёт их. Смежность на brawl: 5–16 % → до 20 %
+     *  с присоединением (m31). */
+    private const val USE_MELEE_PAIR_ENGAGE = true
+    private const val USE_MELEE_PAIR_GATE = false   // запрет одиночке — отвергнут (см. выше)
     private const val MELEE_COVER = 2         // стрелков в RANGED_RANGE + 1 от цели, чтобы мили пошёл на неё (v55)
     private const val USE_INLINE = true       // бросок только в строю (v15)
     /** Строй рядами в бою по контакту (v17): мили — передний ряд поперёк оси на врага, стрелки — второй ряд в 2 за ним
@@ -938,7 +950,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v100"
+    private const val BOT_VERSION = "v101"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2925,7 +2937,13 @@ object PainAndGain {
             // центра между ними — 800 тиков pushing=true, huntable 12/12, `step=stay` у всех, 9615:23822 (m30). Живьём — толчок к
             // стоящему блобу, который не сближается (матчи 70, 133, 152, 159)
             fun withPrey(e: Creep) = !USE_ONE_PREY || !pushing || prey == null || getRange(e, prey) <= ENGAGE_RANGE
-            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) MELEE_HOLD_RANGE else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) }.minByOrNull { getRange(creep, it) } else null
+            // мили входит парой (v101, USE_MELEE_PAIR_ENGAGE): к цели в досягаемости — другой наш мили в MELEE_HOLD_RANGE + 1 от неё
+            val meleeOnly = isMelee(creep) && !hasRanged(creep)
+            fun mateNear(e: Creep, r: Int) = combatArmy.any { m -> m.id != creep.id && isMelee(m) && !hasRanged(m) && hasMelee(m) && getRange(m, e) <= r }
+            fun paired(e: Creep) = !USE_MELEE_PAIR_GATE || !meleeOnly || army.any { a -> a.id != creep.id && getRange(e, a) <= 1 } || mateNear(e, MELEE_HOLD_RANGE + 1)
+            // ...и присоединяется к напарнику, уже стоящему в MELEE_HOLD_RANGE от цели: досягаемость на клетку больше
+            fun holdReach(e: Creep) = if (USE_MELEE_PAIR_ENGAGE && meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
+            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && it.id !in pressGiveUp && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
             val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE

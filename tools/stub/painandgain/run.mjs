@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -148,7 +148,9 @@ const rotating = new Set();
 // within two, no rotation (a melee is healed back in place, M8A5 -> M8A8 in two ticks), and every gun on our MOST
 // FORWARD creep — the one our healers have not caught up with — then the lowest hits
 let focusAnchor = null;
-const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
+// brawl: an armed ranged of ours first (r->ranged 152 of 367 in match 249 — our ranged were disarmed 113 creep-ticks against
+// his 42), then the lowest hits
+const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : has('brawl') ? (live(o, R) > 0 ? 0 : 1) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
 // the enemy's fire concentration, as tools/replay.py's conc counts it live: per tick the largest number of its single-target
 // shots on one of ours; reported at the end as a histogram (matches 140–179: the live lines put four or more on one creep in
 // 11–28 % of their firing ticks, the bot 0–3 %)
@@ -161,7 +163,7 @@ function fireAt(c, ours) {
   const inRange = ours.filter((o) => range(c, o) <= 3);
   if (live(c, R) > 0 && inRange.length) {
     const close = inRange.filter((o) => range(c, o) <= 2);
-    if (close.length >= 2 && !NINE) c.rangedMassAttack();
+    if (close.length >= 2 && !NINE && !has('brawl')) c.rangedMassAttack();   // brawl: single-target fire (mass 6 of 412 shots in match 249)
     else { const t = inRange.sort((a, b) => targetKey(a) - targetKey(b))[0]; c.rangedAttack(t); eShots.set(t.id, (eShots.get(t.id) || 0) + 1); }
   }
   if (live(c, A) > 0) {
@@ -499,7 +501,61 @@ function enemyTick() {
     }
     // 'sleeper': the army stands still (a camper the passive floor mistakes for a dead bot) until t=500, then rushes
     if (has('sleeper') && world.tick < (parseInt(process.env.SLEEP || '500', 10))) continue;
-    if (has('rush') || has('sleeper')) {
+    if (has('brawl')) {
+      // 'brawl' (live matches 238 and 249, けろびー's blob at parity — both lost by annihilation, three of his melee killed at
+      // most): the whole army walks at ours as one blob and fights the way the replays count it. A melee goes for the nearest
+      // of our RANGED or HEALERS within five (a->ranged 21, a->healer 15 against a->melee 10 in 249), else the nearest creep,
+      // and swings whenever adjacent (51 swings in 59 adjacent creep-ticks). A ranged holds exactly three from our nearest
+      // creep (2:115 3:286 4:141 of 580 creep-ticks), steps back from anything within two, and fires single shots at the
+      // lowest hits in range. A healer stands adjacent to the most wounded mate (235 adjacent heals against 85 ranged) and
+      // never steps away from our armed creeps; with nobody wounded it walks one behind the nearest melee. No rotation.
+      const ourF = ours.filter((o) => !isRunner(o));
+      const nearest = (ourF.length ? ourF : ours).slice().sort((a, b) => range(c, a) - range(c, b))[0];
+      const isHealer = live(c, H) > 0 && live(c, A) === 0 && live(c, R) === 0;
+      // the blob keeps its edge (v3 of the form): the stub's blob walked THROUGH our line — melee diving to soft targets,
+      // ranged following to three from whatever was nearest and ending adjacent to the rest of ours, healers behind them —
+      // and our mass fire took twelve creeps in thirty ticks (m31: deaths t=94–124), where the live blob held one side of
+      // us for a hundred ticks and lost three. Here the blob advances only formed (nobody more than three behind its front),
+      // a melee holds the front and swings at what is adjacent (a soft target within TWO draws it, not five), a ranged
+      // stands where it is three from our nearest armed creep and at least three from every other, a healer one behind
+      // the nearest ranged unless a mate at three or more from our armed is wounded
+      const ourArmed = ourF.filter((o) => live(o, A) + live(o, R) > 0);
+      const minOur = (x, y) => ourArmed.length ? Math.min(...ourArmed.map((o) => Math.max(Math.abs(x - o.x), Math.abs(y - o.y)))) : 99;
+      // the feint (match 249, t=44–49): at first contact the whole blob steps back a cell for three ticks and then comes on —
+      // live it marked all twelve of his creeps as 'keeping their distance' for twenty ticks and our melee stood
+      if (armyState.feint === undefined && ourArmed.some((o) => fighters.some((f) => range(f, o) <= 3))) armyState.feint = world.tick;
+      if (armyState.feint !== undefined && world.tick - armyState.feint < 3) { const near = ourArmed.filter((o) => range(c, o) <= 4); if (near.length && !stepBack(c, near)) stepAway(c, near); continue; }
+      const blobC = { x: Math.round(fighters.reduce((s, f) => s + f.x, 0) / fighters.length), y: Math.round(fighters.reduce((s, f) => s + f.y, 0) / fighters.length) };
+      const frontD = Math.min(...fighters.map((f) => minOur(f.x, f.y)));
+      const formed = fighters.every((f) => minOur(f.x, f.y) <= frontD + 3);
+      if (isHealer) {
+        const mate = fighters.filter((o) => o !== c && live(o, H) === 0 && o.hits < o.hitsMax && minOur(o.x, o.y) >= 3).sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax))[0];
+        const rng = fighters.filter((o) => live(o, R) > 0 && live(o, A) === 0).sort((a, b) => range(c, a) - range(c, b))[0];
+        if (mate && range(c, mate) > 1) stepToward(c, mate, 1);
+        else if (!mate && rng && (range(c, rng) > 1 || minOur(c.x, c.y) <= 3)) { if (minOur(c.x, c.y) <= 3) stepBack(c, ourArmed.filter((o) => range(c, o) <= 4)); else stepToward(c, rng, 1); }
+      } else if (live(c, A) > 0) {
+        const soft = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= 2).sort((a, b) => range(c, a) - range(c, b))[0];
+        const tgt = soft || nearest;
+        if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD)) stepToward(c, tgt, 1);
+      } else if (nearest) {
+        const d = minOur(c.x, c.y);
+        if (d <= 2) { if (!stepBack(c, ourArmed.filter((o) => range(c, o) <= 3))) stepAway(c, ourArmed.filter((o) => range(c, o) <= 3)); }
+        else if (d > 3 && !formed && d > frontD + 1) stepToward(c, nearest, 3);   // a laggard paths up to the front (a greedy step stalls behind terrain — m28/m31 froze without a shot)
+        else if (d > 3 && (formed || d > frontD)) {
+          // the neighbour cell at three from our nearest armed creep and no closer to any other, nearest to the blob's front
+          let best = null, bs = 1e9;
+          for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) {
+            const x = c.x + dx, y = c.y + dy;
+            if (!inBounds(x, y) || world.terrain[idx(x, y)] === 1 || (creepAt(x, y) && creepAt(x, y) !== c)) continue;
+            const m = minOur(x, y);
+            if (m < 3) continue;
+            const sc = (m - 3) * 10 + Math.max(Math.abs(x - blobC.x), Math.abs(y - blobC.y)) * 0.1;
+            if (sc < bs) { bs = sc; best = { x, y }; }
+          }
+          if (best && (best.x !== c.x || best.y !== c.y)) c.move(getDirection(best.x - c.x, best.y - c.y));
+        }
+      }
+    } else if (has('rush') || has('sleeper')) {
       // whole army marches at our army; melee closes, ranged keeps 2, healers two cells behind the most damaged mate
       // and away from our armed creeps within 2 — as the live opponents keep theirs (matches 3, 9); a healer glued
       // to the front made the stub's rush stronger than any live army and rewarded front-row healers on our side
@@ -628,6 +684,22 @@ const origLog = (...args) => origWrite(args.join(' ') + '\n');
 console.log = (...args) => { const s = args.join(' '); lines.push(s); if (isLoopError(s)) loopErrors++; };
 const bot = await import(BOT);
 const t0 = Date.now();
+// ours act: the bot's own uptime, counted the way tools/replay.py counts it live — healer creep-ticks with a wounded mate
+// within one and heals given, melee creep-ticks with an enemy within one and swings, ranged creep-ticks with an enemy within
+// three and shots (matches 238/249 live: healers 81–94 %, melee 47–83 % of only 18–23 creep-ticks against his 59–75, ranged
+// 70–76 %; his 100 % / 86–97 % / 89–100 %). The melee adjacency itself — how often our melee ARE adjacent — is the gap
+const oAct = { h_can: 0, h_did: 0, m_can: 0, m_did: 0, m_ticks: 0, r_can: 0, r_did: 0, r_ticks: 0 };
+function oursAct() {
+  const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
+  if (!c1.some((e) => c0.some((c) => range(c, e) <= 8))) return;   // in contact only
+  for (const c of c0) {
+    const m = world.intents.get(c.id) || {};
+    const isH = live(c, H) > 0 && live(c, A) === 0 && live(c, R) === 0;
+    if (isH) { if (c0.some((o) => o !== c && o.hits < o.hitsMax && range(c, o) <= 1)) { oAct.h_can++; if (m.heal && range(c, m.heal.target) <= 1) oAct.h_did++; } }
+    else if (live(c, A) > 0) { oAct.m_ticks++; if (c1.some((e) => range(c, e) <= 1)) { oAct.m_can++; if (m.melee) oAct.m_did++; } }
+    else if (live(c, R) > 0) { oAct.r_ticks++; if (c1.some((e) => range(c, e) <= 3)) { oAct.r_can++; if (m.ranged) oAct.r_did++; } }
+  }
+}
 let ended = '';
 let cpuMax = 0, cpuMaxTick = 0, cpuSlow = 0;
 for (let t = 1; t <= ticks; t++) {
@@ -635,6 +707,7 @@ for (let t = 1; t <= ticks; t++) {
   const tLoop = performance.now();
   try { bot.loop(); } catch (e) { loopErrors++; lines.push('loop error (uncaught): ' + (e && e.stack || e)); }
   const msLoop = performance.now() - tLoop;
+  oursAct();
   if (msLoop > cpuMax) { cpuMax = msLoop; cpuMaxTick = t; }
   if (msLoop > 50) cpuSlow++;
   enemyTick();
@@ -643,7 +716,7 @@ for (let t = 1; t <= ticks; t++) {
   if (TRACE && t >= TRACE[0] && t <= TRACE[1]) {
     // per-tick positions: ours as x,y[/fatigue], the nearest enemy's range and position — for reading a chase
     const near = (c) => c1.reduce((b, e) => (range(c, e) < range(c, b) ? e : b), c1[0]);
-    origLog(`trace t=${t} ours ${c0.map((c) => `${c.summary().replace(/\s.*/, '')}@${c.x},${c.y}${c.fatigue ? '/' + c.fatigue : ''}`).join(' ')} | enemy ${c1.map((c) => `${c.x},${c.y}`).join(' ')} | gap ${c0.length && c1.length ? Math.min(...c0.map((c) => range(c, near(c)))) : '-'}`);
+    origLog(`trace t=${t} ours ${c0.map((c) => `${c.summary().replace(/\s.*/, '')}@${c.x},${c.y}${c.fatigue ? '/' + c.fatigue : ''}`).join(' ')} | enemy ${c1.map((c) => `${c.summary().replace(/\s.*/, '')}@${c.x},${c.y}`).join(' ')} | gap ${c0.length && c1.length ? Math.min(...c0.map((c) => range(c, near(c)))) : '-'}`);
   }
   if (c0.length === 0) { ended = `our army destroyed at t=${world.tick - 1}`; break; }
   if (c1.length === 0) { ended = `enemy army destroyed at t=${world.tick - 1}`; break; }
@@ -662,6 +735,8 @@ const log = `${outDir}run-${process.env.LOGTAG || ""}${scenario.join('+')}${proc
 writeFileSync(log, lines.join('\n') + '\n\n=== EVENTS ===\n' + world.events.join('\n') + '\n');
 const c0 = creeps().filter((c) => c.owner === 0).length, c1 = creeps().filter((c) => c.owner === 1).length;
 origLog(`done: ${ended || `${ticks} ticks`} score=${world.score[0]}/${world.score[1]} alive=${c0}/${c1} errors=${loopErrors} time=${((Date.now() - t0) / 1000).toFixed(1)}s log=${log}`);
+const pc = (a, b) => `${a}/${b} (${b ? Math.round(100 * a / b) : 0}%)`;
+origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach)`);
 origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
 if (errs.length) origLog('first error:\n' + errs.slice(0, 2).join('\n'));
