@@ -173,6 +173,16 @@ object PainAndGain {
      *  постом без D5. */
     private const val USE_POST_ON_CENTRE = true
     private var USE_FLEE_DIRECTION = true
+    /** В УГОЛ НЕ БЕЖАТЬ (v116, матч 295 — близнец 273: Coldkimchi, стёрты к 599-му у западной стены, 1182 → 1178). При паритете от
+     *  безфлагового броска точек уклонения с выходом нет (best=-), и бегство направлением (v46/v53) ведёт от поста R3 (11,47) по
+     *  стене на юг: (11,72) → (10,76) → (7,85) → (5,90) → (5,94) — сорок пять клеток в угол; он идёт следом с темпом 100 и догоняет
+     *  на 94-м у стены (край 7): вход проигран 4556:1532, его мили 63 удара против 9. Угол как ловушка — с числами: в углу проиграны
+     *  83, 92, 110, 273, 295, в поле выиграны 66, 75, 79, 93, 96; «не уклоняться при паритете» целиком (v107) отвергнуто стендом
+     *  (roost m29: без hunted армия против неподвижной россыпи не идёт никуда). Здесь уже: бегство направлением не назначается,
+     *  если точка бегства ближе FLEE_EDGE_MIN к краю карты — от равного по скорости бег ничего не спасает, он выбирает место боя;
+     *  без точки уклонения армия стоит строем у поста и принимает вход (стрелки вровень с мили, v113), с открытым флангом. */
+    private const val USE_NO_FLEE_TO_EDGE = true
+    private const val FLEE_EDGE_MIN = 8   // = EDGE_CORNER вскрытия: бой с центром ближе восьми к краю — «у стены»
     /** Фокус-огонь (v45; оператор по матчу 78: «нет фокус-файра — каждый рэндж стреляет в своего; держать их вместе и за ход
      *  выбивать максимум из одного», и «цель — та, к которой лекари далеки»). Замер по реплеям: наибольшее число наших выстрелов
      *  в ОДНУ цель за тик — четыре и больше лишь в 1–2 % тиков (матчи 78, 73, 67) против 11 % у Coldkimchi и 14 % у けろびー;
@@ -1105,7 +1115,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v114"
+    private const val BOT_VERSION = "v116"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2189,6 +2199,12 @@ object PainAndGain {
         // сквозь преследователя или в угол (матч 80: (3,3) −40, дом 0, (96,96) 0)
         if (USE_FLEE_DIRECTION && (best == null || bestScore <= 0)) {
             val flee = fleePoint(ctx, armed)
+            val edge = flee?.let { minOf(it.x, it.y, 99 - it.x, 99 - it.y) } ?: 99
+            if (USE_NO_FLEE_TO_EDGE && flee != null && edge <= FLEE_EDGE_MIN) {
+                if (DEBUG_LOG && (cur != null || getTicks() % (LOG_EVERY * 5) == 0)) println("evade: t=$now flee=(${flee.x},${flee.y}) refused — ${edge} from the edge, the army stands at the post (see USE_NO_FLEE_TO_EDGE)")
+                evadeTarget = null
+                return null
+            }
             if (flee != null) {
                 if (cur == null || cur.x != flee.x || cur.y != flee.y)
                     println("evade: t=$now flee=(${flee.x},${flee.y}) best=${best?.let { "(${it.x},${it.y})" } ?: "-"} score=$bestScore from=(${ctx.ourCentroid.x},${ctx.ourCentroid.y}) approach=${(approachRate * 100).toInt()}")
