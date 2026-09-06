@@ -467,6 +467,17 @@ object PainAndGain {
      *  делало её одноразовой; рассыпанный фермер не собирается никогда, и ядро против его крупнейшей группы из двух-трёх в
      *  перевесе весь матч. Против кайтера и лагеря стенда гонки нет по признаку россыпи, против пар spread — по целям. */
     private const val USE_SCATTER_RACE = true
+    /** ОПОРА ЯДРА ПРИ РОССЫПИ — ЕГО КРУПНЕЙШАЯ ГРУППА (v97, матч 240 — ricardo18informatica2020, россыпь с первого тика:
+     *  шесть флагов к 86-му, его крупнейшая группа 4 из 9 вооружённых 49 % тиков, 17355:23708 при обеих армиях 16000/16000).
+     *  Опора v91 «против крупнейшей группы» действовала только в дебют-гонке (viaRace); фермеру по тишине (quietChain) ядро
+     *  мерилось против ВСЕЙ его россыпи, и после каждого захвата (его дебафф снимается — его сила 3098 → 3559 на 419-м,
+     *  3084 → 3507 на 564/636/710-м) отзыв v94 возвращал двоих из троих: шесть циклов «трое вышли — флаг взят — двое назад»
+     *  за матч, H4 в 46 клетках (M1 на каждом) взяты на 486-м и 1116-м. Ядро дерётся с тем, что до него дойдёт: при россыпи
+     *  (крупнейшая группа не больше половины) опора ОТЗЫВА — его крупнейшая группа при PUSH_RATIO, как в гонке. Выпуск же
+     *  остаётся против всей его армии: та же опора и для выпуска (v97a) распускала армию в бегунов против пар стенда —
+     *  spread 6/6 → 0/6 (m28 4287:24318, m19 8360:24315) при живых 14/13, никто не берёт ничего; camp+shy 4/5, гейт 125/125
+     *  при 3 хуже / 5 лучше (roost). Выпуск строгий, отзыв мягкий — гистерезис вместо качелей. */
+    private const val USE_SCATTER_RECALL_REF = true
     /** ОДНА МЕРА ЯДРА (v94, решение оператора 06.09.2026): пул проверял ядро против его мощи только в тик выпуска, а через
      *  сто тиков флаги перешли из рук в руки (дебаффы холдера), дистанция и досягаемость сменились — и постура видела 0,82
      *  там, где пул проверил 0,97: матч 233 ядро из девяти 2919 против 3559 в EVADE 200–300, матчи 199 и 201 то же. Ядро
@@ -754,6 +765,19 @@ object PainAndGain {
      *  цели и точки уклонения в разные стороны через каждые 3–6 тиков, в сумме стояла на месте и была догнана
      *  (стенд m8 army); дальше — цели с выходом, иначе безопасная точка. */
     private const val EVADE_RANGE = 25
+    /** СИГНАЛ БРОСКА — ТОЛЬКО В ПРЕДЕЛАХ ДОСЯГАЕМОСТИ (v97, матчи 234–240: уклонение на 3-м тике во всех семи, следующая цель
+     *  на 39–108-м): на первых тиках его армия сомкнута дома и «сближается» в полном темпе — к центру идут все, — и сигнал
+     *  безфлагового броска гнал армию в дом (12,9) и угол (3,3) на 36 тиков против любого соперника. Против россыпи (матч 240)
+     *  это шесть его флагов к 86-му при нашем одном; против настоящего броска (матч 238) угол не спас — армия вышла к посту на
+     *  23-м и встретила его в поле на 67-м. Сигнал — когда его вооружённый в RUSH_SIGNAL_RANGE от нашего центра: дальше идти
+     *  ему ещё RUSH_SIGNAL_RANGE − EVADE_RANGE тиков, и уклонение успевает; до того армия стоит у поста (v88), флаги по
+     *  паритету, «первый флаг — их» по-прежнему через unflaggedRushNow. ОТВЕРГНУТО стендом (v97b): гейт 124/125 (m29 camp
+     *  16177:22866) при 32 хуже / 32 лучше — дебют меняется во ВСЕХ сценариях (army m21/23/24/29/3/5 из лидерства в
+     *  уничтожение, block/nine/kite/wing m30–m34 из уничтожения в лидерство, screen+flagless −3600…−6600 запаса), camp+shy
+     *  3/5, spread 1/6 (m28 855:24340, m33 1167:24322): уклонение первых тиков — часть дебюта, на котором стоит стенд, и
+     *  цена россыпи живьём (матч 240) стендом не покрыта. Открытая находка: дебют против россыпи. */
+    private const val USE_RUSH_SIGNAL_IN_REACH = false
+    private const val RUSH_SIGNAL_RANGE = 50
     private const val EVADE_ARRIVED = 3
     private const val EVADE_EVAL_EVERY = 5
     private const val EVADE_HYSTERESIS = 4
@@ -875,7 +899,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v96"
+    private const val BOT_VERSION = "v97"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1122,7 +1146,8 @@ object PainAndGain {
         // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.
         // Начатый бросок кончается, когда враг взял флаг, замер, разошёлся или ушёл дальше EVADE_RANGE и не приближается
         val noEnemyFlag = ctx.flags.none { it.theirs }
-        val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed
+        val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed &&
+            (!USE_RUSH_SIGNAL_IN_REACH || armedNow.any { getRange(it, ctx.ourCentroid) <= RUSH_SIGNAL_RANGE })
         val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
             (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
         unflaggedRushNow = rushSignal || rushHold
@@ -2254,12 +2279,16 @@ object PainAndGain {
             // дебаффом цели просто нет, а скауты берут при 0,75 как раньше
             val coreRef = if (viaRace) largestMembers else combatEnemies
             val coreFloor = if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR
+            // при россыпи (v97, USE_SCATTER_RECALL_REF) опора ОТЗЫВА — его крупнейшая группа при PUSH_RATIO; выпуск — как был
+            val recallGroup = viaRace || (USE_SCATTER_RECALL_REF && scattered)
+            val recallRef = if (recallGroup) largestMembers else combatEnemies
+            val recallFloor = if (viaDryHunt || recallGroup) PUSH_RATIO else PARITY_FLOOR
             // одна мера ядра (v94): порог держится каждый тик — просело, сильнейший отделённый возвращается
             if (USE_ONE_CORE_MEASURE && farmer && detachedIds.isNotEmpty()) {
-                val floorNow = coreFloor
+                val floorNow = recallFloor
                 var core = army.filter { it.id !in detachedIds }
                 var recalled = 0
-                while (detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, coreRef) < enemyPowerOf(coreRef, core) * floorNow) {
+                while (detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * floorNow) {
                     val back = ctx.runners.filter { it.id in detachedIds }.maxByOrNull { ourPowerOf(listOf(it), emptyList()) } ?: break
                     detachedIds.remove(back.id); core = core + back; recalled++
                 }
