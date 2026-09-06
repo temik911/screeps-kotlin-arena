@@ -544,6 +544,15 @@ object PainAndGain {
      *  держит порог КАЖДЫЙ тик той же мерой, что постура (ourPowerOf/enemyPowerOf по нынешней армии): просело — сильнейший
      *  отделённый возвращается, пока порог не восстановлен. */
     private const val USE_ONE_CORE_MEASURE = true
+    /** ОТЗЫВ ПО МОЩИ — ТОЛЬКО УСТОЙЧИВЫЙ (v114, матч 277 — MetalicaX гастролью, 21167:24168, 1193 → 1187): отряд выпускался и
+     *  отзывался на следующий же тик четыре раза за матч (564/565, 669/670, 822→859→902, 1012/1013) при одной мере (v94/v95b):
+     *  мера прыгает сама — его мощь против ядра 3234 → 3679 за тик, когда его блоб на 9–13 клетках входит в боевой радиус и
+     *  выходит из него (состав combatEnemies и «в досягаемости» у weightedHits/threatOf). Отзыв по просадке ядра — только когда
+     *  просадка держится RECALL_TICKS тиков подряд; настоящая просадка (его подкрепление, наша потеря) держится, мигание — нет.
+     *  ОТВЕРГНУТО гейтом: m30 scatter 21539:24312 (пять тиков отряда при коротком ядре против россыпи — проигранная гонка очков),
+     *  3 хуже / 0 лучше при v113. Мигание меры остаётся открытым (см. docs, матч 277): лечить его надо в самой мере, а не в отзыве. */
+    private const val USE_RECALL_PERSIST = false
+    private const val RECALL_TICKS = 5
     /** ОТРЯД ПАРАМИ (v94): россыпь по двое на флаг (けろびー в матче 233, spread стенда) одиночному бегуну не по зубам — пул
      *  отпускал по крипу на флаг, бегуны 19 раз выходили и возвращались «без цели». Флаг со стаей, которую один бегун не
      *  побьёт, а двое ближайших вооружённых свободных побьют (по Ланчестеру пары против стаи), получает обоих; пул отпускает
@@ -1152,6 +1161,7 @@ object PainAndGain {
     private val aggressiveIds = HashSet<String>()
     private val lastHits = HashMap<String, Int>()
     private val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
+    private var coreShortTicks = 0                  // тиков подряд ядро без отряда ниже порога (см. USE_RECALL_PERSIST)
     private val lastCell = HashMap<String, Int>()
     private val ghostLogged = HashMap<String, Int>()
     private class Shooter(val cell: Int, val ranged: Double, val melee: Double)
@@ -2477,11 +2487,14 @@ object PainAndGain {
                 val floorNow = recallFloor
                 var core = army.filter { it.id !in detachedIds }
                 var recalled = 0
-                while (detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * floorNow) {
+                val short = core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * floorNow
+                coreShortTicks = if (short) coreShortTicks + 1 else 0
+                val recallNow = !USE_RECALL_PERSIST || coreShortTicks >= RECALL_TICKS
+                while (recallNow && detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * floorNow) {
                     val back = ctx.runners.filter { it.id in detachedIds }.maxByOrNull { ourPowerOf(listOf(it), emptyList()) } ?: break
                     detachedIds.remove(back.id); core = core + back; recalled++
                 }
-                if (recalled > 0) detachRecallTick = now   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
+                if (recalled > 0) { detachRecallTick = now; coreShortTicks = 0 }   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
                 if (DEBUG_LOG && recalled > 0) println("detach t=$now: $recalled recalled — the core fell under ${floorNow} of him by the posture's measure")
             }
             if (!farmer) detachedIds.clear()
