@@ -265,6 +265,18 @@ object PainAndGain {
      *  оставшиеся тики не в нашу пользу; «он не бьёт» — его удар не позже PASSIVE_TICKS назад. Риск (его атака при 0,8)
      *  против MetalicaX за десять матчей не наблюдался ни разу: он бьёт, только когда мы приходим к нему. */
     private const val USE_LOST_RACE_PROJECTED = true
+    /** ПРОИГРАННАЯ ГОНКА — И СТАЯ У СВОБОДНОГО ФЛАГА ПО ПАРИТЕТУ (v99, матч 242 — MetalicaX пятнадцатый раз из шестнадцати,
+     *  4611:12360 при обеих армиях целых): он взял D5 и A3 (31,67) и запарковал все двенадцать вооружённых между ними на (41,57)
+     *  на 1500 тиков; мы взяли R3 (13,49) и простояли на нём 1500 тиков при 3967:3520 (1,13 — меньше 1,3 при своём флаге,
+     *  толчка нет; ни контакта, ни боя — все сетки молчат) с ЧЕТЫРЬМЯ свободными флагами: к каждому он ближе нас, стая у флага
+     *  (packAt) — вся его армия, и гейт стаи требовал pushRatio 1,3 с ценой боя, тогда как порог самого захвата в проигранной
+     *  гонке — 0,75 (v63/v88). В проигранной гонке (проигрыш по проекции при PASSIVE_TICKS без удара по нам) стая у флага, у
+     *  которого его вооружённых сейчас нет, — по PARITY_FLOOR и без цены боя: бой по паритету с тем, кто придёт, лучше верного
+     *  проигрыша по очкам, а не придёт — флаг наш. Охраняемые им флаги (стая уже там) — по-прежнему толчок. ОТВЕРГНУТО стендом
+     *  (v99a): гейт 124/125 (m29 camp из уничтожения на 584-м в проигрыш 15006:21075) при 10 хуже / 10 лучше (camp m30/m31/m33
+     *  и farm+weak m32/m33 хуже, army m21/m23/m24 и roost лучше), camp+shy 4/5 (m34 14148:23010), spread 5/6: в проигранной
+     *  гонке у стоящего лагеря армия уходила к свободным флагам вместо толчка, который его уничтожал. См. USE_PUSH_KEEPS_FLAG_UNLESS_LOST. */
+    private const val USE_LOST_RACE_PACK_PARITY = false
     private const val USE_HOLD_OWN_FLAG = true    // пост — свой флаг под ногами при враге рядом (v66)
     private const val PARITY_FLOOR_LOST = 0.75
     private const val PUSH_RELEASE_RATIO_STALEMATE = 0.95
@@ -538,6 +550,11 @@ object PainAndGain {
      *  флаг присутствием (см. USE_HOLD_OWN_FLAG): пока обмена нет (fightOn), с флага не уходят ради толчка, который не
      *  сближается; при перевесе PUSH_RATIO толчок идёт как прежде. */
     private const val USE_PUSH_KEEPS_FLAG = true
+    /** СВОЙ ФЛАГ НЕ ПОДНИМАЕТ ПОРОГ В ПРОИГРАННОЙ ГОНКЕ (v99, матч 242, см. USE_LOST_RACE_PACK_PARITY): 1500 тиков HOLD при
+     *  3967:3520 (1,13) у R3 (13,49) — толчок на его запаркованный блоб требовал 1,3 только потому, что мы держим флаг за 3 в
+     *  тик, а гонка проигрывалась при 3:8. Флаг, ради которого v77 поднимает порог, стоит меньше матча: в проигранной гонке
+     *  (lostRaceNow) порог толчка — как без флага (1,1 при отставании с неотрицательным счётом обмена). */
+    private const val USE_PUSH_KEEPS_FLAG_UNLESS_LOST = true
     /** ЦЕННОСТЬ ФЛАГА ДЛЯ БЕГУНА — ЗА ГОРИЗОНТ (v78, матч 190 — MetalicaX третий раз, 19755:23543, ни одного контакта за
      *  1848 тиков): с 300-го всё стояло — армия на D5, его блоб у своего A3, темп 12:13 полторы тысячи тиков при −1800 после
      *  дебюта, а его R3 (13,49) 1300 тиков был НИЧЕЙ по занятости: 3 очка в тик, 3900 — вся разница. Три наших бегуна
@@ -910,7 +927,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v98"
+    private const val BOT_VERSION = "v99"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1412,12 +1429,21 @@ object PainAndGain {
         // неподвижный враг — тоже армия: «пассивный» порог 0.95 пустил третий флаг против спящего, тот проснулся, и бой
         // при 0.96 был проигран (стенд m6 sleeper); порог один
         // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
-        val quiet = lastHurtTick == 0 || getTicks() - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
-        val quietShort = lastHurtTick == 0 || getTicks() - lastHurtTick >= PASSIVE_TICKS
-        val lostRace = USE_LOST_RACE_CAPTURE && (if (USE_LOST_RACE_PROJECTED) losingAtTheEnd && quietShort
-            else stalemateNow && quiet && ourScore <= enemyScore && ourRate <= enemyRate)
+        val lostRace = lostRaceNow()
         val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else if (needed) PARITY_FLOOR else CAPTURE_FLOOR
         return ours >= theirs * floor
+    }
+
+    /** Проигранная гонка (v63/v88): проигрыш по проекции на конец матча при PASSIVE_TICKS без удара по нам (v99: одна и та же
+     *  для порога захвата и для стаи у свободного флага, см. USE_LOST_RACE_PACK_PARITY). */
+    private fun lostRaceNow(): Boolean {
+        if (!USE_LOST_RACE_CAPTURE) return false
+        val ticksLeft = arenaInfo.ticksLimit - getTicks()
+        val losingAtTheEnd = if (USE_LAST_CALL_PROJECTED) (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft <= 0 else ourScore <= enemyScore
+        val quiet = lastHurtTick == 0 || getTicks() - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
+        val quietShort = lastHurtTick == 0 || getTicks() - lastHurtTick >= PASSIVE_TICKS
+        return if (USE_LOST_RACE_PROJECTED) losingAtTheEnd && quietShort
+            else stalemateNow && quiet && ourScore <= enemyScore && ourRate <= enemyRate
     }
 
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
@@ -1738,8 +1764,11 @@ object PainAndGain {
             val ratio = if (current) LOCAL_ENTER_RATIO else pushRatio
             // цена боя — гейт на ВХОД к охраняемому флагу (лазейка «уже в контакте» отправила армию к дальнему
             // флагу с девятью охранниками сквозь наступающую армию — стенд rush, t=61)
-            val ok = pack.isEmpty() || (USE_FARMER_PACK_FREE && farmerQuietNow) || (ourPowerOf(group, pack) >= enemyPowerOf(pack, group) * ratio &&
-                fightCost(pack, group) <= group.maxOf { speedSlack(it) })
+            // проигранная гонка (v99, USE_LOST_RACE_PACK_PARITY): стая у флага, у которого его вооружённых сейчас нет, — по паритету
+            val lostRacePack = USE_LOST_RACE_PACK_PARITY && lostRaceNow() && pack.none { getRange(it, f.pos) <= ENGAGE_RANGE }
+            val ok = pack.isEmpty() || (USE_FARMER_PACK_FREE && farmerQuietNow) ||
+                (lostRacePack && ourPowerOf(group, pack) >= enemyPowerOf(pack, group) * PARITY_FLOOR) ||
+                (ourPowerOf(group, pack) >= enemyPowerOf(pack, group) * ratio && fightCost(pack, group) <= group.maxOf { speedSlack(it) })
             if (!ok) continue
             // гистерезис: текущая цель ценнее на четверть, чтобы не прыгать между равными; дорогой по силе — позже
             val value = f.swing * captureCost(ctx, f) / (travel + 10) * (if (current) 1.25 else 1.0)
@@ -2196,7 +2225,9 @@ object PainAndGain {
         // нулевой ледж (обмена ещё не было) допуск не закрывает — иначе толчок в стоящий лагерь стенда не начинался
         // (v87b: spread m33 24314 → 7298, 14 хуже); закрывает только проигранный размен
         val ledgerOk = !USE_PUSH_LEDGER || exchangeLedger >= 0
-        val pushRatio = if (holdingFlag || !ledgerOk) PUSH_RATIO else if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
+        // в проигранной гонке свой флаг порога не поднимает (v99, USE_PUSH_KEEPS_FLAG_UNLESS_LOST)
+        val flagRaises = holdingFlag && !(USE_PUSH_KEEPS_FLAG_UNLESS_LOST && lostRaceNow())
+        val pushRatio = if (flagRaises || !ledgerOk) PUSH_RATIO else if (stalemate) PUSH_RATIO_STALEMATE else if (behindOnScore) PUSH_RATIO_BEHIND else PUSH_RATIO
         val pushRelease = if (stalemate) PUSH_RELEASE_RATIO_STALEMATE else if (behindOnScore) PUSH_RELEASE_RATIO_BEHIND else PUSH_RELEASE_RATIO
         // зачистка: у врага не осталось никого с боем, а мы позади по очкам — аннигиляция единственная победа, и остаток
         // (скауты, обломки) добивается без оглядки на «ловимость» (матч 19: последний M1 с 28 хитами сидел у нашего R3
