@@ -126,7 +126,7 @@ Measured on the same kind of match, it does exactly what it was built to do — 
 | 1210 | 15 / **3**, realised **2** | 16 / **6**, realised **16** |
 | 1610 | 15 / **2**, realised 6 | 16 / **10**, realised **18** |
 
-The eight-match series read 4-2-2 against v35's 5-1-2, rating 1168→1162 — but seven of those eight were against stachu3478 where v35's had been mostly けろびー, so the series number compares two different opponents and the in-match numbers do not. Stub 23/23, every scenario on the same tick: there the army does not die away, so the hedge never binds, which is the point of it.
+The first eight-match series read 4-2-2 against v35's 5-1-2, rating 1168→1162 — but seven of those eight were against stachu3478 where v35's had been mostly けろびー, so that number compared two different opponents while the in-match numbers compared one. A second series settled it: **6-2-0, rating 1162→1177**, the session's high, and over sixteen matches v36 stands at 10-4-2. The first series was the draw of opponents, as the in-match numbers had already said. Stub 23/23, every scenario on the same tick: there the army does not die away, so the hedge never binds, which is the point of it.
 
 ## Offline stub harness
 
