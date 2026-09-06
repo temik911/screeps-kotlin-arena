@@ -384,6 +384,17 @@ object PainAndGain {
      *  отстаём по очкам, и ядро остаётся не слабее его армии × PUSH_RATIO, то есть охотиться может и одно. Выстрел бегуна у
      *  флага не в счёт (lastFireTick — только армия). */
     private const val USE_DRY_HUNT = true
+    /** ОКНО ПОГОНИ НЕ ОБНУЛЯЕТСЯ МИГАНИЕМ (v76, матч 185 — MetalicaX, гонка очков при паритете 21900:22900, обе армии целы):
+     *  его блоб из девяти вооружённых ходил между A3 и R3 в 7–15 клетках от нас и не дрался, мы при 1,2 «толкали», и постура
+     *  мигала ANNIHILATE/HOLD каждые пять-шесть тиков (huntable 12/12 ↔ 0/12 — он шагает назад, см. evasive и открытую
+     *  находку матча 70); окно «погоня не сближается» (armyDistHist, v57) копилось только в ANNIHILATE и обнулялось каждым
+     *  HOLD — за 1900 тиков ни разу не набрало DETACH_WINDOW (dry=2503 на 1503-м), и вход в отряд через сухую погоню был
+     *  мёртв. HOLD БЕЗ ЛОВИМЫХ И С ВРАГОМ РЯДОМ (его вооружённый в ENGAGE_RANGE + RANGED_RANGE) — та же погоня на паузе: окно
+     *  копится и в нём; обнуляют его бой (fightOn), отход, уклонение, поход за флагом и HOLD без этих двух признаков: «любой
+     *  HOLD» выпускал отряды у поста возле лагеря стенда до толчка, который его стирает на 375-м (гейт 123/125, m31/m33 camp
+     *  из уничтожения в проигрыш по очкам), «HOLD без ловимых» — на 113-м тике у поста, пока его блоб фармил в 45 клетках
+     *  (124/125, m31 camp 7520:23669): дистанция «держалась», но никто не гнался. */
+    private const val USE_CHASE_WINDOW_HOLD = true
     /** Стая у флага не преграда для ТИХОГО фермера (v72, см. chooseFlagObjective): противник, не стрелявший FARMER_QUIET тиков
      *  с первой досягаемости, отходит от наших (стенд camp+shy, живые 133/152/159) — «цена боя» за его флаг с двенадцатью на нём
      *  бесконечна на бумаге и нулевая на деле, и ядро при паритете уходило к угловым флагам за сорок клеток (m31: (85,27) →
@@ -666,7 +677,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v75"
+    private const val BOT_VERSION = "v76"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1812,7 +1823,9 @@ object PainAndGain {
         // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
         val exchangeRecent = now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && now - lastHurtTick <= STALL_TICKS)
         val fightOn = inContact(armedEnemies, army) && (!USE_COLD_CONTACT || exchangeRecent)
-        if (posture == Posture.ANNIHILATE && !fightOn && armyDist >= 0) {
+        val pausedChase = USE_CHASE_WINDOW_HOLD && posture == Posture.HOLD && huntable.isEmpty() &&
+            armedEnemies.any { e -> army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
+        if ((posture == Posture.ANNIHILATE || pausedChase) && !fightOn && armyDist >= 0) {
             armyDistHist.addLast(armyDist)
             // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
             // отряд на 566-м при his_moved=0 по реплею (матч 133, одиннадцатый проигрыш фермеру-лагерю 8346:22771)
