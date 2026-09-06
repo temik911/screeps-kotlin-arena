@@ -327,6 +327,15 @@ run map-match35.txt -      screen+flagless
 run map-match35.txt -      nine+flagless
 run map-match33.txt match2 farm+weak
 run map-match28.txt -      farm+weak
+# v100 (06.09.2026, the operator's "the scatter on the stand and the opening without the corner"): `scatter` — the live
+# match-240 scatterer (ricardo18informatica2020, 17355:23708 with both armies whole) on the six maps of the spread family;
+# v99 won all six narrowly (m31 by 217, m34 by 1456), v100 (the opening at the post instead of the corner) by 3700–8300
+run map-match19.txt -      scatter
+run map-match28.txt -      scatter
+run map-match30.txt -      scatter
+run map-match31.txt -      scatter
+run map-match33.txt -      scatter
+run map-match34.txt -      scatter
 run map-match32.txt -      farm+weak
 run map-match30.txt match2 wing
 run map-match30.txt match2 hunter
