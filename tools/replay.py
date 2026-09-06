@@ -53,7 +53,7 @@ already disarmed — and the losses are in geometry: the enemy line stands at ex
 walk around our front to our ranged and healers (66 adjacent creep-ticks against our 28 in match 30), while our
 melee hold a line nobody attacks. See docs/pain-and-gain.md, matches 30–35, and the press (v30) that came out of it.
 """
-import argparse, gzip, json, re, sys
+import argparse, gzip, json, re, statistics, sys
 from collections import Counter
 
 RANGED_RANGE, HEAL_RANGE = 3, 3
@@ -99,8 +99,15 @@ def our_side(meta, us):
 
 
 def ticks(doc):
-    """Yields (k, start, now, acts) per tick: creeps before this tick's updates (what intents were judged on), after
-    them, and this tick's actions as {creep id: [codes]} plus the raw action list."""
+    """Yields (k, start, now, acts, raw) per tick — see frames(); the raw tick itself is dropped."""
+    for k, start, now, acts, raw, _ in frames(doc):
+        yield k, start, now, acts, raw
+
+
+def frames(doc):
+    """Yields (k, start, now, acts, raw, tick) per tick: creeps before this tick's updates (what intents were judged
+    on), after them, this tick's actions as {creep id: [codes]}, the raw action list, and the whole tick record —
+    structure energy and hits arrive in the tick's `s`, which the creep state above never sees."""
     creeps = {}
     for tick in doc['ticks']:
         k = tick['k']
@@ -119,7 +126,7 @@ def ticks(doc):
         acts = {}
         for a in tick.get('a', []):
             acts.setdefault(a[0], []).append(a[1])
-        yield k, start, creeps, acts, tick.get('a', [])
+        yield k, start, creeps, acts, tick.get('a', []), tick
 
 
 def header(meta, names, us_side):
@@ -380,11 +387,242 @@ def cmd_track(args):
     print('his creeps on flag cells (tick:flag(x,y):role):', ' '.join(f"{t}:{f}({x},{y}):{r[0]}" for t, f, (x, y), r in visits[:80]))
 
 
+PART_COST = {'m': 50, 'w': 100, 'c': 50, 'a': 80, 'r': 150, 'h': 250, 't': 10}
+BUILD_COST = {'tower': 1250, 'spawn': 1000, 'rampart': 200, 'extension': 200, 'container': 100,
+              'constructedWall': 100, 'road': 10, 'link': 5}
+
+
+def body_cost(body):
+    return sum(PART_COST.get(k, 0) * n for k, n in parse_body(body))
+
+
+def spawn_queue(doc, side):
+    """[(tick, body, cost)] — every creep that side started, in order. `n` records a creep on the tick it
+    appears, which is the tick the spawn was charged for it."""
+    out = []
+    for tick in doc['ticks']:
+        for n in tick.get('n', []):
+            if n[1] == side:
+                out.append((tick['k'], n[6], body_cost(n[6])))
+    return out
+
+
+def built(doc):
+    """[(id, kind, side, x, y, tick)] for structures that were not there at the start.
+
+    A structure the tool first saw mid-match carries a synthetic id (the initial ones are numbered from
+    1); the tick is the first one where it reports hits or energy, so it is the tick it became real,
+    give or take the first update. Construction sites are skipped — a site is a plan, not a structure."""
+    firstseen = {}
+    for tick in doc['ticks']:
+        for s in tick.get('s', []):
+            firstseen.setdefault(s[0], tick['k'])
+    out = []
+    for o in doc['objects']:
+        if o['kind'] in ('constructionSite', 'container', 'spawn'):
+            continue
+        t = firstseen.get(o['id'])
+        if t is not None and t > 1:
+            out.append((o['id'], o['kind'], o['side'], o['x'], o['y'], t))
+    return out
+
+
+def containers(doc):
+    """[(x, y, energy, appears)] — the map's energy, with the tick each container showed up.
+
+    The four corner piles and the two walled ones are there from tick 0. The rest arrive in mirrored
+    pairs, two every fifty ticks, and the tool numbers them a1, a2, a3 ... in order of appearance, so
+    the pair index gives the tick. That is a derivation from the ordering, not a reading: it is checked
+    against the first tick each container's energy changed, which can only come after it appeared."""
+    out = []
+    for o in doc['objects']:
+        if o['kind'] != 'container':
+            continue
+        appears = 0
+        if o['id'].startswith('a'):
+            appears = 50 * ((int(o['id'][1:]) + 1) // 2)
+        out.append((o['x'], o['y'], o['energy'], appears))
+    return out
+
+
+def cmd_economy(args):
+    """The production race: what each side picked up, what reached its spawn, and what it turned into.
+
+    Nothing here is inferred from our own logs — the replay carries every structure's energy per tick, so
+    the enemy's economy is as readable as ours, and it had never been read. A spawn's energy moves for
+    three reasons: it regenerates, a hauler delivers, and a creep is charged for at the tick it starts.
+    Adding the charge back gives the flow in; the regeneration is measured as the median flow (most ticks
+    are quiet ones) rather than assumed."""
+    doc, meta, names = load(args.replay)
+    us = our_side(meta, args.us)
+    header(meta, names, us)
+    objs = {o['id']: o for o in doc['objects']}
+    spawn_id = {o['side']: o['id'] for o in doc['objects'] if o['kind'] == 'spawn'}
+    energy = {o['id']: o.get('energy') or 0 for o in doc['objects']}
+    charged = {s: {} for s in (0, 1)}
+    for s in (0, 1):
+        for t, _, cost in spawn_queue(doc, s):
+            charged[s][t] = charged[s].get(t, 0) + cost
+    flow = {s: [] for s in (0, 1)}       # (tick, energy entering the spawn that tick, regen included)
+    took = {s: 0.0 for s in (0, 1)}      # energy withdrawn from the piles by that side
+    contested = decayed = 0.0
+    for k, start, now, acts, raw, tick in frames(doc):
+        for sid, hits, e in [(x[0], x[1], x[2]) for x in tick.get('s', [])]:
+            o = objs.get(sid)
+            if o is None:
+                continue
+            prev, energy[sid] = energy.get(sid, 0), e
+            if o['kind'] == 'spawn':
+                flow[o['side']].append((k, e - prev + charged[o['side']].pop(k, 0)))
+            elif o['kind'] == 'container' and e < prev:
+                drop = prev - e
+                # a withdraw reaches one cell, so whoever stood next to the pile that tick took it; a pile
+                # that empties with nobody beside it is the map taking it back (these piles decay)
+                near = {c['side'] for c in start.values() if rng((c['x'], c['y']), (o['x'], o['y'])) <= 1}
+                if len(near) == 1:
+                    took[near.pop()] += drop
+                elif near:
+                    contested += drop
+                else:
+                    decayed += drop
+    regen = {s: statistics.median([f for _, f in flow[s]]) if flow[s] else 0 for s in (0, 1)}
+    print(f"whole match, {meta['ticks']} ticks; the map hands out 80 energy per tick (two 2000 piles every 50)\n")
+    for s in (0, 1):
+        tag = 'OURS ' if s == us else 'ENEMY'
+        delivered = sum(max(0.0, f - regen[s]) for _, f in flow[s])
+        creeps = spawn_queue(doc, s)
+        structs = [b for b in built(doc) if b[2] == s]
+        struct_cost = sum(BUILD_COST.get(b[1], 0) for b in structs)
+        ticks_seen = len(flow[s]) or 1
+        print(f"{tag} {names[s]}: picked up {took[s]:.0f} from the piles, delivered {delivered:.0f} to the "
+              f"spawn ({delivered / ticks_seen:.1f}/tick), never arrived {max(0.0, took[s] - delivered):.0f}")
+        print(f"      spent {sum(c for _, _, c in creeps)} on {len(creeps)} creeps and {struct_cost} on "
+              f"{len(structs)} structures ({', '.join(sorted({b[1] for b in structs})) or 'none'}); "
+              f"ends holding {energy.get(spawn_id.get(s), 0):.0f}, spawn regenerates {regen[s]:.0f}/tick")
+    print(f"      piles nobody was standing next to when they emptied: {decayed:.0f} "
+          f"(they decay); with both sides beside them: {contested:.0f}")
+    print(f"\ncumulative energy delivered to the spawn, every {args.step} ticks:")
+    print(f"{'tick':>6} {names[0][:12]:>16} {names[1][:12]:>16}")
+    run = {s: 0.0 for s in (0, 1)}
+    idx = {s: 0 for s in (0, 1)}
+    for k in range(args.step, meta['ticks'] + 1, args.step):
+        for s in (0, 1):
+            while idx[s] < len(flow[s]) and flow[s][idx[s]][0] <= k:
+                run[s] += max(0.0, flow[s][idx[s]][1] - regen[s])
+                idx[s] += 1
+        print(f"{k:>6} {run[0]:>16.0f} {run[1]:>16.0f}")
+    print("\nwhoever's curve is above buys more army for the same body prices — that is the whole race.")
+
+
+def cmd_spawns(args):
+    doc, meta, names = load(args.replay)
+    us = our_side(meta, args.us)
+    header(meta, names, us)
+    for s in (0, 1):
+        tag = 'OURS ' if s == us else 'ENEMY'
+        q = spawn_queue(doc, s)
+        total = 0
+        print(f"\n{tag} {names[s]}: {len(q)} creeps, {sum(c for _, _, c in q)} energy")
+        for t, body, cost in q:
+            total += cost
+            print(f"  t={t:<5} {body:<28} {role(body):<7} {cost:>5}  running {total}")
+
+
+def cmd_scenario(args):
+    """Write what the stub needs to replay this opponent: the map, the piles, his queue and how he fought."""
+    doc, meta, names = load(args.replay)
+    us = our_side(meta, args.us)
+    him = 1 - us
+    spawns = [{'side': o['side'], 'x': o['x'], 'y': o['y'], 'energy': o.get('energy') or 0}
+              for o in doc['objects'] if o['kind'] == 'spawn']
+    walls = [{'x': o['x'], 'y': o['y'], 'hits': o['hits']}
+             for o in doc['objects'] if o['kind'] == 'constructedWall']
+    # how he fought, measured rather than assumed: does he walk into us, does he back off when a gun of
+    # ours closes in, and does he move as a body or as a trickle
+    kite_chances = kited = 0
+    group_sizes = []
+    closest = 99
+    our_spawn = next(s for s in spawns if s['side'] == us)
+    for k, start, now, acts, raw, tick in frames(doc):
+        his = [c for c in now.values() if c['side'] == him and c['role'] in ('melee', 'ranged', 'healer')]
+        ours = [c for c in now.values() if c['side'] == us and c['role'] in ('melee', 'ranged')]
+        if not his or not ours:
+            continue
+        closest = min(closest, min(rng((c['x'], c['y']), (our_spawn['x'], our_spawn['y'])) for c in his))
+        for cid, c in now.items():
+            if c['side'] != him or cid not in start:
+                continue
+            p = start[cid]
+            near = [o for o in ours if rng((p['x'], p['y']), (o['x'], o['y'])) <= 2]
+            if near:
+                kite_chances += 1
+                d0 = min(rng((p['x'], p['y']), (o['x'], o['y'])) for o in near)
+                d1 = min(rng((c['x'], c['y']), (o['x'], o['y'])) for o in near)
+                if d1 > d0:
+                    kited += 1
+        seen, best = set(), 0
+        for i, a in enumerate(his):
+            if i in seen:
+                continue
+            stack, n = [i], 0
+            seen.add(i)
+            while stack:
+                j = stack.pop()
+                n += 1
+                for k2, b in enumerate(his):
+                    if k2 not in seen and rng((his[j]['x'], his[j]['y']), (b['x'], b['y'])) <= 8:
+                        seen.add(k2)
+                        stack.append(k2)
+            best = max(best, n)
+        group_sizes.append(best)
+    kite = kited / kite_chances if kite_chances else 0.0
+    group = statistics.fmean(group_sizes) if group_sizes else 0.0
+    # the class is a lookup into behaviours the stub already has, not a new one invented per opponent
+    if closest > 20:
+        cls = 'farmer'
+    elif kite >= 0.2:
+        cls = 'healball'
+    elif group >= 3:
+        cls = 'pairs'
+    else:
+        cls = 'stream'
+    scenario = {
+        'source': meta.get('shortId'),
+        'opponent': names[him],
+        'result': 'we won' if meta['result'].get('winner') == us else (
+            'draw' if meta['result'].get('draw') else 'we lost'),
+        'ticks': meta['ticks'],
+        'width': meta['width'], 'height': meta['height'],
+        'terrain': doc['terrain'],
+        'ourSide': us,
+        'spawns': spawns,
+        'walls': walls,
+        'containers': [{'x': x, 'y': y, 'energy': e, 'appears': a} for x, y, e, a in containers(doc)],
+        'enemyQueue': [{'t': t, 'body': b, 'cost': c} for t, b, c in spawn_queue(doc, him)],
+        'enemyStructures': [{'kind': kind, 'x': x, 'y': y, 't': t}
+                            for _, kind, side, x, y, t in built(doc) if side == him],
+        'behaviour': {'class': cls, 'kite': round(kite, 3), 'group': round(group, 2),
+                      'closestToOurSpawn': closest},
+    }
+    out = args.out or f"{meta.get('shortId')}.scenario.json"
+    with open(out, 'w', encoding='utf-8') as f:
+        json.dump(scenario, f)
+    print(f"{out}: {names[him]}, {scenario['result']}, {meta['ticks']} ticks")
+    print(f"  his queue: {len(scenario['enemyQueue'])} creeps, "
+          f"{sum(c['cost'] for c in scenario['enemyQueue'])} energy; "
+          f"structures: {', '.join(s['kind'] + '@' + str(s['t']) for s in scenario['enemyStructures']) or 'none'}")
+    print(f"  behaviour: {cls} (kited away {100 * kite:.0f}% of the times a gun of ours came within two, "
+          f"largest group {group:.1f}, came within {closest} of our spawn)")
+    print(f"  play it: tools/stub/spawnandswamp/replay.sh {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     for name, fn, need_window in (('summary', cmd_summary, False), ('silent', cmd_silent, True), ('focus', cmd_focus, True), ('trace', cmd_trace, True),
-                                  ('choice', cmd_choice, False), ('track', cmd_track, False)):
+                                  ('choice', cmd_choice, False), ('track', cmd_track, False),
+                                  ('economy', cmd_economy, False), ('spawns', cmd_spawns, False),
+                                  ('scenario', cmd_scenario, False)):
         p = sub.add_parser(name)
         p.add_argument('replay')
         if need_window:
@@ -395,6 +633,8 @@ def main():
         if name == 'silent': p.add_argument('-n', type=int, default=12, help='examples of our own silent armed creep-ticks to print')
         if name == 'trace': p.add_argument('--side', choices=('us', 'them'), default='us')
         if name == 'track': p.add_argument('--step', type=int, default=50, help='ticks between position lines')
+        if name == 'economy': p.add_argument('--step', type=int, default=200, help='ticks between curve lines')
+        if name == 'scenario': p.add_argument('--out', help='where to write the scenario json')
         p.set_defaults(fn=fn)
     args = ap.parse_args()
     args.fn(args)
