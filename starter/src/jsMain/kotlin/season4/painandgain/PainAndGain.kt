@@ -462,7 +462,10 @@ object PainAndGain {
      *  гонки — флаг, к которому МЫ ближе любого его вооружённого: «неохраняемый сейчас» флаг, к которому его сиделец уже
      *  идёт (roost/spread на 20-м тике), выпускал отряд на пятьдесят тиков впустую — roost на восьми картах медленнее,
      *  spread m19 24322:21778 → 16111:24314. У MetalicaX это флаги нашей половины (R3 (85,49), H4 (90,8), A3 (67,31)),
-     *  которые его россыпь брала к 84–122-му. */
+     *  которые его россыпь брала к 84–122-му. И гонка гаснет от его СБОРА, а не от удара (v93, матч 232 — фермер けろびー
+     *  19-й раз, 12618:23446): гонка вышла на 65-м (трое), а на 82-м погасла от одного тычка — условие «обмена ещё не было»
+     *  делало её одноразовой; рассыпанный фермер не собирается никогда, и ядро против его крупнейшей группы из двух-трёх в
+     *  перевесе весь матч. Против кайтера и лагеря стенда гонки нет по признаку россыпи, против пар spread — по целям. */
     private const val USE_SCATTER_RACE = true
     /** ПУЛ ОТРЯДА МЕРИТ ЯДРО ПРОТИВ ЕГО МОЩИ, СЧИТАННОЙ ПРОТИВ ЯДРА, И ОТРЯД БЕЗ ДЕЛА ОТЗЫВАЕТСЯ (v84, матч 199 — MetalicaX
      *  пятый раз, 10996:17460 к 1700-му): на 763-м его лекарь занял наш A3, гонка стала проигранной, и пул отдал ТРЁХ
@@ -839,7 +842,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v92"
+    private const val BOT_VERSION = "v93"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2153,7 +2156,7 @@ object PainAndGain {
             // дебют-гонка (v91, см. USE_SCATTER_RACE): россыпь его армии до первого обмена
             val raceTargets = ctx.flags.count { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
                 (armedEnemies.minOfOrNull { getRange(it, f.pos) } ?: 999) > (army.minOfOrNull { getRange(it, f.pos) } ?: 999) }
-            val raceNow = USE_SCATTER_RACE && scattered && armedEnemies.size >= 4 && lastFireTick < 0 && lastHurtTick == 0 && raceTargets > 0
+            val raceNow = USE_SCATTER_RACE && scattered && armedEnemies.size >= 4 && raceTargets > 0
             if (posture == Posture.FLAG || posture == Posture.EVADE || posture == Posture.RETREAT) lastNonHuntTick = now
             // рассыпанный остаток — вход v75 как был; блоб-остаток — под стрелковой защитой пула и только после PASSIVE_TICKS
             // охоты без FLAG/EVADE/RETREAT («охота длилась» и для россыпи задерживала отряд: spread m33 24327:24222 → 19509:24315)
