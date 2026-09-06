@@ -717,6 +717,17 @@ object PainAndGain {
      *  на четверть окна, дистанция больше ENGAGE_RANGE) стоящий лагерь не даёт, гуляющий блоб — даёт: простой в этом окне,
      *  флаги на STALL_COOLDOWN всей армией. */
     private const val USE_KEEPS_DISTANCE_STALL_WINDOW = true
+    /** ДИСТАНЦИЮ ДЕРЖИТ И ТОТ, КТО ПОЧТИ НЕ ХОДИТ (v98, матч 241 — MetalicaX четырнадцатый раз из пятнадцати, 20688:22144+ при
+     *  наших 16000 и его 14400): толчок при 1,26–1,58 с t=300 по 830 в 8–13 клетках от его блоба у A3 (67,31), reach 0/5, ни
+     *  выстрела; блоб шагал назад на 2–3 клетки, все его крипы становились «уходящими» (evasive, окно 8), huntable мигал 0/11 ↔
+     *  6/11, и толчок гас и загорался 21 раз за 530 тиков (HOLD → к посту на западе → ANNIHILATE → обратно). Окно v92 требует
+     *  его сдвига на четверть окна (12 клеток за 50) — застенчивый блоб смещается на 3–10 и в окно не попадает; свободные D5 и
+     *  A3 (31,67) 500 тиков не взяты, пикет сработал лишь на 829-м, когда блоб ушёл к югу, и за 80 тиков взяты четыре флага.
+     *  Для ПРОСТОЯ окно без требования его сдвига: толчок DETACH_WINDOW тиков без боя, дистанция не сократилась и больше
+     *  броска — он держит дистанцию, как бы он это ни делал. Стоячий лагерь, у которого замираем мы в 3–5 клетках (m31 camp),
+     *  под окно не попадает (дистанция не больше ENGAGE_RANGE); марш к нему сокращает дистанцию. Для ОТРЯДА (distanceKept →
+     *  quietChain) требование сдвига остаётся (v57/v59). */
+    private const val USE_KEEPS_DISTANCE_ANY_MOVE = true
     private const val LEASH_RANGE = 8
 
     /** Плотность строя при враге рядом (см. compact): шаг разрешён только на клетку в COMPACT_RANGE от центра
@@ -899,7 +910,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v97"
+    private const val BOT_VERSION = "v98"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2109,18 +2120,19 @@ object PainAndGain {
         // которого замираем мы, дистанцию не «держит». Окно отряда — DETACH_WINDOW (v59): по восьми тикам (CHASE_WINDOW) отряд
         // собрался на 207-м тике матча 139, когда дистанция за сто тиков сократилась с 40 до 12 — армия почти догнала, а
         // восьмитиковое окно поймало паузу; ядро без пяти встало, он ушёл и запарковался (3174:22931)
-        fun kept(window: Int): Boolean {
+        fun kept(window: Int, needMoved: Boolean = true): Boolean {
             if (armyDistHist.size <= window || enemyCentHist.size <= window) return false
             val d0 = armyDistHist.elementAt(armyDistHist.size - 1 - window)
             val a = enemyCentHist.elementAt(enemyCentHist.size - 1 - window); val b = enemyCentHist.last()
             if (a < 0 || b < 0) return false
             val moved = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
-            return armyDistHist.last() >= d0 && armyDistHist.last() > ENGAGE_RANGE && moved >= window / 4
+            return armyDistHist.last() >= d0 && armyDistHist.last() > ENGAGE_RANGE && (!needMoved || moved >= window / 4)
         }
         val distanceKept = combatEnemies.isNotEmpty() && kept(DETACH_WINDOW)
         if (distanceKept) lastDistanceKeptTick = now
+        // для простоя — и без его сдвига (v98, USE_KEEPS_DISTANCE_ANY_MOVE): застенчивый блоб держит дистанцию шагами на 2–3
         val keepsDistance = (USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)) ||
-            (USE_KEEPS_DISTANCE_STALL_WINDOW && distanceKept)
+            (USE_KEEPS_DISTANCE_STALL_WINDOW && (distanceKept || (USE_KEEPS_DISTANCE_ANY_MOVE && combatEnemies.isNotEmpty() && kept(DETACH_WINDOW, needMoved = false))))
         while (marchHist.size > MARCH_STALL_TICKS) marchHist.removeFirst()
         // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
         val marchStalled = pushing && marchCell >= 0 && marchHist.size == MARCH_STALL_TICKS &&
