@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 37
+    private const val BOT_VERSION = 38
 
     private const val LATE_MARGIN = 60
 
@@ -271,9 +271,10 @@ object SpawnAndSwamp {
      *  пяти клетках от спавна, тревога держалась 81%, а башня не достала бы ни до кого. */
     private val homeFightTicks = ArrayDeque<Int>()
 
-    /** Дом в критическом положении в прошлом тике: враг бьёт спавн и гарнизон не держит. Пока так,
-     *  каждая единица в спавне принадлежит бойцу, и смотритель из спавна не берёт. */
-    private var lastHomeCritical = false
+    /** Доживает ли спавн до полного бойца при нынешнем входящем уроне (прошлый тик). Пока доживает,
+     *  смотритель может брать из спавна: башня — такое же вложение, как боец, и достраивать её надо.
+     *  Не доживает — каждая единица принадлежит бойцу, как и в правиле лагеря. */
+    private var lastSpawnOutlivesFighter = true
 
     /** РАЗМЕН за последнее окно: чистая потеря хитов по обе стороны, по тикам. Чистая — значит с
      *  вычетом лечения: отбитый и залеченный хит прогрессом не является, а именно им счёт и обманывается.
@@ -1286,7 +1287,7 @@ object SpawnAndSwamp {
                 return
             }
         }
-        lastHomeCritical = alarm && ourPower < enemyPower && spawnUnderFire
+        lastSpawnOutlivesFighter = spawnLife > fullBody.size * CREEP_SPAWN_TIME
         if (DEBUG_LOG && fighterFirst && energy < fullCost && getTicks() % 10 == 0) {
             println("spawn: fighter first — enemy arrives in $threatIn, hold=${holdReady.toInt()} invest=${investReady.toInt()} deficit=${deficit.toInt()} alarm=$alarm closes=$closesNow flow=${(flow * 10).toInt() / 10.0}")
         }
@@ -1350,15 +1351,18 @@ object SpawnAndSwamp {
         // БАШНЯ ДОМА. Площадка ничего не стоит, поэтому ставится сразу, как только счёт (towerWorth)
         // говорит, что дома она даёт больше бойца за ту же энергию. Смотритель — часть цены башни:
         // без него площадку некому строить, а готовая башня молчит (ёмкость — один выстрел)
-        if (ctx.myTowers.isEmpty() && ctx.mySites.isEmpty()) {
+        if (ctx.myTowers.isEmpty()) {
+            // площадка уже стоит — спрашиваем про ОСТАТОК: бросить недостроенное дороже, чем достроить
+            val site = ctx.mySites.minByOrNull { getRange(spawn, it) }
+            val left = if (site == null) -1 else ((site.progressTotal ?: 0) - (site.progress ?: 0)).coerceAtLeast(0)
             val trace = StringBuilder()
-            val worth = towerWorth(defenders, threats, flow, trace)
+            val worth = towerWorth(defenders, threats, flow, left, trace)
             if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && trace.isNotEmpty()) println("tower: worth=$worth$trace")
             // СЧЁТ УЖЕ ОТВЕТИЛ. towerWorth сравнил башню с бойцом против тех же врагов и с замеренной
             // смертностью бойцов; спрашивать сверх этого «а не купить ли всё-таки бойца» (fighterFirst)
             // значит запретить башню ровно там, где она и нужна, — враг у ворот (матч 26: worth=true
             // трижды, площадка не поставлена ни разу). Остаются только часы: спавн должен дожить
-            if (worth) {
+            if (worth && site == null) {
                 val spot = towerSpot(ctx)
                 if (spot != null) {
                     val r = createConstructionSite(spot.x, spot.y, StructureTower::class.js)
@@ -3154,7 +3158,7 @@ object SpawnAndSwamp {
      *  Башня работает лишь дома, поэтому её урон и хиты умножены на замеренную долю боя дома (homeShare);
      *  бойцу — скидка на смертность (survivalOfFighters): купленный боец гибнет, поставленная башня стоит.
      *  Цена башни — вместе со смотрителем: без него площадку некому строить, а готовая башня молчит. */
-    private fun towerWorth(defenders: List<Creep>, threats: List<Creep>, flow: Double, trace: StringBuilder? = null): Boolean {
+    private fun towerWorth(defenders: List<Creep>, threats: List<Creep>, flow: Double, left: Int = -1, trace: StringBuilder? = null): Boolean {
         val share = homeShare()
         if (share <= 0.0 || threats.isEmpty()) return false
         val heal = threats.sumOf { InfluenceMap.profileOf(it).heal }
@@ -3163,7 +3167,10 @@ object SpawnAndSwamp {
         val base = lanchester(dps, heal, hits.toInt())
         // враг бьёт спавн с трёх клеток, башня стоит во втором кольце — худший случай по дальности
         val towerDps = InfluenceMap.towerShot(TOWER_RING + RANGED_RANGE) / InfluenceMap.towerCooldown
-        val towerPrice = buildCost("StructureTower") + builderBody(builderWork(flow)).sumOf { cost(it) }
+        // цена — ОСТАТОК, а не всё вложенное: после 800 из 1250 башня стоит 450, и с бойцом сравнивать
+        // надо именно их. Вложенное уже потрачено и выбор больше не определяет
+        val towerPrice = (if (left >= 0) left else buildCost("StructureTower")) +
+            (if (left >= 0) 0 else builderBody(builderWork(flow)).sumOf { cost(it) })
         val withTower = lanchester(dps + towerDps * share, heal, (hits + TOWER_HITS * share).toInt())
         val body = fighterBody(SPAWN_ENERGY_CAPACITY)
         val bodyDps = (body.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER + body.count { it == ATTACK } * ATTACK_POWER).toDouble()
@@ -3230,7 +3237,7 @@ object SpawnAndSwamp {
             val goal: Position? = site ?: tower
             val reach = if (site != null) BUILD_RANGE else 1
             val canAct = goal != null && getRange(b, goal) <= reach
-            val mayTake = !lastHomeCritical && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
+            val mayTake = lastSpawnOutlivesFighter && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
             }
