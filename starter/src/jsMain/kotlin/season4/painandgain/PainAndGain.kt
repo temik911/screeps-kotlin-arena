@@ -478,6 +478,12 @@ object PainAndGain {
      *  побьёт, а двое ближайших вооружённых свободных побьют (по Ланчестеру пары против стаи), получает обоих; пул отпускает
      *  столько, сколько требуют охраны целей (флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного). */
     private const val USE_RUNNER_PAIRS = true
+    /** ВЫПУСК С ДЕБАФФОМ ЦЕЛИ (v95, решение оператора 06.09.2026): при точном паритете (матч 237, 3507:3679 ↔ 3679:3507)
+     *  выпуск одного крипа опускал ядро под порог, как только бегун брал флаг (дебафф холдера ложится на всю сторону), и
+     *  одна мера (v94) возвращала его — 56 строк отряда по одному в такт DETACH_WINDOW. Пул проверяет ядро без крипа И с
+     *  дебаффом флага, за которым тот пойдёт (ближайший к нему чужой флаг, неохраняемый предпочтительно), той же
+     *  гипотетической мерой, что captureAllowed (powerAfter): порог не держится — крипа не отпускать. */
+    private const val USE_RELEASE_WITH_TARGET_DEBUFF = true
     /** ПУЛ ОТРЯДА МЕРИТ ЯДРО ПРОТИВ ЕГО МОЩИ, СЧИТАННОЙ ПРОТИВ ЯДРА, И ОТРЯД БЕЗ ДЕЛА ОТЗЫВАЕТСЯ (v84, матч 199 — MetalicaX
      *  пятый раз, 10996:17460 к 1700-му): на 763-м его лекарь занял наш A3, гонка стала проигранной, и пул отдал ТРЁХ
      *  стрелков — ядро проверялось против theirs=3222, его мощи против ПОЛНОЙ армии; против ядра из девяти его мощь 3520, и
@@ -853,7 +859,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v94"
+    private const val BOT_VERSION = "v95"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1392,7 +1398,11 @@ object PainAndGain {
 
     /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
      *  вражья — без них, если флаги были его. */
-    private fun powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double> {
+    private fun powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double> =
+        powerAfterFor(ctx, ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }, ctx.combatEnemies, f)
+
+    /** То же для заданной стороны и группы врага (v95: пул проверяет ядро без крипа с дебаффом его флага-цели). */
+    private fun powerAfterFor(ctx: Ctx, side: List<Creep>, opp: List<Creep>, f: FlagInfo): Pair<Double, Double> {
         val taking = HashSet(plannedCaptures); taking.add(f.id)
         fun mods(mine: Boolean): HypoMods {
             fun k(type: String): Double {
@@ -1404,12 +1414,12 @@ object PainAndGain {
         }
         val ourMods = mods(true)
         val theirMods = mods(false)
-        // наша СТОРОНА, не ядро (v59): паритет захвата — страховка от аннигиляции стороны, а отряженные в бегуны (см. USE_DETACH)
-        // живы и вооружены. Ядро без пяти отряжённых стояло в паритете (2918 против 2954), захват был запрещён ВСЕМ, и четверо
-        // отряжённых 800 тиков стояли POISED в клетке от свободных D5, A3, R3 и H4 — 3174:22931, двенадцатый проигрыш фермеру
-        // (матч 139); до отряда, при 1,41, захваты были разрешены и скаутам
-        val side = ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }
-        return powerOf(side, ctx.combatEnemies, ourMods, theirMods) to powerOf(ctx.combatEnemies, side, theirMods, ourMods)
+        // для captureAllowed сторона — армия с вооружёнными и лечащими бегунами (v59): паритет захвата — страховка от
+        // аннигиляции стороны, а отряженные в бегуны (см. USE_DETACH) живы и вооружены. Ядро без пяти отряжённых стояло в
+        // паритете (2918 против 2954), захват был запрещён ВСЕМ, и четверо отряжённых 800 тиков стояли POISED в клетке от
+        // свободных D5, A3, R3 и H4 — 3174:22931, двенадцатый проигрыш фермеру (матч 139); до отряда, при 1,41, захваты были
+        // разрешены и скаутам
+        return powerOf(side, opp, ourMods, theirMods) to powerOf(opp, side, theirMods, ourMods)
     }
 
     /** Цена флага в силе — доля нашей мощи, которая останется после захвата (1 — бесплатно): флаг лечения
@@ -2216,12 +2226,20 @@ object PainAndGain {
                     detachedIds.removeAll(idle.toSet()); idle.forEach { idleRunnerTicks.remove(it) }; detachRecallTick = now
                 }
             }
+            // ОДНА ОПОРА (v95b): группа врага и порог одни для выпуска, проверки с дебаффом цели и отзыва — при гонке выпуск
+            // мерился против его крупнейшей группы, а отзыв против всей армии при 1,3, и трое выходили и возвращались на
+            // следующий тик (m31 camp: 173/174, 255/256). Порог ядра в проигранной гонке НЕ опускается до порога захватов
+            // (PARITY_FLOOR_LOST, v88): это исключение про захват стороной, а не про раскол ядра — с 0,75 для ядра пул против
+            // пар spread отпускал лишних, и spread из 6/6 стал 2/6 (m28 24322:19608 → 14960:24320); при паритете выпуска с
+            // дебаффом цели просто нет, а скауты берут при 0,75 как раньше
+            val coreRef = if (viaRace) largestMembers else combatEnemies
+            val coreFloor = if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR
             // одна мера ядра (v94): порог держится каждый тик — просело, сильнейший отделённый возвращается
             if (USE_ONE_CORE_MEASURE && farmer && detachedIds.isNotEmpty()) {
-                val floorNow = if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR
+                val floorNow = coreFloor
                 var core = army.filter { it.id !in detachedIds }
                 var recalled = 0
-                while (detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, combatEnemies) < enemyPowerOf(combatEnemies, core) * floorNow) {
+                while (detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, coreRef) < enemyPowerOf(coreRef, core) * floorNow) {
                     val back = ctx.runners.filter { it.id in detachedIds }.maxByOrNull { ourPowerOf(listOf(it), emptyList()) } ?: break
                     detachedIds.remove(back.id); core = core + back; recalled++
                 }
@@ -2244,10 +2262,19 @@ object PainAndGain {
                     // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
                     // его мощь — против ядра-кандидата, не против полной армии (v84: пары Ланчестера)
                     // в дебют-гонке (v91) ядро мерится против его крупнейшей группы: россыпь армией не дерётся
-                    val theirsVsCore = if (viaRace) enemyPowerOf(largestMembers, without) else if (USE_DETACH_PAIRED_MEASURE) enemyPowerOf(combatEnemies, without) else theirs
-                    if (without.none { hasWeapon(it) } || ourPowerOf(without, if (viaRace) largestMembers else combatEnemies) < theirsVsCore * (if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR)) break
+                    val theirsVsCore = if (USE_DETACH_PAIRED_MEASURE || viaRace) enemyPowerOf(coreRef, without) else theirs
+                    if (without.none { hasWeapon(it) } || ourPowerOf(without, coreRef) < theirsVsCore * coreFloor) break
                     // сухая охота без россыпи — стрелковая масса ядра держит перевес над его стрелками (v82, кайтер)
                     if (viaDryHunt && !scattered && USE_DRY_HUNT_RANGED_GUARD && rangedMass(without) < theirRangedMass * PUSH_RATIO) break
+                    // выпуск с дебаффом цели (v95): ядро без крипа и с дебаффом флага, за которым он пойдёт, держит тот же порог
+                    if (USE_RELEASE_WITH_TARGET_DEBUFF) {
+                        val target = ctx.flags.filter { !it.ours && it.occupant?.my != true }
+                            .minByOrNull { f -> getRange(c, f.pos) + (if (armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }) 100 else 0) }
+                        if (target != null) {
+                            val (oursAfter, theirsAfter) = powerAfterFor(ctx, without, coreRef, target)
+                            if (oursAfter < theirsAfter * coreFloor) break
+                        }
+                    }
                     detachedIds.add(c.id)
                     remaining = without
                 }
