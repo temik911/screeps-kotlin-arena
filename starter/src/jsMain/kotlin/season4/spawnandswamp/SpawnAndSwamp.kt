@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 42
+    private const val BOT_VERSION = 43
 
     private const val LATE_MARGIN = 60
 
@@ -1727,8 +1727,12 @@ object SpawnAndSwamp {
             .sortedWith(compareByDescending<Creep> { InfluenceMap.profileOf(it).heal }.thenBy { it.hits })
             .map { Def(it.hits.toDouble(), effectiveDps(it, wave, spawn), InfluenceMap.profileOf(it).heal) })
         var defHits = defs.firstOrNull()?.hits ?: 0.0
-        class Gun(val tower: TowerInfo, val shot: Double, var next: Int)
-        val guns = towers.map { Gun(it, InfluenceMap.towerShot(towerRangeFor(it, listOf(spawn))), maxOf(0, it.cooldown)) }
+        // башня — цель с хитами: её огонь идёт, пока она жива, и наш урон её снимает (см. кольцо ниже)
+        class Gun(val tower: TowerInfo, val shot: Double, var next: Int, var hits: Double)
+        val guns = towers.mapTo(ArrayList()) {
+            Gun(it, InfluenceMap.towerShot(towerRangeFor(it, listOf(spawn))), maxOf(0, it.cooldown),
+                (it.obj?.hits ?: TOWER_HITS).toDouble())
+        }
         var lost = 0.0
         fun fire(t: Int, shotOf: (Gun) -> Double) {
             for (g in guns) {
@@ -1802,8 +1806,26 @@ object SpawnAndSwamp {
                     defHits = (defs.firstOrNull()?.hits ?: 0.0) - carry
                 }
             } else {
-                spawnHits -= ourDps
-                if (spawnHits <= 0.0) return SiegeResult(true, i + 1, lost.toInt())
+                // защитников нет — БАШНЯ перед спавном: пока она жива, её выстрел ложится каждый кулдаун
+                // до конца осады, и снять его — то же, что снять защитника, только навсегда. Лечения у
+                // неё нет, хиты известны, и при собранном огне это десяток тиков. Мягкие цели вперёд:
+                // защитники и стреляют, и умирают быстрее, поэтому они выше по порядку
+                // ...и только если она умрёт РАНЬШЕ спавна: спавн и есть условие победы, а башня —
+                // помеха. Три башни крепости это девять тысяч хитов против трёх у спавна: грызть их
+                // вместо цели — проигрыш по определению
+                // ...и только если ВСЕ достающие башни в сумме не дороже спавна. При равных хитах (в этой
+                // арене у обоих по 3000) башня выгоднее: урон тот же, а стрелять она больше не будет
+                // никогда — ни по этой волне, ни по следующим. Три башни крепости — девять тысяч против
+                // трёх, и грызть их вместо цели уже проигрыш. Сравнение то же, что в стрельбе
+                val reach = guns.filter { it.shot > 0.0 }
+                val gun = if (reach.sumOf { it.hits } <= (spawn.hits ?: SPAWN_HITS).toDouble()) reach.firstOrNull() else null
+                if (gun != null) {
+                    gun.hits -= ourDps
+                    if (gun.hits <= 0.0) guns.remove(gun)
+                } else {
+                    spawnHits -= ourDps
+                    if (spawnHits <= 0.0) return SiegeResult(true, i + 1, lost.toInt())
+                }
             }
         }
         return SiegeResult(false, SIEGE_LIMIT, lost.toInt())
@@ -2401,7 +2423,15 @@ object SpawnAndSwamp {
         }
 
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
-        healAndShoot(fighters, allies, enemyCreeps, enemySpawn, focusTarget, pushing, wallTarget)
+        // БАШНЯ — ЦЕЛЬ ПЕРЕД СПАВНОМ, но после крипов: порядок тот же, что в симуляции осады (мягкие
+        // вперёд — они и стреляют, и умирают быстрее), и разнобой между стрельбой и симуляцией как раз
+        // и давал стенду разброс. Кормленная башня живёт до конца осады и бьёт каждый кулдаун; спавн
+        // не стреляет вовсе, поэтому его очередь последняя
+        val enemySpawnHits = enemySpawn?.hits ?: 0
+        val liveTowers = ctx.enemyTowers.filter { it.fed && (it.obj?.hits ?: 0) > 0 }
+        val towerTarget = if (liveTowers.sumOf { it.obj?.hits ?: 0 } > enemySpawnHits) null
+            else liveTowers.minByOrNull { it.obj?.hits ?: Int.MAX_VALUE }?.obj
+        healAndShoot(fighters, allies, enemyCreeps, enemySpawn, focusTarget, pushing, wallTarget, towerTarget)
         return ourOffense
     }
 
@@ -2531,7 +2561,7 @@ object SpawnAndSwamp {
 
     /** Лечение и стрельба за один проход (см. spawn-strike: heal вплотную совместим со стрельбой,
      *  rangedHeal — нет; лечение распределяется по потребности с учётом входящего урона). */
-    private fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, stormSpawn: Boolean, wallTarget: StructureWall? = null) {
+    private fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, stormSpawn: Boolean, wallTarget: StructureWall? = null, towerTarget: StructureTower? = null) {
         val healDone = HashMap<String, Int>()
         val incoming = HashMap<String, Int>()
         fun need(target: Creep): Int {
@@ -2548,7 +2578,7 @@ object SpawnAndSwamp {
                 if (closeTarget != null) {
                     creep.heal(closeTarget)
                     healDone[closeTarget.id] = (healDone[closeTarget.id] ?: 0) + healParts * HEAL_POWER
-                    shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget, active)
+                    shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget, active, towerTarget)
                     continue
                 }
                 val farTarget = candidates.filter { it.hitsMax - it.hits > 0 }.maxByOrNull { need(it) }
@@ -2558,15 +2588,16 @@ object SpawnAndSwamp {
                     continue
                 }
             }
-            shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget, active)
+            shoot(creep, enemyCreeps, enemySpawn, focusTarget, stormSpawn, wallTarget, active, towerTarget)
         }
     }
 
-    private fun shoot(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, stormSpawn: Boolean, wallTarget: StructureWall? = null, allies: List<Creep> = emptyList()) {
+    private fun shoot(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, stormSpawn: Boolean, wallTarget: StructureWall? = null, allies: List<Creep> = emptyList(), towerTarget: StructureTower? = null) {
         if (!hasRanged(creep)) return
         val creepsInRange = enemyCreeps.filter { creep.getRangeTo(it) <= RANGED_RANGE }
         val spawnInRange = enemySpawn != null && creep.getRangeTo(enemySpawn) <= RANGED_RANGE
-        if (creepsInRange.isEmpty() && !spawnInRange) {
+        val towerInRange = towerTarget != null && creep.getRangeTo(towerTarget) <= RANGED_RANGE
+        if (creepsInRange.isEmpty() && !spawnInRange && !towerInRange) {
             // стрелять не по кому — добиваем стену пролома, если она в дальности
             if (wallTarget != null && creep.getRangeTo(wallTarget) <= RANGED_RANGE) creep.rangedAttack(wallTarget)
             return
@@ -2582,6 +2613,11 @@ object SpawnAndSwamp {
 
         // штурм: спавн — пока в дальности нет боевых крипов (они стреляют, спавн — нет; симуляция осады
         // считает так же: защитники первыми, затем спавн), носильщики башни огня не отвлекают
+        // боевых крипов в дальности нет — башня, потом спавн (тот же порядок, что в симуляции)
+        if (combatInRange.isEmpty() && towerInRange) {
+            creep.rangedAttack(towerTarget!!)
+            return
+        }
         if (stormSpawn && spawnInRange && combatInRange.isEmpty()) {
             creep.rangedAttack(enemySpawn!!)
             return
