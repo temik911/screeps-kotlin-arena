@@ -120,6 +120,21 @@ function stepAway(c, from) {
   const s = r.path[0];
   if (s) c.move(getDirection(s.x - c.x, s.y - c.y));
 }
+// one greedy step back: the free neighbour cell farthest from the nearest of `from` (a flee path with every creep at 255
+// finds nothing inside a formed line, and the screen's ranged stood at one or two from ours in 80–100 % of contact samples)
+function stepBack(c, from) {
+  let best = null, bd = Math.min(...from.map((f) => range(c, f)));
+  const taken = new Set(creeps().filter((o) => !o.spawning && o !== c).map((o) => o.x * 100 + o.y));
+  for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) {
+    if (!dx && !dy) continue;
+    const x = c.x + dx, y = c.y + dy;
+    if (!inBounds(x, y) || taken.has(x * 100 + y) || world.terrain[idx(x, y)] === 1) continue;
+    const d = Math.min(...from.map((f) => Math.max(Math.abs(x - f.x), Math.abs(y - f.y))));
+    if (d > bd) { bd = d; best = { x, y }; }
+  }
+  if (best) c.move(getDirection(best.x - c.x, best.y - c.y));
+  return !!best;
+}
 function isRunner(c) { return c.body.every((p) => p.type === M); }
 // 'nine' (match 9 opponent): our healers first, then the lowest hits — two of ours lost every HEAL part by tick 140
 const healerOf = (o) => live(o, H) > 0 && live(o, A) === 0 && live(o, R) === 0;
@@ -218,7 +233,7 @@ function screenMove(c, plan, fighters, ours) {
     const prey = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= 3).sort((a, b) => range(c, a) - range(c, b))[0];
     if (prey) { stepToward(c, prey, 1); return; }
   }
-  if (armedClose.length) { stepAway(c, armedClose); return; }
+  if (armedClose.length) { if (!stepBack(c, armedClose)) stepAway(c, armedClose); return; }
   // '+focus' (matches 140–179, 05–06.09.2026): the live line — Coldkimchi's and けろびー's fighting build — stands at three from
   // our MOST FORWARD creep, the one every gun of its goes to (targetKey), so all five reach the same target: four or more shots
   // on one creep in 11–28 % of its firing ticks against 0–3 % of ours. The plain screen keeps three from each ranged's OWN
@@ -228,6 +243,12 @@ function screenMove(c, plan, fighters, ours) {
     const focus = ourF.slice().sort((a, b) => range(anchor, a) - range(anchor, b) || a.hits - b.hits)[0];
     if (focus) {
       if (isR(c)) {
+        // the live ranged keep EXACTLY three from the nearest of ours and step back when one of ours steps to two (the
+        // 'keeps its distance' lines of every standing fight): matches 191/195/198 put his ranged at 3–4 from our nearest
+        // in 800 of 1200 creep-ticks and never at one or two, while this screen's ranged, standing still at three or
+        // closer, were at one or two in 80–100 % of contact samples and dead by t=160–200 (06.09.2026, item 5)
+        const nearest = ourF.slice().sort((a, b) => range(c, a) - range(c, b))[0];
+        if (nearest && range(c, nearest) < 3) { if (!stepBack(c, [nearest])) stepAway(c, [nearest]); return; }
         if (range(c, focus) <= 3) return;
         if (!formed && !has('fast') && range(c, slot) > 1) { stepToward(c, slot, 0); return; }
         stepToward(c, focus, 3); return;
@@ -236,7 +257,7 @@ function screenMove(c, plan, fighters, ours) {
       // 140–179 (adjacent to ours 54 % of their creep-ticks in 140, at two or three 72 % in 145): they hold our melee off the
       // ranged behind them and hit what steps in; a melee of ours adjacent gets the swing (fireAt) and then a step back to two
       const adjOurs = ourF.filter((o) => range(c, o) <= 1);
-      if (adjOurs.length && range(c, focus) <= 1) { stepAway(c, adjOurs); return; }
+      if (adjOurs.length && range(c, focus) <= 1) { if (!stepBack(c, adjOurs)) stepAway(c, adjOurs); return; }
       if (range(c, focus) > 2) { stepToward(c, focus, 2); return; }
       return;
     }
