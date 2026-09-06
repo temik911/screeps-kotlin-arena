@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|camp|screen (+flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|camp (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -134,12 +134,20 @@ const rotating = new Set();
 // FORWARD creep — the one our healers have not caught up with — then the lowest hits
 let focusAnchor = null;
 const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
+// the enemy's fire concentration, as tools/replay.py's conc counts it live: per tick the largest number of its single-target
+// shots on one of ours; reported at the end as a histogram (matches 140–179: the live lines put four or more on one creep in
+// 11–28 % of their firing ticks, the bot 0–3 %)
+const eShots = new Map();
+const eConc = { ticks: 0, hist: [0, 0, 0, 0, 0, 0] };
+function eConcTick() {
+  if (eShots.size) { let m = 0; for (const v of eShots.values()) if (v > m) m = v; eConc.ticks++; eConc.hist[Math.min(m, 5)]++; eShots.clear(); }
+}
 function fireAt(c, ours) {
   const inRange = ours.filter((o) => range(c, o) <= 3);
   if (live(c, R) > 0 && inRange.length) {
     const close = inRange.filter((o) => range(c, o) <= 2);
     if (close.length >= 2 && !NINE) c.rangedMassAttack();
-    else c.rangedAttack(inRange.sort((a, b) => targetKey(a) - targetKey(b))[0]);
+    else { const t = inRange.sort((a, b) => targetKey(a) - targetKey(b))[0]; c.rangedAttack(t); eShots.set(t.id, (eShots.get(t.id) || 0) + 1); }
   }
   if (live(c, A) > 0) {
     const adj = inRange.filter((o) => range(c, o) <= 1);
@@ -211,6 +219,28 @@ function screenMove(c, plan, fighters, ours) {
     if (prey) { stepToward(c, prey, 1); return; }
   }
   if (armedClose.length) { stepAway(c, armedClose); return; }
+  // '+focus' (matches 140–179, 05–06.09.2026): the live line — Coldkimchi's and けろびー's fighting build — stands at three from
+  // our MOST FORWARD creep, the one every gun of its goes to (targetKey), so all five reach the same target: four or more shots
+  // on one creep in 11–28 % of its firing ticks against 0–3 % of ours. The plain screen keeps three from each ranged's OWN
+  // nearest armed creep and spreads its fire over five targets — which is why it loses to the block (m30 at 199, m31 at 318)
+  // while the live line wins nine of ten. With +focus a ranged of the screen keeps exactly three from that one creep
+  if (has('focus')) {
+    const focus = ourF.slice().sort((a, b) => range(anchor, a) - range(anchor, b) || a.hits - b.hits)[0];
+    if (focus) {
+      if (isR(c)) {
+        if (range(c, focus) <= 3) return;
+        if (!formed && !has('fast') && range(c, slot) > 1) { stepToward(c, slot, 0); return; }
+        stepToward(c, focus, 3); return;
+      }
+      // the live line's melee stand at TWO from our most forward creep, in front of their ranged — the poke of matches 73 and
+      // 140–179 (adjacent to ours 54 % of their creep-ticks in 140, at two or three 72 % in 145): they hold our melee off the
+      // ranged behind them and hit what steps in; a melee of ours adjacent gets the swing (fireAt) and then a step back to two
+      const adjOurs = ourF.filter((o) => range(c, o) <= 1);
+      if (adjOurs.length && range(c, focus) <= 1) { stepAway(c, adjOurs); return; }
+      if (range(c, focus) > 2) { stepToward(c, focus, 2); return; }
+      return;
+    }
+  }
   if (nearestArmed && range(c, nearestArmed) <= 3) return;
   if (range(c, slot) > 1) { stepToward(c, slot, 0); return; }
   // '+fast' (match 78, Coldkimchi): the live line never waits to form — it walks at our army at full speed and forms on
@@ -290,6 +320,7 @@ function healAt(c, mine) {
   if (range(c, hurt) <= 1) c.heal(hurt); else c.rangedHeal(hurt);
 }
 function enemyTick() {
+  eConcTick();
   const flags = world.objects.filter((o) => o.exists && o.kind === 'flag');
   const mine = creeps().filter((c) => c.owner === 1);
   const ours = creeps().filter((c) => c.owner === 0);
@@ -354,7 +385,7 @@ function enemyTick() {
   const blockPlan = ((has('block') || has('wing') || has('screen')) && armyMode === 'fight') || (has('screen') && armyMode === 'march') ? planBlock(fighters, ours, ourCentroid) : null;
   focusAnchor = blockPlan ? blockPlan.anchor : null;
   for (const c of fighters) {
-    fireAt(c, ours);
+    if (!has('shy')) fireAt(c, ours);   // +shy: the live camper never fired (matches 133, 152, 159: 16000/16000 both sides)
     healAt(c, mine);
     if (has('none') || has('scouts')) continue; // 'scouts': only the enemy runners act, its army idles (match 2)
     if (blockPlan) { blockMove(c, blockPlan, fighters, ours); continue; }
@@ -469,8 +500,12 @@ function enemyTick() {
       // eight-cell reach boundary — 3174:22934 without a shot from either side
       const takeable = flags.filter((f) => f.owner !== 1 && !ours.some((o) => o.x === f.x && o.y === f.y));
       const camping = has('camp') && takeable.length === 0;
+      // '+shy' (live matches 133, 152, 159 — けろびー's camper of 05–06.09.2026): the parked blob steps aside when our armed creeps
+      // come within six and walks back onto the flag when they are gone; live it sat on D5 at 0.6 of its power, our army
+      // at 1.3 flickered ANNIHILATE/HOLD and walked to the post forty cells away on every HOLD, and it retook D5 each time
+      // (12009:24099). The plain camp never moves — the stub's push destroys it at t=400–700, the live one was never reached
       const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
-      if (threat.length && !camping) stepAway(c, threat);
+      if (threat.length && (!camping || has('shy'))) stepAway(c, threat);
       else if (isRunner(c)) {
         const free = flags.filter((f) => f.owner !== 1).sort((a, b) => range(c, a) - range(c, b));
         const post = free[Math.min(runners.indexOf(c), free.length - 1)];
@@ -557,5 +592,6 @@ const log = `${outDir}run-${process.env.LOGTAG || ""}${scenario.join('+')}${proc
 writeFileSync(log, lines.join('\n') + '\n\n=== EVENTS ===\n' + world.events.join('\n') + '\n');
 const c0 = creeps().filter((c) => c.owner === 0).length, c1 = creeps().filter((c) => c.owner === 1).length;
 origLog(`done: ${ended || `${ticks} ticks`} score=${world.score[0]}/${world.score[1]} alive=${c0}/${c1} errors=${loopErrors} time=${((Date.now() - t0) / 1000).toFixed(1)}s log=${log}`);
+origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
 if (errs.length) origLog('first error:\n' + errs.slice(0, 2).join('\n'));
