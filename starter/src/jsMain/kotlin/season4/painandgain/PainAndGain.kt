@@ -827,6 +827,14 @@ object PainAndGain {
      *  сработал). Пауза погони (pausedChase) считается, пока его вооружённый в 2 × ENGAGE_RANGE от наших: окно живёт сквозь
      *  мигание, и «дистанция не сократилась за 50 тиков» ловит гастроль. */
     private const val USE_CHASE_WINDOW_WIDE = true
+    /** ОКНО ДИСТАНЦИИ ЖИВЁТ В HOLD ПРИ ЛЮБЫХ ЛОВИМЫХ (v112, матч 274 — MetalicaX гастролью, 18455:22936, ни одного простоя за 1800
+     *  тиков, рейтинг 1153 → 1148, второй пункт сводки ledger.py: MetalicaX 3-17, −121). Его блоб парил в 9–13 клетках при паритете
+     *  (0,985 — толчка нет), признак контакта мигал каждые 2–10 тиков (c=t/c=f в строках posture), и ВСЕ ДВЕНАДЦАТЬ были «ловимы»
+     *  (он не уходит, а стоит) — а пауза погони (v76/v106) держит окно armyDistHist в HOLD только при ПУСТОМ списке ловимых
+     *  (в матче 258 huntable был 0/12 от «уходящих»). Окно стиралось каждым HOLD, «держит дистанцию» не набралось ни разу
+     *  (detach t=1145: dry=2145), и армия 1800 тиков стояла лицом к нему на трёх флагах против его четырёх-пяти. Пауза погони —
+     *  при его вооружённом в 2 × ENGAGE_RANGE независимо от ловимых: мигание контакта и мигание «уходящих» — одно мигание. */
+    private const val USE_CHASE_WINDOW_ANY_HUNTABLE = true
     /** ТРАССА РЕШЕНИЙ (v108, инструмент 2 разбора): мили без цели при враге в ENGAGE_RANGE печатает, какой фильтр снял бросок.
      *  Прежде лог говорил, что крип сделал (f-строка раз в десять тиков), но не почему: «наши мили 117 тиков стояли на двух»
      *  (матч 251) отвечалось счётчиком отказов и догадкой. Одна строка `why t=N:` на тик со всеми праздными мили —
@@ -1046,7 +1054,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v111"
+    private const val BOT_VERSION = "v112"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2262,7 +2270,7 @@ object PainAndGain {
         val exchangeRecent = now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && now - lastHurtTick <= STALL_TICKS)
         val fightOn = inContact(armedEnemies, army) && (!USE_COLD_CONTACT || exchangeRecent)
         val pauseReach = if (USE_CHASE_WINDOW_WIDE) 2 * ENGAGE_RANGE else ENGAGE_RANGE + RANGED_RANGE   // v106: окно сквозь мигание
-        val pausedChase = USE_CHASE_WINDOW_HOLD && posture == Posture.HOLD && huntable.isEmpty() &&
+        val pausedChase = USE_CHASE_WINDOW_HOLD && posture == Posture.HOLD && (huntable.isEmpty() || USE_CHASE_WINDOW_ANY_HUNTABLE) &&
             armedEnemies.any { e -> army.any { getRange(e, it) <= pauseReach } }
         if ((posture == Posture.ANNIHILATE || pausedChase) && !fightOn && armyDist >= 0) {
             armyDistHist.addLast(armyDist)

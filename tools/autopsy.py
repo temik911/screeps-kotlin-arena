@@ -472,7 +472,7 @@ def classify(R):
           f"his melee adjacent {adj_share * 100:.0f}% of their creep-ticks, his centroid moved {mic if mic is None else round(mic, 1)} cells per 10 in contact")
     if R['disp_share'] >= 0.5:
         return ('scatter' if move < 4 else 'farmer'), ev
-    if ct < 20:
+    if ct < 20 or ct < 0.1 * R['ticks']:   # a tourer engages briefly and leaves (match 274: 105 contact ticks of 1 830)
         return ('sentinel' if move < 4 else 'touring'), ev
     if mode in (RANGED_RANGE, RANGED_RANGE + 1) and adj_share < 0.10 and ct >= 30 and (mic is None or mic <= LINE_MOVE):
         return 'line', ev
@@ -504,7 +504,8 @@ def outcome_form(L, R, meta_result, ticks):
     last = S[-1] if S else None
     if last:
         gap = abs(last['score'][0] - last['score'][1])
-        if gap <= 25 * (2000 - last['t']):
+        end = max(ticks or 0, last['t'])   # the lead is judged at the END, not at the last ten-tick sample (match 274: reachable at 1810, unreachable at 1830)
+        if gap <= 25 * (2000 - end):
             if meta_result == 'won':
                 return 'annihilation', f"his army gone after t={last['t']} (lead {gap} was reachable, the end came between samples)"
             if meta_result == 'lost':
