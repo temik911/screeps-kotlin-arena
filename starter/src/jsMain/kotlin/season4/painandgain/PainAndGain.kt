@@ -94,6 +94,20 @@ object PainAndGain {
     private const val HEAL_RANGE = 3
     private const val MELEE_KEEP_RANGE = 2
     private const val MELEE_KITE_DISCOUNT = 0.1
+    /** ДОЛЯ СМЕЖНОСТИ МИЛИ В МОЩИ (v103, пункт 5 плана оператора — «цена стрелков»): модель считала удар мили целиком (четыре
+     *  M8A8 — 960 в тик против 300 у пяти M6R6, три четверти урона стороны), а по реплеям 238/249 мили бьёт, только когда
+     *  вплотную — у него 20 % крип-тиков боя, у нас 5–8 %: 36 % его урона и 19 % нашего пришлись на мили. Отсюда цена флагов
+     *  наоборот: R3 (−20 % стрельбы) стоил модели 1 % мощи, A3 (−20 % удара) — 7,5 %, и скаут брал R3 первым в каждом матче,
+     *  отдавая пятую часть того огня, которым бой решается (открыто с матча 47). В счёте мощи удар мили входит с долей
+     *  MELEE_ADJACENCY_SHARE (его уровень; наш ниже, пока v101 не поднял), хиты мили — целиком: он принимает огонь (r->melee
+     *  163 из его 361 выстрела). Ланчестер по-прежнему √(урон − лечение) × хиты. ОТВЕРГНУТО стендом (v103, поверх v102):
+     *  гейт 131/131, но 27 хуже / 40 лучше — перетасовка всего; spread 6/6 → 2/6 (m31 11058:24336, m19 17111:24313, m28, m33),
+     *  camp+shy 5/5 → 3/5 (m30 17998:22529, m31 23274:24031), brawl m32 — наша армия уничтожена (5219:14635). Цены флагов
+     *  перевернулись (R3 из дешёвого стал дорогим), и все пороги паритета, настроенные под старые цены, стали запрещать захваты,
+     *  на которых стоят гонки стенда. Цена стрелков в модели верна по реплеям, но её нельзя менять отдельно от порогов —
+     *  открытая находка с числом: доля 0,25 требует перенастройки PARITY_FLOOR/CAPTURE_FLOOR по всем семьям. */
+    private const val USE_MELEE_ADJACENCY_SHARE = false
+    private const val MELEE_ADJACENCY_SHARE = 0.25
 
     /** Перевес, при котором армия идёт добивать, и порог продолжения. Порог продолжения выше единицы: прежний
      *  0.9 вместе со входом «по контакту» открывал лазейку — контакт с ОДНИМ стрелком включал ДОБИТЬ, а дальше
@@ -150,6 +164,14 @@ object PainAndGain {
      *  нашей половины (для юго-восточного старта R3 (85,49)); «пост не ближе EVADE_RANGE к краю» (USE_POST_INSIDE, v46)
      *  отвергался на безфлаговом стенде (−20k) — точка была никакой, флаг хотя бы держится. */
     private const val USE_POST_OUR_FLAG = true
+    /** ЦЕНТРАЛЬНЫЙ ФЛАГ ДЕРЖИТ АРМИЯ (v102, пункт 3 плана оператора — «часовой на D5»; матчи 242 и 243, MetalicaX пятнадцатый и
+     *  шестнадцатый раз): в 243 наш бегун взял D5 на 71-м, армия стояла у поста — центроида своих флагов (64,40) — в четырнадцати
+     *  клетках, на 118-м его блоб из двенадцати встал на D5 и просидел там до 1312-го при паритете 3679:3507 — 1194 тика по пять в
+     *  тик, которых мы не оспаривали; в 242 он взял D5 сам и запарковал армию рядом на 1500 тиков. Кто сидит на центральном
+     *  флаге всей армией, собирает пять в тик за паритетом, запрещающим другой стороне подойти. Пока D5 наш, пост армии — сам D5
+     *  (POST_STANDOFF вокруг): его блобу, идущему на флаг, армия встречается на нём, а не бегун; центроид флагов остаётся
+     *  постом без D5. */
+    private const val USE_POST_ON_CENTRE = true
     private var USE_FLEE_DIRECTION = true
     /** Фокус-огонь (v45; оператор по матчу 78: «нет фокус-файра — каждый рэндж стреляет в своего; держать их вместе и за ход
      *  выбивать максимум из одного», и «цель — та, к которой лекари далеки»). Замер по реплеям: наибольшее число наших выстрелов
@@ -950,7 +972,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v101"
+    private const val BOT_VERSION = "v102"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2031,7 +2053,9 @@ object PainAndGain {
      *  стоять на нём армии незачем, а угол — ловушка для равного по скорости. */
     private fun postPoint(ctx: Ctx): Position {
         val ourHalfFlag = if (USE_POST_OUR_FLAG) ctx.flags.filter { DistanceMap.inOurHalf(it.pos.x, it.pos.y) }.minByOrNull { getRange(it.pos, ctx.ourCentroid) }?.pos else null
-        val c = centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ourHalfFlag ?: ctx.home
+        // центральный флаг наш — пост на нём (v102, USE_POST_ON_CENTRE)
+        val centre = if (USE_POST_ON_CENTRE) ctx.flags.firstOrNull { it.ours && it.type == EFF_DAMAGE_TAKEN_MODIFIER }?.pos else null
+        val c = centre ?: centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ourHalfFlag ?: ctx.home
         return if (!USE_POST_INSIDE) passableNear(c) else passableNear(InfluenceMap.cell(c.x.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE), c.y.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE)))
     }
 
@@ -3848,7 +3872,9 @@ object PainAndGain {
     /** Мощь стороны по Ланчестеру против группы противника: √(её урон − его лечение) × её хиты; mods — её
      *  гипотетические множители, oppMods — множитель лечения противника. */
     private fun powerOf(side: List<Creep>, opp: List<Creep>, mods: HypoMods, oppMods: HypoMods): Double {
-        val dps = side.sumOf { effectiveDps(it, opp, mods.ranged, mods.melee) }
+        // удар мили — с долей смежности (v103, USE_MELEE_ADJACENCY_SHARE); хиты (weightedHits) без неё
+        val meleeK = mods.melee * (if (USE_MELEE_ADJACENCY_SHARE) MELEE_ADJACENCY_SHARE else 1.0)
+        val dps = side.sumOf { effectiveDps(it, opp, mods.ranged, meleeK) }
         val heal = opp.sumOf { InfluenceMap.profileOf(it).heal } * oppMods.heal
         return lanchester(dps, heal, side.sumOf { weightedHits(it, opp, mods.hits) })
     }
