@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 33
+    private const val BOT_VERSION = 34
 
     private const val LATE_MARGIN = 60
 
@@ -1918,8 +1918,10 @@ object SpawnAndSwamp {
         // ВСЕЙ армии, включая стоящих дома: в матче 18 он сработал на 1990-м, когда авангард стоял в 51
         // клетке, а масса армии — в сотне, и матч кончился ничьей при нетронутых 3000 хитов чужого спавна
         fun budget(travelTicks: Int, siege: SiegeResult) = travelTicks.toLong() + minOf(siege.ticks, SIEGE_LIMIT)
-        val startTravel = travelOf(staging, spawnFlow)
-        val frontTravel = travelOf(waveFront, spawnFlow)
+        // ход считается по маршруту подхода и СВОИМ телом (pathTicks), а не по цене поля: цена поля
+        // под огнём — это урон, а часам нужны тики. Пустое поле или недостижимая цель — прежний ответ
+        val startTravel = travelTicksOf(staging, assaultFlow, spawnFlow)
+        val frontTravel = travelTicksOf(waveFront, assaultFlow, spawnFlow)
         val never = Long.MAX_VALUE / 4
         val goNeed = minOf(
             if (staging.isEmpty()) never else budget(startTravel, siegeStart),
@@ -2075,7 +2077,14 @@ object SpawnAndSwamp {
         // группы, которая не придёт до конца матча, — это ничья по расписанию (матч 18: hold=true с
         // 1800-го при двухстах тиках в запасе, подкрепление уходило по одному бойцу и не успело). Ход
         // подкрепления — от поста, а если поста нет, от спавна: следующий боец родится там
-        val homeTravel = if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
+        // от дома до фронта — тоже по маршруту подхода, телом самого медленного из живых бойцов
+        // (новорождённый будет такой же); бойцов нет — по прежнему полю
+        val homeTravel = if (assaultFlow.isNotEmpty() && fighters.isNotEmpty())
+            flowNear(assaultFlow, mySpawn.x, mySpawn.y).let { cell ->
+                if (cell < 0) Int.MAX_VALUE / 4
+                else fighters.maxOf { pathTicks(it, assaultFlow, cell) }.let { if (it >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 4 else it }
+            }
+        else if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
         else flowNear(spawnFlow, mySpawn.x, mySpawn.y).let { if (it < 0) Int.MAX_VALUE / 4 else spawnFlow[it] }
         val reinforceTravel = if (staging.isNotEmpty()) startTravel else homeTravel
         val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN
@@ -2863,6 +2872,19 @@ object SpawnAndSwamp {
 
     /** Тики хода ГРУППЫ до цели по полю потока — по САМОМУ дальнему её бойцу: группа идёт вместе, и
      *  осада начинается, когда дошёл последний. Пустая группа или пустое поле — «никогда». */
+    /** Ход группы по маршруту в ТИКАХ: каждый своим телом по клеткам поля подхода, берём худшего.
+     *  `plain` — запасной ответ, когда маршрута нет (поле пусто или цель недостижима). */
+    private fun travelTicksOf(group: List<Creep>, route: IntArray, plain: IntArray): Int {
+        if (group.isEmpty() || route.isEmpty()) return travelOf(group, plain)
+        var worst = 0
+        for (c in group) {
+            val t = pathTicks(c, route, c.x * 100 + c.y)
+            if (t >= Int.MAX_VALUE / 4) return travelOf(group, plain)
+            if (t > worst) worst = t
+        }
+        return worst
+    }
+
     private fun travelOf(group: List<Creep>, flow: IntArray): Int {
         if (group.isEmpty() || flow.isEmpty()) return Int.MAX_VALUE / 4
         return group.maxOf { flow[it.x * 100 + it.y].let { d -> if (d < 0) Int.MAX_VALUE / 4 else d } }
