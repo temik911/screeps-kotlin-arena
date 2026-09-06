@@ -530,6 +530,26 @@ object PainAndGain {
      *  делало её одноразовой; рассыпанный фермер не собирается никогда, и ядро против его крупнейшей группы из двух-трёх в
      *  перевесе весь матч. Против кайтера и лагеря стенда гонки нет по признаку россыпи, против пар spread — по целям. */
     private const val USE_SCATTER_RACE = true
+    /** «РАССЫПАН» С ГИСТЕРЕЗИСОМ И СБРОС ОТРЯДА НЕ ОТ МОРГАНИЯ (v115, матч 294 — けろびー фермером, 15846:24244, 1192 → 1182): его девять
+     *  вооружённых в дебюте делятся 5+2+2 (пятеро у D5, пары по флагам), крупнейшая группа 4–5 из девяти ходит через порог
+     *  «≤ половины», и признак «рассыпан», а с ним дебют-гонка (raceNow) и признак фермера, мигали через тик — отряд выпускался и
+     *  отзывался КАЖДЫЙ тик (detach 76, 87, 88, 89, 90, 91; 44 строки за матч, пары соседних тиков до 1595-го), а он взял шесть
+     *  флагов к 80-му при наших одном; счёт разошёлся на 80-м, гонка проиграна в дебюте при нашей мощи 1,53 к 250-му.
+     *  Два гистерезиса: «рассыпан» включается при крупнейшей группе ≤ половины и гаснет только при сборе ≥ SCATTER_OFF_SHARE
+     *  (v93: «гонка гаснет от сбора, не от удара» — теперь и буквально); сброс отряда по «не фермер» — после FARMER_OFF_TICKS
+     *  подряд, а настоящий бой возвращает отряд отзывом по мощи в тот же тик (USE_ONE_CORE_MEASURE).
+     *  ВТОРОЕ ОТВЕРГНУТО стендом: с FARMER_OFF_TICKS = 5 семья spread из 5/6 в 3/6 — m28 24335:21054 → 16862:24327, m30
+     *  24326:24260 → 10851:24326 (отряд, не сброшенный морганием, остаётся при россыпи, где сброс и пересбор были работой);
+     *  гейт 131/131 при 9 хуже (roost m28/m30/m32 медленнее, camp m31 из стирания в отрыв) / 7 лучше. Гистерезис «рассыпан»
+     *  один: spread как был, tour m28 выигран. FARMER_OFF_TICKS = 1 — сброс в тот же тик, как прежде.
+     *  И ГИСТЕРЕЗИС ОТВЕРГНУТ: сам по себе он теряет spread m30 (24320:21580 → 16807:24318) и даёт шторм на tour m29 — 240 строк
+     *  detach и 48 простоев против 15 и 5 у v114: блоб гастролёра при нашем подходе рассыпается на шаг и собирается, защёлка
+     *  «рассыпан» щёлкает вместе с ним; гейт 131/131 при 2/6. Дебют против полурассыпанного (5+2+2) остаётся ОТКРЫТЫМ:
+     *  порог «крупнейшая группа ≤ половины» — ярлык на границе, и хвост его ни в какую сторону не лечит; предмет — сама
+     *  гонка за свободные флаги, когда его группа держит центр, а пары берут края (матч 294). */
+    private const val USE_SCATTER_HYSTERESIS = false
+    // SCATTER_OFF_SHARE = 3/4: сбор — крупнейшая группа не меньше трёх четвертей его вооружённых (целочисленно: ×4 ≥ ×3)
+    private const val FARMER_OFF_TICKS = 1
     /** ОПОРА ЯДРА ПРИ РОССЫПИ — ЕГО КРУПНЕЙШАЯ ГРУППА (v97, матч 240 — ricardo18informatica2020, россыпь с первого тика:
      *  шесть флагов к 86-му, его крупнейшая группа 4 из 9 вооружённых 49 % тиков, 17355:23708 при обеих армиях 16000/16000).
      *  Опора v91 «против крупнейшей группы» действовала только в дебют-гонке (viaRace); фермеру по тишине (quietChain) ядро
@@ -1176,6 +1196,8 @@ object PainAndGain {
     private val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
     private var coreShortTicks = 0                  // тиков подряд ядро без отряда ниже порога (см. USE_RECALL_PERSIST)
     private val theirsHist = ArrayDeque<Double>()   // его мощь против армии за MEASURE_WINDOW тиков (см. USE_CORE_MEASURE_WINDOW)
+    private var scatteredLatched = false            // «рассыпан» с гистерезисом (см. USE_SCATTER_HYSTERESIS)
+    private var farmerOffTicks = 0                  // тиков подряд без признака фермера (см. FARMER_OFF_TICKS)
     private val lastCell = HashMap<String, Int>()
     private val ghostLogged = HashMap<String, Int>()
     private class Shooter(val cell: Int, val ranged: Double, val melee: Double)
@@ -2467,7 +2489,11 @@ object PainAndGain {
             // начала матча, m30 camp 18891:23756) и против кайтера стенда, ходящего впятером (m31 kite 1979:23896 — 25 тиков
             // отряда на 183–214-м, и бой без четверых проигран): гейт 120/125
             val largestGroup = armedEnemies.maxOfOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
-            val scattered = armedEnemies.isNotEmpty() && largestGroup <= maxOf(1, armedEnemies.size / 2)
+            val scatteredRaw = armedEnemies.isNotEmpty() && largestGroup <= maxOf(1, armedEnemies.size / 2)
+            // с гистерезисом (v115): включается по «≤ половины», гаснет по сбору «≥ SCATTER_OFF_SHARE»
+            val gathered = armedEnemies.isEmpty() || largestGroup * 4 >= armedEnemies.size * 3   // три четверти (SCATTER_OFF_SHARE)
+            scatteredLatched = if (!USE_SCATTER_HYSTERESIS) scatteredRaw else if (scatteredRaw) true else if (gathered) false else scatteredLatched
+            val scattered = scatteredLatched
             val groupSeed = armedEnemies.maxByOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } }
             val largestMembers = if (groupSeed == null) armedEnemies else armedEnemies.filter { getRange(groupSeed, it) <= ENGAGE_RANGE }
             // дебют-гонка (v91, см. USE_SCATTER_RACE): россыпь его армии до первого обмена
@@ -2530,7 +2556,9 @@ object PainAndGain {
                 if (recalled > 0) { detachRecallTick = now; coreShortTicks = 0 }   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
                 if (DEBUG_LOG && recalled > 0) println("detach t=$now: $recalled recalled — the core fell under ${floorNow} of him by the posture's measure")
             }
-            if (!farmer) detachedIds.clear()
+            farmerOffTicks = if (farmer) 0 else farmerOffTicks + 1
+            // сброс отряда по «не фермер» — только продержавшись FARMER_OFF_TICKS (v115): одноткового моргания признака не хватает
+            if (!farmer) { if (farmerOffTicks >= FARMER_OFF_TICKS) detachedIds.clear() }
             else if ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
                 // столько, сколько требуют охраны целей (v94): флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного
