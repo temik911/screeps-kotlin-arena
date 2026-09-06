@@ -374,6 +374,9 @@ object PainAndGain {
     /** Темп сближения (см. approachRate, доля скорости к нам за APPROACH_WINDOW), с которого безфлаговая армия — это
      *  бросок на нас, а не блуждание: россыпь, идущая по флагам, к нам не идёт. */
     private const val APPROACH_RUSH = 0.5
+    private const val USE_RUSH_VETO_SUSTAINED = false  // v114a/b: вето «бой близко» после RUSH_VETO_TICKS — отвергнуто (см. captureAllowed)
+    private const val USE_STALL_LIFTS_RUSH_VETO = true // v114: простой «держит дистанцию» снимает вето «бой близко» для захватов
+    private const val RUSH_VETO_TICKS = 10             // половина окна подхода: бросок на полной скорости держит темп всё окно
 
     /** Построение перед контактом: боец не входит в дальность врага (≤ RANGED_RANGE от боевого врага), пока у
      *  авангарда (ближайшего к врагу ходячего вооружённого) в FORM_RANGE клетках не соберётся доля FORM_SHARE
@@ -553,6 +556,15 @@ object PainAndGain {
      *  3 хуже / 0 лучше при v113. Мигание меры остаётся открытым (см. docs, матч 277): лечить его надо в самой мере, а не в отзыве. */
     private const val USE_RECALL_PERSIST = false
     private const val RECALL_TICKS = 5
+    /** МЕРА ЯДРА С ОКНОМ (v114, второй пункт сводки — гастроль, матч 277): его мощь против ядра прыгает на 10–15 % за тик от состава
+     *  combatEnemies и «в досягаемости» (3234 → 3679), и один порог для выпуска и отзыва (v95b) при такой мере — качели на
+     *  соседних тиках (564/565, 669/670, 1012/1013). Лечится в самой мере: его мощь за MEASURE_WINDOW тиков — выпуск мерится
+     *  против МАКСИМУМА за окно (ядро держит порог и против его сильнейшей недавней меры), отзыв — против МИНИМУМА (ядро
+     *  просело даже против его слабейшей): между ними — полоса гистерезиса ровно в размах мигания, а настоящая просадка
+     *  (его подкрепление, наша потеря) сдвигает и минимум. Отзыв «после N тиков» (v114a, USE_RECALL_PERSIST) был отвергнут
+     *  гейтом; здесь отряд при настоящей просадке возвращается в тот же тик. */
+    private const val USE_CORE_MEASURE_WINDOW = true
+    private const val MEASURE_WINDOW = 10
     /** ОТРЯД ПАРАМИ (v94): россыпь по двое на флаг (けろびー в матче 233, spread стенда) одиночному бегуну не по зубам — пул
      *  отпускал по крипу на флаг, бегуны 19 раз выходили и возвращались «без цели». Флаг со стаей, которую один бегун не
      *  побьёт, а двое ближайших вооружённых свободных побьют (по Ланчестеру пары против стаи), получает обоих; пул отпускает
@@ -1073,7 +1085,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v113"
+    private const val BOT_VERSION = "v114"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1135,6 +1147,7 @@ object PainAndGain {
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     private var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
+    private var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
     private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     private var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     private val detachedIds = HashSet<String>()           // отряды: вооружённые, зачисленные в бегуны (см. USE_DETACH)
@@ -1162,6 +1175,7 @@ object PainAndGain {
     private val lastHits = HashMap<String, Int>()
     private val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
     private var coreShortTicks = 0                  // тиков подряд ядро без отряда ниже порога (см. USE_RECALL_PERSIST)
+    private val theirsHist = ArrayDeque<Double>()   // его мощь против армии за MEASURE_WINDOW тиков (см. USE_CORE_MEASURE_WINDOW)
     private val lastCell = HashMap<String, Int>()
     private val ghostLogged = HashMap<String, Int>()
     private class Shooter(val cell: Int, val ranged: Double, val melee: Double)
@@ -1334,6 +1348,7 @@ object PainAndGain {
         // взяла D5, и скаут взял R3 на 42-м (матч 47, пятый бой с けろびー подряд с R×0.8); уклонение по-прежнему только от
         // безфлагового (флагованный слабее — с ним дерёмся), а дебафф перед боем не берём ни от кого
         fightImminentNow = unflaggedRushNow || (!ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed)
+        fightImminentTicks = if (fightImminentNow) fightImminentTicks + 1 else 0
         // враг рядом, но не воюет: армия с боем в досягаемости броска, и наши хиты не падали STALL_TICKS тиков подряд — фермер
         // (けろびー v5, матчи 51 и 57: шесть флагов к 82-му, 1400 тиков рядом без единого выстрела, 10804:22779 при 12 наших
         // против его 4 к концу); гейты боя в captureAllowed («в контакте», «бой близко») к нему не применяются, паритет —
@@ -1566,7 +1581,20 @@ object PainAndGain {
         // за тридцать тиков против пятой части огня на весь бой
         // флаг перехвата (см. USE_INTERCEPT) открыт и в контакте с фермером, и при «бое близко»; остальные — нет
         val intercept = enemyNotFightingNow && f.id == interceptFlagId
-        if (fightImminentNow && !intercept) return false
+        // «бой близко» закрывает НОВУЮ цель сразу, а УЖЕ выбранную снимает, лишь продержавшись RUSH_VETO_TICKS подряд (v114, матч
+        // 277): его блоб, шагающий на 9–13 клетках, гонял темп подхода 31–63 % через порог 50 % каждые три тика, и цель D5 (ценность
+        // 22–41) назначалась и снималась через тик — FLAG↔HOLD 17 раз за сто тиков, три шага к флагу и три назад, 520 тихих тиков
+        // при отставании. Первый срез (вето целиком после 10 тиков) открывал флаги и настоящему броску — его темп тоже рвётся
+        // (колонна растягивается): scatter m28 24317:18115 → 24316:24069, screen m32 −9515, army m35 из стирания в отрыв; при
+        // вето только на новую цель бросок закрыт как прежде, а мигание не сбрасывает уже идущий захват
+        // ...и та форма (v114b: вето сразу на новую цель, на уже идущую — после 10 тиков) тоже отвергнута: удержанная цель вела
+        // армию к флагу навстречу НАСТОЯЩЕМУ броску — scatter m28 и screen m32 те же, camp m31 22868:22895 красный. Мера «он ходит,
+        // а не бросается» в боте уже есть — простой «держит дистанцию» (окно DETACH_WINDOW, срабатывал в 277 на 221-м: «флаги до
+        // 521» — и в этом окне цель мигала): простой снимает вето «бой близко», как снимает вето «в контакте» ниже
+        // (USE_STALL_LIFTS_RUSH_VETO); настоящий бросок дистанцию сокращает и простоя не даёт
+        val current = f.id == objectiveFlagId
+        val vetoOn = !USE_RUSH_VETO_SUSTAINED || !current || fightImminentTicks >= RUSH_VETO_TICKS
+        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow)) return false
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -2340,6 +2368,11 @@ object PainAndGain {
         // ---- постура ----
         val ours = ourPowerOf(army, combatEnemies)
         val theirs = enemyPowerOf(combatEnemies, army)
+        theirsHist.addLast(theirs)
+        while (theirsHist.size > MEASURE_WINDOW) theirsHist.removeFirst()
+        // множители окна (v114): его мощь сейчас → его сильнейшая и слабейшая за окно; при нулевой мере — 1
+        val theirsUp = if (USE_CORE_MEASURE_WINDOW && theirs > 0.0) (theirsHist.maxOrNull() ?: theirs) / theirs else 1.0
+        val theirsDown = if (USE_CORE_MEASURE_WINDOW && theirs > 0.0) (theirsHist.minOrNull() ?: theirs) / theirs else 1.0
         val nearRange = if (posture == Posture.RETREAT) NEAR_RANGE + NEAR_RELEASE else NEAR_RANGE
         // ОТВЕРГНУТО стендом: «враг рядом — рядом с МАССОЙ армии, а не с любым нашим крипом» (хранители стоят по
         // одному на разных концах карты, и висящий у хранителя враг россыпи отменяет цель-флаг у всей армии).
@@ -2487,10 +2520,10 @@ object PainAndGain {
                 val floorNow = recallFloor
                 var core = army.filter { it.id !in detachedIds }
                 var recalled = 0
-                val short = core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * floorNow
+                val short = core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * theirsDown * floorNow
                 coreShortTicks = if (short) coreShortTicks + 1 else 0
                 val recallNow = !USE_RECALL_PERSIST || coreShortTicks >= RECALL_TICKS
-                while (recallNow && detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * floorNow) {
+                while (recallNow && detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * theirsDown * floorNow) {
                     val back = ctx.runners.filter { it.id in detachedIds }.maxByOrNull { ourPowerOf(listOf(it), emptyList()) } ?: break
                     detachedIds.remove(back.id); core = core + back; recalled++
                 }
@@ -2513,7 +2546,7 @@ object PainAndGain {
                     // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
                     // его мощь — против ядра-кандидата, не против полной армии (v84: пары Ланчестера)
                     // в дебют-гонке (v91) ядро мерится против его крупнейшей группы: россыпь армией не дерётся
-                    val theirsVsCore = if (USE_DETACH_PAIRED_MEASURE || viaRace) enemyPowerOf(coreRef, without) else theirs
+                    val theirsVsCore = (if (USE_DETACH_PAIRED_MEASURE || viaRace) enemyPowerOf(coreRef, without) else theirs) * theirsUp
                     if (without.none { hasWeapon(it) } || ourPowerOf(without, coreRef) < theirsVsCore * coreFloor) break
                     // сухая охота без россыпи — стрелковая масса ядра держит перевес над его стрелками (v82, кайтер)
                     if (viaDryHunt && !scattered && USE_DRY_HUNT_RANGED_GUARD && rangedMass(without) < theirRangedMass * PUSH_RATIO) break

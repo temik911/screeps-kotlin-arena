@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp|tour (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 //   REPLAY=<id>.replay.json.gz + scenario `ghost`: the map, flags, bodies and start cells come from a live replay (arukuka's tool,
 //   see tools/replay.py) and the enemy's creeps walk the cells the replay recorded, tick for tick, while our bot plays live —
@@ -699,7 +699,14 @@ function enemyTick() {
       const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
       if (threat.length) stepAway(c, threat);
       else stepToward(c, post, 0);
-    } else if (has('farm') || has('camp')) {
+    } else if (has('farm') || has('camp') || has('tour')) {
+      // 'tour' (07.09.2026, MetalicaX's tour of matches 258, 274 and 277 — 3-17 against us, the ledger's second item): the farmer
+      // that keeps its distance and never parks. Live it hovered at nine to thirteen cells from our army at parity (0.985 — no
+      // push), the contact flag flickered every few ticks, all twelve were "huntable" because it stands rather than leaves, and
+      // its runners took the flags behind our back (2/5 by t=700 in 274; 21167:24168 in 277 with the keeps-distance stall firing
+      // twice and the race lost anyway on two flickers). Here: the blob steps away when one of our armed creeps is within
+      // TOUR_KEEP (twelve), goes for the nearest takeable flag otherwise, and with nothing left to take walks the flags in a
+      // cycle instead of parking (`camp`); it fires at what comes within three (274: 105 contact ticks, 49 shots)
       // 'farm' (live match 26): the army moves as ONE blob to the flag nearest the blob that it does not already own,
       // and never engages — a creep with one of our armed creeps within six steps away and comes back after. Its two
       // runners each sit on a flag of their own. That match ended with both armies at full strength — 902 hits of
@@ -712,11 +719,12 @@ function enemyTick() {
       // eight-cell reach boundary — 3174:22934 without a shot from either side
       const takeable = flags.filter((f) => f.owner !== 1 && !ours.some((o) => o.x === f.x && o.y === f.y));
       const camping = has('camp') && takeable.length === 0;
+      const TOUR_KEEP = 12;
       // '+shy' (live matches 133, 152, 159 — けろびー's camper of 05–06.09.2026): the parked blob steps aside when our armed creeps
       // come within six and walks back onto the flag when they are gone; live it sat on D5 at 0.6 of its power, our army
       // at 1.3 flickered ANNIHILATE/HOLD and walked to the post forty cells away on every HOLD, and it retook D5 each time
       // (12009:24099). The plain camp never moves — the stub's push destroys it at t=400–700, the live one was never reached
-      const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
+      const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= (has('tour') ? TOUR_KEEP : 6));
       if (threat.length && (!camping || has('shy'))) stepAway(c, threat);
       else if (isRunner(c)) {
         const free = flags.filter((f) => f.owner !== 1).sort((a, b) => range(c, a) - range(c, b));
@@ -729,7 +737,8 @@ function enemyTick() {
         // the nearest TAKEABLE flag (06.09.2026): the blob used to head for the nearest flag that was not its own even with one
         // of our creeps standing on it, and with our army posted next to its nearest flag (v100, the opening at the post) it
         // danced at that flag for the whole match instead of farming the rest and parking (gate m30/m31 camp lost on points)
-        const post = camping ? centre : takeable.slice().sort((a, b) => range(blob, a) - range(blob, b))[0];
+        const cycle = flags[Math.floor((world.tick - 1) / 150) % flags.length];   // tour: the next flag every 150 ticks
+        const post = camping ? centre : takeable.length ? takeable.slice().sort((a, b) => range(blob, a) - range(blob, b))[0] : has('tour') ? cycle : undefined;
         if (post) stepToward(c, post, fighters.indexOf(c) === 0 ? 0 : 2);
       }
     } else if (has('roost')) {
