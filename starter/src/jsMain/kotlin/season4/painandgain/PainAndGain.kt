@@ -411,7 +411,10 @@ object PainAndGain {
      *  ядро оказалось 0,84 (2950) при «проверенных» 0,97 → EVADE 900 тиков в углу (15,76) при его блобе, не двигавшемся 900
      *  тиков в 42 клетках; трое отделённых все 900 тиков стояли рядом в RESERVE — ни одного флага, за который бегун пошёл бы.
      *  Темп 6:12. Мощь по Ланчестеру — пары, и его мощь против ядра без стрелков выше: пул считает её против ядра-кандидата.
-     *  Отряд, чьи бегуны DETACH_WINDOW тиков все без цели (RESERVE), отзывается, и новый набор ждёт то же окно. */
+     *  Отряд, чьи бегуны DETACH_WINDOW тиков все без цели (RESERVE), отзывается, и новый набор ждёт то же окно.
+     *  ПОШТУЧНО (v85, матч 201 — MetalicaX шестой раз, 20 800:22 100): из пятерых отделённых на 1184-м двое держали флаги,
+     *  а трое стрелков 200 тиков стояли в RESERVE у ядра в углу (3,28) — «все без цели» не наступало. Бегун, DETACH_WINDOW
+     *  тиков подряд без цели, возвращается в ядро сам; отряд целиком — как раньше. */
     private const val USE_DETACH_PAIRED_MEASURE = true
     private const val USE_DETACH_IDLE_RECALL = true
     /** ОКНО ПОГОНИ НЕ ОБНУЛЯЕТСЯ МИГАНИЕМ (v76, матч 185 — MetalicaX, гонка очков при паритете 21900:22900, обе армии целы):
@@ -751,7 +754,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v84"
+    private const val BOT_VERSION = "v85"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -815,6 +818,7 @@ object PainAndGain {
     private val detachedIds = HashSet<String>()           // отряды: вооружённые, зачисленные в бегуны (см. USE_DETACH)
     private val idleRunnerIds = HashSet<String>()         // бегуны без цели в этом тике (RESERVE; см. USE_DETACH_IDLE_RECALL)
     private var idleDetachTicks = 0                       // подряд тиков, когда весь отряд без цели
+    private val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
     private var detachRecallTick = -1000                  // последний отзыв отряда без дела
     private var lastDistanceKeptTick = -1000              // последний тик, когда погоня не сближала (см. USE_DETACH, v57)
     private var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
@@ -2058,6 +2062,16 @@ object PainAndGain {
             if (USE_DETACH_IDLE_RECALL && idleDetachTicks >= DETACH_WINDOW) {
                 if (DEBUG_LOG) println("detach t=$now: ${detachedIds.size} recalled — nothing for a runner to take for $DETACH_WINDOW ticks")
                 detachedIds.clear(); idleDetachTicks = 0; detachRecallTick = now
+            }
+            // поштучно (v85): отделённый DETACH_WINDOW тиков подряд без цели возвращается в ядро
+            if (USE_DETACH_IDLE_RECALL) {
+                for (id in detachedIds) idleRunnerTicks[id] = if (id in idleRunnerIds) (idleRunnerTicks[id] ?: 0) + 1 else 0
+                idleRunnerTicks.keys.retainAll { it in detachedIds }
+                val idle = detachedIds.filter { (idleRunnerTicks[it] ?: 0) >= DETACH_WINDOW }
+                if (idle.isNotEmpty()) {
+                    if (DEBUG_LOG) println("detach t=$now: ${idle.size} of ${detachedIds.size} recalled — without a target for $DETACH_WINDOW ticks")
+                    detachedIds.removeAll(idle.toSet()); idle.forEach { idleRunnerTicks.remove(it) }; detachRecallTick = now
+                }
             }
             if (!farmer) detachedIds.clear()
             else if ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
