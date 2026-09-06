@@ -417,6 +417,18 @@ object PainAndGain {
      *  тиков подряд без цели, возвращается в ядро сам; отряд целиком — как раньше. */
     private const val USE_DETACH_PAIRED_MEASURE = true
     private const val USE_DETACH_IDLE_RECALL = true
+    /** СУХОЙ ТОЛЧОК — ПРОСТОЙ (v86, матч 212 — MetalicaX восьмой раз из девяти, 19237:23813): при 1,3–1,6 (он дебаффован
+     *  пятью флагами) армия с 300-го по 784-й гналась за его блобом без единого выстрела (последний на 571-м) и без единого
+     *  убитого, пока он фармил 15–22 в тик; простой марша сработал лишь на 784-м (центр стоял 50 тиков), отряд — на 926-м,
+     *  с 1000-го темп 15:10 — не хватило 4576 при −8500 к 900-му. Сетки простоя меряют геометрию (пикет, стоящий центр,
+     *  дистанция); продукт толчка — урон, и толчок, который PASSIVE_TICKS ни стреляет, ни получает (а стрелял хоть раз), —
+     *  простой: флаги всей армией на STALL_COOLDOWN, как у пикета. Не отряд (v57: раскол против кайтера) — вся армия.
+     *  ОТВЕРГНУТО стендом: 124/125 (m29 camp 15309:23824), 11 хуже / 2 лучше — farm+weak m28 23927:11406 → 23919:22064,
+     *  m32 −3611, camp m34 −2862, m33 camp 375 → 1240, кайтеры медленнее, block/screen из уничтожения в лидерство: толчок
+     *  стенда доходит до стоящего блоба за 100–150 тиков без выстрела и добивает его, толчок за блобом MetalicaX не доходит
+     *  никогда — разница в сближении, а сетка «держит дистанцию» отвергнута ещё v36 (находка v28: десять сеток простоя
+     *  меряют геометрию, отказ — в продукте). Выключен; v86 играет как v85. */
+    private const val USE_DRY_PUSH_STALL = false
     /** ОКНО ПОГОНИ НЕ ОБНУЛЯЕТСЯ МИГАНИЕМ (v76, матч 185 — MetalicaX, гонка очков при паритете 21900:22900, обе армии целы):
      *  его блоб из девяти вооружённых ходил между A3 и R3 в 7–15 клетках от нас и не дрался, мы при 1,2 «толкали», и постура
      *  мигала ANNIHILATE/HOLD каждые пять-шесть тиков (huntable 12/12 ↔ 0/12 — он шагает назад, см. evasive и открытую
@@ -754,7 +766,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v85"
+    private const val BOT_VERSION = "v86"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1941,14 +1953,17 @@ object PainAndGain {
         // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
         val marchStalled = pushing && marchCell >= 0 && marchHist.size == MARCH_STALL_TICKS &&
             marchHist.all { it == marchCell } && !fightOn
+        // сухой толчок (v86): толчок PASSIVE_TICKS без нашего выстрела и без удара по нам — не толчок
+        val dryPush = USE_DRY_PUSH_STALL && pushing && lastFireTick >= 0 && now - lastFireTick >= PASSIVE_TICKS &&
+            now - lastHurtTick >= PASSIVE_TICKS && !fightOn
         // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
         // конца матча (стенд m19 spread, t=600–1600)
         // боевые враги нужны ПИКЕТУ (он из них и состоит), а простою марша — нет: зачистка идёт ровно тогда, когда
         // боевых не осталось, и там сетка не сработала ни разу (стенд m18 roost: 1500 тиков погони за двумя скаутами)
         if (posture != Posture.RETREAT && posture != Posture.EVADE && !netDamage && now >= stallUntil &&
-            ((combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS) || marchStalled || keepsDistance)) {
+            ((combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS) || marchStalled || keepsDistance || dryPush)) {
             stallUntil = now + STALL_COOLDOWN
-            if (DEBUG_LOG) println("stall t=$now: ${if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else if (keepsDistance) "the enemy keeps its distance (${armyDistHist.first()} -> ${armyDistHist.last()} over $CHASE_WINDOW ticks)" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
+            if (DEBUG_LOG) println("stall t=$now: ${if (dryPush && !marchStalled) "the push has fired nothing for $PASSIVE_TICKS ticks" else if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else if (keepsDistance) "the enemy keeps its distance (${armyDistHist.first()} -> ${armyDistHist.last()} over $CHASE_WINDOW ticks)" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
         }
         val stalled = now < stallUntil
         stalledNow = stalled
