@@ -595,6 +595,14 @@ object PainAndGain {
      *  гейтом; здесь отряд при настоящей просадке возвращается в тот же тик. */
     private const val USE_CORE_MEASURE_WINDOW = true
     private const val MEASURE_WINDOW = 10
+    /** ОПОРА ОТЗЫВА — ТА ЖЕ, ЧТО ПРИ ВЫПУСКЕ (v117, матч 296 — けろびー фермером, 10283:24120, 1178 → 1168; флаги 1:6 весь матч при
+     *  нашей мощи 1,13 → 12 против 7 к 1100-му). Отряд выпускался и отзывался на соседних тиках снова (262: 4 выпущены, 263: 1
+     *  отозван, 272: 2, 315: 1; 26 строк detach) — и окно меры (v114) этого не ловит, потому что мигает не мощь, а ОПОРА: при
+     *  россыпи (v97, USE_SCATTER_RECALL_REF) отзыв меряется против его крупнейшей группы при PUSH_RATIO, а без россыпи — против всей
+     *  армии при PARITY_FLOOR; ярлык «рассыпан» (крупнейшая ≤ половины: 4 из 9 ↔ 7 из 9) щёлкает на границе, и опора отзыва
+     *  переключается между четырьмя и девятью крипами. Гистерезис самого ярлыка (v115) отвергнут стендом; здесь ярлык
+     *  замораживается для ОТЗЫВА на момент выпуска и держится, пока отряд не вернулся целиком: одна опора на весь эпизод. */
+    private const val USE_RECALL_REF_LATCH = true
     /** ОТРЯД ПАРАМИ (v94): россыпь по двое на флаг (けろびー в матче 233, spread стенда) одиночному бегуну не по зубам — пул
      *  отпускал по крипу на флаг, бегуны 19 раз выходили и возвращались «без цели». Флаг со стаей, которую один бегун не
      *  побьёт, а двое ближайших вооружённых свободных побьют (по Ланчестеру пары против стаи), получает обоих; пул отпускает
@@ -1115,7 +1123,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v116"
+    private const val BOT_VERSION = "v117"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1207,6 +1215,7 @@ object PainAndGain {
     private var coreShortTicks = 0                  // тиков подряд ядро без отряда ниже порога (см. USE_RECALL_PERSIST)
     private val theirsHist = ArrayDeque<Double>()   // его мощь против армии за MEASURE_WINDOW тиков (см. USE_CORE_MEASURE_WINDOW)
     private var scatteredLatched = false            // «рассыпан» с гистерезисом (см. USE_SCATTER_HYSTERESIS)
+    private var scatteredAtRelease = false          // ярлык «рассыпан» на момент выпуска отряда (см. USE_RECALL_REF_LATCH)
     private var farmerOffTicks = 0                  // тиков подряд без признака фермера (см. FARMER_OFF_TICKS)
     private val lastCell = HashMap<String, Int>()
     private val ghostLogged = HashMap<String, Int>()
@@ -2554,7 +2563,8 @@ object PainAndGain {
             val coreRef = if (viaRace) largestMembers else combatEnemies
             val coreFloor = if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR
             // при россыпи (v97, USE_SCATTER_RECALL_REF) опора ОТЗЫВА — его крупнейшая группа при PUSH_RATIO; выпуск — как был
-            val recallGroup = viaRace || (USE_SCATTER_RECALL_REF && scattered)
+            if (detachedIds.isEmpty()) scatteredAtRelease = scattered   // без отряда ярлык свежий; с отрядом — как при выпуске (v117)
+            val recallGroup = viaRace || (USE_SCATTER_RECALL_REF && (if (USE_RECALL_REF_LATCH) scatteredAtRelease else scattered))
             val recallRef = if (recallGroup) largestMembers else combatEnemies
             val recallFloor = if (viaDryHunt || recallGroup) PUSH_RATIO else PARITY_FLOOR
             // одна мера ядра (v94): порог держится каждый тик — просело, сильнейший отделённый возвращается
