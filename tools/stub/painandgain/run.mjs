@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|camp (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -360,6 +360,12 @@ function enemyTick() {
   const fighters = mine.filter((c) => !isRunner(c));
   // runners: nearest flag not theirs (sticky), then sit
   for (const [id] of runnerFlag) if (!mine.some((c) => c.id === id)) runnerFlag.delete(id);
+  // 'scatter': the two runners go for the two H4 corners from the first tick (live match 240: taken at t=78 and 84)
+  if (has('scatter') && !armyState.runnersSeeded) {
+    const h4s = flags.filter((f) => f.effectType === 'eff_heal_modifier');
+    runners.forEach((r, i) => { if (h4s[i]) runnerFlag.set(r.id, h4s[i].id); });
+    armyState.runnersSeeded = true;
+  }
   if (!has('none')) for (const r of runners) {
     let f = runnerFlag.get(r.id) ? flags.find((x) => x.id === runnerFlag.get(r.id)) : null;
     if (f && r.x === f.x && r.y === f.y && f.owner === 1) continue;
@@ -415,7 +421,7 @@ function enemyTick() {
   const blockPlan = ((has('block') || has('wing') || has('screen')) && armyMode === 'fight') || (has('screen') && armyMode === 'march') ? planBlock(fighters, ours, ourCentroid) : null;
   focusAnchor = blockPlan ? blockPlan.anchor : null;
   for (const c of fighters) {
-    if (!has('shy')) fireAt(c, ours);   // +shy: the live camper never fired (matches 133, 152, 159: 16000/16000 both sides)
+    if (!has('shy') && !has('scatter')) fireAt(c, ours);   // +shy, scatter: the live camper/scatterer never fired (matches 133, 152, 159, 240)
     healAt(c, mine);
     if (has('none') || has('scouts')) continue; // 'scouts': only the enemy runners act, its army idles (match 2)
     if (blockPlan) { blockMove(c, blockPlan, fighters, ours); continue; }
@@ -510,6 +516,37 @@ function enemyTick() {
       const intruder = ours.filter((o) => range(c, o) <= 5).sort((a, b) => range(c, a) - range(c, b))[0];
       if (intruder && !isRunner(c)) stepToward(c, intruder, live(c, A) > 0 ? 1 : 2);
       else if (target) stepToward(c, target, c === fighters[0] || fighters.indexOf(c) % 4 === 0 ? 0 : 2);
+    } else if (has('scatter')) {
+      // 'scatter' (live match 240, ricardo18informatica2020, 17355:23708 with both armies whole): from the first tick every
+      // creep walks to a post of its own — by the replay: a melee and a ranged garrison his R3 (t=39), a ranged and a healer
+      // the A3 nearer to us (53), a melee and a ranged the other A3 (60); a trio (melee, ranged, healer) takes D5 (37) and
+      // then tours A3 -> A3 -> R3 -> D5 with three hundred ticks at each; the last melee and ranged sit at the nearer A3
+      // until t=400 and then join the R3 garrison (his largest group four of nine for half the match); the runners take the
+      // two H4 corners (78, 84) and sit. Six flags by t=86 against our one. Nobody fires (the ledger stayed 0); a creep steps
+      // away from our armed creeps within six and walks back when they leave — our army took the far A3 at t=419 from a
+      // garrison that had stepped aside, and the flag went back the moment it left
+      if (!armyState.posts) {
+        const home = { x: Math.round(mine.reduce((s, c) => s + c.x, 0) / mine.length), y: Math.round(mine.reduce((s, c) => s + c.y, 0) / mine.length) };
+        const d5 = flags.find((f) => f.effectType === 'eff_damage_taken_modifier') || flags[0];
+        const r3s = flags.filter((f) => f.effectType === 'eff_ranged_attack_modifier').sort((a, b) => range(home, a) - range(home, b));
+        const a3s = flags.filter((f) => f.effectType === 'eff_attack_modifier').sort((a, b) => range(ourCentroid, a) - range(ourCentroid, b));
+        const hisR3 = r3s[0] || d5, nearA3 = a3s[0] || d5, farA3 = a3s[1] || nearA3;
+        const melee = fighters.filter((f) => live(f, A) > 0), ranged = fighters.filter((f) => live(f, R) > 0 && live(f, A) === 0);
+        const healers = fighters.filter((f) => live(f, H) > 0 && live(f, A) === 0 && live(f, R) === 0);
+        armyState.posts = new Map();
+        const set = (f, tour) => { if (f) armyState.posts.set(f.id, tour); };
+        set(melee[0], [hisR3]); set(ranged[0], [hisR3]);
+        set(ranged[1], [nearA3]); set(healers[0], [nearA3]);
+        set(melee[1], [farA3]); set(ranged[2], [farA3]);
+        const tour = [d5, farA3, nearA3, hisR3];
+        set(melee[2], tour); set(ranged[3], tour); set(healers[1], tour);
+        set(melee[3], [nearA3, hisR3]); set(ranged[4], [nearA3, hisR3]); set(healers[2], [nearA3]);
+      }
+      const tour = armyState.posts.get(c.id) || [flags[0]];
+      const post = tour.length === 4 ? tour[Math.floor((world.tick - 1) / 300) % 4] : tour.length === 2 ? (world.tick < 400 ? tour[0] : tour[1]) : tour[0];
+      const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= 6);
+      if (threat.length) stepAway(c, threat);
+      else { const occ = creepAt(post.x, post.y); stepToward(c, post, !occ || occ === c ? 0 : 1); }
     } else if (has('spread')) {
       // 'spread' (match 19): every creep takes a flag of its own — the i-th creep the i-th flag, two per flag — sits on
       // it, steps away from our armed creeps within 6 and returns when they leave; it never fights as an army
@@ -544,7 +581,10 @@ function enemyTick() {
         const blob = { x: Math.round(fighters.reduce((s, f) => s + f.x, 0) / fighters.length),
                        y: Math.round(fighters.reduce((s, f) => s + f.y, 0) / fighters.length) };
         const centre = flags.slice().sort((a, b) => range(a, { x: 49, y: 49 }) - range(b, { x: 49, y: 49 }))[0];
-        const post = camping ? centre : flags.filter((f) => f.owner !== 1).sort((a, b) => range(blob, a) - range(blob, b))[0];
+        // the nearest TAKEABLE flag (06.09.2026): the blob used to head for the nearest flag that was not its own even with one
+        // of our creeps standing on it, and with our army posted next to its nearest flag (v100, the opening at the post) it
+        // danced at that flag for the whole match instead of farming the rest and parking (gate m30/m31 camp lost on points)
+        const post = camping ? centre : takeable.slice().sort((a, b) => range(blob, a) - range(blob, b))[0];
         if (post) stepToward(c, post, fighters.indexOf(c) === 0 ? 0 : 2);
       }
     } else if (has('roost')) {

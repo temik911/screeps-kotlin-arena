@@ -33,7 +33,7 @@ whatever is in range and rotates its damaged fighters back to the healers), `win
 ranged in the front row — the line stops three cells from our nearest creep and shoots, its melee only step to what
 comes within two, a ranged with one of our armed creeps within two backs off two rows), `spread` (match 19: every enemy
 creep takes a flag of its own, two per flag, sits on it, steps away from our armed creeps within six and comes back —
-it never fights as an army and farms the flags' points), `roost` (match 25: the same dispersal, but the creep never
+it never fights as an army and farms the flags' points), `scatter` (live match 240, ricardo18informatica2020's scatter from the first tick: by the replay, a melee and a ranged garrison his R3, a ranged and a healer the A3 nearer to us, a melee and a ranged the other A3, a trio takes D5 and then tours A3 -> A3 -> R3 -> D5 three hundred ticks at each, the last melee and ranged sit at the nearer A3 until t=400 and then join the R3 garrison, the runners take the two H4 corners and sit; nobody fires, a creep steps away from our armed creeps within six and comes back — six flags by t=86 against our one, D5 at 38, R3 at 43, both A3 at 53/56, both H4 at 82 on the stand as live), `roost` (match 25: the same dispersal, but the creep never
 leaves its flag — it does not step away from ours either; the live opponent of match 25 held all seven flags by t=80 and
 never moved again, and our own log reported every combat enemy stationary), `farm` (live match 26: the army moves as
 one blob to the flag nearest the blob that it does not own, and never engages — a creep with one of our armed creeps

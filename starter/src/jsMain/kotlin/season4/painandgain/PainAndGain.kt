@@ -806,6 +806,17 @@ object PainAndGain {
      *  цена россыпи живьём (матч 240) стендом не покрыта. Открытая находка: дебют против россыпи. */
     private const val USE_RUSH_SIGNAL_IN_REACH = false
     private const val RUSH_SIGNAL_RANGE = 50
+    /** ДЕБЮТ БЕЗ УГЛА (v100, решение оператора 06.09.2026 по матчам 238–243: уклонение на 3-м тике во всех девяти матчах дня,
+     *  30–36 тиков в доме и в углу (3,3), следующая цель на 39–108-м; против россыпи (240) — шесть его флагов к 86-му при нашем
+     *  одном, против часового (242) — его D5 на 39-м, против броска (238) угол не спас — армия вышла к посту на 23-м и встретила
+     *  его в поле). Сигнал безфлагового броска остаётся целиком (первый флаг — их, hunted, выход у целей), меняется одно:
+     *  УКЛОНЕНИЕ по нему снято: армия стоит у поста (флаг нашей половины, v88), скаут ждёт на нём его первого флага, а уходит она
+     *  только обычным уклонением (evadeFirst: его вооружённый в EVADE_RANGE от центра — как весь остальной матч). Дальность
+     *  сигнала (RUSH_SIGNAL_RANGE = 50) пробована первой: веер россыпи входит в 50 клеток на 17-м тике, пока «сомкнут» ещё
+     *  держится, и армия уходила в угол с 17-го по 36-й — та же (5,8) к 40-му (стенд scatter m34). v97b (сигнал целиком по
+     *  досягаемости) отвергнут стендом 124/125 при 32/32 — там менялась и доктрина захвата; здесь только точка стояния. Стенд:
+     *  сценарий scatter (россыпь матча 240) добавлен этой же версией. */
+    private const val USE_OPENING_AT_POST = true
     private const val EVADE_ARRIVED = 3
     private const val EVADE_EVAL_EVERY = 5
     private const val EVADE_HYSTERESIS = 4
@@ -927,7 +938,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v99"
+    private const val BOT_VERSION = "v100"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2419,7 +2430,9 @@ object PainAndGain {
             Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0)
         }
         val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted)
-        val evadeTo = evadeFirst ?: (if (hunted && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
+        // дебют без угла (v100, USE_OPENING_AT_POST): бросок далеко — не уклонение, а пост
+        val rushFar = USE_OPENING_AT_POST && unflaggedRushNow && theirs < ours * RETREAT_RATIO
+        val evadeTo = evadeFirst ?: (if (hunted && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
         val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible
