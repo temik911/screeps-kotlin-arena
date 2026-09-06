@@ -467,6 +467,17 @@ object PainAndGain {
      *  делало её одноразовой; рассыпанный фермер не собирается никогда, и ядро против его крупнейшей группы из двух-трёх в
      *  перевесе весь матч. Против кайтера и лагеря стенда гонки нет по признаку россыпи, против пар spread — по целям. */
     private const val USE_SCATTER_RACE = true
+    /** ОДНА МЕРА ЯДРА (v94, решение оператора 06.09.2026): пул проверял ядро против его мощи только в тик выпуска, а через
+     *  сто тиков флаги перешли из рук в руки (дебаффы холдера), дистанция и досягаемость сменились — и постура видела 0,82
+     *  там, где пул проверил 0,97: матч 233 ядро из девяти 2919 против 3559 в EVADE 200–300, матчи 199 и 201 то же. Ядро
+     *  держит порог КАЖДЫЙ тик той же мерой, что постура (ourPowerOf/enemyPowerOf по нынешней армии): просело — сильнейший
+     *  отделённый возвращается, пока порог не восстановлен. */
+    private const val USE_ONE_CORE_MEASURE = true
+    /** ОТРЯД ПАРАМИ (v94): россыпь по двое на флаг (けろびー в матче 233, spread стенда) одиночному бегуну не по зубам — пул
+     *  отпускал по крипу на флаг, бегуны 19 раз выходили и возвращались «без цели». Флаг со стаей, которую один бегун не
+     *  побьёт, а двое ближайших вооружённых свободных побьют (по Ланчестеру пары против стаи), получает обоих; пул отпускает
+     *  столько, сколько требуют охраны целей (флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного). */
+    private const val USE_RUNNER_PAIRS = true
     /** ПУЛ ОТРЯДА МЕРИТ ЯДРО ПРОТИВ ЕГО МОЩИ, СЧИТАННОЙ ПРОТИВ ЯДРА, И ОТРЯД БЕЗ ДЕЛА ОТЗЫВАЕТСЯ (v84, матч 199 — MetalicaX
      *  пятый раз, 10996:17460 к 1700-му): на 763-м его лекарь занял наш A3, гонка стала проигранной, и пул отдал ТРЁХ
      *  стрелков — ядро проверялось против theirs=3222, его мощи против ПОЛНОЙ армии; против ядра из девяти его мощь 3520, и
@@ -842,7 +853,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v93"
+    private const val BOT_VERSION = "v94"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1482,6 +1493,25 @@ object PainAndGain {
             assigned.add(c.runner.id)
             taken.add(c.flag.id)
             runnerFlag[c.runner.id] = c.flag.id
+        }
+        // пары (v94): флаг со стаей, с которой один не справится, — двум ближайшим свободным вооружённым, если справятся вдвоём
+        if (USE_RUNNER_PAIRS) {
+            for (f in ctx.flags) {
+                if (f.ours || f.id in taken) continue
+                if (f.occupant?.my == true) continue
+                val free = runners.filter { it.id !in assigned && hasWeapon(it) }.sortedBy { getRange(it, f.pos) }.take(2)
+                if (free.size < 2) continue
+                val flow = flowTo(ctx, f.pos)
+                val ticks = free.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
+                if (ticks >= Int.MAX_VALUE / 4) continue
+                val occ = ctx.enemyCreeps.filter { it.x == f.pos.x && it.y == f.pos.y }
+                val pack = (packAt(ctx, f.pos, flow, ticks) + occ).distinctBy { it.id }
+                if (pack.isEmpty()) continue
+                if (ourPowerOf(free, pack) <= enemyPowerOf(pack, free)) continue
+                if (escapeFlows.isNotEmpty() && exitMargin(ctx, f.pos, ticks) < 0) continue
+                for (r in free) { assigned.add(r.id); runnerFlag[r.id] = f.id }
+                taken.add(f.id)
+            }
         }
         for (s in runners) if (s.id !in assigned) runnerFlag.remove(s.id)
 
@@ -2186,10 +2216,24 @@ object PainAndGain {
                     detachedIds.removeAll(idle.toSet()); idle.forEach { idleRunnerTicks.remove(it) }; detachRecallTick = now
                 }
             }
+            // одна мера ядра (v94): порог держится каждый тик — просело, сильнейший отделённый возвращается
+            if (USE_ONE_CORE_MEASURE && farmer && detachedIds.isNotEmpty()) {
+                val floorNow = if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR
+                var core = army.filter { it.id !in detachedIds }
+                var recalled = 0
+                while (detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, combatEnemies) < enemyPowerOf(combatEnemies, core) * floorNow) {
+                    val back = ctx.runners.filter { it.id in detachedIds }.maxByOrNull { ourPowerOf(listOf(it), emptyList()) } ?: break
+                    detachedIds.remove(back.id); core = core + back; recalled++
+                }
+                if (recalled > 0) detachRecallTick = now   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
+                if (DEBUG_LOG && recalled > 0) println("detach t=$now: $recalled recalled — the core fell under ${floorNow} of him by the posture's measure")
+            }
             if (!farmer) detachedIds.clear()
             else if ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
-                val unmanned = ctx.flags.count { f -> f.occupant?.my != true }
+                // столько, сколько требуют охраны целей (v94): флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного
+                val unmanned = if (USE_RUNNER_PAIRS) ctx.flags.sumOf { f -> if (f.occupant?.my == true) 0 else if (armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }) 2 else 1 }
+                    else ctx.flags.count { f -> f.occupant?.my != true }
                 val pool = if (USE_DRY_HUNT_MELEE_FIRST && (viaDryHunt || viaRace)) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
                     else armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
                 var remaining = army.filter { it.id !in detachedIds }
