@@ -183,3 +183,72 @@ Live: a draw, then **four wins in a row**, then a loss — rating 1213→**1227*
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
+
+## Reading a series of matches (06.09.2026)
+
+Three versions in a row were designed off numbers read by eye out of ONE match's log — the focus share
+that produced v42 among them — and the stub, which is the other half of the evidence, is made of
+opponents I invented. Both holes are now instrumented.
+
+**`tools/series.py versions`** joins every cached match to the bot version that played it (the greeting
+line on tick 1), the opponent, the result and the rating move. What it said the first time it ran, over
+the last sixty matches: v37 10-4-2 (+20), v38 7-1-0 (+13), **v39 3-3-2 (−9)**, v41 4-2-1 (−2), v42
+6-2-3 (+18), v43 4-1-1 (+2). The v39 row is the roads probe, and it is the first time its cost has been
+visible as a number. `--by-opponent` and `compare A B` cut the same rows per opponent, which is the only
+control there is over the draw: one match slot, a random opponent, and no way to replay a version
+against the same schedule. Read the counts, not the sign — six matches against one opponent is still six
+matches.
+
+**`tools/series.py metrics`** parses every `key=value` the bot printed across a whole series and ranks
+the fields by how far the groups stand apart (difference over pooled deviation), grouped by outcome,
+version or opponent. It is shape-driven, not name-driven: a new instrument in the bot appears in the
+table without touching the tool, `enemies=5/1` becomes `enemies` and `enemies#2`, a field that never
+decreases over a match is summarised by its last value and everything else by its mean, and values at
+or above ten million are dropped as the `Int.MAX_VALUE` sentinels they are — nothing this bot measures
+comes within two orders of magnitude of that. Over the whole match the ranking is mostly the outcome
+wearing a number's clothes (`push` is high in won matches because winning is what pushing looks like);
+the honest window is `--t0 1 --t1 400`, and there the top field, by a wide margin, is the home-fight
+measure `home=fight:wins(...)` — the matches we lose are the ones where the fight at home starts worse,
+not the ones where the economy starts worse.
+
+**`tools/replay.py economy`** reads both sides' production race off the replay, which nobody had ever
+looked at: the replay carries every structure's energy per tick, so the enemy's economy is as readable
+as ours. A spawn's energy moves for three reasons — it regenerates, a hauler delivers, and a creep is
+charged for at the tick it starts — so adding the charge back gives the flow in, and the regeneration
+is measured as the median flow rather than assumed. Against けろびー on 06.09 we picked up 24450 and
+delivered 23334 (15.7/tick) against his 10000 and 9727 (6.2/tick): **we out-earn him better than two to
+one, and the production race is not where we lose**. The same run says 102050 energy decayed in piles
+nobody was standing next to — the map hands out about 127k over a match and both armies together
+collect a quarter of it, which is the same thing `supplyBound` says from the inside: the fleet is the
+bound, not the supply.
+
+**`tools/replay.py scenario` + `tools/stub/spawnandswamp/replay.sh`** turn a played match into a stub
+scenario: the real terrain, the real walls, every energy pile with its position, size and the tick it
+appeared, both spawns, and the enemy's real spawn queue — every body he built, at the tick he started
+it. Two halves of it are verified against an independent source, our own console log of the same match:
+the decoded terrain matches the bot's printed map in **98 of 98 rows**, and the derived appearance tick
+of the timed piles matches the decay counters the bot logged in **62 of 62**. His economy is not
+replayed (he is granted what he spent, since what is being replayed is his army), and his tactics are
+the nearest of the four behaviours this harness already models, chosen by numbers measured off him —
+how often he backed away from a gun at two cells, how large his largest group ran, how close he ever
+came to our spawn. Committed scenarios: `scenarios/kerobi-win.json` (farmer, tower at 362),
+`scenarios/kerobi-loss.json` (stream), `scenarios/stachu-loss.json` (healball).
+
+**And the honest half of that result: the tactics model is too weak, and the tool's own output says
+so.** Against the current build all three recorded opponents lose in the stub — including the two that
+beat us live. That could mean the bot improved since (v41 played both losses) or that the canned
+behaviour plays them softly, and the two were separated by building v41 in a throwaway worktree and
+running the same scenario: **v41 destroys his spawn at 825 there, exactly as v43 does, while the live
+match at that version was a loss.** So the difference is not the version — it is the model of him. The
+map, the piles and the queue are faithful; the tactics are a stand-in. The removal is named, not
+accepted: the replay records where each of his creeps stood and what it did every tick, so the driver
+can be fitted from the recording (standoff distance, target choice, when he retreats) instead of picked
+from four presets. Until that is done a scenario result is evidence about the map and the schedule, not
+a prediction of the match.
+
+Two things the stub does not model, found while doing this and left as findings rather than fixed
+inside a tooling change: **its movement blocks only on creeps and spawns**, so a `constructedWall`,
+tower or extension object does not physically stop a creep (terrain walls do), and there is **no
+rampart rule** — a rampart is impassable to foreigners in the engine and is not here. Both matter for
+the rampart work that is still open, and both are fixes to `game/prototypes/_world.mjs`'s `endTick`,
+not limitations to write down.
