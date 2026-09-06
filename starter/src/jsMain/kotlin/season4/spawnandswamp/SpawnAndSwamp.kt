@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 35
+    private const val BOT_VERSION = 36
 
     private const val LATE_MARGIN = 60
 
@@ -1322,7 +1322,14 @@ object SpawnAndSwamp {
         // дефицит (тел × максимум из времени рождения и накопления энергии). Два разведчика врага
         // на другом краю карты 170 тиков держали спавн на «боец первым» при притоке 10/23 (02.09).
         // (income, deficit, fighterFirst — выше, до ветки бурильщика)
-        val haulerTurn = needHauler && !fighterFirst && spentHaulers <= spentFighters + spentBuild + HAULER_LEAD
+        // ХЕДЖ ПО ЖИВОЙ СИЛЕ, А НЕ ПО КАССЕ. Прежде сравнивались суммы потраченного, и убитый боец
+        // продолжал оправдывать хаулера всю игру: вложив в бойцов восемь тысяч и держа двоих, мы имели
+        // право на девять тысяч флота — и ровно это и вышло (ничья 1999 тиков: 15 хаулеров против трёх
+        // бойцов, чужой спавн отбит с 2200 обратно до 3000). Считаем то, что ЕСТЬ: цену уцелевших
+        // частей живого флота против цены уцелевших частей живых вооружённых
+        val liveHaulers = ctx.haulers.sumOf { liveCost(it) }
+        val liveFighters = defenders.sumOf { liveCost(it) }
+        val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD
 
         if (haulerTurn) {
             val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
@@ -1332,7 +1339,7 @@ object SpawnAndSwamp {
             if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return
             val r = spawn.spawnCreep(haulerBody(affordable))
             if (r.error == null) spentHaulers += affordable * blockCost()
-            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} spent=$spentHaulers/$spentFighters err=${r.error}")
+            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} live=$liveHaulers/$liveFighters err=${r.error}")
             return
         }
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
@@ -3122,9 +3129,12 @@ object SpawnAndSwamp {
      *  Пока никого не потеряли — единица, и башня честно проигрывает бойцу. */
     private fun survivalOfFighters(fighters: List<Creep>): Double {
         if (spentFighters <= 0) return 1.0
-        val alive = fighters.sumOf { c -> c.body.sumOf { if (it.hits > 0) cost(it.type) else 0 } }
-        return (alive.toDouble() / spentFighters).coerceIn(0.0, 1.0)
+        return (fighters.sumOf { liveCost(it) }.toDouble() / spentFighters).coerceIn(0.0, 1.0)
     }
+
+    /** Цена УЦЕЛЕВШИХ частей крипа: что из вложенного в него ещё существует. Выбитая часть не стоит
+     *  ничего — ни как урон, ни как хиты, — и в сравнении сил считать её нельзя. */
+    private fun liveCost(creep: Creep): Int = creep.body.sumOf { if (it.hits > 0) cost(it.type) else 0 }
 
     /** Окупается ли башня против бойца за ту же энергию. Мера одна и та же — ПРИБАВКА к мощи обороны
      *  против тех же врагов, с их лечением (см. lanchester): против пары «стрелок + лекарь» непрерывный
