@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 34
+    private const val BOT_VERSION = 35
 
     private const val LATE_MARGIN = 60
 
@@ -396,6 +396,11 @@ object SpawnAndSwamp {
      *  сколько флот МОГ БЫ возить; это — сколько он ВОЗИТ на самом деле. Матч 22 (05.09.2026): по замеру
      *  повтора противник всадил 133 выстрела в наши безоружные хаулеры, приток упал с 22 до 4, а прогноз
      *  всё это время видел на земле 5-9 тысяч и звал покупать ещё — флот вырос до одиннадцати. */
+    /** Точки, которые мы уже видели, и энергия, с которой каждая ПОЯВИЛАСЬ. Ключи не чистятся: пропавшая
+     *  и вернувшаяся точка (например, ставшая на тик недостижимой) иначе сосчиталась бы дважды. */
+    private val siteFirstSeen = HashMap<String, Int>()
+    private val appeared = ArrayDeque<Pair<Int, Int>>()
+
     private val delivered = ArrayDeque<Pair<Int, Int>>()
     private val haulerStore = HashMap<String, Int>()
     private var firstHaulerTick = -1
@@ -613,6 +618,7 @@ object SpawnAndSwamp {
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
         measureDelivery(ctx)
+        measureSupply(ctx)
         val breach = breachPlan(ctx)
         if (DEBUG_LOG && breach != null && !breachLogged) {
             breachLogged = true
@@ -657,7 +663,7 @@ object SpawnAndSwamp {
             println(
                 "t=${getTicks()} spawnE=${mySpawn.store[RESOURCE_ENERGY]} spawning=${mySpawn.spawning != null} " +
                     "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
-                    "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }} " +
+                    "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }}s${supplyRate().toInt()} " +
                     "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawnHits=${enemySpawn?.hits} " +
                     "mine=${myTowers.joinToString(",") { "T(${it.x},${it.y})h=${it.hits}e=${it.store[RESOURCE_ENERGY]}" }.ifEmpty { "-" }}${ctx.mySites.joinToString("") { "+site(${it.x},${it.y})${it.progress}/${it.progressTotal}" }} home=${(homeShare() * 100).toInt()}%"
             )
@@ -1296,9 +1302,18 @@ object SpawnAndSwamp {
         // поедет умирать туда же
         val realised = realisedIncome()
         val fleetDelivers = realised < 0.0 || realised >= projectedIncome(ctx, usable) * PUSH_RELEASE_RATIO
+        // ПОТОК, А НЕ КУЧА. capacityBound спрашивает, лежит ли на земле на четыре круга всего флота, —
+        // это вопрос про склад. Карта же роняет две точки по 2000 каждые пятьдесят тиков: восемьдесят в
+        // тик ПОЯВЛЯЕТСЯ. Пока появляется больше, чем мы увозим, узкое место — ёмкость по определению,
+        // сколько бы ни лежало прямо сейчас (матч 45: 6050 на земле, восемь хаулеров, приток 9 из 80).
+        // Оба ответа «да» — покупаем; сторожа при этом остаются прежние: замеренная сдача (fleetDelivers)
+        // запрещает рост, когда флот не вывозит обещанного, а цель спавна (targetIncome) — когда возить
+        // уже некуда
+        val taking = realisedIncome().let { if (it < 0.0) projectedIncome(ctx, usable) else it }
+        val supplyBound = supplyRate() > taking
         val needHauler = allHaulers < MAX_HAULERS && fleetDelivers &&
             !(energy >= SPAWN_ENERGY_CAPACITY && carried > 0) &&
-            capacityBound(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) }, HAULER_BLOCKS_MIN * CARRY_CAPACITY) &&
+            (supplyBound || capacityBound(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) }, HAULER_BLOCKS_MIN * CARRY_CAPACITY)) &&
             projectedIncome(ctx, usable) < targetIncome()
         // стража «на всякий случай» нет: армия врага видна с момента его spawnCreep, и боец строится
         // в ответ на неё (fighterFirst). Страж за 500 стоял 200 тиков без дела, а второй хаулер
@@ -1317,7 +1332,7 @@ object SpawnAndSwamp {
             if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return
             val r = spawn.spawnCreep(haulerBody(affordable))
             if (r.error == null) spentHaulers += affordable * blockCost()
-            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
+            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} spent=$spentHaulers/$spentFighters err=${r.error}")
             return
         }
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
@@ -2974,6 +2989,26 @@ object SpawnAndSwamp {
         if (firstHaulerTick < 0 && ctx.haulers.isNotEmpty()) firstHaulerTick = now
         if (sum > 0) delivered.addLast(now to sum)
         while (delivered.isNotEmpty() && delivered.first().first < now - PRODUCTION_WINDOW) delivered.removeFirst()
+    }
+
+    /** Сколько энергии ПОЯВИЛОСЬ на карте в этот тик: новые точки со своим начальным запасом. Это приток
+     *  предложения, а не остаток на земле, и именно он говорит, есть ли смысл в ещё одной ёмкости. */
+    private fun measureSupply(ctx: Ctx) {
+        val now = getTicks()
+        var fresh = 0
+        for (s in ctx.sites) {
+            if (siteFirstSeen.containsKey(s.id)) continue
+            siteFirstSeen[s.id] = s.energy
+            fresh += s.energy
+        }
+        if (fresh > 0) appeared.addLast(now to fresh)
+        while (appeared.isNotEmpty() && appeared.first().first < now - PRODUCTION_WINDOW) appeared.removeFirst()
+    }
+
+    /** Появление энергии в тик за окно (см. measureSupply). */
+    private fun supplyRate(): Double {
+        val span = minOf(PRODUCTION_WINDOW, getTicks() + 1)
+        return if (span <= 0) 0.0 else appeared.sumOf { it.second }.toDouble() / span
     }
 
     /** Замеренный приток (энергии в тик) за окно; -1, пока флот не проработал целое окно и мерить нечего. */
