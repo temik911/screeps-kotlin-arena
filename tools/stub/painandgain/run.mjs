@@ -247,7 +247,12 @@ function screenMove(c, plan, fighters, ours) {
         // 'keeps its distance' lines of every standing fight): matches 191/195/198 put his ranged at 3–4 from our nearest
         // in 800 of 1200 creep-ticks and never at one or two, while this screen's ranged, standing still at three or
         // closer, were at one or two in 80–100 % of contact samples and dead by t=160–200 (06.09.2026, item 5)
+        // ...and out of OUR ranged's reach: the live line's ranged stand at three from our nearest MELEE (whom they shoot)
+        // and at four from our nearest RANGED (who therefore never shoot them: 0 of his ranged disarmed in 191/195/198
+        // against 45–79 of ours) — a ranged of ours within three is stepped away from, our melee at three is the target
         const nearest = ourF.slice().sort((a, b) => range(c, a) - range(c, b))[0];
+        const ourRanged = ourF.filter((o) => live(o, R) > 0).sort((a, b) => range(c, a) - range(c, b))[0];
+        if (ourRanged && range(c, ourRanged) <= 3) { if (!stepBack(c, [ourRanged])) stepAway(c, [ourRanged]); return; }
         if (nearest && range(c, nearest) < 3) { if (!stepBack(c, [nearest])) stepAway(c, [nearest]); return; }
         if (range(c, focus) <= 3) return;
         if (!formed && !has('fast') && range(c, slot) > 1) { stepToward(c, slot, 0); return; }
@@ -259,6 +264,10 @@ function screenMove(c, plan, fighters, ours) {
       const adjOurs = ourF.filter((o) => range(c, o) <= 1);
       if (adjOurs.length && range(c, focus) <= 1) { if (!stepBack(c, adjOurs)) stepAway(c, adjOurs); return; }
       if (range(c, focus) > 2) { stepToward(c, focus, 2); return; }
+      // the POKE (06.09.2026): from two the live melee step in on our most forward creep, swing and step back the same tick
+      // (fireAt runs before the move) — 33–63 swings a fight against our 5–9, which stand behind our ranged and never
+      // answer; at two the stub's melee only waited for someone to walk into them
+      if (range(c, focus) === 2) { stepToward(c, focus, 1); return; }
       return;
     }
   }

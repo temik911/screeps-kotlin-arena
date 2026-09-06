@@ -661,6 +661,15 @@ object PainAndGain {
      *  лидерства на 1557-м в проигрыш по очкам; 283 против 285. Гонка с фермером — открытая находка: нужен не отказ от
      *  погони, а удержание взятого (гарнизон отвергнут 17→18) или перехват блоба. */
     private const val USE_KEEPS_DISTANCE_STALL = false
+    /** ПРОСТОЙ «ОН ДЕРЖИТ ДИСТАНЦИЮ» — В ОКНЕ ОТРЯДА (v92, дебют против гуляющего блоба MetalicaX): его девять вооружённых ходят
+     *  одним блобом по маршруту флагов (D5 на 42-м, A3 на 62–69-м, R3 на 85-м, H4 на 123–126-м), скауты берут остальное, а
+     *  наша армия при 1,32 гонится за блобом с 42-го по 280-й при 3:22 — толчок, который не смыкается, с первого тика (матч
+     *  230; в 185–228 та же форма после дебюта). Сетка v36 (окно CHASE_WINDOW = 8) отвергнута дважды: 06.09 поверх v74–v91
+     *  — 124/125, m29 camp 14315:22146, camp m30/m31/m33 −6274/−3894/−3082: восемь тиков ловят дрожание центра у стоящего
+     *  лагеря. Окно отряда (DETACH_WINDOW = 50, distanceKept: дистанция не сократилась, его центр сдвинулся не меньше чем
+     *  на четверть окна, дистанция больше ENGAGE_RANGE) стоящий лагерь не даёт, гуляющий блоб — даёт: простой в этом окне,
+     *  флаги на STALL_COOLDOWN всей армией. */
+    private const val USE_KEEPS_DISTANCE_STALL_WINDOW = true
     private const val LEASH_RANGE = 8
 
     /** Плотность строя при враге рядом (см. compact): шаг разрешён только на клетку в COMPACT_RANGE от центра
@@ -830,7 +839,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v91"
+    private const val BOT_VERSION = "v92"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2022,7 +2031,8 @@ object PainAndGain {
         }
         val distanceKept = combatEnemies.isNotEmpty() && kept(DETACH_WINDOW)
         if (distanceKept) lastDistanceKeptTick = now
-        val keepsDistance = USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)
+        val keepsDistance = (USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)) ||
+            (USE_KEEPS_DISTANCE_STALL_WINDOW && distanceKept)
         while (marchHist.size > MARCH_STALL_TICKS) marchHist.removeFirst()
         // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
         val marchStalled = pushing && marchCell >= 0 && marchHist.size == MARCH_STALL_TICKS &&
