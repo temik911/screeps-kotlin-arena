@@ -375,6 +375,15 @@ object PainAndGain {
      *  (m30: 0 строк stall/detach за матч, 9615:23822). «В контакте стоять законно — строй рубится на месте при полном
      *  взаимном лечении» остаётся верным: рубка стреляет. */
     private const val USE_COLD_CONTACT = true
+    /** СУХАЯ ОХОТА (v75, матч 183 — семнадцатое поражение фермеру けろびー, 20315:23272): его армия стёрта до двух одиноких
+     *  бегунов к 650-му (наши 4114 против 709), они обегали флаги каждые 20–30 тиков, наши девять вооружённых бежали следом
+     *  одной кучей при 0–8 в тик против 17–25, ни выстрела с 637-го — а отряд вышел на 935-м, когда истекли FARMER_QUIET тиков
+     *  с последнего удара по нам (635-й, бой при стирании его крипов); с 935-го темп 21:4, и до конца не хватило 3000. Тишина
+     *  в 300 тиков отделяет фермера от кайтера стенда, который возвращается за разделённым ядром через 160 тиков после укуса
+     *  приманки (см. FARMER_QUIET); отряд без этой тишины — когда за PASSIVE_TICKS ни нашего выстрела, ни удара по нам, мы
+     *  отстаём по очкам, и ядро остаётся не слабее его армии × PUSH_RATIO, то есть охотиться может и одно. Выстрел бегуна у
+     *  флага не в счёт (lastFireTick — только армия). */
+    private const val USE_DRY_HUNT = true
     /** Стая у флага не преграда для ТИХОГО фермера (v72, см. chooseFlagObjective): противник, не стрелявший FARMER_QUIET тиков
      *  с первой досягаемости, отходит от наших (стенд camp+shy, живые 133/152/159) — «цена боя» за его флаг с двенадцатью на нём
      *  бесконечна на бумаге и нулевая на деле, и ядро при паритете уходило к угловым флагам за сорок клеток (m31: (85,27) →
@@ -657,7 +666,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v74"
+    private const val BOT_VERSION = "v75"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1290,7 +1299,7 @@ object PainAndGain {
             val nearby = ctx.combatEnemies.filter { getRange(s, it) <= RANGED_RANGE + 2 }
             val underFire = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies) > 0.0
             // мили-бегун (отряд) рубит вплотную (v57): healAndShoot за бегунов только стреляет, удар мили выдаёт цикл армии
-            if (hasMelee(s)) ctx.enemyCreeps.filter { getRange(s, it) <= 1 }.minByOrNull { it.hits }?.let { s.attack(it); lastFireTick = getTicks() }
+            if (hasMelee(s)) ctx.enemyCreeps.filter { getRange(s, it) <= 1 }.minByOrNull { it.hits }?.let { s.attack(it) }
             // захватчик без замены: от врага «с боем» ближе SCOUT_FLEE_TRIGGER — прочь (пустой MOVE ходит клетку за тик и
             // по болоту, где стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
             val threats = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER && threatening(it, ctx.enemyCreeps) }
@@ -1925,8 +1934,17 @@ object PainAndGain {
             val quietSinceFirstReach = firstNearTick >= 0 && now - firstNearTick >= FARMER_QUIET
             farmerQuietNow = quiet && quietSinceFirstReach
             val lostRaceNow = behindOnScore && ourRate <= enemyRate
-            val farmer = armedEnemies.isNotEmpty() && quiet && firstNearTick >= 0 &&
-                (chaseDry || detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
+            // сухая охота (v75, см. USE_DRY_HUNT): мы уже стреляли, с тех пор PASSIVE_TICKS ни выстрела, ни удара, отстаём — и его
+            // вооружённые РАССЫПАНЫ: крупнейшая группа в ENGAGE_RANGE не больше половины (бегуны матча 183: 2 по одному). «Сто
+            // тиков без обмена» само по себе (v75 первая проба) выпускало отряд на сотом тике против целого лагеря (счёт от
+            // начала матча, m30 camp 18891:23756) и против кайтера стенда, ходящего впятером (m31 kite 1979:23896 — 25 тиков
+            // отряда на 183–214-м, и бой без четверых проигран): гейт 120/125
+            val largestGroup = armedEnemies.maxOfOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
+            val scattered = armedEnemies.isNotEmpty() && largestGroup <= maxOf(1, armedEnemies.size / 2)
+            val dryHunt = USE_DRY_HUNT && behindOnScore && scattered && lastFireTick >= 0 &&
+                now - lastFireTick >= PASSIVE_TICKS && now - lastHurtTick >= PASSIVE_TICKS
+            val farmer = armedEnemies.isNotEmpty() && firstNearTick >= 0 &&
+                ((quiet && (chaseDry || detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))) || dryHunt)
             val detachedBefore = detachedIds.size
             if (!farmer) detachedIds.clear()
             else if (!contact || (USE_COLD_CONTACT && !exchangeRecent)) {
@@ -1937,13 +1955,14 @@ object PainAndGain {
                 for (c in pool) {
                     if (detachedIds.size >= unmanned) break
                     val without = remaining.filter { it.id != c.id }
-                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirs * PARITY_FLOOR) break
+                    // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
+                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirs * (if (quiet) PARITY_FLOOR else PUSH_RATIO)) break
                     detachedIds.add(c.id)
                     remaining = without
                 }
             }
             if (DEBUG_LOG && detachedIds.size != detachedBefore)
-                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
+                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
         } else detachedIds.clear()
         val interceptDenies = interceptFlag != null && !interceptFlag.ours
         val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)
