@@ -12,6 +12,11 @@ truth, and nothing to keep in sync by hand. What it adds is the join that was be
         the same two versions per opponent. The arena gives one match slot and a random draw, so a
         plain series mixes "the version got worse" with "he drew a different opponent"; this is the
         only control we have over that, and it is a weak one — read the match counts, not the sign.
+    tools/series.py field home home#3 [--t0 --t1]
+        the same fields per match instead of averaged: value, how many ticks carried it, the version,
+        the opponent and the result. A ranking says which instrument differs; this says whether it
+        differs because the number is different or because it was printed on ten ticks instead of two
+        hundred, and those are different diagnoses.
     tools/series.py metrics [--arena ...] [--version 43] [--by outcome|version|opponent] [--t0 --t1]
         every `key=value` the bot printed, aggregated per match and then across matches, ranked by how
         far the groups stand apart (difference over pooled deviation). The question it answers is
@@ -37,7 +42,7 @@ matchlog = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(matchlog)
 
 CACHE_DIR = os.path.expanduser("~/.cache/screeps-arena-series")
-CACHE_VERSION = 3  # bump when the parsed shape changes, so stale files are re-read instead of trusted
+CACHE_VERSION = 4  # bump when the parsed shape changes, so stale files are re-read instead of trusted
 US = "temik911"
 NUM = re.compile(r"-?\d+(?:\.\d+)?")
 # the bot prints Int.MAX_VALUE and its cousins (1073741823 = 2^30-1, 268435455 = 2^28-1) for "no
@@ -152,23 +157,27 @@ def summarise(series, min_points=3):
 
 
 def match_metrics(r, t0, t1):
-    """(summary, samples) of one match, cached on disk — a finished match's log never changes."""
+    """(summary, samples, counts) of one match, cached — a finished match's log never changes.
+
+    counts is how many ticks carried each field: a field printed only while something is happening (the
+    home fight) means one thing when its value moves and another when its tick count does."""
     path = os.path.join(CACHE_DIR, f"{r['game']}_{t0}_{t1}.json")
     final = r["result"] in ("won", "lost", "draw")
     if final and os.path.exists(path):
         try:
             doc = json.load(open(path))
             if doc.get("v") == CACHE_VERSION:
-                return doc["m"], doc["s"]
+                return doc["m"], doc["s"], doc["c"]
         except (ValueError, KeyError):
             pass
     ticks = matchlog.log_ticks(r["game"], {r["game"]: r["logs"]})
     series, samples = series_of(ticks, t0, t1)
     data = summarise(series)
+    counts = {k: len(v) for k, v in series.items() if k in data}
     if final:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        json.dump(dict(v=CACHE_VERSION, m=data, s=samples), open(path, "w"))
-    return data, samples
+        json.dump(dict(v=CACHE_VERSION, m=data, s=samples, c=counts), open(path, "w"))
+    return data, samples, counts
 
 
 # ---------------------------------------------------------------- commands
@@ -237,7 +246,7 @@ def cmd_metrics(args):
         sys.exit("no matches matched")
     groups, samples = defaultdict(list), {}
     for r in rs:
-        m, s = match_metrics(r, args.t0, args.t1)
+        m, s, _ = match_metrics(r, args.t0, args.t1)
         samples.update(s)
         if not m:
             continue
@@ -303,6 +312,30 @@ common.add_argument("--arena", default="spawn-and-swamp", help="substring of the
 common.add_argument("--limit", type=int, default=40, help="how many of the most recent matches to read")
 common.add_argument("--all", action="store_true", help="every cached match, not just the last --limit")
 
+def cmd_field(args):
+    rs = rows(args)
+    if not rs:
+        sys.exit("no matches matched")
+    window = "" if (args.t0, args.t1) == (0, 10 ** 9) else f", ticks {args.t0}..{args.t1}"
+    print(f"{len(rs)} matches{window}; value and (ticks carrying it) per match\n")
+    head = f"{'when':<12} {'ver':>4} {'result':<5} {'opponent':<12}"
+    print(head + " " + " ".join(f"{f[:16]:>18}" for f in args.fields))
+    for r in rs:
+        m, s, c = match_metrics(r, args.t0, args.t1)
+        cells = []
+        for f in args.fields:
+            cells.append(f"{m[f]:>12.1f} ({c.get(f, 0):>3})" if f in m else f"{'-':>18}")
+        when = time.strftime('%d.%m %H:%M', time.localtime(r["when"]))
+        ver = f"v{r['version']}" if r["version"] is not None else "-"
+        print(f"{when:<12} {ver:>4} {r['result']:<5} {foe(r)[:12]:<12} " + " ".join(cells))
+    for f in args.fields:
+        for r in rs:
+            _, s, _ = match_metrics(r, args.t0, args.t1)
+            if f in s:
+                print(f"\n{f} is printed as: {s[f]}")
+                break
+
+
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -316,6 +349,14 @@ p.add_argument("a", type=int)
 p.add_argument("b", type=int)
 p.set_defaults(func=cmd_compare)
 
+p = sub.add_parser("field", parents=[common], help="named fields per match, with their tick counts")
+p.add_argument("fields", nargs="+")
+p.add_argument("--version", type=int, nargs="*", help="only these bot versions")
+p.add_argument("--opponent", help="only matches against this opponent (substring)")
+p.add_argument("--t0", type=int, default=0)
+p.add_argument("--t1", type=int, default=10 ** 9)
+p.set_defaults(func=cmd_field)
+
 p = sub.add_parser("metrics", parents=[common],
                    help="the bot's own printed numbers, aggregated across matches")
 p.add_argument("--version", type=int, nargs="*", help="only these bot versions")
@@ -328,7 +369,7 @@ p.add_argument("--top", type=int, default=30)
 p.set_defaults(func=cmd_metrics)
 
 args = ap.parse_args()
-if args.cmd != "metrics":
+if args.cmd not in ("metrics", "field"):
     args.version = None
     args.opponent = None
 args.func(args)
