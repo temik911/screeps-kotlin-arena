@@ -405,6 +405,15 @@ object PainAndGain {
      *  равно отпускала пятерых на 227-м — армия сама фармила в FLAG со 168-го по 208-й и 19 тиков была в ANNIHILATE; живой
      *  остаток матча 197 армия гнала с 650-го непрерывно). */
     private const val USE_DRY_HUNT_RANGED_GUARD = true
+    /** ПУЛ ОТРЯДА МЕРИТ ЯДРО ПРОТИВ ЕГО МОЩИ, СЧИТАННОЙ ПРОТИВ ЯДРА, И ОТРЯД БЕЗ ДЕЛА ОТЗЫВАЕТСЯ (v84, матч 199 — MetalicaX
+     *  пятый раз, 10996:17460 к 1700-му): на 763-м его лекарь занял наш A3, гонка стала проигранной, и пул отдал ТРЁХ
+     *  стрелков — ядро проверялось против theirs=3222, его мощи против ПОЛНОЙ армии; против ядра из девяти его мощь 3520, и
+     *  ядро оказалось 0,84 (2950) при «проверенных» 0,97 → EVADE 900 тиков в углу (15,76) при его блобе, не двигавшемся 900
+     *  тиков в 42 клетках; трое отделённых все 900 тиков стояли рядом в RESERVE — ни одного флага, за который бегун пошёл бы.
+     *  Темп 6:12. Мощь по Ланчестеру — пары, и его мощь против ядра без стрелков выше: пул считает её против ядра-кандидата.
+     *  Отряд, чьи бегуны DETACH_WINDOW тиков все без цели (RESERVE), отзывается, и новый набор ждёт то же окно. */
+    private const val USE_DETACH_PAIRED_MEASURE = true
+    private const val USE_DETACH_IDLE_RECALL = true
     /** ОКНО ПОГОНИ НЕ ОБНУЛЯЕТСЯ МИГАНИЕМ (v76, матч 185 — MetalicaX, гонка очков при паритете 21900:22900, обе армии целы):
      *  его блоб из девяти вооружённых ходил между A3 и R3 в 7–15 клетках от нас и не дрался, мы при 1,2 «толкали», и постура
      *  мигала ANNIHILATE/HOLD каждые пять-шесть тиков (huntable 12/12 ↔ 0/12 — он шагает назад, см. evasive и открытую
@@ -742,7 +751,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v83"
+    private const val BOT_VERSION = "v84"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -804,6 +813,9 @@ object PainAndGain {
     private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     private var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     private val detachedIds = HashSet<String>()           // отряды: вооружённые, зачисленные в бегуны (см. USE_DETACH)
+    private val idleRunnerIds = HashSet<String>()         // бегуны без цели в этом тике (RESERVE; см. USE_DETACH_IDLE_RECALL)
+    private var idleDetachTicks = 0                       // подряд тиков, когда весь отряд без цели
+    private var detachRecallTick = -1000                  // последний отзыв отряда без дела
     private var lastDistanceKeptTick = -1000              // последний тик, когда погоня не сближала (см. USE_DETACH, v57)
     private var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
     private val enemyCentHist = ArrayDeque<Int>()         // клетка центра его армии по тикам погони (рядом с armyDistHist)
@@ -1311,6 +1323,7 @@ object PainAndGain {
 
     private fun runRunners(ctx: Ctx) {
         val runners = ctx.runners
+        idleRunnerIds.clear()
         if (runners.isEmpty()) { runnerFlag.clear(); return }
         runnerFlag.keys.retainAll { id -> runners.any { it.id == id } }
         val flagById = ctx.flags.associateBy { it.id }
@@ -1400,6 +1413,7 @@ object PainAndGain {
                 // все флаги при деле: к армии, за её спиной
                 val step = if (s.getRangeTo(ctx.ourCentroid) > POST_STANDOFF + 2) pathStep(s, ctx.ourCentroid, POST_STANDOFF + 2, crowdMatrixOf(ctx, -1)) else null
                 if (step != null) TrafficManager.request(s, step, RUNNER_PRIORITY)
+                idleRunnerIds.add(s.id)
                 dbg(s, "RESERVE", null, step)
                 continue
             }
@@ -2039,8 +2053,14 @@ object PainAndGain {
             val farmer = armedEnemies.isNotEmpty() && firstNearTick >= 0 && (quietChain || dryHunt)
             val viaDryHunt = dryHunt && !quietChain   // отряд держится только сухой охотой (v82b)
             val detachedBefore = detachedIds.size
+            // отряд без дела (v84): все отделённые DETACH_WINDOW тиков подряд без цели — отзыв, и набор ждёт то же окно
+            if (USE_DETACH_IDLE_RECALL && detachedIds.isNotEmpty() && detachedIds.all { it in idleRunnerIds }) idleDetachTicks++ else idleDetachTicks = 0
+            if (USE_DETACH_IDLE_RECALL && idleDetachTicks >= DETACH_WINDOW) {
+                if (DEBUG_LOG) println("detach t=$now: ${detachedIds.size} recalled — nothing for a runner to take for $DETACH_WINDOW ticks")
+                detachedIds.clear(); idleDetachTicks = 0; detachRecallTick = now
+            }
             if (!farmer) detachedIds.clear()
-            else if (!contact || (USE_COLD_CONTACT && !exchangeRecent)) {
+            else if ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
                 val unmanned = ctx.flags.count { f -> f.occupant?.my != true }
                 val pool = armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
@@ -2049,7 +2069,9 @@ object PainAndGain {
                     if (detachedIds.size >= unmanned) break
                     val without = remaining.filter { it.id != c.id }
                     // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
-                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirs * (if (viaDryHunt) PUSH_RATIO else PARITY_FLOOR)) break
+                    // его мощь — против ядра-кандидата, не против полной армии (v84: пары Ланчестера)
+                    val theirsVsCore = if (USE_DETACH_PAIRED_MEASURE) enemyPowerOf(combatEnemies, without) else theirs
+                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirsVsCore * (if (viaDryHunt) PUSH_RATIO else PARITY_FLOOR)) break
                     // сухая охота без россыпи — стрелковая масса ядра держит перевес над его стрелками (v82, кайтер)
                     if (viaDryHunt && !scattered && USE_DRY_HUNT_RANGED_GUARD && rangedMass(without) < theirRangedMass * PUSH_RATIO) break
                     detachedIds.add(c.id)
