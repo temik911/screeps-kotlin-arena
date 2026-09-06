@@ -11,6 +11,10 @@ and the tail the window scrolled past is here too.
     tools/match-log.py list [--arena spawn-and-swamp] [--limit 20] [--all]
     tools/match-log.py dump <game-id-prefix> [--out log.txt]
 
+`list` prints the bot version each match was played by, read out of the greeting line the bot logs on
+tick 1 — that is the only tie between a match and the code that played it. `tools/series.py` reads this
+module (scan/describe/chunk_text) to aggregate whole series; keep it importable.
+
 Caveats worth knowing before you trust a line of it: the cache is a cache. Chromium evicts by
 size (~1 GB here), so old matches disappear, and a chunk can be missing from the middle of a
 match — `dump` marks such a gap instead of silently closing it. A match is written to the cache
@@ -22,7 +26,9 @@ from collections import defaultdict
 CACHE = os.path.expanduser("~/Library/Application Support/screeps_arena/Cache/Cache_Data")
 LOG_URL = re.compile(rb"https://arena\.screeps\.com/api/game/([0-9a-f]{24})/log/(\d+)")
 GAME_URL = re.compile(rb"https://arena\.screeps\.com/api/game/([0-9a-f]{24})(?:[^/\x21-\x7e]|$)")
-GREETING = re.compile(r"hello (\w+) ([\w-]+)")
+# every season-4 bot greets as "hello <season> <arena> [v]<N>: ..." — spawn-and-swamp writes "v43",
+# pain-and-gain and escort-run write a bare number
+GREETING = re.compile(r"hello (\w+) ([\w-]+) v?(\d+)")
 
 
 def decompress(path):
@@ -104,28 +110,44 @@ def outcome(meta):
     win = res.get("winner")
     codes = meta.get("codes") or []
     me = meta.get("user")
-    if win is None:
+    if win is None or win == 0.5:
         return "draw"
     if isinstance(win, int) and 0 <= win < len(codes):
         return "won" if codes[win].get("user") == me else "lost"
     return str(win)
 
 
+def log_ticks(game, logs):
+    """{tick: console text} for one match, every chunk merged in tick order."""
+    ticks = {}
+    for t in sorted(logs.get(game, {})):
+        ticks.update(chunk_text(logs[game][t]))
+    return ticks
+
+
 def describe(game, logs, metas):
     chunks = logs.get(game, {})
     first = chunk_text(chunks[min(chunks)]) if chunks else {}
-    greet = ""
+    greet, version, tuning = "", None, ""
     if first:
-        m = GREETING.search(first[min(first)][:200])
-        greet = f"{m.group(1)}/{m.group(2)}" if m else ""
+        head = first[min(first)]
+        m = GREETING.search(head[:200])
+        if m:
+            greet, version = f"{m.group(1)}/{m.group(2)}", int(m.group(3))
+        for line in head.split("\n"):
+            if line.startswith("tuning:"):
+                tuning = line[len("tuning:"):].strip()
+                break
     meta = meta_of(metas[game]) if game in metas else None
     when = max((os.stat(p).st_mtime for p in chunks.values()), default=0)
-    rating = ""
+    rating, delta = "", None
     if meta and meta.get("ratingHistory"):
         r = meta["ratingHistory"]
         rating = f"{r.get('previousRating')}->{r.get('rating')}"
-    return dict(game=game, arena=greet, when=when, chunks=len(chunks),
-                last=max(chunks) if chunks else 0, result=outcome(meta), rating=rating,
+        if isinstance(r.get("rating"), (int, float)) and isinstance(r.get("previousRating"), (int, float)):
+            delta = r["rating"] - r["previousRating"]
+    return dict(game=game, arena=greet, when=when, chunks=len(chunks), version=version, tuning=tuning,
+                last=max(chunks) if chunks else 0, result=outcome(meta), rating=rating, delta=delta,
                 users=[u.get("username") for u in (meta or {}).get("users", [])])
 
 
@@ -141,7 +163,8 @@ def cmd_list(args):
     for r in rows:
         when = time.strftime('%d.%m %H:%M', time.localtime(r["when"]))
         foes = ", ".join(u for u in r["users"] if u)
-        print(f"{when}  {r['game']}  {r['arena']:<22} ticks={r['last']:<5} "
+        ver = f"v{r['version']}" if r['version'] is not None else "-"
+        print(f"{when}  {r['game']}  {r['arena']:<22} {ver:<5} ticks={r['last']:<5} "
               f"{r['result']:<6} {r['rating']:<10} {foes}")
 
 
@@ -164,9 +187,7 @@ def cmd_dump(args):
 
 def full_log(game, logs):
     """One match's console as text in tick order, gaps marked — what `dump` writes, for other tools to read."""
-    ticks, expected = {}, sorted(logs[game])
-    for t in expected:
-        ticks.update(chunk_text(logs[game][t]))
+    ticks, expected = log_ticks(game, logs), sorted(logs[game])
     lines = []
     # a chunk covers the 100 ticks ending at its key; a hole means the client never fetched it
     for prev, cur in zip([0] + expected, expected):
