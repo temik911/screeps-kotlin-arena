@@ -449,6 +449,21 @@ object PainAndGain {
      *  и не считает), а в гонке за флагами a8m8 не хуже стрелка. Порядок пула для сухой охоты — по стрелковой массе крипа
      *  (мили и разоружённые первыми), при равной — слабейший; для тихой цепочки — как было. */
     private const val USE_DRY_HUNT_MELEE_FIRST = true
+    /** ДЕБЮТ-ГОНКА ПРОТИВ РОССЫПИ (v91, решение оператора 06.09.2026): MetalicaX с первого тика рассыпает двенадцать по всем
+     *  семи флагам и к 120-му держит шесть, пока наша армия стоит у поста, а флаги берут два скаута — −2189 к 200-му в матче
+     *  228 при середине 15:10, которая отыграла всё, кроме 1700; та же форма в 185–226. Пока его вооружённые РАССЫПАНЫ
+     *  (крупнейшая группа в ENGAGE_RANGE не больше половины, см. scattered) и обмена ещё не было, армии, с которой надо
+     *  драться, нет: пул отряда мерит ядро против его КРУПНЕЙШЕЙ ГРУППЫ (PUSH_RATIO над ней), а не всей армии, и вход открыт
+     *  без тишины и без «он подходил»; когда он собирается, признак гаснет, farmer падает, и отряды сами возвращаются в ядро
+     *  (см. USE_DETACH). Остаток из одного-трёх — не россыпь, а сухая охота (armedEnemies ≥ 4). Отряд гонки не больше числа
+     *  НЕОХРАНЯЕМЫХ чужих флагов (без его вооружённого в ENGAGE_RANGE): россыпь-сидельцы стенда (roost, spread — по двое на
+     *  флаг весь матч) без этого распускали армию в бегунов навсегда (spread 6/6 → 1/6, m34 24329:20462 → 3216:24325), а
+     *  одиночному бегуну сидящая пара не по зубам; у MetalicaX в дебюте его крипы флаги трогают и идут дальше. И цель
+     *  гонки — флаг, к которому МЫ ближе любого его вооружённого: «неохраняемый сейчас» флаг, к которому его сиделец уже
+     *  идёт (roost/spread на 20-м тике), выпускал отряд на пятьдесят тиков впустую — roost на восьми картах медленнее,
+     *  spread m19 24322:21778 → 16111:24314. У MetalicaX это флаги нашей половины (R3 (85,49), H4 (90,8), A3 (67,31)),
+     *  которые его россыпь брала к 84–122-му. */
+    private const val USE_SCATTER_RACE = true
     /** ПУЛ ОТРЯДА МЕРИТ ЯДРО ПРОТИВ ЕГО МОЩИ, СЧИТАННОЙ ПРОТИВ ЯДРА, И ОТРЯД БЕЗ ДЕЛА ОТЗЫВАЕТСЯ (v84, матч 199 — MetalicaX
      *  пятый раз, 10996:17460 к 1700-му): на 763-м его лекарь занял наш A3, гонка стала проигранной, и пул отдал ТРЁХ
      *  стрелков — ядро проверялось против theirs=3222, его мощи против ПОЛНОЙ армии; против ядра из девяти его мощь 3520, и
@@ -815,7 +830,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v90"
+    private const val BOT_VERSION = "v91"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2123,6 +2138,12 @@ object PainAndGain {
             // отряда на 183–214-м, и бой без четверых проигран): гейт 120/125
             val largestGroup = armedEnemies.maxOfOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
             val scattered = armedEnemies.isNotEmpty() && largestGroup <= maxOf(1, armedEnemies.size / 2)
+            val groupSeed = armedEnemies.maxByOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } }
+            val largestMembers = if (groupSeed == null) armedEnemies else armedEnemies.filter { getRange(groupSeed, it) <= ENGAGE_RANGE }
+            // дебют-гонка (v91, см. USE_SCATTER_RACE): россыпь его армии до первого обмена
+            val raceTargets = ctx.flags.count { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
+                (armedEnemies.minOfOrNull { getRange(it, f.pos) } ?: 999) > (army.minOfOrNull { getRange(it, f.pos) } ?: 999) }
+            val raceNow = USE_SCATTER_RACE && scattered && armedEnemies.size >= 4 && lastFireTick < 0 && lastHurtTick == 0 && raceTargets > 0
             if (posture == Posture.FLAG || posture == Posture.EVADE || posture == Posture.RETREAT) lastNonHuntTick = now
             // рассыпанный остаток — вход v75 как был; блоб-остаток — под стрелковой защитой пула и только после PASSIVE_TICKS
             // охоты без FLAG/EVADE/RETREAT («охота длилась» и для россыпи задерживала отряд: spread m33 24327:24222 → 19509:24315)
@@ -2132,8 +2153,9 @@ object PainAndGain {
             fun rangedMass(cs: List<Creep>) = cs.sumOf { InfluenceMap.profileOf(it).ranged }
             val theirRangedMass = rangedMass(combatEnemies)
             val quietChain = quiet && (chaseDry || detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
-            val farmer = armedEnemies.isNotEmpty() && firstNearTick >= 0 && (quietChain || dryHunt)
+            val farmer = armedEnemies.isNotEmpty() && ((firstNearTick >= 0 && (quietChain || dryHunt)) || raceNow)
             val viaDryHunt = dryHunt && !quietChain   // отряд держится только сухой охотой (v82b)
+            val viaRace = raceNow && !quietChain && !dryHunt   // отряд держится только дебют-гонкой (v91)
             val detachedBefore = detachedIds.size
             // отряд без дела (v84): все отделённые DETACH_WINDOW тиков подряд без цели — отзыв, и набор ждёт то же окно
             if (USE_DETACH_IDLE_RECALL && detachedIds.isNotEmpty() && detachedIds.all { it in idleRunnerIds }) idleDetachTicks++ else idleDetachTicks = 0
@@ -2155,16 +2177,18 @@ object PainAndGain {
             else if ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
                 val unmanned = ctx.flags.count { f -> f.occupant?.my != true }
-                val pool = if (USE_DRY_HUNT_MELEE_FIRST && viaDryHunt) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
+                val pool = if (USE_DRY_HUNT_MELEE_FIRST && (viaDryHunt || viaRace)) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
                     else armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
                 var remaining = army.filter { it.id !in detachedIds }
                 for (c in pool) {
                     if (detachedIds.size >= unmanned) break
+                    if (viaRace && detachedIds.size >= raceTargets) break   // гонка — только за неохраняемые (v91)
                     val without = remaining.filter { it.id != c.id }
                     // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
                     // его мощь — против ядра-кандидата, не против полной армии (v84: пары Ланчестера)
-                    val theirsVsCore = if (USE_DETACH_PAIRED_MEASURE) enemyPowerOf(combatEnemies, without) else theirs
-                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirsVsCore * (if (viaDryHunt) PUSH_RATIO else PARITY_FLOOR)) break
+                    // в дебют-гонке (v91) ядро мерится против его крупнейшей группы: россыпь армией не дерётся
+                    val theirsVsCore = if (viaRace) enemyPowerOf(largestMembers, without) else if (USE_DETACH_PAIRED_MEASURE) enemyPowerOf(combatEnemies, without) else theirs
+                    if (without.none { hasWeapon(it) } || ourPowerOf(without, if (viaRace) largestMembers else combatEnemies) < theirsVsCore * (if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR)) break
                     // сухая охота без россыпи — стрелковая масса ядра держит перевес над его стрелками (v82, кайтер)
                     if (viaDryHunt && !scattered && USE_DRY_HUNT_RANGED_GUARD && rangedMass(without) < theirRangedMass * PUSH_RATIO) break
                     detachedIds.add(c.id)
@@ -2172,7 +2196,7 @@ object PainAndGain {
                 }
             }
             if (DEBUG_LOG && detachedIds.size != detachedBefore)
-                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
+                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
         } else detachedIds.clear()
         val interceptDenies = interceptFlag != null && !interceptFlag.ours
         val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)
