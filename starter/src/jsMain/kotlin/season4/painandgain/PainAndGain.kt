@@ -432,6 +432,12 @@ object PainAndGain {
      *  равно отпускала пятерых на 227-м — армия сама фармила в FLAG со 168-го по 208-й и 19 тиков была в ANNIHILATE; живой
      *  остаток матча 197 армия гнала с 650-го непрерывно). */
     private const val USE_DRY_HUNT_RANGED_GUARD = true
+    /** ОТРЯД СУХОЙ ОХОТЫ — СПЕРВА МИЛИ (v89, решение оператора 06.09.2026 по пункту 3): в матче 212 сухая охота была допустима
+     *  с 726-го, но пул отдаёт слабейших по Ланчестеру первыми — это r6m6, и стрелковая защита (v82) останавливала набор
+     *  на первом же: ядро без стрелков против его пяти стрелков. Против кайтящего блоба бесполезны как раз мили (их защита
+     *  и не считает), а в гонке за флагами a8m8 не хуже стрелка. Порядок пула для сухой охоты — по стрелковой массе крипа
+     *  (мили и разоружённые первыми), при равной — слабейший; для тихой цепочки — как было. */
+    private const val USE_DRY_HUNT_MELEE_FIRST = true
     /** ПУЛ ОТРЯДА МЕРИТ ЯДРО ПРОТИВ ЕГО МОЩИ, СЧИТАННОЙ ПРОТИВ ЯДРА, И ОТРЯД БЕЗ ДЕЛА ОТЗЫВАЕТСЯ (v84, матч 199 — MetalicaX
      *  пятый раз, 10996:17460 к 1700-му): на 763-м его лекарь занял наш A3, гонка стала проигранной, и пул отдал ТРЁХ
      *  стрелков — ядро проверялось против theirs=3222, его мощи против ПОЛНОЙ армии; против ядра из девяти его мощь 3520, и
@@ -798,7 +804,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v88"
+    private const val BOT_VERSION = "v89"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2138,7 +2144,8 @@ object PainAndGain {
             else if ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
                 val unmanned = ctx.flags.count { f -> f.occupant?.my != true }
-                val pool = armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
+                val pool = if (USE_DRY_HUNT_MELEE_FIRST && viaDryHunt) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
+                    else armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
                 var remaining = army.filter { it.id !in detachedIds }
                 for (c in pool) {
                     if (detachedIds.size >= unmanned) break
