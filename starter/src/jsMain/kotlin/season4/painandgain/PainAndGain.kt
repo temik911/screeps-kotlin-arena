@@ -144,6 +144,12 @@ object PainAndGain {
      *  ни разу». */
     private const val USE_DETACH = true
     private var USE_POST_INSIDE = false
+    /** ПОСТ БЕЗ СВОИХ ФЛАГОВ — БЛИЖАЙШИЙ ФЛАГ НАШЕЙ ПОЛОВИНЫ, НЕ ДОМ (v88, завершение пункта 1 решения оператора): матч 221
+     *  (けろびー боевой, армия стёрта к 200-му при его 15870) — уклонение v87 точку с приходом и выходом нашло (85,88), но это
+     *  дом, а дом — угол; армия стояла у него с 33-го по 70-й и приняла бой у стены. Пост в поле — ближайший к армии флаг
+     *  нашей половины (для юго-восточного старта R3 (85,49)); «пост не ближе EVADE_RANGE к краю» (USE_POST_INSIDE, v46)
+     *  отвергался на безфлаговом стенде (−20k) — точка была никакой, флаг хотя бы держится. */
+    private const val USE_POST_OUR_FLAG = true
     private var USE_FLEE_DIRECTION = true
     /** Фокус-огонь (v45; оператор по матчу 78: «нет фокус-файра — каждый рэндж стреляет в своего; держать их вместе и за ход
      *  выбивать максимум из одного», и «цель — та, к которой лекари далеки»). Замер по реплеям: наибольшее число наших выстрелов
@@ -252,6 +258,13 @@ object PainAndGain {
      *  при стоянии — такой же проигрыш. 0,75: две захвата из 3:4 флагов при 0,91 дают 0,77 по числам матча 152, и двух гонке
      *  хватает (16 против 9 в тик с 400-го). На стенде не срабатывает ни разу: все стендовые фермеры бьют. */
     private const val USE_LOST_RACE_CAPTURE = true
+    /** ПРОИГРАННАЯ ГОНКА — ПО ПРОЕКЦИИ, ТИШИНА — PASSIVE_TICKS (v88, решение оператора 06.09.2026 по пункту 4; исключение
+     *  v63 подтверждено): в матче 219 армия при 0,85–0,87 стояла 1200 тиков при 6:12 → 10:15 — не преследуема, не толкает,
+     *  порог 0,97 закрыт, а v63 открыл захваты лишь к 1400-му, потому что требовал BEHIND_PATIENCE тиков тупика плюс
+     *  FARMER_QUIET тишины. Проекция к концу матча уже считается (v80): гонка проиграна, когда счёт плюс разница темпов на
+     *  оставшиеся тики не в нашу пользу; «он не бьёт» — его удар не позже PASSIVE_TICKS назад. Риск (его атака при 0,8)
+     *  против MetalicaX за десять матчей не наблюдался ни разу: он бьёт, только когда мы приходим к нему. */
+    private const val USE_LOST_RACE_PROJECTED = true
     private const val USE_HOLD_OWN_FLAG = true    // пост — свой флаг под ногами при враге рядом (v66)
     private const val PARITY_FLOOR_LOST = 0.75
     private const val PUSH_RELEASE_RATIO_STALEMATE = 0.95
@@ -785,7 +798,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v87"
+    private const val BOT_VERSION = "v88"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1287,7 +1300,9 @@ object PainAndGain {
         // при 0.96 был проигран (стенд m6 sleeper); порог один
         // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
         val quiet = lastHurtTick == 0 || getTicks() - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
-        val lostRace = USE_LOST_RACE_CAPTURE && stalemateNow && quiet && ourScore <= enemyScore && ourRate <= enemyRate
+        val quietShort = lastHurtTick == 0 || getTicks() - lastHurtTick >= PASSIVE_TICKS
+        val lostRace = USE_LOST_RACE_CAPTURE && (if (USE_LOST_RACE_PROJECTED) losingAtTheEnd && quietShort
+            else stalemateNow && quiet && ourScore <= enemyScore && ourRate <= enemyRate)
         val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else if (needed) PARITY_FLOOR else CAPTURE_FLOOR
         return ours >= theirs * floor
     }
@@ -1823,7 +1838,8 @@ object PainAndGain {
      *  16000/16000. Флаг остаётся нашим, пока на него не встанет чужой (хранитель встаёт, когда враг подходит, см. KEEP_RANGE);
      *  стоять на нём армии незачем, а угол — ловушка для равного по скорости. */
     private fun postPoint(ctx: Ctx): Position {
-        val c = centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ctx.home
+        val ourHalfFlag = if (USE_POST_OUR_FLAG) ctx.flags.filter { DistanceMap.inOurHalf(it.pos.x, it.pos.y) }.minByOrNull { getRange(it.pos, ctx.ourCentroid) }?.pos else null
+        val c = centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ourHalfFlag ?: ctx.home
         return if (!USE_POST_INSIDE) passableNear(c) else passableNear(InfluenceMap.cell(c.x.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE), c.y.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE)))
     }
 
