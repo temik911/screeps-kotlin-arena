@@ -3,8 +3,8 @@
 
     tools/autopsy.py <match-id | id-prefix | log-file> [--replay f.replay.json.gz] [--fetch] [--json] [--step 100]
 
-What it reads: our console log (the replay carries it under `logs`; otherwise the Arena client's cache via
-match-log.py, or a file written by play.py --logs) and, when there is one, the full replay from
+What it reads: our console log (the Arena client's cache via match-log.py, or a file written by play.py --logs; the
+replay's own `logs` only as a fallback — the tool records them incompletely) and, when there is one, the full replay from
 arukuka/screeps-arena-tools (both sides' intents and positions per tick; see replay.py for the setup). Replays are
 looked up as <dir>/<id>.replay.json.gz in --replays (default ~/ScreepsArena/replays, or $ARENA_REPLAYS); --fetch
 downloads a missing one through the running client with the tool under --tools (default
@@ -587,6 +587,17 @@ def runner_stands(L):
     return out
 
 
+def posture_at(L, t):
+    """The posture in force at tick t (the last posture line at or before it)."""
+    cur = None
+    for p in L['postures']:
+        if p['t'] <= t:
+            cur = p['posture']
+        else:
+            break
+    return cur
+
+
 def edge_of(cell, W=100, H=100):
     return min(cell[0], cell[1], W - 1 - cell[0], H - 1 - cell[1])
 
@@ -649,6 +660,9 @@ def diagnose(L, R, info):
                                     f"armed ranged in 3 {o['e_r_in3']}:{h['e_r_in3']}, stripped {o['e_stripped']}:{h['e_stripped']}) — the entry was his"))
         if h['m_adj'] >= 20 and h['m_adj'] >= ADJACENCY_X * max(1, o['m_adj']):
             D.append(('melee adjacency', f"his melee were adjacent {h['m_adj']} creep-ticks against our {o['m_adj']} ({h['swings']} vs {o['swings']} swings) — his melee found targets, ours held a line nobody attacked"))
+        if info.get('posture_at_contact') == 'EVADE':
+            D.append(('caught evading', f"the first contact (t={R['contact_t']}) came while the army was in EVADE — running from an equal-speed opponent, backs to him "
+                                        f"(first five ticks' shots ours {o['first5']} his {h['first5']})"))
         if h['first5'] >= 6 and h['first5'] >= VOLLEY_X * max(1, o['first5']):
             D.append(('first volleys', f"in the first five ticks of contact he fired {h['first5']} against our {o['first5']} — the entry was his"))
         fi = R.get('first')
@@ -713,7 +727,7 @@ def render(L, R, info, history, step):
         us = R['us']
         F = R['fight']
         p('')
-        p(f"first contact t={fi['t']} (first fire ours t={R['first_fire'][us]} his t={R['first_fire'][1 - us]}): "
+        p(f"first contact t={fi['t']} in {info.get('posture_at_contact') or '?'} (first fire ours t={R['first_fire'][us]} his t={R['first_fire'][1 - us]}): "
           f"our centroid ({fi['oc'][0]:.0f},{fi['oc'][1]:.0f}) edge {fi['oedge']}, his ({fi['hc'][0]:.0f},{fi['hc'][1]:.0f}) edge {fi['hedge']}, dist {fi['dist']:.0f}")
         p(f"  ten ticks before: our centroid moved {fi['our_moved']:.0f}, his {fi['his_moved']:.0f}; compactness (mean/max to centroid) ours {fi['ocomp'][0]:.1f}/{fi['ocomp'][1]:.0f} his {fi['hcomp'][0]:.1f}/{fi['hcomp'][1]:.0f}")
         p(f"  first five ticks: shots ours {F[us]['first5']} his {F[1 - us]['first5']}; the bot's power at contact ours {info['power'][0]} his {info['power'][1]} "
@@ -842,12 +856,16 @@ def resolve(args):
         if path:
             doc = json.load(gzip.open(path, 'rt', encoding='utf-8'))
             info['replay_path'] = path
-            if log_text is None and doc.get('logs'):
-                log_text = ''.join(doc['logs'][k] for k in sorted(doc['logs'], key=int))
+    # the log: the client's cache first — the replay's `logs` are INCOMPLETE (match 275: 175 ticks with text, six posture
+    # lines against the cache's full console; read against it the autopsy missed `32:HOLD 42:ANNIHILATE` and called the
+    # contact an evade) — the replay's copy only when the cache has no log for the match
     if log_text is None and gid:
         logs, metas = ml.scan() if logs is None else (logs, metas)
         if gid in logs:
             log_text = ml.full_log(gid, logs)
+    if log_text is None and doc and doc.get('logs'):
+        log_text = ''.join(doc['logs'][k] for k in sorted(doc['logs'], key=int))
+        info['log_source'] = 'replay (incomplete)'
     if log_text is None:
         sys.exit(f"no log for {arg}: not a file, not in the client's cache, no replay with logs")
     info['id'] = gid or os.path.basename(arg)
@@ -908,6 +926,7 @@ def main():
         if s and s['enemy'] > 0:
             info['power'] = (s['our'], s['enemy'])
             info['power_ratio'] = s['our'] / s['enemy']
+    info['posture_at_contact'] = posture_at(L, R['contact_t']) if R and R.get('contact_t') is not None else None
     info['diagnosis'] = diagnose(L, R, info)
     if R:
         info['his_form'], info['his_form_evidence'] = classify(R)

@@ -69,6 +69,7 @@ def measure(g, logs, metas, args):
         if s and s['enemy'] > 0:
             info['power'] = (s['our'], s['enemy'])
             info['power_ratio'] = s['our'] / s['enemy']
+    info['posture_at_contact'] = ap.posture_at(L, R['contact_t']) if R and R.get('contact_t') is not None else None
     diag = ap.diagnose(L, R, info)
     tags = [t for t, _ in diag if t != 'nothing fired']
     trans = ap.transitions(L)
@@ -91,6 +92,7 @@ def measure(g, logs, metas, args):
                our_comp=round(R['first']['ocomp'][0], 1) if R and R.get('first') else '-',
                his_comp=round(R['first']['hcomp'][0], 1) if R and R.get('first') else '-',
                our_edge=R['first']['oedge'] if R and R.get('first') else '-',
+               at_contact=info.get('posture_at_contact') or '-',
                melee_idle=L['why_creep_ticks'], replay=bool(R), samples=len(L['samples']))
     return row
 
