@@ -388,6 +388,19 @@ object PainAndGain {
      *  отстаём по очкам, и ядро остаётся не слабее его армии × PUSH_RATIO, то есть охотиться может и одно. Выстрел бегуна у
      *  флага не в счёт (lastFireTick — только армия). */
     private const val USE_DRY_HUNT = true
+    /** СУХАЯ ОХОТА БЕЗ «РАССЫПАН» — ЗАЩИТА ОТ КАЙТЕРА В ПУЛЕ (v82, матч 197 — восемнадцатое поражение фермеру けろびー,
+     *  17848:23225): его остаток с 450-го — быстрый БЛОБ из пяти (крупнейшая группа 5 все 1400 тиков, 0,36 нашей мощи, клетка
+     *  в тик), ни выстрела с 837-го, обходил флаги при 6–12 против 13–19 в тик; «рассыпан» (v75) его исключал, и отряд вышел
+     *  на 1103-м по тишине-300 вместо ~937-го. Кайтер стенда опасен разделённому ядру тем, что мили его не ловят: без
+     *  тишины пул отдаёт крипа, только пока СТРЕЛКОВАЯ масса ядра не меньше его стрелковой × PUSH_RATIO — блоб из пяти с
+     *  одним-двумя стрелками отпускает четверых, кайтер впятером — никого. Порог пула и защита — по ВХОДУ, не по quiet:
+     *  «нас ни разу не били» — тоже quiet, и на m29 camp сухая охота (одна перестрелка на 114-м, сто тиков без обмена в
+     *  фарме) на 214-м отпустила пятерых по паритетному порогу против его полного блоба (0,8 нашей мощи) — 124/125,
+     *  9716:23817. Отряд, который держится только сухой охотой, отдаёт крипов по PUSH_RATIO и под стрелковой защитой. И
+     *  сухая ОХОТА обязана быть охотой: армия PASSIVE_TICKS не была в FLAG/EVADE/RETREAT (m29 camp с порогом по входу всё
+     *  равно отпускала пятерых на 227-м — армия сама фармила в FLAG со 168-го по 208-й и 19 тиков была в ANNIHILATE; живой
+     *  остаток матча 197 армия гнала с 650-го непрерывно). */
+    private const val USE_DRY_HUNT_RANGED_GUARD = true
     /** ОКНО ПОГОНИ НЕ ОБНУЛЯЕТСЯ МИГАНИЕМ (v76, матч 185 — MetalicaX, гонка очков при паритете 21900:22900, обе армии целы):
      *  его блоб из девяти вооружённых ходил между A3 и R3 в 7–15 клетках от нас и не дрался, мы при 1,2 «толкали», и постура
      *  мигала ANNIHILATE/HOLD каждые пять-шесть тиков (huntable 12/12 ↔ 0/12 — он шагает назад, см. evasive и открытую
@@ -725,7 +738,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v81"
+    private const val BOT_VERSION = "v82"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -792,6 +805,7 @@ object PainAndGain {
     private val enemyCentHist = ArrayDeque<Int>()         // клетка центра его армии по тикам погони (рядом с armyDistHist)
     private var lastHurtTick = 0                          // последний тик, когда враг снял с нас хиты (см. farmer в runArmy)
     private var lastFireTick = -1000                      // последний тик, когда кто-то из наших бил или стрелял (см. USE_COLD_CONTACT)
+    private var lastNonHuntTick = 0                       // последний тик в FLAG/EVADE/RETREAT (см. USE_DRY_HUNT_RANGED_GUARD: охота длится)
     private var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
     private var firstReachTick = -1                       // первый такой тик (см. USE_DETACH, v68: тишина считается от него)
     private var firstNearTick = -1                        // первый тик с его вооружённым в ENGAGE_RANGE + RANGED_RANGE (v72: признаки фермера — от него)
@@ -2009,10 +2023,17 @@ object PainAndGain {
             // отряда на 183–214-м, и бой без четверых проигран): гейт 120/125
             val largestGroup = armedEnemies.maxOfOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
             val scattered = armedEnemies.isNotEmpty() && largestGroup <= maxOf(1, armedEnemies.size / 2)
-            val dryHunt = USE_DRY_HUNT && behindOnScore && scattered && lastFireTick >= 0 &&
-                now - lastFireTick >= PASSIVE_TICKS && now - lastHurtTick >= PASSIVE_TICKS
-            val farmer = armedEnemies.isNotEmpty() && firstNearTick >= 0 &&
-                ((quiet && (chaseDry || detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))) || dryHunt)
+            if (posture == Posture.FLAG || posture == Posture.EVADE || posture == Posture.RETREAT) lastNonHuntTick = now
+            // рассыпанный остаток — вход v75 как был; блоб-остаток — под стрелковой защитой пула и только после PASSIVE_TICKS
+            // охоты без FLAG/EVADE/RETREAT («охота длилась» и для россыпи задерживала отряд: spread m33 24327:24222 → 19509:24315)
+            val dryHunt = USE_DRY_HUNT && behindOnScore && lastFireTick >= 0 &&
+                now - lastFireTick >= PASSIVE_TICKS && now - lastHurtTick >= PASSIVE_TICKS &&
+                (scattered || (USE_DRY_HUNT_RANGED_GUARD && now - lastNonHuntTick >= PASSIVE_TICKS))
+            fun rangedMass(cs: List<Creep>) = cs.sumOf { InfluenceMap.profileOf(it).ranged }
+            val theirRangedMass = rangedMass(combatEnemies)
+            val quietChain = quiet && (chaseDry || detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
+            val farmer = armedEnemies.isNotEmpty() && firstNearTick >= 0 && (quietChain || dryHunt)
+            val viaDryHunt = dryHunt && !quietChain   // отряд держится только сухой охотой (v82b)
             val detachedBefore = detachedIds.size
             if (!farmer) detachedIds.clear()
             else if (!contact || (USE_COLD_CONTACT && !exchangeRecent)) {
@@ -2024,7 +2045,9 @@ object PainAndGain {
                     if (detachedIds.size >= unmanned) break
                     val without = remaining.filter { it.id != c.id }
                     // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
-                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirs * (if (quiet) PARITY_FLOOR else PUSH_RATIO)) break
+                    if (without.none { hasWeapon(it) } || ourPowerOf(without, combatEnemies) < theirs * (if (viaDryHunt) PUSH_RATIO else PARITY_FLOOR)) break
+                    // сухая охота без россыпи — стрелковая масса ядра держит перевес над его стрелками (v82, кайтер)
+                    if (viaDryHunt && !scattered && USE_DRY_HUNT_RANGED_GUARD && rangedMass(without) < theirRangedMass * PUSH_RATIO) break
                     detachedIds.add(c.id)
                     remaining = without
                 }
