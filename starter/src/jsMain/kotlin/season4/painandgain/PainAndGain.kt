@@ -432,6 +432,13 @@ object PainAndGain {
      *  в победу). Для матча 191 это ничего не меняло: из угла при равной скорости он выигрывает гонку к любой точке, кроме
      *  угла за нашей спиной, и выбор — бой в углу или марш в него; решает качество боя (см. USE_ROW_TO_RANGED). */
     private const val USE_EVADE_NO_LOSING_RACE = false
+    /** ПОСЛЕДНИЙ ЗОВ — ПО ПРОЕКЦИИ (v80, матч 193 — MetalicaX четвёртый раз, 22138:23728 и девять наших стёрты к 1900-му):
+     *  с 900-го по 1700-й армия стояла при паритете 3507:3679 с темпом 15:10 и отыгрывала с −5300 до −1374 — по проекции к
+     *  концу +126; на 1700-м последний зов (LAST_CALL_TICKS при ourScore ≤ enemyScore, без проекции) открыл захват при 0,95,
+     *  армия ушла за A3 (31,67), сидевший на D5 стрелок отделился отрядом, D5 взят его скаутом, а блоб пришёл к D5 и стёр
+     *  девять наших (13946 → 3362 при его 16000 → 13484). Последний зов — когда проекция к концу матча не в нашу пользу:
+     *  счёт + (наш темп − его) × оставшиеся тики ≤ 0; ничья 0:0 при равных темпах в это входит. */
+    private const val USE_LAST_CALL_PROJECTED = true
     /** Стая у флага не преграда для ТИХОГО фермера (v72, см. chooseFlagObjective): противник, не стрелявший FARMER_QUIET тиков
      *  с первой досягаемости, отходит от наших (стенд camp+shy, живые 133/152/159) — «цена боя» за его флаг с двенадцатью на нём
      *  бесконечна на бумаге и нулевая на деле, и ядро при паритете уходило к угловым флагам за сорок клеток (m31: (85,27) →
@@ -714,7 +721,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v79"
+    private const val BOT_VERSION = "v80"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1182,7 +1189,9 @@ object PainAndGain {
         if (f.ours) return true
         if (ctx.combatEnemies.isEmpty()) return true
         // последний зов и при РАВНОМ счёте: ничья 0:0 после уклонения (см. EVADE_EQUAL_RATIO) отдана не будет
-        if ((behindOnScore || ourScore <= enemyScore) && arenaInfo.ticksLimit - getTicks() <= LAST_CALL_TICKS) return true
+        val ticksLeft = arenaInfo.ticksLimit - getTicks()
+        val losingAtTheEnd = if (USE_LAST_CALL_PROJECTED) (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft <= 0 else ourScore <= enemyScore
+        if ((behindOnScore || losingAtTheEnd) && ticksLeft <= LAST_CALL_TICKS) return true
         // во время броска безфлаговой армии (см. unflaggedRushNow — тот же сигнал, что уводит армию в уклонение) флаг не берёт
         // НИКТО: бой через двадцать тиков, и дебафф ложится на него. Скаут брал R3 на 42–43-м тике во всех четырёх боях с
         // けろびー (матчи 38, 43, 44, 45) — −20 % стрелкам в решающем размене, — проходя порог паритета с запасом три очка мощи
