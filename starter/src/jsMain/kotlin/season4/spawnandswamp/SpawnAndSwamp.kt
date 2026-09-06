@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 40
+    private const val BOT_VERSION = 41
 
     private const val LATE_MARGIN = 60
 
@@ -323,6 +323,13 @@ object SpawnAndSwamp {
      *  сверх того, что объясняют видимые враги и башни. Матч 11: башни в модели не было, и четыре
      *  бойца умерли «ниоткуда» с flee=false; всё, чего модель не знает, должно хотя бы гнать прочь. */
     private val lastHits = HashMap<String, Int>()
+
+    /** Был ли враг в нашей дальности рядом с бойцом в ПРОШЛОМ тике — урон приходит в конце тика, и
+     *  разбирать его надо по обстановке, в которой он нанесён. */
+    private val nearLast = HashMap<String, Boolean>()
+    private var takenTrade = 0
+    private var takenHusk = 0
+    private var takenUnans = 0
     private val lastCell = HashMap<String, Int>()
     private val ghostLogged = HashMap<String, Int>()
 
@@ -1842,6 +1849,7 @@ object SpawnAndSwamp {
     /** Армия. Возвращает мощь наступления (ушедшие волны плюс готовые уйти с поста) — для журнала. */
     private fun runFighters(ctx: Ctx, enemyPower: Double, alarm: Boolean): Double {
         val fighters = ctx.fighters
+        measureIncoming(fighters, ctx.combatEnemies)
         if (fighters.isEmpty()) { wave.clear(); return 0.0 }
         // остов (стрельба выбита) из волны выбывает: он идёт домой (см. !hasWeapon), а волна держала строй
         // «для отставшего» по нему — семеро стояли в сорока клетках от спавна врага сто тиков, пока f49 с
@@ -2387,6 +2395,30 @@ object SpawnAndSwamp {
     }
 
     /** Удар мили: фокус-цель вплотную, иначе самый раненый сосед, иначе спавн врага, иначе стена пролома. */
+    /** Разбор входящего урона по корзинам (см. поля takenTrade/Husk/Unans). Считается в начале тика:
+     *  lastHits снят до стрельбы прошлого тика, значит разница — это урон, полученный ЗА прошлый тик,
+     *  и разбирать его надо по обстановке прошлого тика (nearLast). */
+    private fun measureIncoming(fighters: List<Creep>, combatEnemies: List<Creep>) {
+        for (f in fighters) {
+            val prev = lastHits[f.id]
+            if (prev != null) {
+                val lost = prev - f.hits
+                if (lost > 0) {
+                    when {
+                        nearLast[f.id] != true -> takenUnans += lost
+                        hasWeapon(f) -> takenTrade += lost
+                        else -> takenHusk += lost
+                    }
+                }
+            }
+        }
+        nearLast.keys.retainAll { id -> fighters.any { it.id == id } }
+        for (f in fighters) nearLast[f.id] = combatEnemies.any { getRange(f, it) <= RANGED_RANGE }
+        if (DEBUG_LOG && getTicks() % 200 == 0 && takenTrade + takenHusk + takenUnans > 0) {
+            println("taken t=${getTicks()}: trade=$takenTrade husk=$takenHusk unanswerable=$takenUnans")
+        }
+    }
+
     private fun strike(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, wallTarget: StructureWall?) {
         if (!hasMelee(creep)) return
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
