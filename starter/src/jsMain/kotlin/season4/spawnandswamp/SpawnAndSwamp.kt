@@ -57,7 +57,6 @@ import screeps.api.searchPath
 import screeps.api.structures.StructureContainer
 import screeps.api.structures.StructureExtension
 import screeps.api.structures.StructureRampart
-import screeps.api.structures.StructureRoad
 import screeps.api.structures.StructureSpawn
 import screeps.api.structures.StructureTower
 import screeps.api.structures.StructureWall
@@ -114,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 39
+    private const val BOT_VERSION = 40
 
     private const val LATE_MARGIN = 60
 
@@ -400,11 +399,6 @@ object SpawnAndSwamp {
      *  всё это время видел на земле 5-9 тысяч и звал покупать ещё — флот вырос до одиннадцати. */
     /** Точки, которые мы уже видели, и энергия, с которой каждая ПОЯВИЛАСЬ. Ключи не чистятся: пропавшая
      *  и вернувшаяся точка (например, ставшая на тик недостижимой) иначе сосчиталась бы дважды. */
-    /** Тики, проведённые ГРУЖЁНЫМИ хаулерами в клетке, накопительно. Дорога экономит ход именно там,
-     *  где гружёный ползёт по болоту, поэтому топтаность клетки и есть мера её пользы. */
-    private val loadedCell = IntArray(10000)
-    private var roadProbeCell = -1
-
     private val siteFirstSeen = HashMap<String, Int>()
     private val appeared = ArrayDeque<Pair<Int, Int>>()
 
@@ -654,8 +648,6 @@ object SpawnAndSwamp {
         runTowers(ctx)
         runHaulers(ctx)
         runBuilders(ctx)
-        roadProbe(ctx)
-        if (DEBUG_LOG) logRoad()
         val ourOffense = runFighters(ctx, enemyPower, alarm)
 
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
@@ -1059,8 +1051,6 @@ object SpawnAndSwamp {
         for (h in haulers) {
             val carrying = h.store[RESOURCE_ENERGY] ?: 0
             val free = h.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
-            // топтаность: тик гружёного в клетке. Именно эти тики дорога и сокращает
-            if (carrying > 0) loadedCell[h.x * 100 + h.y]++
 
             // остов: все CARRY выбиты, возить нечем — уходим за кольцо парковки и не занимаем клетки
             // сдачи (шесть остовов стояли вплотную к спавну в режиме DELIVER до конца матча 8)
@@ -3232,38 +3222,13 @@ object SpawnAndSwamp {
         }
     }
 
-    /** ПРОБА ДОРОГИ (замер, не правило). Самая топтаная гружёными клетка БОЛОТА: там дорога сокращает
-     *  ход с пяти тиков до одного. Кладём одну и смотрим в логе, как быстро её стирают — ROAD_WEAROUT
-     *  известен (1), а сколько частей тела списывается за шаг, из констант не следует, и от этого зависит,
-     *  окупается ли дорога вообще. Ставится только когда башня уже стоит и смотрителю нечем заняться. */
-    private fun roadProbe(ctx: Ctx) {
-        if (roadProbeCell >= 0 || ctx.myTowers.isEmpty() || ctx.mySites.isNotEmpty() || ctx.builders.isEmpty()) return
-        val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
-        var best = -1
-        var bestUse = 0
-        for (i in 0 until 10000) {
-            if (loadedCell[i] <= bestUse) continue
-            val x = i / 100
-            val y = i % 100
-            if (!DistanceMap.isSwamp(x, y) || i in busy) continue
-            if (ctx.sites.any { it.pos.x == x && it.pos.y == y }) continue
-            bestUse = loadedCell[i]
-            best = i
-        }
-        if (best < 0) return
-        val r = createConstructionSite(best / 100, best % 100, StructureRoad::class.js)
-        if (DEBUG_LOG) println("road: probe at (${best / 100},${best % 100}) loadedTicks=$bestUse err=${r.error}")
-        if (r.error == null) roadProbeCell = best
-    }
-
-    /** Запись пробы: хиты дороги по тикам — это и есть замер износа. */
-    private fun logRoad() {
-        if (roadProbeCell < 0 || getTicks() % 50 != 0) return
-        val x = roadProbeCell / 100
-        val y = roadProbeCell % 100
-        val road = getObjectsByPrototype(StructureRoad::class).firstOrNull { it.exists && it.x == x && it.y == y }
-        println("road t=${getTicks()} (${x},${y}) hits=${road?.hits ?: -1}/${road?.hitsMax ?: -1} loadedTicks=${loadedCell[roadProbeCell]}")
-    }
+    // ДОРОГИ — ЗАМЕРЕНО И ОТВЕРГНУТО (06.09.2026). Дорога делает гружёный шаг по болоту из пяти тиков
+    // одним за 50 энергии, и приток упирался именно в гружёное плечо, так что счёт выглядел заманчиво.
+    // Проба положила одну дорогу на САМОЙ топтаной клетке болота и записала её в лог: за матч эта клетка
+    // набрала ШЕСТЬ тиков гружёного хаулера, то есть экономия 24 тика за 50 энергии. Износ ни при чём —
+    // его не было вовсе (2500/2500 за 1150 тиков; ROAD_HITS в рантайме 2500, а не 500 из typings).
+    // Причина в том, что трафик не концентрируется: поле пути и так обходит болото по цене ×5, а точки
+    // появляются в случайных местах карты, и общего коридора не возникает. Мостить нечего.
 
     /** Смотритель: пока есть площадка — возит в неё энергию из спавна и строит, башня готова — держит
      *  в ней выстрел. Он безоружен и от огня уходит, как хаулер, продолжая работать на ходу (стройка и
