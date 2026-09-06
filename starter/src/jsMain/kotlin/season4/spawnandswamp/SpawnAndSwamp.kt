@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 41
+    private const val BOT_VERSION = 42
 
     private const val LATE_MARGIN = 60
 
@@ -2204,14 +2204,25 @@ object SpawnAndSwamp {
         val blockedSet = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
         val meleeEnemies = enemyCreeps.filter { InfluenceMap.profileOf(it).melee > 0.0 }
 
-        // фокус-файр: лекари -> добиваемые за тик -> самые раненые
+        // ФОКУС-ФАЙР ПО ВРЕМЕНИ ДО СМЕРТИ. Повтор проигранного матча: его доля фокуса 0.95 при 1.14
+        // цели в тик, наша 0.75 при 1.68, и молчание тут ни при чём (мы стреляли в 104 случаях из 110).
+        // Прежний порядок ставил лечение первым и выбирал лекаря, до которого достаёт ОДИН ствол: сорок
+        // урона против тридцати шести лечения — двести двадцать пять тиков, то есть распыление под видом
+        // фокуса. Порядок «больше стволов» вместо лечения тоже неверен — стенд ответил tower+healball
+        // 976→1231. Верный вопрос один и он же снимает лексикографию: какая цель умрёт БЫСТРЕЕ под теми
+        // стволами, что до неё достают, за вычетом лечения тех, кто достаёт до неё
         val inFireRange = enemyCreeps.filter { e -> fighters.any { it.getRangeTo(e) <= RANGED_RANGE } }
         val focusPool = inFireRange.filter { e -> combatEnemies.any { it.id == e.id } }.ifEmpty { inFireRange }
         fun fireAvailableAt(e: Creep) = fighters.filter { it.getRangeTo(e) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged }
+        // лечение, которое ДОСТАЁТ до цели: лечат с трёх клеток, и лечащие сами могут быть где угодно
+        fun healCovering(e: Creep) = enemyCreeps.filter { getRange(it, e) <= HEAL_RANGE }.sumOf { InfluenceMap.profileOf(it).heal }
+        fun ticksToKill(e: Creep): Double {
+            val net = fireAvailableAt(e) - healCovering(e)
+            return if (net <= 0.0) Double.MAX_VALUE else e.hits / net
+        }
         val focusTarget = focusPool.minWithOrNull(
-            compareByDescending<Creep> { InfluenceMap.profileOf(it).heal }
-                .thenBy { if (it.hits <= fireAvailableAt(it)) 0 else 1 }
-                .thenBy { it.hits }
+            compareBy<Creep> { ticksToKill(it) }
+                .thenByDescending { InfluenceMap.profileOf(it).heal }
                 .thenBy { getRange(it, centroid) }
         )
 
