@@ -1061,6 +1061,51 @@ pays.** The stand's own weakness is now named twice over — our army there is 1
 live, and its enemy farm collects 3.4/tick against our 12.2 on the same map — so the honest next step is
 to make the stand's opponent an economy that competes, and only then re-ask this question.
 
+### Positioning: the accusation was the instrument's, and it is withdrawn (08.09.2026)
+
+The last item on the list was "positioning and hauler escort", and its evidence was the autopsy's
+`[uptime]` rule: **our ranged had a target within three and did not fire on 10–19 % of those creep-ticks
+in the losses, against his 1–3 %.** That is a serious charge — it says our fighters stand in reach and
+do nothing — and it was worth checking before writing code against it.
+
+It was false, and the reason is one line in `tools/replay.py`. The replay's creep records carry a
+`spawning` flag; `frames()` unpacked it and threw it away. **A creep still being born cannot act, and it
+stands on the spawn cell — where an enemy at range three is routine.** Counted as "had the chance and did
+not act", those creep-ticks invented an uptime gap exactly in the matches where we spawn most, which is
+the ones we lose. The examples the tool printed said so plainly once read: `t=636 ranged 53 at (5,50)
+hits=1200 m8r4 acts=[] nearest at 3` — a full-health fighter standing **on our spawn**, four ticks
+running.
+
+With `spawning` tracked and excluded, in `replay.py silent` and in `autopsy.py` alike:
+
+| match | ours, before | ours, after | his |
+|---|---|---|---|
+| 6a9eb70c lost | 81 % | **95 %** | 98 % |
+| 6a9ef3be lost | 87 % | **96 %** | 98 % |
+| 6a9edc4a lost | 85 % | **97 %** | 99 % |
+| 6a9edca9 lost | 90 % | **97 %** | 97 % |
+| 6a9ede4e won | 98 % | 98 % | 95 % |
+| 6a9edf2c won | 97 % | 98 % | 95 % |
+| 6a9ef0a9 won | 98 % | 98 % | 94 % |
+| 6a9eddb3 draw | 99 % | 99 % | 96 % |
+
+**Our fire discipline is 95–99 % in every match and does not separate wins from losses, nor us from
+him.** The `[uptime]` rule stops firing on the losses it used to name, and one of the three standing
+accusations against the bot is withdrawn.
+
+What is left of the item does not support a change either. `[corner fight]` — our centroid within eight
+cells of the map edge for 62–100 % of contact ticks, his 13.8–34.4 — fires in the **wins** as readily as
+in the losses (71 % and 62 % in two we won), so it describes this map, where both spawns sit one cell
+from the border, rather than a mistake. `[marched into a formed line]` fires in two replays of eight.
+Our haulers die 2–5 times a match in the losses and 0–1 in the wins, which separates, but his army is
+standing at our spawn in exactly those matches: the deaths are a symptom of the fight being at home, and
+an escort would be paid for out of the same army that is losing it.
+
+So no code came out of item five, and what came out instead is one fewer false signal. The instruments
+that do separate wins from losses still point at the same place — `posture.travel` and `enemySpawns`,
+which are one fact about his second spawn — and the honest next move is the one the fifth attempt named:
+give the stand an opponent whose economy competes, then re-ask.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
