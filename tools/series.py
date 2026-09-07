@@ -42,7 +42,7 @@ matchlog = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(matchlog)
 
 CACHE_DIR = os.path.expanduser("~/.cache/screeps-arena-series")
-CACHE_VERSION = 4  # bump when the parsed shape changes, so stale files are re-read instead of trusted
+CACHE_VERSION = 5  # bump when the parsed shape changes, so stale files are re-read instead of trusted
 US = "temik911"
 NUM = re.compile(r"-?\d+(?:\.\d+)?")
 # the bot prints Int.MAX_VALUE and its cousins (1073741823 = 2^30-1, 268435455 = 2^28-1) for "no
@@ -51,8 +51,13 @@ NUM = re.compile(r"-?\d+(?:\.\d+)?")
 # within two orders of magnitude of ten million, so anything above it is arithmetic on a sentinel.
 SENTINEL = 1e7
 TICK_LINE = re.compile(r"^t=(\d+) (.+)$")
-NAMED_LINE = re.compile(r"^([a-z][a-z ]*): (.+)$")
+# a named line may stamp its own tick before the colon — `enemy structures t=1900: ...`, `sites t=101:`,
+# `taken t=200:`. Without the optional stamp the pattern missed every one of those lines, which is how a
+# rampart on the enemy spawn stayed out of every summary for a day
+NAMED_LINE = re.compile(r"^([a-z][a-z ]*?)(?: t=\d+)?: (.+)$")
 TOKEN = re.compile(r"([A-Za-z][\w.]*)=(\S+)")
+# a number inside a value, with the letter that introduces it if there is one (`r14`, `s113`, `w160`)
+LABELLED = re.compile(r"([A-Za-z])?(-?\d+(?:\.\d+)?)")
 
 
 # ---------------------------------------------------------------- reading matches
@@ -103,11 +108,25 @@ def fields_of(text):
         if low.startswith("true") or low.startswith("false"):
             out[name] = (1.0 if low.startswith("true") else 0.0, raw)
             continue
-        for i, n in enumerate(NUM.findall(value)):
-            v = float(n)
+        # A number introduced by a letter is NAMED by that letter; only the unlabelled ones are counted
+        # by position. The bot writes `income=6/27r14s113` and, before a hauler exists, `income=0/27s909`
+        # — with pure position the third field is the realised income in one line and the supply in the
+        # other, and a comparison across a series silently mixes them. That mixing produced a reading
+        # ("realised 42 in draws against 57 in wins") that was two different quantities.
+        pos = 0
+        for m in LABELLED.finditer(value):
+            v = float(m.group(2))
             if abs(v) >= SENTINEL:
                 continue
-            out[name if i == 0 else f"{name}#{i + 1}"] = (v, raw)
+            label = m.group(1)
+            if label:
+                field = f"{name}.{label}"
+            else:
+                pos += 1
+                field = name if pos == 1 else f"{name}#{pos}"
+            if field in out:
+                field = f"{field}@2"
+            out[field] = (v, raw)
     return out
 
 
@@ -296,7 +315,14 @@ def cmd_metrics(args):
     print("\nwhere those fields come from — a `#k` is the k-th number of its token:")
     for base in bases:
         raw = samples[base]
-        parts = " ".join(f"{i + 1}:{n}" for i, n in enumerate(NUM.findall(raw.split("=", 1)[-1])))
+        pos, bits = 0, []
+        for m in LABELLED.finditer(raw.split("=", 1)[-1]):
+            if m.group(1):
+                bits.append(f".{m.group(1)}:{m.group(2)}")
+            else:
+                pos += 1
+                bits.append(f"{pos}:{m.group(2)}")
+        parts = " ".join(bits)
         print(f"  {raw}\n      {parts}")
     print("\neffect = |difference| / pooled deviation: 0.8 and up is a gap wider than the spread inside\n"
           "each group. It points at an instrument, never at a cause — read the matches it names. And a\n"
