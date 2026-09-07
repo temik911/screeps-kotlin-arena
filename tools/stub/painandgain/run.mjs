@@ -271,7 +271,10 @@ function screenMove(c, plan, fighters, ours) {
   const slot = slotOf.get(c.id) || anchor;
   const formed = fighters.filter((o) => !isRunner(o)).every((o) => range(o, slotOf.get(o.id) || anchor) <= 2);
   if (isH(c)) {
-    const mate = fighters.filter((o) => o !== c && live(o, H) === 0 && o.hits < o.hitsMax).sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax))[0];
+    // under +poke the healer walks to the creep that lost the most hits this tick — our focus target — not to the deepest deficit
+    const underFire = has('poke') ? fighters.filter((o) => o !== c && live(o, H) === 0 && lostNow(o) > 0).sort((a, b) => lostNow(b) - lostNow(a))[0] : null;
+    const mate = underFire || fighters.filter((o) => o !== c && live(o, H) === 0 && o.hits < o.hitsMax).sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax))[0];
+    if (has('poke') && process.env.POKEDBG) console.log(`pokedbg t=${world.tick} healer ${c.id} @(${c.x},${c.y}) underFire=${underFire ? underFire.id + '@(' + underFire.x + ',' + underFire.y + ') lost=' + lostNow(underFire) + ' d=' + range(c, underFire) : '-'} mate=${mate ? mate.id : '-'}`);
     if (mate) { if (range(c, mate) > 1) stepToward(c, mate, 1); return; }
     if (range(c, slot) > 0) stepToward(c, slot, 0);
     return;
@@ -409,9 +412,13 @@ function blockMove(c, plan, fighters, ours) {
   if (range(c, anchor) > 2) stepToward(c, anchor, 1);
   else if (nearest) stepToward(c, nearest, 1);
 }
+const lastHitsOf = new Map();   // +poke: hits per enemy creep last tick — the one that lost hits is the one under our fire
+function lostNow(o) { const was = lastHitsOf.get(o.id); return was === undefined ? 0 : Math.max(0, was - o.hits); }
 function healAt(c, mine) {
   if (live(c, H) === 0) return;
-  const hurt = mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 3).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits))[0];
+  // under +poke the creep under fire THIS tick comes first (the live line heals its focus target 52 % of its damage ticks)
+  const underFire = has('poke') ? mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 3 && lostNow(o) > 0).sort((a, b) => lostNow(b) - lostNow(a))[0] : null;
+  const hurt = underFire || mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 3).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits))[0];
   if (!hurt) return;
   if (range(c, hurt) <= 1) c.heal(hurt); else c.rangedHeal(hurt);
 }
@@ -861,6 +868,27 @@ function oursAct() {
 // — did a heal of ours land on it, and was a healer of ours adjacent to it. Live (entry-heal.py on the replays): the most-hit
 // creep of ours got any heal in 2 of 19 damage ticks of match 267's entry, 0 of 20 in 264, 1 of 20 in 259; his in 10 of 20
 const oFocus = { ticks: 0, healed: 0, adjacent: 0 };
+// the mirror (07.09.2026): the creep of HIS our single-target intents put the most damage on — did HIS heal land on it, was HIS
+// healer adjacent. Live 506 (Coldkimchi): his focus target healed 52 % of its damage ticks; the stand's line healed ours 36 %
+const eFocus = { ticks: 0, healed: 0, adjacent: 0 };
+function focusActMirror() {
+  const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
+  const dmg = new Map();
+  for (const e of c0) {
+    const m = world.intents.get(e.id) || {};
+    if (m.ranged && m.ranged.type === 'attack' && m.ranged.target) dmg.set(m.ranged.target.id, (dmg.get(m.ranged.target.id) || 0) + 10 * live(e, R));
+    if (m.melee && m.melee.target) dmg.set(m.melee.target.id, (dmg.get(m.melee.target.id) || 0) + 30 * live(e, A));
+  }
+  let most = null, md = 0;
+  for (const [id, d] of dmg) if (d > md) { md = d; most = id; }
+  if (most === null) return;
+  const t = c1.find((c) => c.id === most);
+  if (!t) return;
+  eFocus.ticks++;
+  const healsIt = (c) => { const m = world.intents.get(c.id) || {}; return (m.heal && m.heal.target && m.heal.target.id === most) || (m.ranged && m.ranged.type === 'heal' && m.ranged.target && m.ranged.target.id === most); };
+  if (c1.some(healsIt)) eFocus.healed++;
+  if (c1.some((c) => c !== t && live(c, H) > 0 && live(c, A) === 0 && live(c, R) === 0 && range(c, t) <= 1)) eFocus.adjacent++;
+}
 function focusAct() {
   const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
   const dmg = new Map();
@@ -899,7 +927,9 @@ for (let t = 1; t <= ticks; t++) {
   if (msLoop > cpuMax) { cpuMax = msLoop; cpuMaxTick = t; }
   if (msLoop > 50) cpuSlow++;
   enemyTick();
+  if (has('poke')) for (const o of creeps()) if (o.owner === 1) lastHitsOf.set(o.id, o.hits);
   focusAct();
+  focusActMirror();   // after his intents are placed, like focusAct after ours
   entryAct();
   // ghost: the first thirty ticks of contact, intent by intent — what each side fired and healed while the entry was decided
   if (has('ghost') && ghostMeta.firstContact !== null && t <= ghostMeta.firstContact + 30) {
@@ -945,7 +975,7 @@ if (has('ghost')) {
   const rec = (d) => rc === null ? '-' : `${lost(ghostMeta.recHits[0], rc, d)}/${lost(ghostMeta.recHits[1], rc, d)}`;
   origLog(`ghost entry (hits lost ours/his): stand contact t=${sc} +20 ${stub(20)} +50 ${stub(50)} +100 ${stub(100)} | record contact t=${rc} +20 ${rec(20)} +50 ${rec(50)} +100 ${rec(100)}`);
 }
-origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach, his ${oAct.e_ticks ? Math.round(100 * oAct.e_can / oAct.e_ticks) : 0}%); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}`);
+origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach, his ${oAct.e_ticks ? Math.round(100 * oAct.e_can / oAct.e_ticks) : 0}%); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}; OUR focus target healed by him ${pc(eFocus.healed, eFocus.ticks)}, his healer adjacent to it ${pc(eFocus.adjacent, eFocus.ticks)}`);
 origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
 if (errs.length) origLog('first error:\n' + errs.slice(0, 2).join('\n'));
