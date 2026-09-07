@@ -129,10 +129,14 @@ def frames(doc):
         start = {cid: dict(c) for cid, c in creeps.items()}
         for n in tick.get('n', []):
             cid, side, x, y, hits, hits_max, body, spawning = n
-            creeps[cid] = dict(side=side, x=x, y=y, hits=hits, hitsMax=hits_max, body=body, role=role(body), tail=tail(body))
+            creeps[cid] = dict(side=side, x=x, y=y, hits=hits, hitsMax=hits_max, body=body, role=role(body),
+                               tail=tail(body), spawning=bool(spawning))
         for u in tick.get('u', []):
             cid, x, y, hits, fatigue, spawning = u
-            if cid in creeps: creeps[cid].update(x=x, y=y, hits=hits)
+            # A CREEP STILL BEING BORN CANNOT ACT, and it stands on the spawn cell where an enemy at
+            # range 3 is common — counted as "had a target and did not fire" it invented an uptime gap
+            # exactly in the matches where we spawn most, which is the ones we lose.
+            if cid in creeps: creeps[cid].update(x=x, y=y, hits=hits, spawning=bool(spawning))
         for b in tick.get('b', []):
             cid, body = b
             if cid in creeps: creeps[cid].update(body=body, role=role(body), tail=tail(body))
@@ -223,6 +227,7 @@ def cmd_silent(args):
             enemy = [c for c in start.values() if c['side'] != s]
             if not enemy: continue
             for cid, c in mine:
+                if c.get('spawning'): continue   # still being born: it cannot act, so it is not silent
                 d = min(rng((c['x'], c['y']), (e['x'], e['y'])) for e in enemy)
                 my = acts.get(cid, [])
                 disarmed = c['hits'] <= 100 * c['tail']

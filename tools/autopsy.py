@@ -423,6 +423,13 @@ def analyse_replay(doc, us):
             for cid, c in start.items():
                 s = c['side']
                 U = F[s]
+                # A CREEP STILL BEING BORN CANNOT ACT. It stands on the spawn cell, where an enemy at
+                # range three is routine, so counting it as "had the chance and did not act" invented an
+                # uptime gap exactly in the matches where we spawn most — the ones we lose. Measured:
+                # our ranged uptime in the two けろびー#16 losses reads 81% and 87% with these counted
+                # and 95% and 97% without, against his 98% either way.
+                if c.get('spawning'):
+                    continue
                 mates = [o for oid, o in start.items() if o['side'] == s and oid != cid]
                 foes = [o for o in start.values() if o['side'] != s]
                 if not foes:
