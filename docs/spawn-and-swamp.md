@@ -332,10 +332,10 @@ The instrument was rebuilt around this and it produced the finding the pooled vi
 
 ```
 opponent bot           n    W-L-D  rating   our versions
-けろびー v16               8    0-8-0     -27   v21,v23,v27,v39,v42,v46
-けろびー v17               7    0-4-3      -2   v35,v37,v39,v42,v46
-stachu3478 v6          7    2-5-0     -46   v31,v36,v37,v38,v43,v46
-けろびー v15              21   14-4-3     +88   v26,v28,…,v46
+けろびー#16                8    0-8-0     -27   v21,v23,v27,v39,v42,v46
+けろびー#17                7    0-4-3      -2   v35,v37,v39,v42,v46
+stachu3478#6           7    2-5-0     -46   v31,v36,v37,v38,v43,v46
+けろびー#15               21   14-4-3     +88   v26,v28,…,v46
 ```
 
 **けろびー v16 has beaten every one of six versions of ours, eight times out of eight; his v17 has never
