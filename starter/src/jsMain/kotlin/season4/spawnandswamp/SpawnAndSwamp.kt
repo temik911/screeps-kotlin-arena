@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 48
+    private const val BOT_VERSION = 49
 
     private const val LATE_MARGIN = 60
 
@@ -468,7 +468,8 @@ object SpawnAndSwamp {
     private class PendingTower(val info: TowerInfo, val eta: Int)
 
     private class Ctx(
-        val mySpawn: StructureSpawn,
+        val mySpawn: StructureSpawn,           // ДОМ: геометрия, тревога, оборона — всё считается от него
+        val mySpawns: List<StructureSpawn>,    // все наши живые: второй строится у энергии (forwardSpot)
         val enemySpawn: StructureSpawn?,       // ЦЕЛЬ осады — ближайший его спавн, не обязательно исходный
         val enemySpawns: List<StructureSpawn>, // ВСЕ его живые спавны: он их строит, и победа — это все
         val myCreeps: List<Creep>,
@@ -494,7 +495,10 @@ object SpawnAndSwamp {
     )
 
     fun tick() {
-        val mySpawn = getObjectsByPrototype(StructureSpawn::class).firstOrNull { it.my == true } ?: return
+        // Спавнов у нас может быть больше одного. Порядок getObjectsByPrototype — порядок создания,
+        // поэтому первый и есть ДОМ: на нём держится вся геометрия, и она не переезжает от стройки
+        val mySpawns = getObjectsByPrototype(StructureSpawn::class).filter { it.my == true && it.exists }
+        val mySpawn = mySpawns.firstOrNull() ?: return
         // СПАВНОВ У НЕГО СКОЛЬКО УГОДНО. Порядок getObjectsByPrototype — порядок создания, поэтому
         // первый живой и есть его ИСХОДНЫЙ: на нём держится геометрия карты (поля расстояний, чья
         // половина, чьи кучи энергии), и она не должна ездить вслед за целью. Цель осады — ДРУГОЕ:
@@ -644,7 +648,7 @@ object SpawnAndSwamp {
         val enemyLoaded = enemyHome?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
 
         val sites = collectSites(combatEnemies, loadedToSpawn, enemyLoaded)
-        val ctx = Ctx(mySpawn, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, mySites)
+        val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, mySites)
 
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
@@ -957,6 +961,21 @@ object SpawnAndSwamp {
     private fun usableSites(ctx: Ctx): List<EnergySite> =
         ctx.sites.filter { it.safe && (it.ours || contestedOk(it, ctx.combatEnemies)) }
 
+    /**
+     * КУДА СДАВАТЬ: ближайший наш спавн, у которого есть место. Смысл второго спавна в том и есть —
+     * рейс считается до НЕГО, а не до дома; при одном спавне ответ всегда дом.
+     * Расстояние — по гружёному полю потока (кэш на тик), а не по Чебышеву: спавн стоит в стенном
+     * кармане, и прямая линия там врёт.
+     */
+    private fun dropOff(ctx: Ctx, creep: Creep): StructureSpawn {
+        if (ctx.mySpawns.size <= 1) return ctx.mySpawn
+        val free = ctx.mySpawns.filter { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }
+        val pool = if (free.isEmpty()) ctx.mySpawns else free
+        return pool.minByOrNull {
+            flowTo(ctx, it)[creep.x * 100 + creep.y].let { d -> if (d < 0) Int.MAX_VALUE else d }
+        } ?: ctx.mySpawn
+    }
+
     /** Поле в шагах до точки (пустой хаулер идёт по болоту как по суше) — кэш на тик. */
     private fun siteSteps(ctx: Ctx, site: EnergySite): IntArray =
         siteStepsCache.getOrPut(site.id) { DistanceMap.stepFieldTo(site.pos, ctx.blocked) }
@@ -1098,13 +1117,14 @@ object SpawnAndSwamp {
             val incoming = InfluenceMap.damageAt(h.x, h.y, ctx.combatEnemies)
             if (incoming > 0.0) {
                 haulerSite.remove(h.id)?.let { sid -> claimed[sid] = ((claimed[sid] ?: 0) - free).coerceAtLeast(0) }
-                val step = fleeStep(h, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(h, mySpawn, 1, matrixFor(h))
+                val home = dropOff(ctx, h)
+                val step = fleeStep(h, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(h, home, 1, matrixFor(h))
                 // шаг бегства в болото с грузом — прижатие на пять тиков под огнём (вес груза, см.
                 // periodAt); пустой идёт по болоту как по суше — груз бросаем, он полежит (−1/тик),
                 // вернёмся. Четыре гружёных хаулера ползли из-под M5R5 через болото с fatigue=40 (матч 8)
                 if (carrying > 0 && step != null && periodAt(h, step.x, step.y) > 1) h.drop(RESOURCE_ENERGY)
                 go(h, step)
-                if (carrying > 0 && h.getRangeTo(mySpawn) <= 1) h.transfer(mySpawn, RESOURCE_ENERGY)
+                if (carrying > 0 && h.getRangeTo(home) <= 1) h.transfer(home, RESOURCE_ENERGY)
                 dbg(h, "FLEE", null, step)
                 continue
             }
@@ -1125,13 +1145,14 @@ object SpawnAndSwamp {
                 // везём: у спавна — сдаём; спавн полон — ждём рядом, не занимая его соседние клетки.
                 // Назначение снимаем и возвращаем точке «увозимую» ёмкость.
                 haulerSite.remove(h.id)?.let { sid -> claimed[sid] = ((claimed[sid] ?: 0) - free).coerceAtLeast(0) }
-                val spawnFree = mySpawn.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
-                if (h.getRangeTo(mySpawn) <= 1) {
-                    if (spawnFree > 0) h.transfer(mySpawn, RESOURCE_ENERGY)
+                val drop = dropOff(ctx, h)
+                val spawnFree = drop.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
+                if (h.getRangeTo(drop) <= 1) {
+                    if (spawnFree > 0) h.transfer(drop, RESOURCE_ENERGY)
                     dbg(h, if (spawnFree > 0) "DELIVER" else "WAIT_FULL", null)
                 } else {
                     val stopAt = if (spawnFree > 0) 1 else 2
-                    val step = if (h.getRangeTo(mySpawn) > stopAt) pathStep(h, mySpawn, stopAt, matrixFor(h)) else null
+                    val step = if (h.getRangeTo(drop) > stopAt) pathStep(h, drop, stopAt, matrixFor(h)) else null
                     go(h, step)
                     dbg(h, "TO_SPAWN", null, step)
                 }
@@ -1187,7 +1208,8 @@ object SpawnAndSwamp {
                 // (не вплотную: соседние клетки спавна — выход новорождённых и подход сдающих).
                 // Стоящий НЕ регистрирует интент: без желания и с приоритетом 0 его протолкнёт свапом любой едущий.
                 if (carrying > 0) {
-                    val step = if (h.getRangeTo(mySpawn) <= 1) { h.transfer(mySpawn, RESOURCE_ENERGY); null } else pathStep(h, mySpawn, 1, matrixFor(h))
+                    val back = dropOff(ctx, h)
+                    val step = if (h.getRangeTo(back) <= 1) { h.transfer(back, RESOURCE_ENERGY); null } else pathStep(h, back, 1, matrixFor(h))
                     go(h, step)
                     dbg(h, "DUMP", null, step)
                 } else if (h.getRangeTo(mySpawn) > PARK_RANGE) {
@@ -1240,8 +1262,9 @@ object SpawnAndSwamp {
      * меньше целей под фокус, лечение концентрируется; первого защитника не ждём вовсе.
      */
     private fun spawnIfNeeded(ctx: Ctx, defenders: List<Creep>, threats: List<Creep>, alarm: Boolean, enemyArrival: Int, spawnUnderFire: Boolean) {
-        val spawn = ctx.mySpawn
-        if (spawn.spawning != null) return
+        // ПРОИЗВОДИТ ЛЮБОЙ СВОБОДНЫЙ, и берётся тот, у кого энергии больше: хаулеры сдают в ближайший,
+        // поэтому энергия копится там, где короче рейс, и очередь должна идти оттуда же
+        val spawn = ctx.mySpawns.filter { it.spawning == null }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 } ?: return
         val energy = spawn.store[RESOURCE_ENERGY] ?: 0
         val carried = ctx.haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
         val ourPower = ourPowerOf(defenders, threats)
