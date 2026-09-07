@@ -31,6 +31,7 @@ import screeps.api.getObjectsByPrototype
 import screeps.api.getRange
 import screeps.api.getTerrainAt
 import screeps.api.getTicks
+import screeps.api.getCpuTime
 import screeps.api.searchPath
 import screeps.api.season4.FLAG_TYPES
 import screeps.api.season4.MAX_SCORE_PER_TICK
@@ -1131,6 +1132,13 @@ object PainAndGain {
      *  пока устье открыто, а не когда враг в четырёх клетках. Скаут — страховка от аннигиляции (пустой MOVE не
      *  устаёт и не догоняется на открытом месте), его гибель стоит матча. */
     private const val SCOUT_FLEE_TRIGGER = 8
+    /** СВОБОДНЫЙ ФЛАГ БЕГУНА (проба после серии 407–426, матч 407): см. runRunners — бегун без оружия идёт на флаг мимо вето запаса
+     *  выхода, если его ближайший угрожающий крип дальше от флага, чем путь бегуна плюс SCOUT_FLEE_TRIGGER. ОТВЕРГНУТО стендом на
+     *  сценариях с армией без одного мили (OURWEAK=1): tour 6-2 → 6-2 (m31 в победу, m32 в поражение, m30 23983:14925 → 23969:23514),
+     *  split 4-4 → 2-6 (m28, m33, m35 в поражения — бегун идёт на флаг между группами фермера и отдаёт его вместе с собой), blitz
+     *  без изменений, семейства почти без изменений. Вторая проба предмета 407 после армейского «преследуемы тем, кто может
+     *  дойти» (split 7-1 → 4-4); предмет открыт: 530 тиков EVADE и бегун в RESERVE при его армии в 47 клетках. */
+    private const val USE_RUNNER_FREE_FLAG = false
     private const val SCOUT_FLEE_RANGE = 12
 
     /** Уклонение (поза EVADE): армия, которую мы не можем ДОБИТЬ (наша мощь меньше их × pushRatio), существует — не
@@ -1338,7 +1346,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v127"
+    private const val BOT_VERSION = "v131"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1458,12 +1466,31 @@ object PainAndGain {
     // ---------- кэши на тик ----------
     private val flowCache = HashMap<Int, IntArray>()
     private val flowCacheTick = HashMap<Int, Int>()   // тик расчёта поля (см. FLOW_TTL)
+    private val flowFull = HashMap<Int, Boolean>()   // поле посчитано целиком (не ограничено NEAR_FLOW), см. flowTo/v131b
     private var flowSig = 0                            // подпись препятствий, при которой считан кэш
     /** Срок жизни поля к неподвижной цели (флаг, дом, угол): препятствия поля — стены, чужие рампарты, спавны,
      *  неподвижные крипы и чужие флаги — меняются редко, а считались поля каждый тик: 21–24 BFS в тик в гуще боя
      *  (семь флагов для выбора цели, девять точек выхода, цели крипов) — и три живых таймаута (матчи 16–18). Поле к
      *  цели-крипу (см. NEAR_FLOW) живёт один тик; смена подписи препятствий сбрасывает весь кэш. */
     private const val FLOW_TTL = 5
+    /** ТИК В ЛИМИТЕ НА ХОЛОДНОЙ VM (v131). Живой замер прибором cpu (07.09.2026, два матча): лимит 100 мс на тик (первый — 1000),
+     *  тики 2–35 стоят 60–95 мс, второй тик вылетал за лимит в обоих матчах (в одном — ещё 277-й, в бою), после сотого — 20–45 мс;
+     *  на стенде те же тики стоят 6–9 мс — холодный JIT даёт восьмикратный множитель на всё, а две самые тяжёлые фазы — кандидаты
+     *  бегунов (семь флагов × поток, путь, стая, цена захвата на каждого бегуна КАЖДЫЙ тик: 25–61 мс живьём) и постура (26–44 мс).
+     *  Две меры: (1) поле потока к клетке ФЛАГА живёт FLOW_TTL_FLAG тиков вместо FLOW_TTL — флаг не двигается, а смена препятствий
+     *  сбрасывает кэш подписью (см. flowSig); поля с обходом опасности (avoid) и ближние (near) — как прежде; (2) страховка CPU —
+     *  тик, уже стоящий дороже CPU_GUARD_MS, не пересчитывает кандидатов бегунов и оставляет им прежние флаги. Тёплые тики до
+     *  страховки не доходят, и исходы стенда не меняются. Тик за лимитом теряет ВСЕ интенты — 14 крипов стоят один тик. */
+    /** ДОЛГИЙ СРОК ПОЛЯ К ФЛАГУ — ОТВЕРГНУТО стендом (v131/v131b): не через «урезанные» поля (v131b держит долгий срок только полным),
+     *  а через бюджет BFS — реже считаются потоки к флагам, чаще целиком считаются остальные поля, и исходы плывут: таблица входов
+     *  +20/+50 3 хуже / 0 лучше (brawl m28 486/13518 → 1908/13565, m29 1130/13047 → 2754/10711, m33 2628/11684 → 4522/12376), blitz
+     *  4-4 → 2-6, семейство split лучше на трёх картах (m31, m32, m34 в победы), tour/split без одного мили вразнобой. Смешанно —
+     *  не версия; живьём v131b 2:0 против けろびー при втором тике всё ещё за лимитом. */
+    private const val USE_FLAG_FLOW_TTL = false
+    private const val FLOW_TTL_FLAG = 30
+    private const val USE_CPU_GUARD = true
+    private const val USE_FLAG_FLOW_PREFETCH = true   // потоки ко всем флагам считаются на первом тике (лимит 1000 мс), см. tick()
+    private const val CPU_GUARD_MS = 50.0
     /** Бюджет полных полей в тик (поле «вблизи» — четверть): сверх него устаревшее поле отдаётся как есть, а НОВАЯ
      *  цель получает ограниченное поле (см. NEAR_FLOW) с пометкой «устарело» — полное досчитается следующим тиком в
      *  пределах бюджета. Без этого начало боя (клетки врагов для броска и добычи, точки уклонения, флаги, вычищенные
@@ -1513,6 +1540,34 @@ object PainAndGain {
         val ourCentroid: Position,
         val enemyCentroid: Position?,
     )
+
+    /** ЗАМЕР CPU (07.09.2026): в живых логах «Script execution timed out» на ПЕРВОМ тике в 12 матчах из 20 каждой серии — первый
+     *  тик убивается лимитом (cpuTimeLimitFirstTick), и до этого дня у бота не было ни одной своей меры CPU (строка «cpu t=» —
+     *  стендовая). На первых трёх тиках после каждой фазы печатается `cpu t=N <фаза>=мс` отдельной строкой — последняя строка перед
+     *  таймаутом называет фазу, съевшую бюджет; раз в сто тиков — самый долгий тик с прошлой строки. getCpuTime() — наносекунды
+     *  с начала тика (на стенде — по hrtime). */
+    private var cpuMaxMs = 0.0
+    private var cpuMaxTick = 0
+    private var cpuSlowTicks = 0
+    private val cpuPhases = ArrayList<Pair<String, Double>>()
+    private const val CPU_SLOW_MS = 60.0   // a tick over this prints its phases (the limit is 100 ms; the first tick 1 000)
+    private fun cpuMs(): Double = try { getCpuTime() / 1_000_000.0 } catch (e: Throwable) { 0.0 }
+    private fun cpuMark(phase: String) { cpuPhases.add(phase to cpuMs()) }
+    private fun cpuSummary() {
+        val ms = cpuMs()
+        if (ms > cpuMaxMs) { cpuMaxMs = ms; cpuMaxTick = getTicks() }
+        if (ms > CPU_SLOW_MS) cpuSlowTicks++
+        if (DEBUG_LOG && (getTicks() <= 3 || ms > CPU_SLOW_MS || getTicks() % 100 == 0)) {
+            var prev = 0.0
+            val parts = cpuPhases.joinToString(" ") { (ph, at) -> val d = at - prev; prev = at; "$ph=${(d * 10).toInt() / 10.0}" }
+            println("cpu t=${getTicks()} total=${(ms * 10).toInt() / 10.0}ms: $parts")
+        }
+        cpuPhases.clear()
+        if (DEBUG_LOG && getTicks() % 100 == 0) {
+            println("cpu t=${getTicks()}: max=${(cpuMaxMs * 10).toInt() / 10.0}ms at t=$cpuMaxTick slow(>${CPU_SLOW_MS.toInt()}ms)=$cpuSlowTicks limit=${arenaInfo.cpuTimeLimit / 1_000_000}/${arenaInfo.cpuTimeLimitFirstTick / 1_000_000}ms")
+            cpuMaxMs = 0.0; cpuMaxTick = 0; cpuSlowTicks = 0
+        }
+    }
 
     fun tick() {
         bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick)
@@ -1581,12 +1636,18 @@ object PainAndGain {
 
         DistanceMap.syncWalls(walls.size)
         DistanceMap.ensureBuilt(home, enemyHome)
+        cpuMark("built")
 
+        cpuMark("prep")
         val ourCentroid = centroidOf(army.ifEmpty { active }) ?: home
         val enemyCentroid = centroidOf(combatEnemies.ifEmpty { enemyCreeps })
         val ctx = Ctx(home, enemyHome, myCreeps, active, army, runners, enemyCreeps, combatEnemies, blocked, rawDanger, dangerMatrix, flags, flagCells, flagBlocked, passiveEnemy, ourCentroid, enemyCentroid)
 
         enemyArrivalTicks(ctx)
+        // предзагрузка (v131b): потоки ко всем флагам считаются на первом тике, чей лимит 1000 мс, — второй тик (лимит 100 мс,
+        // холодный JIT, 60–95 мс живьём) находит их в кэше вместо семи BFS
+        if (USE_FLAG_FLOW_PREFETCH && getTicks() == 1) { for (f in ctx.flags) flowTo(ctx, f.pos); cpuMark("prefetch") }
+cpuMark("arrival")
         plannedCaptures.clear()
         // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
         // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
@@ -1645,9 +1706,12 @@ object PainAndGain {
         // pushing=true в девяти клетках от него (m30, 9615:23822)
         if (enemyNear && firstNearTick < 0) firstNearTick = getTicks()
         runRunners(ctx)
+        cpuMark("runners")
         runArmy(ctx)
 
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
+        cpuMark("resolve")
+        cpuSummary()
         InfluenceMap.pruneStances(myCreeps.mapTo(HashSet()) { it.id })
         // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
         for (e in enemyCreeps) {
@@ -2003,7 +2067,10 @@ object PainAndGain {
         // следующим НЕ НАШИМ; сидеть на своём — когда чужих свободных на всех не хватает
         class Cand(val runner: Creep, val flag: FlagInfo, val value: Double)
         val cands = ArrayList<Cand>()
-        for (s in runners) {
+        // страховка CPU (v131): тик уже дороже CPU_GUARD_MS — бегуны оставляют прежние флаги, кандидаты не пересчитываются
+        val cpuGuard = USE_CPU_GUARD && getTicks() > 1 && cpuMs() > CPU_GUARD_MS
+        if (cpuGuard && DEBUG_LOG) println("cpu t=${getTicks()} guard: runners keep their flags (${(cpuMs() * 10).toInt() / 10.0}ms)")
+        if (!cpuGuard) for (s in runners) {
             val currentId = runnerFlag[s.id]
             val armedRunner = hasWeapon(s)
             for (f in ctx.flags) {
@@ -2029,7 +2096,13 @@ object PainAndGain {
                 // при охотнике (см. escapeFlows) флаг без выхода — карман: три безоружных крипа сидели на угловых флагах,
                 // пока армия врага шла к ним, и были добиты по одному — последний на 545-м тике, аннигиляция при +5000
                 // очков (матч 13)
-                if (escapeFlows.isNotEmpty() && exitMargin(ctx, f.pos, ticks) < 0) continue
+                // СВОБОДНЫЙ ФЛАГ БЕГУНА (v130, USE_RUNNER_FREE_FLAG): вето запаса выхода не касается бегуна без оружия, если его ближайший
+                // угрожающий крип дальше от флага, чем путь бегуна плюс порог его бегства (SCOUT_FLEE_TRIGGER): бегун дойдёт раньше,
+                // чем угроза войдёт в его порог. Матч 407: армия 530 тиков в EVADE при его армии в 47 клетках, бегун scout_1 всё
+                // время RESERVE — у каждого флага запас выхода отрицателен или неизвестен; бегун — M1 на 100 хитов, армию не тянет
+                val hisNearestToFlag = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }.minOfOrNull { getRange(it, f.pos) } ?: Int.MAX_VALUE / 4
+                val freeFlag = USE_RUNNER_FREE_FLAG && !armedRunner && hisNearestToFlag > ticks + SCOUT_FLEE_TRIGGER
+                if (escapeFlows.isNotEmpty() && !freeFlag && exitMargin(ctx, f.pos, ticks) < 0) continue
                 // свой пустой флаг стоит половину — но СИДЯЩИЙ на нём закрывает клетку от чужих бегунов (матч 2:
                 // центральный D5 забрал вражеский M1, пока армия уходила за соседним флагом, и вернуть его было
                 // некому); чужой — двойной размен; флаг, который порог силы сейчас не разрешает, — пятую часть
@@ -2042,9 +2115,11 @@ object PainAndGain {
                 cands.add(Cand(s, f, value))
             }
         }
+cpuMark("r.cands")
         cands.sortByDescending { it.value }
         val assigned = HashSet<String>()
         val taken = HashSet<String>()
+        if (cpuGuard) for (s in runners) runnerFlag[s.id]?.let { id -> if (flagById[id] != null) { assigned.add(s.id); taken.add(id) } }
         for (c in cands) {
             if (c.runner.id in assigned || c.flag.id in taken) continue
             assigned.add(c.runner.id)
@@ -2052,7 +2127,7 @@ object PainAndGain {
             runnerFlag[c.runner.id] = c.flag.id
         }
         // пары (v94): флаг со стаей, с которой один не справится, — двум ближайшим свободным вооружённым, если справятся вдвоём
-        if (USE_RUNNER_PAIRS) {
+        if (USE_RUNNER_PAIRS && !cpuGuard) {
             for (f in ctx.flags) {
                 if (f.ours || f.id in taken) continue
                 if (f.occupant?.my == true) continue
@@ -2136,7 +2211,10 @@ object PainAndGain {
         val now = getTicks()
         val hit = flowCache[key]
         val at = flowCacheTick[key]
-        if (hit != null && at != null && now - at < (if (near) 1 else FLOW_TTL)) return hit
+        // долгий срок — только ПОЛНОМУ полю к флагу (v131b): поле, посчитанное сверх бюджета BFS, ограничено NEAR_FLOW клетками, и
+        // в кэше на тридцать тиков оно тридцать тиков говорило бегунам и армии «пути нет» (blitz 4-4 → 2-6, входы 3 хуже / 0 лучше)
+        val ttl = if (near) 1 else if (USE_FLAG_FLOW_TTL && !avoid && flowFull[key] == true && ctx.flags.any { it.pos.x == target.x && it.pos.y == target.y }) FLOW_TTL_FLAG else FLOW_TTL
+        if (hit != null && at != null && now - at < ttl) return hit
         if (hit != null && bfsCost >= BFS_BUDGET) return hit   // сверх бюджета — устаревшее поле
         val bounded = near || bfsCost >= BFS_BUDGET            // сверх бюджета новая цель — ограниченное поле
         bfsThisTick++
@@ -2144,6 +2222,7 @@ object PainAndGain {
         val f = DistanceMap.flowFieldTo(target, ctx.flagBlocked + (if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked),
             maxDist = if (bounded) NEAR_FLOW else Int.MAX_VALUE)
         flowCache[key] = f
+        flowFull[key] = !bounded
         flowCacheTick[key] = if (bounded && !near) -1000 else now
         return f
     }
@@ -2199,11 +2278,12 @@ object PainAndGain {
         return q.melee + q.ranged > 0.0 || enemyCreeps.any { w -> w.id != e.id && getRange(w, e) <= HEAL_RANGE + 1 && w.body.any { it.type == ATTACK || it.type == RANGED_ATTACK } }
     }
 
-    private fun chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushRatio: Double, escapeNeeded: Boolean = false): Objective? {
+    private fun chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushRatio: Double, escapeNeeded: Boolean = false, onlyFlagId: String? = null): Objective? {
         if (group.isEmpty()) return null
         var best: Objective? = null
         for (f in ctx.flags) {
             if (f.ours) continue
+            if (onlyFlagId != null && f.id != onlyFlagId) continue   // страховка CPU (v131c): сверх бюджета — только текущая цель
             if (!captureAllowed(ctx, f)) continue
             val flow = flowTo(ctx, f.pos)
             val travel = group.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
@@ -2578,6 +2658,7 @@ object PainAndGain {
         // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
         // пикет простоя — поэтому охота посчитана здесь, до простоя
         val huntable = armedEnemies.filter { catchable(it, chasers) }
+cpuMark("a.hunt")
         // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
         val netDamage = enemyHitsHist.size == STALL_TICKS &&
             (enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
@@ -2697,6 +2778,7 @@ object PainAndGain {
         // без стрелков строя нет — лекарей и раненых травят, и «в контакте держим строй» держало их у поста, где
         // стоял враг (стенд m7 sleeper: три лекаря с flee=true разбежались по карте и были добиты поодиночке)
         val retreatFeasible = (!contact || strikers.isEmpty()) && !atRetreatPoint
+cpuMark("a.retreat")
         // мера боя (v120, см. USE_FIGHT_PACK_MEASURE): его боевые по порядку прихода к нашей массе — первый и все, кто придёт,
         // пока стая, набранная до него, умирает под нашим огнём (окно растёт вместе со стаей: колонна входит целиком)
         val fightPack = if (!USE_FIGHT_PACK_MEASURE || combatEnemies.size <= 1 || strikers.isEmpty()) combatEnemies else run {
@@ -2943,9 +3025,14 @@ object PainAndGain {
         // группу не догоняет. Есть цель-флаг, проходящая гейт стаи, — погоня снята, как при перехвате
         // ...и не по ярлыку «не дерётся» (он гаснет, пока его хранители мелькают в досягаемости), а по сухости самой погони: ни
         // нашего выстрела, ни удара по нам PASSIVE_TICKS подряд (blitz m28: с 83-го по 239-й ни того ни другого при ANNIHILATE)
+        // страховка CPU на постуре (v131c): тик уже дороже CPU_GUARD_MS — цель-флаг оценивается только текущая, потоки выхода не
+        // пересчитываются; тёплые тики (6–9 мс на стенде) сюда не доходят
+        val cpuGuardArmy = USE_CPU_GUARD && now > 1 && cpuMs() > CPU_GUARD_MS
+        if (cpuGuardArmy && DEBUG_LOG) println("cpu t=$now guard: posture keeps the objective (${(cpuMs() * 10).toInt() / 10.0}ms)")
         val dryNow = (lastFireTick < 0 || now - lastFireTick >= PASSIVE_TICKS) && now - lastHurtTick >= PASSIVE_TICKS
         val sweepObjective = if (USE_SWEEP_OVER_CHASE && behindOnScore && dryNow && armedEnemies.isNotEmpty() && !interceptDenies)
-            chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, false) else null
+            chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, false, if (cpuGuardArmy) objectiveFlagId else null) else null
+cpuMark("a.sweep")
         val chaseVeto = (enemyNotFightingNow && (interceptDenies || !behindOnScore)) || sweepObjective != null
         // ОТКРЫТАЯ НАХОДКА (матч 70): второй источник мигания — «ловимых нет»: блоб, шагнувший назад на две клетки, делает
         // «уходящими» всех двенадцать на восемь тиков (см. evasive), и наступление снимается на эти тики, армия к посту.
@@ -2993,7 +3080,8 @@ object PainAndGain {
             if (ac != null) { hisCentHist.addLast(ac.x * 100 + ac.y); while (hisCentHist.size > APPROACH_WINDOW) hisCentHist.removeFirst() } else hisCentHist.clear()
             approachRate = if (enemyDistHist.size >= 2) ((enemyDistHist.first() - enemyDistHist.last()).toDouble() / (enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
         }
-        if (escapeNeeded) refreshEscape(ctx, armedEnemies) else { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
+        if (escapeNeeded && !(cpuGuardArmy && escapeFlows.isNotEmpty())) refreshEscape(ctx, armedEnemies) else if (!escapeNeeded) { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
+cpuMark("a.escape")
         // враг близко (см. EVADE_RANGE) — уклонение раньше целей; далеко — цели с выходом, иначе безопасная точка
         val enemyClose = hunted && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
         val evadeFirst = if (enemyClose && !annihilate && !contact) evadePoint(ctx, armedEnemies, strikers) else null
@@ -3005,10 +3093,12 @@ object PainAndGain {
             val flow = flowTo(ctx, f.pos)
             Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0)
         }
-        val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted)
+        val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted, if (cpuGuardArmy) objectiveFlagId else null)
+cpuMark("a.obj")
         // дебют без угла (v100, USE_OPENING_AT_POST): бросок далеко — не уклонение, а пост
         val rushFar = USE_OPENING_AT_POST && unflaggedRushNow && theirsFight < oursFight * RETREAT_RATIO
         val evadeTo = evadeFirst ?: (if (hunted && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
+cpuMark("a.evade")
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
         val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible
@@ -3293,6 +3383,7 @@ object PainAndGain {
         val healersAlive = army.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
         // строй рядами в бою по контакту (см. USE_BLOCK); при перевесе (добивание) — прежняя охота
         val slotOf = HashMap<String, Position>()
+        cpuMark("posture")
         val blockOn = USE_BLOCK && posture == Posture.ANNIHILATE && !pushing && combatEnemies.isNotEmpty() && strikers.isNotEmpty()
         // прижим (см. USE_PRESS, PRESS_PATIENCE): линия врага стоит — контакт, его огонь достаёт наших, и ни один его мили не
         // в MELEE_HOLD_RANGE + 1 от наших вооружённых; включившись, держится, пока есть контакт и строй
@@ -3397,6 +3488,7 @@ object PainAndGain {
         // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
         lostTick.clear()
         for (c in army) lostTick[c.id] = ((lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
+        cpuMark("plan")
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
             val healer = !hasWeapon(creep) && hasHeal(creep)
@@ -3855,6 +3947,7 @@ object PainAndGain {
             lastCell[creep.id] = creep.x * 100 + creep.y
         }
 
+        cpuMark("moves")
         if (TRACE_WHY && DEBUG_LOG && whyLines.isNotEmpty()) { println("why t=${getTicks()}: " + whyLines.joinToString(" ")); whyLines.clear() }
         if (TRACE_WHY && DEBUG_LOG && getTicks() % (LOG_EVERY * 10) == 0 && whySum.isNotEmpty()) {
             println("why-sum t=${getTicks()}: " + whySum.entries.sortedByDescending { it.value }.joinToString(" ") { "${it.key}=${it.value}" })
@@ -3862,6 +3955,7 @@ object PainAndGain {
         }
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
         healAndShoot(army + ctx.runners.filter { hasWeapon(it) }, allies, enemyCreeps, focusTarget, focusOrder)
+        cpuMark("shoot")
     }
 
     /** Удар мили: фокус-цель вплотную, иначе самый раненый сосед. */

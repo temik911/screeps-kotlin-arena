@@ -9,7 +9,7 @@ export function getObjectById(id) { return byId(id); }
 export function getRange(a, b) { return rangeOf(a, b); }
 export function getTerrainAt(pos) { return terrainAt(pos.x, pos.y); }
 export function getTicks() { return world.tick; }
-export function getCpuTime() { return 0; }
+export function getCpuTime() { return world.tickStartNs ? Number(process.hrtime.bigint() - world.tickStartNs) : 0; }   // ns since this tick's loop() call (the bot's cpu trace)
 export function getHeapStatistics() { return {}; }
 export function getDirection(dx, dy) {
   dx = Math.sign(dx); dy = Math.sign(dy);

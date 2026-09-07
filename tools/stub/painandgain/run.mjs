@@ -304,7 +304,11 @@ function screenMove(c, plan, fighters, ours) {
         // our armed creeps within two is where that fighter goes next tick; a healer there leaves it standing under our melee
         if (fightersOf.some((o) => o.x === x + dir.x && o.y === y + dir.y && armed.some((q) => range(o, q) <= 2))) continue;
         const adj = fightersOf.filter((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 1).length;
-        const score = adj * 10 + (wounded ? Math.max(0, 3 - Math.max(Math.abs(wounded.x - x), Math.abs(wounded.y - y))) : 0) - (dx || dy ? 0.5 : 0);
+        // the front first (fourth cut): the two fighters nearest to our armed creeps are the ones our fire lands on — live his
+        // healers stand level with them (depth 0, at 2–3 from our nearest), not in the middle of the blob
+        const frontTwo = armed.length ? fightersOf.slice().sort((a, b) => Math.min(...armed.map((q) => range(a, q))) - Math.min(...armed.map((q) => range(b, q)))).slice(0, 2) : [];
+        const frontAdj = frontTwo.filter((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 1).length;
+        const score = frontAdj * 30 + adj * 10 + (wounded ? Math.max(0, 3 - Math.max(Math.abs(wounded.x - x), Math.abs(wounded.y - y))) : 0) - (dx || dy ? 0.5 : 0);
         if (score > bs) { bs = score; best = { x, y }; }
       }
       if (best && (best.x !== c.x || best.y !== c.y)) c.move(getDirection(best.x - c.x, best.y - c.y));
@@ -992,6 +996,7 @@ let cpuMax = 0, cpuMaxTick = 0, cpuSlow = 0;
 for (let t = 1; t <= ticks; t++) {
   world.perspective = 0;
   const tLoop = performance.now();
+  world.tickStartNs = process.hrtime.bigint();   // getCpuTime() of the bot's cpu trace counts from here
   try { bot.loop(); } catch (e) { loopErrors++; lines.push('loop error (uncaught): ' + (e && e.stack || e)); }
   const msLoop = performance.now() - tLoop;
   oursAct();
