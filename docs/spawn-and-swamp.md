@@ -1001,6 +1001,66 @@ The gap the stand showed on the way is worth more than the correction: **our arm
 and dies live** — 13 of our creeps died in one 743-tick loss — which is why every change aimed at army
 quality measures as zero there. That is the positioning question, and it is next.
 
+### The delivery point, fifth attempt: it finally gets built, and it still does not pay (08.09.2026)
+
+The fourth attempt closed two escape routes and left one opening: **his own play**. Reading his replays
+with a fixed `economy` tool turned that opening into a case:
+
+| | our income | his income | his built spawns |
+|---|---|---|---|
+| 6a9eb70c **lost** | 7376 / 743t = 9.9/t | 12885 / 743t = **17.3/t** | 2 (t=242, 544), taking 3185 and 1034 |
+| 6a9ef3be **lost** | 8410 / 843t = 10.0/t | 13799 / 843t = **16.4/t** | 4 (t=269..764), taking 913–1402 each |
+| 6a9ede4e won | 23496 / 1993t = 11.8/t | 15203 / 1993t = 7.6/t | none |
+| 6a9eddb3 draw | 27042 / 2000t = 13.5/t | 12427 / 2000t = 6.2/t | none |
+| 6a9edf2c won | 12703 / 1140t = 11.1/t | 11057 / 1140t = 9.7/t | none |
+
+**Our income is flat at 10–13.5/tick across wins and losses; his doubles from 7 to 17 when he builds
+delivery points, and that is when we lose.** `series.py metrics` says the same from our own logs without
+knowing any of it: over forty matches the field that separates our wins from our losses furthest is
+`posture.travel` (won 190, lost 77, effect 5.7) — the distance from our nearest striker to *his nearest
+spawn* — with `enemySpawns` (won 1.03, lost 2.00) right behind it. Those are one fact: **in the matches
+we lose he has a second spawn by tick 400.**
+
+And the free-answer measurement agrees: a spawn of ours handed over already built (`FWD=x,y` in the
+stand) is worth 10–40 %: `tower+fortspawn` 868 → 777, `tower+stream` 574 → 501, `none` 428 → 383,
+`fortress` 1332 → 1019 at the drop centroid; two of them, 868 → 621.
+
+**So the fifth attempt was worth making, and this time the site actually gets built.** Four earlier
+attempts never finished one; this one does, and the reason it now finishes is two corrections that are
+about the estimate, not about the feature:
+
+- **The ferry.** `siteReadyTicks` charged a pile-fed site nothing for time (`supplied = 0`) and priced
+  it at `left / (WORK × BUILD_POWER)`. But the keeper carries two CARRY, so a thousand is ten trips, and
+  ten trips over fifty steps is eleven hundred ticks, not eighty. With the ferry in, the estimate for
+  the fourth attempt's own spot goes from `build=81` to `build=1187` — the honest number.
+- **The clock.** The observed build rate was measured from the tick the *site appeared*, so the keeper's
+  fifty-step walk counted as slow building: 40 progress in 100 ticks = 0.4/tick, "ready in 2400 with
+  1700 left", and the keeper abandoned the site it had just started. Counting only ticks with a keeper
+  **within `BUILD_RANGE`** fixes it without weakening the dead-site rule — and the weakening is real if
+  you take the obvious shortcut instead: clocking from the first progress makes a starved site look
+  alive and `siege6` sinks 420 energy against 10. Presence, not progress, is what separates "walking"
+  from "stalled".
+
+**With those in, the site finishes — 80 → 360 → 760 → done — and the stand says it is a loss anyway.**
+Every scenario slower (`none` 428 → 464, `tower` 450 → 507, `ball` 663 → 867, `tower+healball` 521 →
+885, `tower+hover` 450 → 1056, `tower+stream` 574 → 1012, `tower+pairs` 538 → 791, `tower+fortspawn`
+868 → 1227), and `siege6` **FAIL** with 172 sunk in a site the siege will not let anyone finish.
+
+The gap between the free spawn (worth 10–40 %) and the bought one (a loss) is the price, and it is
+now measurable rather than arguable: 1000 for the spawn, 700 for the keeper, and the keeper's fifty-step
+commute out of the fight. On this stand our income is already 13–15/tick and the wave wins by tick
+450–900; 1700 energy repaid at 1.6–3.7/tick needs five hundred to a thousand ticks the match does not
+have. Live the arithmetic is different — our income is 10–13.5/tick, matches run 800–2000, and his four
+points are worth about nine energy a tick to him — but that is an argument, not a measurement, and the
+one instrument that can settle it says no.
+
+So: reverted, for the fifth time, and what survives is the presence-clock (**v56**, all twenty-six
+scenarios tick-for-tick v55, `siege6` still 10). What a sixth attempt needs is no longer a mystery and
+no longer about the gate: **the price has to come down or the stand has to grow the regime where it
+pays.** The stand's own weakness is now named twice over — our army there is 10–17 creeps against 3–6
+live, and its enemy farm collects 3.4/tick against our 12.2 on the same map — so the honest next step is
+to make the stand's opponent an economy that competes, and only then re-ask this question.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.

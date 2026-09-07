@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 55
+    private const val BOT_VERSION = 56
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -332,6 +332,19 @@ object SpawnAndSwamp {
 
     /** id площадки башни врага -> (тик первого наблюдения, прогресс тогда) — темп стройки. */
     private val siteSeen = HashMap<String, Pair<Int, Int>>()
+
+    /** Площадка -> (тиков, что смотритель провёл В ДОСЯГАЕМОСТИ от неё; её прогресс на первом таком
+     *  тике). Знаменатель наблюдаемой скорости стройки: см. siteReadyTicks. */
+    private val siteWork = HashMap<String, Pair<Int, Int>>()
+
+    private fun measureSiteWork(ctx: Ctx) {
+        for (s in ctx.mySites) {
+            if (ctx.builders.none { getRange(it, s) <= BUILD_RANGE }) continue
+            val was = siteWork[s.id]
+            siteWork[s.id] = if (was == null) 1 to (s.progress ?: 0) else (was.first + 1) to was.second
+        }
+        siteWork.keys.retainAll { id -> ctx.mySites.any { it.id == id } }
+    }
 
     /** Кончится ли осада раньше, если следующее тело — мили: ответ СИМУЛЯЦИИ, снятый в runFighters и
      *  прочитанный на следующем тике теми, кто решает состав, — отбором волны (кого пускать) и спавном
@@ -726,6 +739,7 @@ object SpawnAndSwamp {
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
         measureDelivery(ctx)
         measureSupply(ctx)
+        measureSiteWork(ctx)
         val breach = breachPlan(ctx)
         if (DEBUG_LOG && breach != null && !breachLogged) {
             breachLogged = true
@@ -3759,8 +3773,16 @@ object SpawnAndSwamp {
         val work = ctx.builders.sumOf { b -> b.body.count { it.type == WORK && it.hits > 0 } }
         if (site != null && work > 0) {
             val progress = site.progress ?: 0
-            val (t0, p0) = siteSeen.getOrPut(site.id) { getTicks() to progress }
-            val seen = getTicks() - t0
+            // ЧАСЫ СКОРОСТИ ИДУТ ТОЛЬКО ТОГДА, КОГДА СМОТРИТЕЛЬ У ПЛОЩАДКИ. Прежде отсчёт шёл от
+            // появления площадки, и в замер попадал ПОХОД: у домашней башни это три клетки и ничего не
+            // меняло, а у площадки в полусотне шагов выходило 40 прогресса на 100 тиков = 0.4/тик, срок
+            // 2400 при остатке матча 1700, вердикт «не успеть» — и смотритель бросал стройку, которую
+            // сам же начал. Просто «считать с первого прогресса» — не ответ: тогда площадка, у которой
+            // смотритель СТОИТ, а энергии нет, перестаёт выглядеть мёртвой, и фикстура осады сразу
+            // ловит это (siege6: 420 утопленных против 10). Различает эти два случая не прогресс и не
+            // календарь, а присутствие рук: тики похода не считаются, тики простоя У ПЛОЩАДКИ считаются
+            val (worked, p0) = siteWork[site.id] ?: (0 to progress)
+            val seen = worked
             if (seen >= APPROACH_WINDOW / 2) {
                 val observed = (progress - p0).toDouble() / seen
                 // ноль — это ещё не «никогда»: смотритель мог не дойти, а спавн стоять пустым. Замер
