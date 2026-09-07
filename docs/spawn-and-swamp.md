@@ -568,6 +568,37 @@ be worth taking blind (a smaller first structure, or a site that can be abandone
 a signal in the opening that separates the regimes. The site machinery (v50) is not what blocks it, and
 the three attempts are recorded so the fourth does not rediscover them.
 
+### Twenty matches of v50 — the best rating rate measured so far (07.09.2026)
+
+Four versions had landed without a single live match (v47's siege symmetry, v48's plural enemy spawns,
+v49's plural own spawns, v50's site jobs and the keeper-body fix). Twenty matches:
+
+| version | n | W-L-D | rating | per match |
+|---|---|---|---|---|
+| v44 | 20 | 14-1-5 | +9 | +0.5 |
+| v46 | 26 | 16-9-1 | −31 | −1.2 |
+| **v50** | **20** | **16-3-1** | **+28** | **+1.4** |
+
+Rating 1189 → 1217. Cut per opponent BOT against v46, on the bots both versions met:
+
+| his bot | v46 | v50 |
+|---|---|---|
+| stachu3478#7 | 2-0-0 +8 | 4-0-0 +20 |
+| stachu3478#9 | 0-1-0 −10 | 2-0-0 +11 |
+| stachu3478#6 | 0-1-0 −11 | 1-0-0 +5 |
+| stachu3478#10 | 2-1-0 ±0 | 1-0-0 +5 |
+| けろびー#15 | 1-2-0 −13 | 2-1-0 +5 |
+| けろびー#13 | 2-1-1 −7 | 0-1-0 −11 |
+
+Thirteen matches each on shared bots: v46 10-6-2, v50 13-3-1. stachu3478#6 and #9, which had leaked
+−46 and −10 over their history, both went positive.
+
+Two things this series does **not** say. It never drew けろびー#16 or #17 — the two bots no version of
+ours has beaten — so the standing hole is untested; and it cannot attribute the gain to any one of the
+four versions, since they were played together. The three losses were けろびー#13, けろびー#15 and a
+first meeting with `Little Ancestor#1` (−15); both けろびー losses had `enemySpawns=1`, so v48's change
+took no part in them.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
