@@ -412,14 +412,19 @@ def built(doc):
 
     A structure the tool first saw mid-match carries a synthetic id (the initial ones are numbered from
     1); the tick is the first one where it reports hits or energy, so it is the tick it became real,
-    give or take the first update. Construction sites are skipped — a site is a plan, not a structure."""
+    give or take the first update. Construction sites are skipped — a site is a plan, not a structure.
+
+    SPAWNS ARE STRUCTURES HERE. They used to be skipped along with containers, on the assumption that
+    the two on the map are the two you start with. けろびー#16 builds a second at t=242 and a third at
+    t=544; his #17 builds six, two of them on our half (07.09.2026). Skipping them hid the one thing
+    that decides those matches."""
     firstseen = {}
     for tick in doc['ticks']:
         for s in tick.get('s', []):
             firstseen.setdefault(s[0], tick['k'])
     out = []
     for o in doc['objects']:
-        if o['kind'] in ('constructionSite', 'container', 'spawn'):
+        if o['kind'] in ('constructionSite', 'container'):
             continue
         t = firstseen.get(o['id'])
         if t is not None and t > 1:

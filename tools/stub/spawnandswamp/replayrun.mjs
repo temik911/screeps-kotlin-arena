@@ -64,6 +64,10 @@ const style = BEHAVIOUR[scen.behaviour.class] || BEHAVIOUR.stream;
 const queue = scen.enemyQueue.slice();
 const structs = scen.enemyStructures.slice();
 const towers = [];
+// его спавны: исходный плюс те, что он построил по ходу матча. Производство идёт из ЛЮБОГО свободного,
+// победа — только когда снесены все
+const enSpawns = [en];
+const enFree = () => enSpawns.filter(s => s.exists && !s.spawning)[0] || null;
 let spawned = 0;
 
 let errors = 0;
@@ -80,14 +84,16 @@ for (let t = 0; t < TICKS; t++) {
     if (s.kind === 'tower') { const w = new StructureTower(s.x, s.y, false); w.store.energy = C.TOWER_CAPACITY; towers.push(w); }
     else if (s.kind === 'rampart') new StructureRampart(s.x, s.y, C.RAMPART_HITS, false);
     else if (s.kind === 'constructedWall') new StructureWall(s.x, s.y, C.WALL_HITS);
+    else if (s.kind === 'spawn') { enSpawns.push(new StructureSpawn(s.x, s.y, false, 1000)); }
     else if (s.kind === 'extension') { /* an extension only holds energy for him; his economy is granted */ }
   }
   for (let i = structs.length - 1; i >= 0; i--) if (structs[i].t <= t) structs.splice(i, 1);
   // his economy is not what is being replayed: he is granted what he actually spent, on his own schedule
   while (queue.length && queue[0].t <= t) {
-    if (en.spawning) break;
-    en.store.energy = Math.max(en.store.energy, queue[0].cost);
-    const r = en.spawnCreep(body(queue[0].body));
+    const s = enFree();
+    if (!s) break;
+    s.store.energy = Math.max(s.store.energy, queue[0].cost);
+    const r = s.spawnCreep(body(queue[0].body));
     if (r.error !== undefined) break;
     r.object.foe = true;
     queue.shift();
@@ -148,14 +154,15 @@ for (let t = 0; t < TICKS; t++) {
   }
 
   my.store.energy = Math.min(1000, my.store.energy + 1);
-  if (t % 200 === 0) lines.push(`REPLAY t=${t}: his creeps ${foes.length} (${spawned} of ${scen.enemyQueue.length} built), towers ${towers.filter(w => w.exists).length}, our spawn ${my.hits}, his ${en.hits}`);
+  if (t % 200 === 0) lines.push(`REPLAY t=${t}: his creeps ${foes.length} (${spawned} of ${scen.enemyQueue.length} built), towers ${towers.filter(w => w.exists).length}, our spawn ${my.hits}, his spawns ${enSpawns.map(s => s.exists ? s.hits : 'dead').join('/')}`);
   endTick();
   if (!my.exists) { origLog('MY SPAWN DESTROYED at', t); break; }
-  if (!en.exists) { origLog('ENEMY SPAWN DESTROYED at', t); break; }
+  if (!enSpawns.some(s => s.exists)) { origLog('ENEMY SPAWN DESTROYED at', t, 'spawns:', enSpawns.length); break; }
 }
 console.log = origLog;
 const skip = /^\d\d:|=== MAP|=== END MAP/;
 for (const l of lines) if (!skip.test(l)) origLog(l);
 origLog(`--- scenario: ${scen.source} vs ${scen.opponent} (${scen.result} live), behaviour ${scen.behaviour.class}`);
-origLog('--- ticks run:', world.tick, 'errors:', errors, 'spawnE:', my.store.energy, 'enemySpawnHits:', en.hits,
+origLog('--- ticks run:', world.tick, 'errors:', errors, 'spawnE:', my.store.energy,
+        'his spawns:', enSpawns.map(s => (s.exists ? s.hits : 'dead')).join('/'),
         'his creeps built:', spawned, 'of', scen.enemyQueue.length);
