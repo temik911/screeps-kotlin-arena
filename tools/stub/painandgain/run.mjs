@@ -1,6 +1,6 @@
 // Offline runner for Pain and Gain (fixed armies, no spawns): a map (synthetic, or MAP=map-matchN.txt dumped from a
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
-//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp|tour|split (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate)
+//   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp|tour|split (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate; +poke, +wall, +blob: the line's forms, see README)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
 //   REPLAY=<id>.replay.json.gz + scenario `ghost`: the map, flags, bodies and start cells come from a live replay (arukuka's tool,
 //   see tools/replay.py) and the enemy's creeps walk the cells the replay recorded, tick for tick, while our bot plays live —
@@ -270,6 +270,48 @@ function screenMove(c, plan, fighters, ours) {
   }
   const slot = slotOf.get(c.id) || anchor;
   const formed = fighters.filter((o) => !isRunner(o)).every((o) => range(o, slotOf.get(o.id) || anchor) <= 2);
+  // '+blob' (07.09.2026): the live line as replays 506/602 measure it — no rows, no slots. Each creep keeps three from our
+  // nearest armed creep BY ITSELF (at two or less: the free neighbour cell farthest from us — the live creep steps away
+  // 67–79 % of the ticks our melee stands at two of it, the distance the next tick is 2–4 and one in 7 %; our melee swung 0
+  // and 3 times in two fights), stands and shoots at three, and beyond three walks toward the focus but never farther than
+  // two from the blob's centroid and never without a healer within two. Healers go to the creep that lost hits this tick,
+  // step back from our melee at one, and otherwise sit within one of the centroid. The screen's rows and the squares (dense,
+  // loose, swapping) gave our melee 9–18 % adjacent creep-ticks against the live 2 % — a creep in a formed row has no free
+  // cell to step into, and a block as a whole either stood or ran
+  if (has('blob')) {
+    const members = fighters.filter((o) => !isRunner(o));
+    const cen = { x: Math.round(members.reduce((a, o) => a + o.x, 0) / members.length), y: Math.round(members.reduce((a, o) => a + o.y, 0) / members.length) };
+    const dn = nearestArmed ? range(c, nearestArmed) : 99;
+    const threats = armed.filter((o) => range(c, o) <= 3);
+    if (isH(c)) {
+      if (dn <= 1) { stepBack(c, threats); return; }
+      const underFire = members.filter((o) => o !== c && !isH(o) && lostNow(o) > 0).sort((a, b) => lostNow(b) - lostNow(a))[0];
+      const mate = underFire || members.filter((o) => o !== c && !isH(o) && o.hits < o.hitsMax).sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
+      if (mate) { if (range(c, mate) > 1) stepToward(c, mate, 1); return; }
+      if (range(c, cen) > 1) stepToward(c, cen, 1);
+      return;
+    }
+    // rotation as under +poke: below half the weapon parts out of our reach to a healer, back at five of eight
+    if (!armyState.rotOut) armyState.rotOut = new Set();
+    const weap = isR(c) ? R : A;
+    const lv = live(c, weap), full = c.body.filter((p) => p.type === weap).length;
+    if (!armyState.rotOut.has(c.id) && full > 0 && lv * 2 < full) armyState.rotOut.add(c.id);
+    if (armyState.rotOut.has(c.id) && lv * 8 >= full * 5) armyState.rotOut.delete(c.id);
+    if (armyState.rotOut.has(c.id)) {
+      const inReach = ourF.filter((o) => range(c, o) <= 3);
+      const healer = members.filter((o) => o !== c && isH(o)).sort((a, b) => range(c, a) - range(c, b))[0];
+      if (inReach.length) { if (!stepBack(c, inReach)) stepAway(c, inReach); return; }
+      if (healer && range(c, healer) > 1) { stepToward(c, healer, 1); return; }
+      return;
+    }
+    if (dn <= 2) { stepBack(c, threats.length ? threats : [nearestArmed]); return; }
+    if (dn === 3) return;
+    if (range(c, cen) > 2) { stepToward(c, cen, 1); return; }
+    if (!members.some((o) => isH(o) && range(c, o) <= 2)) { stepToward(c, cen, 1); return; }
+    const focus = ourF.slice().sort((a, b) => range(anchor, a) - range(anchor, b) || a.hits - b.hits)[0];
+    if (focus) stepToward(c, focus, 3); else stepToward(c, plan.nearestOur, 3);
+    return;
+  }
   if (isH(c)) {
     // under +poke the healer walks to the creep that lost the most hits this tick — our focus target — not to the deepest deficit
     const underFire = has('poke') ? fighters.filter((o) => o !== c && live(o, H) === 0 && lostNow(o) > 0).sort((a, b) => lostNow(b) - lostNow(a))[0] : null;
@@ -427,7 +469,7 @@ function lostNow(o) { const was = lastHitsOf.get(o.id); return was === undefined
 function healAt(c, mine) {
   if (live(c, H) === 0) return;
   // under +poke the creep under fire THIS tick comes first (the live line heals its focus target 52 % of its damage ticks)
-  const underFire = has('poke') ? mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 3 && lostNow(o) > 0).sort((a, b) => lostNow(b) - lostNow(a))[0] : null;
+  const underFire = has('poke') || has('blob') ? mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 3 && lostNow(o) > 0).sort((a, b) => lostNow(b) - lostNow(a))[0] : null;
   const hurt = underFire || mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 3).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits))[0];
   if (!hurt) return;
   if (range(c, hurt) <= 1) c.heal(hurt); else c.rangedHeal(hurt);
@@ -937,7 +979,7 @@ for (let t = 1; t <= ticks; t++) {
   if (msLoop > cpuMax) { cpuMax = msLoop; cpuMaxTick = t; }
   if (msLoop > 50) cpuSlow++;
   enemyTick();
-  if (has('poke')) for (const o of creeps()) if (o.owner === 1) lastHitsOf.set(o.id, o.hits);
+  if (has('poke') || has('blob')) for (const o of creeps()) if (o.owner === 1) lastHitsOf.set(o.id, o.hits);
   focusAct();
   focusActMirror();   // after his intents are placed, like focusAct after ours
   entryAct();
