@@ -824,7 +824,7 @@ const t0 = Date.now();
 // within one and heals given, melee creep-ticks with an enemy within one and swings, ranged creep-ticks with an enemy within
 // three and shots (matches 238/249 live: healers 81–94 %, melee 47–83 % of only 18–23 creep-ticks against his 59–75, ranged
 // 70–76 %; his 100 % / 86–97 % / 89–100 %). The melee adjacency itself — how often our melee ARE adjacent — is the gap
-const oAct = { h_can: 0, h_did: 0, m_can: 0, m_did: 0, m_ticks: 0, r_can: 0, r_did: 0, r_ticks: 0 };
+const oAct = { h_can: 0, h_did: 0, m_can: 0, m_did: 0, m_ticks: 0, r_can: 0, r_did: 0, r_ticks: 0, e_can: 0, e_ticks: 0 };
 function oursAct() {
   const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
   if (!c1.some((e) => c0.some((c) => range(c, e) <= 8))) return;   // in contact only
@@ -835,6 +835,8 @@ function oursAct() {
     else if (live(c, A) > 0) { oAct.m_ticks++; if (c1.some((e) => range(c, e) <= 1)) { oAct.m_can++; if (m.melee) oAct.m_did++; } }
     else if (live(c, R) > 0) { oAct.r_ticks++; if (c1.some((e) => range(c, e) <= 3)) { oAct.r_can++; if (m.ranged) oAct.r_did++; } }
   }
+  // his ranged with one of ours within three — the same share for the other side (live 506: ours 42 %, his 57 %)
+  for (const e of c1) if (live(e, R) > 0) { oAct.e_ticks++; if (c0.some((c) => range(c, e) <= 3)) oAct.e_can++; }
 }
 // the enemy's focus and our healers (v109): per tick the creep of ours the enemy's single-target intents put the most damage on
 // — did a heal of ours land on it, and was a healer of ours adjacent to it. Live (entry-heal.py on the replays): the most-hit
@@ -924,7 +926,7 @@ if (has('ghost')) {
   const rec = (d) => rc === null ? '-' : `${lost(ghostMeta.recHits[0], rc, d)}/${lost(ghostMeta.recHits[1], rc, d)}`;
   origLog(`ghost entry (hits lost ours/his): stand contact t=${sc} +20 ${stub(20)} +50 ${stub(50)} +100 ${stub(100)} | record contact t=${rc} +20 ${rec(20)} +50 ${rec(50)} +100 ${rec(100)}`);
 }
-origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}`);
+origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach, his ${oAct.e_ticks ? Math.round(100 * oAct.e_can / oAct.e_ticks) : 0}%); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}`);
 origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
 if (errs.length) origLog('first error:\n' + errs.slice(0, 2).join('\n'));

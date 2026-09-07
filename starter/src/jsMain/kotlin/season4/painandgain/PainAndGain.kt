@@ -401,8 +401,22 @@ object PainAndGain {
      *  M8A1 ушёл за лекарей, за восемь тиков стал M8A5 и вернулся, наши умирали на месте — из двенадцати ни один не
      *  отошёл, и бой при 0.97 проигран 12:0 без единой его потери. Лечение касанием возвращает часть за полтора тика;
      *  отходящий боец стреляет и рубит по пути. */
+    /** Ротация как тумблер (v126): БЕЗ ротации таблица входов 18 хуже / 6 лучше по +50, dart m29 не уничтожен (14/3), m31 живых
+     *  13 → 10 — ротация стенду нужна; предмет был не в ней, а в её ДЛИТЕЛЬНОСТИ (см. USE_ROTATE_IN_ONE_PART). */
+    private const val USE_ROTATION = true
+    /** РОТИРУЮЩИЙ ИДЁТ К ЛЕКАРЮ ПОВЕРХ СЛОТА (v126, серия 347–366): planBlock/planFight исключают его из фронта, и он получает слот
+     *  ЗАДНЕГО ряда, а в порядке движения слот стоит раньше ротации — боец шёл в тыловой слот, где лекаря может не быть (матч 506,
+     *  Coldkimchi: melee_1 в ротации с 92-го по 119-й, 27 тиков при дефиците 400; трое из четырёх мили в ротации на 101–114-м).
+     *  НА СТЕНДЕ НЕОТЛИЧИМО: 26 сценариев и 8 dart до цифры те же (slotHold стоит раньше обоих, а ротирующий на стенде — вплотную
+     *  к врагу); живьём ближайший лекарь стоит у фронта, и «к лекарю» есть «к фронту». Выключено как незамеренное. */
+    private const val USE_ROTATE_OVER_SLOT = false
     private const val ROTATE_OUT = 0.5
     private const val ROTATE_IN = 0.9
+    /** ВОЗВРАТ ИЗ РОТАЦИИ НА ОДНУ ЧАСТЬ ВЫШЕ ПОРОГА ВЫХОДА (v126, серия 347–366, пять стираний блобом): см. backIn в rotating. Стенд:
+     *  без ротации вовсе — таблица входов 18 хуже / 6 лучше, dart m29 не уничтожен, m31 живых 13 → 10; порог 0.25/0.6 — 16/8;
+     *  возврат при 5 из 8 — 10 хуже / 11 лучше (нейтрально), при 6 из 8 — 11/10. Живьём ротация в проигранных боях длится
+     *  50–97 тиков (в выигранных 5–22): боец висит у фронта в равновесии огня и лечения и не бьёт. */
+    private const val USE_ROTATE_IN_ONE_PART = true
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
      *  назад» (v15) на входе в рубку уводит наших мили сквозь свой строй, а его мили идут следом и рубят наших стрелков и лекарей.
@@ -931,6 +945,12 @@ object PainAndGain {
      *  обе формы отвергались против кайтера и линии с мили-тычком). Признак здесь другой: его БЛИЖАЙШИЙ к нашему фронту
      *  вооружённый — стрелок без мили-частей. Тогда один ряд: стрелки в середине, мили по флангам, в RANGED_RANGE от него. */
     private const val USE_RANGED_FRONT_VS_RANGED = true
+    /** ЛИНИЯ ПРОТИВ ТЫЧКА (v126, серия 347–366): см. pokeLine в planBlock. СТЕНД СЛЕП: brawl бьёт вплотную, dart уходит после
+     *  удара, screen держит три стрелками — тычка (его мили в 2–3 без удара, стрелки на клетку за ним) нет ни в одной форме; из 26
+     *  сценариев изменились два (m30 brawl +50 2536:10038 → 3648:10567, m31 brawl живых 12 → 10, наши стрелки с целью в трёх 51 → 31 %),
+     *  оба хуже. Призраки 506/602 не сходятся (контакт на 393-м и 518-м — армия уходит от записи). Выключено до формы `poke` на
+     *  стенде; живой замер за ним: 506 — его стрелки с целью в трёх 57 % против наших 42 %, 63 выстрела «только по мили». */
+    private const val USE_LINE_VS_POKE = false
     private const val RANGED_FRONT_GROUP = 6   // блоб: столько его вооружённых в ENGAGE_RANGE от ближайшего (россыпь — 1–3)
     private var rangedLevelLatched = false     // ряд вровень защёлкнут контактом с подходящим блобом; снимается, когда никого в ENGAGE_RANGE
     private const val REGROUP_TICKS = 5
@@ -1257,7 +1277,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v122"
+    private const val BOT_VERSION = "v126"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1804,6 +1824,7 @@ object PainAndGain {
      *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
     private val plannedCaptures = HashSet<String>()
     private val rotatingIds = HashSet<String>()   // бойцы в ротации (см. ROTATE_OUT)
+    private val rotateSince = HashMap<String, Int>()   // тик выхода в ротацию (замер длительности, см. USE_ROTATE_OVER_SLOT)
     private val NO_FLOW = IntArray(10000) { -1 }
     private val keeperIds = HashMap<String, String>()   // хранитель флага → id флага (см. KEEP_RANGE)
     private val enemyHitsHist = ArrayDeque<Int>()         // сумма хитов врага за STALL_TICKS тиков (чистый урон)
@@ -3266,7 +3287,7 @@ object PainAndGain {
             if (ourYielding) yieldingTick = getTicks()
             val planNow = USE_PLAN && (standoffNow || standingNow)
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
-            else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget)
+            else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget, retreating = enemyRetreating)
         }
         // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
         lostTick.clear()
@@ -3279,12 +3300,16 @@ object PainAndGain {
             // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
             val wounded = !healer && !hasWeapon(creep)
             // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
-            val rotating = !healer && hasWeapon(creep) && healersAlive && run {
+            val rotating = USE_ROTATION && !healer && hasWeapon(creep) && healersAlive && run {
                 val weapons = creep.body.count { it.type == ATTACK || it.type == RANGED_ATTACK }
                 val live = creep.body.count { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
                 val frac = if (weapons == 0) 1.0 else live.toDouble() / weapons
-                if (creep.id in rotatingIds) { if (frac >= ROTATE_IN) { rotatingIds.remove(creep.id); false } else true }
-                else if (frac < ROTATE_OUT) { rotatingIds.add(creep.id); true } else false
+                // возврат на одну часть ВЫШЕ порога выхода (v126, USE_ROTATE_IN_ONE_PART): 0.9 от восьми частей ATTACK — все восемь, то есть
+                // полное лечение блока; под огнём у фронта оно не наступает, и мили висит в ротации 50–97 тиков при 1050–1250 хитах
+                // (матч 506, melee_4 116–212; 602, melee_3 314–372) — ноль ударов. Его мили (матч 14) вернулся при 5 из 8
+                val backIn = if (USE_ROTATE_IN_ONE_PART) live >= kotlin.math.ceil(weapons * ROTATE_OUT).toInt() + 1 else frac >= ROTATE_IN
+                if (creep.id in rotatingIds) { if (backIn) { rotatingIds.remove(creep.id); if (DEBUG_LOG) println("rot t=$now in ${creep.id} frac=$frac took=${now - (rotateSince[creep.id] ?: now)}"); false } else true }
+                else if (frac < ROTATE_OUT) { rotatingIds.add(creep.id); rotateSince[creep.id] = now; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}"); true } else false
             }
             val support = healer || wounded
             val nearestEnemyRange = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
@@ -3490,6 +3515,8 @@ object PainAndGain {
             when {
                 keeper -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 slotHold -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
+                // ротация раньше слота (v126, USE_ROTATE_OVER_SLOT): слот ротирующего — тыловой ряд, а лекарь ходит за своим подопечным
+                USE_ROTATE_OVER_SLOT && rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
@@ -3877,7 +3904,7 @@ object PainAndGain {
      *  ударами (стенд m6 sleeper, армия потеряна). Ряды поперёк оси центр → ближайшая группа врагов с боем; слоты по
      *  порядку SLOT_ORDER от середины ряда, стены и клетки мили пропускаются; крип берёт ближайший свободный слот
      *  своего ряда. */
-    private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>, rangedRow: Boolean = true, standoff: Boolean = false, focusTarget: Creep? = null) {
+    private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>, rangedRow: Boolean = true, standoff: Boolean = false, focusTarget: Creep? = null, retreating: Boolean = false) {
         val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in rotatingIds }
         val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in rotatingIds }
         val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
@@ -3908,7 +3935,15 @@ object PainAndGain {
         val hisFrontRanged = USE_RANGED_FRONT_VS_RANGED && (closing || rangedLevelLatched) && threats.minByOrNull { e -> armed.minOf { getRange(it, e) } }
             ?.let { n -> val pr = InfluenceMap.profileOf(n); pr.ranged > 0.0 && pr.melee <= 0.0 && armed.minOf { getRange(it, n) } <= RANGED_RANGE + 1 && threats.count { getRange(n, it) <= ENGAGE_RANGE } >= RANGED_FRONT_GROUP } == true
         if (hisFrontRanged && inReach) rangedLevelLatched = true
-        val standoffLine = rangeds.isNotEmpty() && ((USE_RANGED_FRONT && standoff && !theirMeleeIn) || hisFrontRanged)
+        // ЛИНИЯ ПРОТИВ ТЫЧКА (v126, USE_LINE_VS_POKE): его мили в 2–3 от наших БЕЗ удара — не рубка, а приманка (Coldkimchi, матчи 153,
+        // 506, 602: его мили вплотную 3–5 % крип-тиков). Ряды за передним мили ставят наших стрелков в 3 − d от тычка — в 4–5 от его
+        // стрелков за ним, — а его стрелки в 3 от нашего переднего мили: живьём 506 (t=74–130) его стрелки с целью в трёх 158
+        // крип-тиков против наших 113, 63 его выстрела «только по мили»; стенд brawl — наши 24–51 %, его 56–70 % на всех восьми
+        // картах. Пока никто из его мили не вплотную к нашим, стрелки и мили стоят ОДНИМ рядом в RANGED_RANGE от тычка: впереди
+        // на выстрел бесплатно не стоит никто, а его стрелкам, чтобы стрелять, надо подойти туда, где достают и наши
+        val hisMeleeAdjacent = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && armed.any { getRange(e, it) <= 1 } }
+        val pokeLine = USE_LINE_VS_POKE && theirMeleeIn && !hisMeleeAdjacent && inReach && !closing && !retreating
+        val standoffLine = rangeds.isNotEmpty() && ((USE_RANGED_FRONT && standoff && !theirMeleeIn) || hisFrontRanged || pokeLine)
         val front = if (standoffLine) rangeds else melees.ifEmpty { rangeds }
         // якорь — ПЕРЕДНИЙ боец (ближайший к врагу), не центроид: центроид мили отстаёт от фронта на 1–2 клетки, и ряд
         // стрелков «в 3 − d» от него стоял в 4–5 от линии врага, вставшей в 3 от нашего переднего (матч 18)
