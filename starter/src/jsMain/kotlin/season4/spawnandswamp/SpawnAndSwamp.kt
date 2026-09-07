@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 49
+    private const val BOT_VERSION = 50
 
     private const val LATE_MARGIN = 60
 
@@ -314,11 +314,10 @@ object SpawnAndSwamp {
      *  штурма и не выпускают. */
     private var assaultWantsMelee = false
 
-    /** Успеет ли домашняя башня стать башней: площадку ставят, смотрителя покупают и недострой кормят
-     *  по ОДНИМ часам (towerReadyTicks против жизни спавна и остатка матча). Считается раз в тик в
-     *  spawnIfNeeded; пока спавн рождает крипа, тот выходит раньше и признак остаётся с прошлого тика —
-     *  он про экономику и меняется медленно. */
-    private var siteInTime = false
+    /** Стройки этого тика — по одной записи на площадку, у каждой свои часы и свой источник энергии
+     *  (см. SiteJob). Считается раз в тик в spawnIfNeeded и читается позже строителями; пока спавн
+     *  рождает крипа, список остаётся с прошлого тика — он про экономику и меняется медленно. */
+    private var siteJobs: List<SiteJob> = emptyList()
 
     /** Гистерезис решений «охотимся на угрозу на нашей половине» (группой) и локальной агрессии
      *  (на бойца): пороговое решение без памяти дрожит на границе радиуса — два бойца 300 тиков
@@ -1299,12 +1298,10 @@ object SpawnAndSwamp {
         // пока спавн сносили (матч 19: 904 энергии в банке, ноль крипов, снесён на 1000-м)
         val spawnFire = InfluenceMap.fireAt(spawn.x, spawn.y, threats)
         val spawnLife = if (spawnFire > 0.0) (spawn.hits ?: SPAWN_HITS) / spawnFire else Double.MAX_VALUE
-        // ЧАСЫ ПЛОЩАДКИ. Готовая башня в сроке не нуждается — её надо только кормить; недостроенная
-        // становится башней, лишь когда на неё довезут остаток, и при мёртвой экономике это «никогда»
-        val siteNow = ctx.mySites.minByOrNull { getRange(spawn, it) }
-        siteInTime = ctx.myTowers.isNotEmpty() ||
-            towerReadyTicks(ctx, siteNow, siteNow?.let { s -> ((s.progressTotal ?: 0) - (s.progress ?: 0)).coerceAtLeast(0) } ?: -1, flow, energy) <
-            minOf(spawnLife, (arenaInfo.ticksLimit - getTicks()).toDouble())
+        // ЧАСЫ ПЛОЩАДКИ — У КАЖДОЙ СВОИ. Готовая башня в сроке не нуждается — её надо только кормить;
+        // недостроенная становится башней, лишь когда на неё довезут остаток, и при мёртвой экономике
+        // это «никогда». Спавн-точка-сдачи судится другим сроком и кормится не из спавна (см. SiteJob)
+        siteJobs = buildJobs(ctx, spawnLife, flow, energy)
         val minFighter = cost(RANGED_ATTACK) + cost(MOVE)
         // БОЕЦ ПЕРВЫМ — держать энергию под полное тело, не покупая ничего, — только когда так боец
         // приходит раньше. «Держать» — полный боец из того, что в спавне и едет, при нынешнем потоке;
@@ -1411,20 +1408,22 @@ object SpawnAndSwamp {
         // говорит, что дома она даёт больше бойца за ту же энергию. Смотритель — часть цены башни:
         // без него площадку некому строить, а готовая башня молчит (ёмкость — один выстрел)
         if (ctx.myTowers.isEmpty()) {
-            // площадка уже стоит — спрашиваем про ОСТАТОК: бросить недостроенное дороже, чем достроить
-            val site = ctx.mySites.minByOrNull { getRange(spawn, it) }
-            val left = if (site == null) -1 else ((site.progressTotal ?: 0) - (site.progress ?: 0)).coerceAtLeast(0)
+            // площадка уже стоит — спрашиваем про ОСТАТОК: бросить недостроенное дороже, чем достроить.
+            // Спрашиваем при этом про ПЛОЩАДКУ БАШНИ, а не про ближайшую: чужая по назначению стройка
+            // рядом с домом отвечала за башню и на «стоит ли уже», и на «успеем ли»
+            val job = siteJobs.firstOrNull { it.kind == "StructureTower" }
+            val site = job?.site
+            val left = if (site == null) -1 else job.left
             val trace = StringBuilder()
             // ЧАСЫ. towerWorth считает прибавку на энергию и ничего не знает о времени: боец рождается
             // за десятки тиков, а площадка становится башней только когда на неё довезут остаток. При
             // притоке 1-2 в тик это «никогда», и энергия уходит в недостроенное — три поражения из пяти
             // (06.09.2026) держали площадку 220-863 из 1250 до конца матча. Горизонт — уже существующие
             // сроки: жизнь спавна под нынешним огнём и остаток матча
-            val worth = siteInTime && towerWorth(defenders, threats, flow, left, trace)
+            val inTime = job?.inTime ?: false
+            val worth = inTime && towerWorth(defenders, threats, flow, left, trace)
             if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && (trace.isNotEmpty() || site != null)) {
-                val ready = towerReadyTicks(ctx, site, left, flow, energy)
-                println("tower: worth=$worth inTime=$siteInTime ready=${if (ready >= Double.MAX_VALUE / 2) "never" else ready.toInt().toString()} " +
-                    "horizon=${minOf(spawnLife, (arenaInfo.ticksLimit - getTicks()).toDouble()).toInt()} left=$left$trace")
+                println("tower: worth=$worth inTime=$inTime job=${job ?: "-"} jobs=${siteJobs.size}$trace")
             }
             // СЧЁТ УЖЕ ОТВЕТИЛ. towerWorth сравнил башню с бойцом против тех же врагов и с замеренной
             // смертностью бойцов; спрашивать сверх этого «а не купить ли всё-таки бойца» (fighterFirst)
@@ -1441,7 +1440,9 @@ object SpawnAndSwamp {
         // СМОТРИТЕЛЬ — ЧАСТЬ ЦЕНЫ БАШНИ, И ЧАСЫ У НЕГО ТЕ ЖЕ. Под площадку, которая не достроится
         // в срок, он не покупается: в проигранном матче 22:22 он стоил 700 при притоке 2 в тик и
         // достроил 95 из 482 оставшихся. У готовой башни срока нет — её надо только кормить
-        if (ctx.builders.isEmpty() && siteInTime && (ctx.mySites.isNotEmpty() || ctx.myTowers.isNotEmpty())) {
+        // смотритель покупается под РАБОТУ, которую успеваем сделать, или под готовую башню, которую
+        // надо кормить; «есть хоть какая-то площадка» этого вопроса не задаёт
+        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty())) {
             val builder = builderBody(builderWork(flow))
             val builderCost = builder.sumOf { cost(it) }
             if (energy < builderCost) {
@@ -1498,6 +1499,72 @@ object SpawnAndSwamp {
         val r = spawn.spawnCreep(body)
         if (r.error == null) spentFighters += body.sumOf { cost(it) }
         if (DEBUG_LOG) println("spawn: ${if (guard) "guard" else "fighter"} parts=${body.size} cost=${body.sumOf { cost(it) }} energy=$energy alarm=$alarm first=$fighterFirst our=${ourPower.toInt()}/${enemyPower.toInt()} deficit=${deficit.toInt()} fire=$spawnUnderFire arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
+    }
+
+    /**
+     * СТРОЙКА — ЭТО РАБОТА, А НЕ ОБЪЕКТ. У каждой площадки три ответа, и они РАЗНЫЕ у разных построек:
+     *  - `kind` — что из неё станет (цена площадки и есть её имя: башня 1250, спавн 1000);
+     *  - `deadline` — срок, к которому она обязана встать. У домашней башни это жизнь спавна под огнём:
+     *    башня, которая встанет после того, как нас снесли, не оборона. У спавна-точки-сдачи — только
+     *    остаток матча: он не оборона, а экономика, и окупается не в этом бою;
+     *  - `supply` — откуда смотритель берёт энергию. Домашнюю башню кормят из спавна; дальнюю площадку
+     *    так кормить нельзя вовсе — два CARRY на рейс в восемьдесят тиков тысячу не довезут, — и она
+     *    кормится из кучи, рядом с которой и стоит.
+     * `site == null` — работа ещё ПЛАН: так спрашивают «а если начать».
+     */
+    private class SiteJob(
+        val site: ConstructionSite?,
+        val kind: String,
+        val left: Int,
+        val supply: Position,
+        val fromSpawn: Boolean,
+        val deadline: Double,
+        val ready: Double,
+    ) {
+        val inTime: Boolean get() = ready < deadline
+        override fun toString() =
+            "$kind${site?.let { "(${it.x},${it.y})" } ?: "?"}left=$left ready=${if (ready >= Double.MAX_VALUE / 2) "never" else ready.toInt().toString()}/${deadline.toInt()}"
+    }
+
+    /** Только то, что бот СТАВИТ сам: цена площадки — её имя, и у рампарта с расширением цена общая,
+     *  поэтому их здесь нет (мы их не ставим). */
+    private val BUILDABLE = arrayOf("StructureTower", "StructureSpawn")
+
+    private fun buildKindOf(site: ConstructionSite): String? {
+        val total = site.progressTotal ?: return null
+        return BUILDABLE.firstOrNull { buildCost(it) == total }
+    }
+
+    /** Откуда кормить эту площадку: из спавна, если он ближе, иначе из ближайшей безопасной кучи.
+     *  Вопрос решается расстоянием, а не видом постройки: башня стоит у спавна и кормится оттуда сама
+     *  собой, а площадка у энергии — от энергии, и обе получают один и тот же ответ одного правила. */
+    private fun supplyFor(ctx: Ctx, at: Position): Pair<Position, Boolean> {
+        val pile = ctx.sites.filter { it.safe && it.energy > 0 && it.container != null }.minByOrNull { getRange(at, it.pos) }
+        if (pile != null && getRange(at, pile.pos) < getRange(at, ctx.mySpawn)) return pile.pos to false
+        return ctx.mySpawn as Position to true
+    }
+
+    /** Работы этого тика. Когда башни нет и площадки под неё нет, в список входит ПЛАН башни — тем же
+     *  вопросом «успеем ли», каким судят стоящую. */
+    private fun buildJobs(ctx: Ctx, spawnLife: Double, flow: Double, energy: Int): List<SiteJob> {
+        val matchLeft = (arenaInfo.ticksLimit - getTicks()).toDouble()
+        val jobs = ArrayList<SiteJob>()
+        for (s in ctx.mySites) {
+            val kind = buildKindOf(s) ?: continue
+            val left = ((s.progressTotal ?: 0) - (s.progress ?: 0)).coerceAtLeast(0)
+            val (supply, fromSpawn) = supplyFor(ctx, s)
+            // ЧАСЫ ПО НАЗНАЧЕНИЮ. Башня — оборона: она обязана встать, пока спавн жив. Спавн — экономика:
+            // ему довольно успеть до конца матча, а окупаемость проверена отдельно, при постановке
+            val deadline = if (kind == "StructureTower") minOf(spawnLife, matchLeft) else matchLeft
+            jobs.add(SiteJob(s, kind, left, supply, fromSpawn,
+                deadline, siteReadyTicks(ctx, s, kind, left, fromSpawn, flow, energy)))
+        }
+        if (ctx.myTowers.isEmpty() && jobs.none { it.kind == "StructureTower" }) {
+            val left = buildCost("StructureTower")
+            jobs.add(SiteJob(null, "StructureTower", left, ctx.mySpawn, true,
+                minOf(spawnLife, matchLeft), siteReadyTicks(ctx, null, "StructureTower", left, true, flow, energy)))
+        }
+        return jobs
     }
 
     /** Через сколько тиков в спавн доедет ещё gap энергии: гружёные хаулеры по тикам гружёного пути,
@@ -3388,8 +3455,8 @@ object SpawnAndSwamp {
      *  полокна, вопрос перестаёт быть модельным: темп площадки ВИДЕН, и берётся он — тем же прибором,
      *  которым бот меряет ЧУЖУЮ площадку (siteSeen/pendingTowers), потому что своя ничем не отличается.
      *  Стоящая площадка не «строится долго», а не достроится никогда. */
-    private fun towerReadyTicks(ctx: Ctx, site: ConstructionSite?, left: Int, flow: Double, energy: Int): Double {
-        val siteLeft = if (site == null) buildCost("StructureTower") else left
+    private fun siteReadyTicks(ctx: Ctx, site: ConstructionSite?, kind: String, left: Int, fromSpawn: Boolean, flow: Double, energy: Int): Double {
+        val siteLeft = if (site == null) buildCost(kind) else left
         if (siteLeft <= 0) return 0.0
         val work = ctx.builders.sumOf { b -> b.body.count { it.type == WORK && it.hits > 0 } }
         if (site != null && work > 0) {
@@ -3415,7 +3482,10 @@ object SpawnAndSwamp {
         // вердикт переключался на каждом провале, смотритель то бросал площадку, то возвращался, и
         // осада выигрывалась на 270 тиков позже (стенд siege: 1631 против 1361)
         val steady = realisedIncome().let { if (it < 0.0) flow else it + regenRate() }
-        return maxOf(energyArrivalTicks(ctx, maxOf(0, need - energy), steady), siteLeft / rate) + born
+        // ПЛОЩАДКА, КОТОРУЮ КОРМЯТ НЕ ИЗ СПАВНА, НЕ ЖДЁТ ПРИТОКА. Энергия для неё уже лежит рядом, и
+        // срок задаёт только скорость рук смотрителя; ждать доставки в спавн — считать чужой счёт
+        val supplied = if (fromSpawn) energyArrivalTicks(ctx, maxOf(0, need - energy), steady) else 0.0
+        return maxOf(supplied, siteLeft / rate) + born
     }
 
     /** Окупается ли башня против бойца за ту же энергию. Мера одна и та же — ПРИБАВКА к мощи обороны
@@ -3506,9 +3576,10 @@ object SpawnAndSwamp {
         val spawn = ctx.mySpawn
         // НЕДОСТРОЙ НЕ КОРМЯТ. Площадка, которую при нынешнем притоке не успеть достроить, не «строится
         // долго» — она мертва, и каждая ходка смотрителя уносит в неё энергию, которой не хватает на тело
-        // (матч 06.09 22:22: 863 из 1250 к концу матча при притоке 1-2 в тик). Часы те же, что у
-        // постановки площадки и у покупки смотрителя, — siteInTime
-        val site = if (siteInTime) ctx.mySites.minByOrNull { getRange(spawn, it) } else null
+        // (матч 06.09 22:22: 863 из 1250 к концу матча при притоке 1-2 в тик). Часы — СВОИ у каждой
+        // площадки (SiteJob), а не одни на всех
+        val job = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
+        val site = job?.site
         val tower = ctx.myTowers.filter { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }.minByOrNull { getRange(spawn, it) }
         for (b in ctx.builders) {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
@@ -3516,17 +3587,26 @@ object SpawnAndSwamp {
             val goal: Position? = site ?: tower
             val reach = if (site != null) BUILD_RANGE else 1
             val canAct = goal != null && getRange(b, goal) <= reach
-            val mayTake = lastSpawnOutlivesFighter && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
+            // ОТКУДА ЭТА ПЛОЩАДКА КОРМИТСЯ — сказано в самой работе. Домашнюю башню кормят из спавна;
+            // площадку у энергии — из кучи рядом с ней, иначе смотритель возит тысячу по сорок клеток
+            val fromPile = job != null && !job.fromSpawn
+            val pile = if (fromPile) ctx.sites.filter { it.container != null && it.safe && it.energy > 0 }
+                .minByOrNull { getRange(b, it.pos) } else null
+            val mayTake = !fromPile && lastSpawnOutlivesFighter && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
+            val mayScoop = pile != null && free > 0 && getRange(b, pile.pos) <= 1
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
             }
             // кормить нечего — груз возвращается в спавн, а не лежит в смотрителе до конца матча
             if (goal == null && carrying > 0 && getRange(b, spawn) <= 1) b.transfer(spawn, RESOURCE_ENERGY)
             if (mayTake && free > 0) b.withdraw(spawn, RESOURCE_ENERGY)
+            if (mayScoop) pile!!.container?.let { b.withdraw(it, RESOURCE_ENERGY) }
             val incoming = InfluenceMap.damageAt(b.x, b.y, ctx.combatEnemies)
             val step = when {
                 incoming > 0.0 -> fleeStep(b, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(b, spawn, 1, ctx.dangerMatrix)
                 goal == null -> if (getRange(b, spawn) > PARK_RANGE) pathStep(b, spawn, PARK_RANGE, ctx.dangerMatrix) else null
+                // пустой идёт за энергией ТУДА, ГДЕ ОНА ДЛЯ ЭТОЙ ПЛОЩАДКИ: к спавну или к куче
+                carrying <= 0 && pile != null -> if (getRange(b, pile.pos) > 1) pathStep(b, pile.pos, 1, ctx.dangerMatrix) else null
                 carrying <= 0 && !mayTake -> pathStep(b, spawn, 1, ctx.dangerMatrix)
                 !canAct -> pathStep(b, goal, reach, ctx.dangerMatrix)
                 else -> null
@@ -3534,7 +3614,7 @@ object SpawnAndSwamp {
             if (step != null && canMove(b)) TrafficManager.request(b, step, HAULER_LOADED_PRIORITY)
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
                 println("  b${b.id} (${b.x},${b.y}) carry=$carrying/${capacityOf(b)} work=${b.body.count { it.type == WORK && it.hits > 0 }} " +
-                    "goal=${goal?.let { "(${it.x},${it.y})" } ?: "-"}${if (site != null) "site" else "feed"} act=$canAct take=$mayTake fire=${incoming.toInt()} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
+                    "goal=${goal?.let { "(${it.x},${it.y})" } ?: "-"}${if (site != null) "site" else "feed"} job=${job ?: "-"} act=$canAct take=$mayTake scoop=$mayScoop fire=${incoming.toInt()} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
             }
         }
     }
