@@ -623,9 +623,18 @@ function enemyTick() {
         if (mate && range(c, mate) > 1) stepToward(c, mate, 1);
         else if (!mate && rng && (range(c, rng) > 1 || minOur(c.x, c.y) <= 3)) { if (minOur(c.x, c.y) <= 3) stepBack(c, ourArmed.filter((o) => range(c, o) <= 4)); else stepToward(c, rng, 1); }
       } else if (live(c, A) > 0) {
-        const soft = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= 2).sort((a, b) => range(c, a) - range(c, b))[0];
+        // '+dart' (07.09.2026, the series of twenty — every loss a blob or line fight; replay 197ebb, けろびー#1): his melee are
+        // darters — at one, two and three cells from our nearest in equal measure (65:60:69 creep-ticks), adjacent 27 % of the
+        // time, 53 swings to our 11 — a soft target within THREE draws a melee, and a melee that was adjacent last tick steps
+        // back a cell when one of our armed creeps is within two, so its adjacency comes in one-tick darts
+        const dart = has('dart');
+        armyState.adjTick = armyState.adjTick || {};
+        const wasAdj = dart && armyState.adjTick[c.id] === world.tick - 1;
+        if (ourF.some((o) => range(c, o) <= 1)) armyState.adjTick[c.id] = world.tick;
+        const soft = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= (dart ? 3 : 2)).sort((a, b) => range(c, a) - range(c, b))[0];
         const tgt = soft || nearest;
-        if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD)) stepToward(c, tgt, 1);
+        if (wasAdj && ourArmed.some((o) => range(c, o) <= 2)) { const near = ourArmed.filter((o) => range(c, o) <= 2); if (!stepBack(c, near)) stepAway(c, near); }
+        else if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD)) stepToward(c, tgt, 1);
       } else if (nearest) {
         const d = minOur(c.x, c.y);
         if (d <= 2) { if (!stepBack(c, ourArmed.filter((o) => range(c, o) <= 3))) stepAway(c, ourArmed.filter((o) => range(c, o) <= 3)); }

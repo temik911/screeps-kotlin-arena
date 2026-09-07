@@ -68,3 +68,5 @@ reproducible by re-running its scenario).
 `tools/land.sh` runs `regress.sh` as the landing gate: every line must say `PASS` with `errors: 0` — the enemy army
 destroyed, or the match ended with our score ahead. A new arena's harness starts as a copy of a sibling directory
 (`game/` is arena-agnostic; the runner and `world.mjs` are where the arena rules live).
+
+**`brawl+dart` (07.09.2026).** The brawl's melee as the replays of the series of twenty count them (197ebb, けろびー#1): a soft target within THREE draws a melee, and a melee that was adjacent last tick steps back a cell when one of our armed creeps is within two — adjacency in one-tick darts (live: at one, two and three cells 65:60:69 creep-ticks, adjacent 27 %, 53 swings to our 11). On the stand the build still destroys it on all eight maps with the entry ours on six — the live blob's edge is not yet in any form; the row is kept as the measure for melee rules (v122: m30 +50 5 054:8 034 -> 3 208:10 352).
