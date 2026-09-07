@@ -100,7 +100,9 @@ function buildLiveMap(path) {
   world.objects.push(new ScoreFlag(85, 49, Rm, 3));
   // START=match2: we were player 2 (bottom-right), the enemy player 1 — the same two position sets swapped
   const swap = process.env.START === 'match2';
-  for (const [x, y, body] of (swap ? MATCH1_ENEMY : MATCH1_OURS)) world.objects.push(new Creep(x, y, 0, body));
+  // OURWEAK=N: our army without its first N melee (match 407: a melee lost at t=723 and 530 ticks of EVADE from a tourer 47 away)
+  let weakSkip = parseInt(process.env.OURWEAK || '0', 10);
+  for (const [x, y, body] of (swap ? MATCH1_ENEMY : MATCH1_OURS)) { if (weakSkip > 0 && body === MELEE) { weakSkip--; continue; } world.objects.push(new Creep(x, y, 0, body)); }
   // +weak: the enemy fields a remnant — two scouts, one melee, three ranged, two healers — the shape the live opponent of
   // matches 28 and 33 was left with after our hunt (and then farmed the flags behind our back for a points win)
   const WEAK = (process.argv[3] || '').includes('weak');
@@ -285,10 +287,27 @@ function screenMove(c, plan, fighters, ours) {
     const threats = armed.filter((o) => range(c, o) <= 3);
     if (isH(c)) {
       if (dn <= 1) { stepBack(c, threats); return; }
-      const underFire = members.filter((o) => o !== c && !isH(o) && lostNow(o) > 0).sort((a, b) => lostNow(b) - lostNow(a))[0];
-      const mate = underFire || members.filter((o) => o !== c && !isH(o) && o.hits < o.hitsMax).sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
-      if (mate) { if (range(c, mate) > 1) stepToward(c, mate, 1); return; }
-      if (range(c, cen) > 1) stepToward(c, cen, 1);
+      // the healers sit INSIDE the blob touching as many fighters as they can (live: his healer adjacent to the creep our fire
+      // lands on 62–83 % of ticks while that creep is a different one almost every tick — the first cut chased the creep that
+      // lost the most hits and was always in transit): the free cell among the eight and its own with the most fighters adjacent,
+      // ties toward the most wounded, never at one from our armed creeps; far from the blob it walks to the centroid first
+      if (range(c, cen) > 2) { stepToward(c, cen, 1); return; }
+      const fightersOf = members.filter((o) => !isH(o));
+      const wounded = fightersOf.filter((o) => o.hits < o.hitsMax).sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
+      const taken = new Set(creeps().filter((o) => !o.spawning && o !== c).map((o) => o.x * 100 + o.y));
+      let best = null, bs = -1;
+      for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) {
+        const x = c.x + dx, y = c.y + dy;
+        if (!inBounds(x, y) || world.terrain[idx(x, y)] === 1 || ((dx || dy) && taken.has(x * 100 + y))) continue;
+        if (armed.some((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 1)) continue;
+        // not the step-back cell of a pressed fighter: the cell directly behind (along the axis to us) a fighter with one of
+        // our armed creeps within two is where that fighter goes next tick; a healer there leaves it standing under our melee
+        if (fightersOf.some((o) => o.x === x + dir.x && o.y === y + dir.y && armed.some((q) => range(o, q) <= 2))) continue;
+        const adj = fightersOf.filter((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 1).length;
+        const score = adj * 10 + (wounded ? Math.max(0, 3 - Math.max(Math.abs(wounded.x - x), Math.abs(wounded.y - y))) : 0) - (dx || dy ? 0.5 : 0);
+        if (score > bs) { bs = score; best = { x, y }; }
+      }
+      if (best && (best.x !== c.x || best.y !== c.y)) c.move(getDirection(best.x - c.x, best.y - c.y));
       return;
     }
     // rotation as under +poke: below half the weapon parts out of our reach to a healer, back at five of eight
