@@ -3412,7 +3412,14 @@ object SpawnAndSwamp {
      *  суммы: k = √(цена × поток / (BUILD_POWER × цена WORK)) — из потока, а не назначено. */
     private fun builderWork(flow: Double): Int {
         val k = sqrt(buildCost("StructureTower") * maxOf(flow, 0.5) / (BUILD_POWER * cost(WORK)))
-        return k.toInt().coerceIn(1, (MAX_CREEP_SIZE - 4) / 2)
+        // ТЕЛО ОБЯЗАНО ПОМЕЩАТЬСЯ В СПАВН. Потолок спавна — SPAWN_ENERGY_CAPACITY, и смотритель дороже
+        // него не строится НИКОГДА, а правило «копим на смотрителя» при этом возвращает управление
+        // каждый тик и не даёт построить ничего другого: 176 тиков подряд «saving for builder
+        // cost=1200 energy=1000» и два бойца за весь матч. Формула считает ОПТИМУМ, а не то, что можно
+        // купить, и её надо обрезать кошельком — при нынешнем притоке она даёт пять WORK, но приток
+        // считается прогнозом и всплеск делает тело неоплатным
+        val affordable = (SPAWN_ENERGY_CAPACITY - 2 * cost(MOVE) - 2 * cost(CARRY)) / cost(WORK)
+        return k.toInt().coerceIn(1, minOf((MAX_CREEP_SIZE - 4) / 2, affordable))
     }
 
     /** Тело смотрителя [MOVE×2, CARRY×2, WORK×k]: WORK в хвосте — урон снимает части спереди, и
