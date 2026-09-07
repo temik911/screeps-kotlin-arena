@@ -28,7 +28,7 @@ const enFree=()=>enSpawns.filter(s=>s.exists&&!s.spawning)[0]||null;
 for(const [cx,cy] of [[88,49],[11,50]]){ new StructureContainer(cx,cy,5000); for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx||dy) new StructureWall(cx+dx,cy+dy,10000); } }
 new StructureContainer(98,1,2500); new StructureContainer(98,98,2500); new StructureContainer(1,1,2500); new StructureContainer(1,98,2500);
 const TICKS=parseInt(process.argv[2]||'900'); const MODES=(process.argv[3]||'none').split('+');
-const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped'); const PAIRS=MODES.includes('pairs'); const SIEGE=MODES.includes('siege'); const FORT=MODES.includes('fortspawn'); const TWOSPAWN=MODES.includes('twospawn'); const CAMPER=PAIRS||SIEGE||TWOSPAWN; const SIEGE_N=parseInt(process.env.SIEGE_HUNTERS||'5'); const SIEGE_EVERY=parseInt(process.env.SIEGE_EVERY||'80');
+const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped'); const PAIRS=MODES.includes('pairs'); const SIEGE=MODES.includes('siege'); const FORT=MODES.includes('fortspawn'); const TWOSPAWN=MODES.includes('twospawn'); const FARM=MODES.includes('farm'); const CAMPER=PAIRS||SIEGE||TWOSPAWN||FARM; const SIEGE_N=parseInt(process.env.SIEGE_HUNTERS||'5'); const SIEGE_EVERY=parseInt(process.env.SIEGE_EVERY||'80');
 // STREAM: противник матча 15 — с 280-го тика попеременно M3R3 и M4H2 каждые 40 тиков, каждый идёт к нашему спавну сразу,
 // без сбора в четвёрки (правила движения и стрельбы — как у HEALBALL); подкрепление тянется потоком за первыми
 // RUSH: противник матча 14 — два M5R1 с первого тика через свой спавн, третий на 200-м; идут к нашему спавну, встают в трёх
@@ -62,6 +62,21 @@ let site=null, builder=null; if(TOWERSITE){ builder=new Creep(6,50,false,[C.MOVE
 // собираются у своего спавна и идут шаром к нашему: держат 6 клеток от спавна, стреляют по ближайшему нашему в 3,
 // отходят от бойца в двух клетках, лечат самого битого, гоняют хаулеров в восьми клетках
 let hbQueue=[]; let hbCount=0;
+// FARM: противник с ЭКОНОМИКОЙ, а не с расписанием. Одиннадцать M1C1 возят энергию из контейнеров в
+// свой спавн — так играет けろびー: одиннадцать построены к 174-му тику, дальше он их не заказывает
+// и НИ ОДИН не умирает за девять реплеев. Армия покупается на доставленное (M5R5/M5H3 по 1000,
+// ведут себя как PAIRS). Это единственный сценарий, где «дать ему собрать меньше» вообще что-то
+// значит: у остальных приток врага — константа в конце тика, и налёт на его тыл нечем измерить.
+// KILL=n@t[:every] убивает n его хаулеров ДАРОМ на тике t (и дальше каждые every тиков) — изоляция
+// вопроса «стоит ли отказ ему в добыче хоть чего-нибудь», отдельно от того, по карману ли нам налёт
+const FARM_FLEET=parseInt(process.env.FARM_FLEET||'11');
+const farmHaulers=[]; let farmBuilt=0, farmDelivered=0, farmSpent=0, farmKilled=0;
+const KILLSPEC=(process.env.KILL||'').match(/^(\d+)@(\d+)(?::(\d+))?$/);
+const KILL_N=KILLSPEC?parseInt(KILLSPEC[1]):0, KILL_T=KILLSPEC?parseInt(KILLSPEC[2]):0, KILL_EVERY=KILLSPEC&&KILLSPEC[3]?parseInt(KILLSPEC[3]):0;
+// контейнер, к которому нельзя подойти (заперт кольцом стен, как оба приспавновых), возчику не цель
+const farmReachable=(c)=>{ for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(!dx&&!dy) continue;
+    const x=c.x+dx,y=c.y+dy; if(x<1||y<1||x>98||y>98) continue; if(terrainAt(x,y)===C.TERRAIN_WALL) continue;
+    if(world.objects.some(q=>q.exists&&q instanceof StructureWall&&q.x===x&&q.y===y)) continue; return true; } return false; };
 function hbBody(i){ return i%2===0 ? [C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK] : [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.HEAL,C.HEAL]; }
 // SIEGE_HUNTERS: пятеро (по умолчанию) — форма живого поражения, экономика жива и мы выигрываем осаду;
 // шестеро — та же осада с приткоком в ноль, где площадка башни становится недостроем. Второй прогон
@@ -121,6 +136,14 @@ for(let t=0;t<TICKS;t++){
   if(TWOSPAWN && t===540) enSpawns.push(new StructureSpawn(50,56,false,1000));
   // с несколькими спавнами очередь льётся из ЛЮБОГО свободного — отсюда два крипа в соседние тики
   while((HEALBALL||STREAM||FORTRESS||CAMPER) && hbQueue.length && enFree()){ const r=enFree().spawnCreep(hbQueue[0]); if(!r.object) break; r.object.hb=CAMPER?Math.floor(hbCount/2):((STREAM||FORTRESS)?hbCount:Math.floor(hbCount/4)); hbCount++; hbQueue.shift(); }
+  if(FARM && !en.spawning){
+    if(farmBuilt<FARM_FLEET){ const r=en.spawnCreep([C.MOVE,C.CARRY]); if(r.object){ r.object.farmer=true; farmHaulers.push(r.object); farmBuilt++; farmSpent+=100; } }
+    else { const r=en.spawnCreep(pairBody(hbCount)); if(r.object){ r.object.hb=Math.floor(hbCount/2); hbCount++; farmSpent+=1000; } }
+  }
+  if(FARM && KILL_N && t>=KILL_T && (t===KILL_T || (KILL_EVERY && (t-KILL_T)%KILL_EVERY===0))){
+    const live=farmHaulers.filter(c=>c.exists);
+    for(const c of live.slice(0,KILL_N)){ c.hits=0; c.exists=false; farmKilled++; }
+  }
   if(HARASS && harassQueue.length && !en.spawning && t>=1){ const r=en.spawnCreep(harassQueue[0]); if(r.object){ r.object.harasser=true; harassQueue.shift(); } }
   { const t0=performance.now(); loop(); const dt=performance.now()-t0; loopTotal+=dt; if(dt>loopMax) loopMax=dt; }
   if(HARASS||SIEGE){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
@@ -137,6 +160,22 @@ for(let t=0;t<TICKS;t++){
         if(best&&(best.x!==o.x||best.y!==o.y)) world.intents.push({creep:o,x:best.x,y:best.y}); }
       else { const haul=mine.filter(c=>c.body.some(p=>p.type===C.CARRY)).sort((a,b)=>range(a,o)-range(b,o))[0];
         if(haul){ if(range(haul,o)>3) o.moveTo(haul); } else if(range(o,my)>3) o.moveTo(my); } } }
+  if(FARM){ for(const o of world.objects){ if(!(o instanceof Creep)||o.my||!o.farmer||!o.exists||o.spawning) continue;
+      const home=()=>{ if(range(o,en)<=1){ const had=o.store.energy; o.transfer(en); farmDelivered+=had-o.store.energy; } else o.moveTo(en); };
+      if(o.store.getFreeCapacity()<=0){ o.pile=null; home(); continue; }
+      // держится выбранной кучи, пока она жива и не пуста: без этого он каждый тик берёт ближайшую по
+      // Чебышёву, а кучи появляются и распадаются — и возчик ходит между двумя, не довозя ни одной
+      if(o.pile && (!o.pile.exists || o.pile.store.energy<=0)) o.pile=null;
+      if(!o.pile){ let best=null,bt=1e9;
+        for(const q of world.objects){ if(!q.exists||!(q instanceof StructureContainer)||q.store.energy<=0||!farmReachable(q)) continue;
+          // оценка ВРЕМЕНИ рейса, а не расстояния: пустым — тик на клетку, гружёным по болоту — пять;
+          // плюс штраф за уже едущих туда — иначе все одиннадцать идут гуськом в одну кучу и стоят в
+          // очереди у одной клетки (замерено: колонна по x=1 к угловому контейнеру, приток вдвое ниже)
+          const busy=farmHaulers.filter(h=>h.exists&&h!==o&&h.pile===q).length;
+          const d=range(o,q), t=d+range(q,en)*(terrainAt(q.x,q.y)===2?3:2)+8*busy; if(t<bt){bt=t;best=q;} }
+        o.pile=best; }
+      if(o.pile){ if(range(o,o.pile)<=1){ o.withdraw(o.pile); if(o.store.getFreeCapacity()<=0) o.pile=null; } else o.moveTo(o.pile); }
+      else if(o.store.energy>0) home(); } }
   { const live=towers.filter(t=>t&&t.exists);
     for(const t of live){
       if(t.cooldown===0 && t.store.energy>=C.TOWER_ENERGY_COST){ const tg=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning&&range(q,t)<=C.TOWER_RANGE).sort((a,b)=>range(a,t)-range(b,t))[0]; if(tg) t.attack(tg); } }
@@ -177,6 +216,9 @@ for(let t=0;t<TICKS;t++){
       if(adj) o.attack(adj); else if(Math.max(Math.abs(my.x-o.x),Math.abs(my.y-o.y))<=1) o.attack(my); else o.moveTo(my); } }
   for(const o of world.objects){ if(o instanceof Creep && !o.my && o.rusher){ const tgt=world.objects.find(q=>q.exists&&q.my===true&&(q instanceof Creep&&!q.spawning)&&Math.max(Math.abs(q.x-o.x),Math.abs(q.y-o.y))<=3)||my;
       if(o.rangedAttack(tgt)!==0){ const dx=Math.sign(my.x-o.x), dy=Math.sign(my.y-o.y); const nx=o.x+dx, ny=o.y+dy; if(world.terrain[nx*100+ny]!==1) o.moveTo(my); else o.moveTo({x:o.x, y:o.y+(dy||1)}); } } }
+  if(FARM && t%100===0){ const hl=farmHaulers.filter(c=>c.exists).length;
+    const army=world.objects.filter(q=>q.exists&&q instanceof Creep&&!q.my&&q.hb!==undefined&&!q.spawning).length;
+    lines.push('FARM t='+t+' haulers='+hl+' killed='+farmKilled+' delivered='+farmDelivered+' spent='+farmSpent+' army='+army+' spawnE='+en.store.energy); }
   if(t%50===0 && enSpawns.length>1) lines.push('ENEMY SPAWNS t='+t+': '+enSpawns.map(s=>'('+s.x+','+s.y+')h='+(s.exists?s.hits:'dead')).join(' '));
   if(t%50===0) lines.push('ENEMIES t='+t+': '+(tw?'TOWER h='+tw.hits+' e='+tw.store.energy+' cd='+tw.cooldown+' exists='+tw.exists+' | ':'')+(site&&site.exists?'SITE '+site.progress+'/'+site.progressTotal+' | ':'')+world.objects.filter(o=>o instanceof Creep&&!o.my).map(c=>'('+c.x+','+c.y+')h='+c.hits).join(' '));
   if(t>=286&&t<=298){ lines.push('INTENTS t='+t+': '+world.intents.map(i=>'h'+i.creep.id+'('+i.creep.x+','+i.creep.y+')->('+i.x+','+i.y+')').join(' ')+' | creeps: '+world.objects.filter(o=>o instanceof Creep&&o.my).map(c=>c.id+'('+c.x+','+c.y+')f='+c.fatigue).join(' ')); }
@@ -192,4 +234,6 @@ const skip=/^\d\d:|=== MAP|=== END MAP/;
 for(const l of lines) if(!skip.test(l)) origLog(l);
 origLog('--- loop ms: avg', (loopTotal/world.tick).toFixed(2), 'max', loopMax.toFixed(1));
 origLog('--- ticks run:', world.tick, 'errors:', errors, 'my creeps:', world.objects.filter(o=>o instanceof Creep&&o.my).map(c=>c.body.map(p=>p.type[0]).join('')).join(' '), 'spawnE:', my.store.energy, 'enemySpawnHits:', en.hits);
+if(FARM) origLog('--- farm: delivered', farmDelivered, 'spent', farmSpent, 'haulers', farmHaulers.filter(c=>c.exists).length+'/'+farmBuilt, 'killed', farmKilled,
+    'army bought', hbCount, 'alive', world.objects.filter(q=>q.exists&&q instanceof Creep&&!q.my&&q.hb!==undefined).length);
 origLog('WALLS:', world.objects.filter(o=>o instanceof StructureWall).map(w=>'('+w.x+','+w.y+')h='+w.hits).join(' '));

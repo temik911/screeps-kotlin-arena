@@ -897,6 +897,66 @@ permanent corner containers, or the spawn with a keeper sized for that trip), an
 match will be long, available before tick 200** — which is neither the siege verdict, nor his spawn
 count, nor anything else the bot currently prints.
 
+### Hunting his haulers: the premise measured, and rejected (07.09.2026)
+
+The proposal was in one sentence: the collection race is won not only by collecting more but by letting
+him collect less, and the second half looked cheaper than the first — his `M1C1` are unarmed, he shoots
+ours (17–57 shots a match), we never shoot his. Two halves of that are true and the half that mattered
+is false.
+
+**True, and worth writing down.** Across nine stored replays his hauler fleet is **eleven `M1C1`, all
+ordered before tick 174, and not one of them ever dies** — 0 deaths in nine matches, so he has never
+once had to answer the question of whether he would replace one. He shoots ours with intent, not by
+accident: in 47–100 % of those shots there was no armed creep of ours within three of the shooter, and
+they cost us 0–5 haulers a match.
+
+**False: "cheaper".** His farm never comes near our army. Of his hauler creep-ticks, **0 % are within
+three cells of any armed creep of ours** in every one of the nine matches, and 0–13 % within eight; in
+the three matches we lost fastest, not one hauler-tick is within twenty. Their whole route lies **70–94
+cells from our spawn** — the corners they work are the corners of *his* half. So this is not a
+target-selection change with a cheap edge; it is an expedition of ~89 cells, and it has to be priced
+like one.
+
+**And the prize was measured before the price.** His eleven haulers deliver 16 247 energy in 843 ticks —
+**1.97 energy per hauler-tick**. Killing one for good, at a moment when he has never shown he would
+rebuild it, is worth about two energy a tick for the rest of the match. That is not a small prize, which
+is why it was worth building an instrument rather than arguing.
+
+**The instrument, and its verdict.** The stand had no enemy economy at all — in all twenty-six scenarios
+the enemy's income is a constant added at the end of the tick, so nothing there could ever price denial.
+`farm` is the first scenario where the opponent has one: eleven `M1C1` that carry energy from the piles
+to his spawn (sticky targets, trip-time choice, and a penalty for a pile others are already heading to —
+without that last one all eleven walk single file down the x=1 column to the same corner and his income
+halves), and an army bought out of what they deliver. `KILL=n@t[:every]` then removes n of his haulers
+**for free**, which is the same discipline the body-ceiling measurement used: hand the answer over
+without its cost and see whether it is worth anything.
+
+It is not, on this stand. A free wipe of **all eleven** haulers moves the win from 882 to 862 ticks in
+`tower+fortspawn+farm` and from 447 to 440 in `tower+farm`; smaller free kills move it the *wrong* way
+as often as the right one (`tower+farm` 447 → 780 at six kills, `tower+fortspawn+farm` 882 → 1089 at
+three). One cell does look favourable — in `fortress+farm` a free wipe turns a no-win into a win at
+1245 — but there his income is the scenario's constant `+15`/tick and not the farm at all, so what the
+wipe removed was eleven bodies from the corridor, not eleven earners. And the control says why the noise
+swamps the signal: swept over fleets of 3, 5, 8, 11 and 16,
+his delivered energy runs 500 → 385 → 1100 → 1569 → 3250 — a 6.5× range — and the outcome tick stays at
+451/477/453/465/455. **His economy, across a six-fold range, does not move the outcome of the stand at
+all.** A raider that has to walk eighty-nine cells cannot beat a free wipe that is worth twenty ticks.
+
+**What the instrument's own weakness then said, and it is the useful part.** His farm on the stand
+delivers 2–4/tick where live he delivers **19.3/tick** and we deliver 9.1 — so the stand cannot buy him
+an army big enough for his economy to decide anything, and the gap is not terrain (the live maps are
+33 % wall / 32 % swamp against the stand's 5 % / 35 %, i.e. the stand is the *easier* one) and not pile
+placement (live piles scatter uniformly, peaking 30–49 cells from each spawn, exactly as the stand
+places them). The whole of his 2× is in the four extra spawns he builds — see the next section. So the
+hunt is rejected, the `farm` scenario and the `KILL` knob stay as the stand's first enemy economy, and
+the thing this dig actually found belongs to the delivery point, not to the haulers.
+
+**Two defects fixed in `tools/replay.py` on the way**, both found by disbelieving a number:
+`economy` divided delivered energy by the number of **spawn**-ticks rather than match ticks, so a player
+with five spawns had his rate divided by five — けろびー read as 7.6/tick against our 9.7, "about the
+same", while he was in fact collecting 19.3 against our 9.1. And `economy` now prints the energy that
+went **into each spawn separately**, which is the line that says whether a built spawn earned its 1000.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.

@@ -534,12 +534,36 @@ def cmd_economy(args):
         creeps = spawn_queue(doc, s)
         structs = [b for b in built(doc) if b[2] == s]
         struct_cost = sum(BUILD_COST.get(b[1], 0) for b in structs)
-        ticks_seen = len(flow[s]) or 1
-        print(f"{tag} {names[s]}: picked up {took[s]:.0f} from the piles, delivered {delivered:.0f} to the "
-              f"spawn ({delivered / ticks_seen:.1f}/tick), never arrived {max(0.0, took[s] - delivered):.0f}")
+        # ПО ТИКАМ МАТЧА, а не по строкам flow: flow держит запись на КАЖДЫЙ спавн в тик, и у игрока
+        # с пятью спавнами делитель был впятеро больше настоящего. けろびー читался как 7.6/тик против
+        # наших 9.7 — то есть «мы собираем не меньше», — при том что на деле он собирал 16 против 10
+        span = meta['ticks'] or 1
+        n_spawns = len({o['id'] for o in doc['objects'] if o['kind'] == 'spawn' and o['side'] == s})
+        print(f"{tag} {names[s]}: picked up {took[s]:.0f} from the piles, delivered {delivered:.0f} to "
+              f"{n_spawns} spawn(s) ({delivered / span:.1f}/tick over the match), never arrived "
+              f"{max(0.0, took[s] - delivered):.0f}")
         print(f"      spent {sum(c for _, _, c in creeps)} on {len(creeps)} creeps and {struct_cost} on "
               f"{len(structs)} structures ({', '.join(sorted({b[1] for b in structs})) or 'none'}); "
               f"ends holding {energy.get(spawn_id.get(s), 0):.0f}, spawn regenerates {regen[s]:.0f}/tick")
+    starting_ids = set(initial_spawns(doc).values())
+    per = {}
+    for k, start, now, acts, raw, tick in frames(doc):
+        for sid, hits, e in [(x[0], x[1], x[2]) for x in tick.get('s', [])]:
+            o = objs.get(sid)
+            if o is None or o['kind'] != 'spawn':
+                continue
+            prev = per.setdefault(sid, [o.get('energy') or 0, 0.0, None])
+            if e > prev[0]:
+                prev[1] += e - prev[0]
+            if prev[2] is None:
+                prev[2] = k
+            prev[0] = e
+    print("\n  energy INTO each spawn (a built spawn is a delivery point — this says whether it earned its 1000):")
+    for sid, (_, gained, first) in sorted(per.items(), key=lambda kv: -kv[1][1]):
+        o = objs[sid]
+        tag = 'OURS ' if o['side'] == us else 'ENEMY'
+        when = 'from the start' if sid in starting_ids else f"built, first seen t={first}"
+        print(f"    {tag} ({o['x']},{o['y']}) {when}: {gained:.0f}")
     print(f"      piles nobody was standing next to when they emptied: {decayed:.0f} "
           f"(they decay); with both sides beside them: {contested:.0f}")
     print(f"\ncumulative energy delivered to the spawn, every {args.step} ticks:")
