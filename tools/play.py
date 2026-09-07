@@ -172,11 +172,33 @@ def fame_state(c, arena_id):
     }})()""")
 
 
-def fame_games(c, fame_id):
-    """The session's games (`/api/fame/<id>/games`), as the server lists them — ids, results and the points each gave."""
+def fame_post(c, arena_id, action):
+    """`take` (the chest: rewards into the inventory, `rewardedAt` set) or `finish` (the session closed until tomorrow) on
+    `/api/fame/<ARENA id>/<action>` — every fame endpoint is keyed by the arena, not the session (the client's fame service
+    destructures `_id` from the arena; with the session id the server answers a TypeError) — the operator's two clicks at
+    the end of a fame day, run only under --fame-collect."""
     return c.json_eval(f"""(async () => {{
       {JS_GET}
-      const r = await GET('{API}/fame/{fame_id}/games');
+      const r = await GET('{API}/fame/{arena_id}/{action}', {{method: 'POST', body: '{{}}', headers: {{'Content-Type': 'application/json'}}}});
+      const t = await r.text(); return JSON.stringify({{status: r.status, body: t.slice(0, 2000)}});
+    }})()""")
+
+
+def inventory(c):
+    """The Steam inventory as the server lists it: {itemdefid: quantity}."""
+    return c.json_eval(f"""(async () => {{
+      {JS_GET}
+      const r = await GET('{API}/inventory'); const j = await r.json(); const out = {{}};
+      for (const it of (j.items || [])) out[it.itemdefid] = (out[it.itemdefid] || 0) + Number(it.quantity || 0);
+      return JSON.stringify(out);
+    }})()""")
+
+
+def fame_games(c, arena_id):
+    """Today's session's games (`/api/fame/<ARENA id>/games`), as the server lists them."""
+    return c.json_eval(f"""(async () => {{
+      {JS_GET}
+      const r = await GET('{API}/fame/{arena_id}/games');
       const t = await r.text(); return JSON.stringify({{status: r.status, body: t.slice(0, 3000)}});
     }})()""")
 
@@ -289,6 +311,7 @@ def main():
     ap.add_argument("--logs", metavar="DIR", help="write each match's console into this directory")
     ap.add_argument("--list", action="store_true", help="list arenas with their ids, folders and slots")
     ap.add_argument("--fame", action="store_true", help="play games of today's fame session (/fame/start) instead of rating games; never finishes the session")
+    ap.add_argument("--fame-collect", action="store_true", help="end today's fame session: take the rewards, then finish it (the operator's two clicks; nothing is played)")
     ap.add_argument("--history", type=int, metavar="N", help="print the arena's last N rating matches from the server and exit")
     ap.add_argument("--us", default="temik911", help="our username prefix (for --history)")
     a = ap.parse_args()
@@ -318,6 +341,31 @@ def main():
             r = h["rating"]
             rating = f"{r[0]}->{r[1]} #{r[2]}" if r else "-"
             print(f"{when}  {h['id']}  {h['result']:<5} {h['ticks']:>5}t  {rating:<16} code {h['code']}  vs {h['opponent']}")
+        return
+    if a.fame_collect:
+        f = fame_state(c, arena["id"])
+        if not f["id"]:
+            raise SystemExit(f"{arena['name']}: no fame session today — nothing to collect")
+        s = slot(c, arena["id"])
+        if s["game"] and s["status"] != "finished":
+            raise SystemExit(f"{arena['name']}: a match is still running ({s['game']}) — collect after it ends")
+        print(f"fame: session {f['id']} points={f['points']} level={f['level']} rewardedAt={f['rewardedAt']} finishedAt={f['finishedAt']}")
+        before = inventory(c)
+        if not f["rewardedAt"]:
+            r = fame_post(c, arena["id"], "take")
+            print(f"fame: take -> {r['status']} {r['body']}")
+        else:
+            print("fame: rewards already taken")
+        if not f["finishedAt"]:
+            r = fame_post(c, arena["id"], "finish")
+            print(f"fame: finish -> {r['status']} {r['body']}")
+        else:
+            print("fame: already finished")
+        f = fame_state(c, arena["id"])
+        print(f"fame: session after: points={f['points']} level={f['level']} rewardedAt={f['rewardedAt']} finishedAt={f['finishedAt']}")
+        after = inventory(c)
+        gained = {k: after.get(k, 0) - before.get(k, 0) for k in set(before) | set(after) if after.get(k, 0) != before.get(k, 0)}
+        print(f"fame: inventory gained {gained if gained else 'nothing'}")
         return
     folder = folder_for(arena["name"])
     s = slot(c, arena["id"])
