@@ -290,6 +290,54 @@ ticks than at his spawn in eighty", which is exactly what the stream scenarios p
 is a state condition standing in for that comparison; the comparison itself — one valuation over both jobs —
 is the real answer and a bigger piece of work than one version.
 
+**Forty-seventh version — the siege simulation discounts our melee against defenders too.** The
+simulation took our damage to the defender queue from `units.sumOf { it.dps() }`, that is 150 a tick for
+a melee body, while their damage to us went through `effectiveDps`, that is with the kite discount. One
+rule applied to one side. Split in two: `dps()` against the STRUCTURE, which does not run, and
+`creepDps()` against the defenders, scaled by the same `meleeFactor` used everywhere else; a body that is
+not bought yet has no position, so `meleeReach` asks the question from the parts alone. Every scenario in
+the harness is tick-for-tick what v46 gave and the verdicts move only where defenders stand
+(`tower+healball` melee 25t → 40t). It closes an asymmetry, not a match — and it is **not** the cause of
+the `fortress` optimism it was chased for: there the siege is thirteen ticks and the defender queue is
+empty, so what the verdict compares is one tick out of fourteen. That comparison is correct and
+irrelevant, and the body it buys is worse at everything else for the next three hundred ticks.
+
+### Twenty matches of v46, and what they say about v44 (07.09.2026)
+
+v46's first series was 5-1-0 with no draws and read like a large step. Twenty more matches say it was six
+matches: **v46 over twenty-six matches is 16-9-1 and −31 rating (−1.2 a match), against v44's 12 matches
+at 5-0-5 and +8 (+0.8 a match)**. Split by opponent (`series.py compare 44 46`), the whole difference is
+one player:
+
+| opponent | v44 | v46 |
+|---|---|---|
+| stachu3478 | 2-0-3 −3 | 6-3-0 −7 |
+| けろびー | 3-0-2 **+11** | 4-6-1 **−24** |
+
+Both versions turn draws into decisive matches; against stachu3478 that is roughly even money, against
+けろびー it is a rout. A draw against him costs nothing and a loss costs nine rating points, so converting
+two draws into six losses is bad arithmetic however good the wins look.
+
+The obvious explanation — that けろびー changed his bot between the two series — is the one the numbers
+rule out. `series.py field enemies enemy --opponent けろびー --t0 1 --t1 600` prints his early army per
+match, and the distribution is the same in both eras: he opens either weak (≈40 power) or strong
+(≈450–800), in both. What changed is what we do against the strong opening. **v44 never had a wave out in
+the first six hundred ticks against him (`posture.front` 0.00) and drew those matches; v46 does
+(`front` 2.28, `attrition` 3051 against v44's 914) and loses them.**
+
+Inside v46 the same split holds by outcome: over the whole series the field that separates a win from a
+loss in the first three hundred ticks is not one of ours but his — `enemies` 7.8 in wins against 12.1 in
+losses, `enemyPower` 514 against 768. The losses are the matches where he arrives early and in force.
+
+And our answer to that is a rule that deadlocks. `fighterFirst` blocks haulers while the spawn saves for
+a full body; the saving is licensed by `holdReady < investReady`, and `investReady` (build the economy
+first, then a fighter) grows precisely when the income is crushed — so the worse the income, the more
+attractive saving looks, and haulers stay blocked. Counted over the series, the "fighter first" line
+prints 85 times across eight losses and 20 times across nine wins; in one 700-tick loss it prints 28
+times, which is 280 ticks of a spawn building nothing while the enemy walks in. The guard put there for
+match 17 (`holdReady <= threatIn || holdReady < investReady || closesNow`) does not catch it, because the
+middle clause is true exactly in the state it was meant to break.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
