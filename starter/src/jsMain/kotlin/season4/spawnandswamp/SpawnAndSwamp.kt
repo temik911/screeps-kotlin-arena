@@ -350,6 +350,9 @@ object SpawnAndSwamp {
     private const val EXT_PROBE = true
     private var extProbeDone = false
 
+    /** Проба ответила (в любую сторону) — дальше бот живёт обычной жизнью. */
+    private var extAnswered = false
+
     /** Считать ли экстеншены в бюджете тела. Начинаем с «да» (так говорят и доки, и разработчик) и
      *  ОПРОВЕРГАЕМ фактом: заказ тела дороже, чем лежит в спавне, оплачивается только экстеншенами, и
      *  если он не прошёл — они не досягаемы, и больше мы на них не рассчитываем до конца матча. Без
@@ -1479,7 +1482,10 @@ object SpawnAndSwamp {
         // БАШНЯ ДОМА. Площадка ничего не стоит, поэтому ставится сразу, как только счёт (towerWorth)
         // говорит, что дома она даёт больше бойца за ту же энергию. Смотритель — часть цены башни:
         // без него площадку некому строить, а готовая башня молчит (ёмкость — один выстрел)
-        if (ctx.myTowers.isEmpty()) {
+        // ...и пока идёт ПРОБА, других площадок нет вовсе: один смотритель на две стройки не кончает
+        // ни одной (первый матч пробы: экстеншен 100/200, башня 20/1250, ответа нет). Ветка живёт
+        // только при включённой EXT_PROBE и снимается вместе с ней
+        if (ctx.myTowers.isEmpty() && !(EXT_PROBE && !extAnswered)) {
             // площадка уже стоит — спрашиваем про ОСТАТОК: бросить недостроенное дороже, чем достроить.
             // Спрашиваем при этом про ПЛОЩАДКУ БАШНИ, а не про ближайшую: чужая по назначению стройка
             // рядом с домом отвечала за башню и на «стоит ли уже», и на «успеем ли»
@@ -1593,6 +1599,7 @@ object SpawnAndSwamp {
         if (price > energy && extEnergy > 0) {
             val ok = r.error == null
             if (!ok) extReach = false
+            extAnswered = true
             if (DEBUG_LOG) println("extprobe t=${getTicks()} spawnE=$energy extE=$extEnergy exts=${ctx.myExtensions.size} range=${ctx.myExtensions.minOfOrNull { getRange(it, spawn) } ?: -1} cost=$price parts=${body.size} err=${r.error} reach=$ok")
         }
         if (DEBUG_LOG) println("spawn: ${if (guard) "guard" else if (healer) "healer" else "fighter"} parts=${body.size} cost=${body.sumOf { cost(it) }} energy=$energy alarm=$alarm first=$fighterFirst our=${ourPower.toInt()}/${enemyPower.toInt()} deficit=${deficit.toInt()} fire=$spawnUnderFire arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
