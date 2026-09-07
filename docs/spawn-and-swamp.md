@@ -512,9 +512,37 @@ a thousand energy.** It can only put in what it carries — 100 a trip — and t
 beside has usually decayed by the time it gets there, so the trip is not two cells but forty. けろびー
 solves it by building where a pile is alive at that moment, at two WORK next to his own supply.
 
-So the next attempt needs the placement to weigh a **live and lasting** source, not the memory of one —
-the permanent corner piles, or a spot where drops keep landing — and probably more than one keeper.
-The site machinery is no longer what blocks it.
+**The third attempt, on the same day, fixed both of those and still measured as a loss — and named the
+reason the first two hid.** The placement was wrong for a reason worth keeping: candidates were only
+cells beside past drops, and the best cell on the map is the middle, which no drop had touched. Scanning
+the neighbourhood of the energy-weighted centroid as well finds it: on the map of the match we lost, the
+fleet collects **20.0 energy a tick delivering home and 46.1 delivering to (49,46)**. The keeper was
+wrong for a reason that is pure arithmetic: `[MOVE×2, CARRY×2, WORK×k]` carries a hundred, and a spawn
+costs a thousand. Sizing it for the job — enough CARRY that ferrying keeps up with the hands, which is
+`c = w·d/5` from `d·C/(25c) = C/(5w)`, MOVE for the weight, the whole thing cut by what the spawn can
+hold — took the site from 40/1000 to 600–800/1000.
+
+And every scenario was still slower (`none` 428 → 460, `ball` 663 → 872, `tower+healball` 521 → 1028),
+with the spawn never finished. Adding the honest horizon — the match ends when our siege ends, so the
+investment's working life is `min(ticksLimit, travel + siege.ticks)` rather than the arena's limit —
+changed almost nothing, because the decision is taken around tick 100, when nobody's siege is winnable
+and the horizon is therefore "the whole match" in every scenario.
+
+**The harness cannot judge this feature, and that is the finding.** Every scenario in it is a short win
+— 430 to 900 ticks — so a thousand energy taken out of the army at tick 100 is always worse there than
+the income it returns by tick 460. The matches the feature exists for are the ones we lose: けろびー#16
+at 743 and #17 at 2000, where our siege is never winnable and the game is decided by who collects more.
+The stub's opponents cannot produce that, by construction.
+
+What the arithmetic still misses is the same thing in a sentence: **the price is paid out of the army at
+the moment the army decides the match**, and `forwardWorth` compares the investment only against doing
+nothing, never against the fighter the same thousand would buy. `towerWorth` already does exactly that
+comparison for the tower — gain in defence per energy, against a fighter, discounted by measured
+mortality — and the delivery point needs its own version of it. That, and a scenario in the harness
+where the enemy is strong enough that the match is long, are what the fourth attempt needs.
+
+The site machinery is no longer what blocks it: v50 stands, and the three attempts above are recorded so
+the next one does not rediscover them.
 
 ## Offline stub harness
 
