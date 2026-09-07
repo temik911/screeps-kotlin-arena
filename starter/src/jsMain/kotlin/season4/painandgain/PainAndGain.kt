@@ -641,6 +641,22 @@ object PainAndGain {
     private const val USE_PUSH_PACK_AT_HEAD = true
     /** ЛЕКАРИ НЕ С ХРАНИТЕЛЯМИ (v120, стенд spread m30 на v120i): см. healMate. */
     private const val USE_HEALERS_NOT_WITH_KEEPERS = true
+    /** ЗАХВАТ МЕРИТСЯ ЯДРОМ (v121, матч 298 — третья форма мигания отряда, названная оператором). На 505-м тике отряд из двоих выпущен
+     *  при 3885 против 3234; на 506-м капитан армии берёт A3, дебафф ложится на ядро без двоих — постура видит 3045 против 3679
+     *  (0,83, EVADE), ядро «просело» — один отозван; на 512-м теряем свой R3, на 515-м отозван второй; три таких цикла за матч
+     *  (505, 952, 1378), гонка проиграна на 740. Гейт захвата мерил силу «после» по армии ВМЕСТЕ с выпущенными бегунами
+     *  (ctx.army + runners), постура — по ядру без них: захват проходил по одной мере и ронял ядро под порог уклонения по другой.
+     *  Захват мерится тем же, что и постура, — ядром; и в состояние «после» входит флаг-цель армии, чей захват уже идёт
+     *  (USE_TAKING_INCLUDES_OBJECTIVE): выпуск v95 проверял ядро с дебаффом флага БЕГУНА, а не флага, который армия берёт
+     *  следующим тиком.
+     *  ОБЕ МЕРЫ ОТВЕРГНУТЫ СТЕНДОМ. Захват ядром душит захваты бегунов: ядро на пороге выпуска (0,97) с любым дебаффом ниже
+     *  порога захвата, бегуны без дела — split 6-2 → 2-6 (m28 24303:20588 → 7581:24310), spread m31 24334:13713 → 9081:24341, tour m30
+     *  22932:22068 → 12598:22445. Флаг-цель в состоянии «после» один: split 6-2 → 5-3 (m31 24302:22764 → 21967:24299, m34 уже). Мера
+     *  захвата «армия с бегунами» несёт гонку фермера — это и есть то, на чём стоят split/spread; расхождение с мерой постуры
+     *  (ядро) остаётся ОТКРЫТОЙ НАХОДКОЙ матча 298: захват, разрешённый по одной мере, роняет ядро под порог уклонения по
+     *  другой (3885 → 3045 против 3679 за тик). */
+    private const val USE_CAPTURE_MEASURES_CORE = false
+    private const val USE_TAKING_INCLUDES_OBJECTIVE = false
     // SCATTER_OFF_SHARE = 3/4: сбор — крупнейшая группа не меньше трёх четвертей его вооружённых (целочисленно: ×4 ≥ ×3)
     private const val FARMER_OFF_TICKS = 1
     /** ОПОРА ЯДРА ПРИ РОССЫПИ — ЕГО КРУПНЕЙШАЯ ГРУППА (v97, матч 240 — ricardo18informatica2020, россыпь с первого тика:
@@ -1784,11 +1800,13 @@ object PainAndGain {
     /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
      *  вражья — без них, если флаги были его. */
     private fun powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double> =
-        powerAfterFor(ctx, ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }, ctx.combatEnemies, f)
+        powerAfterFor(ctx, if (USE_CAPTURE_MEASURES_CORE) ctx.army else ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }, ctx.combatEnemies, f)
 
     /** То же для заданной стороны и группы врага (v95: пул проверяет ядро без крипа с дебаффом его флага-цели). */
     private fun powerAfterFor(ctx: Ctx, side: List<Creep>, opp: List<Creep>, f: FlagInfo): Pair<Double, Double> {
         val taking = HashSet(plannedCaptures); taking.add(f.id)
+        // и флаг-цель армии (v121): захват, который уже идёт, — часть состояния «после»
+        if (USE_TAKING_INCLUDES_OBJECTIVE) objectiveFlagId?.let { id -> if (ctx.flags.any { it.id == id && !it.ours }) taking.add(id) }
         fun mods(mine: Boolean): HypoMods {
             fun k(type: String): Double {
                 val now = ctx.flags.count { it.mine == mine && it.type == type }
