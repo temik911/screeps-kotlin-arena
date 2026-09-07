@@ -85,8 +85,8 @@ def rows(args):
 
 
 def foe(r):
-    # the opponent as name#version — his code version is the server's upload counter, and one name plays several bots
-    others = [r["opponent"]] if r.get("opponent") else [u for u in r["users"] if u and u != US]
+    # the opponent's NAME only; `bot` below adds his code version — every table keys on bot(r)
+    others = [u for u in r["users"] if u and u != US]
     return others[0] if others else "?"
 
 
