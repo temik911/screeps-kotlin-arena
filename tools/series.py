@@ -89,6 +89,18 @@ def foe(r):
     return others[0] if others else "?"
 
 
+def bot(r):
+    """The opponent as the ladder actually presents him: a NAME AND A CODE VERSION.
+
+    One player is several bots over a day. Pooling them produced a false reading on 07.09.2026 — "v46
+    is a regression against けろびー" — that vanished the moment his versions were held apart: our v44
+    had drawn his v12/v14/v15 and never met v16 or v17, which no version of ours has ever beaten.
+    """
+    name = foe(r)
+    v = r.get("opp_code")
+    return f"{name}#{v}" if v is not None else name
+
+
 # ---------------------------------------------------------------- instrument parsing
 
 def fields_of(text):
@@ -222,17 +234,17 @@ def cmd_versions(args):
         w, l, d = wld(rs_v)
         deltas = [r["delta"] for r in rs_v if r["delta"] is not None]
         total = sum(deltas)
-        foes = ", ".join(f"{n} {c}" for n, c in Counter(foe(r) for r in rs_v).most_common())
+        foes = ", ".join(f"{n} {c}" for n, c in Counter(bot(r) for r in rs_v).most_common())
         name = f"v{ver}" if ver is not None else "-"
         per = f"{total / len(deltas):+.1f}" if deltas else "-"
         print(f"{name:<8} {len(rs_v):>3} {f'{w}-{l}-{d}':>8} {total:>+7} {per:>10}  {foes}")
     if args.by_opponent:
-        foes = sorted({foe(r) for r in rs})
-        print(f"\n{'version':<8} " + " ".join(f"{f[:12]:>14}" for f in foes))
+        foes = sorted({bot(r) for r in rs})
+        print(f"\n{'version':<8} " + " ".join(f"{f[:14]:>14}" for f in foes))
         for ver in sorted(by, key=lambda v: (v is None, v)):
             cells = []
             for f in foes:
-                sub = [r for r in by[ver] if foe(r) == f]
+                sub = [r for r in by[ver] if bot(r) == f]
                 cells.append(f"{'-'.join(map(str, wld(sub))):>14}" if sub else f"{'.':>14}")
             print(f"{('v' + str(ver)) if ver is not None else '-':<8} " + " ".join(cells))
         print("cells are won-lost-drawn")
@@ -243,8 +255,8 @@ def cmd_compare(args):
     rs = rows(args)
     by = defaultdict(lambda: defaultdict(list))
     for r in rs:
-        by[foe(r)][r["version"]].append(r)
-    print(f"{'opponent':<16} " + " ".join(f"{'v' + str(v):>18}" for v in (args.a, args.b)))
+        by[bot(r)][r["version"]].append(r)
+    print(f"{'opponent bot':<20} " + " ".join(f"{'v' + str(v):>18}" for v in (args.a, args.b)))
     for f in sorted(by):
         cells = []
         for v in (args.a, args.b):
@@ -255,8 +267,9 @@ def cmd_compare(args):
             w, l, d = wld(sub)
             delta = sum(x["delta"] for x in sub if x["delta"] is not None)
             cells.append(f"{f'{w}-{l}-{d} {delta:+}':>18}")
-        print(f"{f:<16} " + " ".join(cells))
-    print("cells are won-lost-drawn and the rating moved; a version is only comparable inside a row")
+        print(f"{f:<20} " + " ".join(cells))
+    print("cells are won-lost-drawn and the rating moved; a version is only comparable inside a row,")
+    print("and a row is ONE BOT of his (name#code version) — a bare name pools bots he has rewritten")
 
 
 def cmd_metrics(args):
@@ -274,7 +287,7 @@ def cmd_metrics(args):
         elif args.by == "version":
             key = f"v{r['version']}"
         else:
-            key = foe(r)
+            key = bot(r)
         groups[key].append(m)
     order = [k for k in sorted(groups, key=lambda k: -len(groups[k])) if len(groups[k]) >= args.min]
     if len(order) < 2:
@@ -353,13 +366,41 @@ def cmd_field(args):
             cells.append(f"{m[f]:>12.1f} ({c.get(f, 0):>3})" if f in m else f"{'-':>18}")
         when = time.strftime('%d.%m %H:%M', time.localtime(r["when"]))
         ver = f"v{r['version']}" if r["version"] is not None else "-"
-        print(f"{when:<12} {ver:>4} {r['result']:<5} {foe(r)[:12]:<12} " + " ".join(cells))
+        print(f"{when:<12} {ver:>4} {r['result']:<5} {bot(r)[:16]:<16} " + " ".join(cells))
     for f in args.fields:
         for r in rs:
             _, s, _ = match_metrics(r, args.t0, args.t1)
             if f in s:
                 print(f"\n{f} is printed as: {s[f]}")
                 break
+
+
+def cmd_foes(args):
+    """One row per opponent BOT, every version of ours pooled.
+
+    The unit here is deliberately the other side's code version, and our own is deliberately pooled: the
+    question this answers is "which of their bots do we lose to", which no per-our-version cut can ask
+    with the handful of matches a single version gets. What it found on 07.09.2026: けろびー v16 is
+    0-8-0 across six different versions of ours, and v17 0-4-3 — a bot we have never beaten, whose
+    presence or absence in a series moves the rating more than any change of ours did.
+    """
+    rs = rows(args)
+    if not rs:
+        sys.exit("no matches matched")
+    by = defaultdict(list)
+    for r in rs:
+        by[bot(r)].append(r)
+    print(f"{len(rs)} matches against {len(by)} opponent bots")
+    print(f"{'opponent bot':<20} {'n':>3} {'W-L-D':>8} {'rating':>7} {'per match':>10}  our versions")
+    for f in sorted(by, key=lambda k: (sum(x["delta"] or 0 for x in by[k]), -len(by[k]))):
+        sub = by[f]
+        w, l, d = wld(sub)
+        deltas = [r["delta"] for r in sub if r["delta"] is not None]
+        total = sum(deltas)
+        per = f"{total / len(deltas):+.1f}" if deltas else "-"
+        ours = ",".join(f"v{v}" for v in sorted({r["version"] for r in sub if r["version"] is not None}))
+        print(f"{f:<20} {len(sub):>3} {f'{w}-{l}-{d}':>8} {total:>+7} {per:>10}  {ours}")
+    print("worst first by rating moved; a bot we never beat is a hole in ours, not a bad draw")
 
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -369,6 +410,12 @@ p = sub.add_parser("versions", parents=[common],
                    help="one row per bot version: matches, W-L-D, rating, opponents")
 p.add_argument("--by-opponent", action="store_true", help="add a version x opponent table")
 p.set_defaults(func=cmd_versions)
+
+p = sub.add_parser("foes", parents=[common],
+                   help="one row per opponent BOT (his code version), our versions pooled")
+p.add_argument("--version", type=int, nargs="*", help="only these bot versions of ours")
+p.add_argument("--opponent", help="only this opponent (substring of the name)")
+p.set_defaults(func=cmd_foes)
 
 p = sub.add_parser("compare", parents=[common], help="two versions side by side, per opponent")
 p.add_argument("a", type=int)
