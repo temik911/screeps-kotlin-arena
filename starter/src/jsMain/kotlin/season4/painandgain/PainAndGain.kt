@@ -1252,6 +1252,14 @@ object PainAndGain {
 
     /** Охрана флага: боевые враги в этом радиусе от флага (дальность сближения + выстрел). */
     private const val FLAG_GUARD_RANGE = 11
+    /** МЕМО СТАИ (v132): см. packAt — пути его крипов к флагу считаются раз в тик на флаг; чистая оптимизация. */
+    private const val USE_PACK_MEMO = true
+    /** ЗАСТОЙ ПО БЛИЖАЙШЕЙ ГРУППЕ (v132): «держит дистанцию» меряется до центра его БЛИЖАЙШЕЙ группы (вооружённые в ENGAGE_RANGE от
+     *  его ближайшего к нам вооружённого), а не до центра всей армии. Матч с Coldkimchi 07.09 (6a9f0af1): его армия расколота —
+     *  пятеро (4 стрелка, 1 мили, без лекаря) в углу (1–4,1–6), три лекаря и три мили в 25–40 клетках; центр всей армии уходил
+     *  вместе с дальними, «keeps its distance (8 -> 12 over 8 ticks)» на 274-м отправил армию за флагами на 300 тиков в двух шагах
+     *  от загнанной пятёрки, а гонка/отряд затем расколола нас самих; к 330-му он собрался и снёс нас по частям. */
+    private const val USE_STALL_NEAREST_GROUP = true
 
     /** Враг «рядом» с армией (для отхода): в этих клетках от кого-то из наших; из отхода выходим, когда он
      *  дальше NEAR_RANGE + NEAR_RELEASE (иначе постура прыгала каждый тик на кромке радиуса). */
@@ -1346,7 +1354,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v131"
+    private const val BOT_VERSION = "v132"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2255,8 +2263,22 @@ cpuMark("r.cands")
     /** Стая у цели: боевые враги рядом с ней и те, кто дойдёт до неё (своим телом по полю) не позже нас —
      *  из ХОДЯЧИХ: стоящий на месте STILL_TICKS тиков в стаю по «успеет дойти» не зачисляется (матч 1:
      *  армия врага не сделала ни шага за 1570 тиков, а «успевала» к каждому флагу, и армия простояла на посту). */
-    private fun packAt(ctx: Ctx, pos: Position, flow: IntArray, ourTravel: Int): List<Creep> =
-        ctx.combatEnemies.filter { getRange(it, pos) <= FLAG_GUARD_RANGE || (!stationary(it) && pathTicks(it, flow, it.x * 100 + it.y) <= ourTravel) }
+    private fun packAt(ctx: Ctx, pos: Position, flow: IntArray, ourTravel: Int): List<Creep> {
+        if (!USE_PACK_MEMO) return ctx.combatEnemies.filter { getRange(it, pos) <= FLAG_GUARD_RANGE || (!stationary(it) && pathTicks(it, flow, it.x * 100 + it.y) <= ourTravel) }
+        // МЕМО СТАИ (v132): пути его крипов к клетке флага ходятся раз в тик на флаг и поле, а не на каждого бегуна: пять отцепленных
+        // бегунов × семь флагов × одиннадцать его крипов давали ~150 000 шагов по полю за тик (фаза r.cands 52–73 мс из 80–99 мс боевого
+        // тика, восемь таймаутов в матче с Coldkimchi 07.09). Результат тот же
+        if (packTicksTick != getTicks()) { packTicksCache.clear(); packTicksTick = getTicks() }
+        val key = pos.x * 100 + pos.y
+        val cached = packTicksCache[key]?.takeIf { it.first === flow }
+        val ticksOf = cached?.second ?: HashMap<String, Int>().also { m ->
+            for (e in ctx.combatEnemies) if (!stationary(e)) m[e.id] = pathTicks(e, flow, e.x * 100 + e.y)
+            packTicksCache[key] = flow to m
+        }
+        return ctx.combatEnemies.filter { getRange(it, pos) <= FLAG_GUARD_RANGE || (ticksOf[it.id]?.let { t -> t <= ourTravel } == true) }
+    }
+    private val packTicksCache = HashMap<Int, Pair<IntArray, Map<String, Int>>>()   // клетка флага → (поле, id врага → тики пути), см. packAt
+    private var packTicksTick = -1
 
     /** Сколько тиков враг не двигался (новый враг считается идущим). */
     private fun stationaryFor(e: Creep): Int = getTicks() - (enemyLastMove[e.id] ?: getTicks())
@@ -2690,7 +2712,13 @@ cpuMark("a.hunt")
         // (сам на 0,75 мощи), парил в 10–28 клетках от нас и не дрался — за 1600 тиков ни одного выстрела с нашей стороны;
         // пикет не срабатывал (враг дальше ENGAGE_RANGE), марш не «стоял» (армия за ним ходила), и ANNIHILATE держал армию
         // лицом к нему на двух-трёх флагах против его пяти: 8 в тик против 17, проигрыш 15652:22950 при 16000/16000 у обоих
-        val armyDist = ctx.enemyCentroid?.let { getRange(centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: it, it) } ?: -1
+        // застой по ближайшей группе (v132, USE_STALL_NEAREST_GROUP): центр его группы, ближайшей к нашему вооружённому центру
+        val ourArmedCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })
+        val stallCentroid: Position? = if (USE_STALL_NEAREST_GROUP && ourArmedCentroid != null && armedEnemies.isNotEmpty()) {
+            val nearest = armedEnemies.minByOrNull { getRange(it, ourArmedCentroid) }!!
+            centroidOf(armedEnemies.filter { getRange(it, nearest) <= ENGAGE_RANGE })
+        } else ctx.enemyCentroid
+        val armyDist = stallCentroid?.let { getRange(ourArmedCentroid ?: it, it) } ?: -1
         // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
         val exchangeRecent = now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && now - lastHurtTick <= STALL_TICKS)
         val fightOn = inContact(armedEnemies, army) && (!USE_COLD_CONTACT || exchangeRecent)
@@ -2701,7 +2729,7 @@ cpuMark("a.hunt")
             armyDistHist.addLast(armyDist)
             // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
             // отряд на 566-м при his_moved=0 по реплею (матч 133, одиннадцатый проигрыш фермеру-лагерю 8346:22771)
-            enemyCentHist.addLast(centroidOf(armedEnemies)?.let { it.x * 100 + it.y } ?: -1)
+            enemyCentHist.addLast((if (USE_STALL_NEAREST_GROUP) stallCentroid else centroidOf(armedEnemies))?.let { it.x * 100 + it.y } ?: -1)
         } else { armyDistHist.clear(); enemyCentHist.clear() }
         while (armyDistHist.size > DETACH_WINDOW + 1) armyDistHist.removeFirst()
         while (enemyCentHist.size > DETACH_WINDOW + 1) enemyCentHist.removeFirst()

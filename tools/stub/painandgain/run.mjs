@@ -291,7 +291,11 @@ function screenMove(c, plan, fighters, ours) {
       // lands on 62–83 % of ticks while that creep is a different one almost every tick — the first cut chased the creep that
       // lost the most hits and was always in transit): the free cell among the eight and its own with the most fighters adjacent,
       // ties toward the most wounded, never at one from our armed creeps; far from the blob it walks to the centroid first
-      if (range(c, cen) > 2) { stepToward(c, cen, 1); return; }
+      // fifth cut: the healer's cohesion radius is three, not two — the cell beside the front fighter (at three from our nearest)
+      // lies two to three from the blob's centroid, and the radius of two pulled the healer back from it every other tick
+      // (fourth cut: the creep under our fire is his front one 60–75 % of ticks with free cells beside it always, his
+      // healer adjacent 3–30 %)
+      if (range(c, cen) > 3) { stepToward(c, cen, 2); return; }
       const fightersOf = members.filter((o) => !isH(o));
       const wounded = fightersOf.filter((o) => o.hits < o.hitsMax).sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
       const taken = new Set(creeps().filter((o) => !o.spawning && o !== c).map((o) => o.x * 100 + o.y));
@@ -308,8 +312,16 @@ function screenMove(c, plan, fighters, ours) {
         // healers stand level with them (depth 0, at 2–3 from our nearest), not in the middle of the blob
         const frontTwo = armed.length ? fightersOf.slice().sort((a, b) => Math.min(...armed.map((q) => range(a, q))) - Math.min(...armed.map((q) => range(b, q)))).slice(0, 2) : [];
         const frontAdj = frontTwo.filter((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 1).length;
-        const score = frontAdj * 30 + adj * 10 + (wounded ? Math.max(0, 3 - Math.max(Math.abs(wounded.x - x), Math.abs(wounded.y - y))) : 0) - (dx || dy ? 0.5 : 0);
+        // sixth cut: a gradient toward the front — the healer chooses among its eight neighbours only, so without a distance term
+        // it never walks the three cells to the front fighter and the adjacency bonus never applies (fifth cut: adjacent 13–16 %)
+        const toFront = frontTwo.length ? Math.min(...frontTwo.map((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)))) : 9;
+        const score = frontAdj * 30 + adj * 10 + Math.max(0, 8 - toFront) * 4 + (wounded ? Math.max(0, 3 - Math.max(Math.abs(wounded.x - x), Math.abs(wounded.y - y))) : 0) - (dx || dy ? 0.5 : 0);
         if (score > bs) { bs = score; best = { x, y }; }
+      }
+      if (process.env.BLOBDBG && threats.length) {
+        const f0 = armed.length ? fightersOf.slice().sort((a, b) => Math.min(...armed.map((q) => range(a, q))) - Math.min(...armed.map((q) => range(b, q))))[0] : null;
+        const excl = []; for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) { const x = c.x + dx, y = c.y + dy; if (!inBounds(x, y) || world.terrain[idx(x, y)] === 1) continue; if ((dx || dy) && taken.has(x * 100 + y)) excl.push('taken'); else if (armed.some((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 1)) excl.push('ours'); else if (fightersOf.some((o) => o.x === x + dir.x && o.y === y + dir.y && armed.some((q) => range(o, q) <= 2))) excl.push('lane'); }
+        console.log(`blobdbg t=${world.tick} H${c.id}@(${c.x},${c.y}) dn=${dn} front=${f0 ? f0.id + '@' + f0.x + ',' + f0.y + ' d' + range(c, f0) + ' dn' + Math.min(...armed.map((q) => range(f0, q))) : '-'} best=${best ? best.x + ',' + best.y : '-'} score=${bs} excluded=${excl.join('/')}`);
       }
       if (best && (best.x !== c.x || best.y !== c.y)) c.move(getDirection(best.x - c.x, best.y - c.y));
       return;
@@ -963,6 +975,19 @@ function focusActMirror() {
   const healsIt = (c) => { const m = world.intents.get(c.id) || {}; return (m.heal && m.heal.target && m.heal.target.id === most) || (m.ranged && m.ranged.type === 'heal' && m.ranged.target && m.ranged.target.id === most); };
   if (c1.some(healsIt)) eFocus.healed++;
   if (c1.some((c) => c !== t && live(c, H) > 0 && live(c, A) === 0 && live(c, R) === 0 && range(c, t) <= 1)) eFocus.adjacent++;
+  // the target's rank among his fighters by distance to our armed creeps (1 = the front one), and a free cell next to it
+  const ourArmed = c0.filter((c) => live(c, A) + live(c, R) > 0);
+  if (ourArmed.length) {
+    const near = (c) => Math.min(...ourArmed.map((q) => range(c, q)));
+    const fighters = c1.filter((c) => live(c, A) + live(c, R) > 0 || c === t).sort((a, b) => near(a) - near(b));
+    const rank = Math.min(fighters.indexOf(t) + 1, 4);
+    if (!eFocus.rank) eFocus.rank = [0, 0, 0, 0, 0];
+    eFocus.rank[rank]++;
+    const taken = new Set(creeps().filter((o) => !o.spawning).map((o) => o.x * 100 + o.y));
+    let free = 0;
+    for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) { if (!dx && !dy) continue; const x = t.x + dx, y = t.y + dy; if (inBounds(x, y) && world.terrain[idx(x, y)] !== 1 && !taken.has(x * 100 + y)) free++; }
+    if (free === 0) eFocus.noFree = (eFocus.noFree || 0) + 1;
+  }
 }
 function focusAct() {
   const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
@@ -1051,7 +1076,7 @@ if (has('ghost')) {
   const rec = (d) => rc === null ? '-' : `${lost(ghostMeta.recHits[0], rc, d)}/${lost(ghostMeta.recHits[1], rc, d)}`;
   origLog(`ghost entry (hits lost ours/his): stand contact t=${sc} +20 ${stub(20)} +50 ${stub(50)} +100 ${stub(100)} | record contact t=${rc} +20 ${rec(20)} +50 ${rec(50)} +100 ${rec(100)}`);
 }
-origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach, his ${oAct.e_ticks ? Math.round(100 * oAct.e_can / oAct.e_ticks) : 0}%); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}; OUR focus target healed by him ${pc(eFocus.healed, eFocus.ticks)}, his healer adjacent to it ${pc(eFocus.adjacent, eFocus.ticks)}`);
+origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach, his ${oAct.e_ticks ? Math.round(100 * oAct.e_can / oAct.e_ticks) : 0}%); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}; OUR focus target healed by him ${pc(eFocus.healed, eFocus.ticks)}, his healer adjacent to it ${pc(eFocus.adjacent, eFocus.ticks)}; target rank by our reach 1:${(eFocus.rank || [0,0,0,0,0])[1]} 2:${(eFocus.rank || [0,0,0,0,0])[2]} 3:${(eFocus.rank || [0,0,0,0,0])[3]} 4+:${(eFocus.rank || [0,0,0,0,0])[4]}, no free cell beside it ${eFocus.noFree || 0}`);
 origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
 if (errs.length) origLog('first error:\n' + errs.slice(0, 2).join('\n'));
