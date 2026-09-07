@@ -332,14 +332,18 @@ The instrument was rebuilt around this and it produced the finding the pooled vi
 
 ```
 opponent bot           n    W-L-D  rating   our versions
-けろびー#16                8    0-8-0     -27   v21,v23,v27,v39,v42,v46
+けろびー#16                5    0-5-0     -15   v39,v42,v46
 けろびー#17                7    0-4-3      -2   v35,v37,v39,v42,v46
-stachu3478#6           7    2-5-0     -46   v31,v36,v37,v38,v43,v46
-けろびー#15               21   14-4-3     +88   v26,v28,…,v46
+stachu3478#6           7    3-4-0     -32   v36,v37,v38,v43,v44,v46
+けろびー#15               18   11-4-3     +54   v35,…,v46
 ```
 
-**けろびー v16 has beaten every one of six versions of ours, eight times out of eight; his v17 has never
-lost to us in seven.** They are not a bad draw, they are a hole — and they are on this disk, with logs
+(the numbers above are the API store's, read 07.09.2026 after the client cache was closed as a
+source: the store reaches back two hundred rating matches, the cache had held only what the client
+window happened to show. Counting both, けろびー#16 has beaten eight versions of ours in eight
+meetings.)
+
+**けろびー#16 has beaten every version of ours it has met; his #17 has never lost to us in seven.** They are not a bad draw, they are a hole — and they are on this disk, with logs
 and replays, which is where the next version comes from. Against his v15, by contrast, we are 14-4-3 and
 +88: the ladder is not one opponent getting better, it is a set of bots of very different difficulty, and
 a series that says nothing about which ones it drew says nothing at all.
@@ -427,14 +431,18 @@ Three versions in a row were designed off numbers read by eye out of ONE match's
 that produced v42 among them — and the stub, which is the other half of the evidence, is made of
 opponents I invented. Both holes are now instrumented.
 
-**`tools/series.py versions`** joins every cached match to the bot version that played it (the greeting
+**`tools/series.py versions`** joins every stored match to the bot version that played it (the greeting
 line on tick 1), the opponent, the result and the rating move. What it said the first time it ran, over
 the last sixty matches: v37 10-4-2 (+20), v38 7-1-0 (+13), **v39 3-3-2 (−9)**, v41 4-2-1 (−2), v42
 6-2-3 (+18), v43 4-1-1 (+2). The v39 row is the roads probe, and it is the first time its cost has been
-visible as a number. `--by-opponent` and `compare A B` cut the same rows per opponent, which is the only
-control there is over the draw: one match slot, a random opponent, and no way to replay a version
-against the same schedule. Read the counts, not the sign — six matches against one opponent is still six
-matches.
+visible as a number. `--by-opponent` and `compare A B` cut the same rows per opponent BOT — his
+name and the code version he uploaded, because one username plays several bots in an afternoon — which
+is the only control there is over the draw: one match slot, a random opponent, and no way to replay a
+version against the same schedule. Read the counts, not the sign — six matches against one bot of his is
+still six matches. (Source note, 07.09.2026: these tools read Chromium's disk cache under the client
+until the operator closed it. They read `~/ScreepsArena/games/` now, filled from the API by
+`match-log.py fetch` and by `play.py` as it plays; the store is both complete and deeper — v44 turned
+out to have played twenty matches, not the twelve the cache had kept.)
 
 **`tools/series.py metrics`** parses every `key=value` the bot printed across a whole series and ranks
 the fields by how far the groups stand apart (difference over pooled deviation), grouped by outcome,
