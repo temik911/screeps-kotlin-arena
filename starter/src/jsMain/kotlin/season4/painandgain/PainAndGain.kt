@@ -952,6 +952,13 @@ object PainAndGain {
      *  построена следом: стенд стирает её на всех восьми картах при обеих настройках; с прикрытием m30 +50 5054:8034 → 3208:10352
      *  (12 → 13 живых), m33 +20 3878:6440 → 4726:6077 при +50 3104:12980 → 2914:12138, остальные шесть без изменений. */
     private const val USE_PRESS_COVER = true
+    /** ОБЕЗОРУЖЕННЫЙ УХОДИТ ИЗ ДОСЯГАЕМОСТИ И В КОНТАКТЕ (v123, серия 307–326): см. reachMine. ОТВЕРГНУТО ТАБЛИЦЕЙ ВХОДОВ:
+     *  +20 хуже 13 / лучше 10, +50 хуже 13 / лучше 11 из 26; brawl m31 12 → 9 живых (+50 6416:5916 → 7754:5686), m35 13 → 12
+     *  (+50 1656:12101 → 3720:10616), fourteen m31/m33 из стирания в победу по очкам; brawl+dart 3 хуже / 2 лучше. Обезоруженный
+     *  в контакте — губка для его выстрелов рядом с фронтом: уйдя из трёх, он открывает вооружённых, а лечения вне досягаемости
+     *  лекарей всё равно не получает. Живая находка серии (наши обезоруженные в досягаемости половину времени, его — десятую)
+     *  остаётся: его лечат за линией, наших — нет; предмет — лекарь для обезоруженных за линией, не бегство. */
+    private const val USE_STRIPPED_LEAVES_REACH = false
     /** Хранитель флага (v18): боец, стоящий на НАШЕМ флаге, при чужом бегуне в KEEP_RANGE и без нашего бегуна на флаге
      *  или назначенного к нему остаётся на месте, пока бегун врага рядом; в строю, в ударной группе и в цели армии он не
      *  участвует; снимается, когда флаг не наш, бегун врага ушёл, наш бегун встал на флаг или враг с боем в
@@ -3506,7 +3513,13 @@ object PainAndGain {
             // t=550; матчи 4–6 в первом размене теряли 1:5 при равной силе)
             val lostLastTick = lastHits[creep.id]?.let { it - creep.hits } ?: 0
             // лекарь и раненый бегут (врассыпную) только в одиночестве: при своём рядом — отход группой по постуре
-            val inReach = (creep.x * 100 + creep.y) in reachNow
+            // раненый (без оружия и лечения) и в контакте уходит из ПОЛНОЙ досягаемости — стрелка в трёх, мили в двух (v123,
+            // USE_STRIPPED_LEAVES_REACH): сужение до мили в контакте — для лекаря, которому лечить фронт; обезоруженному в
+            // огне делать нечего, а живым он вернётся с лечением. Серия 307–326: наши обезоруженные стояли в трёх от его
+            // вооружённых половину своего времени (131 из 258, 264 из 552 крип-тиков), его — десятую (26 из 79, 7 из 11);
+            // правило «обезоруженные в досягаемости» — 3 из 6 поражений и 0 из 18 побед
+            val reachMine = if (USE_STRIPPED_LEAVES_REACH && wounded) reachCells else reachNow
+            val inReach = (creep.x * 100 + creep.y) in reachMine
             val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
                 (support && inReach) ||
                 (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
@@ -3560,7 +3573,7 @@ object PainAndGain {
                 !canMove(creep) -> null
                 keeper -> null
                 mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
-                slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachNow else emptySet())
+                slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet())
                 hold -> null
                 else -> {
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
@@ -3603,7 +3616,7 @@ object PainAndGain {
                     // наш лекарь стоял вплотную к самому раненому в 13% замеров и дальше трёх клеток — в 32%. Закрытыми
                     // остаются клетки вплотную к вражескому МИЛИ: там лекарь не лечит, а умирает
                     val healingNow = healer && healMate != null && healMate.hits < healMate.hitsMax && getRange(creep, healMate) <= HEAL_RANGE + 1
-                    if (support && !inReach && reachNow.isNotEmpty() && !healingNow) myBlocked = myBlocked + reachNow
+                    if (support && !inReach && reachMine.isNotEmpty() && !healingNow) myBlocked = myBlocked + reachMine
                     if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
                         val front = HashSet<Int>()
                         for ((dx, dy) in DIRECTIONS) {

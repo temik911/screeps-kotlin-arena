@@ -329,6 +329,8 @@ the parallel-sessions rules in `CLAUDE.md`).
 
 **v122 (07.09.2026, the first of the series' findings): the melee press only under cover.** `engage` has demanded MELEE_COVER ranged within four of the target since v55; `pressTarget` did not, and in the replays of the series' losses the melee pressed a stepping-back line alone into its fire (melee_1 1 600 -> 752 in fourteen ticks) while the ranged row trailed out of range. The stand is neutral on it — entry table 25 of 26 rows unchanged (m33 brawl +1 445 at +20 with 13 alive instead of 12), farmer families 21 of 22 identical, gate 131/131 — because no stand form steps back with darting melee; the series of twenty is the measure, and a `dart` form for the stand comes next.
 
+**v123 tried and rejected (07.09.2026, the series' second finding — our disarmed creeps stay in his reach, his leave it).** A stripped creep (no weapon or heal part left) was made to leave the FULL reach of his armed even in contact, where the reach is narrowed to his melee's for the healers' sake. The entry table said no: +20 worse 13 / better 10, +50 worse 13 / better 11 of 26, brawl m31 12 -> 9 alive, m35 13 -> 12, two `fourteen` fights from annihilation to a win on points; brawl+dart 3 worse / 2 better. A disarmed creep beside the front is a sponge for his shots; sent out of three it uncovers the armed and gets no healing there either. What the series' numbers say he does differently is not the fleeing but the healing behind the line — the open item is a healer for the disarmed behind the line, not their flight.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
