@@ -941,6 +941,15 @@ object PainAndGain {
      *  потеряна против чистой победы к 100-му; 74 строки хуже, 66 лучше, m13 sleeper — армия потеряна). Ряд за фронтом
      *  (planBlock) держит стрелков в двух за мили — под удар попадает только фронт. Оставлено выключенным как замер. */
     private const val USE_PRESS_RING = false
+    /** ПРИЖИМ ПОД ПРИКРЫТИЕМ (v122, серия 307–326 из двадцати матчей): все шесть поражений дня — стирание в бою с блобом/линией
+     *  при 12-0 по очкам; его мили смежны 69–173 крип-тиков против наших 14–37, вход его в 5 из 6. Реплей 197ebb (けろびー#1, 242
+     *  тика): его блоб шагает назад по диагонали, стреляя; наши мили гонятся за целью прижима в его огонь (мили_1 1600 → 752 за
+     *  14 тиков), ряд стрелков в двух за мили не достаёт (44 выстрела против 70). Бросок (engage) с v55 требует прикрытия —
+     *  MELEE_COVER стрелков в четырёх от цели, — цель прижима шла мимо этой проверки. См. pressCovered.
+     *  СТЕНД НЕЙТРАЛЕН: таблица входов 25 из 26 строк без изменений (m33 brawl +1445 на +20 при 13 живых вместо 12), семьи фермера
+     *  21 из 22 идентичны, гейт 131/131 — на стенде нет сцены, где цель прижима не прикрыта (brawl не шагает назад, у screen нет
+     *  рывков мили). Мера — серия из двадцати; форма «шагающий назад блоб с рывками мили» (`dart`) строится на стенде следом. */
+    private const val USE_PRESS_COVER = true
     /** Хранитель флага (v18): боец, стоящий на НАШЕМ флаге, при чужом бегуне в KEEP_RANGE и без нашего бегуна на флаге
      *  или назначенного к нему остаётся на месте, пока бегун врага рядом; в строю, в ударной группе и в цели армии он не
      *  участвует; снимается, когда флаг не наш, бегун врага ушёл, наш бегун встал на флаг или враг с боем в
@@ -1222,7 +1231,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v120"
+    private const val BOT_VERSION = "v122"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -3292,9 +3301,16 @@ object PainAndGain {
                     localEnemies.any { getRange(creep, it) <= 1 })
             // отказ (см. PRESS_GIVEUP) действует, пока цель не вернулась в три (v111, USE_GIVEUP_RETURNS)
             fun givenUp(e: Creep) = e.id in pressGiveUp && !(USE_GIVEUP_RETURNS && getRange(creep, e) <= MELEE_HOLD_RANGE + 1)
+            // прижим — только под прикрытием стрелков (v122, USE_PRESS_COVER): та же мера, что у броска (см. covered, v55) —
+            // MELEE_COVER стрелков в RANGED_RANGE + 1 от цели или свой вплотную к ней; иначе мили прижимают шагающую назад линию
+            // в одиночку под её огонь (серия 307–326: けろびー#1 дважды за 240 тиков, наш мили 1600 → 752 за 14 тиков погони,
+            // стрелки в двух за мили не достают — 44 выстрела против 70)
+            fun pressCovered(e: Creep) = !USE_PRESS_COVER ||
+                combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
+                army.any { a -> a.id != creep.id && getRange(e, a) <= 1 }
             val pressTarget: Creep? = if (!pack) null else
-                focusTarget?.takeIf { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && !givenUp(it) }
-                    ?: localEnemies.filter { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) }.minByOrNull { getRange(creep, it) }
+                focusTarget?.takeIf { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && !givenUp(it) && pressCovered(it) }
+                    ?: localEnemies.filter { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && pressCovered(it) }.minByOrNull { getRange(creep, it) }
             val pressRanged = USE_PRESS_RING && pressOn && hasRanged(creep) && !rotating && localAggressive
             val holdMelee = isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
