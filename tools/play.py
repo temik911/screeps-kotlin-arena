@@ -140,17 +140,44 @@ def slot(c, arena_id):
     }})()""")
 
 
-def start(c, arena_id):
+def start(c, arena_id, fame=False):
+    """One game: a rating game through `/game/start`, or a game of today's fame session through `/fame/start` — the same
+    form (the arena and the code zip); the client's FameSeriesAction adds an optional `modifierDefId`, an inventory item
+    that multiplies the fame, which this never sends (spending the operator's items is the operator's click)."""
+    ep = '/fame/start' if fame else '/game/start'
     return c.json_eval(f"""(async () => {{
       const fd = new FormData();
       fd.append('arena', {json.dumps(arena_id)});
       fd.append('code', window[{json.dumps(SLOT)}], 'code.zip');
       {JS_GET}
-      const r = await GET('{API}/game/start', {{method: 'POST', body: fd}});
-      let id = null, err = null;
-      try {{ const j = await r.json(); id = (j.game && j.game._id) || j.game || null; err = j.error || null; }}
+      const r = await GET('{API}{ep}', {{method: 'POST', body: fd}});
+      let id = null, err = null, fameId = null, raw = null;
+      try {{ const j = await r.json(); id = (j.game && j.game._id) || j.game || null; err = j.error || null;
+             fameId = (j.fame && j.fame._id) || null; raw = JSON.stringify(j).slice(0, 400); }}
       catch (e) {{ err = String(e); }}
-      return JSON.stringify({{status: r.status, id, err}});
+      return JSON.stringify({{status: r.status, id, err, fameId, raw}});
+    }})()""")
+
+
+def fame_state(c, arena_id):
+    """Today's fame session of the arena as the server holds it (`/api/arena/<id>` → `fame`): `{}` before the first game,
+    then the id, points, the rewards level, `finishedAt` once the operator has finished it (fame is daily: finishing
+    leaves until tomorrow), and `qualifying` (fewer than five rating games — no fame yet)."""
+    return c.json_eval(f"""(async () => {{
+      {JS_GET}
+      const r = await GET('{API}/arena/{arena_id}');
+      const j = await r.json(); const a = j.arena || {{}}; const f = a.fame || {{}};
+      return JSON.stringify({{id: f._id || null, points: f.points || 0, level: f.rewardsLevel || 0, finishedAt: f.finishedAt || null,
+                              rewardedAt: f.rewardedAt || null, qualifying: !!a.qualifying, keys: Object.keys(f)}});
+    }})()""")
+
+
+def fame_games(c, fame_id):
+    """The session's games (`/api/fame/<id>/games`), as the server lists them — ids, results and the points each gave."""
+    return c.json_eval(f"""(async () => {{
+      {JS_GET}
+      const r = await GET('{API}/fame/{fame_id}/games');
+      const t = await r.text(); return JSON.stringify({{status: r.status, body: t.slice(0, 3000)}});
     }})()""")
 
 
@@ -261,6 +288,7 @@ def main():
     ap.add_argument("--stop-on-non-win", action="store_true", help="stop at the first loss or draw")
     ap.add_argument("--logs", metavar="DIR", help="write each match's console into this directory")
     ap.add_argument("--list", action="store_true", help="list arenas with their ids, folders and slots")
+    ap.add_argument("--fame", action="store_true", help="play games of today's fame session (/fame/start) instead of rating games; never finishes the session")
     ap.add_argument("--history", type=int, metavar="N", help="print the arena's last N rating matches from the server and exit")
     ap.add_argument("--us", default="temik911", help="our username prefix (for --history)")
     a = ap.parse_args()
@@ -306,13 +334,20 @@ def main():
         os.makedirs(a.logs, exist_ok=True)
 
     tally = {"won": 0, "lost": 0, "draw": 0}
+    if a.fame:
+        f = fame_state(c, arena["id"])
+        if f["qualifying"]:
+            raise SystemExit(f"{arena['name']}: fewer than five rating games here — no fame session yet")
+        if f["finishedAt"]:
+            raise SystemExit(f"{arena['name']}: today's fame session is finished ({f['finishedAt']}) — fame returns tomorrow")
+        print(f"fame: session {f['id'] or '(not started)'} points={f['points']} level={f['level']} keys={f['keys']}")
     for i in range(1, a.count + 1):
         if payload_size(c) != size:            # the page was reloaded, or the payload was overwritten
             print(f"{i}/{a.count}: the payload is not on the page any more, sending it again")
             size = push_zip(c, data)
-        r = start(c, arena["id"])
+        r = start(c, arena["id"], fame=a.fame)
         if r["status"] not in (200, 201) or not r.get("id"):
-            print(f"{i}/{a.count}: start failed ({r['status']} {r.get('err')})")
+            print(f"{i}/{a.count}: start failed ({r['status']} {r.get('err')}) {r.get('raw') or ''}")
             break
         gid = r["id"]
         st = wait(c, gid)
@@ -332,6 +367,12 @@ def main():
             if greeting.startswith("hello") and slug(arena["name"]) not in greeting:
                 line += f"\n  !! WRONG BOT PLAYED: {greeting[:80]}"
         print(line, flush=True)
+        if a.fame:
+            f = fame_state(c, arena["id"])
+            print(f"fame: session {f['id']} points={f['points']} level={f['level']} finishedAt={f['finishedAt']}", flush=True)
+            if f["finishedAt"]:
+                print("fame: the session is finished — stopping")
+                break
         if (a.stop_on_defeat and res == "lost") or (a.stop_on_non_win and res != "won"):
             print(f"stopping at {res}")
             break
