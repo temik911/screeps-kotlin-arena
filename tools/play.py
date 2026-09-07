@@ -163,7 +163,8 @@ def history(c, arena_id, limit, us):
             res = "won" if h["codes"][w]["user"] == me else "lost"
         else:
             res = str(w)
-        foes = ", ".join(u["name"] for u in h["users"] if u["id"] != me)
+        # the opponent's code version next to the name: a username is not a bot (07.09.2026)
+        foes = ", ".join(f"{u['name']}#{next((c['version'] for c in h['codes'] if c['user'] == u['id']), '?')}" for u in h["users"] if u["id"] != me)
         ver = next((c["version"] for c in h["codes"] if c["user"] == me), None)
         out.append(dict(id=h["id"], created=h["created"], ticks=h["ticks"], result=res, opponent=foes, rating=h["rating"], code=ver))
     return out

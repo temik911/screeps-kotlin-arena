@@ -783,9 +783,11 @@ def render(L, R, info, history, step):
         p(f"  [{tag}] {text}")
     if history:
         p('')
-        p(f"history vs {info['opponent']} (cache): " + ', '.join(f"{h['when']} {h['result'][0].upper()}{h['ticks']}{'*' if h['game'] == info['id'] else ''}" for h in history))
+        p(f"history vs {info['opponent']} (cache, the opponent's code version after #): " + ', '.join(f"{h['when']} {h['result'][0].upper()}{h['ticks']}#{h['code']}{'*' if h['game'] == info['id'] else ''}" for h in history))
         w = sum(1 for h in history if h['result'] == 'won')
-        p(f"  {w}:{len(history) - w} over {len(history)} cached matches")
+        byv = Counter((h['code'], h['result']) for h in history)
+        vers = sorted({h['code'] for h in history}, key=lambda v: (v is None, v))
+        p(f"  {w}:{len(history) - w} over {len(history)} cached matches; by his version: " + ', '.join(f"#{v} {byv[(v, 'won')]}:{byv[(v, 'lost')]}" for v in vers))
     return '\n'.join(out)
 
 
@@ -878,11 +880,12 @@ def resolve(args):
             info['rating'] = d['rating']
             info['ticks'] = d['last']
             foes = [u for u in d['users'] if u and not u.startswith(args.us)]
-            info['opponent'] = ', '.join(foes) or '?'
+            info['opponent'] = d.get('opponent') or ', '.join(foes) or '?'
+            info['opp_code'] = d.get('opp_code')
             for g in logs:
                 dd = ml.describe(g, logs, metas)
                 if ('pain-and-gain' in dd['arena'] or not dd['arena']) and any(u in dd['users'] for u in foes) and dd['result'] in ('won', 'lost'):
-                    history.append(dict(game=g, when=time.strftime('%d.%m %H:%M', time.localtime(dd['when'])), result=dd['result'], ticks=dd['last'], rating=dd['rating']))
+                    history.append(dict(game=g, when=time.strftime('%d.%m %H:%M', time.localtime(dd['when'])), result=dd['result'], ticks=dd['last'], rating=dd['rating'], code=dd.get('opp_code')))
             history.sort(key=lambda h: h['when'])
             history = history[-12:]
     if doc:

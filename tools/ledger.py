@@ -52,7 +52,7 @@ def measure(g, logs, metas, args):
     L = ap.parse_log(text)
     foes = [u for u in d['users'] if u and not u.startswith(args.us)]
     info = dict(id=g, result=d['result'], opponent=', '.join(foes) or '?', ticks=d['last'], rating=d['rating'],
-                when=time.strftime('%d.%m %H:%M', time.localtime(d['when'])))
+                when=time.strftime('%d.%m %H:%M', time.localtime(d['when'])), opp_code=d.get('opp_code'))
     R = None
     hits = sorted(glob.glob(os.path.join(args.replays, f"{g}*.replay.json.gz")))
     if hits:
@@ -76,7 +76,7 @@ def measure(g, logs, metas, args):
     fl = ap.flicker(trans)
     q = ap.quiet_run(L)
     fin = info['divergence'].get('final')
-    row = dict(when=info['when'], id=g, version=L['version'] or '?', opponent=info['opponent'], result=info['result'], ticks=info['ticks'],
+    row = dict(when=info['when'], id=g, version=L['version'] or '?', opponent=info['opponent'], opp_code=info.get('opp_code'), result=info['result'], ticks=info['ticks'],
                delta=rating_delta(info['rating']), form=info['form'], his_form=(ap.classify(R)[0] if R else '-'),
                tags='|'.join(tags), flicker=fl[0], quiet=q['ticks'] if q else 0, giveups=len(L['giveups']), evades=len(L['evades']),
                score=f"{fin['score'][0]}:{fin['score'][1]}" if fin else '-', contact=R['contact_t'] if R else '-',
@@ -163,7 +163,19 @@ def report(rows, args):
             print(f"  {r['when']} {r['id'][-6:]} {r['version']:5s} {r['opponent'][:14]:14s} {r['result'][0].upper()} {r['ticks']:5d} {r['delta'] if r['delta'] is not None else '?':>4} "
                   f"{r['form'][:12]:12s} {r['his_form']:8s} c={r['contact']!s:>4} e={r['corner']!s:>4} v={r['first5']:>5} f={r['flicker']:2d} q={r['quiet']:4d} g={r['giveups']:3d} i={r['melee_idle']:4d} "
                   f"E={r['entry_lost']:>10} s={r['entry_shots']:>6} in3={r['entry_in3']:>6} st={r['entry_stripped']:>4} S={r['stripped']:>8} mv={r['our_moved']}/{r['his_moved']} cp={r['our_comp']}/{r['his_comp']} {r['tags'].replace('|', ', ')}")
-    # by opponent
+    # by opponent AND his code version — a username is not a bot: the server counts his uploads, and けろびー's version 1 (a blob,
+    # 06.09) and version 3 (07.09) lose and win differently (the operator, 07.09.2026)
+    byv = defaultdict(list)
+    for r in rows:
+        byv[(r['opponent'], r['opp_code'])].append(r)
+    print('\nby opponent VERSION (matches W-L, rating won/lost, first..last seen, his forms, rules firing in the losses):')
+    for (name, ver), rs in sorted(byv.items(), key=lambda kv: (kv[0][0], kv[0][1] if kv[0][1] is not None else -1)):
+        w = sum(1 for r in rs if r['result'] == 'won')
+        won = sum(r['delta'] for r in rs if (r['delta'] or 0) > 0)
+        lost = sum(r['delta'] for r in rs if (r['delta'] or 0) < 0)
+        forms = Counter(r['his_form'] for r in rs if r['his_form'] != '-')
+        tags = Counter(t for r in rs if r['result'] == 'lost' for t in r['tags'].split('|') if t)
+        print(f"  {name[:16]:16s}#{str(ver):<4} {len(rs):3d}  {w}-{len(rs) - w:<3d} {won:+4d}/{lost:<5d} {rs[0]['when']}..{rs[-1]['when']}  {dict(forms.most_common(3)) if forms else ''}  {dict(tags.most_common(3))}")
     by = defaultdict(list)
     for r in rows:
         by[r['opponent']].append(r)

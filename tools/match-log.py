@@ -143,14 +143,27 @@ def describe(game, logs, metas):
     meta = meta_of(metas[game]) if game in metas else None
     when = max((os.stat(p).st_mtime for p in chunks.values()), default=0)
     rating, delta = "", None
+    # the code versions the match was played with — the server's per-user upload counter, one per side. An opponent's
+    # username is not a bot: けろびー played version 1 as a blob on 06.09 and version 3 on 07.09, and the two lose and win
+    # differently; read results by name AND version (07.09.2026, the operator)
+    our_code, opp_code = None, None
+    if meta:
+        for c in meta.get("codes") or []:
+            if c.get("user") == meta.get("user"):
+                our_code = c.get("version")
+            else:
+                opp_code = c.get("version")
     if meta and meta.get("ratingHistory"):
         r = meta["ratingHistory"]
         rating = f"{r.get('previousRating')}->{r.get('rating')}"
         if isinstance(r.get("rating"), (int, float)) and isinstance(r.get("previousRating"), (int, float)):
             delta = r["rating"] - r["previousRating"]
+    users = [u.get("username") for u in (meta or {}).get("users", [])]
+    me_name = next((u.get("username") for u in (meta or {}).get("users", []) if u.get("_id") == (meta or {}).get("user")), None)
     return dict(game=game, arena=greet, when=when, chunks=len(chunks), version=version, tuning=tuning,
                 last=max(chunks) if chunks else 0, result=outcome(meta), rating=rating, delta=delta,
-                users=[u.get("username") for u in (meta or {}).get("users", [])])
+                users=users, our_code=our_code, opp_code=opp_code,
+                opponent="/".join(f"{u}#{opp_code}" if opp_code is not None else u for u in users if u and u != me_name))
 
 
 def cmd_list(args):
@@ -164,10 +177,9 @@ def cmd_list(args):
     print(f"{len(rows)} matches (cache holds {len(logs)})")
     for r in rows:
         when = time.strftime('%d.%m %H:%M', time.localtime(r["when"]))
-        foes = ", ".join(u for u in r["users"] if u)
         ver = f"v{r['version']}" if r['version'] is not None else "-"
         print(f"{when}  {r['game']}  {r['arena']:<22} {ver:<5} ticks={r['last']:<5} "
-              f"{r['result']:<6} {r['rating']:<10} {foes}")
+              f"{r['result']:<6} {r['rating']:<10} vs {r['opponent'] or ', '.join(u for u in r['users'] if u)}")
 
 
 def cmd_dump(args):
