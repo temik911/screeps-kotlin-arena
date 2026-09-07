@@ -853,6 +853,50 @@ switch stay in the code, dead, so the pair can be re-run if the arena changes. T
 extension model (a store, and `spawnCreep` drawing from extensions **within `SPAWN_RANGE`** — which the
 live matches have now confirmed as the right reading) and the `EXT=n` knob.
 
+### The delivery point, fourth attempt: two escape routes closed (07.09.2026)
+
+The third attempt left two ways out, both written down: **make the bet cheap enough to take blind**, or
+**find a signal in the opening that separates a long match from a short one**. The fourth attempt tried
+the second and, with the extension experiment above, closed the first as well.
+
+**The cheap structure does not exist.** That was the extension: 200 instead of 1000 for a place to hand
+energy in. The live matches say a spawn draws from extensions only within `SPAWN_RANGE`, so an extension
+by the far containers is 200 energy and hauler trips into nothing. The delivery point costs 1000, and
+with the keeper it prices at **1700**.
+
+**The horizon is uninformative exactly when it is consulted, and that was my own proposal.** The idea was
+sound in shape: an economic investment is worth its price only over the time the match still has to run,
+and the bot already owns an instrument for that — the siege simulation, which says when the match ends if
+the siege succeeds (`siegeEnds` = approach + siege ticks; "never" while no siege is winnable). Wired in,
+it changes nothing, and the trace says why in one field:
+
+```
+forward spawn: site at (56,47) rate=4.8->6.3/t build=100 ends=- left=1723 price=1700
+```
+
+`ends=-` is "never": at tick ~177 no siege is winnable yet, because there is barely an army to simulate,
+so the horizon falls back to the whole match and the bet is taken blind after all. A siege verdict early
+means "we have no army yet", not "this match will be long" — the instrument answers a different question
+than the one asked of it.
+
+**And the build-time prediction is wrong in a way that decides the outcome.** `keeperTicks` prices the
+ferry against the supply the site has *now* — the nearest pile — and a temporary pile decays in 99 ticks.
+Predicted `build=100`; measured, the site crawls 0 → 70 → 170 → 300 → 400 → 500 in trips of a hundred and
+never finishes. That is the failure mode, and it is not "slower": the sites end at **400–800 of 1000**,
+so the energy is spent and nothing is bought.
+
+The stand, against v54: every short scenario slower (`none` 428 → 460, `tower` 450 → 503, `ball` 663 →
+872, `tower+healball` 521 → 1028, `tower+hover` 450 → 978, `tower+fortspawn` 868 → 1043), `tower+stream`
+574 → no win in 2000, and `siege6` back to FAIL with 880 of 1000 sunk in a site the siege will not let
+anyone finish.
+
+So the fourth attempt is reverted like the three before it, and what it adds to the record is two closed
+doors rather than a feature. What is left for a fifth is narrower than before and can be stated exactly:
+**a supply that does not decay** (the site must be fed by something whose life is not 99 ticks — the
+permanent corner containers, or the spawn with a keeper sized for that trip), and **a signal that this
+match will be long, available before tick 200** — which is neither the siege verdict, nor his spawn
+count, nor anything else the bot currently prints.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
