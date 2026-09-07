@@ -580,6 +580,67 @@ object PainAndGain {
      *  старта, а то, что армия делает, когда флаг охраняет пара, а её видит как «угрозу» охота. */
     private const val USE_SPLIT_RACE = false
     private const val SPLIT_MIN = 3   // вторая группа не меньше трёх вооружённых: отставшие от колонны ходят по одному-два
+    /** МЕРА БОЯ — ТЕ, КТО В НЁМ БУДЕТ (v120, стенд split m28 на v117, 07.09.2026). Постура мерила его мощь по ВСЕЙ его боевой
+     *  армии, где бы та ни стояла: на 183-м тике его шестёрка сидела на H4 в углу (11–18, 78–85) в шести клетках от нашего ядра
+     *  из десяти, вторая шестёрка — в противоположном углу (88–90, 8–11), в семидесяти клетках, — и ядро 3044 уклонялось от
+     *  суммы 3559 (RETREAT_RATIO 1,15), мигая EVADE/HOLD в углу (19,19) с 183-го по 419-й тик, пока он держал четыре флага против
+     *  трёх (rate 11/14); из восьми карт split четыре с 200–500 тиками уклонения/поста при «слабее». По Ланчестеру бой с частью
+     *  его армии всей своей выгоден ровно тогда, когда остальные не успеют: мера боя — его боевые по порядку прихода к центру
+     *  нашей массы (тики хода по его телу и местности, pathTicks): первый и все, кто придёт, пока набранная до него стая
+     *  умирает под нашим огнём по модели цены боя (fightTicks: лекари первыми, доля смежности мили как в мощи); окно растёт
+     *  вместе со стаей, так что растянутая колонна входит целиком, а вторая группа в другом углу — нет. Первый срез с радиусом
+     *  «в досягаемости массы» (ENGAGE_RANGE + RANGED_RANGE) и мерой по всей армии вне его не работал: уклонение решается на
+     *  EVADE_RANGE (25), и в 12–25 клетках стая была пуста, а мера — прежней (split m31 24293:20333 → 12711:24290, FLAG↔EVADE
+     *  через тик на 338–384-м). По этой мере считаются «слабее» (отход/уклонение), «явно слабее» в контакте и наступление;
+     *  захваты (дебафф ложится на обе армии целиком), пул отряда и окно меры ядра — как были, по всей его армии. Строка
+     *  постуры несёт fight=мощь/число стаи и ourFight, когда стая не вся армия. */
+    private const val USE_FIGHT_PACK_MEASURE = true
+    /** ГОНКА МЕРИТ «МЫ БЛИЖЕ» С ВЫПУЩЕННЫМИ БЕГУНАМИ (v120): цели гонки — свободные флаги, к которым мы ближе его, и ctx.army
+     *  без отделённых (бегун в ctx.runners) терял того самого крипа, которым мы были ближе, — см. raceForce. */
+    private const val USE_RACE_FORCE_WITH_RUNNERS = true
+    /** ТЕРПЕНИЕ ПОСТРОЕНИЯ — С ПОЯВЛЕНИЯ АВАНГАРДА (v120, стенд spread m31): см. formWaitSince. Построение получает FORM_PATIENCE
+     *  тиков на сбор с того тика, как авангард появился (враг с боем в досягаемости броска), и дальше марш идёт, сплочение —
+     *  делом cohesionHold; прежде таймер сбрасывался каждым собранным тиком, и шаг авангарда к цели, ломавший построение,
+     *  давал цикл «шаг — назад» без конца.
+     *  ОТВЕРГНУТО СТЕНДОМ (v120e): армия, идущая несобранной через десять тиков после появления авангарда, входит в бои хуже —
+     *  split 5-3 → 2-6 (m29 24267:16914 → 22958:24273, m30 24283:19647 → 21896:24299, m34, m35), tour 8-0 с узкими краями
+     *  (m29 21727:9106 → 23418:22351, m31 23568:13601 → 16733:15532), гейт 130/131 — scatter m31 19949:24311; сам spread m31
+     *  не выправлен (20579 → 16150:24316). Цикл «шаг — назад» на spread m31 остаётся ОТКРЫТОЙ НАХОДКОЙ: авангард, чей шаг к
+     *  цели ломает сбор «5 из 6 в двух клетках», — граница FORM_RANGE/FORM_SHARE, и терпение тут не лекарство. */
+    private const val USE_FORM_PATIENCE_FROM_VAN = false
+    /** АВАНГАРД СБОРА — ИЗ МАССЫ (v120, стенд split m28): точка сбора марша к флагу (rallyTo) выбиралась ближайшим к флагу
+     *  вооружённым по обходному полю среди ВСЕХ ходячих, и на 701–822-м тиках ею стал стрелок, застрявший с тремя лекарями по ту
+     *  сторону его шестёрки на D5 (53,35) в 24 клетках от массы: масса шла «к авангарду» в обход его группы, стрелок — по
+     *  поводку к центру массы в обход той же группы, шага не было ни у кого 120 тиков, простой марша снял наступление на 300
+     *  тиков при 10 против 15 в тик и 3673 против 1253 его ближней стаи (13884:24289). Построение это уже знает: «авангард —
+     *  только из массы (MASS_RANGE): оторвавшийся крип не точка сбора» (formMass); сбор марша выбирает авангард так же. */
+    private const val USE_RALLY_VAN_FROM_MASS = true
+    /** ЦЕНТР МАССЫ — КРУПНЕЙШАЯ ГРУППА, А НЕ СРЕДНЕЕ (v120, стенд spread m30 на v120f, 20654:24318). Центр вооружённых считался
+     *  средним по всем ходячим вооружённым, и на 700–1800-м тиках его тянули двое отставших — мили на поводке в 13 клетках и
+     *  стрелок в 7 — так, что четвёрка стрелков стояла в четырёх клетках от «центра» при COMPACT_RANGE 2: правило плотности
+     *  (враг в досягаемости — шаг только на клетки строя или к центру) закрывало шаги к цели-флагу A3 (31,67), шаги к центру
+     *  проигрывали по потоку стоянию, отставшие не доходили тем же правилом — армия 1100 тиков в FLAG у флага под его тройкой
+     *  при 12 против 13 в тик (форма тупика матчей 294/296 и v119). Центр массы — центр КРУПНЕЙШЕЙ группы ходячих вооружённых
+     *  (сид с наибольшим числом своих в MASS_RANGE, как groupSeed у его армии): отставший не сдвигает точку, к которой стягивают
+     *  плотность, поводок, сбор и построение; та же точка — цель поля прихода для меры боя (massCentroid). */
+    private const val USE_MASS_CLUSTER_CENTROID = true
+    /** ПРОСТОЙ СНИМАЕТ ПОСТРОЕНИЕ (v120, стенд spread m33 на v120g, 23645:24308; та же форма — spread m31 на v120d и m30 на v120f).
+     *  Построение собирается у авангарда — ближайшего к врагу с боем в досягаемости броска, — а марш идёт по потоку к
+     *  флагу-цели; когда враг в досягаемости — стоячий пикет сбоку от пути (его пара на соседнем флаге в пяти клетках, «picket
+     *  of 2 armed in reach for 320 ticks without damage»), две тяги смотрят в разные стороны: шаг марша уводит бойца из двух
+     *  клеток от авангарда, сбор (5 из 6) рассыпается, formGo возвращает его, сбор готов, шаг марша снова — цикл в два тика,
+     *  1000 тиков в FLAG у D5 под одним его крипом при 13 против 12 в тик. Простой уже вынес решение «контакт мнимый — флаги до
+     *  N» и снимает удары (engage, poker) и наступление; построение перед огнём, которого простой не намерил, снимается той
+     *  же мерой — марш идёт мимо пикета несобранным, а сплочение на марше остаётся делом cohesionHold. Терпение построения с
+     *  появления авангарда (USE_FORM_PATIENCE_FROM_VAN) ОТВЕРГНУТО выше: оно снимало сбор и перед настоящим боем. */
+    private const val USE_STALL_LIFTS_FORMING = true
+    /** СТАЯ НАСТУПЛЕНИЯ — У ЕГО ГОЛОВЫ (v120, таблица входов v117 → v120g): см. pushPack. Мера боя у нашей массы (fightPack)
+     *  считала для толчка голову колонны без хвоста, и армия шла навстречу блобу: brawl 4 хуже / 1 лучше, m30 +50 2536 → 6250
+     *  своих хитов, m29 и m34 из стирания в победу по очкам. Наступление — бой у него: стая по приходу к его ближайшему не
+     *  позже нашего медленнейшего бойца плюс время её смерти. */
+    private const val USE_PUSH_PACK_AT_HEAD = true
+    /** ЛЕКАРИ НЕ С ХРАНИТЕЛЯМИ (v120, стенд spread m30 на v120i): см. healMate. */
+    private const val USE_HEALERS_NOT_WITH_KEEPERS = true
     // SCATTER_OFF_SHARE = 3/4: сбор — крупнейшая группа не меньше трёх четвертей его вооружённых (целочисленно: ×4 ≥ ×3)
     private const val FARMER_OFF_TICKS = 1
     /** ОПОРА ЯДРА ПРИ РОССЫПИ — ЕГО КРУПНЕЙШАЯ ГРУППА (v97, матч 240 — ricardo18informatica2020, россыпь с первого тика:
@@ -1145,7 +1206,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v117"
+    private const val BOT_VERSION = "v120"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2455,7 +2516,7 @@ object PainAndGain {
         // каждый тик, а обездвиженные остаются врагу (стенд rush: отход при 1250 против 1619 отдал ещё
         // шестерых). Иначе в контакте — бой всем составом, даже слабее: рубка с фокусом лучше разгрома
         // контакт армии — контакт её МАССЫ (см. MASS_RANGE): один оторвавшийся не переводит армию в бой
-        val massCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
+        val massCentroid = clusterCentroid(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
         val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
         val contact = inContact(armedEnemies, massArmy)
         val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
@@ -2471,9 +2532,53 @@ object PainAndGain {
         // без стрелков строя нет — лекарей и раненых травят, и «в контакте держим строй» держало их у поста, где
         // стоял враг (стенд m7 sleeper: три лекаря с flee=true разбежались по карте и были добиты поодиночке)
         val retreatFeasible = (!contact || strikers.isEmpty()) && !atRetreatPoint
-        val weaker = theirs >= ours * (if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
+        // мера боя (v120, см. USE_FIGHT_PACK_MEASURE): его боевые по порядку прихода к нашей массе — первый и все, кто придёт,
+        // пока стая, набранная до него, умирает под нашим огнём (окно растёт вместе со стаей: колонна входит целиком)
+        val fightPack = if (!USE_FIGHT_PACK_MEASURE || combatEnemies.size <= 1 || strikers.isEmpty()) combatEnemies else run {
+            // центр массы в стене даёт пустое поле (см. passableNear): все приходы MAX, стая — вся армия, и уклонение в угол
+            // на 199-м тике split m28 при его шестёрке в шести клетках
+            val flow = flowTo(ctx, passableNear(massCentroid))
+            val arrival = combatEnemies.map { e -> e to pathTicks(e, flow, e.x * 100 + e.y) }.sortedBy { it.second }
+            val pack = ArrayList<Creep>()
+            val t0 = arrival.first().second
+            var limit = t0
+            for ((e, t) in arrival) {
+                if (pack.isNotEmpty() && t > limit) break
+                pack.add(e)
+                val kill = fightTicks(pack, strikers)
+                limit = if (kill >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 2 else t0 + kill
+            }
+            pack
+        }
+        val fightAll = fightPack.size == combatEnemies.size
+        val oursFight = if (fightAll) ours else ourPowerOf(army, fightPack)
+        val theirsFight = if (fightAll) theirs else enemyPowerOf(fightPack, army)
+        // стая НАСТУПЛЕНИЯ (v120, USE_PUSH_PACK_AT_HEAD): наступать — идти к его ближайшему, и бой будет у НЕГО, а не у нашей
+        // массы: стая — те, кто дойдёт до головы не позже нас плюс время её смерти. Хвост колонны в десяти клетках за головой
+        // приходит к ней через десять тиков после нас — он в стае; вторая группа фермера в другом углу — нет. Мера прихода
+        // к нашей массе (fightPack) годится для «слабее» (стоим — кто дойдёт до нас), но для толчка она считала голову
+        // колонны без хвоста: таблица входов v117 → v120g brawl 4 хуже / 1 лучше (m30 +50: 2536 → 6250 своих хитов, 13 → 9 живых)
+        val pushPack = if (!USE_FIGHT_PACK_MEASURE || !USE_PUSH_PACK_AT_HEAD || combatEnemies.size <= 1 || strikers.isEmpty()) fightPack else run {
+            val head = combatEnemies.minByOrNull { e -> massArmy.minOf { getRange(e, it) } } ?: return@run fightPack
+            val toHead = flowTo(ctx, head)
+            val ourTravel = strikers.map { pathTicks(it, toHead, it.x * 100 + it.y) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: return@run fightPack
+            val arrival = combatEnemies.map { e -> e to (if (e.id == head.id) 0 else pathTicks(e, toHead, e.x * 100 + e.y)) }.sortedBy { it.second }
+            val pack = ArrayList<Creep>()
+            var limit = ourTravel
+            for ((e, t) in arrival) {
+                if (pack.isNotEmpty() && t > limit) break
+                pack.add(e)
+                val kill = fightTicks(pack, strikers)
+                limit = if (kill >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 2 else ourTravel + kill
+            }
+            pack
+        }
+        val pushAll = pushPack.size == combatEnemies.size
+        val oursPush = if (pushAll) ours else ourPowerOf(army, pushPack)
+        val theirsPush = if (pushAll) theirs else enemyPowerOf(pushPack, army)
+        val weaker = theirsFight >= oursFight * (if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // из идущего боя (см. RETREAT_CONTACT_RATIO) — только при явном проигрыше
-        val weakerContact = theirs >= ours * (if (posture == Posture.ANNIHILATE) RETREAT_CONTACT_RATIO else if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
+        val weakerContact = theirsFight >= oursFight * (if (posture == Posture.ANNIHILATE) RETREAT_CONTACT_RATIO else if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // ДОБИТЬ по перевесу — с гистерезисом; по контакту — пока контакт есть (без гистерезиса: см. PUSH_RELEASE_RATIO)
         val stalemate = behindTicks >= BEHIND_PATIENCE
         stalemateNow = stalemate
@@ -2544,8 +2649,12 @@ object PainAndGain {
             val groupSeed = armedEnemies.maxByOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } }
             val largestMembers = if (groupSeed == null) armedEnemies else armedEnemies.filter { getRange(groupSeed, it) <= ENGAGE_RANGE }
             // дебют-гонка (v91, см. USE_SCATTER_RACE): россыпь его армии до первого обмена
+            // «мы ближе» — всей силой, с уже выпущенными бегунами (v120): бегун, выпущенный к свободному флагу, и был тем, кем мы
+            // были ближе; без него гонка кончалась, его отзывали, а следующим тиком выпускали снова — 1260 строк detach за
+            // матч (split m31), постура мигала с ним ДОБИТЬ↔ДЕРЖАТЬ через тик (наша мощь 4179↔3502)
+            val raceForce = if (USE_RACE_FORCE_WITH_RUNNERS) army + ctx.runners.filter { it.id in detachedIds } else army
             val raceTargets = ctx.flags.count { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
-                (armedEnemies.minOfOrNull { getRange(it, f.pos) } ?: 999) > (army.minOfOrNull { getRange(it, f.pos) } ?: 999) }
+                (armedEnemies.minOfOrNull { getRange(it, f.pos) } ?: 999) > (raceForce.minOfOrNull { getRange(it, f.pos) } ?: 999) }
             // расколот (v119): ВТОРАЯ группа его вооружённых (вне крупнейшей, в ENGAGE_RANGE друг от друга) не меньше SPLIT_MIN —
             // две группы фермера, а не отставшие от колонны на марше: первый срез «двое вне крупнейшей» стартовал гонку на
             // двадцатом тике по хвосту колонны spread, и spread m19/m31/m33 из побед в 20403:24313, 14392:24330, 14990:24318
@@ -2646,7 +2755,7 @@ object PainAndGain {
                 }
             }
             if (DEBUG_LOG && detachedIds.size != detachedBefore)
-                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
+                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow targets=$raceTargets largest=$largestGroup/${armedEnemies.size} dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
         } else detachedIds.clear()
         val interceptDenies = interceptFlag != null && !interceptFlag.ours
         val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)
@@ -2656,7 +2765,7 @@ object PainAndGain {
         // ловимых) — 51 хуже / 51 лучше, гейтовые m28 farm+weak и m30 camp красные, кайтеры добиваются позже на десятке карт,
         // m16 kite проигран; порог evasive «больше половины окна» — 66 хуже / 44 лучше. Быстрое снятие наступления, когда
         // ловимых нет, — то, чем армия не гонится за кайтером; цена — эти тики против блоба, который отступает и возвращается
-        pushing = !stalled && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && ours >= theirs * (if (pushing) pushRelease else pushRatio)))
+        pushing = !stalled && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && oursPush >= theirsPush * (if (pushing) pushRelease else pushRatio)))
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -2671,7 +2780,7 @@ object PainAndGain {
         // добивания» уводило и от равной армии. Поля выхода нужны и бегунам без армии (см. runnerEscape)
         // от безфлагового броска (см. EVADE_EQUAL_RATIO) уклоняемся уже при равной силе
         val hunted = armedEnemies.isNotEmpty() && strikers.isNotEmpty() &&
-            (theirs >= ours * RETREAT_RATIO || (unflaggedRushNow && theirs >= ours * EVADE_EQUAL_RATIO))
+            (theirsFight >= oursFight * RETREAT_RATIO || (unflaggedRushNow && theirsFight >= oursFight * EVADE_EQUAL_RATIO))
         val escapeNeeded = hunted || (armedEnemies.isNotEmpty() && strikers.isEmpty())
         // темп сближения врага (0 — стоит, 1 — идёт на нас): запас выхода даёт ему фору только в этом темпе — фора «идёт
         // к выходу мгновенно» отвергала всякую цель при враге, стоящем дома, и армия весь матч сидела дома (стенд m1 scouts)
@@ -2696,7 +2805,7 @@ object PainAndGain {
         }
         val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted)
         // дебют без угла (v100, USE_OPENING_AT_POST): бросок далеко — не уклонение, а пост
-        val rushFar = USE_OPENING_AT_POST && unflaggedRushNow && theirs < ours * RETREAT_RATIO
+        val rushFar = USE_OPENING_AT_POST && unflaggedRushNow && theirsFight < oursFight * RETREAT_RATIO
         val evadeTo = evadeFirst ?: (if (hunted && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
@@ -2729,7 +2838,7 @@ object PainAndGain {
             postureLogged = postureKey
             println("posture: $newPosture t=${getTicks()} our=${ours.toInt()} enemy=${theirs.toInt()} near=$enemyNear contact=$contact pushing=$pushing huntable=${huntable.size}/${combatEnemies.size} retreatFeasible=$retreatFeasible strikers=${strikers.size}/${army.size} " +
                 "obj=${objective?.let { "(${it.flag.pos.x},${it.flag.pos.y})${typeChar(it.flag.type)}${it.flag.score} pack=${it.pack.size} travel=${it.travel} v=${(it.value * 100).toInt()}" } ?: "-"} " +
-                "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} evadeTo=${evadeTo?.let { "(${it.x},${it.y})" } ?: "-"} approach=${(approachRate * 100).toInt()} post=(${post.x},${post.y}) behind=$behindOnScore/$behindTicks hunt=$huntingThreat")
+                "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} evadeTo=${evadeTo?.let { "(${it.x},${it.y})" } ?: "-"} approach=${(approachRate * 100).toInt()} post=(${post.x},${post.y}) behind=$behindOnScore/$behindTicks hunt=$huntingThreat fight=${theirsFight.toInt()}/${fightPack.size}${if (fightAll) "" else " ourFight=${oursFight.toInt()}"} push=${theirsPush.toInt()}/${pushPack.size}${if (pushAll) "" else " ourPush=${oursPush.toInt()}"}")
         }
         posture = newPosture
 
@@ -2905,7 +3014,7 @@ object PainAndGain {
             pushing -> nearestPrey(huntable)
             else -> nearestPrey(contactPack.filter { catchable(it, chasers) })
         }
-        val armedCentroid = centroidOf(mobileArmy.filter { hasWeapon(it) }.ifEmpty { army }) ?: centroid
+        val armedCentroid = clusterCentroid(mobileArmy.filter { hasWeapon(it) }.ifEmpty { army }) ?: centroid
         // захватчик флага-цели — ближайший к флагу ВООРУЖЁННЫЙ член группы (одной клетки на всех не хватит; лекарь
         // ходит за подопечным, и назначенный захватчиком лекарь тысячу тиков стоял рядом с флагом — стенд greedy)
         val objectiveCapturer = objective?.let { o -> mobileArmy.filter { hasWeapon(it) }.ifEmpty { mobileArmy }.minByOrNull { getRange(it, o.flag.pos) }?.id }
@@ -2939,7 +3048,12 @@ object PainAndGain {
             near.count { getRange(it, formVan) <= FORM_RANGE } >= needed
         }
         val formWaiting = formVan != null && !formationGathered && armedEnemies.any { e -> formers.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
-        if (!formWaiting) formWaitSince = -1 else if (formWaitSince < 0) formWaitSince = getTicks()
+        // терпение — с появления авангарда, а не с последнего несобранного тика (v120, USE_FORM_PATIENCE_FROM_VAN): авангард,
+        // шагнувший к цели, сам ломал построение (нужны 5 из 6 в двух клетках от него, оставалось 4), по formGo шагал назад,
+        // построение собиралось, он шагал снова — цикл в два тика 1300 тиков на spread m31 (20579:24316) при таймере
+        // терпения, сбрасываемом каждым собранным тиком
+        if (USE_FORM_PATIENCE_FROM_VAN) { if (formVan == null) formWaitSince = -1 else if (formWaitSince < 0) formWaitSince = getTicks() }
+        else if (!formWaiting) formWaitSince = -1 else if (formWaitSince < 0) formWaitSince = getTicks()
         val formationReady = formationGathered || (formWaitSince >= 0 && getTicks() - formWaitSince >= FORM_PATIENCE)
         // досягаемость врага для лекаря и раненого (см. reachCells): стрелок бьёт на 3, мили шагнёт и ударит на 2. Тело
         // лекаря HHHHHHMMMMMM — лечение впереди, и первое же попадание снимает 12 лечения в тик навсегда; наши лекари
@@ -3215,9 +3329,14 @@ object PainAndGain {
             // ближайшему ходячему бойцу — не к самому раненому через полкарты: два лекаря шли к обездвиженному
             // остову за стеной, а строй ждал их у флага (стенд greedy)
             val healMate = if (healer) {
-                val fighters = army.filter { it.id != creep.id && hasWeapon(it) }
+                // хранитель флага — не подопечный, пока есть ходячие бойцы (v120, USE_HEALERS_NOT_WITH_KEEPERS): лекарь рядом с
+                // хранителем видел в нём единственного «своего в четырёх», и трое лекарей стояли по одному у хранителей на D5 и
+                // R3, а ударная шестёрка у A3 шла без лечения (spread m30 на v120i, 20291:24327); раненый хранитель снимается с
+                // флага (см. updateKeepers) и становится подопечным как все
+                val keptOut = USE_HEALERS_NOT_WITH_KEEPERS && army.any { hasWeapon(it) && canMove(it) && it.id !in keeperIds }
+                val fighters = army.filter { it.id != creep.id && hasWeapon(it) && !(keptOut && it.id in keeperIds) }
                 // подопечные — вооружённые; вне боя рядом — и раненые (они сами идут к лекарю, см. wounded)
-                val patients = army.filter { it.id != creep.id && !(hasHeal(it) && !hasWeapon(it)) }
+                val patients = army.filter { it.id != creep.id && !(hasHeal(it) && !hasWeapon(it)) && !(keptOut && it.id in keeperIds) }
                 val engagedNear = fighters.any { f -> getRange(creep, f) <= HEAL_RANGE + 1 && combatEnemies.any { getRange(f, it) <= RANGED_RANGE + 1 } }
                 val near = (if (engagedNear) fighters else patients).filter { getRange(creep, it) <= HEAL_RANGE + 1 }
                 // подопечный под огнём (v109b, USE_WARD_UNDER_FIRE) ОТВЕРГНУТ таблицей входов стенда: лекари шли к терявшему хиты
@@ -3257,7 +3376,9 @@ object PainAndGain {
                 var van: Creep? = null
                 var vanFlow = my
                 var vanId = creep.id
-                for (m in mobileArmy) {
+                // авангард — из массы (v120, USE_RALLY_VAN_FROM_MASS): оторвавшийся крип не точка сбора, как и в построении
+                val rallyPool = if (USE_RALLY_VAN_FROM_MASS) mobileArmy.filter { hasWeapon(it) && getRange(it, armedCentroid) <= MASS_RANGE }.ifEmpty { mobileArmy } else mobileArmy
+                for (m in rallyPool) {
                     if (m.id == creep.id || !hasWeapon(m)) continue
                     val d = mf[m.x * 100 + m.y]
                     if (d < 0) continue
@@ -3273,7 +3394,8 @@ object PainAndGain {
             // в контакте построение окончено: авангард — тот, кто уже дерётся, и «собраться у авангарда с дистанцией 1»
             // тянуло стрелков за ним внутрь строя врага, а стреляли они с 4–5 клеток впустую (матч 15, t=68–100)
             val forming = formVan != null && !formationReady && !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE &&
-                localEnemies.any { threatening(it, enemyCreeps) } && nearestEnemyRange > RANGED_RANGE && !contact
+                localEnemies.any { threatening(it, enemyCreeps) } && nearestEnemyRange > RANGED_RANGE && !contact &&
+                !(USE_STALL_LIFTS_FORMING && stalled)   // пикет без урона — не бой, к которому строятся (v120)
             val formHold = forming && (formVan!!.id == creep.id || getRange(creep, formVan) <= FORM_RANGE)
             val formGo = forming && !formHold
             val target: Position
@@ -3470,7 +3592,7 @@ object PainAndGain {
                     if (support) r.add("support")
                     if (rotating) r.add("rotating")
                     if (stalled) r.add("stalled")
-                    if (!localAggressive) r.add("!aggr")
+                    if (!localAggressive) r.add("!aggr(${ourPowerOf(localAllies, localEnemies).toInt()}/${enemyPowerOf(localEnemies, localAllies).toInt()}x${ratio} cost=${fightCost(localEnemies, localAllies).let { if (it >= Double.MAX_VALUE / 2) "inf" else it.toInt().toString() }} slack=${localAllies.maxOfOrNull { speedSlack(it) } ?: 0} le=${localEnemies.size} la=${localAllies.size})")
                     if (!inLine) r.add("!inLine")
                     val d = getRange(creep, near)
                     if (holdMelee && d > holdReach(near)) r.add("hold:d$d>${holdReach(near)}")
@@ -4146,6 +4268,24 @@ object PainAndGain {
         return damage
     }
 
+    /** Тики боя: пока враги умирают по одному под нашим огнём (порядок и лечение — как в fightCost; удар мили — с долей
+     *  смежности, как в мощи); MAX, если чистый урон не положителен. */
+    private fun fightTicks(enemies: List<Creep>, ours: List<Creep>): Int {
+        val meleeK = if (USE_MELEE_ADJACENCY_SHARE) MELEE_ADJACENCY_SHARE else 1.0
+        val ourDps = ours.sumOf { effectiveDps(it, enemies, 1.0, meleeK) }
+        if (ourDps <= 0.0) return Int.MAX_VALUE / 2
+        val order = enemies.sortedWith(compareByDescending<Creep> { InfluenceMap.profileOf(it).heal }.thenBy { it.hits })
+        var heal = enemies.sumOf { InfluenceMap.profileOf(it).heal }
+        var ticks = 0.0
+        for (e in order) {
+            val net = ourDps * InfluenceMap.takenOf(e) - heal
+            if (net <= 0.0) return Int.MAX_VALUE / 2
+            ticks += e.hits / net
+            heal -= InfluenceMap.profileOf(e).heal
+        }
+        return ticks.toInt() + 1
+    }
+
     private fun lanchester(dps: Double, enemyHeal: Double, hits: Double): Double =
         sqrt(maxOf(0.0, dps - enemyHeal) * maxOf(0.0, hits))
 
@@ -4276,6 +4416,14 @@ object PainAndGain {
         val goals = enemies.map { e -> SearchGoal(pos = InfluenceMap.cell(e.x, e.y), range = range) }.toTypedArray()
         val result = searchPath(creep, goals, SearchPathOptions(flee = true, costMatrix = dangerMatrix))
         return result.path.firstOrNull()
+    }
+
+    /** Центр крупнейшей группы (v120, см. USE_MASS_CLUSTER_CENTROID): сид — крип с наибольшим числом своих из списка в MASS_RANGE
+     *  (при равенстве — больший id), центр — по его группе; без переключателя — среднее по всем. */
+    private fun clusterCentroid(cs: List<Creep>): Position? {
+        if (!USE_MASS_CLUSTER_CENTROID || cs.size <= 2) return centroidOf(cs)
+        val seed = cs.maxWithOrNull(compareBy<Creep>({ c -> cs.count { getRange(c, it) <= MASS_RANGE } }, { it.id })) ?: return null
+        return centroidOf(cs.filter { getRange(seed, it) <= MASS_RANGE })
     }
 
     private fun centroidOf(points: List<Position>): Position? {
