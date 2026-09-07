@@ -21,7 +21,7 @@ report() { # $1 = label, $2 = log file
 # siege в этом списке НЕТ намеренно: его ИСХОД хаотичен — при том же боте смена периода подкрепления
 # на один тик даёт 938, 1631 и 1685 (замерено 06.09.2026). Гейт на таком исходе — монетка; сам
 # сценарий остаётся для ручных прогонов, а проверяется по нему РЕШЕНИЕ (siege6 ниже)
-for m in none enemy swarm raider harass tower tower+enemy ball tower+healball towersite healball tower+hover rush camp stream tower+stream fortress pairs tower+pairs; do
+for m in none enemy swarm raider harass tower tower+enemy ball tower+healball towersite healball tower+hover rush camp stream tower+stream fortress pairs tower+pairs fortspawn tower+fortspawn; do
   f=out/${TAG}_r2_${m//+/_}.txt
   "$NODE" --import ./register.mjs run2.mjs 2000 "$m" > "$f" 2>&1
   report "run2:$m" "$f"

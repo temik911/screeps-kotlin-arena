@@ -11,6 +11,14 @@ export class GameObject { constructor(x,y){ this.x=x; this.y=y; this.id=world.ne
   findClosestByPath(arr){ return this.findClosestByRange(arr); }
   findInRange(arr,r){ return arr.filter(o=>range(this,o)<=r); } }
 export class Structure extends GameObject { constructor(x,y,hits){ super(x,y); this.hits=hits; this.hitsMax=hits; } }
+/** Урон по СТРУКТУРЕ под рампартом достаётся рампарту: пока он цел, структура под ним цела. Так в
+ *  движке, и так в Арене — замер живого матча 07.09.2026: хиты чужого спавна стояли на 3000 полторы
+ *  тысячи тиков и рухнули за тридцать, когда кончился рампарт. Крипов рампарт не защищает. */
+export function hurt(target, amount){
+  const shield = (target instanceof Creep) ? null
+    : world.objects.find(o=>o.exists && o instanceof StructureRampart && o!==target && o.x===target.x && o.y===target.y);
+  (shield || target).hits -= amount;
+}
 export class OwnedStructure extends Structure { constructor(x,y,hits,my){ super(x,y,hits); this.my=my; } }
 export class StructureSpawn extends OwnedStructure { constructor(x,y,my,energy){ super(x,y,3000,my); this.store=new Store(1000); this.store.energy=energy; this.spawning=null; this.directions=[1,2,3,4,5,6,7,8]; }
   setDirections(){ return 0; }
@@ -23,7 +31,7 @@ export class StructureTower extends OwnedStructure { constructor(x,y,my){ super(
   heal(t){ if(this.cooldown>0) return C.ERR_TIRED; if(this.store.energy<C.TOWER_ENERGY_COST) return C.ERR_NOT_ENOUGH_ENERGY; const r=range(this,t); if(r>C.TOWER_RANGE) return C.ERR_NOT_IN_RANGE;
     t.hits=Math.min(t.hitsMax, t.hits+Math.max(0, C.TOWER_POWER_HEAL*(1-C.TOWER_FALLOFF*Math.max(0,r-C.TOWER_OPTIMAL_RANGE)/(C.TOWER_FALLOFF_RANGE-C.TOWER_OPTIMAL_RANGE)))); this.store.energy-=C.TOWER_ENERGY_COST; this.cooldown=C.TOWER_COOLDOWN; return 0; }
   attack(t){ if(this.cooldown>0) return C.ERR_TIRED; if(this.store.energy<C.TOWER_ENERGY_COST) return C.ERR_NOT_ENOUGH_ENERGY; const r=range(this,t); if(r>C.TOWER_RANGE) return C.ERR_NOT_IN_RANGE;
-    t.hits-=Math.max(0, C.TOWER_POWER_ATTACK*(1-C.TOWER_FALLOFF*Math.max(0,r-C.TOWER_OPTIMAL_RANGE)/(C.TOWER_FALLOFF_RANGE-C.TOWER_OPTIMAL_RANGE))); this.store.energy-=C.TOWER_ENERGY_COST; this.cooldown=C.TOWER_COOLDOWN; return 0; } }
+    hurt(t, Math.max(0, C.TOWER_POWER_ATTACK*(1-C.TOWER_FALLOFF*Math.max(0,r-C.TOWER_OPTIMAL_RANGE)/(C.TOWER_FALLOFF_RANGE-C.TOWER_OPTIMAL_RANGE)))); this.store.energy-=C.TOWER_ENERGY_COST; this.cooldown=C.TOWER_COOLDOWN; return 0; } }
 export class StructureWall extends Structure {} export class StructureRampart extends OwnedStructure {} export class StructureRoad extends Structure {}
 export class ConstructionSite extends GameObject { constructor(x,y,my,total,proto){ super(x,y); this.my=my; this.progress=0; this.progressTotal=total; this._proto=proto;
     // structure — будущая структура: движок отдаёт её только владельцу площадки, и бот читает по ней тип
@@ -45,9 +53,9 @@ export class Creep extends GameObject { constructor(x,y,my,body){ super(x,y); th
   parts(t){ return this.body.filter(p=>p.type===t&&p.hits>0).length; }
   move(dir){ if(this.fatigue>0) return -11; const d=[[0,0],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]][dir]; world.intents.push({creep:this,x:this.x+d[0],y:this.y+d[1]}); return 0; }
   moveTo(t){ const r=_searchPath(this,{pos:t,range:1}); const s=r.path[0]; if(s) world.intents.push({creep:this,x:s.x,y:s.y}); return 0; }
-  attack(t){ if(range(this,t)>1) return C.ERR_NOT_IN_RANGE; t.hits-=30*this.parts(C.ATTACK); return 0; }
-  rangedAttack(t){ if(range(this,t)>3) return C.ERR_NOT_IN_RANGE; t.hits-=10*this.parts(C.RANGED_ATTACK); return 0; }
-  rangedMassAttack(){ for(const o of world.objects){ if(o.exists && o!==this && o.hits!==undefined && o.my!==this.my && range(this,o)<=3) o.hits-=10*this.parts(C.RANGED_ATTACK)*[1,1,0.4,0.1][range(this,o)]; } return 0; }
+  attack(t){ if(range(this,t)>1) return C.ERR_NOT_IN_RANGE; hurt(t, 30*this.parts(C.ATTACK)); return 0; }
+  rangedAttack(t){ if(range(this,t)>3) return C.ERR_NOT_IN_RANGE; hurt(t, 10*this.parts(C.RANGED_ATTACK)); return 0; }
+  rangedMassAttack(){ for(const o of world.objects){ if(o.exists && o!==this && o.hits!==undefined && o.my!==this.my && range(this,o)<=3) hurt(o, 10*this.parts(C.RANGED_ATTACK)*[1,1,0.4,0.1][range(this,o)]); } return 0; }
   heal(t){ if(range(this,t)>1) return C.ERR_NOT_IN_RANGE; t.hits=Math.min(t.hitsMax,t.hits+12*this.parts(C.HEAL)); return 0; }
   rangedHeal(t){ if(range(this,t)>3) return C.ERR_NOT_IN_RANGE; t.hits=Math.min(t.hitsMax,t.hits+4*this.parts(C.HEAL)); return 0; }
   withdraw(t){ if(range(this,t)>1) return C.ERR_NOT_IN_RANGE; const a=Math.min(this.store.getFreeCapacity(), t.store.energy); t.store.energy-=a; this.store.energy+=a; return a>0?0:C.ERR_NOT_ENOUGH_RESOURCES; }

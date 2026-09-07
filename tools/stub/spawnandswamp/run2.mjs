@@ -1,5 +1,5 @@
 import * as C from 'game/constants';
-import { world, endTick, StructureSpawn, StructureContainer, StructureWall, StructureTower, ConstructionSite, Creep, Resource, range, terrainAt } from 'game/prototypes';
+import { world, endTick, StructureSpawn, StructureContainer, StructureWall, StructureRampart, StructureTower, ConstructionSite, Creep, Resource, range, terrainAt } from 'game/prototypes';
 import { loop } from '../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/spawnandswamp/SpawnAndSwamp.export.mjs';
 // мир как в живом матче: рамка стен, треть болота, наш спавн справа (94,49) в кармане за стенным блоком x=81..86 (y=20..83),
 // выходы из кармана сверху (y<=10) и снизу (y>=89); угловые контейнеры 2500; временные 2000/99 тиков каждые 50 тиков
@@ -14,7 +14,7 @@ const my=new StructureSpawn(94,49,true,1000); const en=new StructureSpawn(5,50,f
 for(const [cx,cy] of [[88,49],[11,50]]){ new StructureContainer(cx,cy,5000); for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx||dy) new StructureWall(cx+dx,cy+dy,10000); } }
 new StructureContainer(98,1,2500); new StructureContainer(98,98,2500); new StructureContainer(1,1,2500); new StructureContainer(1,98,2500);
 const TICKS=parseInt(process.argv[2]||'900'); const MODES=(process.argv[3]||'none').split('+');
-const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped'); const PAIRS=MODES.includes('pairs'); const SIEGE=MODES.includes('siege'); const CAMPER=PAIRS||SIEGE; const SIEGE_N=parseInt(process.env.SIEGE_HUNTERS||'5'); const SIEGE_EVERY=parseInt(process.env.SIEGE_EVERY||'80');
+const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped'); const PAIRS=MODES.includes('pairs'); const SIEGE=MODES.includes('siege'); const FORT=MODES.includes('fortspawn'); const CAMPER=PAIRS||SIEGE; const SIEGE_N=parseInt(process.env.SIEGE_HUNTERS||'5'); const SIEGE_EVERY=parseInt(process.env.SIEGE_EVERY||'80');
 // STREAM: противник матча 15 — с 280-го тика попеременно M3R3 и M4H2 каждые 40 тиков, каждый идёт к нашему спавну сразу,
 // без сбора в четвёрки (правила движения и стрельбы — как у HEALBALL); подкрепление тянется потоком за первыми
 // RUSH: противник матча 14 — два M5R1 с первого тика через свой спавн, третий на 200-м; идут к нашему спавну, встают в трёх
@@ -30,6 +30,9 @@ let harassQueue = HARASS ? [[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK]
 // «проиграна», и бот без срока выхода досиживает матч дома с растущей армией (ничья матча 18).
 // Поток идёт до 1150-го и иссякает — как в матче 18: дальше враг не приходит, наша армия растёт дома,
 // а осада по симуляции всё ещё «проиграна» из-за башен. Версия без срока выхода досиживает до лимита
+// FORTSPAWN: рампарт на чужом спавне — так играют ОБА соперника в девяти живых матчах из десяти
+// (07.09.2026). Работа по спавну становится не 3000 хитов, а 13000, и весь урон по спавну идёт
+// в рампарт, пока тот цел. Ставится на 150-м тике, как в матчах
 const towers=[]; if(TOWER){ towers.push(new StructureTower(7,50,false)); }
 if(FORTRESS){ towers.push(new StructureTower(7,50,false)); towers.push(new StructureTower(6,52,false)); towers.push(new StructureTower(6,48,false)); }
 for(const t of towers) t.store.energy=C.TOWER_CAPACITY;
@@ -63,6 +66,7 @@ for(let t=0;t<TICKS;t++){
   if(ENEMY && t===150){ for(let i=0;i<2;i++){ const r=new Creep(6,50+i,false,[C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.HEAL]); r.rusher=true; } }
   // BALL: шар из пяти мили-лекарей [M×5,A,H] каждые 200 тиков идёт к нашему спавну (матч 9: третий противник)
   // RAIDER: одиночный M5A3 с 30-го тика идёт бить наш спавн (матч 10: бурильщик не подошёл вплотную)
+  if(FORT && t===150) new StructureRampart(5,50,C.RAMPART_HITS,false);
   if(RAIDER && (t===30 || t===400)){ const r=new Creep(6,50,false,[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.ATTACK,C.ATTACK,C.ATTACK]); r.baller=true; }
   if(BALL && t>=300 && (t-300)%200===0){ for(let i=0;i<5;i++){ const r=new Creep(6,48+i,false,[C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.ATTACK,C.HEAL]); r.baller=true; } }
   if(SWARM && t>=140 && (t-140)%45===0){ const r=new Creep(6,50+((t/45)|0)%3,false,[C.MOVE,C.RANGED_ATTACK]); r.rusher=true; } // SWARM

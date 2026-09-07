@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 44
+    private const val BOT_VERSION = 45
 
     private const val LATE_MARGIN = 60
 
@@ -679,7 +679,7 @@ object SpawnAndSwamp {
                 "t=${getTicks()} spawnE=${mySpawn.store[RESOURCE_ENERGY]} spawning=${mySpawn.spawning != null} " +
                     "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                     "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }}s${supplyRate().toInt()} " +
-                    "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawnHits=${enemySpawn?.hits} " +
+                    "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawnHits=${enemySpawn?.hits}+${spawnRampartHits(ctx)} " +
                     "mine=${myTowers.joinToString(",") { "T(${it.x},${it.y})h=${it.hits}e=${it.store[RESOURCE_ENERGY]}" }.ifEmpty { "-" }}${ctx.mySites.joinToString("") { "+site(${it.x},${it.y})${it.progress}/${it.progressTotal}" }} home=${(homeShare() * 100).toInt()}%"
             )
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
@@ -1693,6 +1693,7 @@ object SpawnAndSwamp {
 
     private class SiegeResult(val win: Boolean, val ticks: Int, val hitsLost: Int) {
         override fun toString() = "${if (win) "win" else "lose"}/${ticks}t/-$hitsLost"
+
     }
     private val SIEGE_LOSE = SiegeResult(false, Int.MAX_VALUE / 2, 0)
 
@@ -1843,7 +1844,7 @@ object SpawnAndSwamp {
                 // никогда — ни по этой волне, ни по следующим. Три башни крепости — девять тысяч против
                 // трёх, и грызть их вместо цели уже проигрыш. Сравнение то же, что в стрельбе
                 val reach = guns.filter { it.shot > 0.0 }
-                val gun = if (reach.sumOf { it.hits } <= (spawn.hits ?: SPAWN_HITS).toDouble()) reach.firstOrNull() else null
+                val gun = if (reach.sumOf { it.hits } <= ((spawn.hits ?: SPAWN_HITS) + rampartHits).toDouble()) reach.firstOrNull() else null
                 if (gun != null) {
                     gun.hits -= ourDps
                     if (gun.hits <= 0.0) guns.remove(gun)
@@ -1973,7 +1974,7 @@ object SpawnAndSwamp {
         val siegeTowers = if (enemySpawn != null) coveringTowers(ctx, listOf(enemySpawn)) +
             ctx.pendingTowers.filter { it.eta <= travel + siege && InfluenceMap.towerShot(towerRangeFor(it.info, listOf(enemySpawn))) > 0.0 }.map { it.info }
         else emptyList()
-        val spawnRampart = enemySpawn?.let { s -> ctx.ramparts.filter { it.my != true && it.x == s.x && it.y == s.y }.sumOf { it.hits ?: 0 } } ?: 0
+        val spawnRampart = spawnRampartHits(ctx)
         // на выход — ГРУППА ПОСТА, которая уйдёт вместе (волны друг друга не ждут: подкрепление по двое
         // догоняло первую волну через сотню тиков и ложилось под башню по очереди — стенд); на
         // продолжение — ушедшие волны
@@ -2452,7 +2453,9 @@ object SpawnAndSwamp {
         // вперёд — они и стреляют, и умирают быстрее), и разнобой между стрельбой и симуляцией как раз
         // и давал стенду разброс. Кормленная башня живёт до конца осады и бьёт каждый кулдаун; спавн
         // не стреляет вовсе, поэтому его очередь последняя
-        val enemySpawnHits = enemySpawn?.hits ?: 0
+        // цена спавна — ВМЕСТЕ с рампартом на нём: пока тот цел, наш огонь по спавну идёт в него, и
+        // сравнивать башню надо с настоящей работой (3000 + 10000), а не с голой табличкой спавна
+        val enemySpawnHits = (enemySpawn?.hits ?: 0) + spawnRampartHits(ctx)
         val liveTowers = ctx.enemyTowers.filter { it.fed && (it.obj?.hits ?: 0) > 0 }
         val towerTarget = if (liveTowers.sumOf { it.obj?.hits ?: 0 } > enemySpawnHits) null
             else liveTowers.minByOrNull { it.obj?.hits ?: Int.MAX_VALUE }?.obj
@@ -3249,6 +3252,16 @@ object SpawnAndSwamp {
     private fun survivalOfFighters(fighters: List<Creep>): Double {
         if (spentFighters <= 0) return 1.0
         return (fighters.sumOf { liveCost(it) }.toDouble() / spentFighters).coerceIn(0.0, 1.0)
+    }
+
+    /** Хиты рампарта НА клетке чужого спавна. Пока он цел, весь урон по спавну достаётся ему, поэтому
+     *  работа по спавну — это его хиты ПЛЮС эти. Считалось в одном месте (симуляция осады) и не
+     *  считалось в двух других (выбор цели в стрельбе и то же правило внутри симуляции), из-за чего бот
+     *  спорил сам с собой при укреплённом спавне. Соперники ставят рампарт на спавн в девяти матчах из
+     *  десяти (07.09.2026). */
+    private fun spawnRampartHits(ctx: Ctx): Int {
+        val s = ctx.enemySpawn ?: return 0
+        return ctx.ramparts.filter { it.my != true && it.x == s.x && it.y == s.y }.sumOf { it.hits ?: 0 }
     }
 
     /** Цена УЦЕЛЕВШИХ частей крипа: что из вложенного в него ещё существует. Выбитая часть не стоит
