@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 47
+    private const val BOT_VERSION = 48
 
     private const val LATE_MARGIN = 60
 
@@ -469,7 +469,8 @@ object SpawnAndSwamp {
 
     private class Ctx(
         val mySpawn: StructureSpawn,
-        val enemySpawn: StructureSpawn?,
+        val enemySpawn: StructureSpawn?,       // ЦЕЛЬ осады — ближайший его спавн, не обязательно исходный
+        val enemySpawns: List<StructureSpawn>, // ВСЕ его живые спавны: он их строит, и победа — это все
         val myCreeps: List<Creep>,
         val active: List<Creep>,
         val haulers: List<Creep>,
@@ -494,7 +495,14 @@ object SpawnAndSwamp {
 
     fun tick() {
         val mySpawn = getObjectsByPrototype(StructureSpawn::class).firstOrNull { it.my == true } ?: return
-        val enemySpawn = getObjectsByPrototype(StructureSpawn::class).firstOrNull { it.my == false && it.exists }
+        // СПАВНОВ У НЕГО СКОЛЬКО УГОДНО. Порядок getObjectsByPrototype — порядок создания, поэтому
+        // первый живой и есть его ИСХОДНЫЙ: на нём держится геометрия карты (поля расстояний, чья
+        // половина, чьи кучи энергии), и она не должна ездить вслед за целью. Цель осады — ДРУГОЕ:
+        // ближайший к нам, потому что до него ближе идти и потому что он опаснее — построенный на
+        // нашей половине спавн рождает армию у нас за спиной (けろびー#17 ставил два таких)
+        val enemySpawns = getObjectsByPrototype(StructureSpawn::class).filter { it.my == false && it.exists }
+        val enemyHome = enemySpawns.firstOrNull()
+        val enemySpawn = enemySpawns.minByOrNull { getRange(mySpawn, it) }
         siteStepsCache.clear()
         flowCache.clear()
         assaultCache.clear()
@@ -524,7 +532,7 @@ object SpawnAndSwamp {
                     "model shot(1..4,10,20)=${(1..4).map { InfluenceMap.towerShot(it).toInt() }} ${InfluenceMap.towerShot(10).toInt()} ${InfluenceMap.towerShot(20).toInt()}"
             )
             println("my spawn=(${mySpawn.x},${mySpawn.y}) energy=${mySpawn.store[RESOURCE_ENERGY]} hits=${mySpawn.hits}/${mySpawn.hitsMax} " +
-                "enemy spawn=${enemySpawn?.let { "(${it.x},${it.y})" } ?: "none"}")
+                "enemy spawns=${enemySpawns.joinToString(" ") { "(${it.x},${it.y})" }.ifEmpty { "none" }}")
             // ЧТО ЕЩЁ МОЖНО ПОСТАВИТЬ: рампарт непроходим для врага и рождается сразу с полными хитами,
             // расширения поднимают потолок тела. Печатаем то, что отдаёт САМА арена, — d.ts клиента устаревает
             // (в нём TOWER_FALLOFF_RANGE=20, а рантайм говорит 21)
@@ -625,16 +633,18 @@ object SpawnAndSwamp {
         val dangerMatrix = InfluenceMap.dangerCostMatrix(enemyCreeps, blocked)
 
         DistanceMap.syncWalls(walls.size) // снесённая стена пролома открывает проход — поля заново
-        if (enemySpawn != null) DistanceMap.ensureBuilt(mySpawn, enemySpawn)
+        // геометрия — по ИСХОДНОМУ спавну: ensureBuilt кэширует поле по подписи рампартов и цели не
+        // видит вовсе, а «наша половина» не может переезжать оттого, что он построил спавн в центре
+        if (enemyHome != null) DistanceMap.ensureBuilt(mySpawn, enemyHome)
 
         val loadedToSpawn = DistanceMap.flowFieldTo(mySpawn, blocked)
         flowCache[mySpawn.x * 100 + mySpawn.y] = loadedToSpawn
         val stepsToSpawn = DistanceMap.stepFieldTo(mySpawn, blocked)
         val enemyApproach = DistanceMap.flowFieldTo(mySpawn, blockedForEnemy)
-        val enemyLoaded = enemySpawn?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
+        val enemyLoaded = enemyHome?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
 
         val sites = collectSites(combatEnemies, loadedToSpawn, enemyLoaded)
-        val ctx = Ctx(mySpawn, enemySpawn, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, mySites)
+        val ctx = Ctx(mySpawn, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, mySites)
 
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
@@ -685,7 +695,7 @@ object SpawnAndSwamp {
                 "t=${getTicks()} spawnE=${mySpawn.store[RESOURCE_ENERGY]} spawning=${mySpawn.spawning != null} " +
                     "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                     "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }}s${supplyRate().toInt()} " +
-                    "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawnHits=${enemySpawn?.hits}+${spawnRampartHits(ctx)} " +
+                    "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawns=${enemySpawns.size}@${enemySpawn?.let { "${it.x},${it.y}" } ?: "-"} enemySpawnHits=${enemySpawn?.hits}+${spawnRampartHits(ctx)} " +
                     "mine=${myTowers.joinToString(",") { "T(${it.x},${it.y})h=${it.hits}e=${it.store[RESOURCE_ENERGY]}" }.ifEmpty { "-" }}${ctx.mySites.joinToString("") { "+site(${it.x},${it.y})${it.progress}/${it.progressTotal}" }} home=${(homeShare() * 100).toInt()}%"
             )
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
@@ -2641,6 +2651,9 @@ object SpawnAndSwamp {
     private fun pushWinsRace(ctx: Ctx, ourHalfCombat: List<Creep>, siege: SiegeResult): Boolean {
         val fighters = ctx.fighters
         val enemySpawn = ctx.enemySpawn ?: return false
+        // размен «мы снесём его раньше, чем он нас» действителен ровно тогда, когда его спавн ОДИН:
+        // с двумя снос первого не кончает матч, а свой мы уже отдали
+        if (ctx.enemySpawns.size > 1) return false
         if (!pushing || !siege.win || fighters.isEmpty() || ourHalfCombat.isEmpty()) return false
         val spawnFlow = flowTo(ctx, enemySpawn)
         val travel = fighters.minOf { spawnFlow[it.x * 100 + it.y].let { d -> if (d < 0) Int.MAX_VALUE else d } }
