@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 45
+    private const val BOT_VERSION = 46
 
     private const val LATE_MARGIN = 60
 
@@ -307,6 +307,12 @@ object SpawnAndSwamp {
 
     /** id площадки башни врага -> (тик первого наблюдения, прогресс тогда) — темп стройки. */
     private val siteSeen = HashMap<String, Pair<Int, Int>>()
+
+    /** Кончится ли осада раньше, если следующее тело — мили: ответ СИМУЛЯЦИИ, снятый в runFighters и
+     *  прочитанный на следующем тике теми, кто решает состав, — отбором волны (кого пускать) и спавном
+     *  (что покупать). Один ответ на оба вопроса: разойдясь, они дают армию, которую покупают для
+     *  штурма и не выпускают. */
+    private var assaultWantsMelee = false
 
     /** Успеет ли домашняя башня стать башней: площадку ставят, смотрителя покупают и недострой кормят
      *  по ОДНИМ часам (towerReadyTicks против жизни спавна и остатка матча). Считается раз в тик в
@@ -1436,7 +1442,9 @@ object SpawnAndSwamp {
         val spawnLimited = energy >= SPAWN_ENERGY_CAPACITY && carried > 0
         // противник мили, а домашний мили-гарнизон слабее его набега — строим гарнизон (см. guardNeeded):
         // шар из пяти M5A1H1 у нашего спавна дома убивает бурильщик (180 в тик вплотную), а не стрелки
-        val guard = guardNeeded
+        // мили строится по двум причинам, и обе — счёт: дома против мили-шара (guardNeeded), в поле —
+        // когда симуляция говорит, что с ним осада кончится раньше (assaultWantsMelee)
+        val guard = guardNeeded || assaultWantsMelee
         val body = if (guard) guardBody(energy, spawnLimited) else fighterBody(energy, spawnLimited)
         val full = if (guard) guardBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else fighterBody(SPAWN_ENERGY_CAPACITY, spawnLimited)
         // Ждём полное тело, если гарнизон и так держит (deficit <= 0: недомерок ничего не добавит) или
@@ -1694,6 +1702,13 @@ object SpawnAndSwamp {
     private class SiegeResult(val win: Boolean, val ticks: Int, val hitsLost: Int) {
         override fun toString() = "${if (win) "win" else "lose"}/${ticks}t/-$hitsLost"
 
+        /** Лучше — та осада, что кончается ПОБЕДОЙ раньше; при равном сроке — дешевле по хитам. Два
+         *  проигрыша не сравниваются вовсе: «продержаться на десять тиков дольше» — не причина менять
+         *  состав армии, и первая попытка сравнивать их сроком выбирала мили там, где осады нет. */
+        fun better(other: SiegeResult): Boolean =
+            if (!win) false
+            else if (!other.win) true
+            else ticks < other.ticks || (ticks == other.ticks && hitsLost < other.hitsLost)
     }
     private val SIEGE_LOSE = SiegeResult(false, Int.MAX_VALUE / 2, 0)
 
@@ -1738,9 +1753,11 @@ object SpawnAndSwamp {
      * (матч 11). Потери пути (attrition) снимаются до осады фокусом по самому раненому. ratio — запас:
      * хиты спавна считаются с этим множителем (1.3 на выход, 0.9 на продолжение), плюс рампарт на нём.
      */
-    private fun siegeOutcome(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int = 0): SiegeResult {
+    private fun siegeOutcome(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int = 0, extra: Array<BodyPartType>? = null): SiegeResult {
         if (wave.isEmpty()) return SIEGE_LOSE
-        val units = wave.map { c -> SimUnit(c.body.filter { it.hits > 0 }.map { it.type to it.hits }) }
+        // extra — ещё не купленное тело: тем же прогоном спрашиваем, с каким из них осада кончится раньше
+        val units = ArrayList(wave.map { c -> SimUnit(c.body.filter { it.hits > 0 }.map { it.type to it.hits }) })
+        if (extra != null) units.add(SimUnit(extra.map { it to 100 }))
         var left = attrition
         while (left > 0.0) {
             val v = units.filter { it.alive() }.minByOrNull { it.total() } ?: return SIEGE_LOSE
@@ -1755,8 +1772,13 @@ object SpawnAndSwamp {
         var defHits = defs.firstOrNull()?.hits ?: 0.0
         // башня — цель с хитами: её огонь идёт, пока она жива, и наш урон её снимает (см. кольцо ниже)
         class Gun(val tower: TowerInfo, val shot: Double, var next: Int, var hits: Double)
+        // ЧЕМ БЛИЖЕ СТОИМ, ТЕМ СИЛЬНЕЕ ВЫСТРЕЛ. Дистанция башни считается от дистанции, с которой мы
+        // бьём цель: стрелок стоит в трёх клетках, мили — в одной, и там выстрел на сотню больше. Без
+        // этого прогон с мили-телом обещал победу под тремя башнями крепости и получал её на сто
+        // семнадцать тиков позже (стенд fortress)
+        val standoff = if (extra != null && extra.none { it == RANGED_ATTACK } && extra.any { it == ATTACK }) 1 else RANGED_RANGE
         val guns = towers.mapTo(ArrayList()) {
-            Gun(it, InfluenceMap.towerShot(towerRangeFor(it, listOf(spawn))), maxOf(0, it.cooldown),
+            Gun(it, InfluenceMap.towerShot(towerRangeFor(it, listOf(spawn), standoff)), maxOf(0, it.cooldown),
                 (it.obj?.hits ?: TOWER_HITS).toDouble())
         }
         var lost = 0.0
@@ -1915,7 +1937,15 @@ object SpawnAndSwamp {
         // ---- постура: оборона / наступление (гистерезис + срок выхода до ничьей) ----
         // в поле — полноскоростные стрелки (см. fullSpeed): покалеченный ходит вдвое-втрое медленнее
         // и либо тормозит волну, либо отстаёт и гибнет один; дома он полноценный защитник
-        val strikers = fighters.filter { fullSpeed(it) && hasRanged(it) }
+        // РАБОТА РЕШАЕТ СОСТАВ, и отвечает на это симуляция осады (assaultWantsMelee, ниже): по
+        // структуре ATTACK даёт 30 урона за 80 энергии против 10 за 150 у RANGED — впятеро дешевле, —
+        // а по кайтящему стрелку не работает вовсе, и обе половины она моделирует сама. Мгновенный
+        // срез («хиты структуры больше хитов живых крипов») этого не умеет: в ПОТОКЕ живых крипов
+        // всегда мало, и мили уходил под кайт (стенд: stream17 888->1455)
+        // ...и только пока мили не нужен ДОМА: тот же guardNeeded, по которому он и строится против
+        // мили-шара. Иначе волна уводит гарнизон ровно тогда, когда к дому идёт поток (стенд stream17:
+        // наш спавн снесён на 1357-м)
+        val strikers = fighters.filter { fullSpeed(it) && (hasRanged(it) || (assaultWantsMelee && !guardNeeded && hasMelee(it))) }
         // ПОДХОД — по ближайшему к цели стрелку (центр масс бывает на стене, где поле = -1): по нему
         // считается горизонт производства врага, то есть когда осада НАЧНЁТСЯ. Срок, до которого волна
         // обязана выйти, считается ниже и по всей группе — это разные величины, и прежде их путали
@@ -1994,6 +2024,24 @@ object SpawnAndSwamp {
         // осада фронтом ВМЕСТЕ с группой поста: когда волна держит кромку, подкрепление уходит к ней, если
         // сумма выигрывает (с запасом на выход, как siegeStart)
         val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
+        // КАКОЕ ТЕЛО КОНЧИТ ОСАДУ РАНЬШЕ — спрашивается тем же прогоном и по той же группе, что ходит
+        // в осаду; ответ читают отбор волны и спавн на следующем тике
+        val siegeCrew = if (waveFront.isNotEmpty()) waveFront else staging
+        // ...и вопрос ставится только там, где работа СТРУКТУРНАЯ по существу: спавн в броне или под
+        // прикрытием башни. По голому спавну симуляция честно отвечает «мили быстрее» (3000 хитов это
+        // 22 тика против 65), и она права — но тело покупается не только для осады, а стрелок ещё и
+        // защищает флот, пока волна собирается. Без этой привязки бот брал мили против потока и терял
+        // дом (стенд stream17: наш спавн снесён на 1357-м, где раньше была победа на 888-м)
+        val armoured = spawnRampart > 0 || siegeTowers.isNotEmpty()
+        if (enemySpawn == null || siegeCrew.isEmpty() || !armoured) assaultWantsMelee = false
+        else {
+            val withRanged = siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = fighterBody(SPAWN_ENERGY_CAPACITY))
+            val withMelee = siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = guardBody(SPAWN_ENERGY_CAPACITY))
+            assaultWantsMelee = withMelee.better(withRanged)
+            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0 && (assaultWantsMelee || withRanged.win)) {
+                println("assault body: ranged=$withRanged melee=$withMelee rampart=$spawnRampart crew=${siegeCrew.size} -> ${if (assaultWantsMelee) "MELEE" else "ranged"}")
+            }
+        }
         // СРОК ВЫХОДА: штурм успевает, только если группа ещё дойдёт и добьёт до лимита тиков. Ход
         // группы — по САМОМУ дальнему её бойцу (идут вместе, осада начинается с приходом последнего),
         // время осады — из её же симуляции. Прежний «последний звонок» брал ход БЛИЖАЙШЕГО бойца и урон
@@ -2358,7 +2406,10 @@ object SpawnAndSwamp {
                 !hasWeapon(creep) -> { target = mySpawn; standoff = HOME_STANDOFF + 1 }
                 homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
-                melee -> { target = mySpawn; standoff = HOME_STANDOFF }
+                // поводок — про ПОГОНЮ, а не про осаду: мили, не идущий в волне, остаётся дома, потому
+                // что за кайтящей целью он уходил на другой край карты и становился турелью (02.09).
+                // Идущий в волне марширует со всеми — чужой спавн не кайтит, и мили взят ради него
+                melee && !marching -> { target = mySpawn; standoff = HOME_STANDOFF }
                 // враг у дома сильнее гарнизона — пост отрядом, подкрепление копится у спавна
                 homeTarget != null && !marching -> { target = mySpawn; standoff = HOME_STANDOFF }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }

@@ -253,6 +253,43 @@ composition and the push decision have to be judged by **one** valuation, and th
 one version — it is the same "two rules disagreeing" defect as v33 and v43, and it is where the next
 attempt starts.
 
+**Forty-sixth version — melee joins the wave against an armoured spawn.** v45 recorded that the melee
+composition had been measured down and blamed it on two rules using different valuations. That was wrong,
+and the log said so: the posture line showed `PUSH ... front=3/3` with twenty-five fighters alive. The
+real cause is one line of the wave's membership — `val strikers = fighters.filter { fullSpeed(it) &&
+hasRanged(it) }`. A melee body can never be a striker, so it can never be staged, so it can **never** join
+an assault; the twenty-four melee bodies bought in that experiment were structurally excluded from every
+wave and sat at home as garrison. Three conditions were then tried for admitting melee, and the stub threw
+out the first two. (1) *The structural job is larger than the creep job*, measured on the enemies alive at
+that instant — this broke every scenario where the enemy comes as a **stream**: in a stream few enemies are
+alive at once, so the condition fired and the melee walked into being kited (`stream17` 888 → 1455,
+`tower+stream` 947 → 1290, `harass` 779 → 1151). (2) *The siege simulation decides* — it is the right
+instrument (it models the approach under tower fire, the defenders and the kiting) and it answered
+correctly for the question it was asked, which is the wrong question: with one creep against an unramparted
+spawn it says `melee=win/22t` against `ranged=win/65t`, because 3000 hits at 150 a tick really is faster
+than at 40. But the body is not bought only for the siege — the same energy is the fleet's guard while the
+wave gathers, and `stream17` turned from a win at 888 into **our own spawn destroyed at 1357**. (3) What
+holds: the simulation decides, and it is only **asked** when the target is armoured — a rampart on the
+spawn or a tower covering it. That is the state the whole thread came from: armour is what makes the job
+structural, and 30 damage for 80 energy against 10 for 150 is what makes melee the answer to armour. The
+verdict feeds both decisions from one place — who is admitted to the wave and what the spawn buys — so they
+cannot disagree. The leash on melee in target selection (`melee -> mySpawn`) is lifted for a creep that is
+in the wave: it exists against chasing a kiting creep across the map, and a spawn does not run.
+
+Measured on the whole harness: **every scenario without armour is tick-for-tick identical to v45**, and the
+armoured ones move a long way — `tower+healball` 1030 → 521, `tower+stream` 947 → 574, `tower+fortspawn`
+1215 → 888, `tower+pairs` 810 → 538, `fortspawn` 508 → 415, `tower` 496 → 450, `towersite` 487 → 437. One
+regression stands: `fortress` (three fed towers, no rampart) 1215 → 1332, still a win. Its cause is not
+established — the simulation was also taught that a tower fires harder at a melee standing at one than at a
+ranged creep standing at three (`towerRangeFor` with the melee's standoff), which is true to the engine and
+changed nothing measurable there, so the optimism has another source and it is the next thing to read.
+
+What is still open, and named rather than written down as a limitation: **the siege simulation optimises
+the siege in isolation.** It has no way to say "this body is worth more at home for the next three hundred
+ticks than at his spawn in eighty", which is exactly what the stream scenarios punish. The gate on armour
+is a state condition standing in for that comparison; the comparison itself — one valuation over both jobs —
+is the real answer and a bigger piece of work than one version.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
