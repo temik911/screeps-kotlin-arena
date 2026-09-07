@@ -959,6 +959,23 @@ object PainAndGain {
      *  лекарей всё равно не получает. Живая находка серии (наши обезоруженные в досягаемости половину времени, его — десятую)
      *  остаётся: его лечат за линией, наших — нет; предмет — лекарь для обезоруженных за линией, не бегство. */
     private const val USE_STRIPPED_LEAVES_REACH = false
+    /** ЗАЧИСТКА ФЛАГОВ ВМЕСТО ПОГОНИ (v124, серия 327–346 — быстрый гастролёр けろびー#4, три поражения по очкам при выигранном
+     *  бое; стенд `blitz` 4-4 на v122): см. sweepObjective и chaseVeto. Правило v42 «позади против недерущегося — гнаться, стоять
+     *  значит проиграть» верно, когда взять нечего; когда флаг под его одиночным хранителем проходит гейт стаи, взять его — это
+     *  и есть не стоять.
+     *  СТЕНД `blitz` НЕЙТРАЛЕН: по ярлыку «не дерётся» (v124) — ни одной цифры не сдвинул (ярлык гаснет, пока его хранители
+     *  мелькают в досягаемости); по сухости погони (v124b: ни выстрела, ни удара PASSIVE_TICKS) — m28 3961:23980 → 23973:23418,
+     *  m32 23975:21586 → 4980:23981, шесть карт без изменений, 4-4 → 4-4. Взятый флаг его пятёрка отбирает через 10–20 тиков
+     *  (хранитель назначен на 388-м, снят на 397-м, его крип на флаге на 406-м), пока армия у следующего; зачистка не быстрее
+     *  его отбора. Выключено как замер. */
+    private const val USE_SWEEP_OVER_CHASE = false
+    /** ЦЕЛЬ ГОНКИ — ФЛАГ ПОД СТАЕЙ ПО СИЛАМ ПАРЕ (v125, серия 327–346, стенд blitz): см. racePaired / pairBeats.
+     *  ОТВЕРГНУТО СТЕНДОМ: blitz 4-4 → 1-7 (m28 2046:24129, m35 1112:23910), шторм отряда 115–567 строк: восемь выпущены на 173-м,
+     *  отозваны на 174-м — пара для гейта считалась по ядру БЕЗ бегунов (самоссылка, как в гонке до v120: без восьмерых в ядре
+     *  двух вооружённых не набиралось, targets=0, farmer=false, отряд снят), и так через тик; а сами пары его бродячая пятёрка
+     *  съедает по одной: к 200-му тику восемь наших без оружия при army=4. Против одиночных хранителей пара сильна, против
+     *  пятёрки, которая приходит через двадцать тиков, — нет; предмет — не выпуск пар, а армия, которая держит взятое. */
+    private const val USE_RACE_PAIR_TARGETS = false
     /** Хранитель флага (v18): боец, стоящий на НАШЕМ флаге, при чужом бегуне в KEEP_RANGE и без нашего бегуна на флаге
      *  или назначенного к нему остаётся на месте, пока бегун врага рядом; в строю, в ударной группе и в цели армии он не
      *  участвует; снимается, когда флаг не наш, бегун врага ушёл, наш бегун встал на флаг или враг с боем в
@@ -2689,8 +2706,22 @@ object PainAndGain {
             // были ближе; без него гонка кончалась, его отзывали, а следующим тиком выпускали снова — 1260 строк detach за
             // матч (split m31), постура мигала с ним ДОБИТЬ↔ДЕРЖАТЬ через тик (наша мощь 4179↔3502)
             val raceForce = if (USE_RACE_FORCE_WITH_RUNNERS) army + ctx.runners.filter { it.id in detachedIds } else army
-            val raceTargets = ctx.flags.count { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
+            // цель гонки — и флаг под стаей, которую бьёт ПАРА наших слабейших бегунов (v125, USE_RACE_PAIR_TARGETS): быстрый
+            // гастролёр (けろびー#4, серия 327–346) оставляет на каждом взятом флаге одного хранителя, тот уходит от наших в шести и
+            // возвращается — «свободных» флагов нет, гонка v91 молчала (targets=0), армия толкала его пятёрку 200 тиков, а его
+            // хранители держали шесть флагов (стенд blitz: 4-4 при 1:6 к 200-му)
+            val racePair = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
+                .sortedBy { ourPowerOf(listOf(it), emptyList()) }.take(2)
+            fun pairBeats(f: FlagInfo): Boolean {
+                if (racePair.size < 2) return false
+                val pack = armedEnemies.filter { getRange(it, f.pos) <= ENGAGE_RANGE }
+                return pack.isNotEmpty() && ourPowerOf(racePair, pack) >= enemyPowerOf(pack, racePair) * PUSH_RATIO
+            }
+            val raceFree = ctx.flags.filter { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
                 (armedEnemies.minOfOrNull { getRange(it, f.pos) } ?: 999) > (raceForce.minOfOrNull { getRange(it, f.pos) } ?: 999) }
+            val racePaired = if (USE_RACE_PAIR_TARGETS) ctx.flags.filter { f -> !f.ours && f.occupant?.my != true && pairBeats(f) } else emptyList()
+            val raceTargets = raceFree.size + racePaired.size
+            val raceSlots = raceFree.size + racePaired.size * 2   // по два бегуна на флаг под стаей (см. USE_RUNNER_PAIRS)
             // расколот (v119): ВТОРАЯ группа его вооружённых (вне крупнейшей, в ENGAGE_RANGE друг от друга) не меньше SPLIT_MIN —
             // две группы фермера, а не отставшие от колонны на марше: первый срез «двое вне крупнейшей» стартовал гонку на
             // двадцатом тике по хвосту колонны spread, и spread m19/m31/m33 из побед в 20403:24313, 14392:24330, 14990:24318
@@ -2768,7 +2799,7 @@ object PainAndGain {
                 var remaining = army.filter { it.id !in detachedIds }
                 for (c in pool) {
                     if (detachedIds.size >= unmanned) break
-                    if (viaRace && detachedIds.size >= raceTargets) break   // гонка — только за неохраняемые (v91)
+                    if (viaRace && detachedIds.size >= raceSlots) break   // гонка — за неохраняемые и за флаги под стаей по силам паре (v91, v125)
                     val without = remaining.filter { it.id != c.id }
                     // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
                     // его мощь — против ядра-кандидата, не против полной армии (v84: пары Ланчестера)
@@ -2791,10 +2822,19 @@ object PainAndGain {
                 }
             }
             if (DEBUG_LOG && detachedIds.size != detachedBefore)
-                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow targets=$raceTargets largest=$largestGroup/${armedEnemies.size} dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
+                println("detach t=$now: ${detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow targets=$raceTargets(${racePaired.size} paired) largest=$largestGroup/${armedEnemies.size} dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
         } else detachedIds.clear()
         val interceptDenies = interceptFlag != null && !interceptFlag.ours
-        val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)
+        // ЗАЧИСТКА ФЛАГОВ ВМЕСТО ПОГОНИ (v124, стенд blitz m28 на v122, 3961:23980): позади по очкам против врага, который не
+        // дерётся, армия 200 тиков (42–239) толкала его пятёрку в 647 мощи при своих 3575 — та уходит в шести на той же
+        // скорости, — пока его одиночные хранители держали шесть флагов; флаг под одним-двумя его крипами армия берёт, а
+        // группу не догоняет. Есть цель-флаг, проходящая гейт стаи, — погоня снята, как при перехвате
+        // ...и не по ярлыку «не дерётся» (он гаснет, пока его хранители мелькают в досягаемости), а по сухости самой погони: ни
+        // нашего выстрела, ни удара по нам PASSIVE_TICKS подряд (blitz m28: с 83-го по 239-й ни того ни другого при ANNIHILATE)
+        val dryNow = (lastFireTick < 0 || now - lastFireTick >= PASSIVE_TICKS) && now - lastHurtTick >= PASSIVE_TICKS
+        val sweepObjective = if (USE_SWEEP_OVER_CHASE && behindOnScore && dryNow && armedEnemies.isNotEmpty() && !interceptDenies)
+            chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, false) else null
+        val chaseVeto = (enemyNotFightingNow && (interceptDenies || !behindOnScore)) || sweepObjective != null
         // ОТКРЫТАЯ НАХОДКА (матч 70): второй источник мигания — «ловимых нет»: блоб, шагнувший назад на две клетки, делает
         // «уходящими» всех двенадцать на восемь тиков (см. evasive), и наступление снимается на эти тики, армия к посту.
         // Два устранения ОТВЕРГНУТЫ стендом: гистерезис по ловимости (наступление снимается лишь после целого CHASE_WINDOW без

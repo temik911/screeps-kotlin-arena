@@ -23,6 +23,7 @@ const ticks = parseInt(process.argv[2] || '2000', 10);
 // TRACE=from-to prints every creep's position each tick in that range (see the loop below)
 const TRACE = process.env.TRACE ? process.env.TRACE.split('-').map((v) => parseInt(v, 10)) : null;
 const scenario = (process.argv[3] || 'none').split('+');
+if (scenario.includes('blitz')) scenario.push('split');   // blitz is the split farmer with keepers, our flags as targets and far-running scouts
 const has = (s) => scenario.includes(s);
 // ---------- ghost: a live replay drives the enemy ----------
 // REPLAY=<file> — the `.replay.json.gz` of arukuka/screeps-arena-tools (format: its docs/FORMAT.md): `terrain` is a run-length
@@ -732,7 +733,8 @@ function enemyTick() {
       // twelve at 0.6 of its power (2954 against our 4179) for a thousand ticks while our army stood ten to thirteen cells
       // away: the intercept's "a farmer is not chased" had nothing left to intercept, and the push flickered with the
       // eight-cell reach boundary — 3174:22934 without a shot from either side
-      const takeable = flags.filter((f) => f.owner !== 1 && !ours.some((o) => o.x === f.x && o.y === f.y));
+      // blitz: a flag of ours with our creep on it is a target too (live: A3+g8 — his six around our keeper at t=300)
+      const takeable = has('blitz') ? flags.filter((f) => f.owner !== 1) : flags.filter((f) => f.owner !== 1 && !ours.some((o) => o.x === f.x && o.y === f.y));
       const camping = has('camp') && takeable.length === 0;
       const TOUR_KEEP = 12;
       const groupOf = (f) => fighters.indexOf(f) % 2;   // split: two groups by alternation — mixed roles in each
@@ -741,13 +743,28 @@ function enemyTick() {
       // at 1.3 flickered ANNIHILATE/HOLD and walked to the post forty cells away on every HOLD, and it retook D5 each time
       // (12009:24099). The plain camp never moves — the stub's push destroys it at t=400–700, the live one was never reached
       const threat = ours.filter((o) => live(o, A) + live(o, R) > 0 && range(c, o) <= (has('tour') ? TOUR_KEEP : 6));
+      // blitz keepers: the fighter that took a flag stays on it (steps away from our armed within six, comes back) and is
+      // not a member of its group any more; a keeper whose flag was lost to us rejoins
+      armyState.keeperOf = armyState.keeperOf || {};
+      if (has('blitz') && !isRunner(c)) {
+        const kept = armyState.keeperOf[c.id];
+        const keptFlag = kept ? flags.find((f) => f.id === kept) : null;
+        if (keptFlag && keptFlag.owner !== 1 && !(c.x === keptFlag.x && c.y === keptFlag.y)) delete armyState.keeperOf[c.id];
+        const under = flags.find((f) => f.x === c.x && f.y === c.y && f.owner === 1);
+        if (!armyState.keeperOf[c.id] && under && !Object.values(armyState.keeperOf).includes(under.id)) armyState.keeperOf[c.id] = under.id;
+      }
+      const keeperFlag = has('blitz') && armyState.keeperOf[c.id] ? flags.find((f) => f.id === armyState.keeperOf[c.id]) : null;
       if (threat.length && (!camping || has('shy'))) stepAway(c, threat);
+      else if (keeperFlag) { if (range(c, keeperFlag) > 0) stepToward(c, keeperFlag, 0); }
       else if (isRunner(c)) {
-        const free = flags.filter((f) => f.owner !== 1).sort((a, b) => range(c, a) - range(c, b));
+        // blitz: the scouts run for the farthest free flags — the army takes the near ones
+        const free = flags.filter((f) => f.owner !== 1).sort((a, b) => has('blitz') ? range(b, c) - range(a, c) : range(c, a) - range(c, b));
         const post = free[Math.min(runners.indexOf(c), free.length - 1)];
         if (post) stepToward(c, post, 0);
       } else if (fighters.length) {
-        const mates = has('split') ? fighters.filter((f) => groupOf(f) === groupOf(c)) : fighters;
+        const groupMates = has('split') ? fighters.filter((f) => groupOf(f) === groupOf(c)) : fighters;
+        const freeMates = has('blitz') ? groupMates.filter((f) => !armyState.keeperOf[f.id]) : groupMates;
+        const mates = freeMates.length ? freeMates : groupMates;
         const blob = { x: Math.round(mates.reduce((s, f) => s + f.x, 0) / mates.length),
                        y: Math.round(mates.reduce((s, f) => s + f.y, 0) / mates.length) };
         const centre = flags.slice().sort((a, b) => range(a, { x: 49, y: 49 }) - range(b, { x: 49, y: 49 }))[0];
