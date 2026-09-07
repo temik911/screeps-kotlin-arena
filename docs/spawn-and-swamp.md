@@ -213,6 +213,46 @@ the reinforcement period by one tick gives 938, 1631 and 1685 — the fixture is
 carries signal only in its decision, so `regress.sh` asserts the decision (`run2:siege6`, pass = at most a
 keeper's carrying capacity of energy abandoned) and leaves the outcome out of the pass list.
 
+**Forty-fifth version — the rampart is part of the price of the spawn.** The operator pointed at what the
+readings kept missing: in some draws the wave was not failing to arrive, it was failing to get *through*
+— a rampart over the enemy spawn, with a tower killing us while we chewed it. The logs settle it. In nine
+of the ten matches of the v44 series the enemy had ramparts (both opponents build them), and in the draw
+of 07.09 00:04 the enemy spawn's hits stood at 3000 from tick 10 to tick 1760 and then fell 3000 → 2080 →
+1120 → 440 → 360 in thirty ticks: the rampart held every shot until it died, and the match ended 360 hits
+short of a win. In the draw of 00:09 the same shape with a tower in it — his tower chewed down to 180 of
+3000, his spawn at 2960, our fighters standing three cells from his spawn with 151, 400 and 745 hits of
+1200. So the job at his spawn is not 3000 hits, it is 13000, and **three places in the bot price that job
+while only one of them counted the rampart**: the siege simulation had it (`spawnHits = spawn.hits * ratio
++ rampartHits`), while both "tower before the spawn" rules — the one in the simulation and the one in the
+live fire — compared the towers' hits against the bare 3000. With a fortified spawn the bot therefore
+refused to kill a tower that costs a quarter of the real work and shoots back while we do it. One helper
+(`spawnRampartHits`) now answers for all three, and the tick line prints `enemySpawnHits=3000+10000` — the
+old line said 3000 and was what made me read "we never reached him" where we were standing on top of him.
+The stub learned the same fact: damage to a structure under a rampart goes to the rampart (`hurt()` in
+`_world.mjs`), and two scenarios carry it — `fortspawn` (a rampart on the enemy spawn at tick 150, as in
+the matches) and `tower+fortspawn`, which is the shape of the draws. All twenty-two older scenarios are
+tick-for-tick unchanged.
+
+**And the half that was measured and withdrawn: melee in the wave.** Against a structure `ATTACK` does 30
+damage for 80 energy where `RANGED_ATTACK` does 10 for 150 — five times more per energy, and 13000 hits is
+where that ratio decides a match. The siege simulation already models everything that argues the other way
+(the approach under tower fire, the kiting, the defenders), so it was given both candidate bodies and asked
+which one ends the siege sooner; it answered MELEE on the fortified fixture, by a wide margin
+(`ranged=lose/25t melee=win/81t`). The stub said no: `tower+fortspawn` went from 1215 to the tick limit,
+and the log shows why — twenty-four melee bodies bought, twenty-five fighters alive at the end, and
+`push=false(defend)` to the last tick. **The buying rule and the leaving rule disagree**: the siege
+simulation values a melee body at its full damage against a structure it must break, while `ourPowerOf`
+values it at the kiting discount (`meleeFactor`), so the army that was bought for the assault is never
+judged strong enough to leave. Two smaller things were found on the way and are worth keeping in view: the
+first version of the comparison preferred melee whenever *both* outcomes were losses ("holding out ten
+ticks longer"), which is a taste rule and cost the fixture its win outright; and melee is on a leash in the
+target selection (`melee -> target = mySpawn`) that keeps it home even when it is in the wave — the leash
+is about chasing a creep across the map, not about a spawn that cannot run, but lifting it alone does not
+help while the push gate discounts melee. The removal is named, not written down as a limitation: the
+composition and the push decision have to be judged by **one** valuation, and that is a bigger change than
+one version — it is the same "two rules disagreeing" defect as v33 and v43, and it is where the next
+attempt starts.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
