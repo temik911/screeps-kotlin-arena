@@ -13,7 +13,12 @@ mkdir -p out
 # stream fed by a harvester economy from tick 1 out-produces the opening that funds one fighter and a small harvester, and
 # a pull-less world (PULL_MODEL=off) is a parity race the escort cannot win without a strike. Run and reported in full
 # mode, outside the landing gate until a live match says which of them are real.
-open() { if [[ "$TAG" == land ]]; then return; fi; run "$@"; }
+# An open scenario is NOT a gate line: it is a known finding kept runnable, and it loses by construction. It used to
+# print FAIL, which reads as "the arena's gate is broken" to anyone running the suite without the `land` tag — on
+# 07.09.2026 a neighbouring session read exactly that and reported the gate as failing on main, while the gate was
+# green. So an open scenario prints OPEN whatever it does, and the counters below keep it out of the verdict.
+gate_pass=0; gate_fail=0; open_n=0
+open() { if [[ "$TAG" == land ]]; then return; fi; OPEN=1; run "$@"; OPEN=0; }
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario, $4.. = extra env (KEY=VALUE)
   local map=$1 start=$2 sc=$3 label line
   shift 3
@@ -30,9 +35,25 @@ run() { # $1 = map file or -, $2 = START or -, $3 = scenario, $4.. = extra env (
   errors=$(print -r -- "$line" | sed -E 's/.*errors=([0-9]+).*/\1/')
   if [[ -z "$line" ]]; then verdict=FAIL; outcome="no done line"; errors=?
   elif [[ "$outcome" == WIN* ]]; then verdict=PASS
+  elif (( ${OPEN:-0} )); then verdict=OPEN
   else verdict=FAIL; fi
+  case "$verdict" in
+    PASS) (( gate_pass++ )) ;;
+    FAIL) (( gate_fail++ )) ;;
+    OPEN) (( open_n++ )) ;;
+  esac
   printf '%-4s %-26s %-52s | errors: %s \n' "$verdict" "$label" "$outcome" "$errors"
 }
+# The summary goes to STDERR on purpose: land.sh captures only stdout and fails the landing on any line that is not a
+# pass marker with zero errors, so a summary line on stdout would break every arena's landing.
+summary() {
+  print -u2 -r -- ""
+  print -u2 -r -- "gate: $gate_pass PASS, $gate_fail FAIL — these and only these decide the landing (land.sh runs this suite with the \`land\` tag, which skips the open ones)."
+  if (( open_n )); then
+    print -u2 -r -- "open findings: $open_n printed as OPEN — known, runnable, and lost by construction; they are NOT gate failures. See \"Открытые находки\" in docs/escort-run.md."
+  fi
+}
+trap summary EXIT
 # the live map of match 1 (04.09.2026) with its measured layout — the escort body, the 500-energy spawns, the flags and
 # the sources are the real ones, so these lines are the closest thing to a replay of a live match
 run  map-match1.txt - none
