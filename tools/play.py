@@ -13,10 +13,8 @@ the client itself runs up to three series at once and the server keeps one match
     tools/play.py spawn-and-swamp -n 5 --logs runs/         # keep every match's console
     tools/play.py pain-and-gain --history 20                # the arena's last matches FROM THE SERVER: id, opponent, result, rating
 
-`--history` is the dedicated way to read results — the client's cache (`match-log.py list`) holds only the matches the
-client displayed, and a series played from the client's own UI, or watched on another machine, is not in it; the
-server's `/api/arena/<id>/rating-history` has every rating match. What the server does not know is which build played
-it: that is the bot's greeting line in the console, so `--history` shows the code version the server assigned (a
+`--history` reads results from the server (`/api/arena/<id>/rating-history` has every rating match); the match documents themselves go into the store `tools/match-log.py` keeps (`~/ScreepsArena/games/<id>/`) as each match ends — nothing is read from the client's cache. What the server does not know is which build played
+a match: that is the bot's greeting line in the console, so `--history` shows the code version the server assigned (a
 counter per upload) and the console's greeting comes from `match-log.py` or the replay.
 
 Rating matches move your rating; that is the point of playing them. Landing first is NOT required
