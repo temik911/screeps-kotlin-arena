@@ -354,6 +354,69 @@ that line prints 85 times across eight losses against 20 across nine wins; in on
 28 times, which is 280 ticks of a spawn building nothing while the enemy walks in. The guard put there for
 match 17 does not catch it, because its middle clause is true exactly in the state it was meant to break.
 
+### けろびー#16 builds spawns, and that is the whole of it (07.09.2026)
+
+`series.py foes` said けろびー#16 has beaten six versions of ours eight times out of eight and his #17
+has never lost to us in seven. Two replays say why, and it is not tactics.
+
+```
+tools/replay.py spawns 6a9eb70c…   # his creeps born at t=322 AND t=323 — one tick apart
+```
+
+A spawn can start one body at a time, so two births in consecutive ticks mean two spawns. The replay's
+object list confirms it: **his #16 has three spawns** — (94,49) from tick 1, (56,14) finished at t=242,
+(56,13) at t=544 — and **his #17 has seven**, at (74,21), (51,59), (24,39), (58,54), (29,35) added
+through the match, two of them on our half. He pays 1000 for each, out of one 400-energy `M2C2W2`
+builder, and the console log had been printing the sites all along: `sites: null(61,31)530/1000` —
+`progressTotal` 1000 is `StructureSpawn`, the only structure that costs it.
+
+Our bot took `getObjectsByPrototype(StructureSpawn).firstOrNull { it.my == false }`. One spawn, in his
+corner, ninety cells away. So the wave marched past the one he had just built forty cells from us and
+ground at the corner while the near one pumped an army into our back — and `pushWinsRace`, which trades
+our spawn for his, was offering a trade that cannot be won when he has three.
+
+**What the extra spawns actually buy him is not throughput, it is haulage.** `replay.py economy` on the
+match we lost:
+
+```
+OURS   picked up  7100 from the piles, delivered  6695 (9.6/tick), spent  8280 on 13 creeps
+ENEMY  picked up 16050 from the piles, delivered 15128 (10.6/tick), spent 12440 on 24 creeps
+       piles nobody was standing next to when they emptied: 39750 (they decay)
+```
+
+The map hands out eighty energy a tick and between us we took a third of it. He collects **2.3 times**
+what we do, and his second spawn at (56,14) sits among the containers at (54,13), (57,13) and (56,11):
+he moved the delivery point to the energy instead of carrying the energy to the delivery point.
+
+v48 makes the list the state: `enemySpawns` is every live one, `enemySpawn` is the target — the nearest
+to ours, both the shortest march and the most dangerous — while map geometry (the distance fields, whose
+half a cell is, whose a pile is) stays on his ORIGINAL spawn, because those are facts about the map and
+must not travel with the target. `pushWinsRace` refuses the trade outright while he has more than one.
+Every scenario in the harness is tick-for-tick what v47 gave; on the new `twospawn` it kills the mid-map
+spawn by t=500 where v47 left it untouched until t=1350, and still finishes later overall (1945 against
+1443) because a wave with a reachable target goes out, is ground down and comes back — the verdict
+volatility, which this exposes rather than causes.
+
+**What v48 does not fix, and the measurement that says so.** Played against the recorded match
+(`scenarios/kerobi16.json`), v48 sees all three spawns and targets the near one — and never pushes once
+in 743 ticks, because `sim` says lose the whole way: his army is twice ours throughout. The economy is
+the binding constraint, and one attempt at it was measured and withdrawn. v49 replaced the fleet-growth
+guard — `realised >= projectedIncome * 0.9`, a measurement judged against a model that underrates a long
+trip — with the marginal question the guard was really after: did the LAST hauler bought raise delivery.
+That is the right question and it changed the wrong thing: the fleet grew from five haulers to nine and
+delivery stayed at 10/tick, while `fortress` improved (1332 → 1193), `tower+enemy` lost 68 ticks and the
+`siege6` fixture failed outright (240 energy abandoned in a dead site against a 100 threshold). Reverted.
+
+Its value is the number it produced: with nearly twice the fleet our delivery did not move, and
+`projectedIncome` fell to **0 of a target of 27** while the map kept dropping two 2000-piles every fifty
+ticks. The bot had run out of piles it was *willing* to use: `usable=0` with `sites=2` for the whole
+second half. `usableSites` keeps a pile only while `safe` — no armed enemy within `SITE_DANGER_RANGE`
+and no damage on the cell — and けろびー's creeps roam and camp, so on his maps everything becomes unsafe
+and the income goes to zero. He took 16050 from the same map under the same creeps. **That absolute
+safety veto, not the size of the fleet, is what the next version has to answer**, and it should answer
+it with the arithmetic the bot already does elsewhere: a pile is worth a trip when the load beats the
+chance of losing the hauler, which is the arrival race it already computes for the spawn.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
