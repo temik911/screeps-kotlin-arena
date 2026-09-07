@@ -492,6 +492,14 @@ object PainAndGain {
      *  крипу. Замер (матч 67 по реплею): наши стрелки в 4+ от цели стояли со свободной клеткой впереди 42 раза против 6 —
      *  ряд «в 3 − d от переднего мили» ставит их на ряд дальше, чем надо; цель в трёх 67 % крип-тиков. */
     private const val USE_PLAN = true
+    /** ПОКРЫТИЕ ЛЕКАРЕЙ (v128): клетка лекаря в стоячем бою — где больше наших бойцов БЕЗ лекаря вплотную (жадное покрытие);
+     *  см. healerCmp в planFight. Живьём (реплеи 506/411) его лекарь вплотную к нашей цели 62–83 % тиков, наш к его — 14–16 %.
+     *  Стенд против v127: blitz 4-4 → 6-2 (m28 3961:23980 → 24033:22229, m33 16255:24133 → 24137:23351), tour лучше на пяти
+     *  картах из восьми (m34 его армия 14827 → 2558, живых 14/4), split m32 из поражения в победу; таблица входов по +20 4 хуже /
+     *  3 лучше, по +50 7 хуже / 6 лучше без переворотов (brawl m31 7252/5519 → 2546/11547, m33 2628/11684 → 3428/9457), сумма
+     *  разниц по +50 −8213 в нашу пользу. Простое число соседей (v128a) сгоняло трёх лекарей к одной группе: по +50 7 хуже /
+     *  4 лучше и brawl m31 из победы в уничтожение армии — отвергнуто. */
+    private const val USE_HEALERS_COVER = true
     private const val USE_PLAN_OUR_SIDE = true   // клетки плана боя только на нашей стороне (v61, см. planFight)
     private const val USE_RANGED_BEHIND_MELEE = true   // клетка стрелка не впереди фронта мили (v69, см. planFight)
     /** Одна добыча на всех в толчке (v71) — ОТВЕРГНУТО моделью, ради которой строился стенд: гейт 125/125 при 4 хуже / 9 лучше
@@ -1314,7 +1322,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v127"
+    private const val BOT_VERSION = "v128"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4217,11 +4225,19 @@ object PainAndGain {
         val healers = rear.filter { hasHeal(it) }
         val wounded = rear.filter { !hasHeal(it) }
         fun needAt(cell: FightCell): Double = fighterCells.filter { getRange(cell.pos, it.pos) <= 1 }.maxOfOrNull { it.dmg } ?: -1.0
+        // ПОКРЫТИЕ (v128, USE_HEALERS_COVER): клетка лекаря — где больше НАШИХ бойцов вплотную, и лишь потом наибольший входящий
+        // урон у соседа. Живьём (реплеи 506/411, первые 60 тиков контакта) его лекарь вплотную к нашей цели 62–83 % тиков, наш к
+        // его цели 14–16 %, при том что цель огня у обеих сторон меняется почти каждый тик (та же, что тиком раньше, в 31–44 %):
+        // лекарь, идущий к бойцу под огнём, приходит, когда огонь уже ушёл; лекарь, касающийся многих, уже стоит рядом
+        val healerCells = ArrayList<FightCell>()
+        // покрытие — по бойцам, у которых ЕЩЁ нет лекаря вплотную (жадное покрытие): по простому числу соседей трое лекарей
+        // сбегались к одной плотной группе и бросали остальных (v128a: brawl m31 из победы в уничтожение армии)
+        fun coverAt(cell: FightCell): Int = fighterCells.count { f -> getRange(cell.pos, f.pos) <= 1 && healerCells.none { h -> getRange(h.pos, f.pos) <= 1 } }
         fun healerCmp(c: Creep) = compareBy<FightCell> { if (it.meleeNear == 0) 1 else 0 }
+            .thenBy { if (USE_HEALERS_COVER) coverAt(it) else 0 }
             .thenBy { needAt(it) }
             .thenBy { -it.dmg }
             .thenBy { -getRange(c, it.pos) }
-        val healerCells = ArrayList<FightCell>()
         fun byFighter(cell: FightCell) = fighterCells.any { getRange(cell.pos, it.pos) <= 1 }
         for (h in healers.sortedBy { c -> fighterCells.minOfOrNull { getRange(c, it.pos) } ?: 0 }) {
             val cell = place(h, healerCmp(h), { it.meleeNear == 0 && byFighter(it) }) { cell -> byFighter(cell) }
