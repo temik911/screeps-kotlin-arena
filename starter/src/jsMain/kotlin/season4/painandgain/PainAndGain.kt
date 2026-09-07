@@ -164,6 +164,12 @@ object PainAndGain {
      *  нашей половины (для юго-восточного старта R3 (85,49)); «пост не ближе EVADE_RANGE к краю» (USE_POST_INSIDE, v46)
      *  отвергался на безфлаговом стенде (−20k) — точка была никакой, флаг хотя бы держится. */
     private const val USE_POST_OUR_FLAG = true
+    /** ПОСТ ПОД БРОСКОМ — К ЦЕНТРУ (проба после серии 387–406, дебют против гастролёра): см. postPoint. ОТВЕРГНУТО стендом: blitz
+     *  4-4 → 3-5 (m31 23931:21418 → 8049:23597, m32 23975:21586 → 4379:24104), таблица входов по +50 9 хуже / 4 лучше (brawl m28
+     *  486:13518 → 5126:10606, m35 2632:12727 → 5868:4741), split m28 и m35 из побед в поражения; лучше только tour (m28/m31/m32).
+     *  Армия, ждущая конца удержания ближе к центру, встречает бросок и группы блица раньше и хуже. Четвёртая проба дебюта, и все
+     *  четыре стенд оплачивает боями: удержание броска у дома — цена, которую он назначил. */
+    private const val USE_POST_TOWARD_CENTRE = false
     /** ЦЕНТРАЛЬНЫЙ ФЛАГ ДЕРЖИТ АРМИЯ (v102, пункт 3 плана оператора — «часовой на D5»; матчи 242 и 243, MetalicaX пятнадцатый и
      *  шестнадцатый раз): в 243 наш бегун взял D5 на 71-м, армия стояла у поста — центроида своих флагов (64,40) — в четырнадцати
      *  клетках, на 118-м его блоб из двенадцати встал на D5 и просидел там до 1312-го при паритете 3679:3507 — 1194 тика по пять в
@@ -2444,7 +2450,12 @@ object PainAndGain {
      *  16000/16000. Флаг остаётся нашим, пока на него не встанет чужой (хранитель встаёт, когда враг подходит, см. KEEP_RANGE);
      *  стоять на нём армии незачем, а угол — ловушка для равного по скорости. */
     private fun postPoint(ctx: Ctx): Position {
-        val ourHalfFlag = if (USE_POST_OUR_FLAG) ctx.flags.filter { DistanceMap.inOurHalf(it.pos.x, it.pos.y) }.minByOrNull { getRange(it.pos, ctx.ourCentroid) }?.pos else null
+        // пост под безфлаговым броском — флаг нашей половины, ближний к ЦЕНТРУ (v129, USE_POST_TOWARD_CENTRE): армия ждёт конца
+        // удержания в 25 от D5 у A3, а не в углу у R3; первый флаг по времени тот же, второй на тридцать тиков раньше (матчи 5, 8,
+        // 19 серий 367–406: его шесть флагов к 80–91-му, наш второй на 83–140-м)
+        val centreCell = InfluenceMap.cell(49, 49)
+        val ourHalfFlag = if (USE_POST_OUR_FLAG) ctx.flags.filter { DistanceMap.inOurHalf(it.pos.x, it.pos.y) }
+            .minByOrNull { if (USE_POST_TOWARD_CENTRE && unflaggedRushNow) getRange(it.pos, centreCell) else getRange(it.pos, ctx.ourCentroid) }?.pos else null
         // центральный флаг наш — пост на нём (v102, USE_POST_ON_CENTRE)
         val centre = if (USE_POST_ON_CENTRE) ctx.flags.firstOrNull { it.ours && it.type == EFF_DAMAGE_TAKEN_MODIFIER }?.pos else null
         val c = centre ?: centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ourHalfFlag ?: ctx.home

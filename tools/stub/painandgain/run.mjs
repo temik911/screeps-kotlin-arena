@@ -331,6 +331,16 @@ function screenMove(c, plan, fighters, ours) {
       // 140–179 (adjacent to ours 54 % of their creep-ticks in 140, at two or three 72 % in 145): they hold our melee off the
       // ranged behind them and hit what steps in; a melee of ours adjacent gets the swing (fireAt) and then a step back to two
       const adjOurs = ourF.filter((o) => range(c, o) <= 1);
+      // '+wall' (07.09.2026): Coldkimchi#1's melee (506/602) stand at three from our melee 279/352 creep-ticks, at four 322/311,
+      // adjacent 26/21, and swing 16 and 4 times in a fight — a screen at three level with the ranged, never a step in; our
+      // holdMelee (reach two) never triggers, his ranged shoot our front at three, our ranged a row behind are at four
+      if (has('wall')) {
+        const nearest = ourF.slice().sort((a, b) => range(c, a) - range(c, b))[0];
+        if (nearest && range(c, nearest) < 3) { if (!stepBack(c, [nearest])) stepAway(c, [nearest]); return; }
+        if (nearest && range(c, nearest) === 3) return;
+        if (!formed && !has('fast') && range(c, slot) > 1) { stepToward(c, slot, 0); return; }
+        stepToward(c, focus, 3); return;
+      }
       if (adjOurs.length && range(c, focus) <= 1) { if (!stepBack(c, adjOurs)) stepAway(c, adjOurs); return; }
       if (range(c, focus) > 2) { stepToward(c, focus, 2); return; }
       // the POKE (06.09.2026): from two the live melee step in on our most forward creep, swing and step back the same tick
