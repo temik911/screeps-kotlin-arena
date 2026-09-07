@@ -49,7 +49,7 @@ else
 fi
 f=out/${TAG}_r3_camped19.txt
 "$NODE" --import ./register.mjs run3.mjs 200 camped19 > "$f" 2>&1
-built=$(grep -cE '^spawn: (fighter|guard) parts' "$f")
+built=$(grep -cE '^spawn: (fighter|guard|healer) parts' "$f")
 errs=$(grep -cE 'loop error|exception' "$f")
 if [[ $built -ge 1 && $errs -eq 0 ]]; then
   printf '%-18s %-32s | %s | ghost=0\n' "run3:camped19" "PASS built $built body under fire" "--- ticks run: fixture errors: 0 "

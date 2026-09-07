@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 50
+    private const val BOT_VERSION = 51
 
     private const val LATE_MARGIN = 60
 
@@ -313,6 +313,11 @@ object SpawnAndSwamp {
      *  (что покупать). Один ответ на оба вопроса: разойдясь, они дают армию, которую покупают для
      *  штурма и не выпускают. */
     private var assaultWantsMelee = false
+
+    /** Тот же вопрос и тот же прогон, что у assaultWantsMelee, но про ЛЕКАРЯ. Гейта «спавн в броне»
+     *  здесь нет и не нужно: лекарь не наносит урона, поэтому по голой цели прогон сам отвечает
+     *  «медленнее» — правило гейтит себя тем, что считает. */
+    private var assaultWantsHealer = false
 
     /** Стройки этого тика — по одной записи на площадку, у каждой свои часы и свой источник энергии
      *  (см. SiteJob). Считается раз в тик в spawnIfNeeded и читается позже строителями; пока спавн
@@ -668,7 +673,7 @@ object SpawnAndSwamp {
         // хитов бурильщика, который в поле не идёт, раздули корень Ланчестера и выпустили волну из
         // двух раненых (матч 6)
         homeSpawnPos = mySpawn
-        val defenders = fighters.filter { hasWeapon(it) }
+        val defenders = fighters.filter { inArms(it) }
         val ourDefense = ourPowerOf(defenders, combatEnemies)
         val enemyPower = enemyPowerOf(combatEnemies, fighters)
         // для решений спавна враг — «скоро»: с теми, кто ещё рождается у его спавна
@@ -817,6 +822,13 @@ object SpawnAndSwamp {
     private fun hasMelee(creep: Creep) = creep.body.any { it.type == ATTACK && it.hits > 0 }
     private fun isMelee(creep: Creep) = creep.body.any { it.type == ATTACK }
     private fun hasWeapon(creep: Creep) = hasRanged(creep) || hasMelee(creep)
+    private fun hasHeal(creep: Creep) = creep.body.any { it.type == HEAL && it.hits > 0 }
+
+    /** ЕЩЁ В СТРОЮ: стреляет ИЛИ лечит. Лекарь оружия не носит, но бой без него — другой бой, и в
+     *  обороне он считается наравне (его лечение вычитается из урона врага в enemyPowerOf). Обратное
+     *  тоже верно: остов, у которого сбито ЛЕЧЕНИЕ, уходит домой ровно так же, как остов со сбитыми
+     *  стволами, — поэтому правило одно на оба случая. */
+    private fun inArms(creep: Creep) = hasWeapon(creep) || hasHeal(creep)
 
     /** Тело бурильщика [MOVE, ATTACK]×k под нынешний ПОТОК энергии (регенерация + приток): k минимизирует
      *  накопление недостающего + рождение + ход + ломку. Прежняя формула (k ≈ √(H/180)) считала энергию
@@ -1478,9 +1490,12 @@ object SpawnAndSwamp {
         // шар из пяти M5A1H1 у нашего спавна дома убивает бурильщик (180 в тик вплотную), а не стрелки
         // мили строится по двум причинам, и обе — счёт: дома против мили-шара (guardNeeded), в поле —
         // когда симуляция говорит, что с ним осада кончится раньше (assaultWantsMelee)
+        // ...а лекарь — по третьему ответу того же прогона (assaultWantsHealer). Мили-гарнизон дома
+        // старше: против мили-шара у спавна лекарь без урона не держит ничего
         val guard = guardNeeded || assaultWantsMelee
-        val body = if (guard) guardBody(energy, spawnLimited) else fighterBody(energy, spawnLimited)
-        val full = if (guard) guardBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else fighterBody(SPAWN_ENERGY_CAPACITY, spawnLimited)
+        val healer = !guard && assaultWantsHealer
+        val body = if (guard) guardBody(energy, spawnLimited) else if (healer) healerBody(energy, spawnLimited) else fighterBody(energy, spawnLimited)
+        val full = if (guard) guardBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else if (healer) healerBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else fighterBody(SPAWN_ENERGY_CAPACITY, spawnLimited)
         // Ждём полное тело, если гарнизон и так держит (deficit <= 0: недомерок ничего не добавит) или
         // если враг придёт позже, чем доедет недостающее — по ГРУЖЁНЫМ хаулерам в пути, не по притоку
         // с земли: при пустых точках (income=0) и 2150 энергии в дороге «ждать» выходило 773 тика, и
@@ -1498,7 +1513,7 @@ object SpawnAndSwamp {
 
         val r = spawn.spawnCreep(body)
         if (r.error == null) spentFighters += body.sumOf { cost(it) }
-        if (DEBUG_LOG) println("spawn: ${if (guard) "guard" else "fighter"} parts=${body.size} cost=${body.sumOf { cost(it) }} energy=$energy alarm=$alarm first=$fighterFirst our=${ourPower.toInt()}/${enemyPower.toInt()} deficit=${deficit.toInt()} fire=$spawnUnderFire arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
+        if (DEBUG_LOG) println("spawn: ${if (guard) "guard" else if (healer) "healer" else "fighter"} parts=${body.size} cost=${body.sumOf { cost(it) }} energy=$energy alarm=$alarm first=$fighterFirst our=${ourPower.toInt()}/${enemyPower.toInt()} deficit=${deficit.toInt()} fire=$spawnUnderFire arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
     }
 
     /**
@@ -1596,6 +1611,7 @@ object SpawnAndSwamp {
         var moves = body.count { it == MOVE }
         var ranged = body.count { it == RANGED_ATTACK }
         var melee = body.count { it == ATTACK }
+        var heal = body.count { it == HEAL }
         var value = 0
         for (part in body) {
             // обрыв держит TOUGH в узде: снятый, он делает броню лучшей частью тела (замерено 06.09.2026 —
@@ -1603,11 +1619,13 @@ object SpawnAndSwamp {
             // брать чужой спавн). ЭТА функция отвечает на вопрос «сколько чего брать»; на вопрос
             // «что терять первым» отвечает порядок частей в fighterBody, и он от неё независим
             if (moves < weight) break // скорость потеряна — дальше тело волне не нужно
-            value += (ranged * RANGED_ATTACK_POWER + melee * ATTACK_POWER) * 100 // сто хитов этой части боец бьёт с текущим уроном
+            // сто хитов этой части боец бьёт с текущим уроном; лекарь — те же сто хитов лечит
+            value += (ranged * RANGED_ATTACK_POWER + melee * ATTACK_POWER + heal * HEAL_POWER) * 100
             when (part) {
                 MOVE -> moves--
                 RANGED_ATTACK -> ranged--
                 ATTACK -> melee--
+                HEAL -> heal--
                 else -> {}
             }
         }
@@ -1644,6 +1662,45 @@ object SpawnAndSwamp {
                 a++
             }
             best ?: arrayOf(MOVE, ATTACK)
+        }
+    }
+
+    private val healerBodyCache = HashMap<Int, Array<BodyPartType>>()
+
+    /** Тело лекаря под бюджет — тот же перебор и порядок, что у fighterBody, но с HEAL вместо RANGED:
+     *  запасные MOVE вперёд, лечение в хвост (урон снимает части спереди, и сбиваться лечение должно
+     *  последним), MOVE 1:1 к остальным. На 1000 это M10H2 — 24 лечения вплотную и 1200 хитов, а не
+     *  M5H3 противника (36 и 800): счёт тот же, что выбрал M8R4 вместо M5R5, и он считает не ставку, а
+     *  ставку × хиты, которые тело успеет прожить. Болото — 1 тик на клетку, то есть волна с ним не
+     *  растягивается ни при какой скорости бойцов.
+     *  Лекарь у противника — けろびー с 220-го тика, и его лекари съели от 12% до 63% всего, что мы по
+     *  нему выстрелили (пять реплеев 07.09.2026: 1920, 4308, 10044, 5628 и 2276 вылеченного против
+     *  нуля у нас). Само по себе тело не стреляет, поэтому покупается только когда прогон осады говорит,
+     *  что с ним она кончится раньше (assaultWantsHealer). */
+    private fun healerBody(budget: Int, spawnLimited: Boolean = false): Array<BodyPartType> {
+        val cap = minOf(budget, SPAWN_ENERGY_CAPACITY)
+        return healerBodyCache.getOrPut(cap * 2 + (if (spawnLimited) 1 else 0)) {
+            val block = cost(HEAL) + cost(MOVE)
+            var best: Array<BodyPartType>? = null
+            var bestValue = -1.0
+            var h = 1
+            while (h * block <= cap && 2 * h <= MAX_CREEP_SIZE) {
+                val maxExtra = minOf((cap - h * block) / cost(MOVE), MAX_CREEP_SIZE - 2 * h)
+                for (e in 0..maxExtra) {
+                    val body = ArrayList<BodyPartType>(2 * h + e)
+                    val scored = ArrayList<BodyPartType>(2 * h + e)
+                    repeat(e) { scored.add(MOVE) }
+                    repeat(h) { scored.add(HEAL) }
+                    repeat(h) { scored.add(MOVE) }
+                    repeat(e + h) { body.add(MOVE) }
+                    repeat(h) { body.add(HEAL) }
+                    val arr = body.toTypedArray()
+                    val value = bodyValue(scored.toTypedArray()).toDouble() / (if (spawnLimited) arr.size * CREEP_SPAWN_TIME else 1)
+                    if (value > bestValue) { bestValue = value; best = arr }
+                }
+                h++
+            }
+            best ?: arrayOf(MOVE, HEAL)
         }
     }
 
@@ -1845,6 +1902,35 @@ object SpawnAndSwamp {
             }
             return d
         }
+        /** Лечение в тик — по RANGED_HEAL_POWER (4 с части), а не по HEAL_POWER (12). Вплотную лекарь
+         *  лечит втрое сильнее, и у противника 96% лечений оказались именно вплотную (реплеи 07.09.2026:
+         *  80+3r, 120+0r, 279+5r, 155+7r, 95+4r), — но ВПЛОТНУЮ это положение, а положений эта симуляция
+         *  не знает: она считает волну точкой. Для урона такое допущение осторожно (достаётся всем), для
+         *  лечения — наоборот, и по полной ставке прогон обещал, что один лекарь кончит осаду на
+         *  одиннадцать тиков раньше пятого стрелка (стенд tower+enemy: 56 против 67), после чего волна
+         *  уходила пятёркой вместо шестёрки и матч не выигрывался вовсе. Считаем то, что лекарь даёт
+         *  БЕЗ положения; за остальное платит строй, а строя прогон не обещает. */
+        fun healPower(): Double {
+            var h = 0.0
+            for (i in types.indices) if (hits[i] > 0 && types[i] == HEAL) h += RANGED_HEAL_POWER.toDouble()
+            return h
+        }
+        /** Вернуть хиты. Движок держит их «сзади наперёд» (part[i] = hits − 100×(n−1−i)), значит лечение
+         *  поднимает самую ЗАДНЮЮ повреждённую часть — ту, которую урон снял последней; мёртвая часть при
+         *  этом оживает, она не удалена, у неё ноль хитов. Возвращает возвращённое. */
+        fun mend(amount: Double): Double {
+            var left = amount
+            for (i in hits.indices.reversed()) {
+                if (left <= 0.0) break
+                if (hits[i] >= 100) continue
+                val add = minOf((100 - hits[i]).toDouble(), left)
+                hits[i] += add.toInt()
+                left -= add
+            }
+            return amount - left
+        }
+        /** Недостающие хиты — по сотне на часть (это максимум части в движке). */
+        fun missing() = types.size * 100 - total()
         /** Снять урон спереди; возвращает снятое (меньше amount, если боец кончился). */
         fun hit(amount: Double): Double {
             var left = amount
@@ -1875,6 +1961,19 @@ object SpawnAndSwamp {
             SimUnit(c.body.filter { it.hits > 0 }.map { it.type to it.hits }, meleeFactor(c, defenders, null))
         })
         if (extra != null) units.add(SimUnit(extra.map { it to 100 }, meleeReach(extra, defenders)))
+        // НАШЕ ЛЕЧЕНИЕ — в прогоне. Чужое из нашего урона вычиталось всегда (defs.heal ниже), своего
+        // не было вовсе, и на вопрос «а если лекарь» симуляция отвечала «строго хуже» ПО ПОСТРОЕНИЮ:
+        // тело без урона в модели без лечения не может ничего. Лечим самого пострадавшего живого —
+        // тот же выбор, что делает healAndShoot
+        val anyHeal = units.any { u -> u.types.any { it == HEAL } }
+        fun mendWave(): Double {
+            if (!anyHeal) return 0.0 // прогон без лекарей не платит за них ничего: он идёт каждый тик
+            val alive = units.filter { it.alive() }
+            val power = alive.sumOf { it.healPower() }
+            if (power <= 0.0) return 0.0
+            val v = alive.maxByOrNull { it.missing() } ?: return 0.0
+            return v.mend(power)
+        }
         var left = attrition
         while (left > 0.0) {
             val v = units.filter { it.alive() }.minByOrNull { it.total() } ?: return SIEGE_LOSE
@@ -1904,7 +2003,10 @@ object SpawnAndSwamp {
                 if (t < g.next) continue
                 val shot = shotOf(g)
                 if (shot <= 0.0) continue
-                val v = units.filter { it.alive() }.maxWithOrNull(compareBy({ it.dps() }, { it.total() })) ?: return
+                // башня бьёт самого ОПАСНОГО, а лекарь опасен: пока он жив, выстрел приходится отменять
+                // каждый тик. Без этого он в прогоне был бессмертен (dps=0 — значит никогда не цель) и
+                // получался дешевле любого стрелка по построению
+                val v = units.filter { it.alive() }.maxWithOrNull(compareBy({ it.dps() + it.healPower() }, { it.total() })) ?: return
                 lost += v.hit(shot)
                 g.next = t + InfluenceMap.towerCooldown
             }
@@ -1932,9 +2034,15 @@ object SpawnAndSwamp {
                 if (best < 0) break
                 cell = best
                 steps++
-                val period = wave.maxOf { periodAt(it, cell / 100, cell % 100) }
+                // ТЕМП МАРША — по самому медленному из тех, КТО ЕЩЁ ХОДИТ. У крипа без живых MOVE период
+                // «никогда» (periodOn), и максимум по всей группе превращал подход в repeat на полмиллиарда:
+                // стенд tower+healball встал намертво на 480-м тике, как только в группу для вопроса о теле
+                // попала вся армия, а в ней — сбитый на ноги боец. Идти некому — осады нет
+                val period = wave.filter { liveMoves(it) > 0 }.maxOfOrNull { periodAt(it, cell / 100, cell % 100) }
+                    ?: return SIEGE_LOSE
                 repeat(period) {
                     fire(clock) { g -> InfluenceMap.towerShot(getRange(g.tower.pos, InfluenceMap.cell(cell / 100, cell % 100))) }
+                    lost = maxOf(0.0, lost - mendWave()) // лечат и на марше: подход по болоту — полсотни тиков под башней
                     clock++
                 }
                 if (units.none { it.alive() }) return SiegeResult(false, 0, lost.toInt())
@@ -1946,7 +2054,7 @@ object SpawnAndSwamp {
         // на 150 больше расчётного)
         repeat(extraShots) {
             for (g in guns) {
-                val v = units.filter { it.alive() }.maxWithOrNull(compareBy({ it.dps() }, { it.total() })) ?: break
+                val v = units.filter { it.alive() }.maxWithOrNull(compareBy({ it.dps() + it.healPower() }, { it.total() })) ?: break
                 lost += v.hit(g.shot)
             }
         }
@@ -1959,6 +2067,7 @@ object SpawnAndSwamp {
                 val v = units.filter { it.alive() }.minByOrNull { it.total() }
                 if (v != null) lost += v.hit(defDps)
             }
+            lost = maxOf(0.0, lost - mendWave())
             val ourDps = units.sumOf { it.dps() }
             if (ourDps <= 0.0) return SiegeResult(false, i, lost.toInt())
             if (defs.isNotEmpty()) {
@@ -2041,7 +2150,7 @@ object SpawnAndSwamp {
         // остов (стрельба выбита) из волны выбывает: он идёт домой (см. !hasWeapon), а волна держала строй
         // «для отставшего» по нему — семеро стояли в сорока клетках от спавна врага сто тиков, пока f49 с
         // четырьмя MOVE уходил к нашему (стенд tower+stream: чужой спавн умер на 1545-м вместо 1125-го)
-        wave.keys.retainAll { id -> fighters.any { it.id == id && hasWeapon(it) } }
+        wave.keys.retainAll { id -> fighters.any { it.id == id && inArms(it) } }
         val mySpawn = ctx.mySpawn
         val enemySpawn = ctx.enemySpawn
         val allies = ctx.myCreeps
@@ -2062,7 +2171,9 @@ object SpawnAndSwamp {
         // ...и только пока мили не нужен ДОМА: тот же guardNeeded, по которому он и строится против
         // мили-шара. Иначе волна уводит гарнизон ровно тогда, когда к дому идёт поток (стенд stream17:
         // наш спавн снесён на 1357-м)
-        val strikers = fighters.filter { fullSpeed(it) && (hasRanged(it) || (assaultWantsMelee && !guardNeeded && hasMelee(it))) }
+        // ...и лекарь идёт со всеми всегда: стрелять он не умеет, дома в одиночку не делает ничего,
+        // а его дело — держать живой ту группу, которая работает
+        val strikers = fighters.filter { fullSpeed(it) && (hasRanged(it) || hasHeal(it) || (assaultWantsMelee && !guardNeeded && hasMelee(it))) }
         // ПОДХОД — по ближайшему к цели стрелку (центр масс бывает на стене, где поле = -1): по нему
         // считается горизонт производства врага, то есть когда осада НАЧНЁТСЯ. Срок, до которого волна
         // обязана выйти, считается ниже и по всей группе — это разные величины, и прежде их путали
@@ -2083,7 +2194,7 @@ object SpawnAndSwamp {
         val staging = freeStrikers.filter { atHome(it) }
         // сила наступления: ушедшие волны (кто ещё вооружён — волна своих ждёт, см. hold) плюс те,
         // кто готов уйти с поста
-        val offensive = fighters.filter { (it.id in wave && hasWeapon(it)) || staging.any { s -> s.id == it.id } }
+        val offensive = fighters.filter { (it.id in wave && inArms(it)) || staging.any { s -> s.id == it.id } }
         val ourOffense = ourPowerOf(offensive, combatEnemies)
         // волна в пути платит за каждую стычку (fightCost): идущих к нам встречаем группами (группа —
         // одновременно), рождённых за марш и осаду — по одному, типичным бойцом врага. Уходим, если
@@ -2125,7 +2236,7 @@ object SpawnAndSwamp {
         // на выход — ГРУППА ПОСТА, которая уйдёт вместе (волны друг друга не ждут: подкрепление по двое
         // догоняло первую волну через сотню тиков и ложилось под башню по очереди — стенд); на
         // продолжение — ушедшие волны
-        val waveMembers = fighters.filter { it.id in wave && hasWeapon(it) }
+        val waveMembers = fighters.filter { it.id in wave && inArms(it) }
         val spawnFlow = if (enemySpawn != null) flowTo(ctx, enemySpawn) else IntArray(0)
         // маршрут волны — по урону; часы (startTravel, homeTravel, сплочение) остаются на spawnFlow
         val assaultFlow = if (enemySpawn != null) assaultTo(ctx, enemySpawn) else IntArray(0)
@@ -2141,22 +2252,40 @@ object SpawnAndSwamp {
         // осада фронтом ВМЕСТЕ с группой поста: когда волна держит кромку, подкрепление уходит к ней, если
         // сумма выигрывает (с запасом на выход, как siegeStart)
         val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
-        // КАКОЕ ТЕЛО КОНЧИТ ОСАДУ РАНЬШЕ — спрашивается тем же прогоном и по той же группе, что ходит
-        // в осаду; ответ читают отбор волны и спавн на следующем тике
-        val siegeCrew = if (waveFront.isNotEmpty()) waveFront else staging
+        // КАКОЕ ТЕЛО КОНЧИТ ОСАДУ РАНЬШЕ — спрашивается тем же прогоном; ответ читают отбор волны и
+        // спавн на следующем тике.
+        // ГРУППА ЗДЕСЬ — ВСЯ АРМИЯ, а не фронт, и это не мелочь. Прогон отвечает на «а если ЕЩЁ ОДНО
+        // такое тело», а ответ применяется к КАЖДОЙ следующей покупке, пока не переменится: чтобы он
+        // переменился, купленное обязано попадать в ту же группу, по которой вопрос и задан. Фронт —
+        // четверо в зазоре сплочения, и пополнение в него не входит, поэтому вопрос вечно задавался о
+        // четвёрке, а ответ тратил весь матч. С мили это было незаметно (мили всё равно бьёт, и армия
+        // из мили спавн доламывает), с лекарем — нет: стенд tower+enemy взял 31 лекаря, четырёх
+        // стрелков и не снёс спавн вовсе, где раньше сносил на 827-м
+        val siegeCrew = offensive.filter { fullSpeed(it) }.ifEmpty { if (waveFront.isNotEmpty()) waveFront else staging }
         // ...и вопрос ставится только там, где работа СТРУКТУРНАЯ по существу: спавн в броне или под
         // прикрытием башни. По голому спавну симуляция честно отвечает «мили быстрее» (3000 хитов это
         // 22 тика против 65), и она права — но тело покупается не только для осады, а стрелок ещё и
         // защищает флот, пока волна собирается. Без этой привязки бот брал мили против потока и терял
         // дом (стенд stream17: наш спавн снесён на 1357-м, где раньше была победа на 888-м)
         val armoured = spawnRampart > 0 || siegeTowers.isNotEmpty()
-        if (enemySpawn == null || siegeCrew.isEmpty() || !armoured) assaultWantsMelee = false
+        if (enemySpawn == null || siegeCrew.isEmpty()) { assaultWantsMelee = false; assaultWantsHealer = false }
         else {
-            val withRanged = siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = fighterBody(SPAWN_ENERGY_CAPACITY))
-            val withMelee = siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = guardBody(SPAWN_ENERGY_CAPACITY))
-            assaultWantsMelee = withMelee.better(withRanged)
-            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0 && (assaultWantsMelee || withRanged.win)) {
-                println("assault body: ranged=$withRanged melee=$withMelee rampart=$spawnRampart crew=${siegeCrew.size} -> ${if (assaultWantsMelee) "MELEE" else "ranged"}")
+            fun run(extra: Array<BodyPartType>) =
+                siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = extra)
+            val withRanged = run(fighterBody(SPAWN_ENERGY_CAPACITY))
+            val withMelee = if (armoured) run(guardBody(SPAWN_ENERGY_CAPACITY)) else SIEGE_LOSE
+            // ЛЕКАРЬ спрашивается всегда, когда осада вообще считается. Он ничего не ломает, значит по
+            // незащищённой цели прогон честно скажет «дольше» и его не возьмут; выиграть он может
+            // только тем, ради чего и нужен, — тем, что волна доживает до конца работы
+            val withHealer = run(healerBody(SPAWN_ENERGY_CAPACITY))
+            var bestName = "ranged"
+            var best = withRanged
+            if (withMelee.better(best)) { bestName = "melee"; best = withMelee }
+            if (withHealer.better(best)) { bestName = "healer"; best = withHealer }
+            assaultWantsMelee = bestName == "melee"
+            assaultWantsHealer = bestName == "healer"
+            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0 && (bestName != "ranged" || withRanged.win)) {
+                println("assault body: ranged=$withRanged melee=$withMelee healer=$withHealer rampart=$spawnRampart crew=${siegeCrew.size} heal=${siegeCrew.count { hasHeal(it) }} -> $bestName")
             }
         }
         // СРОК ВЫХОДА: штурм успевает, только если группа ещё дойдёт и добьёт до лимита тиков. Ход
@@ -2207,7 +2336,7 @@ object SpawnAndSwamp {
         // резало шар по болоту, и «гарнизон бьёт угрозу у дома» считалось против трёх из восьми, а пятеро
         // стояли на клетку дальше (стенд hover: 635 против 464 при 758 у всего шара)
         val homePack = combatEnemies.filter { e -> homeThreats.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
-        val homeGuard = fighters.filter { it.id !in wave && staging.none { s -> s.id == it.id } && hasWeapon(it) }
+        val homeGuard = fighters.filter { it.id !in wave && staging.none { s -> s.id == it.id } && inArms(it) }
         val guardHolds = homeThreats.isEmpty() ||
             ourPowerOf(homeGuard, homePack) >= enemyPowerOf(homePack, homeGuard) * DEFEND_MARGIN
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
