@@ -350,6 +350,14 @@ object PainAndGain {
      *  все дебаффы (A×0.6 R×0.6 H×0.5 D×1.1 на 1302-м) и снимает с него все (×1); гейт захвата при CAPTURE_FLOOR пропустил его
      *  при мере 2247:1925, а очков седьмой флаг добавляет +3/т. См. captureAllowed. */
     private const val USE_NO_SEVENTH_FLAG = true
+    /** БЕГУН БЕРЁТ ФЛАГ НАШЕЙ ПОЛОВИНЫ ПОД БРОСКОМ (проба после серии 387–406, дебют против гастролёра — MetalicaX#3/#4, けろびー#12):
+     *  см. captureAllowed. ОТВЕРГНУТО таблицей входов: 17 хуже / 5 лучше по +20, brawl m33 из уничтожения его в уничтожение НАШЕЙ
+     *  армии (2628:11684 → 8051:6038 по +50), m32 brawl живых 11 → 7, m30 brawl +50 3028:12818 → 5940:5767 — дебафф бегуна перед
+     *  настоящим боем (урок v47) дороже тура; blitz без изменений (пол паритета держал бегунов и так), tour лучше на пяти картах. */
+    private const val USE_RUNNER_HALF_UNDER_RUSH = false
+    /** ЕГО ФЛАГИ В ПОЛЁТЕ СЧИТАЮТСЯ ЕГО В МОЩИ «ПОСЛЕ» (та же проба): см. powerAfterFor. НЕЙТРАЛЬНО: blitz и таблица входов до
+     *  цифры те же, tour m30 лучше, m34/m35 хуже — окно «вплотную к флагу» меняет гейт редко. Выключено как незамеренное. */
+    private const val USE_HIS_FLAGS_IN_FLIGHT = false
     /** Доктрина паритета (оператор, 05.09.2026): потеря всех крипов — проигрыш при любом счёте, поэтому копить флаги
      *  нельзя — армия обязана оставаться примерно равной вражьей, а флагов берём столько, сколько держит НЕБОЛЬШОЙ
      *  отрыв. Пока не впереди или отрыв не растёт, допустим флаг, после которого у нас не меньше этой доли их мощи —
@@ -1797,7 +1805,7 @@ object PainAndGain {
      * (матч 3: «отстаём» на 2 очка при 6:10 разрешило всё подряд). Исключение — последние LAST_CALL_TICKS:
      * бой уже не успеет, и очки решают.
      */
-    private fun captureAllowed(ctx: Ctx, f: FlagInfo): Boolean {
+    private fun captureAllowed(ctx: Ctx, f: FlagInfo, runner: Boolean = false): Boolean {
         if (f.ours) return true
         if (ctx.combatEnemies.isEmpty()) return true
         // седьмой флаг — никогда при живой его армии (v127, USE_NO_SEVENTH_FLAG): все дебаффы наши, ни одного его
@@ -1826,7 +1834,11 @@ object PainAndGain {
         // (USE_STALL_LIFTS_RUSH_VETO); настоящий бросок дистанцию сокращает и простоя не даёт
         val current = f.id == objectiveFlagId
         val vetoOn = !USE_RUSH_VETO_SUSTAINED || !current || fightImminentTicks >= RUSH_VETO_TICKS
-        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow)) return false
+        // бегун берёт флаг НАШЕЙ половины и под броском (v128, USE_RUNNER_HALF_UNDER_RUSH): вето «бой близко» держало и скаутов —
+        // матчи 5, 8, 19 серий 367–406: rush=true с 10-го по 39-й, бегуны 0 detached, наш первый флаг на 42–98-м при его шести к
+        // 80–91-му; пол паритета ниже по-прежнему считает цену дебаффа
+        val runnerHalf = USE_RUNNER_HALF_UNDER_RUSH && runner && DistanceMap.inOurHalf(f.pos.x, f.pos.y)
+        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow) && !runnerHalf) return false
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -1903,7 +1915,10 @@ object PainAndGain {
         fun mods(mine: Boolean): HypoMods {
             fun k(type: String): Double {
                 val now = ctx.flags.count { it.mine == mine && it.type == type }
-                val after = ctx.flags.count { it.type == type && (if (mine) (it.ours || it.id in taking) else (it.theirs && it.id !in taking)) }
+                // его флаги В ПОЛЁТЕ (v128, USE_HIS_FLAGS_IN_FLIGHT): свободный флаг с его вооружённым вплотную — его в состоянии «после»,
+                // и пол паритета видит симметричный размен, а не наш дебафф против его чистой армии (гастролёр берёт D5 на 39–41-м)
+                fun inFlight(fl: FlagInfo) = USE_HIS_FLAGS_IN_FLIGHT && !fl.ours && !fl.theirs && fl.id !in taking && ctx.combatEnemies.any { e -> hasWeapon(e) && getRange(e, fl.pos) <= 1 }
+                val after = ctx.flags.count { it.type == type && (if (mine) (it.ours || it.id in taking) else ((it.theirs && it.id !in taking) || inFlight(it))) }
                 return stackMul(type, after) / stackMul(type, now).coerceAtLeast(0.01)
             }
             return HypoMods(ranged = k(EFF_RANGED_ATTACK_MODIFIER), melee = k(EFF_ATTACK_MODIFIER), heal = k(EFF_HEAL_MODIFIER), hits = 1.0 / k(EFF_DAMAGE_TAKEN_MODIFIER))
@@ -2068,7 +2083,7 @@ object PainAndGain {
                 continue
             }
             // брать ли флаг сейчас (дебафф): нельзя — ждём рядом, шаг на клетку сделаем, когда станет можно
-            val allowed = captureAllowed(ctx, f)
+            val allowed = captureAllowed(ctx, f, runner = true)
             val range = if (allowed) 0 else 1
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)
             // при запрете захвата клетка флага — стена и для его же бегуна: путь к «зазору 1» шёл ЧЕРЕЗ флаг, и скаут брал R3

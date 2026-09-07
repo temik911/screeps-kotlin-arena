@@ -316,7 +316,9 @@ function screenMove(c, plan, fighters, ours) {
         // against 45–79 of ours) — a ranged of ours within three is stepped away from, our melee at three is the target
         const nearest = ourF.slice().sort((a, b) => range(c, a) - range(c, b))[0];
         const ourRanged = ourF.filter((o) => live(o, R) > 0).sort((a, b) => range(c, a) - range(c, b))[0];
-        if (ourRanged && range(c, ourRanged) <= 3) { if (!stepBack(c, [ourRanged])) stepAway(c, [ourRanged]); return; }
+        // ...but not under '+poke': the live line's ranged stand level with its melee and take our fire (506, t=80–92: his
+        // block a 4x4 square, ranged beside the melee, three from our nearest creep all through the entry)
+        if (!has('poke') && ourRanged && range(c, ourRanged) <= 3) { if (!stepBack(c, [ourRanged])) stepAway(c, [ourRanged]); return; }
         if (nearest && range(c, nearest) < 3) { if (!stepBack(c, [nearest])) stepAway(c, [nearest]); return; }
         if (range(c, focus) <= 3) return;
         if (!formed && !has('fast') && range(c, slot) > 1) { stepToward(c, slot, 0); return; }
