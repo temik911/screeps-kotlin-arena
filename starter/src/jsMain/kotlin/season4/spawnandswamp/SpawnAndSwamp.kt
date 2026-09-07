@@ -113,7 +113,28 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 51
+    private const val BOT_VERSION = 52
+
+    /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна. Доки Арены противоречат себе на соседних строках
+     *  (`spawnCreep` — «within SPAWN_RANGE», `StructureExtension` — «regardless of distance»), поэтому
+     *  здесь стоит ОСТОРОЖНОЕ чтение: то, что работает при обоих, работает всегда. Ставим мы всё равно
+     *  во втором-третьем кольце от спавна, так что при любом ответе это в пределах. Значение снимет
+     *  матч-эксперимент; до него это НЕ измеренная константа арены, и читать её из рантайма нельзя —
+     *  `external val` в файле с @file:JsModule компилируется в статический ESM-импорт, и отсутствующее
+     *  в рантайме имя не даёт боту стартовать вовсе */
+    private const val EXTENSION_REACH = 20
+
+    /** ПОТОЛОК ТЕЛА в энергии: спавн плюс его экстеншены — и он НАМЕРЕННО не используется выборщиками
+     *  тел, потому что замер сказал не поднимать его. Читается только приборами (лог, проба).
+     *  ЗАМЕР (стенд, 07.09.2026): экстеншены выдавались готовыми и полными с первого тика, то есть
+     *  даром, — и всё равно хуже. `tower` 450 → 471 / 545 / 520 при двух, пяти и десяти; `tower+stream`
+     *  574 → 1007 / 677 / 919; `tower+fortspawn` 868 → 990 / 584 / 939; `fortress` 1332 → 1261 / 1346 /
+     *  1414. Десять клеток из двенадцати хуже. Прогон осады обещал обратное и не соврал — внутри осады
+     *  тело на 1200 действительно кончает её за 17 тиков против 20, — но он не видит, чем тело платит
+     *  СНАРУЖИ: спавн один и последователен, три тика на часть, и тело в 22 части держит его 66 тиков
+     *  против 36. Армия растёт реже и крупнее, а решает её темп. Это же объясняет, почему за 187
+     *  сохранённых реплеев экстеншен не построил НИ ОДИН соперник. */
+    private var bodyCap = SPAWN_ENERGY_CAPACITY
 
     private const val LATE_MARGIN = 60
 
@@ -319,6 +340,23 @@ object SpawnAndSwamp {
      *  «медленнее» — правило гейтит себя тем, что считает. */
     private var assaultWantsHealer = false
 
+    /** ОДНОКРАТНАЯ ПРОБА РАССТОЯНИЯ, а не боевое правило. Доки Арены противоречат себе: `spawnCreep`
+     *  говорит «в пределах SPAWN_RANGE», `StructureExtension` — «на любом расстоянии»; кода движка нет,
+     *  консоли в Арене нет, и различить это может только матч. Различает УСПЕХ, а не код возврата:
+     *  -6 — это сразу ERR_NOT_ENOUGH_ENERGY, ERR_NOT_ENOUGH_RESOURCES и ERR_NOT_ENOUGH_EXTENSIONS.
+     *  Включается EXT_PROBE ровно на один матч; выключенная, вся ветка мертва.
+     *  Ответ нужен не потолку (тот отвергнут замером, см. bodyCap), а ТОЧКЕ СДАЧИ: если расстояние не
+     *  ограничивает, экстеншен у дальних куч стоит 200 вместо 1000 за спавн. */
+    private const val EXT_PROBE = false
+    private var extProbeDone = false
+
+    /** Считать ли экстеншены в бюджете тела. Начинаем с «да» (так говорят и доки, и разработчик) и
+     *  ОПРОВЕРГАЕМ фактом: заказ тела дороже, чем лежит в спавне, оплачивается только экстеншенами, и
+     *  если он не прошёл — они не досягаемы, и больше мы на них не рассчитываем до конца матча. Без
+     *  этого недосягаемый экстеншен заклинил бы спавн навсегда: бюджет обещает тело, которого касса не
+     *  оплачивает, и так каждый тик. */
+    private var extReach = true
+
     /** Стройки этого тика — по одной записи на площадку, у каждой свои часы и свой источник энергии
      *  (см. SiteJob). Считается раз в тик в spawnIfNeeded и читается позже строителями; пока спавн
      *  рождает крипа, список остаётся с прошлого тика — он про экономику и меняется медленно. */
@@ -495,6 +533,7 @@ object SpawnAndSwamp {
         val pendingEnemies: List<Creep>,   // боевые крипы врага, ещё рождающиеся в его спавне (разведка)
         val pendingTowers: List<PendingTower>, // площадки башен врага с оценкой достройки
         val myTowers: List<StructureTower>,    // наши живые башни
+        val myExtensions: List<StructureExtension>, // наши живые экстеншены: потолок тела и куда сдавать
         val mySites: List<ConstructionSite>,   // наши недостроенные площадки
     )
 
@@ -579,6 +618,7 @@ object SpawnAndSwamp {
         }
         // башни врага — источник огня (см. InfluenceMap: урон, влияние, опасность), не только препятствие
         myTowers = getObjectsByPrototype(StructureTower::class).filter { it.exists && it.my == true && (it.hits ?: 0) > 0 }
+        val myExtensions = getObjectsByPrototype(StructureExtension::class).filter { it.exists && it.my == true && (it.hits ?: 0) > 0 }
         val mySites = getObjectsByPrototype(ConstructionSite::class).filter { it.exists && it.my == true }
         val enemyTowers = getObjectsByPrototype(StructureTower::class)
             .filter { it.exists && it.my != true && (it.hits ?: 0) > 0 }
@@ -652,7 +692,10 @@ object SpawnAndSwamp {
         val enemyLoaded = enemyHome?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
 
         val sites = collectSites(combatEnemies, loadedToSpawn, enemyLoaded)
-        val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, mySites)
+        // ПОТОЛОК ТЕЛА этого тика: спавн плюс досягаемые экстеншены. Считается ДО любого выбора тела
+        bodyCap = SPAWN_ENERGY_CAPACITY +
+            myExtensions.count { getRange(it, mySpawn) <= EXTENSION_REACH } * EXTENSION_ENERGY_CAPACITY
+        val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, myExtensions, mySites)
 
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
@@ -1158,6 +1201,18 @@ object SpawnAndSwamp {
                 haulerSite.remove(h.id)?.let { sid -> claimed[sid] = ((claimed[sid] ?: 0) - free).coerceAtLeast(0) }
                 val drop = dropOff(ctx, h)
                 val spawnFree = drop.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
+                // ГДЕ ЛЕЖИТ ЭНЕРГИЯ, ДЛЯ БЮДЖЕТА НЕВАЖНО: spawnCreep берёт сперва из спавна, потом из
+                // экстеншенов, так что сотня в экстеншене — та же сотня. Поэтому сдаём в БЛИЖАЙШЕЕ, где
+                // есть место, а не в спавн и только потом в экстеншены: то правило выстраивало доставку
+                // в очередь (спавн до тысячи → долив → покупка) и стоило стенду tower+stream 574 → 1612
+                val ext = ctx.myExtensions.filter { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }
+                    .minByOrNull { h.getRangeTo(it) }
+                    ?.takeIf { spawnFree == 0 || h.getRangeTo(it) < h.getRangeTo(drop) }
+                if (ext != null) {
+                    if (h.getRangeTo(ext) <= 1) { h.transfer(ext, RESOURCE_ENERGY); dbg(h, "FILL_EXT", null) }
+                    else { val step = pathStep(h, ext, 1, matrixFor(h)); go(h, step); dbg(h, "TO_EXT", null, step) }
+                    continue
+                }
                 if (h.getRangeTo(drop) <= 1) {
                     if (spawnFree > 0) h.transfer(drop, RESOURCE_ENERGY)
                     dbg(h, if (spawnFree > 0) "DELIVER" else "WAIT_FULL", null)
@@ -1277,6 +1332,11 @@ object SpawnAndSwamp {
         // поэтому энергия копится там, где короче рейс, и очередь должна идти оттуда же
         val spawn = ctx.mySpawns.filter { it.spawning == null }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 } ?: return
         val energy = spawn.store[RESOURCE_ENERGY] ?: 0
+        // БЮДЖЕТ ТЕЛА — спавн плюс досягаемые экстеншены: spawnCreep берёт из них сам, спавн тратится
+        // первым. Всё остальное в этой функции (хаулер, бурильщик, смотритель) считается по ЭНЕРГИИ
+        // СПАВНА: те покупки не спавн делает, а мы, и экстеншен для них не касса
+        val extEnergy = if (!extReach) 0 else ctx.myExtensions.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
+        val budget = energy + extEnergy
         val carried = ctx.haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
         val ourPower = ourPowerOf(defenders, threats)
         val enemyPower = enemyPowerOf(threats, defenders)
@@ -1324,9 +1384,9 @@ object SpawnAndSwamp {
         // или приходит раньше, чем вложением, или недомерок из наличной энергии сам закрывает дефицит
         // (ветка бойца ниже); иначе вкладываем — враг всё равно придёт раньше бойца, и только приток даёт
         // следующего
-        val holdReady = energyArrivalTicks(ctx, fullCost - energy, flow) + fullBody.size * CREEP_SPAWN_TIME
+        val holdReady = energyArrivalTicks(ctx, fullCost - budget, flow) + fullBody.size * CREEP_SPAWN_TIME
         val investReady = guardReadySim(ctx, breach, energy).toDouble()
-        val closesNow = energy >= minFighter && closesDeficit(fighterBody(energy), defenders, threats)
+        val closesNow = budget >= minFighter && closesDeficit(fighterBody(budget), defenders, threats)
         // тревога — тот же выбор, а не безусловный запрет: враг, вставший у ворот на тысячу тиков, держал
         // спавн на регенерации 1/тик без единого хаулера при открытом проломе в девяти клетках (стенд stream17)
         // под тревогой враг уже в SPAWN_ALARM_TICKS от спавна, даже если стоит: enemyArrival для стоящего
@@ -1414,7 +1474,7 @@ object SpawnAndSwamp {
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
         if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return
 
-        if (energy < minFighter) return
+        if (budget < minFighter) return
 
         // БАШНЯ ДОМА. Площадка ничего не стоит, поэтому ставится сразу, как только счёт (towerWorth)
         // говорит, что дома она даёт больше бойца за ту же энергию. Смотритель — часть цены башни:
@@ -1447,6 +1507,16 @@ object SpawnAndSwamp {
                     val r = createConstructionSite(spot.x, spot.y, StructureTower::class.js)
                     if (DEBUG_LOG) println("tower: site at (${spot.x},${spot.y})$trace flow=${(flow * 10).toInt() / 10.0} err=${r.error}")
                 }
+            }
+        }
+        // ПРОБА РАССТОЯНИЯ (EXT_PROBE): один экстеншен ДАЛЬШЕ спорного радиуса, и всё. Боевого
+        // правила «строить экстеншены» здесь нет — потолок тела отвергнут замером (см. bodyCap)
+        if (EXT_PROBE && !extProbeDone && ctx.myExtensions.isEmpty() && ctx.mySites.isEmpty() && !fighterFirst) {
+            val spot = extensionProbeSpot(ctx)
+            if (spot != null) {
+                val r = createConstructionSite(spot.x, spot.y, StructureExtension::class.js)
+                if (r.error == null) extProbeDone = true
+                if (DEBUG_LOG) println("extprobe site at (${spot.x},${spot.y}) range=${getRange(spot, ctx.mySpawn)} err=${r.error}")
             }
         }
         // СМОТРИТЕЛЬ — ЧАСТЬ ЦЕНЫ БАШНИ, И ЧАСЫ У НЕГО ТЕ ЖЕ. Под площадку, которая не достроится
@@ -1494,7 +1564,7 @@ object SpawnAndSwamp {
         // старше: против мили-шара у спавна лекарь без урона не держит ничего
         val guard = guardNeeded || assaultWantsMelee
         val healer = !guard && assaultWantsHealer
-        val body = if (guard) guardBody(energy, spawnLimited) else if (healer) healerBody(energy, spawnLimited) else fighterBody(energy, spawnLimited)
+        val body = if (guard) guardBody(budget, spawnLimited) else if (healer) healerBody(budget, spawnLimited) else fighterBody(budget, spawnLimited)
         val full = if (guard) guardBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else if (healer) healerBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else fighterBody(SPAWN_ENERGY_CAPACITY, spawnLimited)
         // Ждём полное тело, если гарнизон и так держит (deficit <= 0: недомерок ничего не добавит) или
         // если враг придёт позже, чем доедет недостающее — по ГРУЖЁНЫМ хаулерам в пути, не по притоку
@@ -1502,7 +1572,7 @@ object SpawnAndSwamp {
         // спавн выпустил M1R1 за 200 и M2R1 за 250 (матч 8). И при тревоге тоже: при держащем
         // гарнизоне тревога выпускала M1R1 по 200 (матч 9); недомерок при тревоге — только когда
         // гарнизон не держит и энергия не успевает
-        val gap = SPAWN_ENERGY_CAPACITY - energy
+        val gap = bodyCap - budget
         if (gap > 0 && bodyValue(full) > bodyValue(body)) {
             val waitTicks = energyArrivalTicks(ctx, gap, flow)
             if (deficit <= 0.0 || (enemyArrival > waitTicks && spawnLife > waitTicks)) return
@@ -1513,6 +1583,18 @@ object SpawnAndSwamp {
 
         val r = spawn.spawnCreep(body)
         if (r.error == null) spentFighters += body.sumOf { cost(it) }
+        // ПРОБА: тело дороже, чем лежит в спавне, оплачивается только экстеншенами. Одна строка на
+        // такой заказ — это и есть подтверждение (или опровержение) того, что они питают spawnCreep;
+        // код возврата тут не различает ничего, -6 это сразу три ошибки, различает УСПЕХ
+        // ПРОБА И ПРЕДОХРАНИТЕЛЬ В ОДНОМ. Тело дороже, чем лежит в спавне, оплачивается только
+        // экстеншенами — значит УСПЕХ такого заказа и есть ответ (код возврата не отвечает: -6 это
+        // сразу три разные ошибки). Не прошло — экстеншены не досягаемы, и бюджет перестаёт их считать
+        val price = body.sumOf { cost(it) }
+        if (price > energy && extEnergy > 0) {
+            val ok = r.error == null
+            if (!ok) extReach = false
+            if (DEBUG_LOG) println("extprobe t=${getTicks()} spawnE=$energy extE=$extEnergy exts=${ctx.myExtensions.size} range=${ctx.myExtensions.minOfOrNull { getRange(it, spawn) } ?: -1} cost=$price parts=${body.size} err=${r.error} reach=$ok")
+        }
         if (DEBUG_LOG) println("spawn: ${if (guard) "guard" else if (healer) "healer" else "fighter"} parts=${body.size} cost=${body.sumOf { cost(it) }} energy=$energy alarm=$alarm first=$fighterFirst our=${ourPower.toInt()}/${enemyPower.toInt()} deficit=${deficit.toInt()} fire=$spawnUnderFire arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
     }
 
@@ -1541,9 +1623,11 @@ object SpawnAndSwamp {
             "$kind${site?.let { "(${it.x},${it.y})" } ?: "?"}left=$left ready=${if (ready >= Double.MAX_VALUE / 2) "never" else ready.toInt().toString()}/${deadline.toInt()}"
     }
 
-    /** Только то, что бот СТАВИТ сам: цена площадки — её имя, и у рампарта с расширением цена общая,
-     *  поэтому их здесь нет (мы их не ставим). */
-    private val BUILDABLE = arrayOf("StructureTower", "StructureSpawn")
+    /** Только то, что бот СТАВИТ сам: цена площадки — её имя. У рампарта и экстеншена цена ОБЩАЯ
+     *  (200 обоим), поэтому опознание по цене однозначно ровно пока мы не ставим рампартов; ставим —
+     *  и площадку придётся различать чем-то ещё. */
+    private val BUILDABLE = if (EXT_PROBE) arrayOf("StructureTower", "StructureSpawn", "StructureExtension")
+        else arrayOf("StructureTower", "StructureSpawn")
 
     private fun buildKindOf(site: ConstructionSite): String? {
         val total = site.progressTotal ?: return null
@@ -2285,7 +2369,7 @@ object SpawnAndSwamp {
             assaultWantsMelee = bestName == "melee"
             assaultWantsHealer = bestName == "healer"
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0 && (bestName != "ranged" || withRanged.win)) {
-                println("assault body: ranged=$withRanged melee=$withMelee healer=$withHealer rampart=$spawnRampart crew=${siegeCrew.size} heal=${siegeCrew.count { hasHeal(it) }} -> $bestName")
+                println("assault body: ranged=$withRanged melee=$withMelee healer=$withHealer rampart=$spawnRampart crew=${siegeCrew.size} heal=${siegeCrew.count { hasHeal(it) }} cap=$bodyCap -> $bestName")
             }
         }
         // СРОК ВЫХОДА: штурм успевает, только если группа ещё дойдёт и добьёт до лимита тиков. Ход
@@ -3532,6 +3616,31 @@ object SpawnAndSwamp {
             if (x * 100 + y in busy) continue
             val score = getRange(pos, enemy)
             if (score < bestScore) { bestScore = score; best = pos }
+        }
+        return best
+    }
+
+    /** Клетка ПРОБЫ расстояния: строго дальше спорного радиуса и не дальше, чем нужно, чтобы это
+     *  доказать, — проходимая, свободная, на нашей половине и подальше от врага. Ближе радиуса ставить
+     *  бессмысленно: там ответ одинаков при обоих чтениях доков. */
+    private fun extensionProbeSpot(ctx: Ctx): Position? {
+        val spawn = ctx.mySpawn
+        val enemy: Position = ctx.enemySpawn ?: spawn
+        val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
+        var best: Position? = null
+        var bestScore = -1
+        for (dx in -(EXTENSION_REACH + 5)..(EXTENSION_REACH + 5)) for (dy in -(EXTENSION_REACH + 5)..(EXTENSION_REACH + 5)) {
+            val ring = maxOf(abs(dx), abs(dy))
+            if (ring <= EXTENSION_REACH || ring > EXTENSION_REACH + 5) continue
+            val x = spawn.x + dx
+            val y = spawn.y + dy
+            if (x < 1 || y < 1 || x > 98 || y > 98) continue
+            val pos = InfluenceMap.cell(x, y)
+            if (getTerrainAt(pos) == TERRAIN_WALL) continue
+            if (x * 100 + y in busy) continue
+            if (ctx.stepsToSpawn[x * 100 + y] < 0) continue // недостижимо — смотритель туда не дойдёт
+            val score = getRange(pos, enemy)
+            if (score > bestScore) { bestScore = score; best = pos }
         }
         return best
     }

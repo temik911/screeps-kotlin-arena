@@ -16,7 +16,13 @@ export const MAX_CREEP_SIZE=50, CREEP_SPAWN_TIME=3, RESOURCE_ENERGY='energy', RE
   RESOURCE_DECAY=1000, MAX_CONSTRUCTION_SITES=10, CONSTRUCTION_COST={StructureTower:1250,StructureExtension:200,StructureRoad:10,StructureContainer:100,StructureWall:100,StructureRampart:200,StructureSpawn:1000}, STRUCTURE_PROTOTYPES={},
   CONSTRUCTION_COST_ROAD_SWAMP_RATIO=5, CONSTRUCTION_COST_ROAD_WALL_RATIO=150, CONTAINER_HITS=300, CONTAINER_CAPACITY=2000,
   WALL_HITS=10000, WALL_HITS_MAX=10000, RAMPART_HITS=10000, RAMPART_HITS_MAX=10000, ROAD_HITS=2500, ROAD_WEAROUT=1,
-  EXTENSION_HITS=100, EXTENSION_ENERGY_CAPACITY=100, SPAWN_ENERGY_CAPACITY=1000, SPAWN_HITS=3000;
+  EXTENSION_HITS=100, EXTENSION_ENERGY_CAPACITY=100, SPAWN_ENERGY_CAPACITY=1000, SPAWN_HITS=3000,
+  // РАДИУС, С КОТОРОГО СПАВН БЕРЁТ ИЗ ЭКСТЕНШЕНОВ. Доки Арены противоречат себе на соседних
+  // строках: `spawnCreep` говорит «within SPAWN_RANGE», `StructureExtension` — «regardless of
+  // distance», разработчик на стороне второго. Стенд берёт ОСТОРОЖНОЕ чтение: то, что работает
+  // при обоих, работает и здесь, а на спорное мы так никогда и не заложимся по ошибке.
+  // Значение снимет матч-эксперимент; до него это НЕ измеренная константа арены
+  SPAWN_RANGE=20;
 export const EFF_CONSTRUCTION_BOOST='eff_construction_boost', EFF_HEAL_BOOST='eff_heal_boost', EFF_RANGED_ATTACK_BOOST='eff_ranged_attack_boost',
   EFF_ATTACK_BOOST='eff_attack_boost', EFF_WORK_BOOST='eff_work_boost', EFF_MOVE_BOOST='eff_move_boost',
   EFF_ATTACK_MODIFIER='eff_attack_modifier', EFF_RANGED_ATTACK_MODIFIER='eff_ranged_attack_modifier', EFF_HEAL_MODIFIER='eff_heal_modifier',

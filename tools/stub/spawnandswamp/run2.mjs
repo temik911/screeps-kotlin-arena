@@ -1,5 +1,5 @@
 import * as C from 'game/constants';
-import { world, endTick, StructureSpawn, StructureContainer, StructureWall, StructureRampart, StructureTower, ConstructionSite, Creep, Resource, range, terrainAt } from 'game/prototypes';
+import { world, endTick, StructureSpawn, StructureContainer, StructureWall, StructureRampart, StructureTower, StructureExtension, ConstructionSite, Creep, Resource, range, terrainAt } from 'game/prototypes';
 import { loop } from '../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/spawnandswamp/SpawnAndSwamp.export.mjs';
 // мир как в живом матче: рамка стен, треть болота, наш спавн справа (94,49) в кармане за стенным блоком x=81..86 (y=20..83),
 // выходы из кармана сверху (y<=10) и снизу (y>=89); угловые контейнеры 2500; временные 2000/99 тиков каждые 50 тиков
@@ -10,6 +10,15 @@ for(let x=13;x<=18;x++) for(let y=20;y<=83;y++) world.terrain[x*100+y]=1;
 for(const [sx,sy] of [[94,49],[5,50]]) for(let x=sx-6;x<=sx+6;x++) for(let y=sy-6;y<=sy+6;y++) if(x>0&&x<99&&y>0&&y<99) world.terrain[x*100+y]=0;
 for(let y=1;y<99;y++){ world.terrain[98*100+y]=0; world.terrain[1*100+y]=0; } // бордюрные колонны — равнина, как в матче
 const my=new StructureSpawn(94,49,true,1000); const en=new StructureSpawn(5,50,false,1000);
+// EXT=n — n НАШИХ экстеншенов, уже построенных и полных, во втором кольце от спавна. Это не поведение
+// бота, а ИЗОЛЯЦИЯ вопроса: стоит ли поднятый потолок тела чего-нибудь сам по себе, отдельно от того,
+// успевает ли бот его себе построить. Сравнивать с прогоном без EXT на том же сценарии
+{ const n=parseInt(process.env.EXT||'0'); let placed=0;
+  for(let dx=-2;dx<=2&&placed<n;dx++) for(let dy=-2;dy<=2&&placed<n;dy++){
+    if(Math.max(Math.abs(dx),Math.abs(dy))!==2) continue;
+    const x=my.x+dx, y=my.y+dy; if(x<1||y<1||x>98||y>98) continue;
+    if(world.terrain[x*100+y]===C.TERRAIN_WALL) continue;
+    const e=new StructureExtension(x,y,C.EXTENSION_HITS,true); e.store.energy=C.EXTENSION_ENERGY_CAPACITY; placed++; } }
 // TWOSPAWN: у соперника не один спавн, а три — он их СТРОИТ (けろびー#16: 242-й и 544-й тик). Ставятся
 // в центре карты, то есть БЛИЖЕ к нам, чем его исходный: это и есть суть приёма — производство
 // переезжает нам навстречу, а условий победы становится три

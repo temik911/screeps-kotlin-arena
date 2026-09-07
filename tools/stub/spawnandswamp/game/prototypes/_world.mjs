@@ -22,11 +22,19 @@ export function hurt(target, amount){
 export class OwnedStructure extends Structure { constructor(x,y,hits,my){ super(x,y,hits); this.my=my; } }
 export class StructureSpawn extends OwnedStructure { constructor(x,y,my,energy){ super(x,y,3000,my); this.store=new Store(1000); this.store.energy=energy; this.spawning=null; this.directions=[1,2,3,4,5,6,7,8]; }
   setDirections(){ return 0; }
+  /** Энергия спавна ПЛЮС экстеншены владельца в SPAWN_RANGE (см. константу): спавн тратится первым,
+   *  остаток добирается с экстеншенов, ближние первыми. Это и есть единственный способ построить тело
+   *  дороже SPAWN_ENERGY_CAPACITY. */
+  reachableExtensions(){ return world.objects.filter(o=>o.exists && o instanceof StructureExtension && o.my===this.my
+      && o.store && o.store.energy>0 && range(this,o)<=C.SPAWN_RANGE).sort((a,b)=>range(this,a)-range(this,b)); }
   spawnCreep(body){ if(this.spawning) return {error:C.ERR_BUSY}; const cost=body.reduce((s,p)=>s+C.BODYPART_COST[p],0);
-    if(cost>this.store.energy) return {error:C.ERR_NOT_ENOUGH_ENERGY}; this.store.energy-=cost;
+    const exts=this.reachableExtensions();
+    if(cost>this.store.energy+exts.reduce((s,e)=>s+e.store.energy,0)) return {error:C.ERR_NOT_ENOUGH_ENERGY};
+    let left=cost-Math.min(cost,this.store.energy); this.store.energy-=Math.min(cost,this.store.energy);
+    for(const e of exts){ if(left<=0) break; const take=Math.min(left,e.store.energy); e.store.energy-=take; left-=take; }
     const c=new Creep(this.x,this.y,this.my,body); c.spawning=true; this.spawning={needTime:body.length*3, remainingTime:body.length*3, creep:c, cancel(){return 0;}}; return {object:c}; } }
 export class StructureContainer extends OwnedStructure { constructor(x,y,energy,decay){ super(x,y,300,undefined); this.store=new Store(2000); this.store.energy=energy; this.ticksToDecay=decay; } }
-export class StructureExtension extends OwnedStructure {}
+export class StructureExtension extends OwnedStructure { constructor(x,y,hits,my){ super(x,y,hits,my); this.store=new Store(C.EXTENSION_ENERGY_CAPACITY); } }
 export class StructureTower extends OwnedStructure { constructor(x,y,my){ super(x,y,C.TOWER_HITS,my); this.store=new Store(C.TOWER_CAPACITY); this.cooldown=0; }
   heal(t){ if(this.cooldown>0) return C.ERR_TIRED; if(this.store.energy<C.TOWER_ENERGY_COST) return C.ERR_NOT_ENOUGH_ENERGY; const r=range(this,t); if(r>C.TOWER_RANGE) return C.ERR_NOT_IN_RANGE;
     t.hits=Math.min(t.hitsMax, t.hits+Math.max(0, C.TOWER_POWER_HEAL*(1-C.TOWER_FALLOFF*Math.max(0,r-C.TOWER_OPTIMAL_RANGE)/(C.TOWER_FALLOFF_RANGE-C.TOWER_OPTIMAL_RANGE)))); this.store.energy-=C.TOWER_ENERGY_COST; this.cooldown=C.TOWER_COOLDOWN; return 0; }
