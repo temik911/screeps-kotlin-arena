@@ -338,6 +338,18 @@ object PainAndGain {
      *  (ни одного флага — 0:0); 0.95 пускает дешёвые флаги, а 0.85 оставляло армию при 0.83 к пробуждению
      *  «спящего» лагеря (стенд sleeper: победа держалась на удаче кайта). */
     private const val CAPTURE_FLOOR = 1.0
+    /** ОТРЫВ С ТЕМПОМ НЕ ТРЕБУЕТ БОЯ (v127, серия 367–386, матчи 7 и 15 — MetalicaX#2/#4): впереди по счёту и по проекции на конец
+     *  матча армия не начинает боя сама — толчок (pushing) и прижим «пачка идёт» (pressing) выключены, бой только по контакту,
+     *  который принёс он. Матч 15: при +1658 (+15/т против +10/т) прижим дважды (628, 654) загнал пачку в его линию при мере
+     *  3385:2938, и 14484 хитов стали 4763 за тридцать тиков (его мили 39 ударов против наших 10, 53 массовых выстрела); матч 7:
+     *  при +3066 после седьмого флага прижим на 1319-м — одиннадцать крипов стали тремя за пятнадцать тиков. Мера силы в обоих
+     *  завышала нас вдвое (мили считаются на полный удар, массовый огонь по плотному блоку не считается вовсе); отрыв,
+     *  который темп удерживает до конца, боя с такой мерой не стоит. */
+    private const val USE_LEAD_HOLDS = true
+    /** СЕДЬМОЙ ФЛАГ НЕ БЕРЁТСЯ, ПОКА ЕГО АРМИЯ ЖИВА (v127, матч 7): захват, после которого все семь флагов наши, кладёт на нас
+     *  все дебаффы (A×0.6 R×0.6 H×0.5 D×1.1 на 1302-м) и снимает с него все (×1); гейт захвата при CAPTURE_FLOOR пропустил его
+     *  при мере 2247:1925, а очков седьмой флаг добавляет +3/т. См. captureAllowed. */
+    private const val USE_NO_SEVENTH_FLAG = true
     /** Доктрина паритета (оператор, 05.09.2026): потеря всех крипов — проигрыш при любом счёте, поэтому копить флаги
      *  нельзя — армия обязана оставаться примерно равной вражьей, а флагов берём столько, сколько держит НЕБОЛЬШОЙ
      *  отрыв. Пока не впереди или отрыв не растёт, допустим флаг, после которого у нас не меньше этой доли их мощи —
@@ -1136,6 +1148,13 @@ object PainAndGain {
      *  досягаемости) отвергнут стендом 124/125 при 32/32 — там менялась и доктрина захвата; здесь только точка стояния. Стенд:
      *  сценарий scatter (россыпь матча 240) добавлен этой же версией. */
     private const val USE_OPENING_AT_POST = true
+    /** БЛОБ, ИДУЩИЙ К СВОБОДНОМУ ФЛАГУ, — НЕ БРОСОК (v127, серия 367–386, MetalicaX#3 0:2): см. flagBound у rushSignal.
+     *  ОТВЕРГНУТО стендом: blitz 4-4 → 2-6 (m31 23931:21418 → 5412:23900, m32 23975:21586 → 20718:23331, m35 23880:21378 →
+     *  3641:24004), таблица входов 4 хуже / 3 лучше — m8 hunter +20 3919 → 6002, m30 screen+focus 3324 → 4157: без броска армия
+     *  идёт навстречу настоящему; split m33 24290:19345 → 19224:24286. Центр лежит на пути любого броска, и «идёт к флагу»
+     *  от «идёт на нас» по темпу не отличить, пока он не прошёл флаг мимо. Дебют против быстрого гастролёра остаётся открыт:
+     *  в матче 5 его D5 на 41-м, наш первый флаг на 54-м, а бегуны не брали своих флагов из-за пола паритета. */
+    private const val USE_RUSH_NOT_FLAG_BOUND = false
     private const val EVADE_ARRIVED = 3
     private const val EVADE_EVAL_EVERY = 5
     private const val EVADE_HYSTERESIS = 4
@@ -1277,7 +1296,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v126"
+    private const val BOT_VERSION = "v127"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1315,6 +1334,7 @@ object PainAndGain {
     private var huntingThreat = false
     /** ДОБИТЬ по перевесу (не по контакту) — только к нему применяется гистерезис PUSH_RELEASE_RATIO. */
     private var pushing = false
+    private var leadHoldsWas = false   // трасса «отрыв держит» (см. USE_LEAD_HOLDS)
     /** Точка отхода — одна на весь отход (см. retreatPoint). */
     private var retreatTarget: Position? = null
     /** Кто на прошлом тике шёл на личную цель (engage): такого не ждут по сплочению. */
@@ -1338,6 +1358,7 @@ object PainAndGain {
     private val hisCentHist = ArrayDeque<Int>()   // клетка центра его вооружённых за APPROACH_WINDOW (v113: ПОДХОДИТ ОН, не мы)
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
+    private var flagBoundWas = false                      // трасса «его блоб идёт к флагу» (см. USE_RUSH_NOT_FLAG_BOUND)
     private var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
     private var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
     private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
@@ -1534,7 +1555,21 @@ object PainAndGain {
         // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.
         // Начатый бросок кончается, когда враг взял флаг, замер, разошёлся или ушёл дальше EVADE_RANGE и не приближается
         val noEnemyFlag = ctx.flags.none { it.theirs }
-        val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed &&
+        // блоб, идущий к СВОБОДНОМУ ФЛАГУ, а не на нас (v127, USE_RUSH_NOT_FLAG_BOUND): ближайший к его центру свободный флаг
+        // не дальше нашего центра, и его темп к этому флагу не ниже темпа к нам — он на туре. Матч 5 серии 367–386 (MetalicaX#3):
+        // с 10-го по 41-й rush=true, армия на посту, захваты под вето; он взял D5 на 41-м, R3 на 45-м, оба A3 на 60-м, наш
+        // первый флаг — на 54-м. Бросок сквозь центр без захвата снова читается броском, когда его темп к флагу падает
+        val flagBound = USE_RUSH_NOT_FLAG_BOUND && hisCentHist.size >= 2 && run {
+            val hc = centroidOf(armedNow) ?: return@run false
+            val free = ctx.flags.filter { !it.ours && !it.theirs }.minByOrNull { getRange(it.pos, hc) } ?: return@run false
+            val a = hisCentHist.first(); val b = hisCentHist.last()
+            val pa = InfluenceMap.cell(a / 100, a % 100); val pb = InfluenceMap.cell(b / 100, b % 100)
+            val flagRate = (getRange(pa, free.pos) - getRange(pb, free.pos)).toDouble() / (hisCentHist.size - 1)
+            getRange(hc, free.pos) <= getRange(hc, ctx.ourCentroid) && flagRate >= approachRate
+        }
+        if (DEBUG_LOG && flagBound != flagBoundWas) println("rush t=${getTicks()}: his blob ${if (flagBound) "is flag-bound (no rush)" else "is not flag-bound"} approach=${(approachRate * 100).toInt()}%")
+        flagBoundWas = flagBound
+        val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed && !flagBound &&
             (!USE_RUSH_SIGNAL_IN_REACH || armedNow.any { getRange(it, ctx.ourCentroid) <= RUSH_SIGNAL_RANGE })
         val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
             (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
@@ -1765,6 +1800,8 @@ object PainAndGain {
     private fun captureAllowed(ctx: Ctx, f: FlagInfo): Boolean {
         if (f.ours) return true
         if (ctx.combatEnemies.isEmpty()) return true
+        // седьмой флаг — никогда при живой его армии (v127, USE_NO_SEVENTH_FLAG): все дебаффы наши, ни одного его
+        if (USE_NO_SEVENTH_FLAG && ctx.flags.count { it.ours } + 1 >= ctx.flags.size) return false
         // последний зов и при РАВНОМ счёте: ничья 0:0 после уклонения (см. EVADE_EQUAL_RATIO) отдана не будет
         val ticksLeft = arenaInfo.ticksLimit - getTicks()
         val losingAtTheEnd = if (USE_LAST_CALL_PROJECTED) (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft <= 0 else ourScore <= enemyScore
@@ -2862,7 +2899,11 @@ object PainAndGain {
         // ловимых) — 51 хуже / 51 лучше, гейтовые m28 farm+weak и m30 camp красные, кайтеры добиваются позже на десятке карт,
         // m16 kite проигран; порог evasive «больше половины окна» — 66 хуже / 44 лучше. Быстрое снятие наступления, когда
         // ловимых нет, — то, чем армия не гонится за кайтером; цена — эти тики против блоба, который отступает и возвращается
-        pushing = !stalled && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && oursPush >= theirsPush * (if (pushing) pushRelease else pushRatio)))
+        // отрыв с темпом (v127, USE_LEAD_HOLDS): впереди по счёту и по проекции — толчка и прижима нет, бой только его
+        val leadHolds = USE_LEAD_HOLDS && !behindOnScore && ourScore > enemyScore && armedEnemies.isNotEmpty()
+        if (DEBUG_LOG && leadHolds != leadHoldsWas) println("lead t=$now: holds ${if (leadHolds) "on" else "off"} score=$ourScore:$enemyScore rate=$ourRate:$enemyRate push=${oursPush.toInt()}:${theirsPush.toInt()}")
+        leadHoldsWas = leadHolds
+        pushing = !stalled && !leadHolds && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && oursPush >= theirsPush * (if (pushing) pushRelease else pushRatio)))
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -3228,7 +3269,7 @@ object PainAndGain {
                 (combatArmy.filter { hasWeapon(it) }.minOfOrNull { getRange(e, it) } ?: 99).let { it > MELEE_HOLD_RANGE + 2 && it <= ENGAGE_RANGE }
         }
         standoffTicks = if (contact && underTheirFire && !theirMeleeIn && !theirMeleeClosing && !theirMeleeMid) standoffTicks + 1 else 0
-        pressing = USE_PRESS && blockOn && contact && (standoffTicks >= PRESS_PATIENCE || pressing)
+        pressing = USE_PRESS && blockOn && contact && !leadHolds && (standoffTicks >= PRESS_PATIENCE || pressing)
         val pressOn = pressing
         // «цель уходит» (см. PRESS_GIVEUP): за два тика прижима дистанция от наших мили до неё не сократилась
         if (blockOn) {

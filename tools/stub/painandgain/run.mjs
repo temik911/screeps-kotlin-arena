@@ -288,6 +288,23 @@ function screenMove(c, plan, fighters, ours) {
   // while the live line wins nine of ten. With +focus a ranged of the screen keeps exactly three from that one creep
   if (has('focus')) {
     const focus = ourF.slice().sort((a, b) => range(anchor, a) - range(anchor, b) || a.hits - b.hits)[0];
+    // '+poke' (07.09.2026): the line's fighters rotate like the live one — out of our reach to a healer below half their
+    // weapon parts, back at five of eight — so the poke melee are not stripped where they stand (m29 without it: his four
+    // melee gone by t=50, the line destroyed at 129 while Coldkimchi's holds 16000/16000)
+    if (has('poke') && focus && (isR(c) || live(c, A) > 0 || armyState.rotOut?.has(c.id))) {
+      if (!armyState.rotOut) armyState.rotOut = new Set();
+      const weap = isR(c) ? R : A;
+      const lv = live(c, weap), full = c.body.filter((p) => p.type === weap).length;
+      if (!armyState.rotOut.has(c.id) && full > 0 && lv * 2 < full) armyState.rotOut.add(c.id);
+      if (armyState.rotOut.has(c.id) && lv * 8 >= full * 5) armyState.rotOut.delete(c.id);
+      if (armyState.rotOut.has(c.id)) {
+        const inReach = ourF.filter((o) => range(c, o) <= 3);
+        const healer = fighters.filter((o) => o !== c && isH(o)).sort((a, b) => range(c, a) - range(c, b))[0];
+        if (inReach.length) { if (!stepBack(c, inReach)) stepAway(c, inReach); return; }
+        if (healer && range(c, healer) > 1) { stepToward(c, healer, 1); return; }
+        return;
+      }
+    }
     if (focus) {
       if (isR(c)) {
         // the live ranged keep EXACTLY three from the nearest of ours and step back when one of ours steps to two (the
