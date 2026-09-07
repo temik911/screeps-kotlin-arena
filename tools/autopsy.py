@@ -58,6 +58,9 @@ MELEE_IDLE = 50          # idle melee creep-ticks with an enemy within engage ra
 STRIPPED_X = 3.0         # our stripped creep-ticks in his reach this many times his (a stripped creep has no weapon or heal part left)
 STRIPPED_MIN = 30
 ENTRY_TICKS = 20         # the entry: this many ticks from the first contact
+OPENING_TICKS = 60       # the opening: this many ticks from the first contact — the window the reach rule reads
+REACH_GAP = 0.10         # his ranged's share of creep-ticks with a target within 3 this far above ours in the opening
+REACH_MIN = 100          # ... with at least this many ranged creep-ticks on each side
 ENTRY_X = 1.5            # hits we lost in the entry this many times what he lost
 UPTIME_LOW = 0.85        # our uptime in a role below this while his is above UPTIME_HIGH
 UPTIME_HIGH = 0.90
@@ -353,7 +356,7 @@ def analyse_replay(doc, us):
     F = {s: dict(shots=0, mass=0, swings=0, heals=0, rheals=0, exp_dmg=0, exp_heal=0, obs_lost=0, obs_gain=0,
                  h_can=0, h_did=0, m_can=0, m_did=0, r_can=0, r_did=0, m_adj=0, r_in3=0, r_ticks=0, m_ticks=0,
                  shots_by_role=Counter(), r_dist=Counter(), first5=0, stripped_in_reach=0, stripped_ticks=0,
-                 e_shots=0, e_swings=0, e_heals=0, e_lost=0, e_stripped=0, e_deaths=0, e_r_in3=0) for s in (0, 1)}
+                 e_shots=0, e_swings=0, e_heals=0, e_lost=0, e_stripped=0, e_deaths=0, e_r_in3=0, o_r_in3=0, o_r_ticks=0) for s in (0, 1)}
     if win:
         for k, start, now, acts, raw in rp.ticks(doc):
             if k < win[0] or k > win[1]:
@@ -444,6 +447,10 @@ def analyse_replay(doc, us):
                 elif live_parts(c, 'r') > 0:
                     U['r_ticks'] += 1
                     U['r_dist'][min(d, 7)] += 1
+                    if k <= win[0] + OPENING_TICKS:
+                        U['o_r_ticks'] += 1
+                        if d <= RANGED_RANGE:
+                            U['o_r_in3'] += 1
                     if d <= RANGED_RANGE:
                         U['r_can'] += 1
                         U['r_in3'] += 1
@@ -658,6 +665,11 @@ def diagnose(L, R, info):
         if o['e_lost'] >= 1000 and o['e_lost'] >= ENTRY_X * max(1, h['e_lost']):
             D.append(('entry lost', f"in the first {ENTRY_TICKS} ticks of contact we lost {o['e_lost']} hits to his {h['e_lost']} (shots {o['e_shots']}:{h['e_shots']}, "
                                     f"armed ranged in 3 {o['e_r_in3']}:{h['e_r_in3']}, stripped {o['e_stripped']}:{h['e_stripped']}) — the entry was his"))
+        if o['o_r_ticks'] >= REACH_MIN and h['o_r_ticks'] >= REACH_MIN:
+            orr, hrr = o['o_r_in3'] / o['o_r_ticks'], h['o_r_in3'] / h['o_r_ticks']
+            if hrr >= orr + REACH_GAP:
+                D.append(('reach', f"in the first {OPENING_TICKS} ticks of contact his ranged had a target within 3 in {hrr * 100:.0f}% of their creep-ticks against our "
+                                   f"{orr * 100:.0f}% ({h['o_r_in3']}/{h['o_r_ticks']} vs {o['o_r_in3']}/{o['o_r_ticks']}) — his line reached ours and ours did not reach his"))
         if h['m_adj'] >= 20 and h['m_adj'] >= ADJACENCY_X * max(1, o['m_adj']):
             D.append(('melee adjacency', f"his melee were adjacent {h['m_adj']} creep-ticks against our {o['m_adj']} ({h['swings']} vs {o['swings']} swings) — his melee found targets, ours held a line nobody attacked"))
         if info.get('posture_at_contact') == 'EVADE':
@@ -743,7 +755,7 @@ def render(L, R, info, history, step):
             p(f"  {tag} shots={A['shots']} mass={A['mass']} swings={A['swings']} heals={A['heals']}+{A['rheals']}r  expected dmg={A['exp_dmg']} heal={A['exp_heal']} "
               f"net on the other={A['exp_dmg'] - o['exp_heal']}  observed on the other: lost={o['obs_lost']} gained={o['obs_gain']}")
             p(f"       uptime healers {pct(A['h_did'], A['h_can'])} melee {pct(A['m_did'], A['m_can'])} ranged {pct(A['r_did'], A['r_can'])}; "
-              f"melee adjacent {A['m_adj']} of {A['m_ticks']} creep-ticks; ranged in 3: {pct(A['r_in3'], A['r_ticks'])}; "
+              f"melee adjacent {A['m_adj']} of {A['m_ticks']} creep-ticks; ranged in 3: {pct(A['r_in3'], A['r_ticks'])}, opening {pct(A['o_r_in3'], A['o_r_ticks'])}; "
               f"shots by target {dict(A['shots_by_role'].most_common(4))}; ranged dist hist {' '.join(f'{d}:{n}' for d, n in sorted(A['r_dist'].items()))}")
         o, h = F[us], F[1 - us]
         p(f"  entry (first {ENTRY_TICKS} ticks from t={R['window'][0]}): hits lost ours {o['e_lost']} his {h['e_lost']}; shots ours {o['e_shots']} his {h['e_shots']}; "
