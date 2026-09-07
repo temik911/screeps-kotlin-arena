@@ -302,41 +302,57 @@ the `fortress` optimism it was chased for: there the siege is thirteen ticks and
 empty, so what the verdict compares is one tick out of fourteen. That comparison is correct and
 irrelevant, and the body it buys is worse at everything else for the next three hundred ticks.
 
-### Twenty matches of v46, and what they say about v44 (07.09.2026)
+### Twenty matches of v46, and the reading they overturned (07.09.2026)
 
-v46's first series was 5-1-0 with no draws and read like a large step. Twenty more matches say it was six
-matches: **v46 over twenty-six matches is 16-9-1 and −31 rating (−1.2 a match), against v44's 12 matches
-at 5-0-5 and +8 (+0.8 a match)**. Split by opponent (`series.py compare 44 46`), the whole difference is
-one player:
+v46's first series was 5-1-0 and read like a large step. Twenty more matches made it 16-9-1 and −31
+rating against v44's 12 at 5-0-5 and +8, and cut per opponent the difference sat entirely on けろびー:
+3-0-2 (+11) for v44 against 4-6-1 (−24) for v46. **That reading was wrong, and the operator named why:
+opponents version their bots exactly as we version ours.**
 
-| opponent | v44 | v46 |
+`/api/game/<id>` carries `codes[]` — `{user, version}` per side — so every match records which BOT played,
+not merely which player. Pooled by name, one けろびー is five different bots in a single afternoon (v13,
+v14, v15, v16, v17), and the comparison above added them together. Held apart (`series.py compare`, whose
+rows are now one bot each), what v44 and v46 actually share is four bots and nine matches each:
+
+| his bot | our v44 | our v46 |
 |---|---|---|
-| stachu3478 | 2-0-3 −3 | 6-3-0 −7 |
-| けろびー | 3-0-2 **+11** | 4-6-1 **−24** |
+| けろびー v14 | 1-0-2 +1 | 1-0-0 +4 |
+| けろびー v15 | 1-0-0 +7 | 1-2-0 −13 |
+| stachu3478 v10 | 1-0-2 −2 | 2-1-0 ±0 |
+| stachu3478 v7 | 0-0-1 −3 | 2-0-0 +8 |
 
-Both versions turn draws into decisive matches; against stachu3478 that is roughly even money, against
-けろびー it is a rout. A draw against him costs nothing and a loss costs nine rating points, so converting
-two draws into six losses is bad arithmetic however good the wins look.
+On the bots both met, v44 is 3-0-5 (+3) and v46 6-3-0 (−1): the draws did turn into decisive matches, and
+the rating difference between the versions is not established either way on nine matches. **What moved the
+rating was the draw of the matchmaker.** v44 never met けろびー v16, v17 or stachu3478 v6; v46 met them
+four times.
 
-The obvious explanation — that けろびー changed his bot between the two series — is the one the numbers
-rule out. `series.py field enemies enemy --opponent けろびー --t0 1 --t1 600` prints his early army per
-match, and the distribution is the same in both eras: he opens either weak (≈40 power) or strong
-(≈450–800), in both. What changed is what we do against the strong opening. **v44 never had a wave out in
-the first six hundred ticks against him (`posture.front` 0.00) and drew those matches; v46 does
-(`front` 2.28, `attrition` 3051 against v44's 914) and loses them.**
+The instrument was rebuilt around this and it produced the finding the pooled view had been hiding.
+`series.py foes` gives one row per opponent bot with our versions pooled — deliberately pooled, because
+"which of their bots beats us" is a question no single version of ours has the matches to ask:
 
-Inside v46 the same split holds by outcome: over the whole series the field that separates a win from a
-loss in the first three hundred ticks is not one of ours but his — `enemies` 7.8 in wins against 12.1 in
-losses, `enemyPower` 514 against 768. The losses are the matches where he arrives early and in force.
+```
+opponent bot           n    W-L-D  rating   our versions
+けろびー v16               8    0-8-0     -27   v21,v23,v27,v39,v42,v46
+けろびー v17               7    0-4-3      -2   v35,v37,v39,v42,v46
+stachu3478 v6          7    2-5-0     -46   v31,v36,v37,v38,v43,v46
+けろびー v15              21   14-4-3     +88   v26,v28,…,v46
+```
 
-And our answer to that is a rule that deadlocks. `fighterFirst` blocks haulers while the spawn saves for
-a full body; the saving is licensed by `holdReady < investReady`, and `investReady` (build the economy
-first, then a fighter) grows precisely when the income is crushed — so the worse the income, the more
-attractive saving looks, and haulers stay blocked. Counted over the series, the "fighter first" line
-prints 85 times across eight losses and 20 times across nine wins; in one 700-tick loss it prints 28
-times, which is 280 ticks of a spawn building nothing while the enemy walks in. The guard put there for
-match 17 (`holdReady <= threatIn || holdReady < investReady || closesNow`) does not catch it, because the
-middle clause is true exactly in the state it was meant to break.
+**けろびー v16 has beaten every one of six versions of ours, eight times out of eight; his v17 has never
+lost to us in seven.** They are not a bad draw, they are a hole — and they are on this disk, with logs
+and replays, which is where the next version comes from. Against his v15, by contrast, we are 14-4-3 and
++88: the ladder is not one opponent getting better, it is a set of bots of very different difficulty, and
+a series that says nothing about which ones it drew says nothing at all.
+
+Two things stand recorded from the wrong reading. Its arithmetic ("a draw costs nothing, a loss costs
+nine, so converting draws into decisive matches is bad") only holds against a bot we cannot beat; against
+one we can, the same conversion is what the rating is made of. And the opening deadlock it turned up is
+real on its own evidence: `fighterFirst` blocks haulers while the spawn saves for a full body, the saving
+is licensed by `holdReady < investReady`, and `investReady` (economy first, then a fighter) grows exactly
+when the income is crushed — so the worse the income, the more attractive saving looks. Over the series
+that line prints 85 times across eight losses against 20 across nine wins; in one 700-tick loss it prints
+28 times, which is 280 ticks of a spawn building nothing while the enemy walks in. The guard put there for
+match 17 does not catch it, because its middle clause is true exactly in the state it was meant to break.
 
 ## Offline stub harness
 
