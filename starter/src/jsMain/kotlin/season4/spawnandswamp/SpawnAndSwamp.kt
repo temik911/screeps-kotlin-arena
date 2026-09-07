@@ -348,6 +348,12 @@ object SpawnAndSwamp {
      *  Ответ нужен не потолку (тот отвергнут замером, см. bodyCap), а ТОЧКЕ СДАЧИ: если расстояние не
      *  ограничивает, экстеншен у дальних куч стоит 200 вместо 1000 за спавн. */
     private const val EXT_PROBE = true
+
+    /** Фаза пробы. true — ДАЛЬНИЙ экстеншен (25 клеток, спорный радиус); false — КОНТРОЛЬ, ближний.
+     *  Контроль обязателен и не факультативен: -6 это сразу три ошибки, и «дальний не сработал» без
+     *  «ближний сработал» не значит ничего — могло оказаться, что экстеншены не питают spawnCreep
+     *  вовсе и неверны ОБЕ фразы доков. */
+    private const val EXT_PROBE_FAR = false
     private var extProbeDone = false
 
     /** Проба ответила (в любую сторону) — дальше бот живёт обычной жизнью. */
@@ -3636,9 +3642,11 @@ object SpawnAndSwamp {
         val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
         var best: Position? = null
         var bestScore = -1
-        for (dx in -(EXTENSION_REACH + 5)..(EXTENSION_REACH + 5)) for (dy in -(EXTENSION_REACH + 5)..(EXTENSION_REACH + 5)) {
+        val lo = if (EXT_PROBE_FAR) EXTENSION_REACH + 1 else 2
+        val hi = if (EXT_PROBE_FAR) EXTENSION_REACH + 5 else 3
+        for (dx in -hi..hi) for (dy in -hi..hi) {
             val ring = maxOf(abs(dx), abs(dy))
-            if (ring <= EXTENSION_REACH || ring > EXTENSION_REACH + 5) continue
+            if (ring < lo || ring > hi) continue
             val x = spawn.x + dx
             val y = spawn.y + dy
             if (x < 1 || y < 1 || x > 98 || y > 98) continue
