@@ -599,6 +599,76 @@ four versions, since they were played together. The three losses were けろび�
 first meeting with `Little Ancestor#1` (−15); both けろびー losses had `enemySpawns=1`, so v48's change
 took no part in them.
 
+### v51 — the healer, and the two defects it exposed (07.09.2026)
+
+**Where the rating actually leaks.** Over the forty matches of 07.09 the cut per opponent BOT is not
+even: けろびー's six bots are 6-8-2 for **−41**, and the other thirteen bots together are 21-3-0 for
+**+32**. Every point lost is lost to him.
+
+**What five of his replays say.** His healers ran at 100% uptime in all five, ours do not exist:
+
+| match | our damage | he healed | our NET on him | his damage | we healed |
+|---|---|---|---|---|---|
+| L けろびー#13 | 14780 | 1920 | 12860 | 10260 | **0** |
+| L けろびー#15 | 7850 | 4308 | 3542 | 9290 | **0** |
+| W けろびー#15 | 15990 | **10044** | 5946 | 8370 | **0** |
+| W けろびー#15 | 14210 | 5628 | 8582 | 5710 | **0** |
+| D けろびー#14 | 32480 | 2276 | 30204 | 8900 | **0** |
+
+In the 1900-tick win we fired 15990 and he healed 10044 of it away; the win came on a net of 5946 at
+twice his spend on damage. His queue in the log names the body: `M1C1` haulers, `M3R3`/`M5R5` shooters
+and **`M5H3` — a pure healer, 1000 energy, 36 healing a tick at range 1** — from tick 220 on.
+
+Two other numbers from the same replays, both recorded and neither acted on yet: our melee is adjacent
+to his creeps for 5, 12, 12 and 66 creep-ticks out of 801–4508 (**0.3–1.5%**; he carries no ATTACK and
+kites at 7), and our shooters have something within 3 for **3–13%** of their armed ticks.
+
+**The instrument could not see a healer at all.** What decides which body to buy is the siege
+simulation, and it was asymmetric: it subtracted the DEFENDERS' healing from our damage
+(`net = creepDps − defs.heal`) and knew nothing of ours. A body with no damage, in a model with no
+healing, cannot do anything — so "what if a healer" answered "strictly worse" **by construction**, not
+by measurement. The 05.09 note that rejected HEAL parts *in a fighter's body* had already named the
+next candidate correctly: a separate healer creep beside a full shooter, a formation of two rather than
+one body. So: our units mend in the run, `healerBody` is the third candidate beside ranged and melee,
+and a creep that heals counts as being in arms — in the wave, in the defenders, and dropped from the
+wave when its HEAL is shot off, exactly like a shooter whose guns are gone.
+
+**Two defects the healer exposed, both older than it.**
+
+*The body question was asked about the wrong group.* The run answers "what if ONE more body like this",
+and the answer then governs **every** purchase until it changes. For it to change, what we buy has to
+enter the group the question is asked about — and the group was `waveFront`, the four creeps inside the
+cohesion gap, which reinforcements never join. With melee this was invisible: melee still shoots, and
+an army of melee still breaks a spawn. With a healer it was not: `tower+enemy` bought 31 healers and
+four shooters and stopped winning at all where it had won at 827. The question is now asked about the
+whole marching army (`offensive`, full-speed only).
+
+*The march could hang the bot.* The approach paced itself by `wave.maxOf { periodAt(...) }`, and a
+creep with no live MOVE has period `Int.MAX_VALUE / 4` — `repeat(536870911)`. As soon as the whole army
+entered the question, so did a creep shot off its legs, and `tower+healball` stopped dead at tick 480.
+The march is now paced by whoever can still walk, and a wave that cannot walk loses the siege. This one
+would have hung a live match.
+
+**The run credits the healer at `RANGED_HEAL_POWER`, not `HEAL_POWER`.** Adjacent healing is three
+times stronger and 96% of his heals were adjacent (80+3r, 120+0r, 279+5r, 155+7r, 95+4r) — but adjacent
+is a POSITION, and this simulation has none: it treats the wave as a point. That assumption is
+conservative for damage (everyone is in the blast) and generous for healing, and at the full rate the
+run promised one healer would end the siege eleven ticks before a fifth shooter (`tower+enemy`: 56
+against 67). Acted on, that promise sent the wave out five-strong instead of six, it died, the army
+dribbled out in seven waves after it, and the match was not won at all. What the run credits now is
+what a healer gives WITHOUT a position; the rest is paid for by formation, and formation is not
+something the run promises.
+
+**Measured.** All 26 stub scenarios and four recorded opponents: nothing worse, `tower+fortspawn`
+888 → 868 and the recorded `kerobi-win` 1523 → 1478. A healer is chosen in one scenario (`fortress`).
+
+**Where it does not reach, and why that is now known rather than guessed.** けろびー beats us at HOME,
+and this question is only asked on the assault path. But the recorded `kerobi16` says the home loss is
+not a healing problem at all: the bot buys six full M8R4 and then sits in the `fighter first` deadlock
+(`closes=false`, deficit 708–831) with 847 energy in the spawn, at `income=9/27` against his 24 creeps
+to our 13. That is an ECONOMY loss with a spawn-queue deadlock on top, and adding a defensive healer to
+it would have been machinery built on a guess.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
