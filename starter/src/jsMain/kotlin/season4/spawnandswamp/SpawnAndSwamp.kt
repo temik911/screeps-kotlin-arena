@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 54
+    private const val BOT_VERSION = 55
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -337,6 +337,18 @@ object SpawnAndSwamp {
      *  прочитанный на следующем тике теми, кто решает состав, — отбором волны (кого пускать) и спавном
      *  (что покупать). Один ответ на оба вопроса: разойдясь, они дают армию, которую покупают для
      *  штурма и не выпускают. */
+    /**
+     * ЛЕЧЕНИЕ ВРАГА НА ОДНО НАШЕ ТЕЛО — то, чего не знал перебор тел. bodyValue считала урон × хиты и
+     * молчала о том, что лечение вычитается из урона ПЕРВЫМ: против 36 лечения в тик (его M5H3, 12 за
+     * часть вплотную) наши 40 урона — это 4, а не 40. Замерено на пяти реплеях: его лекари отменяют от
+     * 12% до 63% всего, что мы по нему выстрелили, при уптайме 99% против нашего 81%.
+     * Делится на число НАШИХ стрелков не для красоты: по одной цели бьёт вся волна, и лечение
+     * вычитается из СУММЫ, а не из каждого тела. Отсюда и направление: чем больше армия, тем меньше
+     * поправка, и при трёх и более стрелках она перестаёт менять ответ вовсе (M8R4 остаётся M8R4).
+     * Одиночка же выбирает M5R5 — тело, которым играет けろびー.
+     */
+    private var foeHeal = 0
+
     private var assaultWantsMelee = false
 
     /** Тот же вопрос и тот же прогон, что у assaultWantsMelee, но про ЛЕКАРЯ. Гейта «спавн в броне»
@@ -738,6 +750,7 @@ object SpawnAndSwamp {
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
         measureHomeFight(ctx)
         measureExchange(ctx)
+        foeHeal = foeHealPerBody(ctx)
         spawnIfNeeded(ctx, defenders, threatsSoon, alarm, enemyArrival, spawnUnderFire)
         runTowers(ctx)
         runHaulers(ctx)
@@ -757,7 +770,7 @@ object SpawnAndSwamp {
             val usable = usableSites(ctx)
             println(
                 "t=${getTicks()} spawnE=${mySpawn.store[RESOURCE_ENERGY]} spawning=${mySpawn.spawning != null} " +
-                    "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} " +
+                    "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} foeHeal=$foeHeal " +
                     "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }}s${supplyRate().toInt()} " +
                     "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawns=${enemySpawns.size}@${enemySpawn?.let { "${it.x},${it.y}" } ?: "-"} enemySpawnHits=${enemySpawn?.hits}+${spawnRampartHits(ctx)} " +
                     "mine=${myTowers.joinToString(",") { "T(${it.x},${it.y})h=${it.hits}e=${it.store[RESOURCE_ENERGY]}" }.ifEmpty { "-" }}${ctx.mySites.joinToString("") { "+site(${it.x},${it.y})${it.progress}/${it.progressTotal}" }} home=${(homeShare() * 100).toInt()}%"
@@ -872,6 +885,18 @@ object SpawnAndSwamp {
         if (path.isEmpty()) return null
         breachCache = BreachPlan(target, path, steps, loaded)
         return breachCache
+    }
+
+    /** Лечение врага в тик, делённое на число наших живых стрелков: столько лечения приходится на
+     *  урон ОДНОГО тела, когда волна бьёт по одной цели. Считается по частям вплотную (HEAL_POWER):
+     *  его лекари стоят рядом со своими — 182 лечения вплотную против 11 с расстояния (реплей 6a9eb70c). */
+    private fun foeHealPerBody(ctx: Ctx): Int {
+        val heal = ctx.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } } * HEAL_POWER
+        if (heal <= 0) return 0
+        val shooters = ctx.fighters.count { hasWeapon(it) }.coerceAtLeast(1)
+        // округляется ЗДЕСЬ, а не в ключе кэша: иначе два тика с поправкой 12 и 15 делят ключ, но
+        // считаются по-разному, и в кэше остаётся тот ответ, который случился первым
+        return (heal / shooters) / RANGED_HEAL_POWER * RANGED_HEAL_POWER
     }
 
     private fun canMove(creep: Creep) = creep.body.any { it.type == MOVE && it.hits > 0 }
@@ -1721,7 +1746,9 @@ object SpawnAndSwamp {
             // «что терять первым» отвечает порядок частей в fighterBody, и он от неё независим
             if (moves < weight) break // скорость потеряна — дальше тело волне не нужно
             // сто хитов этой части боец бьёт с текущим уроном; лекарь — те же сто хитов лечит
-            value += (ranged * RANGED_ATTACK_POWER + melee * ATTACK_POWER + heal * HEAL_POWER) * 100
+            // лечение врага съедает урон ПЕРВЫМ: тело, чей урон ниже лечения, не убивает никого,
+            // сколько бы оно ни жило. Своё лечение (heal) от этого не страдает — его вычитать не из чего
+            value += (maxOf(0, ranged * RANGED_ATTACK_POWER + melee * ATTACK_POWER - foeHeal) + heal * HEAL_POWER) * 100
             when (part) {
                 MOVE -> moves--
                 RANGED_ATTACK -> ranged--
@@ -1733,6 +1760,13 @@ object SpawnAndSwamp {
         return value
     }
 
+    /** Ключ кэша тел: бюджет, узкий ли спавн И поправка на лечение врага. Прежний ключ знал только
+     *  первые два, поэтому первый же ответ матча жил до конца — а лекари у врага появляются к 220-му
+     *  тику. Поправка уже округлена до RANGED_HEAL_POWER в foeHealPerBody — без округления каждая
+     *  смерть стрелка заводила бы новый перебор. */
+    private fun bodyKey(cap: Int, spawnLimited: Boolean): Int =
+        (cap * 2 + (if (spawnLimited) 1 else 0)) * 64 + (foeHeal / RANGED_HEAL_POWER).coerceIn(0, 63)
+
     private val guardBodyCache = HashMap<Int, Array<BodyPartType>>()
 
     /** Тело домашнего мили-гарнизона под бюджет — тот же перебор и порядок, что у fighterBody, но с
@@ -1741,7 +1775,7 @@ object SpawnAndSwamp {
      *  стрелка мили не догоняет, а мили-шар у спавна не кайтится и режется только вплотную. */
     private fun guardBody(budget: Int, spawnLimited: Boolean = false): Array<BodyPartType> {
         val cap = minOf(budget, SPAWN_ENERGY_CAPACITY)
-        return guardBodyCache.getOrPut(cap * 2 + (if (spawnLimited) 1 else 0)) {
+        return guardBodyCache.getOrPut(bodyKey(cap, spawnLimited)) {
             val block = cost(ATTACK) + cost(MOVE)
             var best: Array<BodyPartType>? = null
             var bestValue = -1.0
@@ -1780,7 +1814,7 @@ object SpawnAndSwamp {
      *  что с ним она кончится раньше (assaultWantsHealer). */
     private fun healerBody(budget: Int, spawnLimited: Boolean = false): Array<BodyPartType> {
         val cap = minOf(budget, SPAWN_ENERGY_CAPACITY)
-        return healerBodyCache.getOrPut(cap * 2 + (if (spawnLimited) 1 else 0)) {
+        return healerBodyCache.getOrPut(bodyKey(cap, spawnLimited)) {
             val block = cost(HEAL) + cost(MOVE)
             var best: Array<BodyPartType>? = null
             var bestValue = -1.0
@@ -1818,7 +1852,7 @@ object SpawnAndSwamp {
      */
     private fun fighterBody(budget: Int, spawnLimited: Boolean = false): Array<BodyPartType> {
         val cap = minOf(budget, SPAWN_ENERGY_CAPACITY)
-        return fighterBodyCache.getOrPut(cap * 2 + (if (spawnLimited) 1 else 0)) {
+        return fighterBodyCache.getOrPut(bodyKey(cap, spawnLimited)) {
             val rangedBlock = cost(RANGED_ATTACK) + cost(MOVE)
             val toughBlock = cost(TOUGH) + cost(MOVE)
             var best: Array<BodyPartType>? = null

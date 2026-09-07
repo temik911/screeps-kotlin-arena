@@ -943,19 +943,63 @@ his delivered energy runs 500 → 385 → 1100 → 1569 → 3250 — a 6.5× ran
 all.** A raider that has to walk eighty-nine cells cannot beat a free wipe that is worth twenty ticks.
 
 **What the instrument's own weakness then said, and it is the useful part.** His farm on the stand
-delivers 2–4/tick where live he delivers **19.3/tick** and we deliver 9.1 — so the stand cannot buy him
-an army big enough for his economy to decide anything, and the gap is not terrain (the live maps are
-33 % wall / 32 % swamp against the stand's 5 % / 35 %, i.e. the stand is the *easier* one) and not pile
-placement (live piles scatter uniformly, peaking 30–49 cells from each spawn, exactly as the stand
-places them). The whole of his 2× is in the four extra spawns he builds — see the next section. So the
-hunt is rejected, the `farm` scenario and the `KILL` knob stay as the stand's first enemy economy, and
-the thing this dig actually found belongs to the delivery point, not to the haulers.
+delivers 3.4/tick where live he delivers **19.3/tick** — so the stand cannot buy him an army big enough
+for his economy to decide anything. The gap is not the terrain (the live maps are 33 % wall / 32 %
+swamp against the stand's 5 % / 35 %, i.e. the stand is the *easier* one) and not pile placement (live
+piles scatter uniformly, peaking 30–49 cells from each spawn, exactly as the stand places them): on the
+very same map, in the very same run, **our own bot delivers 12.2/tick** against the farm's 3.4. The gap
+is the farm's naive hauler, and the honest reading is that the `farm` opponent is an economy that
+*exists*, not one that competes — it understates denial and every measurement taken on it is a lower
+bound. So the hunt is rejected, the `farm` scenario and the `KILL` knob stay as the stand's first enemy
+economy, and the thing this dig actually found belongs to the delivery point, not to the haulers: the
+whole of his 2× over our live income is in the four extra spawns he builds.
 
 **Two defects fixed in `tools/replay.py` on the way**, both found by disbelieving a number:
 `economy` divided delivered energy by the number of **spawn**-ticks rather than match ticks, so a player
 with five spawns had his rate divided by five — けろびー read as 7.6/tick against our 9.7, "about the
 same", while he was in fact collecting 19.3 against our 9.1. And `economy` now prints the energy that
 went **into each spawn separately**, which is the line that says whether a built spawn earned its 1000.
+
+### v55 — the body knows what he heals, and the stand cannot see it (08.09.2026)
+
+`bodyValue` integrated damage over the hits a body survives at full speed, and said nothing about the
+one thing that decides whether damage kills: **healing is subtracted first**. Against his `M5H3` — 12
+healing per part adjacent — our `M8R4`'s forty damage is four, not forty. Measured across five replays
+his healers undo 12–63 % of everything we fire, at 99 % uptime against our 81 %.
+
+The correction is one term and one cache key. `foeHeal` is his live HEAL parts × `HEAL_POWER` divided
+by **our** armed shooters — divided, because a wave fires at one target and the healing comes off the
+*sum*, not off each body — quantised to `RANGED_HEAL_POWER` so a shooter's death does not restart the
+search; `bodyValue` scores `max(0, damage − foeHeal)`; and the three body caches, keyed on budget alone
+since they were written, now carry `foeHeal` in the key. That last part is not cosmetic: healers appear
+around tick 220, so a cache keyed on budget answered the whole match with the body chosen before the
+enemy had a healer at all.
+
+**Where it bites, measured rather than assumed.** The search moves `M8R4 → M5R5` at `foeHeal ≈ 36`
+(spawn-limited). Live:
+
+| match | our armed, mean | his HEAL parts | his heal/tick | `foeHeal` | body |
+|---|---|---|---|---|---|
+| 6a9eb70c **lost** | 3.1 | 12 | 144 | **46** | `M5R5` |
+| 6a9ef3be **lost** | 3.2 | 9 | 108 | **34** | `M5R5`/`M8R4` boundary |
+| 6a9ef0a9 won | 5.2 | 9 | 108 | 20 | `M8R4` |
+| 6a9ede4e won | 6.5 | 9 | 108 | 16 | `M8R4` |
+
+**It fires in the matches we lose and stays out of the ones we win** — which is what a correction
+computed from state is supposed to do, and it is why the divisor is our army size rather than a
+constant. `M5R5` is also けろびー's own body, chosen by him in exactly this regime.
+
+**And the stand cannot measure it at all — that is the finding, not an excuse.** All twenty-six
+scenarios are tick-for-tick v54 and every body built is the same `M8R4`. The reason is one number: on
+the stand our army reaches **10–17 armed creeps** where live it averages **3.1–6.5**, so `foeHeal`
+there runs 0–8 against a threshold of 36 and the term is inert by construction. A fixture built to
+force it (`healwall` — two healers per fighter instead of one, the live ratio against けろびー) does not
+help: we still win at 484, before he has healers enough. So the stand proves the change **costs
+nothing** and cannot say whether it gains anything; that verdict has to come from a live series.
+
+The gap the stand showed on the way is worth more than the correction: **our army lives on the stand
+and dies live** — 13 of our creeps died in one 743-tick loss — which is why every change aimed at army
+quality measures as zero there. That is the positioning question, and it is next.
 
 ## Offline stub harness
 

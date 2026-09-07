@@ -19,6 +19,14 @@ const my=new StructureSpawn(94,49,true,1000); const en=new StructureSpawn(5,50,f
     const x=my.x+dx, y=my.y+dy; if(x<1||y<1||x>98||y>98) continue;
     if(world.terrain[x*100+y]===C.TERRAIN_WALL) continue;
     const e=new StructureExtension(x,y,C.EXTENSION_HITS,true); e.store.energy=C.EXTENSION_ENERGY_CAPACITY; placed++; } }
+// FWD=x,y[;x,y] — НАШИ спавны, уже построенные и пустые, в названных клетках. Это не поведение бота,
+// а ИЗОЛЯЦИЯ вопроса: стоит ли точка сдачи чего-нибудь сама по себе, отдельно от того, по карману ли
+// она и достроится ли площадка. Тот же приём, что EXT=n. Считать по притоку (income=) и по исходу.
+// けろびー строит их по четыре за матч (269/442/589/764-й тик, 17-38 клеток от своего спавна) и
+// получает в каждый 913-3185 энергии — замер реплеев 07.09.2026
+const myFwd=[];
+for(const p of (process.env.FWD||'').split(';')){ if(!p) continue; const [fx,fy]=p.split(',').map(Number);
+  if(!isFinite(fx)||!isFinite(fy)) continue; myFwd.push(new StructureSpawn(fx,fy,true,0)); }
 // TWOSPAWN: у соперника не один спавн, а три — он их СТРОИТ (けろびー#16: 242-й и 544-й тик). Ставятся
 // в центре карты, то есть БЛИЖЕ к нам, чем его исходный: это и есть суть приёма — производство
 // переезжает нам навстречу, а условий победы становится три
@@ -28,7 +36,7 @@ const enFree=()=>enSpawns.filter(s=>s.exists&&!s.spawning)[0]||null;
 for(const [cx,cy] of [[88,49],[11,50]]){ new StructureContainer(cx,cy,5000); for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){ if(dx||dy) new StructureWall(cx+dx,cy+dy,10000); } }
 new StructureContainer(98,1,2500); new StructureContainer(98,98,2500); new StructureContainer(1,1,2500); new StructureContainer(1,98,2500);
 const TICKS=parseInt(process.argv[2]||'900'); const MODES=(process.argv[3]||'none').split('+');
-const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped'); const PAIRS=MODES.includes('pairs'); const SIEGE=MODES.includes('siege'); const FORT=MODES.includes('fortspawn'); const TWOSPAWN=MODES.includes('twospawn'); const FARM=MODES.includes('farm'); const CAMPER=PAIRS||SIEGE||TWOSPAWN||FARM; const SIEGE_N=parseInt(process.env.SIEGE_HUNTERS||'5'); const SIEGE_EVERY=parseInt(process.env.SIEGE_EVERY||'80');
+const ENEMY=MODES.includes('enemy'); const SWARM=MODES.includes('swarm'); const BALL=MODES.includes('ball'); const RAIDER=MODES.includes('raider'); const TOWER=MODES.includes('tower'); const HARASS=MODES.includes('harass'); const TOWERSITE=MODES.includes('towersite'); const HEALBALL=MODES.includes('healball'); const HOVER=MODES.includes('hover'); const RUSH=MODES.includes('rush'); const CAMP=MODES.includes('camp'); const STREAM=MODES.includes('stream'); const FORTRESS=MODES.includes('fortress'); const CAMPED=MODES.includes('camped'); const PAIRS=MODES.includes('pairs'); const SIEGE=MODES.includes('siege'); const FORT=MODES.includes('fortspawn'); const TWOSPAWN=MODES.includes('twospawn'); const FARM=MODES.includes('farm'); const CAMPER=PAIRS||SIEGE||TWOSPAWN||FARM||MODES.includes('healwall'); const SIEGE_N=parseInt(process.env.SIEGE_HUNTERS||'5'); const SIEGE_EVERY=parseInt(process.env.SIEGE_EVERY||'80');
 // STREAM: противник матча 15 — с 280-го тика попеременно M3R3 и M4H2 каждые 40 тиков, каждый идёт к нашему спавну сразу,
 // без сбора в четвёрки (правила движения и стрельбы — как у HEALBALL); подкрепление тянется потоком за первыми
 // RUSH: противник матча 14 — два M5R1 с первого тика через свой спавн, третий на 200-м; идут к нашему спавну, встают в трёх
@@ -86,8 +94,22 @@ function hbBody(i){ return i%2===0 ? [C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RAN
 // приток падает до 1-2 — это форма ТРЁХ проигранных матчей 06.09.2026, и единственное условие, в
 // котором работает правило часов у башни (v44): недострой, который не достроить, не кормят
 // PAIRS: тела けろびー из лога матча 25 — M5R5 (1000 хитов, 50 урона) и M5H3 (800 хитов, 36 лечения)
-function pairBody(i){ return i%2===0 ? [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK]
-                                     : [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.HEAL,C.HEAL,C.HEAL]; }
+const HEALWALL=MODES.includes('healwall');
+// healwall: ДВА лекаря на бойца вместо одного. Фикстура вопроса «тело против лечения»: только здесь
+// поправка на чужое лечение доходит до порога, за которым перебор тел меняет ответ. Живой ориентир —
+// けろびー с четырьмя-пятью M5H3 при трёх-четырёх наших стрелках (144 лечения на 4 ствола)
+function pairBody(i){ if(HEALWALL) return i%3===0 ? [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK]
+                                     : [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.HEAL,C.HEAL,C.HEAL];
+  return i%2===0 ? [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK,C.RANGED_ATTACK]
+                 : [C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.MOVE,C.HEAL,C.HEAL,C.HEAL]; }
+// НАШ приток, замеренный, а не спрогнозированный: груз, ушедший из наших крипов рядом с нашим
+// спавном. Прогноз бота (income=) отвечает на другой вопрос и с двумя спавнами меняет смысл
+const ourCarry=new Map(); let ourDelivered=0;
+function countOurDeliveries(){ const spawns=[my,...myFwd].filter(x=>x.exists);
+  for(const o of world.objects){ if(!(o instanceof Creep)||!o.my||!o.exists||o.spawning) continue;
+    const was=ourCarry.get(o.id); const now=o.store.energy;
+    if(was!==undefined && now<was && spawns.some(sp=>range(o,sp)<=1)) ourDelivered+=was-now;
+    ourCarry.set(o.id, now); } }
 let errors=0; let loopTotal=0, loopMax=0; /* LOOPTIME */ const origLog=console.log; const lines=[]; console.log=(...a)=>{ const s=a.join(' '); lines.push(s); if(/loop error|Error|exception/i.test(s)) errors++; };
 function freeCell(){ for(let i=0;i<100;i++){ const x=2+Math.floor(rnd()*96), y=2+Math.floor(rnd()*96); if(world.terrain[x*100+y]!==1) return [x,y]; } return [50,50]; }
 for(let t=0;t<TICKS;t++){
@@ -113,6 +135,7 @@ for(let t=0;t<TICKS;t++){
   if(HEALBALL && t>=280 && (t-280)%60===0){ hbQueue.push(hbBody(hbCount)); }
   if(STREAM && t>=280 && (t-280)%40===0){ hbQueue.push(hbBody(hbCount)); }
   if(PAIRS && t>=250 && (t-250)%90===0){ hbQueue.push(pairBody(hbCount)); }
+  if(HEALWALL && t>=250 && (t-250)%60===0){ hbQueue.push(pairBody(hbCount)); }
   // SIEGE ставит осаждающих ПРЯМО у наших ворот и держит их шестерых до конца матча: фикстура про то,
   // на что бот тратит энергию под осадой, а не про то, переживёт ли он сильного противника. Через
   // очередь его спавна такого давления не получить — наша волна успевает снести спавн раньше (512 тик)
@@ -222,10 +245,14 @@ for(let t=0;t<TICKS;t++){
   if(t%50===0 && enSpawns.length>1) lines.push('ENEMY SPAWNS t='+t+': '+enSpawns.map(s=>'('+s.x+','+s.y+')h='+(s.exists?s.hits:'dead')).join(' '));
   if(t%50===0) lines.push('ENEMIES t='+t+': '+(tw?'TOWER h='+tw.hits+' e='+tw.store.energy+' cd='+tw.cooldown+' exists='+tw.exists+' | ':'')+(site&&site.exists?'SITE '+site.progress+'/'+site.progressTotal+' | ':'')+world.objects.filter(o=>o instanceof Creep&&!o.my).map(c=>'('+c.x+','+c.y+')h='+c.hits).join(' '));
   if(t>=286&&t<=298){ lines.push('INTENTS t='+t+': '+world.intents.map(i=>'h'+i.creep.id+'('+i.creep.x+','+i.creep.y+')->('+i.x+','+i.y+')').join(' ')+' | creeps: '+world.objects.filter(o=>o instanceof Creep&&o.my).map(c=>c.id+'('+c.x+','+c.y+')f='+c.fatigue).join(' ')); }
+  countOurDeliveries();
   my.store.energy=Math.min(1000,my.store.energy+1);
+  // каждый спавн регенерирует сам по себе — в живом матче это видно по обоим игрокам
+  for(const f of myFwd) if(f.exists) f.store.energy=Math.min(1000,f.store.energy+1);
+  if(myFwd.length && t%100===0) lines.push('FWD t='+t+': '+myFwd.map(f=>'('+f.x+','+f.y+')'+(f.exists?'e='+f.store.energy:' DEAD')).join(' '));
   for(const s of enSpawns) if(s.exists) s.store.energy=Math.min(1000,s.store.energy+((HEALBALL||STREAM||FORTRESS||TWOSPAWN)?15:1)); // HEALBALL: у врага матча 13 десять хаулеров кормили спавн и башню
   endTick();
-  if(!my.exists){ origLog('MY SPAWN DESTROYED at',t); break; }
+  if(!my.exists && !myFwd.some(f=>f.exists)){ origLog('MY SPAWN DESTROYED at',t); break; }
   // победа — когда снесены ВСЕ его спавны, а не первый: с тремя спавнами убийство одного не кончает матч
   if(!enSpawns.some(s=>s.exists)){ origLog('ENEMY SPAWN DESTROYED at',t,'spawns:',enSpawns.length); break; }
 }
@@ -236,4 +263,5 @@ origLog('--- loop ms: avg', (loopTotal/world.tick).toFixed(2), 'max', loopMax.to
 origLog('--- ticks run:', world.tick, 'errors:', errors, 'my creeps:', world.objects.filter(o=>o instanceof Creep&&o.my).map(c=>c.body.map(p=>p.type[0]).join('')).join(' '), 'spawnE:', my.store.energy, 'enemySpawnHits:', en.hits);
 if(FARM) origLog('--- farm: delivered', farmDelivered, 'spent', farmSpent, 'haulers', farmHaulers.filter(c=>c.exists).length+'/'+farmBuilt, 'killed', farmKilled,
     'army bought', hbCount, 'alive', world.objects.filter(q=>q.exists&&q instanceof Creep&&!q.my&&q.hb!==undefined).length);
+origLog('--- ours: delivered', ourDelivered, 'over', world.tick, 'ticks =', (ourDelivered/Math.max(1,world.tick)).toFixed(1)+'/tick');
 origLog('WALLS:', world.objects.filter(o=>o instanceof StructureWall).map(w=>'('+w.x+','+w.y+')h='+w.hits).join(' '));
