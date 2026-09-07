@@ -38,13 +38,28 @@ IGNORE_ROOT_FILES = {"jsconfig.json"}
 SLOT = "__code_" + uuid.uuid4().hex[:8]
 
 
+# Запрос со страницы клиента срывается сам по себе: седьмой fetch подряд бросает
+# `TypeError: Failed to fetch`, а тот же адрес в одиночку отвечает 200. Непойманный бросок отклоняет
+# весь промис, и команда падает целиком — поэтому каждый GET здесь идёт через один повтор.
+JS_GET = """
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const GET = async (url, init) => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try { return await fetch(url, Object.assign({credentials: 'include'}, init || {})); }
+          catch (e) { if (attempt) throw e; await sleep(250); }
+        }
+      };
+"""
+
+
 # ---------------------------------------------------------------- arenas and folders
 def arenas(c):
     """The season's arenas, straight from the API — ids change every season, so never hardcode."""
     return c.json_eval(f"""(async () => {{
-      const s = await (await fetch('{API}/season/current', {{credentials: 'include'}})).json();
+      {JS_GET}
+      const s = await (await GET('{API}/season/current')).json();
       const id = s.season?._id || s._id;
-      const a = await (await fetch('{API}/season/' + id + '/arenas', {{credentials: 'include'}})).json();
+      const a = await (await GET('{API}/season/' + id + '/arenas')).json();
       return JSON.stringify((a.arenas || a.list || []).map(x => ({{id: x._id, name: x.name, unlocked: !!x.unlocked}})));
     }})()""")
 
@@ -117,7 +132,8 @@ def payload_size(c):
 # ---------------------------------------------------------------- matches
 def slot(c, arena_id):
     return c.json_eval(f"""(async () => {{
-      const r = await fetch('{API}/arena/{arena_id}/current-game', {{credentials: 'include'}});
+      {JS_GET}
+      const r = await GET('{API}/arena/{arena_id}/current-game');
       const j = await r.json();
       return JSON.stringify({{game: j.game ? j.game._id : null, status: j.game ? j.game.status : null,
                               allow: !!j.allowRunGames}});
@@ -129,7 +145,8 @@ def start(c, arena_id):
       const fd = new FormData();
       fd.append('arena', {json.dumps(arena_id)});
       fd.append('code', window[{json.dumps(SLOT)}], 'code.zip');
-      const r = await fetch('{API}/game/start', {{method: 'POST', body: fd, credentials: 'include'}});
+      {JS_GET}
+      const r = await GET('{API}/game/start', {{method: 'POST', body: fd}});
       let id = null, err = null;
       try {{ const j = await r.json(); id = (j.game && j.game._id) || j.game || null; err = j.error || null; }}
       catch (e) {{ err = String(e); }}
@@ -140,7 +157,8 @@ def start(c, arena_id):
 def history(c, arena_id, limit, us):
     """The arena's last rating matches from the server (`/api/arena/<id>/rating-history`), newest first."""
     rows = c.json_eval(f"""(async () => {{
-      const r = await fetch('{API}/arena/{arena_id}/rating-history?limit={int(limit)}&offset=0', {{credentials: 'include'}});
+      {JS_GET}
+      const r = await GET('{API}/arena/{arena_id}/rating-history?limit={int(limit)}&offset=0');
       const j = await r.json();
       return JSON.stringify((j.history || []).map(h => {{
         const g = h.game || {{}};
@@ -170,7 +188,8 @@ def history(c, arena_id, limit, us):
 
 def state(c, gid):
     return c.json_eval(f"""(async () => {{
-      const r = await fetch('{API}/game/{gid}', {{credentials: 'include'}});
+      {JS_GET}
+      const r = await GET('{API}/game/{gid}');
       const j = await r.json(); const g = j.game || {{}};
       return JSON.stringify({{status: g.game?.status, winner: g.game?.result?.winner,
                               rating: g.ratingHistory, users: (g.users || []).map(u => u.username),

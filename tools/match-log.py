@@ -205,14 +205,30 @@ def _play():
 
 
 def fetch_game(c, gid):
-    """`/api/game/<id>` and every log chunk, as the bodies came: (game_body, {tick: chunk_body}) — raw JSON text."""
+    """`/api/game/<id>` and every log chunk, as the bodies came: (game_body, {tick: chunk_body}) — raw JSON text.
+
+    Every request goes through `get()`, which retries once after a pause: a run of fetches from the
+    client's page fails now and then (`TypeError: Failed to fetch` on the seventh in a row, while the
+    same chunk asked for on its own returns 200 and 13 KB), and an unhandled throw rejects the whole
+    call — `fetch --history 80` died on its first match having stored nothing. A chunk that still
+    fails after the retry ends the loop, exactly as a 404 does; there is nothing else to tell "no more
+    chunks" from "the network blinked", since the server answers 404 for a chunk that does not exist
+    and does not answer at all when a request is dropped."""
     return c.json_eval(f"""(async () => {{
       const out = {{game: null, chunks: {{}}}};
-      const g = await fetch('{API}/game/{gid}', {{credentials: 'include'}});
-      if (g.ok) out.game = await g.text();
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const get = async (url) => {{
+        for (let attempt = 0; attempt < 2; attempt++) {{
+          try {{ return await fetch(url, {{credentials: 'include'}}); }}
+          catch (e) {{ if (attempt) return null; await sleep(250); }}
+        }}
+        return null;
+      }};
+      const g = await get('{API}/game/{gid}');
+      if (g && g.ok) out.game = await g.text();
       for (let t = 100; t <= 3000; t += 100) {{
-        const r = await fetch('{API}/game/{gid}/log/' + t, {{credentials: 'include'}});
-        if (!r.ok) break;
+        const r = await get('{API}/game/{gid}/log/' + t);
+        if (!r || !r.ok) break;
         const body = await r.text();
         let j; try {{ j = JSON.parse(body); }} catch (e) {{ break; }}
         if (!Object.keys(j).some(k => /^[0-9]+$/.test(k))) break;
@@ -246,13 +262,33 @@ def fetch_into_store(c, gid, store=STORE, refresh=False):
     return store_game(gid, doc.get("game"), doc.get("chunks") or {}, store), False
 
 
+HISTORY_PAGE = 50  # the endpoint answers at most this many rows, whatever `limit` asks for
+
+
 def history_ids(c, arena_id, limit):
-    """The arena's last rating matches from `/api/arena/<id>/rating-history`, newest first — ids only."""
-    return c.json_eval(f"""(async () => {{
-      const r = await fetch('{API}/arena/{arena_id}/rating-history?limit={int(limit)}&offset=0', {{credentials: 'include'}});
-      const j = await r.json();
-      return JSON.stringify((j.history || []).map(h => h.game?._id || h.game || h._id));
-    }})()""")
+    """The arena's last `limit` rating matches, newest first — ids only.
+
+    Paged with `offset`, because the endpoint caps a page at HISTORY_PAGE however large `limit` is:
+    without the paging `--history 150` silently returned fifty, and everything older simply looked as
+    though it had never been played."""
+    out = []
+    for offset in range(0, int(limit), HISTORY_PAGE):
+        page = c.json_eval(f"""(async () => {{
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          let j = null;
+          for (let attempt = 0; attempt < 2 && !j; attempt++) {{
+            try {{
+              const r = await fetch('{API}/arena/{arena_id}/rating-history?limit={HISTORY_PAGE}&offset={offset}', {{credentials: 'include'}});
+              j = await r.json();
+            }} catch (e) {{ await sleep(250); }}
+          }}
+          return JSON.stringify(((j || {{}}).history || []).map(h => h.game?._id || h.game || h._id));
+        }})()""")
+        page = [g for g in (page or []) if isinstance(g, str)]
+        out += page
+        if len(page) < HISTORY_PAGE:
+            break
+    return out[:int(limit)]
 
 
 def cmd_fetch(args):
