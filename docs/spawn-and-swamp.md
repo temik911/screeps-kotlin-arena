@@ -541,8 +541,32 @@ comparison for the tower — gain in defence per energy, against a fighter, disc
 mortality — and the delivery point needs its own version of it. That, and a scenario in the harness
 where the enemy is strong enough that the match is long, are what the fourth attempt needs.
 
-The site machinery is no longer what blocks it: v50 stands, and the three attempts above are recorded so
-the next one does not rediscover them.
+**Re-measured on the long scenarios, which is what should have been done first.** The third attempt was
+judged on twenty-four scenarios that end in a win at 430–900 ticks, and an investment that pays 26 energy
+a tick from tick ~250 cannot win there — by construction, not by defect. On `twospawn`, the one long
+scenario in the harness, the same build takes the match from **1945 to 1373 ticks, a 29% gain**, and on
+none of the short scenarios did it turn a win into a loss: they were slower, and slower wins cost nothing.
+That is the measurement the feature deserved, and reading the tick count of a short scenario as a verdict
+was my error, not the harness's.
+
+Two things still stop it landing, and both are sharp now.
+
+`siege6` — the fixture that says a spawn must not pour energy into a site it cannot finish — fails at 720
+of 1000. Bounding the forward site's deadline by the home spawn's life (feasibility: the keeper is born
+and fed from home, so the site must outlive it) brought that down from 880 but not away: the site is
+placed at tick ~100 and the siege arrives later, so the energy is already sunk when the deadline turns.
+
+And the obvious gate — ask for a delivery point only when the enemy has more than one spawn, the state
+that makes a match economic by construction and the one けろびー#16 and #17 are in — makes it **worse than
+not having it at all**: the second spawn of his appears around tick 240, so ours is placed at ~674, reaches
+70 of 1000, and `twospawn` goes from a win at 1945 to no win at all in 2000. Late investment is pure loss.
+
+So the shape of the problem is now exact: **the decision has to be taken early, and early there is nothing
+that tells a long match from a short one.** Every signal the bot has — the siege verdict, his spawn count,
+his army — says the same thing at tick 100 in every match. What is left is to make the bet cheap enough to
+be worth taking blind (a smaller first structure, or a site that can be abandoned without loss) or to find
+a signal in the opening that separates the regimes. The site machinery (v50) is not what blocks it, and
+the three attempts are recorded so the fourth does not rediscover them.
 
 ## Offline stub harness
 
