@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 46
+    private const val BOT_VERSION = 47
 
     private const val LATE_MARGIN = 60
 
@@ -1715,18 +1715,33 @@ object SpawnAndSwamp {
     /** Предел симуляции осады в тиках: дольше — не осада, а размен на истощение. */
     private const val SIEGE_LIMIT = 400
 
-    /** Боец в симуляции: живые части спереди назад, урон снимает их по порядку (как в движке). */
-    private class SimUnit(parts: List<Pair<BodyPartType, Int>>) {
+    /** Боец в симуляции: живые части спереди назад, урон снимает их по порядку (как в движке).
+     *  reach — доля удара мили, которая дойдёт до ЖИВЫХ (meleeFactor): структура не кайтит, защитник
+     *  кайтит, и это два разных урона у одного тела. */
+    private class SimUnit(parts: List<Pair<BodyPartType, Int>>, val reach: Double = 1.0) {
         val types = parts.map { it.first }
         val hits = IntArray(parts.size) { parts[it].second }
         fun alive() = hits.any { it > 0 }
         fun total() = hits.sum()
+        /** По СТРУКТУРЕ: спавн и башня не уходят от мили, поэтому удар полный. */
         fun dps(): Double {
             var d = 0.0
             for (i in types.indices) {
                 if (hits[i] <= 0) continue
                 if (types[i] == RANGED_ATTACK) d += RANGED_ATTACK_POWER.toDouble()
                 else if (types[i] == ATTACK) d += ATTACK_POWER.toDouble()
+            }
+            return d
+        }
+        /** По ЗАЩИТНИКАМ: мили доходит той же долей, что и в поле. Без этого симуляция списывала
+         *  очередь лекарей у чужого спавна по 150 в тик и обещала осаду на тик короче стрелковой
+         *  (стенд fortress: melee=win/13t против ranged=win/14t — разница внутри ошибки модели). */
+        fun creepDps(): Double {
+            var d = 0.0
+            for (i in types.indices) {
+                if (hits[i] <= 0) continue
+                if (types[i] == RANGED_ATTACK) d += RANGED_ATTACK_POWER.toDouble()
+                else if (types[i] == ATTACK) d += ATTACK_POWER * reach
             }
             return d
         }
@@ -1756,8 +1771,10 @@ object SpawnAndSwamp {
     private fun siegeOutcome(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int = 0, extra: Array<BodyPartType>? = null): SiegeResult {
         if (wave.isEmpty()) return SIEGE_LOSE
         // extra — ещё не купленное тело: тем же прогоном спрашиваем, с каким из них осада кончится раньше
-        val units = ArrayList(wave.map { c -> SimUnit(c.body.filter { it.hits > 0 }.map { it.type to it.hits }) })
-        if (extra != null) units.add(SimUnit(extra.map { it to 100 }))
+        val units = ArrayList(wave.map { c ->
+            SimUnit(c.body.filter { it.hits > 0 }.map { it.type to it.hits }, meleeFactor(c, defenders, null))
+        })
+        if (extra != null) units.add(SimUnit(extra.map { it to 100 }, meleeReach(extra, defenders)))
         var left = attrition
         while (left > 0.0) {
             val v = units.filter { it.alive() }.minByOrNull { it.total() } ?: return SIEGE_LOSE
@@ -1845,7 +1862,7 @@ object SpawnAndSwamp {
             val ourDps = units.sumOf { it.dps() }
             if (ourDps <= 0.0) return SiegeResult(false, i, lost.toInt())
             if (defs.isNotEmpty()) {
-                val net = ourDps - defs.sumOf { it.heal }
+                val net = units.sumOf { it.creepDps() } - defs.sumOf { it.heal }
                 if (net <= 0.0) return SiegeResult(false, i, lost.toInt())
                 defHits -= net
                 while (defHits <= 0.0 && defs.isNotEmpty()) {
@@ -2885,6 +2902,16 @@ object SpawnAndSwamp {
         val ranged = opponents.filter { hasRanged(it) }
         if (ranged.isEmpty()) return 1.0
         val mine = swampPeriod(unit)
+        return if (ranged.any { swampPeriod(it) > mine }) 1.0 else MELEE_KITE_DISCOUNT
+    }
+
+    /** То же, что meleeFactor, для ЕЩЁ НЕ КУПЛЕННОГО тела: позиции у него нет, значит нет и клаузы
+     *  «уже вплотную», а болотный период считается по частям тела (гружёных CARRY у бойца не бывает). */
+    private fun meleeReach(body: Array<BodyPartType>, opponents: List<Creep>): Double {
+        if (opponents.any { hasMelee(it) }) return 1.0
+        val ranged = opponents.filter { hasRanged(it) }
+        if (ranged.isEmpty()) return 1.0
+        val mine = periodOn(body.count { it != MOVE && it != CARRY }, body.count { it == MOVE }, 10)
         return if (ranged.any { swampPeriod(it) > mine }) 1.0 else MELEE_KITE_DISCOUNT
     }
 
