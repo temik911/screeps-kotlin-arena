@@ -803,6 +803,56 @@ Three things to know before touching this:
   that is merely `undefined` when absent. And the constant's value is a hint, not the answer: only
   behaviour settles behaviour.
 
+### Extensions, settled: the ceiling does not pay and the distance limit is real (07.09.2026)
+
+Two questions, both answered, both negative for us.
+
+**The body ceiling: measured with the answer handed over for free, and rejected.** `M8R4` costs exactly
+`SPAWN_ENERGY_CAPACITY`, so the body is capped by the spawn and not by `MAX_CREEP_SIZE` (12 parts of
+50), and a tower shot here is 950–1000 — nine or ten parts, which takes all eight legs of an `M8R4` in
+one go. The harness gained `EXT=n`: n of our extensions, already built and already full, from tick one —
+the raised ceiling with none of the cost of reaching it.
+
+| scenario | ext0 | ext2 | ext5 | ext10 |
+|---|---|---|---|---|
+| `tower` | 450 | 471 | 545 | 520 |
+| `tower+stream` | 574 | 1007 | 677 | 919 |
+| `tower+fortspawn` | 868 | 990 | 584 | 939 |
+| `fortress` | 1332 | 1261 | 1346 | 1414 |
+
+Ten cells of twelve are worse. The siege run had promised the opposite and did not lie — inside the
+siege a 1200 body ends it in 17 ticks against 20, and a 1500 in 16 — **but it cannot see what the body
+pays outside**: the spawn is one serial producer at three ticks a part, and a 22-part body holds it for
+66 ticks against 36. The army then arrives in rarer, larger lumps, and its rate is what decides. That is
+also why no opponent has built an extension in any of the 187 stored replays.
+
+**The distance limit: settled by two live matches, and the docs' other sentence is the wrong one.** The
+contradiction was inside one document — `spawnCreep` says "within `SPAWN_RANGE`" (20), `StructureExtension`
+says "regardless of distance", and the developer said "remotely" in the thread about this very arena. The
+experiment: one extension filled to 100, and an order for a body costing more than the spawn holds.
+
+| phase | range | `spawn.store` | extension | order | result |
+|---|---|---|---|---|---|
+| A, far | **25** | 995 | 100 | 1000 | `err=-6`, **not born** |
+| B, control | **3** | 972 | 100 | 1000 | `err=null`, **born** |
+
+The control is what makes this a measurement rather than an inference, and it was not optional: `-6` is
+`ERR_NOT_ENOUGH_ENERGY`, `ERR_NOT_ENOUGH_RESOURCES` and `ERR_NOT_ENOUGH_EXTENSIONS` at once, so phase A
+alone says only that the order failed. Together the pair says both things: **extensions do feed
+`spawnCreep`** (the control proves it — 972 in the spawn bought a 1000 body) **and distance does limit
+them** (25 is out, 3 is in). The exact radius is not pinned — nothing between 3 and 25 was tried — and
+`SPAWN_RANGE = 20` is consistent with both readings of the data.
+
+**The consequence, which is why the experiment was run at all: there is no cheap delivery point.** An
+extension by the far containers is 200 energy and hauler trips into nothing. The delivery point is still
+a spawn at 1000, and the fourth attempt at it has to earn that price against a fighter, the way
+`towerWorth` earns the tower's.
+
+The probes cost three rating matches (1270 → 1260) and are now off; `EXT_PROBE` and the far/near phase
+switch stay in the code, dead, so the pair can be re-run if the arena changes. The harness keeps the
+extension model (a store, and `spawnCreep` drawing from extensions **within `SPAWN_RANGE`** — which the
+live matches have now confirmed as the right reading) and the `EXT=n` knob.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
