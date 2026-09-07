@@ -407,6 +407,26 @@ def spawn_queue(doc, side):
     return out
 
 
+def initial_spawns(doc):
+    """{side: id} — the spawn each side STARTED with: the earliest-seen one, ties by id.
+
+    Needed because "first seen after tick 1" does not separate them: our own spawn first reports on
+    tick 2. Everything else of kind spawn was built during the match, which is the whole けろびー#16
+    story (he builds a second by t=242 and a third by t=544)."""
+    seen = {}
+    for tick in doc['ticks']:
+        for s in tick.get('s', []):
+            seen.setdefault(s[0], tick['k'])
+    out = {}
+    for o in doc['objects']:
+        if o['kind'] != 'spawn':
+            continue
+        key = (seen.get(o['id'], 10 ** 9), o['id'])
+        if o['side'] not in out or key < out[o['side']][0]:
+            out[o['side']] = (key, o['id'])
+    return {side: oid for side, (_, oid) in out.items()}
+
+
 def built(doc):
     """[(id, kind, side, x, y, tick)] for structures that were not there at the start.
 
@@ -423,8 +443,9 @@ def built(doc):
         for s in tick.get('s', []):
             firstseen.setdefault(s[0], tick['k'])
     out = []
+    starting = set(initial_spawns(doc).values())
     for o in doc['objects']:
-        if o['kind'] in ('constructionSite', 'container'):
+        if o['kind'] in ('constructionSite', 'container') or o['id'] in starting:
             continue
         t = firstseen.get(o['id'])
         if t is not None and t > 1:
@@ -538,8 +559,10 @@ def cmd_scenario(args):
     doc, meta, names = load(args.replay)
     us = our_side(meta, args.us)
     him = 1 - us
+    # только СТАРТОВЫЕ: построенные по ходу матча едут отдельно, в enemyStructures со своим тиком
+    starting = set(initial_spawns(doc).values())
     spawns = [{'side': o['side'], 'x': o['x'], 'y': o['y'], 'energy': o.get('energy') or 0}
-              for o in doc['objects'] if o['kind'] == 'spawn']
+              for o in doc['objects'] if o['kind'] == 'spawn' and o['id'] in starting]
     walls = [{'x': o['x'], 'y': o['y'], 'hits': o['hits']}
              for o in doc['objects'] if o['kind'] == 'constructedWall']
     # how he fought, measured rather than assumed: does he walk into us, does he back off when a gun of
