@@ -1,75 +1,74 @@
 #!/usr/bin/env python3
-"""Read live-match console logs out of the Arena client's HTTP cache.
+"""Live-match records — the server's own documents, fetched through the API and kept on disk.
 
-The client fetches every match's console from `arena.screeps.com/api/game/<id>/log/<tick>` in
-100-tick chunks and Chromium keeps those responses in its disk cache, gzipped, together with
-`/api/game/<id>` (players, result, rating). Nothing else on this machine stores match logs: the
-client writes no log files, and its Local Storage keeps only "<match>_viewed" flags. So this is
-where a finished match's console lives — no need to copy it out of the client window by hand,
-and the tail the window scrolled past is here too.
+Every match the server played is readable from its API: `/api/game/<id>` (the players, the code
+version each side uploaded, the result, the rating change) and `/api/game/<id>/log/<tick>` (the
+console in 100-tick chunks), and `/api/arena/<id>/rating-history` lists an arena's rating matches.
+The API wants the client's session, and the running Arena client carries it: `tools/arena_cdp.py`
+drives the client's page over CDP and a `fetch` from that page is authenticated. This module keeps
+what it fetches under `~/ScreepsArena/games/<id>/` — `game.json` and `log-<tick>.json`, the
+response bodies as they came — so a match is read once from the server and then from disk.
 
+    tools/match-log.py fetch <game-id>...                    # these matches, into the store
+    tools/match-log.py fetch --history 40 --arena pain-and-gain   # the arena's last 40 rating matches
     tools/match-log.py list [--arena spawn-and-swamp] [--limit 20] [--all]
     tools/match-log.py dump <game-id-prefix> [--out log.txt]
 
-`list` prints the bot version each match was played by, read out of the greeting line the bot logs on
-tick 1 — that is the only tie between a match and the code that played it. `tools/series.py` reads this
-module (scan/describe/chunk_text) to aggregate whole series; keep it importable.
+`tools/play.py` writes every match it plays into the same store as the match ends, so a series
+needs no fetch afterwards; `fetch --history` is for matches played from the client's UI or on
+another machine. `list` prints the bot version each match was played by, read out of the greeting
+line the bot logs on tick 1 — that is the tie between a match and the code that played it — and the
+opponent as name#version, the version being the server's per-user upload counter (a username is
+not a bot). `tools/series.py`, `tools/ledger.py` and `tools/autopsy.py` read this module
+(scan/describe/chunk_text/meta_of/full_log); keep it importable.
 
-Caveats worth knowing before you trust a line of it: the cache is a cache. Chromium evicts by
-size (~1 GB here), so old matches disappear, and a chunk can be missing from the middle of a
-match — `dump` marks such a gap instead of silently closing it. A match is written to the cache
-only when the client actually displayed it, so a match watched on another machine is not here.
+Until 07.09.2026 this module read Chromium's disk cache under the client instead. The operator
+closed that: the cache held only what the client window had displayed, evicted by size, missed
+chunks from the middle of a match, and never held a match watched elsewhere — and everything in it
+was one API call away. Nothing here reads the cache any more.
 """
-import argparse, gzip, json, os, re, sys, time, zlib
+import argparse, gzip, importlib.util, json, os, re, sys, time
 from collections import defaultdict
 
-CACHE = os.path.expanduser("~/Library/Application Support/screeps_arena/Cache/Cache_Data")
-LOG_URL = re.compile(rb"https://arena\.screeps\.com/api/game/([0-9a-f]{24})/log/(\d+)")
-GAME_URL = re.compile(rb"https://arena\.screeps\.com/api/game/([0-9a-f]{24})(?:[^/\x21-\x7e]|$)")
+STORE = os.path.expanduser("~/ScreepsArena/games")
+API = "https://arena.screeps.com/api"
 # every season-4 bot greets as "hello <season> <arena> [v]<N>: ..." — spawn-and-swamp writes "v43",
 # pain-and-gain and escort-run write a bare number
 GREETING = re.compile(r"hello (\w+) ([\w-]+)(?: v?(\d+))?")
 
 
+# ---------------------------------------------------------------- the store
 def decompress(path):
-    """The response body of a cached entry, or b'' — the entry holds headers, then a gzip stream."""
+    """A stored body as bytes (plain JSON, or gzip if someone compressed it), or b''."""
     try:
         raw = open(path, 'rb').read()
     except OSError:
         return b""
-    i = raw.find(b"\x1f\x8b")
-    if i < 0:
-        return b""
-    try:
-        return gzip.decompress(raw[i:])
-    except Exception:
-        try:  # a truncated or trailing-garbage stream still yields its complete prefix
-            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw[i:])
+    if raw[:2] == b"\x1f\x8b":
+        try:
+            return gzip.decompress(raw)
         except Exception:
             return b""
+    return raw
 
 
-def scan(cache=CACHE):
-    """(logs, metas): game id -> {tick: path} and game id -> path, from the client's cache."""
+def scan(store=STORE):
+    """(logs, metas): game id -> {tick: path} and game id -> path, from the store."""
     logs, metas = defaultdict(dict), {}
-    if not os.path.isdir(cache):
-        sys.exit(f"no Arena client cache at {cache}")
-    for name in os.listdir(cache):
-        path = os.path.join(cache, name)
-        if not os.path.isfile(path):
+    if not os.path.isdir(store):
+        return logs, metas
+    for gid in os.listdir(store):
+        d = os.path.join(store, gid)
+        if not re.fullmatch(r"[0-9a-f]{24}", gid) or not os.path.isdir(d):
             continue
-        try:
-            with open(path, 'rb') as f:
-                head = f.read(1024)
-        except OSError:
-            continue
-        m = LOG_URL.search(head)
-        if m:
-            logs[m.group(1).decode()][int(m.group(2))] = path
-            continue
-        m = GAME_URL.search(head)
-        if m:
-            metas[m.group(1).decode()] = path
+        for name in os.listdir(d):
+            p = os.path.join(d, name)
+            if name == "game.json" or name == "game.json.gz":
+                metas[gid] = p
+                continue
+            m = re.fullmatch(r"log-(\d+)\.json(?:\.gz)?", name)
+            if m:
+                logs[gid][int(m.group(1))] = p
     return logs, metas
 
 
@@ -90,13 +89,15 @@ def chunk_text(path):
 
 
 def meta_of(path):
+    """The match document — the `game` object of `/api/game/<id>`."""
     body = decompress(path)
     if not body:
         return None
     try:
-        return json.loads(body.decode('utf-8', 'replace')).get("game")
+        data = json.loads(body.decode('utf-8', 'replace'))
     except ValueError:
         return None
+    return data.get("game") if isinstance(data, dict) and "game" in data else data
 
 
 def outcome(meta):
@@ -125,6 +126,20 @@ def log_ticks(game, logs):
     return ticks
 
 
+def when_of(meta, paths):
+    """The match's time: the document's own timestamp, else the store file's."""
+    for key in ("created", "createdAt", "startTime", "date"):
+        v = (meta or {}).get(key) or ((meta or {}).get("game") or {}).get(key)
+        if isinstance(v, str) and len(v) >= 19:
+            try:
+                return time.mktime(time.strptime(v[:19], '%Y-%m-%dT%H:%M:%S')) - time.timezone + (3600 if time.localtime().tm_isdst else 0)
+            except ValueError:
+                pass
+        if isinstance(v, (int, float)) and v > 1e9:
+            return v / 1000 if v > 1e11 else v
+    return max((os.stat(p).st_mtime for p in paths), default=0)
+
+
 def describe(game, logs, metas):
     chunks = logs.get(game, {})
     first = chunk_text(chunks[min(chunks)]) if chunks else {}
@@ -141,7 +156,7 @@ def describe(game, logs, metas):
                 tuning = line[len("tuning:"):].strip()
                 break
     meta = meta_of(metas[game]) if game in metas else None
-    when = max((os.stat(p).st_mtime for p in chunks.values()), default=0)
+    when = when_of(meta, list(chunks.values()) + ([metas[game]] if game in metas else []))
     rating, delta = "", None
     # the code versions the match was played with — the server's per-user upload counter, one per side. An opponent's
     # username is not a bot: けろびー played version 1 as a blob on 06.09 and version 3 on 07.09, and the two lose and win
@@ -166,15 +181,116 @@ def describe(game, logs, metas):
                 opponent="/".join(f"{u}#{opp_code}" if opp_code is not None else u for u in users if u and u != me_name))
 
 
+def full_log(game, logs):
+    """One match's console as text in tick order, gaps marked — what `dump` writes, for other tools to read."""
+    ticks, expected = log_ticks(game, logs), sorted(logs[game])
+    lines = []
+    # a chunk covers the 100 ticks ending at its key; a hole means the chunk was never fetched
+    for prev, cur in zip([0] + expected, expected):
+        if cur - prev > 100:
+            lines.append(f"# --- ticks {prev + 1}..{cur - 100} are not in the store ---")
+    for t in sorted(ticks):
+        text = ticks[t].rstrip("\n")
+        if text:
+            lines.append(text)
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------- the API, through the client
+def _play():
+    spec = importlib.util.spec_from_file_location('play', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'play.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def fetch_game(c, gid):
+    """`/api/game/<id>` and every log chunk, as the bodies came: (game_body, {tick: chunk_body}) — raw JSON text."""
+    return c.json_eval(f"""(async () => {{
+      const out = {{game: null, chunks: {{}}}};
+      const g = await fetch('{API}/game/{gid}', {{credentials: 'include'}});
+      if (g.ok) out.game = await g.text();
+      for (let t = 100; t <= 3000; t += 100) {{
+        const r = await fetch('{API}/game/{gid}/log/' + t, {{credentials: 'include'}});
+        if (!r.ok) break;
+        const body = await r.text();
+        let j; try {{ j = JSON.parse(body); }} catch (e) {{ break; }}
+        if (!Object.keys(j).some(k => /^[0-9]+$/.test(k))) break;
+        out.chunks[t] = body;
+      }}
+      return JSON.stringify(out);
+    }})()""")
+
+
+def store_game(gid, game_body, chunks, store=STORE):
+    """Write one match's documents into the store; returns the number of chunks written."""
+    d = os.path.join(store, gid)
+    os.makedirs(d, exist_ok=True)
+    if game_body:
+        with open(os.path.join(d, "game.json"), "w", encoding="utf-8") as f:
+            f.write(game_body)
+    for t, body in chunks.items():
+        with open(os.path.join(d, f"log-{int(t)}.json"), "w", encoding="utf-8") as f:
+            f.write(body)
+    return len(chunks)
+
+
+def fetch_into_store(c, gid, store=STORE, refresh=False):
+    """Fetch one match unless the store already has its document and log (or refresh); returns (chunks, skipped)."""
+    d = os.path.join(store, gid)
+    if not refresh and os.path.isfile(os.path.join(d, "game.json")) and any(n.startswith("log-") for n in os.listdir(d)):
+        return 0, True
+    doc = fetch_game(c, gid)
+    if not doc.get("game") and not doc.get("chunks"):
+        return 0, False
+    return store_game(gid, doc.get("game"), doc.get("chunks") or {}, store), False
+
+
+def history_ids(c, arena_id, limit):
+    """The arena's last rating matches from `/api/arena/<id>/rating-history`, newest first — ids only."""
+    return c.json_eval(f"""(async () => {{
+      const r = await fetch('{API}/arena/{arena_id}/rating-history?limit={int(limit)}&offset=0', {{credentials: 'include'}});
+      const j = await r.json();
+      return JSON.stringify((j.history || []).map(h => h.game?._id || h.game || h._id));
+    }})()""")
+
+
+def cmd_fetch(args):
+    play = _play()
+    c = play.CDP()
+    ids = list(args.games)
+    if args.history:
+        if not args.arena:
+            sys.exit("fetch --history needs --arena <name prefix>")
+        arena = play.pick(c, args.arena)
+        ids += [g for g in history_ids(c, arena["id"], args.history) if isinstance(g, str)]
+    if not ids:
+        sys.exit("nothing to fetch: give game ids or --history N --arena <name>")
+    fetched = skipped = missing = 0
+    for gid in ids:
+        n, was = fetch_into_store(c, gid, refresh=args.refresh)
+        if was:
+            skipped += 1
+        elif n == 0 and not os.path.isfile(os.path.join(STORE, gid, "game.json")):
+            missing += 1
+            print(f"{gid}: nothing came back")
+        else:
+            fetched += 1
+            print(f"{gid}: {n} chunks")
+    print(f"fetched {fetched}, already there {skipped}, missing {missing} -> {STORE}")
+
+
+# ---------------------------------------------------------------- commands
 def cmd_list(args):
     logs, metas = scan()
-    rows = [describe(g, logs, metas) for g in logs]
+    games = sorted(set(logs) | set(metas))
+    rows = [describe(g, logs, metas) for g in games]
     if args.arena:
         rows = [r for r in rows if args.arena in r["arena"]]
     rows.sort(key=lambda r: r["when"])
     if not args.all:
         rows = rows[-args.limit:]
-    print(f"{len(rows)} matches (cache holds {len(logs)})")
+    print(f"{len(rows)} matches (store holds {len(games)})")
     for r in rows:
         when = time.strftime('%d.%m %H:%M', time.localtime(r["when"]))
         ver = f"v{r['version']}" if r['version'] is not None else "-"
@@ -199,25 +315,16 @@ def cmd_dump(args):
         sys.stdout.write(out)
 
 
-def full_log(game, logs):
-    """One match's console as text in tick order, gaps marked — what `dump` writes, for other tools to read."""
-    ticks, expected = log_ticks(game, logs), sorted(logs[game])
-    lines = []
-    # a chunk covers the 100 ticks ending at its key; a hole means the client never fetched it
-    for prev, cur in zip([0] + expected, expected):
-        if cur - prev > 100:
-            lines.append(f"# --- ticks {prev + 1}..{cur - 100} are not in the cache ---")
-    for t in sorted(ticks):
-        text = ticks[t].rstrip("\n")
-        if text:
-            lines.append(text)
-    return "\n".join(lines) + "\n"
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("list", help="list cached matches, newest last")
+    p = sub.add_parser("fetch", help="fetch matches from the server through the running client into the store")
+    p.add_argument("games", nargs="*", help="game ids (24 hex)")
+    p.add_argument("--history", type=int, metavar="N", help="also the arena's last N rating matches")
+    p.add_argument("--arena", help="arena name prefix for --history, e.g. pain-and-gain")
+    p.add_argument("--refresh", action="store_true", help="fetch again even if the store has the match")
+    p.set_defaults(func=cmd_fetch)
+    p = sub.add_parser("list", help="list stored matches, newest last")
     p.add_argument("--arena", help="substring of the arena name, e.g. spawn-and-swamp")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--all", action="store_true")

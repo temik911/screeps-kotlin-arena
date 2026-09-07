@@ -23,7 +23,7 @@ Rating matches move your rating; that is the point of playing them. Landing firs
 (rule 5 in CLAUDE.md): what a match needs is that the code being played is committed on your branch
 and that the bot prints its version in the first log line, so the log can be tied back to a commit.
 """
-import argparse, base64, io, json, os, sys, time, uuid, zipfile
+import argparse, importlib.util, base64, io, json, os, sys, time, uuid, zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from arena_cdp import CDP
@@ -203,25 +203,36 @@ def wait(c, gid, timeout=1800):
     return {"status": "timeout"}
 
 
-def dump_log(c, gid, path):
-    data = c.json_eval(f"""(async () => {{
-      const out = {{}};
-      for (let t = 100; t <= 3000; t += 100) {{
-        const r = await fetch('{API}/game/{gid}/log/' + t, {{credentials: 'include'}});
-        if (!r.ok) break;
-        const j = await r.json();
-        const ks = Object.keys(j).filter(k => /^[0-9]+$/.test(k));
-        if (!ks.length) break;
-        for (const k of ks) out[k] = j[k];
-      }}
-      return JSON.stringify(out);
-    }})()""")
+def _match_log():
+    spec = importlib.util.spec_from_file_location('match_log', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'match-log.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def save_match(c, gid, path=None):
+    """The match's server documents into the store (tools/match-log.py: `/api/game/<id>` and every log chunk), and
+    the console as text into `path` when asked; returns the number of ticks that carried console output."""
+    ml = _match_log()
+    doc = ml.fetch_game(c, gid)
+    chunks = doc.get("chunks") or {}
+    ml.store_game(gid, doc.get("game"), chunks)
+    data = {}
+    for body in chunks.values():
+        try:
+            j = json.loads(body)
+        except ValueError:
+            continue
+        for k, v in j.items():
+            if k.isdigit() and isinstance(v, str):
+                data[k] = v
     ticks = sorted(int(k) for k in data)
-    with open(path, "w", encoding="utf-8") as f:
-        for t in ticks:
-            line = data[str(t)].rstrip("\n")
-            if line:
-                f.write(line + "\n")
+    if path:
+        with open(path, "w", encoding="utf-8") as f:
+            for t in ticks:
+                line = data[str(t)].rstrip("\n")
+                if line:
+                    f.write(line + "\n")
     return len(ticks)
 
 
@@ -295,9 +306,10 @@ def main():
         line = (f"{i}/{a.count} {gid} {res:<6} "
                 f"rating {rating.get('previousRating')}->{rating.get('rating')} "
                 f"rank {rating.get('rank')} vs {foes}")
-        if a.logs:
-            path = os.path.join(a.logs, f"{time.strftime('%m%d-%H%M')}-{res}-{gid[-6:]}.txt")
-            line += f" | log {dump_log(c, gid, path)} ticks -> {path}"
+        path = os.path.join(a.logs, f"{time.strftime('%m%d-%H%M')}-{res}-{gid[-6:]}.txt") if a.logs else None
+        n = save_match(c, gid, path)
+        line += f" | log {n} ticks -> {path}" if path else f" | {n} ticks stored"
+        if path:
             # our bots name themselves on the first line; another name means the wrong payload was played
             greeting = open(path, encoding='utf-8').readline().strip()
             if greeting.startswith("hello") and slug(arena["name"]) not in greeting:

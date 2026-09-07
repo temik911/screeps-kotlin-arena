@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The ledger: every Pain and Gain match in the Arena client's cache, autopsied and added up — priorities from numbers,
+"""The ledger: every Pain and Gain match in the match store (tools/match-log.py, fed from the API), autopsied and added up — priorities from numbers,
 not from memory.
 
     tools/ledger.py [--last N] [--since DD.MM] [--opponent NAME] [--version vNN] [--rows] [--csv f.csv] [--json f.json]
 
-For each cached match (tools/match-log.py finds them; the cache holds months) the ledger runs tools/autopsy.py's
+For each stored match (tools/match-log.py fetches them from the server through the client) the ledger runs tools/autopsy.py's
 measurement on the console log and, when ~/ScreepsArena/replays/<id>.replay.json.gz exists, on the replay, and keeps
 one row: when, id, our version, opponent, result, ticks, rating delta, the outcome's form, the opponent's form (replay
 only), the diagnosis tags, and a few numbers (posture flicker, quiet ticks behind, give-ups, contact tick, corner

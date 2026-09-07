@@ -2,7 +2,7 @@
 """Read a whole SERIES of live matches at once: which version played, against whom, how it ended, and
 what the bot's own instruments printed while it happened.
 
-Everything here comes out of the Arena client's cache through `tools/match-log.py` — no new source of
+Everything here comes out of the match store (the API's documents) through `tools/match-log.py` — no new source of
 truth, and nothing to keep in sync by hand. What it adds is the join that was being done by eye:
 
     tools/series.py versions [--arena spawn-and-swamp] [--limit 40] [--by-opponent]
@@ -85,7 +85,8 @@ def rows(args):
 
 
 def foe(r):
-    others = [u for u in r["users"] if u and u != US]
+    # the opponent as name#version — his code version is the server's upload counter, and one name plays several bots
+    others = [r["opponent"]] if r.get("opponent") else [u for u in r["users"] if u and u != US]
     return others[0] if others else "?"
 
 
@@ -349,7 +350,7 @@ def cmd_metrics(args):
 common = argparse.ArgumentParser(add_help=False)
 common.add_argument("--arena", default="spawn-and-swamp", help="substring of the arena name")
 common.add_argument("--limit", type=int, default=40, help="how many of the most recent matches to read")
-common.add_argument("--all", action="store_true", help="every cached match, not just the last --limit")
+common.add_argument("--all", action="store_true", help="every stored match, not just the last --limit")
 
 def cmd_field(args):
     rs = rows(args)

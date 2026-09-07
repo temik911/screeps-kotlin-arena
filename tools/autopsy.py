@@ -3,7 +3,7 @@
 
     tools/autopsy.py <match-id | id-prefix | log-file> [--replay f.replay.json.gz] [--fetch] [--json] [--step 100]
 
-What it reads: our console log (the Arena client's cache via match-log.py, or a file written by play.py --logs; the
+What it reads: our console log (the match store via match-log.py — the API's documents, fetched through the client — or a file written by play.py --logs; the
 replay's own `logs` only as a fallback — the tool records them incompletely) and, when there is one, the full replay from
 arukuka/screeps-arena-tools (both sides' intents and positions per tick; see replay.py for the setup). Replays are
 looked up as <dir>/<id>.replay.json.gz in --replays (default ~/ScreepsArena/replays, or $ARENA_REPLAYS); --fetch
@@ -18,7 +18,7 @@ map edge, compactness, who fired the first volleys, power ratio at contact); the
 damage and healing per side from the intents, uptime per role, melee adjacency, deaths in order); the nets that
 fired and the ones that stayed silent (stall, detach, press give-ups, plan yields, keepers, evades); the runners'
 longest stands; then DIAGNOSIS lines — each a rule with its threshold and the number that crossed it — and the
-history against the same opponent from the client's cache. --json prints the whole measurement as JSON for
+history against the same opponent from the match store. --json prints the whole measurement as JSON for
 aggregation across matches (tools/ledger.py).
 
 Everything here used to be five scripts and half an hour per match (tfields, replay summary/track, replay-damage,
@@ -795,11 +795,11 @@ def render(L, R, info, history, step):
         p(f"  [{tag}] {text}")
     if history:
         p('')
-        p(f"history vs {info['opponent']} (cache, the opponent's code version after #): " + ', '.join(f"{h['when']} {h['result'][0].upper()}{h['ticks']}#{h['code']}{'*' if h['game'] == info['id'] else ''}" for h in history))
+        p(f"history vs {info['opponent']} (store, the opponent's code version after #): " + ', '.join(f"{h['when']} {h['result'][0].upper()}{h['ticks']}#{h['code']}{'*' if h['game'] == info['id'] else ''}" for h in history))
         w = sum(1 for h in history if h['result'] == 'won')
         byv = Counter((h['code'], h['result']) for h in history)
         vers = sorted({h['code'] for h in history}, key=lambda v: (v is None, v))
-        p(f"  {w}:{len(history) - w} over {len(history)} cached matches; by his version: " + ', '.join(f"#{v} {byv[(v, 'won')]}:{byv[(v, 'lost')]}" for v in vers))
+        p(f"  {w}:{len(history) - w} over {len(history)} stored matches; by his version: " + ', '.join(f"#{v} {byv[(v, 'won')]}:{byv[(v, 'lost')]}" for v in vers))
     return '\n'.join(out)
 
 
@@ -834,7 +834,7 @@ def find_replay(gid, args):
 
 
 def resolve(args):
-    """(id, log text, replay doc or None, info from the cache/meta, history rows)."""
+    """(id, log text, replay doc or None, info from the store's document, history rows)."""
     arg = args.match
     log_text, gid, doc, info, history = None, None, None, {}, []
     logs, metas = None, None
@@ -870,9 +870,9 @@ def resolve(args):
         if path:
             doc = json.load(gzip.open(path, 'rt', encoding='utf-8'))
             info['replay_path'] = path
-    # the log: the client's cache first — the replay's `logs` are INCOMPLETE (match 275: 175 ticks with text, six posture
-    # lines against the cache's full console; read against it the autopsy missed `32:HOLD 42:ANNIHILATE` and called the
-    # contact an evade) — the replay's copy only when the cache has no log for the match
+    # the log: the store first — the replay's `logs` are INCOMPLETE (match 275: 175 ticks with text, six posture
+    # lines against the store's full console; read against it the autopsy missed `32:HOLD 42:ANNIHILATE` and called the
+    # contact an evade) — the replay's copy only when the store has no log for the match
     if log_text is None and gid:
         logs, metas = ml.scan() if logs is None else (logs, metas)
         if gid in logs:
@@ -881,7 +881,7 @@ def resolve(args):
         log_text = ''.join(doc['logs'][k] for k in sorted(doc['logs'], key=int))
         info['log_source'] = 'replay (incomplete)'
     if log_text is None:
-        sys.exit(f"no log for {arg}: not a file, not in the client's cache, no replay with logs")
+        sys.exit(f"no log for {arg}: not a file, not in the match store (tools/match-log.py fetch), no replay with logs")
     info['id'] = gid or os.path.basename(arg)
     if not args.no_history and gid:
         logs, metas = ml.scan() if logs is None else (logs, metas)
@@ -928,7 +928,7 @@ def main():
     ap.add_argument('--us', default='temik911', help='username prefix of our side')
     ap.add_argument('--step', type=int, default=100, help='timeline step in ticks')
     ap.add_argument('--json', action='store_true', help='print the measurement as JSON instead of the report')
-    ap.add_argument('--no-history', action='store_true', help='skip the cache scan for the history against this opponent')
+    ap.add_argument('--no-history', action='store_true', help='skip the store scan for the history against this opponent')
     args = ap.parse_args()
     gid, text, doc, info, history = resolve(args)
     L = parse_log(text)
