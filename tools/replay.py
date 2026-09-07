@@ -43,6 +43,21 @@ damage disarms a ranged creep). Restart the client afterwards. Then:
         fifty ticks, his largest group was 4–7 of nine — a melee on R3, a ranged on D5 and a ranged on A3 in the same
         tick — and the army chased the centroid of a dispersed farmer. That is v56 (USE_DETACH, FARMER_MOVE).
 
+    tools/replay.py block <replay.json.gz> t0 t1 [--pics t1,t2]
+        his BLOCK in the frame of the axis from his armed centroid to ours: depth and lateral offset per role, the share
+        of his fighters with a healer adjacent, his centroid's step along the axis per tick against our nearest melee's
+        distance, ASCII pictures of both blocks at the ticks asked — the measure that named Coldkimchi#1's shape
+        (two wide, three deep, healers adjacent to every ranged, walking backwards with our melee at two)
+    tools/replay.py dance <replay.json.gz> t0 t1
+        the melee dance at two: what his creep and our melee did by the next tick, the distance after, swings at one
+    tools/replay.py persist <replay.json.gz> t0 t1
+        target persistence of both sides' ranged fire and whether the creep under fire had a healer adjacent
+    tools/replay.py brawl <replay.json.gz> t0 t1
+        his melee adjacent to ours: victims by role, our nearest armed melee's distance, whether we could swing back
+    tools/replay.py bodies <replay.json.gz> --at t1,t2
+        both sides' creeps at given ticks: role, hits, real body order, position (who was still armed, who could heal)
+    tools/replay.py swings <replay.json.gz> t0 t1
+        the melee's swing choice: what each side's melee hit against the best enemy adjacent to it (armed melee / armed ranged / neither)
 `t0 t1` is the fight window in ticks (pick it from `tools/match-log.py dump` or the summary's first-action tick).
 What `choice` found on the three losses to standing lines (matches 67, 53, 43): with one of his armed ranged within
 three, our ranged shot it 39 / 36 / 46 % of the time and a melee standing at two or a healer the rest; his shot ours
@@ -644,13 +659,233 @@ def cmd_scenario(args):
     print(f"  play it: tools/stub/spawnandswamp/replay.sh {out}")
 
 
+def crng(a, b):
+    """Chebyshev range between two creep dicts (rng() takes (x, y) pairs)."""
+    return max(abs(a['x'] - b['x']), abs(a['y'] - b['y']))
+
+
+def armed(c):
+    return c['role'] in ('melee', 'ranged') and c['hits'] > 100 * c['tail']
+
+
+def cmd_block(args):
+    """His block in the frame of the axis from his armed centroid to ours: depth and lateral offset per role, the share of
+    his fighters with a healer adjacent, his centroid's step along the axis per tick next to our nearest melee's distance,
+    and ASCII pictures of both blocks at the ticks asked for. What it measured on Coldkimchi#1 (match 405, t=180..260):
+    a block two wide and three deep, healers adjacent to 71 % of melee-ticks and 100 % of ranged-ticks, the centroid
+    stepping back 33 of 79 ticks — a block that walks backwards while our melee are at two of it."""
+    import math
+    doc, meta, names = load(args.replay)
+    US = our_side(meta, args.us)
+    pics = set(int(x) for x in args.pics.split(',')) if args.pics else set()
+    depth = {r: [] for r in ('melee', 'ranged', 'healer')}; lat = {r: [] for r in ('melee', 'ranged', 'healer')}
+    adj = Counter(); adjn = Counter(); steps = []; prevc = None; dnear = []
+    width = []; height = []; dist_by_role = {r: Counter() for r in ('melee', 'ranged', 'healer')}
+    for k, start, now, acts, raw in ticks(doc):
+        if k < args.t0 or k > args.t1: continue
+        his = [c for c in now.values() if c['side'] != US and c['role'] in ('melee', 'ranged', 'healer')]
+        ours = [c for c in now.values() if c['side'] == US and c['role'] in ('melee', 'ranged', 'healer')]
+        hisA = [c for c in his if armed(c)]; ourA = [c for c in ours if armed(c)]
+        if not hisA or not ourA: continue
+        hc = (sum(c['x'] for c in hisA) / len(hisA), sum(c['y'] for c in hisA) / len(hisA))
+        oc = (sum(c['x'] for c in ourA) / len(ourA), sum(c['y'] for c in ourA) / len(ourA))
+        ux, uy = oc[0] - hc[0], oc[1] - hc[1]; n = math.hypot(ux, uy) or 1; ux, uy = ux / n, uy / n
+        ds = []; ls = []
+        for c in his:
+            d = (c['x'] - hc[0]) * ux + (c['y'] - hc[1]) * uy; l = -(c['x'] - hc[0]) * uy + (c['y'] - hc[1]) * ux
+            depth[c['role']].append(d); lat[c['role']].append(l); ds.append(d); ls.append(l)
+            near = min(crng(c, o) for o in ours)
+            dist_by_role[c['role']][min(near, 9)] += 1
+            if c['role'] != 'healer':
+                adjn[c['role']] += 1
+                if any(crng(c, h) <= 1 for h in his if h['role'] == 'healer' and h is not c): adj[c['role']] += 1
+        width.append(max(ls) - min(ls)); height.append(max(ds) - min(ds))
+        if prevc: steps.append((k, round((hc[0] - prevc[0]) * ux + (hc[1] - prevc[1]) * uy, 1)))
+        prevc = hc
+        om = [o for o in ourA if o['role'] == 'melee']
+        if om: dnear.append((k, min(crng(o, h) for o in om for h in his)))
+        if k in pics:
+            cells = {}
+            for c in his: cells[(c['x'], c['y'])] = {'melee': 'M', 'ranged': 'R', 'healer': 'H'}[c['role']] if armed(c) or c['role'] == 'healer' else 'x'
+            for c in ours: cells[(c['x'], c['y'])] = {'melee': 'm', 'ranged': 'r', 'healer': 'h'}[c['role']] if armed(c) or c['role'] == 'healer' else '.'
+            xs = [x for x, y in cells]; ys = [y for x, y in cells]
+            print(f"t={k} his centroid ({hc[0]:.1f},{hc[1]:.1f}) ours ({oc[0]:.1f},{oc[1]:.1f}) — his UPPER case, ours lower")
+            for y in range(min(ys), max(ys) + 1):
+                print('   ' + ''.join(cells.get((x, y), '·') for x in range(min(xs), max(xs) + 1)))
+    if not width:
+        print(f"window t={args.t0}..{args.t1}: no tick with both sides armed"); return
+    def q(v): return f"{statistics.mean(v):.1f}" if v else '-'
+    print(f"window t={args.t0}..{args.t1}: his block width (across) mean {statistics.mean(width):.1f} max {max(width):.0f}, depth (along) mean {statistics.mean(height):.1f} max {max(height):.0f}")
+    for r in ('melee', 'ranged', 'healer'):
+        print(f"  {r:6}: depth mean {q(depth[r])} (+ = toward us), |lateral| mean {q([abs(x) for x in lat[r]])}; distance to our nearest: " + ' '.join(f"{d}:{n}" for d, n in sorted(dist_by_role[r].items())))
+    print(f"  healer adjacent: melee {adj['melee']}/{adjn['melee']} ({100 * adj['melee'] // max(1, adjn['melee'])} %), ranged {adj['ranged']}/{adjn['ranged']} ({100 * adj['ranged'] // max(1, adjn['ranged'])} %)")
+    back = [st for k, st in steps if st <= -0.5]; fwd = [st for k, st in steps if st >= 0.5]
+    print(f"  his centroid along the axis: steps back {len(back)} (sum {sum(back):.1f}), forward {len(fwd)} (sum {sum(fwd):.1f}), still {len(steps) - len(back) - len(fwd)} of {len(steps)}")
+    print("  per tick (tick:step/our-melee-to-his-nearest): " + ' '.join(f"{k}:{st:+.0f}/{dict(dnear).get(k, '-')}" for k, st in steps))
+
+
+def cmd_dance(args):
+    """The melee dance: for every tick where one of our armed melee has one of his creeps within two, what the pair did by
+    the next tick (his creep away / toward / sideways / still relative to our melee; our melee stepped or stood), the
+    distance after, and whether our melee swung that tick; then the mirror with the sides swapped. Measured on
+    Coldkimchi#1 (match 405): his creep at two of our melee stepped away 60 % of the time and our melee swung at one
+    only 19 % of its melee-ticks — the dance that a stand without a retreating block never shows."""
+    doc, meta, names = load(args.replay)
+    US = our_side(meta, args.us)
+    fr = [(k, {cid: dict(c) for cid, c in now.items()}, acts) for k, start, now, acts, raw in ticks(doc) if args.t0 <= k <= args.t1 + 1]
+    def side_of(c, us): return c['side'] == US if us else c['side'] != US
+    for label, us_melee in (("OUR melee at HIS creeps", True), ("HIS melee at OUR creeps", False)):
+        moves = Counter(); after = Counter(); swung = Counter(); n = 0; pairs = Counter()
+        for i in range(len(fr) - 1):
+            k, now, acts = fr[i]; k2, nxt, acts2 = fr[i + 1]
+            if k2 != k + 1: continue
+            for mid, m in now.items():
+                if not (side_of(m, us_melee) and m['role'] == 'melee' and armed(m)): continue
+                foes = [(crng(m, c), cid, c) for cid, c in now.items() if not side_of(c, us_melee) and c['role'] in ('melee', 'ranged', 'healer')]
+                if not foes: continue
+                d, cid, c = min(foes, key=lambda t: t[0])
+                if d > 2: continue
+                n += 1
+                m2 = nxt.get(mid); c2 = nxt.get(cid)
+                if not m2 or not c2: after['gone'] += 1; continue
+                d_before = crng(m, c); d_after_his = crng(m, c2)
+                his = 'still' if (c2['x'], c2['y']) == (c['x'], c['y']) else 'away' if d_after_his > d_before else 'toward' if d_after_his < d_before else 'side'
+                ours = 'stepped' if (m2['x'], m2['y']) != (m['x'], m['y']) else 'stood'
+                moves[(his, ours)] += 1
+                after[crng(m2, c2)] += 1
+                if 'a' in acts.get(mid, []): swung[d] += 1
+                pairs[d] += 1
+        print(f"{label}, t={args.t0}..{args.t1}: {n} melee-ticks with a target within two — at 1: {pairs[1]}, at 2: {pairs[2]}; swings at 1: {swung[1]}, at 2: {swung[2]}")
+        print("  his creep / our melee by the next tick: " + ', '.join(f"{h}/{o} {v}" for (h, o), v in moves.most_common()))
+        print("  distance the next tick: " + ', '.join(f"{d}:{v}" for d, v in sorted(after.items(), key=lambda t: str(t[0]))))
+
+
+def cmd_persist(args):
+    """Target persistence of each side's ranged fire: per tick the most-shot enemy creep (single-target shots), the share
+    of firing ticks where it is the same creep as the previous firing tick's, the mean run on one creep, and for the
+    creep under most fire whether a healer of its side was adjacent. Measured on Coldkimchi#1 (match 405): his fire
+    stayed on one creep of ours 71 % of ticks against our 45 %, and his most-shot creep had a healer adjacent 90 % of
+    the time against our 35 % — persistence is worth nothing when the target is healed, and everything when it is not."""
+    stat = {}
+    doc, meta, names = load(args.replay)
+    US = our_side(meta, args.us)
+    for side in (True, False):
+        stat[side] = dict(prev=None, same=0, ticks=0, runs=[], run=0, healed_adj=0, shots=0)
+    for k, start, now, acts, raw in ticks(doc):
+        if k < args.t0 or k > args.t1: continue
+        prev_at = {(c['x'], c['y']): cid for cid, c in start.items()}
+        at = {(c['x'], c['y']): cid for cid, c in now.items()}
+        for side in (True, False):
+            cnt = Counter()
+            for a in raw:
+                cid, code = a[0], a[1]
+                c = start.get(cid) or now.get(cid)
+                if not c or (c['side'] == US) != side: continue
+                if code == 'r' and len(a) >= 4:
+                    tid = prev_at.get((a[2], a[3])) or at.get((a[2], a[3]))
+                    if tid: cnt[tid] += 1
+            st = stat[side]
+            if not cnt: continue
+            tgt, n = cnt.most_common(1)[0]
+            st['ticks'] += 1; st['shots'] += sum(cnt.values())
+            if st['prev'] == tgt: st['same'] += 1; st['run'] += 1
+            else:
+                if st['run']: st['runs'].append(st['run'])
+                st['run'] = 1
+            st['prev'] = tgt
+            t = now.get(tgt)
+            if t and any(h['side'] == t['side'] and h['role'] == 'healer' and h is not t and crng(h, t) <= 1 for h in now.values()): st['healed_adj'] += 1
+    for side, label in ((True, 'OUR fire on his creeps'), (False, 'HIS fire on ours')):
+        st = stat[side]
+        if st['run']: st['runs'].append(st['run'])
+        runs = st['runs'] or [0]
+        print(f"{label}, t={args.t0}..{args.t1}: firing ticks {st['ticks']}, single-target shots {st['shots']}; the most-shot creep the same as the previous firing tick's in {st['same']}/{max(1, st['ticks'] - 1)} ({100 * st['same'] // max(1, st['ticks'] - 1)} %); runs on one creep: {len(runs)}, mean {sum(runs) / len(runs):.1f}, longest {max(runs)}; a healer of its side adjacent to the most-shot creep {st['healed_adj']}/{st['ticks']} ({100 * st['healed_adj'] // max(1, st['ticks'])} %)")
+
+
+def cmd_brawl(args):
+    """His melee at our creeps: for every tick where one of his armed melee is adjacent to one of ours — the victim's
+    role, the distance from that melee to OUR nearest armed melee, whether our side swung that tick and whether one of
+    our melee was adjacent to the attacker (a swing was possible); then the mirror. Measured on けろびー#3 (match 419):
+    his melee ate our ranged and healers while our nearest melee stood five and more away in most of those ticks."""
+    doc, meta, names = load(args.replay)
+    US = our_side(meta, args.us)
+    def side_is(c, us): return (c['side'] == US) == us
+    for us_attacker, label in ((False, 'HIS melee adjacent to OURS'), (True, 'OUR melee adjacent to HIS')):
+        victims = Counter(); dist = Counter(); tk = 0; ct = 0; swung = 0; could = 0; swings_all = 0
+        for k, start, now, acts, raw in ticks(doc):
+            if k < args.t0 or k > args.t1: continue
+            att = [c for cid, c in start.items() if side_is(c, us_attacker) and c['role'] == 'melee' and armed(c)]
+            vic = [c for cid, c in start.items() if not side_is(c, us_attacker) and c['role'] in ('melee', 'ranged', 'healer')]
+            vic_melee = [c for c in vic if c['role'] == 'melee' and armed(c)]
+            swingers = [cid for cid, codes in acts.items() if 'a' in codes and cid in start]
+            my_sw = sum(1 for cid in swingers if side_is(start[cid], us_attacker))
+            their_sw = sum(1 for cid in swingers if not side_is(start[cid], us_attacker))
+            swings_all += my_sw
+            pairs = [(a, v) for a in att for v in vic if crng(a, v) <= 1]
+            if not pairs: continue
+            tk += 1; ct += len(pairs)
+            for a, v in pairs:
+                victims[v['role']] += 1
+                d = min((crng(a, m) for m in vic_melee), default=9)
+                dist[min(d, 5)] += 1
+            if their_sw: swung += 1
+            if any(crng(a, m) <= 1 for a, v in pairs for m in vic_melee): could += 1
+        print(f"{label}, t={args.t0}..{args.t1}: {tk} ticks with adjacency, {ct} adjacent pairs; victims by role: " + ', '.join(f"{r}:{n}" for r, n in victims.most_common()) +
+              f"; the victim side's nearest armed melee to that melee at 1:{dist[1]} 2:{dist[2]} 3:{dist[3]} 4:{dist[4]} 5+:{dist[5]}; the victim side swung in {swung}/{tk} of those ticks, had a melee adjacent to the attacker in {could}/{tk}; attacker side's swings over the window {swings_all}")
+
+
+def cmd_bodies(args):
+    """Both sides' creeps at the ticks given (--at t1,t2,...): role, hits, body with the real part order, position — the
+    question "who was still armed and who could heal at tick N", which the console log answers only for our side."""
+    doc, meta, names = load(args.replay)
+    US = our_side(meta, args.us)
+    want = set(int(x) for x in args.at.split(','))
+    for k, start, now, acts, raw in ticks(doc):
+        if k not in want: continue
+        for side, label in ((US, 'OURS'), (1 - US, 'HIS ')):
+            cs = [c for c in now.values() if c['side'] == side and c['role'] != 'scout']
+            heal = sum(1 for c in cs if 'h' in c['body'] and c['hits'] > 100 * c['tail'])
+            print(f"t={k} {label} n={len(cs)} hits={sum(c['hits'] for c in cs)} with-heal={heal}: " + ' '.join(f"{c['role'][0]}{c['hits']}/{c['body']}@{c['x']},{c['y']}" for c in sorted(cs, key=lambda c: c['role'])))
+
+
+def cmd_swings(args):
+    """The melee's swing choice: for every attack of each side's melee, the victim's role and armed state against the best
+    adjacent enemy (an armed melee adjacent / an armed ranged adjacent / neither). Measured on MetalicaX#2 (match 19830e,
+    12 v 12 at D5): our melee with his armed melee adjacent swung at his ranged 16 of 27 times, his at our melee 17 of 30, and
+    24 of his 74 swings finished disarmed creeps of ours; the strike-melee-first cut this suggested lost on the stand (v134)."""
+    doc, meta, names = load(args.replay)
+    US = our_side(meta, args.us)
+    tab = {s: Counter() for s in (0, 1)}; n = {s: 0 for s in (0, 1)}
+    for k, start, now, acts, raw in ticks(doc):
+        if k < args.t0 or k > args.t1 or not start: continue
+        at = {(c['x'], c['y']): cid for cid, c in start.items()}
+        for a in raw:
+            cid, code = a[0], a[1]
+            if code != 'a' or cid not in start or len(a) < 4: continue
+            m = start[cid]
+            if m['role'] != 'melee': continue
+            tid = at.get((a[2], a[3]))
+            if tid is None or tid not in start: continue
+            v = start[tid]
+            adj = [c for c in start.values() if c['side'] != m['side'] and crng(m, c) <= 1 and c['role'] in ('melee', 'ranged', 'healer')]
+            best = 'armed melee adj' if any(c['role'] == 'melee' and armed(c) for c in adj) else 'armed ranged adj' if any(c['role'] == 'ranged' and armed(c) for c in adj) else 'neither'
+            hit = v['role'] + ('' if v['role'] == 'healer' or armed(v) else '-disarmed')
+            tab[m['side']][(hit, best)] += 1; n[m['side']] += 1
+    for s in (0, 1):
+        label = 'OUR melee' if s == US else 'HIS melee'
+        print(f"{label}, t={args.t0}..{args.t1}: {n[s]} swings")
+        for (hit, best), v in sorted(tab[s].items(), key=lambda t: -t[1]): print(f"   hit {hit:16} | best adjacent: {best:17} {v}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     for name, fn, need_window in (('summary', cmd_summary, False), ('silent', cmd_silent, True), ('focus', cmd_focus, True), ('trace', cmd_trace, True),
                                   ('choice', cmd_choice, False), ('track', cmd_track, False),
                                   ('economy', cmd_economy, False), ('spawns', cmd_spawns, False),
-                                  ('scenario', cmd_scenario, False)):
+                                  ('scenario', cmd_scenario, False),
+                                  ('block', cmd_block, True), ('dance', cmd_dance, True), ('persist', cmd_persist, True),
+                                  ('brawl', cmd_brawl, True), ('bodies', cmd_bodies, False), ('swings', cmd_swings, True)):
         p = sub.add_parser(name)
         p.add_argument('replay')
         if need_window:
@@ -663,6 +898,8 @@ def main():
         if name == 'track': p.add_argument('--step', type=int, default=50, help='ticks between position lines')
         if name == 'economy': p.add_argument('--step', type=int, default=200, help='ticks between curve lines')
         if name == 'scenario': p.add_argument('--out', help='where to write the scenario json')
+        if name == 'block': p.add_argument('--pics', help='ticks to draw both blocks at, comma-separated')
+        if name == 'bodies': p.add_argument('--at', required=True, help='ticks to list both sides at, comma-separated')
         p.set_defaults(fn=fn)
     args = ap.parse_args()
     args.fn(args)

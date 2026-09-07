@@ -339,6 +339,34 @@ function screenMove(c, plan, fighters, ours) {
       if (healer && range(c, healer) > 1) { stepToward(c, healer, 1); return; }
       return;
     }
+    // seventh cut, '+dense' (07.09.2026, night): the fighters' density. Live (405, 506, 602) the block is two wide and three to
+    // four deep — a column pointing at us with two creeps at the front — while the stand's fighters each walk to three from
+    // our nearest armed creep and stand there: an ARC at three, one creep wide, where a healer next to the front creep touches
+    // nobody else. Under +dense only the two fighters nearest to our armed creeps hold at three; every other fighter stays
+    // behind them (four or more from our nearest) and adjacent to at least two blockmates, else it steps to the free
+    // neighbour cell with the most blockmates adjacent that is not nearer than four to our armed creeps
+    if (has('dense') && armed.length) {
+      const fightersOf = members.filter((o) => !isH(o));
+      const dOurs = (o) => Math.min(...armed.map((q) => range(o, q)));
+      const frontTwo = fightersOf.slice().sort((a, b) => dOurs(a) - dOurs(b)).slice(0, 2);
+      if (!frontTwo.includes(c)) {
+        if (dn <= 3) { if (!stepBack(c, threats.length ? threats : [nearestArmed])) stepAway(c, threats.length ? threats : [nearestArmed]); return; }
+        const mates = members.filter((o) => o !== c && range(c, o) <= 1).length;
+        if (mates < 2) {
+          const taken = new Set(creeps().filter((o) => !o.spawning && o !== c).map((o) => o.x * 100 + o.y));
+          let best = null, bs = -1;
+          for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) {
+            const x = c.x + dx, y = c.y + dy;
+            if (!inBounds(x, y) || world.terrain[idx(x, y)] === 1 || ((dx || dy) && taken.has(x * 100 + y))) continue;
+            if (armed.some((o) => Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 3)) continue;
+            const adj = members.filter((o) => o !== c && Math.max(Math.abs(o.x - x), Math.abs(o.y - y)) <= 1).length;
+            const score = adj * 10 - Math.max(Math.abs(cen.x - x), Math.abs(cen.y - y)) - (dx || dy ? 0.5 : 0);
+            if (score > bs) { bs = score; best = { x, y }; }
+          }
+          if (best && (best.x !== c.x || best.y !== c.y)) { c.move(getDirection(best.x - c.x, best.y - c.y)); return; }
+        }
+      }
+    }
     if (dn <= 2) { stepBack(c, threats.length ? threats : [nearestArmed]); return; }
     if (dn === 3) return;
     if (range(c, cen) > 2) { stepToward(c, cen, 1); return; }

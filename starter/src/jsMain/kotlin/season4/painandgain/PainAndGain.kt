@@ -662,6 +662,53 @@ object PainAndGain {
      *  не выправлен (20579 → 16150:24316). Цикл «шаг — назад» на spread m31 остаётся ОТКРЫТОЙ НАХОДКОЙ: авангард, чей шаг к
      *  цели ломает сбор «5 из 6 в двух клетках», — граница FORM_RANGE/FORM_SHARE, и терпение тут не лекарство. */
     private const val USE_FORM_PATIENCE_FROM_VAN = false
+    /** СБОР СТРОЯ — КОМ, А НЕ ОКНО ВОКРУГ АВАНГАРДА (v133, серия 467–486: けろびー#12 трижды, матч 1982db t=1700–1728). Его
+     *  одиннадцать стоят блоком на D5 под дебаффами флагов (A×0.6, H×0.5), наши двенадцать в восьми клетках при 4075 против
+     *  2855, наступление включено — и армия прошла четыре клетки за 28 тиков: у авангарда hold=true(form), стрелки идут «к
+     *  авангарду» и шагают вбок под штрафом плотности, в двух от авангарда собираются пятеро из девяти при нужных семи,
+     *  терпение 10 тиков — один шаг. Авангард по определению ПЕРЕДНИЙ, и окно 5×5 вокруг него накрывает лишь переднюю
+     *  половину компактного блоба в три ряда: правило «доля в двух от авангарда» не выполнимо компактным блобом глубже двух —
+     *  та самая граница FORM_RANGE/FORM_SHARE, названная открытой находкой при отказе от терпения (v120e). Срез: боец собран,
+     *  если он в FORM_RANGE от авангарда ИЛИ вплотную к уже собранному и не дальше FORM_RANGE + 1 от авангарда — компактный ком
+     *  в три ряда собран, колонна за третьим крипом — нет (её строй и был против колонны, матч 4).
+     *  Ком ОДИН на всё — ОТВЕРГНУТ стендом: гейт 130/131 (m34 camp из уничтожения на 237-м в 17053:23958 — армия вошла раньше,
+     *  сняла одного и девяносто тиков «!covered !catchable» за уходящим блобом), таблица входов +20 хуже 19 / лучше 7, +50 13/13,
+     *  исходы 5 лучше / 4 хуже. Строй бережёт вход в ДВИЖУЩУЮСЯ линию по одному, и там его строгость окупается; аккордеон
+     *  вредит только у НЕПОДВИЖНОЙ цели, которой некуда нас ловить. Срез: ком считается, лишь когда все его вооружённые в
+     *  ENGAGE_RANGE + RANGED_RANGE от авангарда за CHASE_WINDOW не сдвинулись дальше клетки (блок на D5, лагерь), иначе — как было. */
+    private const val USE_FORM_CLUMP = true
+    private const val USE_FORM_CLUMP_STILL_ONLY = true
+    /** УДАР МИЛИ — ПО ВООРУЖЁННОМУ МИЛИ ВПЛОТНУЮ ПРЕЖДЕ ПОРЯДКА ФОКУСА (v134, серия 467–486: MetalicaX#2, матч 19830e, 12 на 12 у D5).
+     *  Его блок вошёл в наш HOLD за четырнадцать тиков; обмен 9800:6200 в его пользу и шестеро наших к 1200-му при его нуле. По
+     *  реплею: его мили махнули 74 раза против наших 38 при смежности 76 против 62 — наши 24 смежных мили-тика были БЕЗ ОРУЖИЯ
+     *  (у него 2): его мили били наших мили (17 из 30 при нашем вооружённом мили вплотную) и сняли им ATTACK, наши мили при его
+     *  вооружённом мили вплотную били его стрелков 16 раз из 27 — порядок фокуса (threatOf, v41: живой стрелок в трёх) ведёт
+     *  удар в стрелка по 60 за выстрел, пока мили по 240 разоружает наших. Срез: при вооружённом мили врага вплотную удар идёт
+     *  в него (ближайшего к разоружению — с наименьшим числом живых ATTACK), если цель фокуса не добивается за этот тик.
+     *  ОТВЕРГНУТО стендом (поверх v133): гейт 131/131, но таблица входов +20 хуже 14 / лучше 9, +50 хуже 15 / лучше 7; исходы
+     *  2 лучше (brawl m29, m34 — уничтожение вместо лидерства) / 5 хуже (nine m31 и m34, wing m7 из уничтожения в лидерство по
+     *  очкам, brawl m31 и m35 минус по крипу); семейства: split/spread тождественны, tour m31 его 11 → 1 живых, m34 хуже. Порядок
+     *  фокуса на стенде бьёт «мили первым»; живой бой 19830e остаётся открытым — его сила там в 74 ударах против 38 при
+     *  смежности 76 против 62, то есть в том, КТО ДО КОГО дошёл, а не в выборе цели. */
+    private const val USE_STRIKE_MELEE_FIRST = false
+    private const val USE_FORM_CLUMP_GROUP = true
+    /** ГОНКА НЕ ОТДАЁТ СТРЕЛКОВ КОМПАКТНОЙ ГРУППЕ (v133, серия 467–486: MetalicaX#2, матч 1982f4). Впереди 20652:19903 при темпе
+     *  22/3 на 1700-м; с 1580-го гонка (тихая цепочка, пул по мощи — стрелки первыми) отделила четверых из пяти стрелков на
+     *  флаги, ядро — четыре мили, три лекаря и один стрелок — у A3, его восьмёрка (четыре стрелка, мили, три лекаря,
+     *  крупнейшая группа 5 из 5, россыпи 0 %) в 20 клетках; мера ядра по МОЩИ держала: мили считаются дорого, а стрелка на
+     *  равной скорости мили не догоняет — 218 его выстрелов против 103 наших за 90 тиков, семеро наших к 1780-му, 22207:20848 →
+     *  проигрыш на 1983-м. Для сухой охоты стрелковая защита пула есть (USE_DRY_HUNT_RANGED_GUARD); гонка её обходила. Срез:
+     *  при гонке стрелок не отпускается, пока масса стрелков ядра меньше массы стрелков ЕГО КРУПНЕЙШЕЙ ГРУППЫ × PUSH_RATIO. */
+    private const val USE_RACE_RANGED_GUARD = true
+    /** ЗАГНАННАЯ ГРУППА В ДОСЯГАЕМОСТИ ОТМЕНЯЕТ ЗАСТОЙ «ДЕРЖИТ ДИСТАНЦИЮ» (v133, угол Coldkimchi, матч 198241 t=254–330; форма
+     *  названа при отказе от застоя по ближайшей группе, v132). Его армия расколота 5+6, пятёрка без лекаря загнана в угол и
+     *  стоит, шестёрка уходит — центр всех вооружённых уплывает с ней, «держит дистанцию 8 → 12» на 274-м, армия за флагами,
+     *  гонка отделяет пятерых, ядро слабее его группы — отход, он собирается. Застой по ближайшей группе отвергнут гейтом:
+     *  против россыпи ближайшая группа — один-два крипа. Срез отличает загнанную ГРУППУ от россыпи её собственными
+     *  признаками: не меньше SPLIT_MIN его вооружённых, каждый из которых за CHASE_WINDOW не сдвинулся дальше клетки, хотя бы
+     *  один в ENGAGE_RANGE + RANGED_RANGE от наших ударников, и группа слабее ударников в PUSH_RATIO — пока она есть, застой
+     *  «держит дистанцию» не наступает; одиночки россыпи в группу не складываются, и застой там как был. */
+    private const val USE_STALL_CORNERED_GROUP = true
     /** АВАНГАРД СБОРА — ИЗ МАССЫ (v120, стенд split m28): точка сбора марша к флагу (rallyTo) выбиралась ближайшим к флагу
      *  вооружённым по обходному полю среди ВСЕХ ходячих, и на 701–822-м тиках ею стал стрелок, застрявший с тремя лекарями по ту
      *  сторону его шестёрки на D5 (53,35) в 24 клетках от массы: масса шла «к авангарду» в обход его группы, стрелок — по
@@ -1359,7 +1406,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v132"
+    private const val BOT_VERSION = "v133"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1392,6 +1439,7 @@ object PainAndGain {
     /** Центр вооружённой армии и клетки врагов за последние CHASE_WINDOW тиков (см. evasive). */
     private val ourCentroidHist = ArrayDeque<Int>()
     private val enemyCellHist = HashMap<String, ArrayDeque<Int>>()
+    private var corneredWas = false
     /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
     private val rallyingIds = HashSet<String>()
     private var huntingThreat = false
@@ -2753,8 +2801,21 @@ cpuMark("a.hunt")
         val distanceKept = combatEnemies.isNotEmpty() && kept(DETACH_WINDOW)
         if (distanceKept) lastDistanceKeptTick = now
         // для простоя — и без его сдвига (v98, USE_KEEPS_DISTANCE_ANY_MOVE): застенчивый блоб держит дистанцию шагами на 2–3
-        val keepsDistance = (USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)) ||
-            (USE_KEEPS_DISTANCE_STALL_WINDOW && (distanceKept || (USE_KEEPS_DISTANCE_ANY_MOVE && combatEnemies.isNotEmpty() && kept(DETACH_WINDOW, needMoved = false))))
+        // загнанная группа в досягаемости (см. USE_STALL_CORNERED_GROUP): неподвижная группа его вооружённых не меньше SPLIT_MIN,
+        // хотя бы один в досягаемости ударников, слабее их в PUSH_RATIO — застой «держит дистанцию» не наступает
+        val corneredInReach = USE_STALL_CORNERED_GROUP && armedEnemies.size >= SPLIT_MIN && run {
+            val still = armedEnemies.filter { e ->
+                val h = enemyCellHist[e.id]
+                h != null && h.size >= CHASE_WINDOW && maxOf(abs(h.first() / 100 - h.last() / 100), abs(h.first() % 100 - h.last() % 100)) <= 1
+            }
+            val group = still.filter { e -> still.count { getRange(e, it) <= ENGAGE_RANGE } >= SPLIT_MIN }
+            group.isNotEmpty() && group.any { e -> chasers.any { getRange(it, e) <= ENGAGE_RANGE + RANGED_RANGE } } &&
+                ourPowerOf(chasers, group) >= enemyPowerOf(group, chasers) * PUSH_RATIO
+        }
+        if (DEBUG_LOG && corneredInReach != corneredWas) println("cornered t=$now: ${if (corneredInReach) "a still weak group of his in reach — no distance stall" else "gone"}")
+        corneredWas = corneredInReach
+        val keepsDistance = !corneredInReach && ((USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)) ||
+            (USE_KEEPS_DISTANCE_STALL_WINDOW && (distanceKept || (USE_KEEPS_DISTANCE_ANY_MOVE && combatEnemies.isNotEmpty() && kept(DETACH_WINDOW, needMoved = false)))))
         while (marchHist.size > MARCH_STALL_TICKS) marchHist.removeFirst()
         // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
         val marchStalled = pushing && marchCell >= 0 && marchHist.size == MARCH_STALL_TICKS &&
@@ -3035,6 +3096,8 @@ cpuMark("a.retreat")
                     if (without.none { hasWeapon(it) } || ourPowerOf(without, coreRef) < theirsVsCore * coreFloor) break
                     // сухая охота без россыпи — стрелковая масса ядра держит перевес над его стрелками (v82, кайтер)
                     if (viaDryHunt && !scattered && USE_DRY_HUNT_RANGED_GUARD && rangedMass(without) < theirRangedMass * PUSH_RATIO) break
+                    // гонка (см. USE_RACE_RANGED_GUARD): стрелок не отпускается, пока стрелков в ядре меньше, чем у его крупнейшей группы × PUSH_RATIO
+                    if (USE_RACE_RANGED_GUARD && raceNow && InfluenceMap.profileOf(c).ranged > 0.0 && rangedMass(without) < rangedMass(largestMembers) * PUSH_RATIO) break
                     // выпуск с дебаффом цели (v95): ядро без крипа и с дебаффом флага, за которым он пойдёт, держит тот же порог
                     if (USE_RELEASE_WITH_TARGET_DEBUFF) {
                         val target = ctx.flags.filter { !it.ours && it.occupant?.my != true }
@@ -3370,7 +3433,24 @@ cpuMark("a.evade")
         val formationGathered = formVan == null || run {
             val near = formers.filter { getRange(it, formVan) <= RALLY_RANGE }
             val needed = maxOf(2, ceil(FORM_SHARE * near.size).toInt())
-            near.count { getRange(it, formVan) <= FORM_RANGE } >= needed
+            // ком — только у неподвижной цели (см. USE_FORM_CLUMP_STILL_ONLY): его вооружённые в досягаемости авангарда стоят CHASE_WINDOW
+            val vanFoes = armedEnemies.filter { getRange(it, formVan) <= ENGAGE_RANGE + RANGED_RANGE }
+            // ...и это БЛОК, а не одиночка фермера на флаге (v133d): не меньше SPLIT_MIN неподвижных в ENGAGE_RANGE друг от друга
+            val foesStill = vanFoes.size >= (if (USE_FORM_CLUMP_GROUP) SPLIT_MIN else 1) && vanFoes.all { e ->
+                val h = enemyCellHist[e.id]
+                h != null && h.size >= CHASE_WINDOW && maxOf(abs(h.first() / 100 - h.last() / 100), abs(h.first() % 100 - h.last() % 100)) <= 1
+            } && (!USE_FORM_CLUMP_GROUP || vanFoes.any { e -> vanFoes.count { getRange(e, it) <= ENGAGE_RANGE } >= SPLIT_MIN })
+            if (!USE_FORM_CLUMP || (USE_FORM_CLUMP_STILL_ONLY && !foesStill)) near.count { getRange(it, formVan) <= FORM_RANGE } >= needed
+            else {
+                // ком (см. USE_FORM_CLUMP): в FORM_RANGE от авангарда, или вплотную к собранному и не дальше FORM_RANGE + 1
+                val gathered = near.filter { getRange(it, formVan) <= FORM_RANGE }.toMutableList()
+                var grew = true
+                while (grew) {
+                    grew = false
+                    for (f in near) if (gathered.none { it.id == f.id } && getRange(f, formVan) <= FORM_RANGE + 1 && gathered.any { getRange(f, it) <= 1 }) { gathered.add(f); grew = true }
+                }
+                gathered.size >= needed
+            }
         }
         val formWaiting = formVan != null && !formationGathered && armedEnemies.any { e -> formers.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
         // терпение — с появления авангарда, а не с последнего несобранного тика (v120, USE_FORM_PATIENCE_FROM_VAN): авангард,
@@ -3995,7 +4075,11 @@ cpuMark("a.evade")
     private fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         if (!hasMelee(creep)) return
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
+        // вооружённый мили врага вплотную (см. USE_STRIKE_MELEE_FIRST): ближайший к разоружению, если цель фокуса не добивается за тик
+        val armedMelee = if (!USE_STRIKE_MELEE_FIRST) null else adjacent.filter { hasMelee(it) }.minByOrNull { InfluenceMap.profileOf(it).melee }
+        val focusDying = focusTarget != null && creep.getRangeTo(focusTarget) <= 1 && focusTarget.hits <= InfluenceMap.profileOf(creep).melee
         val target: Creep? = when {
+            armedMelee != null && !focusDying -> armedMelee
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
             adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
             else -> null

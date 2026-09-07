@@ -506,18 +506,32 @@ def outcome_form(L, R, meta_result, ticks):
         return 'annihilation', f"his last creep died at t={his_gone}"
     if ticks and ticks >= 2000:
         return 'points at the limit', f"t={ticks}"
+    # the arena ends a match the tick the lead exceeds 25 per remaining tick (every flag's rate together): measured on the
+    # v132 series, 07.09.2026 — wins ended at 1859 and 1931 exactly where lead > 25 x (2000 - t), losses at 1718–1983 with
+    # both armies whole. Both alive in the replay's last frame is therefore a points end, whatever the last sample's lead says
+    if R and R.get('our_alive_end', 0) > 0 and R.get('his_alive_end', 0) > 0 and R.get('ticks') and R['ticks'] < 2000:
+        last = S[-1] if S else None
+        gap = abs(last['score'][0] - last['score'][1]) if last else 0
+        return 'early on points', f"ended at t={R['ticks']} — the lead became unreachable (both armies alive; {gap} at the last sample t={last['t'] if last else '?'})"
     # an early end is either an unreachable lead (|score gap| > 25 per remaining tick) or an annihilation the ten-tick
     # samples missed — the last creep died between two t= lines; the arena has no third way to end early
     last = S[-1] if S else None
     if last:
-        gap = abs(last['score'][0] - last['score'][1])
-        end = max(ticks or 0, last['t'])   # the lead is judged at the END, not at the last ten-tick sample (match 274: reachable at 1810, unreachable at 1830)
+        # the lead is judged at the END, not at the last ten-tick sample (match 274: reachable at 1810, unreachable at 1830);
+        # the end is the replay's tick count when there is one — the console log stops at its last full hundred (v132 series,
+        # 07.09.2026: five points losses to tourers ended at 1718–1983 with both armies whole, the logs at 1700–1900, and all
+        # five read here as "annihilated between samples") — and the lead is carried from the last sample by the last rates
+        end = max(ticks or 0, last['t'])
+        if R and R.get('ticks'):
+            end = max(end, R['ticks'])
+        r = last.get('rate') or (0, 0)
+        gap = abs((last['score'][1] - last['score'][0]) + (r[1] - r[0]) * (end - last['t']))
         if gap <= 25 * (2000 - end):
             if meta_result == 'won':
                 return 'annihilation', f"his army gone after t={last['t']} (lead {gap} was reachable, the end came between samples)"
             if meta_result == 'lost':
                 return 'annihilated', f"our army gone after t={last['t']} (his lead {gap} was reachable, the end came between samples)"
-        return 'early on points', f"ended after t={last['t']} with a lead of {gap} — unreachable"
+        return 'early on points', f"ended at t={end} with a lead of {gap:.0f} — unreachable (both armies alive)"
     return 'early', f"ended at t={ticks}, no t= samples to say how"
 
 
