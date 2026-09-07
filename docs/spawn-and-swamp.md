@@ -705,6 +705,55 @@ So the honest ledger of v51: the healer is machinery that has not yet paid for i
 it exposed are what paid, and one of them (the approach paced by a creep with no live MOVE) would have
 hung a live match outright.
 
+### The "fighter first" deadlock, proposed and rejected by its own measurement (07.09.2026)
+
+The v51 series offered a clean-looking separator: `spawn.first` is **1.0 in all three losses** and
+0.0–0.2 in fifteen of seventeen wins. Beside it, in every loss, `spawn.closes=false` held for 31–36
+ticks — the affordable body does not close the deficit, so nothing gets built — while the fleet sat at
+4–6 haulers against 7–9 in the wins and the spawn held 464 energy against 380. In the recorded
+`kerobi16` the same state shows 847 energy in the spawn at `income=9/27` while it is being torn down.
+The reading was: two rules that each have a reason (`боец первым` from matches 12/17, `недомерок только
+если закрывает дефицит` from match 12) together refuse to spend anything.
+
+The fix followed the shape the frames ask for — computed, not tuned: **hold only if what you are
+waiting for changes the outcome.** The rule asked `closesDeficit` about the body it could afford NOW;
+it should ask about the FULL body it is holding for, since a full body that does not close the deficit
+will be bought and change nothing, while the haulers it forbade are the only thing that grows one that
+will. One line: `fighterFirst` gains `&& (fullCloses || closesNow)`.
+
+**It does not survive its own measurement, in two independent ways.**
+
+*The fixture says no.* `camped19` — enemy adjacent, no income, spawn alive about fifty ticks, 911 energy
+on hand — went from building a 900-cost fighter to building two haulers and dying with nothing. That
+fixture exists for exactly this (match 19: 904 in the bank, zero creeps, destroyed at tick 1000). Under
+fire there is no "later" to invest for: income cannot arrive before death, and the last thousand has to
+become a body. The rule as written cannot tell that case from the one it was meant for, because the
+thing that separates them is not the deficit but whether the spawn is being shot (`fire=false` at every
+purchase in all three live losses, `fire=true` in `camped19`).
+
+*The series says the premise is wrong.* Counting how many ticks each match printed `fighter first`:
+
+| | ticks holding | haulers built |
+|---|---|---|
+| the three losses | 31, 36, 36 | 6, 10, 5 |
+| the seventeen wins | 0 in eight of them — and **64**, 29, 12, 7, 6, 3, 2, 2, 1 in the rest | 5–17, median 12 |
+
+A win held sixty-four times and bought thirteen haulers. Holding is not what stops the fleet growing,
+and `spawn.first` separates the outcomes without being their cause. The deficits actually held for were
+1–419, which is not "waiting for something that cannot help" — it is the rule working.
+
+**What does separate, on the same evidence.** Haulers per hundred ticks: losses 0.63, 0.75, 1.0; wins
+1.0–1.7. And the collection race, with the strongest control available — the SAME opponent bot:
+
+| vs けろびー#16 | we collected | he collected | result |
+|---|---|---|---|
+| 1539 ticks | **21800** | 18600 | won |
+| 843 ticks | 7150 | **16900** | lost |
+
+One bot, two outcomes, and the ratio flips. The map hands out 80 a tick; we take 9.7–12.4 and 48000 to
+91900 decays with nobody beside it. That is the delivery point again, and it is where the next attempt
+belongs — not in the spawn queue.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
