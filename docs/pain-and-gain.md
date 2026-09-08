@@ -616,6 +616,18 @@ This is not yet regular winning against blobs — 30 % against 17 % is a real mo
 in particular is untouched. But it is the first cut that changes WHO IS NEAREST rather than what our creeps do with
 whoever is, which is the direction the previous seven probes narrowed the search to.
 
+**Matches 583–602 — v135's twenty (08.09.2026): 16:4, 1 183 → 1 228, and the class is broken open.** The confirmation
+series for the kite, against v133's two diagnostic tens of 6:4 and 6:4 (a rating that ended exactly where it started)
+and v134's 6:14 at −96. By his bot: ricardo18informatica2020 4-0, けろびー#12 3-0, けろびー#4 2-1, Coldkimchi#1 1-1,
+and — the two that matter — **けろびー#2 beaten** and **MetalicaX#11 beaten**, both of which had wiped us at 14:0 under
+v133 and neither of which the test games had moved. The four losses are MetalicaX#9 (t=100, still the old wipeout),
+Coldkimchi#1, MetalicaX#3 and けろびー#4.
+
+So the kite holds up where it was measured and beyond it: the unrated games said MetalicaX#10 5-7 and Coldkimchi#1 2-4
+with けろびー#4 unchanged at 4-2, and the rating series turned that into 80 % over twenty against a full draw. What is
+NOT solved is the fastest form of the class — MetalicaX#9 still took us in a hundred ticks — so the wipeout is now a
+minority case rather than the rule.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
