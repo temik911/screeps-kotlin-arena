@@ -793,6 +793,40 @@ The played build stays v135 until the commander is measured — releasing an unm
 series is how v134 cost 96 rating. Everything is committed and toggled; the first thing to do next is to switch
 `USE_COMMANDER` on and run the test games the upload limit denied.
 
+**What the literature says about this exact problem, and what came of trying it (08.09.2026).** A search of the
+published work on RTS unit micro turned up four things worth writing down, and one of them was implemented and priced
+the same day.
+
+**Portfolio Greedy Search** (Churchill & Buro, 2013, *Portfolio greedy search and simulation for large-scale combat in
+StarCraft*) is our problem exactly: instead of searching over actions, each unit is assigned one of a few SCRIPTS, and
+the assignment is improved by hill climbing — unit by unit, try every script, keep the one whose playout scores best.
+It beats Alpha-Beta and UCT on fights up to 50 vs 50 within a 40 ms budget; we have twelve a side and 100 ms, of which
+the commander uses 20. Implemented as v139 and rejected by measurement: per creep it dropped the gate to 128/131
+(m30:kite 0:21 899 with CPU at 3.8 ms, so the line was being torn apart, not starved of time), and per role cluster —
+which the same literature recommends — the gate held at 131/131 but the games read **0-8 and 0-8**. The lesson is the
+one the papers state plainly: a portfolio is only as good as its playout, and ours is four ticks with a simplified
+enemy, which over-values mixed assignments. Worth returning to when the playout is better.
+
+Narrowing the commander's trigger, found while chasing that failure, is a genuine finding of its own: it must not run
+against an enemy that is RETREATING (the kite scenarios scored 0 while our army stood trading) nor against a camp at a
+flag, and only in a real brawl (`theirMeleeIn`). That took the gate from 128 to 131 — but the games still came out
+6-10 and then 1-15, so the trigger was a bug fix, not an improvement.
+
+Three ideas from the same search remain UNTRIED and are the best leads for the next attempt:
+- **target selection by DPS-to-health ratio** — kill the enemy whose removal most reduces incoming damage soonest. The
+  bot has this term (`threatOf(it) / it.hits`) but it sits BELOW `ranged first`, `guns` and `killTicks` in `focusCmp`,
+  so it almost never decides anything;
+- **overkill avoidance** — spread fire once a target is already dead this tick. Nothing in the bot models this, and it
+  is a pure gain: every shot into a corpse is a shot not fired;
+- **Lanchester's square law** — an army's strength goes as the SQUARE of its numbers, so a small edge compounds. Our
+  simulation scores linearly (a sum of profiles), which is exactly why plans four ticks apart look nearly identical;
+  a quadratic score would separate them.
+
+And from the Screeps community rather than academia: quads path as ONE unit — the group's route is computed from the
+centre creep and every member moves to a point on that route just outside the group — and the formation is SWITCHED on
+contact rather than carried into the fight. Our `TrafficManager` resolves collisions after the fact; computing one
+route for the mass and hanging the creeps off it is a different and untried approach.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a

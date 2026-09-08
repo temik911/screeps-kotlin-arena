@@ -679,6 +679,18 @@ object PainAndGain {
     /** Надбавка его урону внутри симуляции: модель проще живого противника, чей ожидаемый урон за матч 20 000 против
      *  наших 7 400, и без надбавки прогноз выбирает напор чаще, чем следует. */
     private const val SIM_ENEMY_EDGE = 1.0   // 1.3 замерено: 2-6 и 2-6 против 9-23 без надбавки — тот же диапазон
+    /** ПОРТФЕЛЬНЫЙ ЖАДНЫЙ ПОИСК (v139): найден по литературе — Churchill & Buro, 2013, «Portfolio greedy search and
+     *  simulation for large-scale combat in StarCraft». Вместо перебора действий каждому юниту назначается один из
+     *  нескольких СКРИПТОВ, и набор улучшается восхождением: юнит за юнитом пробуются все скрипты, остаётся лучший по
+     *  прогону. Метод обгоняет Alpha-Beta и UCT на боях до 50 на 50 при бюджете 40 мс — у нас двенадцать на двенадцать
+     *  и предел 100 мс при нынешних 20. v138 держал ОДИН замысел на всю армию и вышел вровень с кайтом; здесь армия
+     *  смешивает поведение, что литература и называет причиной превосходства портфеля над единой политикой.
+     *  ОТВЕРГНУТО замером: по крипам — гейт 128/131 (m30:kite 0:21 899 при CPU 3,8 мс, то есть рвался строй, а не время);
+     *  по кластерам ролей, как та же литература и советует, — гейт 131/131 и живьём 0-8 против MetalicaX#10 и 0-8
+     *  против #11. Причина в оценке: портфель хорош ровно настолько, насколько точен прогон, а наш прогон на четыре
+     *  тика с упрощённой моделью врага завышает смешанные наборы. Портфель стоит вернуть, когда прогон станет точнее. */
+    private const val USE_PORTFOLIO_SEARCH = false
+    private const val PGS_ROUNDS = 1
     /** Цена уцелевшего тела в оценке симуляции (v138): аннигиляция — поражение при любом счёте, значит крип дороже
      *  своего оружия. Величина в тех же единицах, что профиль: 240 — удар мили, то есть тело весит примерно один удар. */
     /** Цена уцелевшего тела ОТВЕРГНУТА замером: 240 (удар мили) роняло гейт до 128/131, 60 — до 129 (m32 army: армия
@@ -3950,7 +3962,12 @@ cpuMark("a.evade")
             if (ourYielding) yieldingTick = getTicks()
             val planNow = USE_PLAN && (standoffNow || standingNow)
             // командир (v137): в бою с сомкнутым блобом решение одно на армию, и оно вытесняет оба планировщика
-            val commanderNow = USE_COMMANDER && enemyMassedNow && contact && posture == Posture.ANNIHILATE
+            // ...и НЕ против того, кто уходит (v139): в сценарии kite враг держит дистанцию, боя нет, и командир держал
+            // армию в размене вместо игры за флаги — 0:21 899 и 0:21 082 при исправном CPU
+            // ...и только когда рубка ИДЁТ: против лагеря у флага (camp) командир тоже держал армию в размене вместо
+            // очков — 13 311:23 559. Мера уже есть: его мили внутри нашего строя (meleeBrawl)
+            val commanderNow = USE_COMMANDER && enemyMassedNow && contact && posture == Posture.ANNIHILATE &&
+                !enemyRetreating && !stalledNow && theirMeleeIn
             if (commanderNow) {
                 if (!USE_SIMULATION) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
                 else {
@@ -3961,11 +3978,42 @@ cpuMark("a.evade")
                     // выбор цели фокуса симуляцией ОТВЕРГНУТ (v138): перебор пар (замысел, цель) дал 1-7 и 2-6 против
                     // 3-13, а проведённая до стрельбы цель уронила гейт до 129/131 и дала m33:kite 0:21 135 — назначенная
                     // цель ломает липкость фокуса, которая и держит наш огонь на одном. Перебираются только замыслы
+                    // ПОРТФЕЛЬНЫЙ ЖАДНЫЙ ПОИСК (v139, Churchill & Buro 2013): сперва лучший ЕДИНЫЙ замысел, затем
+                    // восхождение — крип за крипом пробуем все замыслы и оставляем тот, чей прогон лучше. Так армия
+                    // смешивает поведение, чего единая политика не умеет
                     for (intent in Intent.values()) {
                         val trial = HashMap<String, Position>()
                         commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
                         val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
                         if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
+                    }
+                    // ...восхождение идёт по ГРУППАМ РОЛЕЙ, а не по отдельным крипам (v139): в литературе это называют
+                    // кластеризацией юнитов, и при нашей грубой оценке она обязательна — назначая замысел каждому крипу
+                    // порознь, поиск рвал строй (гейт 128/131, m30:kite 0:21 899 при CPU всего 3,8 мс, то есть дело не
+                    // в цене, а в том, что смешанные наборы получают завышенную оценку)
+                    if (USE_PORTFOLIO_SEARCH && bestPlan != null) {
+                        val groups = listOf(
+                            mobileArmy.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) },
+                            mobileArmy.filter { hasWeapon(it) && hasRanged(it) },
+                            mobileArmy.filter { !hasWeapon(it) && hasHeal(it) })
+                        val per = HashMap<String, Intent>()
+                        for (c in mobileArmy) per[c.id] = bestIntent
+                        repeat(PGS_ROUNDS) {
+                            for (g in groups) {
+                                if (g.isEmpty()) continue
+                                val was = per[g[0].id] ?: bestIntent
+                                var localBest = was
+                                for (i in Intent.values()) {
+                                    if (i == was) continue
+                                    for (c in g) per[c.id] = i
+                                    val trial = HashMap<String, Position>()
+                                    commandFight(mobileArmy, combatEnemies, armedEnemies, trial, bestIntent, per)
+                                    val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
+                                    if (sc > bestScore) { bestScore = sc; bestPlan = trial; localBest = i }
+                                }
+                                for (c in g) per[c.id] = localBest
+                            }
+                        }
                     }
                     commandOf.clear()
                     bestPlan?.let { commandOf.putAll(it) }
@@ -4798,7 +4846,8 @@ cpuMark("a.evade")
     private enum class Intent { PRESS, HOLD, YIELD, FOCUS, KITE }
 
     private fun commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
-                             out: MutableMap<String, Position>, intent: Intent = Intent.PRESS) {
+                             out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
+                             per: Map<String, Intent>? = null) {
         out.clear()
         val fighters = army.filter { canMove(it) && !it.spawning }
         if (fighters.isEmpty() || armedEnemies.isEmpty()) return
@@ -4849,10 +4898,12 @@ cpuMark("a.evade")
         val melees = fighters.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) }
         val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
         val healers = fighters.filter { !hasWeapon(it) && hasHeal(it) }
+        // ...и замысел может быть СВОЙ у каждого крипа (v139, портфельный поиск): армия смешивает поведение
+        fun intentOf(c: Creep) = per?.get(c.id) ?: intent
         // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
         // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
         for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
-            val ok = when (intent) {
+            val ok = when (intentOf(c)) {
                 Intent.PRESS -> place(c, { p -> armedEnemies.any { getRange(p, it) <= 1 } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
                 Intent.HOLD -> place(c, { p -> armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
                 Intent.YIELD -> place(c, { p -> true }, { p -> -(armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
@@ -4871,7 +4922,7 @@ cpuMark("a.evade")
         // цель концентрации (v138): самый слабый его вооружённый — вокруг него собирается замысел FOCUS
         val weakest = armedEnemies.minByOrNull { it.hits }
         for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
-            val ok = when (intent) {
+            val ok = when (intentOf(c)) {
                 // напор: цель в дальности, меньше входящего; удержание: то же, но безопасность решает сильнее
                 Intent.PRESS -> place(c, { p -> armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 - (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) })
