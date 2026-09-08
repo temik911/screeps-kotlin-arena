@@ -1882,7 +1882,12 @@ object SpawnAndSwamp {
         var best: Position? = null
         var bestRate = collectRate(ctx, ctx.mySpawn as Position, capacity)
         for (src in ctx.sites) {
-            if (!src.safe || src.container == null || src.energy < price) continue
+            // КУЧА НЕ ОБЯЗАНА ОПЛАТИТЬ ВСЮ ПЛОЩАДКУ ОДНА. Смотритель ходит к БЛИЖАЙШЕЙ живой куче
+            // (supplyFor пересчитывается каждый тик), поэтому от места нужно, чтобы рядом было с чего
+            // начать, а не чтобы одна куча держала тысячу. Прежнее требование просило именно этого — и
+            // такие кучи выгребают наши же хаулеры: за шесть тестовых матчей против けろびー#19 площадка
+            // нашлась один раз из шести, в остальных forwardSpot не возвращал ничего вовсе
+            if (!src.safe || src.container == null || src.energy < carry) continue
             val arrive = if (ctx.builders.isNotEmpty()) ctx.builders.minOf { getRange(it, src.pos) }
                 else ctx.stepsToSpawn[src.pos.x * 100 + src.pos.y].coerceAtLeast(0) + keeper.size * CREEP_SPAWN_TIME
             val work = ceil(price.toDouble() / carry) * 4.0 + price.toDouble() / (builderWork(flow) * BUILD_POWER)
