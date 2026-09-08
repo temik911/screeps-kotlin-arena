@@ -781,18 +781,21 @@ function enemyTick() {
         // '+deep': a melee that has a soft target does not wait for the blob to close up — it goes through our line
         else if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD || (deep && soft))) stepToward(c, tgt, 1);
       } else if (nearest) {
+        // '+far' (08.09.2026): his ranged keep FIVE from our armed, not three — live 369 of 647 creep-ticks at seven cells
+        // and `ranged in 3` only 21-47 % against our 63-83 %; at three the stand hands them to us and they strip first
+        const KEEP = has('far') ? 5 : 3;
         const d = minOur(c.x, c.y);
-        if (d <= 2) { if (!stepBack(c, ourArmed.filter((o) => range(c, o) <= 3))) stepAway(c, ourArmed.filter((o) => range(c, o) <= 3)); }
-        else if (d > 3 && !formed && d > frontD + 1) stepToward(c, nearest, 3);   // a laggard paths up to the front (a greedy step stalls behind terrain — m28/m31 froze without a shot)
-        else if (d > 3 && (formed || d > frontD)) {
+        if (d <= KEEP - 1) { const n = ourArmed.filter((o) => range(c, o) <= KEEP); if (!stepBack(c, n)) stepAway(c, n); }
+        else if (d > KEEP && !formed && d > frontD + 1) stepToward(c, nearest, KEEP);   // a laggard paths up to the front (a greedy step stalls behind terrain — m28/m31 froze without a shot)
+        else if (d > KEEP && (formed || d > frontD)) {
           // the neighbour cell at three from our nearest armed creep and no closer to any other, nearest to the blob's front
           let best = null, bs = 1e9;
           for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) {
             const x = c.x + dx, y = c.y + dy;
             if (!inBounds(x, y) || world.terrain[idx(x, y)] === 1 || (creepAt(x, y) && creepAt(x, y) !== c)) continue;
             const m = minOur(x, y);
-            if (m < 3) continue;
-            const sc = (m - 3) * 10 + Math.max(Math.abs(x - blobC.x), Math.abs(y - blobC.y)) * 0.1;
+            if (m < KEEP) continue;
+            const sc = (m - KEEP) * 10 + Math.max(Math.abs(x - blobC.x), Math.abs(y - blobC.y)) * 0.1;
             if (sc < bs) { bs = sc; best = { x, y }; }
           }
           if (best && (best.x !== c.x || best.y !== c.y)) c.move(getDirection(best.x - c.x, best.y - c.y));
