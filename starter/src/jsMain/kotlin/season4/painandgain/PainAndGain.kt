@@ -2046,15 +2046,20 @@ cpuMark("arrival")
      * (матч 3: «отстаём» на 2 очка при 6:10 разрешило всё подряд). Исключение — последние LAST_CALL_TICKS:
      * бой уже не успеет, и очки решают.
      */
-    private fun captureAllowed(ctx: Ctx, f: FlagInfo, runner: Boolean = false): Boolean {
-        if (f.ours) return true
-        if (ctx.combatEnemies.isEmpty()) return true
+    private fun captureAllowed(ctx: Ctx, f: FlagInfo, runner: Boolean = false): Boolean = captureBlock(ctx, f, runner) == null
+
+    /** Какие ворота держат захват — null, если разрешено (v135, прибор к разрезу `tools/flagcut.py`): пять ворот отказывали
+     *  молча, и в логе стояло только POISED, поэтому нельзя было сказать, ЧТО именно держит бегуна в клетке от свободного
+     *  флага. Условия и их порядок те же, что были в captureAllowed. */
+    private fun captureBlock(ctx: Ctx, f: FlagInfo, runner: Boolean = false): String? {
+        if (f.ours) return null
+        if (ctx.combatEnemies.isEmpty()) return null
         // седьмой флаг — никогда при живой его армии (v127, USE_NO_SEVENTH_FLAG): все дебаффы наши, ни одного его
-        if (USE_NO_SEVENTH_FLAG && ctx.flags.count { it.ours } + 1 >= ctx.flags.size) return false
+        if (USE_NO_SEVENTH_FLAG && ctx.flags.count { it.ours } + 1 >= ctx.flags.size) return "seventh"
         // последний зов и при РАВНОМ счёте: ничья 0:0 после уклонения (см. EVADE_EQUAL_RATIO) отдана не будет
         val ticksLeft = arenaInfo.ticksLimit - getTicks()
         val losingAtTheEnd = if (USE_LAST_CALL_PROJECTED) (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft <= 0 else ourScore <= enemyScore
-        if ((behindOnScore || losingAtTheEnd) && ticksLeft <= LAST_CALL_TICKS) return true
+        if ((behindOnScore || losingAtTheEnd) && ticksLeft <= LAST_CALL_TICKS) return null
         // во время броска безфлаговой армии (см. unflaggedRushNow — тот же сигнал, что уводит армию в уклонение) флаг не берёт
         // НИКТО: бой через двадцать тиков, и дебафф ложится на него. Скаут брал R3 на 42–43-м тике во всех четырёх боях с
         // けろびー (матчи 38, 43, 44, 45) — −20 % стрелкам в решающем размене, — проходя порог паритета с запасом три очка мощи
@@ -2079,13 +2084,13 @@ cpuMark("arrival")
         // матчи 5, 8, 19 серий 367–406: rush=true с 10-го по 39-й, бегуны 0 detached, наш первый флаг на 42–98-м при его шести к
         // 80–91-му; пол паритета ниже по-прежнему считает цену дебаффа
         val runnerHalf = USE_RUNNER_HALF_UNDER_RUSH && runner && DistanceMap.inOurHalf(f.pos.x, f.pos.y)
-        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow) && !runnerHalf) return false
+        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow) && !runnerHalf) return "rush"
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
         // при бесплодной охоте (см. STALL_TICKS) контакт мнимый — висящие в трёх-шести клетках крипы россыпи мигали
         // контактом, и цель-флаг пропадала через тик после назначения (стенд m19 spread)
-        if (!stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return false
+        if (!stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
         val (ours, theirs) = powerAfter(ctx, f)
@@ -2095,7 +2100,7 @@ cpuMark("arrival")
         // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
         val lostRace = lostRaceNow()
         val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else if (needed) PARITY_FLOOR else CAPTURE_FLOOR
-        return ours >= theirs * floor
+        return if (ours >= theirs * floor) null else "parity(${ours.toInt()}/${(theirs * floor).toInt()})"
     }
 
     /** Проигранная гонка (v63/v88): проигрыш по проекции на конец матча при PASSIVE_TICKS без удара по нам (v99: одна и та же
@@ -2335,14 +2340,15 @@ cpuMark("r.cands")
                 continue
             }
             // брать ли флаг сейчас (дебафф): нельзя — ждём рядом, шаг на клетку сделаем, когда станет можно
-            val allowed = captureAllowed(ctx, f, runner = true)
+            val block = captureBlock(ctx, f, runner = true)
+            val allowed = block == null
             val range = if (allowed) 0 else 1
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)
             // при запрете захвата клетка флага — стена и для его же бегуна: путь к «зазору 1» шёл ЧЕРЕЗ флаг, и скаут брал R3
             // на 49-м при уклонении с 3-го (матч 56), как и в четырёх боях с けろびー до правила v34/v35
             val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.x * 100 + f.pos.y else -1)) else null
             if (step != null) { TrafficManager.request(s, step, RUNNER_PRIORITY); planCapture(ctx, step) }
-            dbg(s, if (allowed) "TO_FLAG" else "POISED", f, step)
+            dbg(s, if (allowed) "TO_FLAG" else "POISED:$block", f, step)
         }
     }
 
