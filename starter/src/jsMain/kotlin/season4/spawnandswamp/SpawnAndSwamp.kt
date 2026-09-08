@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 57
+    private const val BOT_VERSION = 58
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -126,6 +126,11 @@ object SpawnAndSwamp {
      *  Точный радиус опытом не взят: 25 вне, 3 внутри, между ними не мерено — 20 из доков этому не
      *  противоречит. Следствие, ради которого всё и делалось: ДЕШЁВОЙ ТОЧКИ СДАЧИ ЗА 200 НЕ
      *  СУЩЕСТВУЕТ, у дальних куч экстеншен бесполезен, и точка сдачи — по-прежнему спавн за 1000. */
+    /** Сколько точек сдачи держим. Предел — не вкус: даровой замер на стенде даёт прибавку и на
+     *  четвёртой (farm 13.2 -> 27.0 в тик), но каждая следующая покупается из излишка и потому сама
+     *  себя ограничивает притоком. Три — столько успевает окупиться в матче на 400-2000 тиков. */
+    private const val FORWARD_SPAWNS = 3
+
     private const val EXTENSION_REACH = 20
 
     /** ПОТОЛОК ТЕЛА в энергии: спавн плюс его экстеншены — и он НАМЕРЕННО не используется выборщиками
@@ -391,6 +396,19 @@ object SpawnAndSwamp {
      * Одиночка же выбирает M5R5 — тело, которым играет けろびー.
      */
     private var foeHeal = 0
+
+    /**
+     * ЧЕРЕЗ СКОЛЬКО КОНЧИТСЯ МАТЧ, ЕСЛИ КОНЧИМ ЕГО МЫ — подход волны плюс её осада, то самое goNeed,
+     * которым бот уже решает «пора выходить». Экономическому вложению нужен горизонт, и это
+     * единственный горизонт, который бот вообще способен вычислить.
+     * Четвёртая попытка точки сдачи спрашивала его на 177-м тике, получала «никогда» (армии ещё нет) и
+     * заключала, что горизонта не существует. Вывод был неверен: вопрос задавался слишком рано.
+     * Точка покупается, когда флот собран, приток замерен и тысяча свободна, — то есть после 500-го
+     * тика, когда волна уже есть и вердикт осмыслен. Замер, ради которого это и понадобилось: в
+     * tower+fortspawn площадка ставилась на 570-м и достраивалась к 920-му, а матч кончался на 868-м —
+     * 900 энергии и смотритель в стройку, которая не успела отдать ни одной единицы.
+     */
+    private var siegeEndsIn = Long.MAX_VALUE / 4
 
     private var assaultWantsMelee = false
 
@@ -765,6 +783,8 @@ object SpawnAndSwamp {
             myExtensions.count { getRange(it, mySpawn) <= EXTENSION_REACH } * EXTENSION_ENERGY_CAPACITY
         val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, myExtensions, mySites)
 
+        rememberDrops(sites)
+        cellStepsCache.clear()
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
         measureDelivery(ctx)
@@ -943,6 +963,72 @@ object SpawnAndSwamp {
         // округляется ЗДЕСЬ, а не в ключе кэша: иначе два тика с поправкой 12 и 15 делят ключ, но
         // считаются по-разному, и в кэше остаётся тот ответ, который случился первым
         return (heal / shooters) / RANGED_HEAL_POWER * RANGED_HEAL_POWER
+    }
+
+    /** Что карта РОНЯЛА: клетка -> (сколько энергии там появлялось, сколько тиков она живёт).
+     *  Решение о второй точке сдачи — про ВСЕ будущие кучи, а не про две лежащие сейчас; лучшая
+     *  доступная выборка будущего — то, что уже случилось. У постоянных куч жизнь 0. */
+    private val dropHistory = HashMap<Int, Pair<Int, Int>>()
+
+    private fun rememberDrops(sites: List<EnergySite>) {
+        for (s in sites) {
+            val key = s.pos.x * 100 + s.pos.y
+            val was = dropHistory[key]
+            val life = maxOf(s.ticksToDecay ?: 0, was?.second ?: 0)
+            if (was == null || s.energy > was.first) dropHistory[key] = s.energy to life
+        }
+    }
+
+    private val cellStepsCache = HashMap<Int, IntArray>()
+
+    /** Поле шагов ДО клетки, кэш на тик — и для кучи из истории, и для склада площадки. */
+    private fun cellSteps(ctx: Ctx, key: Int): IntArray =
+        cellStepsCache.getOrPut(key) { DistanceMap.stepFieldTo(InfluenceMap.cell(key / 100, key % 100), ctx.blocked) }
+
+    /** Шаги от клетки до точки — по СОСЕДНЕЙ клетке: сама занята структурой и в поле шагов не
+     *  определена, а хаулер и так встаёт рядом. Кандидат меряется так же — построенный спавн тоже
+     *  станет препятствием, и сравнение обязано быть одинаковым. */
+    private fun stepsFrom(field: IntArray, at: Position): Int {
+        var near = -1
+        for (dx in -1..1) for (dy in -1..1) {
+            val x = at.x + dx
+            val y = at.y + dy
+            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+            val d = field[x * 100 + y]
+            if (d >= 0 && (near < 0 || d < near)) near = d
+        }
+        return near
+    }
+
+    /**
+     * ОТНОСИТЕЛЬНАЯ скорость сбора при сдаче в эту клетку. Абсолютное число здесь врёт примерно в 2.7
+     * раза (модель считает средний рейс по истории падений, а не то, что флот делает на самом деле), и
+     * ЭТИМ его пользоваться нельзя; отношение же выходит точным — замер даровым спавном на стенде:
+     * модель обещала ×1.31, вышло ×1.33; обещала ×1.77, вышло ×1.77. Поэтому forwardWorth берёт отсюда
+     * ТОЛЬКО отношение, а масштаб — у замеренного притока (realisedIncome).
+     * keepHome: вторая точка не заменяет дом, а добавляется к нему — хаулер сдаёт в БЛИЖАЙШИЙ свой
+     * спавн (dropOff). Без этого середина карты выигрывала у всего, будучи равноудалённой от всех куч.
+     */
+    private fun collectRate(ctx: Ctx, at: Position, capacity: Int, keepHome: Boolean = false): Double {
+        if (capacity <= 0 || dropHistory.isEmpty()) return 0.0
+        var reached = 0.0
+        var all = 0.0
+        var tripWeight = 0.0
+        for ((key, drop) in dropHistory) {
+            val (energy, life) = drop
+            all += energy
+            val steps = if (keepHome) {
+                val a = stepsFrom(cellSteps(ctx, key), at)
+                val h = stepsFrom(cellSteps(ctx, key), ctx.mySpawn as Position)
+                if (a < 0) h else if (h < 0) a else minOf(a, h)
+            } else stepsFrom(cellSteps(ctx, key), at)
+            if (steps < 0) continue
+            if (life > 0 && steps > life) continue      // не успеть до распада — этой энергии нет
+            reached += energy
+            tripWeight += 2.0 * steps * energy
+        }
+        if (reached <= 0.0 || all <= 0.0 || tripWeight <= 0.0) return 0.0
+        return capacity / (tripWeight / reached) * (reached / all)
     }
 
     private fun canMove(creep: Creep) = creep.body.any { it.type == MOVE && it.hits > 0 }
@@ -1596,6 +1682,25 @@ object SpawnAndSwamp {
                 }
             }
         }
+        // ТОЧКА СДАЧИ — ПОКУПКА ИЗ ИЗЛИШКА, А НЕ СТАВКА НА ДЛИНУ МАТЧА. Горизонта матча бот не знает и
+        // знать не может (четвёртая попытка требовала его от симуляции осады и получила «никогда»), но
+        // вопрос снимается сам, если тысяча тратится ТОЛЬКО когда она иначе пролежит: спавн полон, флот
+        // собран, дефицита обороны нет и площадок нет вовсе. Так покупает и けろびー — его точки идут
+        // после сбора флота, примерно раз в полтораста тиков, из свободных денег
+        if (ctx.mySites.isEmpty() && ctx.mySpawns.size < FORWARD_SPAWNS &&
+            budget >= buildCost("StructureSpawn") && deficit <= 0.0 && !needHauler && !fighterFirst && !alarm) {
+            val capacity = ctx.haulers.sumOf { h -> h.body.count { it.type == CARRY && it.hits > 0 } } * CARRY_CAPACITY
+            val spot = forwardSpot(ctx, capacity, flow)
+            if (spot != null) {
+                val trace = StringBuilder()
+                if (forwardWorth(ctx, spot, capacity, flow, energy, trace)) {
+                    val r = createConstructionSite(spot.x, spot.y, StructureSpawn::class.js)
+                    if (DEBUG_LOG) println("forward spawn: site at (${spot.x},${spot.y})$trace err=${r.error}")
+                } else if (DEBUG_LOG && getTicks() % (LOG_EVERY * 10) == 0) {
+                    println("forward spawn: no (${spot.x},${spot.y})$trace")
+                }
+            }
+        }
         // ПРОБА РАССТОЯНИЯ (EXT_PROBE): один экстеншен ДАЛЬШЕ спорного радиуса, и всё. Боевого
         // правила «строить экстеншены» здесь нет — потолок тела отвергнут замером (см. bodyCap)
         if (EXT_PROBE && !extProbeDone && ctx.myExtensions.isEmpty() && ctx.mySites.isEmpty() && !fighterFirst) {
@@ -1725,10 +1830,104 @@ object SpawnAndSwamp {
     /** Откуда кормить эту площадку: из спавна, если он ближе, иначе из ближайшей безопасной кучи.
      *  Вопрос решается расстоянием, а не видом постройки: башня стоит у спавна и кормится оттуда сама
      *  собой, а площадка у энергии — от энергии, и обе получают один и тот же ответ одного правила. */
-    private fun supplyFor(ctx: Ctx, at: Position): Pair<Position, Boolean> {
-        val pile = ctx.sites.filter { it.safe && it.energy > 0 && it.container != null }.minByOrNull { getRange(at, it.pos) }
+    private fun supplyFor(ctx: Ctx, at: Position, left: Int = 0, carry: Int = 2 * CARRY_CAPACITY, arrive: Int = 0): Pair<Position, Boolean> {
+        // СКЛАД ОБЯЗАН ПЕРЕЖИТЬ ВСЮ РАБОТУ, А НЕ ОДИН РЕЙС — и дожить до её НАЧАЛА. Временная куча
+        // живёт 99 тиков; смотритель возит по два CARRY, значит тысяча — это десять рейсов, а до места
+        // он ещё идёт полсотни шагов. Без обоих слагаемых куча вплотную к площадке проходит проверку
+        // (десять рейсов по четыре тика = 40 из 99) и распадается раньше, чем до неё дошли: площадка
+        // встаёт на 40/1000 и не двигается — замерено на пятой попытке точки сдачи
+        fun outlivesJob(site: EnergySite): Boolean {
+            val life = site.ticksToDecay ?: return true
+            if (left <= 0 || carry <= 0) return life > 2 * getRange(at, site.pos)
+            val trips = ceil(left.toDouble() / minOf(carry, site.energy).coerceAtLeast(1))
+            return life >= arrive + trips * (2.0 * getRange(at, site.pos) + 2.0)
+        }
+        val pile = ctx.sites.filter { it.safe && it.energy > 0 && it.container != null && outlivesJob(it) }
+            .minByOrNull { getRange(at, it.pos) }
         if (pile != null && getRange(at, pile.pos) < getRange(at, ctx.mySpawn)) return pile.pos to false
         return ctx.mySpawn as Position to true
+    }
+
+    /**
+     * ГДЕ СТОИТ ВТОРАЯ ТОЧКА СДАЧИ: ВПЛОТНУЮ К КУЧЕ, КОТОРАЯ ЕЁ ОПЛАТИТ. Место не ищется по карте — оно
+     * ПОЯВЛЯЕТСЯ, когда карта роняет кучу, которой хватает на всю тысячу и которая доживёт до конца
+     * стройки. Причина в пароме: смотритель носит два CARRY, тысяча — десять рейсов, и в полусотне
+     * шагов от склада это 1100 тиков, а вплотную — сорок. Четыре попытки подряд ставили площадку «в
+     * лучшем месте карты» и ни одна её не достроила.
+     * Кандидат обязан быть НАШИМ по шагам, а не по Чебышёву: спавн стоит в стенном кармане, клетка «в
+     * 38 по прямой» лежит в 80 шагах в обход. Мера — та же, что у куч (EnergySite.safe), но зеркальная:
+     * кучу берут, если успевают раньше врага с запасом, а спавн надо ещё и ДЕРЖАТЬ.
+     */
+    private fun forwardSpot(ctx: Ctx, capacity: Int, flow: Double): Position? {
+        val enemy: Position = ctx.enemySpawn ?: return null
+        if (dropHistory.isEmpty()) return null
+        val enemySteps = DistanceMap.stepFieldTo(enemy, ctx.blockedForEnemy)
+        val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
+        val price = buildCost("StructureSpawn")
+        val keeper = builderBody(builderWork(flow))
+        val carry = (ctx.builders.maxOfOrNull { b -> b.body.count { it.type == CARRY && it.hits > 0 } }
+            ?: keeper.count { it == CARRY }) * CARRY_CAPACITY
+        if (carry <= 0) return null
+        var best: Position? = null
+        var bestRate = collectRate(ctx, ctx.mySpawn as Position, capacity)
+        for (src in ctx.sites) {
+            if (!src.safe || src.container == null || src.energy < price) continue
+            val arrive = if (ctx.builders.isNotEmpty()) ctx.builders.minOf { getRange(it, src.pos) }
+                else ctx.stepsToSpawn[src.pos.x * 100 + src.pos.y].coerceAtLeast(0) + keeper.size * CREEP_SPAWN_TIME
+            val work = ceil(price.toDouble() / carry) * 4.0 + price.toDouble() / (builderWork(flow) * BUILD_POWER)
+            val life = src.ticksToDecay
+            if (life != null && life < arrive + work) continue
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val x = src.pos.x + dx
+                val y = src.pos.y + dy
+                if (x !in 1..98 || y !in 1..98) continue
+                val key = x * 100 + y
+                val pos = InfluenceMap.cell(x, y)
+                if (getTerrainAt(pos) == TERRAIN_WALL) continue
+                if (key in busy) continue
+                if (ctx.loadedToSpawn[key] < 0) continue
+                val ours = ctx.stepsToSpawn[key]
+                val his = enemySteps[key]
+                if (ours < 0) continue
+                if (his >= 0 && ours * 3 / 2 >= his) continue
+                val rate = collectRate(ctx, pos, capacity, keepHome = true)
+                if (rate > bestRate) { bestRate = rate; best = pos }
+            }
+        }
+        return best
+    }
+
+    /**
+     * Окупится ли она. ПРИБАВКА СЧИТАЕТСЯ ОТНОШЕНИЕМ МОДЕЛИ НА ЗАМЕРЕННЫЙ ПРИТОК, а не абсолютом
+     * модели, и это — причина пяти отвергнутых попыток подряд: collectRate занижает абсолют примерно
+     * в 2.7 раза (она обещала прибавку 1.5 в тик там, где даровой спавн на стенде дал 4.3-6.3), но
+     * отношение её точно, и оно же — единственное, что от неё нужно. Без замеренного притока
+     * (realisedIncome < 0, первые триста тиков производства) вопрос не задаётся вовсе: цены нет.
+     * Горизонт — предел арены, и он честен именно потому, что покупка делается ИЗ ИЗЛИШКА (см. ветку
+     * постановки): тысяча, которая иначе пролежала бы в полном спавне, не отнимает бойца.
+     */
+    private fun forwardWorth(ctx: Ctx, spot: Position, capacity: Int, flow: Double, energy: Int, trace: StringBuilder): Boolean {
+        val measured = realisedIncome()
+        if (measured <= 0.0) return false
+        val now = collectRate(ctx, ctx.mySpawn as Position, capacity)
+        val then = collectRate(ctx, spot, capacity, keepHome = true)
+        if (now <= 0.0 || then <= now) return false
+        val gain = measured * (then / now - 1.0)
+        val keeperArrival = if (ctx.builders.isNotEmpty()) ctx.builders.minOf { getRange(it, spot) }
+            else ctx.stepsToSpawn[spot.x * 100 + spot.y].coerceAtLeast(0) + builderBody(builderWork(flow)).size * CREEP_SPAWN_TIME
+        val (supply, fromSpawn) = supplyFor(ctx, spot, buildCost("StructureSpawn"), arrive = keeperArrival)
+        val build = siteReadyTicks(ctx, null, "StructureSpawn", buildCost("StructureSpawn"), fromSpawn, flow, energy, supply, spot)
+        // ГОРИЗОНТ — РАНЬШЕЕ ИЗ ДВУХ: предел арены и срок, за который матч кончим МЫ. Второй известен
+        // именно здесь и именно сейчас: точка покупается после сбора флота и замера притока, а к тому
+        // времени волна есть и вердикт осады осмыслен (в отличие от 177-го тика четвёртой попытки)
+        val horizon = minOf((arenaInfo.ticksLimit - getTicks()).toLong(), siegeEndsIn).toDouble()
+        val left = horizon - build
+        val price = buildCost("StructureSpawn") + (if (ctx.builders.isEmpty()) builderBody(builderWork(flow)).sumOf { cost(it) } else 0)
+        trace.append(" ratio=${(then / now * 100).toInt() / 100.0} measured=${(measured * 10).toInt() / 10.0} gain=${(gain * 10).toInt() / 10.0}/t " +
+            "ends=${if (siegeEndsIn >= Long.MAX_VALUE / 8) "-" else siegeEndsIn.toString()} " +
+            "build=${build.toInt()} left=${left.toInt()} price=$price supply=(${supply.x},${supply.y})${if (fromSpawn) "*" else ""}")
+        return left > 0 && gain * left > price
     }
 
     /** Работы этого тика. Когда башни нет и площадки под неё нет, в список входит ПЛАН башни — тем же
@@ -1739,12 +1938,14 @@ object SpawnAndSwamp {
         for (s in ctx.mySites) {
             val kind = buildKindOf(s) ?: continue
             val left = ((s.progressTotal ?: 0) - (s.progress ?: 0)).coerceAtLeast(0)
-            val (supply, fromSpawn) = supplyFor(ctx, s)
+            val keeperArrival = if (ctx.builders.isNotEmpty()) ctx.builders.minOf { getRange(it, s) }
+                else ctx.stepsToSpawn[s.x * 100 + s.y].coerceAtLeast(0) + builderBody(builderWork(flow)).size * CREEP_SPAWN_TIME
+            val (supply, fromSpawn) = supplyFor(ctx, s, left, arrive = keeperArrival)
             // ЧАСЫ ПО НАЗНАЧЕНИЮ. Башня — оборона: она обязана встать, пока спавн жив. Спавн — экономика:
             // ему довольно успеть до конца матча, а окупаемость проверена отдельно, при постановке
             val deadline = if (kind == "StructureTower") minOf(spawnLife, matchLeft) else matchLeft
             jobs.add(SiteJob(s, kind, left, supply, fromSpawn,
-                deadline, siteReadyTicks(ctx, s, kind, left, fromSpawn, flow, energy)))
+                deadline, siteReadyTicks(ctx, s, kind, left, fromSpawn, flow, energy, supply, InfluenceMap.cell(s.x, s.y))))
         }
         if (ctx.myTowers.isEmpty() && jobs.none { it.kind == "StructureTower" }) {
             val left = buildCost("StructureTower")
@@ -2484,6 +2685,7 @@ object SpawnAndSwamp {
             if (staging.isEmpty()) never else budget(startTravel, siegeStart),
             if (waveFront.isEmpty()) never else budget(frontTravel, siegeGo))
         val lastCall = goNeed < never && remaining <= goNeed + LATE_MARGIN
+        siegeEndsIn = goNeed
         // Может ли враг ещё отнять у нас спавн за остаток: его ближайший боец доходит за enemyApproach и
         // снимает 3000 хитов своим уроном (рождённый позже карту уже не пересечёт). Пока может — армию
         // из дома не выгребаем даже в конце: положенная под башню, она обменяла бы ничью на поражение
@@ -3799,7 +4001,7 @@ object SpawnAndSwamp {
      *  полокна, вопрос перестаёт быть модельным: темп площадки ВИДЕН, и берётся он — тем же прибором,
      *  которым бот меряет ЧУЖУЮ площадку (siteSeen/pendingTowers), потому что своя ничем не отличается.
      *  Стоящая площадка не «строится долго», а не достроится никогда. */
-    private fun siteReadyTicks(ctx: Ctx, site: ConstructionSite?, kind: String, left: Int, fromSpawn: Boolean, flow: Double, energy: Int): Double {
+    private fun siteReadyTicks(ctx: Ctx, site: ConstructionSite?, kind: String, left: Int, fromSpawn: Boolean, flow: Double, energy: Int, supply: Position? = null, at: Position? = null): Double {
         val siteLeft = if (site == null) buildCost(kind) else left
         if (siteLeft <= 0) return 0.0
         val work = ctx.builders.sumOf { b -> b.body.count { it.type == WORK && it.hits > 0 } }
@@ -3837,7 +4039,19 @@ object SpawnAndSwamp {
         // ПЛОЩАДКА, КОТОРУЮ КОРМЯТ НЕ ИЗ СПАВНА, НЕ ЖДЁТ ПРИТОКА. Энергия для неё уже лежит рядом, и
         // срок задаёт только скорость рук смотрителя; ждать доставки в спавн — считать чужой счёт
         val supplied = if (fromSpawn) energyArrivalTicks(ctx, maxOf(0, need - energy), steady) else 0.0
-        return maxOf(supplied, siteLeft / rate) + born
+        // ПАРОМ. Площадку ограничивает не только приток, но и НОГИ смотрителя: он несёт два CARRY за
+        // рейс, значит тысяча — это десять рейсов, а рейс — дорога туда и обратно. Прежняя строка
+        // считала это бесплатным по времени, и площадка в полусотне шагов от склада оценивалась в 80
+        // тиков вместо 1187. У домашней башни склад в двух клетках и паром почти нулевой — потому
+        // прежняя формула на ней и не врала
+        val ferry = if (supply == null) 0.0 else {
+            val carry = (ctx.builders.maxOfOrNull { b -> b.body.count { it.type == CARRY && it.hits > 0 } }
+                ?: builderBody(builderWork(flow)).count { it == CARRY }) * CARRY_CAPACITY
+            val here = at ?: site?.let { InfluenceMap.cell(it.x, it.y) }
+            val hop = if (here == null) 0 else stepsFrom(cellSteps(ctx, supply.x * 100 + supply.y), here).coerceAtLeast(0)
+            if (carry <= 0) Double.MAX_VALUE / 4 else ceil(siteLeft.toDouble() / carry) * (2.0 * hop + 2.0)
+        }
+        return maxOf(supplied, siteLeft / rate + ferry) + born
     }
 
     /** Окупается ли башня против бойца за ту же энергию. Мера одна и та же — ПРИБАВКА к мощи обороны
