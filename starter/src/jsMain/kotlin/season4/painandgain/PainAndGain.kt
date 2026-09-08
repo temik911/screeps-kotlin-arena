@@ -233,7 +233,7 @@ object PainAndGain {
      *  23 954:23 223 в поражение 4 413:23 964, m35 23 714:23 404 → 13 437:23 706. Причина отказа известна с v9 и записана там
      *  же: СТЕНД ПО ЛЕКАРЯМ НЕ БЬЁТ и своих держит вплотную, поэтому огонь по его лекарям на стенде — чистая потеря темпа,
      *  а живьём это 17–35 % его залпа. Предмет открыт, и он не в боте, а в приборе (см. docs, «форма блоба»). */
-    private const val USE_FOCUS_HEALER_FIRST = false
+    private const val USE_FOCUS_HEALER_FIRST = true
     /** БОЛЬШЕ СТВОЛОВ (v70): среди целей одного яруса — та, которую достают больше наших стрелков, и липкость уступает цели,
      *  которую достают на FOCUS_GUNS_SWITCH стволов больше. Матч 173 (боевой けろびー, армия стёрта к 260-му): его 4+ выстрелов в одну
      *  цель в 13 % тиков, наши — 0 %; за двадцать тиков (220–240) четверо наших стрелков из пяти и все лекари разоружены, наши
@@ -718,6 +718,20 @@ object PainAndGain {
      *  ровно в двух названных случаях: залп армии по слабейшему за тик перекрывает его хиты вместе с лечением, которое
      *  до него дотягивается, — или наша мощь не ниже его. Иначе напор исполняется как удержание. */
     private const val USE_MELEE_COMMIT = true
+    /** КОМАНДИР ПРАВИТ ВЕСЬ БОЙ (v144): счётчик cmd= показал, чем командир был на самом деле — 27 тиков из пятисот, и
+     *  в большинстве из них приказ получал ОДИН крип из двенадцати. Остальное время армия шла по старым правилам, и
+     *  оператор увидел ровно это: «крипы разбегаются, нет какого-то единого кулака». Условие теперь одно — контакт с
+     *  сомкнутым врагом; всё, что было сверх (постура, отход, затор, его мили рядом), лишь дробило управление. */
+    private const val USE_COMMANDER_ALWAYS = true
+    /** РАЗДЕТЫЕ ПОД ПРИКАЗОМ (v144): крип без боевых частей не попадал ни в одну группу командира и приказа не получал
+     *  вовсе — стоял, где стоял, и собирал выстрелы. В каждом разборе это первая строка диагноза: наши раздетые под
+     *  огнём 172 крипо-тика из 238 против его 7 из 11. Теперь им назначается клетка прочь из огня. */
+    private const val USE_COMMAND_STRIPPED_OUT = true
+    /** ЛЕКАРЬ ВЫШЕ СТРОЯ В БОЮ (v147): у обеих сторон по три лекаря, но у него в дальности лечения стоят все три каждый
+     *  тик, а у нас 1,8 из трёх (замер по записи 6aa078c0), и лечение выходит 1584 против 9624 — вшестеро. Лекарь вне
+     *  HEAL_RANGE не лечит вовсе, поэтому в бою подопечный обязан стоять выше слота: расстановка о лечении не знает и
+     *  уводила лекаря в строй за пределы дальности. Вне контакта порядок прежний. */
+    private const val USE_HEALER_OVER_SLOT = true
     private const val MELEE_COMMIT_EDGE = 1.0
     private const val POWER_REACH_TICKS = 2
     /** ОТКАЗ ОТ ПЕРЕБОЯ (v140): приём из литературы по микроменеджменту RTS — «focus fire, while avoiding overkill by
@@ -1782,7 +1796,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v143"
+    private const val BOT_VERSION = "v147"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2189,7 +2203,7 @@ cpuMark("arrival")
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -4026,8 +4040,17 @@ cpuMark("a.evade")
             // армию в размене вместо игры за флаги — 0:21 899 и 0:21 082 при исправном CPU
             // ...и только когда рубка ИДЁТ: против лагеря у флага (camp) командир тоже держал армию в размене вместо
             // очков — 13 311:23 559. Мера уже есть: его мили внутри нашего строя (meleeBrawl)
-            val commanderNow = USE_COMMANDER && enemyMassedNow && contact && posture == Posture.ANNIHILATE &&
-                !enemyRetreating && !stalledNow && theirMeleeIn
+            // КОМАНДИР ПРАВИТ ВЕСЬ БОЙ (v144): замер сказал, что он правил 27 тиков из пятисот и в большинстве из них
+            // приказ получал ОДИН крип из двенадцати (cmd=1/27:noMelee) — остальное время армия шла по старым
+            // правилам, и они тянули в другую сторону. Единого кулака из этого выйти не могло: командир успевал лишь
+            // выдернуть крипа из строя. Теперь условие одно — контакт с сомкнутым врагом
+            val commanderNow = USE_COMMANDER && enemyMassedNow && contact &&
+                (USE_COMMANDER_ALWAYS || (posture == Posture.ANNIHILATE && !enemyRetreating && !stalledNow && theirMeleeIn))
+            // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
+            // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
+            if (commanderNow) cmdTicks++ else if (contact && enemyMassedNow) cmdBlocked =
+                if (posture != Posture.ANNIHILATE) "posture" else if (enemyRetreating) "retreat"
+                else if (stalledNow) "stall" else if (!theirMeleeIn) "noMelee" else "off"
             if (commanderNow) {
                 if (!USE_SIMULATION) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
                 else {
@@ -4506,6 +4529,12 @@ cpuMark("a.evade")
                     standoff = if (clumped || !gunsReady) RANGED_RANGE else KITE_STANDOFF
                     avoid = true; nearFlow = true
                 }
+                // ЛЕКАРЬ ВЫШЕ СТРОЯ В БОЮ (v147): замер по записи (6aa078c0, обе стороны по три лекаря) — у него в
+                // дальности лечения стоят ВСЕ ТРИ каждый тик, у нас 1,8 из трёх, и лечение выходит 1584 против 9624.
+                // Причина в порядке цепочки: слот стоял выше подопечного, а расстановка не знает, кого лечить, и уводила
+                // лекаря в строй за пределы дальности. Лекарь вне HEAL_RANGE не лечит вовсе — в бою подопечный главнее
+                USE_HEALER_OVER_SLOT && healer && healMate != null && contact ->
+                    { target = healMate; standoff = 1; nearFlow = true }
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
@@ -5006,6 +5035,10 @@ cpuMark("a.evade")
         val melees = fighters.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) }
         val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
         val healers = fighters.filter { !hasWeapon(it) && hasHeal(it) }
+        // РАЗДЕТЫЕ ТОЖЕ ПОД ПРИКАЗОМ (v144): крип, потерявший все боевые части, не попадал НИ В ОДНУ группу — ни
+        // оружия, ни лечения, — и приказа не получал вовсе, оставаясь стоять под огнём. Диагноз называл это в каждом
+        // разборе: наши раздетые в трёх клетках от его вооружённых 172 крипо-тика из 238, у него 7 из 11
+        val stripped = fighters.filter { !hasWeapon(it) && !hasHeal(it) }
         // ...и замысел может быть СВОЙ у каждого крипа (v139, портфельный поиск): армия смешивает поведение
         fun intentOf(c: Creep) = per?.get(c.id) ?: intent
         // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
@@ -5069,6 +5102,10 @@ cpuMark("a.evade")
                 else place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
             }
         }
+        // раздетые: прочь из огня — в бою от них пользы нет, а его выстрелы они на себя собирают исправно
+        if (USE_COMMAND_STRIPPED_OUT) for (c in stripped)
+            place(c, { true }, { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 -
+                (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
     }
 
     /** Мини-состояние для симуляции (v138): позиция, хиты и профиль крипа. */
@@ -5377,6 +5414,8 @@ cpuMark("a.evade")
 
     private class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
                             val meleeAdj: Int, val meleeNear: Int, val dist: Int)
+    private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
+    private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
     private val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
