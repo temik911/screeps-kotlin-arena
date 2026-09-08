@@ -762,6 +762,37 @@ bot does not have is a way to CHOOSE — to weigh, for this creep on this tick, 
 out. That is a different architecture (a short forward search over the exchange), not another toggle, and it should be
 started deliberately rather than bolted on.
 
+**v138 — a commander and a simulation: the architecture the operator asked for (08.09.2026).** Twenty rules had failed
+because each approximates a per-tick choice, and because each creep decided ALONE: two would pick one cell, a third
+would block a fourth, while his line walks abreast step by step — one decision for twelve. So the army now gets one.
+
+`commandFight` assigns CELLS once a tick. Candidates are every passable cell within two of a fighter; each carries
+`incNow` and `incNext` — the damage that reaches it now, and after his melee take one step, since a melee two cells
+away steps in and swings. Melee are placed first where they reach his armed, ranged next where a target is in range
+and the least is incoming, healers last within HEAL_RANGE of a wounded mate and out of fire. A cell is taken once and
+creeps are served most-constrained-first, so ours no longer block ours. Attacks run in their own pass and are
+untouched, so a creep already in place simply stands and hits.
+
+The commander does not guess which shape is right: it proposes five (PRESS, HOLD, YIELD, FOCUS, KITE) and a four-tick
+simulation picks. Inside it the enemy is played by the model the stub and the replays agree on — melee at our nearest
+soft creep, ranged holding three, healers by the most wounded — and the arena's own arithmetic is modelled: mass attack
+whenever a fan beats a single shot (10/4/1 by distance), healing 12 adjacent and 4 at range, and PART DECAY, since
+armed parts stand first in the body and a creep at ten hits does not hit like a whole one.
+
+Measured, in order: the commander alone 2-4 / 1-5 and gate 128; with the simulation choosing, gate 130 and the intents
+finally differ (PRESS, HOLD, YIELD and FOCUS all appear in one match, where the first version only ever chose PRESS);
+with part decay 1-5 / 2-4; with mass attack modelled 3-3 / 0-6; without the kite among the plans **1-9 against
+MetalicaX#10**, because the commander had displaced from the movement chain the one rule that worked. Adding KITE as a
+fifth plan restored the gate to 131/131 — and THAT version is not measured live: the server stopped accepting code
+uploads after some 150 games today (a small POST still answers, one carrying the zip does not). Tuning that did not
+survive: a weight for surviving bodies (240 → gate 128, 60 → 129), a rollout policy after the first tick (1-5 / 1-5),
+a SPREAD intent (130 in two forms), depth 3 or 6 (129 each; 4 holds 131), and assigning only cells reachable this tick
+(130 against 131 for two).
+
+The played build stays v135 until the commander is measured — releasing an unmeasured architecture into a rating
+series is how v134 cost 96 rating. Everything is committed and toggled; the first thing to do next is to switch
+`USE_COMMANDER` on and run the test games the upload limit denied.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
