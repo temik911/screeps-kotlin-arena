@@ -653,7 +653,7 @@ object PainAndGain {
      *  (2-6 и 2-6), выбор цели фокуса симуляцией (1-7 и 2-6; проведённая до стрельбы — 129 и m33:kite 0:21 135),
      *  раскатка по политике (1-5 и 1-5), замысел SPREAD (130 дважды), глубина 3 и 6 (по 129), назначение только
      *  достижимых за тик клеток (130). Играет v135, пока командир его не обгонит. */
-    private const val USE_COMMANDER = false
+    private const val USE_COMMANDER = true
     /** СИМУЛЯЦИЯ РАЗМЕНА (v138, оператор): командир с одной эвристикой — всё ещё догадка о том, чем кончится обмен, и
      *  замер это показал (2-4 и 1-5). Поэтому командир предлагает ТРИ замысла — напор, удержание, уступка, — а короткая
      *  симуляция на SIM_TICKS тиков считает, чем каждый кончится, и выбирает лучший по нашей уцелевшей мощи минус его.
@@ -676,6 +676,29 @@ object PainAndGain {
      *  129/131 — m32 army, армия уничтожена на 407–419-м тике. Сумма урона поощряет размен, а мощь через четыре тика
      *  учитывает, ЧЕМ мы останемся; для арены, где аннигиляция проигрывает при любом счёте, верно второе. */
     private const val SIM_EXCHANGE_DIV = 0.0
+    /** Масштаб квадратичной оценки: произведение мощи на хиты растёт до сотен тысяч, и делитель держит число в тех же
+     *  порядках, что прежняя линейная сумма, — чтобы пороги и печать оставались читаемыми. */
+    private const val SIM_POWER_SCALE = 1000.0
+    /** МОЩЬ ПО УЧАСТИЮ, А НЕ ПО ПОТЕНЦИАЛУ (v140, по вопросу оператора о матрице силы): `effectiveDps` считал полный
+     *  профиль крипа, где бы тот ни стоял, поэтому мера боя сравнивала армии целиком, а дралась в этот миг половина.
+     *  Замер на входе: `reach=2/5` — цель достают двое наших стрелков из пяти против его двенадцати, и линейная мера
+     *  показывает паритет 4 087:4 087. По Ланчестеру сила идёт как квадрат числа стреляющих, значит вдвое меньшее
+     *  участие равно вчетверо меньшей армии — вот почему мы входим в бой, который считаем равным.
+     *  ЗАМЕРЕНО И НЕ ПОДТВЕРДИЛОСЬ: 1-7 и 3-5 против 10-22 у v140 без него. Диагноз верен (мера считает потенциал, а
+     *  дерётся половина), но лечение оказалось не в ней: осторожничая по участию, армия перестаёт входить там, где
+     *  входить надо, и отдаёт очки. Применялось в самом узком месте — в решении о местном перевесе; шире (во всей мере
+     *  мощи) роняло гейт до 124/131 жёстким срезом и до 126/131 мягким. Формула мощи при этом ВЕРНА: `lanchester` даёт
+     *  sqrt(dps × hits), то есть произведение огня на живучесть — это и есть квадратичный закон, выраженный линейно,
+     *  и сравнение отношений от корня не страдает. */
+    private const val USE_POWER_BY_REACH = false
+    private const val POWER_REACH_TICKS = 2
+    /** ОТКАЗ ОТ ПЕРЕБОЯ (v140): приём из литературы по микроменеджменту RTS — «focus fire, while avoiding overkill by
+     *  spreading damage over several units if the focus firing is enough to kill one». В боте его не было вовсе: все
+     *  стрелки били цель фокуса, даже когда её убивали первые два выстрела, и остаток уходил в труп. Теперь урон
+     *  расписывается по целям за тик, и стрелок, чья цель уже мертва по расписанию, берёт следующую по ранжиру.
+     *  ЗАМЕРЕНО И НЕ ПОДТВЕРДИЛОСЬ: 2-6 и 2-6 против 10-22 у v140 без него (гейт 131/131 в обоих). Перебой у нас редок —
+     *  цель фокуса живёт дольше тика, потому что её лечат трое, — а рассеивание огня стоит темпа. Оставлено выключенным. */
+    private const val USE_NO_OVERKILL = false
     /** Надбавка его урону внутри симуляции: модель проще живого противника, чей ожидаемый урон за матч 20 000 против
      *  наших 7 400, и без надбавки прогноз выбирает напор чаще, чем следует. */
     private const val SIM_ENEMY_EDGE = 1.0   // 1.3 замерено: 2-6 и 2-6 против 9-23 без надбавки — тот же диапазон
@@ -1731,7 +1754,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v135"
+    private const val BOT_VERSION = "v140"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -3993,7 +4016,9 @@ cpuMark("a.evade")
                     for (intent in Intent.values()) {
                         val trial = HashMap<String, Position>()
                         commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
-                        val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
+                        // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
+                        // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
+                        val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget)
                         if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
                     }
                     // ...восхождение идёт по ГРУППАМ РОЛЕЙ, а не по отдельным крипам (v139): в литературе это называют
@@ -4104,7 +4129,7 @@ cpuMark("a.evade")
                 // есть масса, и «отход к центру» был шагом на месте под ударами (матч 3, t=140–280: армия из
                 // семи-восьми «отходила к центру» сто сорок тиков и потеряла всех по одному, не стреляя в ответ)
                 posture == Posture.ANNIHILATE -> !USE_LOCAL_ANNIHILATE || localEnemies.isEmpty() || localAllies.size * 2 >= combatArmy.size ||
-                    ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * (if (creep.id in aggressiveIds) ANNIHILATE_HOLD_RATIO else LOCAL_ENTER_RATIO)
+                    ourPowerReach(localAllies, localEnemies) >= enemyPowerReach(localEnemies, localAllies) * (if (creep.id in aggressiveIds) ANNIHILATE_HOLD_RATIO else LOCAL_ENTER_RATIO)
                 localEnemies.isEmpty() -> true
                 // без боевого своего в четырёх клетках (раненый один) запаса хода нет: maxOf пустого списка бросал
                 // NoSuchElementException КАЖДЫЙ тик до конца матча — армия стояла 1500 тиков после выигранного боя
@@ -4779,9 +4804,13 @@ cpuMark("a.evade")
             }
             shoot(creep, enemyCreeps, focusTarget, focusOrder)
         }
+        damageBooked.clear()
         val most = shotsAt.values.maxOrNull() ?: 0
         if (most > 0) { concSum += most; concTicks++ }
     }
+
+    /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
+    private val damageBooked = HashMap<String, Double>()
 
     private fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         if (!hasRanged(creep)) return
@@ -4797,12 +4826,25 @@ cpuMark("a.evade")
         if (massValue > (if (enemyHeals) 2.5 else 1.0)) {
             creep.rangedMassAttack(); lastFireTick = getTicks()
         } else {
+            // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
+            // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
+            // нашими за тик; если этого хватает с учётом её лечения, стрелок переходит к следующей цели по ранжиру
+            fun booked(t: Creep) = damageBooked[t.id] ?: 0.0
+            // лечение цели считается по его лекарям рядом с ней: вплотную полное, дальше — треть
+            fun healNear(t: Creep) = enemyCreeps.filter { it.id != t.id && InfluenceMap.profileOf(it).heal > 0.0 }
+                .sumOf { h -> val d = h.getRangeTo(t); if (d <= 1) InfluenceMap.profileOf(h).heal else if (d <= HEAL_RANGE) InfluenceMap.profileOf(h).heal / 3.0 else 0.0 }
+            fun dead(t: Creep) = USE_NO_OVERKILL && booked(t) >= t.hits + healNear(t)
             // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
             val target = when {
-                focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE -> focusTarget
-                else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE } ?: massPool.minByOrNull { it.hits }
+                focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE && !dead(focusTarget) -> focusTarget
+                else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE && !dead(it) }
+                    ?: focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE }
+                    ?: massPool.minByOrNull { it.hits }
             }
-            target?.let { creep.rangedAttack(it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks() }
+            target?.let {
+                creep.rangedAttack(it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks()
+                damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
+            }
         }
     }
 
@@ -5100,8 +5142,14 @@ cpuMark("a.evade")
         // оценка: НАКОПЛЕННЫЙ размен, а не только конечная мощь. При равных армиях разница мощей через четыре тика мала
         // и тонет в шуме — планы получались неразличимы; сумма нанесённого и полученного за все тики устойчивее и
         // отвечает на тот вопрос, который задаётся: чей размен лучше, если пойти этим путём (v138)
-        fun power(side: List<SimC>) = side.filter { it.hits > 0 }
-            .sumOf { it.melee + it.ranged + it.heal / 3.0 }
+        // ОЦЕНКА ПО КВАДРАТИЧНОМУ ЗАКОНУ (v140, Ланчестер): сила армии растёт не как сумма, а как ПРОИЗВЕДЕНИЕ огневой
+        // мощи на живучесть — n тел, стреляющих d уроном, стоят n·d·n·hp, потому что каждое лишнее тело и бьёт, и
+        // принимает. Прежняя линейная сумма профилей давала почти одинаковые числа для планов, расходящихся на четыре
+        // тика, и выбор тонул в шуме; произведение разводит их, потому что маленький перевес в размене возводится в
+        // квадрат — ровно то, чем блоб нас и бьёт
+        fun dps(side: List<SimC>) = side.filter { it.hits > 0 }.sumOf { it.melee + it.ranged + it.heal / 3.0 }
+        fun body(side: List<SimC>) = side.filter { it.hits > 0 }.sumOf { it.hits.toDouble() }
+        fun power(side: List<SimC>) = dps(side) * body(side) / SIM_POWER_SCALE
         return (power(us) - power(them))
     }
 
@@ -5657,9 +5705,27 @@ cpuMark("a.evade")
     }
 
     /** Действенный урон крипа в тик против группы (с его эффектами): стрельба целиком, мили — по meleeFactor. */
+    private var powerByReach = false   // мощь по участию включается только там, где решается вступление в бой (v140)
+
     private fun effectiveDps(unit: Creep, opponents: List<Creep>, rangedK: Double = 1.0, meleeK: Double = 1.0): Double {
         val p = InfluenceMap.profileOf(unit)
-        return p.ranged * rangedK + p.melee * meleeK * meleeFactor(unit, opponents)
+        val full = p.ranged * rangedK + p.melee * meleeK * meleeFactor(unit, opponents)
+        if (!powerByReach || opponents.isEmpty()) return full
+        // МОЩЬ СЧИТАЕТСЯ ПО ТЕМ, КТО ДОСТАЁТ (v140): прежде крип шёл в силу полным профилем, даже стоя вне дальности, и
+        // мера боя мерила ПОТЕНЦИАЛ, а не участие. Живьём на первом контакте `reach=2/5` — цель достают двое наших
+        // стрелков из пяти, а он бьёт всеми двенадцатью, и по линейной мере это выглядит паритетом 4 087:4 087.
+        // Ланчестер объясняет цену ошибки: сила идёт как КВАДРАТ числа стреляющих, поэтому вдвое меньшее участие — это
+        // вчетверо меньшая армия. Тот, кто дойдёт за POWER_REACH_TICKS тиков, считается с половинным весом
+        val d = opponents.minOf { getRange(unit, it) }
+        val reach = if (hasRanged(unit)) RANGED_RANGE else MELEE_KEEP_RANGE
+        // мягкая доля: выбрасывать дальних целиком нельзя — мера мощи держит ещё и захват флагов, и постуры на марше,
+        // и жёсткий срез уронил гейт до 124/131 (roost, четыре scatter, camp). Тот, кто достаёт, — полный вес; кто дойдёт
+        // за POWER_REACH_TICKS — половина; остальные — четверть
+        return when {
+            d <= reach -> full
+            d <= reach + POWER_REACH_TICKS -> full * 0.5
+            else -> full * 0.25
+        }
     }
 
     /** Хиты в счёте мощи: по доле удара, которая дойдёт (кайтимая мили в бою не участвует; лекарь и
@@ -5692,6 +5758,21 @@ cpuMark("a.evade")
         val dps = side.sumOf { effectiveDps(it, opp, mods.ranged, meleeK) }
         val heal = opp.sumOf { InfluenceMap.profileOf(it).heal } * oppMods.heal
         return lanchester(dps, heal, side.sumOf { weightedHits(it, opp, mods.hits) })
+    }
+
+    /** Мощь по УЧАСТИЮ: считает только тех, кто достаёт цель, и решает «вступать ли в бой здесь и сейчас» (v140). */
+    private fun ourPowerReach(ours: List<Creep>, theirs: List<Creep>): Double {
+        powerByReach = USE_POWER_BY_REACH
+        val v = powerOf(ours, theirs, NO_MODS, NO_MODS)
+        powerByReach = false
+        return v
+    }
+
+    private fun enemyPowerReach(theirs: List<Creep>, ours: List<Creep>): Double {
+        powerByReach = USE_POWER_BY_REACH
+        val v = powerOf(theirs, ours, NO_MODS, NO_MODS)
+        powerByReach = false
+        return v
     }
 
     /** НАША мощь против группы врага (текущие эффекты). */

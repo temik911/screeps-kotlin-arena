@@ -855,6 +855,33 @@ scratch on the same forecast would land in the same place; what has to improve f
 own combat rules inside it rather than "everyone walks to the assigned cell", or a longer horizon, or an evaluation
 fitted to real outcomes rather than assumed.
 
+**v140 — the commander switched ON, and the forecast made to predict the fight we actually play (08.09.2026).** Three
+changes to the simulation, measured one at a time against MetalicaX#10 and #11:
+
+- **the forecast now uses the bot's REAL focus target.** Ours in the playout used to shoot "the weakest in range" while
+  the bot shoots a sticky focus target — so the plan was scored for a fight nobody would fight. Feeding the actual
+  target in gave **3-5 and 3-5**, the best the commander has managed, and 10-22 over 32 games (31 %) against v135's
+  7-17 (29 %). That makes the commander no longer worse, and it is now ON;
+- **Lanchester's square law in the score.** Power is now `dps × hits`, not their sum: an army's strength goes as the
+  SQUARE of its numbers, because each extra body both fires and absorbs. Measured 3-13 on its own — no better — but it
+  is the correct form and stays;
+- **overkill avoidance** (from the RTS micro literature: focus fire while spreading once a target is already dead)
+  — 2-6 and 2-6 against 10-22, rejected: our focus target rarely dies within a tick, because three healers hold it,
+  and spreading costs tempo.
+
+**On the threat and power matrices, which the operator asked about.** The formula itself is RIGHT: `lanchester(dps,
+heal, hits) = sqrt((dps − heal) × hits)` is the product of firepower and durability — the square law written linearly,
+and comparing ratios is unaffected by the root. But a real defect sits next to it: `effectiveDps` counts a creep's FULL
+profile wherever it stands, so the measure weighs POTENTIAL while only half the army is fighting — at first contact
+`reach=2/5`, two of our five ranged have a target against his twelve, and the linear measure still reads 4 087:4 087.
+By the square law twice fewer shooters is four times less army, which is exactly why we enter fights we think are even.
+Counting power by participation was implemented and measured anyway: applied across the whole measure it dropped the
+gate to 124/131 (hard cut) and 126/131 (soft), and scoped to the local-advantage decision alone it held the gate at
+131/131 but played 1-7 and 3-5. So the diagnosis stands and the cure is elsewhere: made cautious this way, the army
+stops entering fights it should enter and gives away points instead.
+
+Control is intact: **houshanyun#1 6-0** with the commander on.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
