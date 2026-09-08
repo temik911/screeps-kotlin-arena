@@ -1849,6 +1849,51 @@ ways round. Without `OPP` both sides are the current build and the tally is the 
 harness was built to serve: **a change is worth landing when it beats the build it would replace against
 an opponent that answers** — not when it is faster on a fixture that cannot.
 
+### The league gate, and the two things it found in its first hour (08.09.2026)
+
+`tools/stub/spawnandswamp/league.sh <snapshot>` is the gate a candidate now has to pass, and it has
+three opponents rather than one, because one instrument is not an instrument:
+
+1. **the 26 gate scenarios** — regression only, printed against the table saved with the snapshot so a
+   slowdown is visible rather than silent;
+2. **the recorded けろびー#19 at `HUNT=0/4/8`** — one specific strong opponent, faithful map and queue;
+3. **self-play against the build being replaced** — the only opponent here that answers.
+
+The rule: never regress (1); improve (2) or (3) without hurting the other. Neither (2) nor (3) predicts
+the arena alone — a recording does not react, and self-play optimises the mirror — and that limit is the
+reason there are three.
+
+**First finding: the opening is a knife-edge, and the rule that makes it one holds itself up.** In
+self-play both sides are the same build, so the only difference is who acts first inside a tick. The
+side that moved second watched the first buy a breacher, read it as an armed enemy **180 ticks of travel
+away**, got `deficit=557`, and spent the opening thousand on one fighter (`first=true`). It then never
+bought a hauler: `fighterFirst` blocks the hauler branch, and `fighterFirst` compares `threatIn` against
+`investReady`, which is computed from the current income — which is zero precisely because no hauler was
+bought. The rule holds itself up. By t=300 that side had one creep against eight.
+
+Two forms of the fix were measured. Letting the first hauler through unconditionally wins self-play
+**9-0-7** against the build it replaces and makes `run3:rush` 936 → 578 and `stream17` 888 → 682 — but it
+costs `harass` the match entirely, so it fails the gate. Narrowing it to "after a defender exists" passes
+the gate byte-identically and is **inert** — by then the side is already broke. Neither is landed; the
+defect is named and its two obvious repairs are measured and rejected, which is where the next attempt
+starts.
+
+**Second finding, and it is a fault in the instrument rather than the bot: the stub never modelled the
+spawn's regeneration.** The live rule, measured on 02.09.2026 and written at the top of this document, is
+one energy a tick; `endTick` had none, so `flow = income + regen` was understated **everywhere**, and a
+spawn with no haulers could never recover — which is part of why the self-play death spiral looked as
+total as it did. Adding it (one line in `endTick`) makes most scenarios faster — `harass` 779 → 651,
+`rush` 690 → 559, `ball` 663 → 630, `fortress` 1583 → 1319 — and **breaks `siege6`**: the besieged spawn
+now has a trickle to feed a doomed tower site with, and puts 348 into one against a threshold of 100.
+That is a real defect the old model hid, not a mis-calibrated fixture: at one energy a tick the site is
+either finishable (2000 available over the match against 1250 needed) and should be finished, or it is
+not and should be dropped early, and the bot does neither. v70's held clock does not catch it, because
+the site does progress — just too slowly.
+
+So the regeneration fix is **verified and not landed**: it moves all 26 baselines and leaves a failing
+scenario, and half-landing that is worse than naming it. It is the first thing to do next, together with
+whichever way `siege6` should then go.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.

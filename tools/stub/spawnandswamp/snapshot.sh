@@ -10,4 +10,6 @@ SRC=../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotli
 DST=opponents/$1
 rm -rf "$DST"; mkdir -p "$DST"; cp "$SRC"/*.mjs "$DST"/
 ver=$(grep -oE 'BOT_VERSION = [0-9]+' ../../../starter/src/jsMain/kotlin/season4/spawnandswamp/SpawnAndSwamp.kt | head -1)
-echo "snapshot: opponents/$1 <- $ver ($(ls "$DST" | wc -l | tr -d ' ') files)"
+# the snapshot carries this build's gate table too, so league.sh can show what a candidate changed
+zsh ./regress.sh snap > "$DST/regress.txt" 2>&1
+echo "snapshot: opponents/$1 <- $ver ($(ls "$DST" | wc -l | tr -d ' ') files, gate table saved)"
