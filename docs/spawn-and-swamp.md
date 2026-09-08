@@ -1203,6 +1203,62 @@ evidence. What is worth the next move is the second shape — he arrives with tw
 income — and that is the production race, which is where the delivery point and the stand's
 non-competing farm already point.
 
+### The stand's farm made to compete, and the delivery point re-asked on it (08.09.2026)
+
+The fifth attempt ended with a named condition: the stand's opponent has an economy that *exists* and
+does not *compete* — 3.4/tick against our 12.2 on the same map — so no question about the production
+race can be settled there. Two live losses from v57's twenty say the race is exactly the subject:
+
+| | our income | his | what he spent it on |
+|---|---|---|---|
+| lost 6a9fc71d (fleet shot off) | **4.9/t** | 7.2/t | 13040 on 24 creeps |
+| lost 6a9fcb43 (out-armied) | 9.4/t | **10.8/t** | 13970 on creeps **and 4000 on four spawns** |
+
+So the farm was given the two things he demonstrably has, and nothing else:
+
+- **His delivery points.** When the fleet is complete and 1000 is spare, he places a spawn beside the
+  pile his haulers are working — *where the carrying is*, which is what his replays show — and his
+  haulers then deliver to the nearest of his spawns. The building itself is a stand-in (1000 charged at
+  once, the spawn appears `FARM_BUILD` ticks later): his real crew is a `m1w1c1w1c1m1` at a pile, and
+  modelling it would be its own source of error. Live spacing between his spawns — 27, 173, 102, 45 and
+  175 ticks — sets `FARM_EVERY = 150`.
+- **A fleet that carries.** Delivery on this stand is proportional to fleet capacity (his 550 → 3.4/tick,
+  ours 1750 → 12.2), so eleven `M1C1` is not a competitor here, it is a museum piece: it is what he
+  chose on *his* map. The farm now hauls the way we do — up to eight haulers, body sized by what the
+  spawn can afford right now, exactly our own `haulerBody` rule. `FARM_FLEET=11 FARM_BLOCKS=1`
+  reproduces けろびー's literal fleet.
+
+Result: the farm's rate goes **3.4 → 5.4–8.6/tick** against our 12.6–15.4, it builds one to three
+delivery points a match, and the match can end with three or four of his spawns to destroy.
+
+**And then the delivery point was re-asked, free, against an opponent who builds them** — the same
+discipline as the extension ceiling and the free hauler wipe. The outcome tick is *not* comparable
+across these runs (the win condition itself changes with how many spawns he builds), so the measure is
+income:
+
+| scenario | none | one | two | four |
+|---|---|---|---|---|
+| `farm` | 13.2/t | 17.5 (+33 %) | 23.4 (+77 %) | 27.0 (+105 %) |
+| `tower+farm` | 12.6/t | 18.9 (+50 %) | 22.3 (+77 %) | 24.7 (+96 %) |
+| `tower+fortspawn+farm` | 15.4/t | 20.4 (+32 %) | 29.4 (+91 %) | 26.0 (+69 %) |
+
+**A delivery point is worth a third to a half of our income, and two of them roughly double it** — +4.3
+to +6.3 energy a tick for the first. That is four times what the bot's own model claimed when it chose a
+spot in the fourth and fifth attempts (`rate=4.8->6.3/t`, a gain of 1.5).
+
+**And the reason is a scale error, not a modelling error, which is the useful part.** `collectRate` gets
+the *ratio* very nearly exact and its absolute numbers about 2.7× too low: it predicted 4.8 → 6.3
+(**×1.31**) where the free spawn measured 13.2 → 17.5 (**×1.33**); it predicted 4.8 → 8.5 (**×1.77**) at
+a two-point-equivalent spot where two free spawns measured 13.2 → 23.4 (**×1.77**). But `forwardWorth`
+spends that model's **absolute** gain against an absolute price (`gain × left > price`), so the gate has
+been running about 2.7× too strict for five attempts.
+
+That names what a sixth attempt starts from, and for once it is one line rather than a redesign: take
+the **ratio** from `collectRate` and the **scale** from the income the bot has actually measured
+(`realisedIncome()`), so the gain reads +4/tick where it is +4/tick. At 1700 with a keeper that is a
+payback near 400 ticks against matches that run 400–2000 — still not free, and now at least priced with
+the right number.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.

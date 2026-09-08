@@ -77,7 +77,31 @@ let hbQueue=[]; let hbCount=0;
 // значит: у остальных приток врага — константа в конце тика, и налёт на его тыл нечем измерить.
 // KILL=n@t[:every] убивает n его хаулеров ДАРОМ на тике t (и дальше каждые every тиков) — изоляция
 // вопроса «стоит ли отказ ему в добыче хоть чего-нибудь», отдельно от того, по карману ли нам налёт
-const FARM_FLEET=parseInt(process.env.FARM_FLEET||'11');
+// ТЕЛО И РАЗМЕР ФЛОТА — ПРОТИВНИКА, А НЕ МУЗЕЙНОГО ЭКСПОНАТА. けろびー возит одиннадцатью M1C1, и на
+// ЕГО карте это даёт 7-19 в тик; на карте стенда та же связка даёт 3.4 против наших 12.2, потому что
+// доставка идёт ровно пропорционально ЁМКОСТИ флота (замерено: ёмкость 550 против наших 1750, доставка
+// 3.4 против 12.2). Сценарий нужен как КОНКУРЕНТ, поэтому по умолчанию ферма возит тем же телом и тем
+// же числом, что и мы: восемь M5C5 = 2000 ёмкости против наших ~1750. Точная связка けろびー
+// воспроизводится ручками FARM_FLEET=11 FARM_BLOCKS=1
+const FARM_FLEET=parseInt(process.env.FARM_FLEET||'8');
+const FARM_BLOCKS=parseInt(process.env.FARM_BLOCKS||'5');
+// тело — ПО КАРМАНУ СЕЙЧАС, как у нашего бота (haulerBody): ждать полного M5C5 значит собрать флот к
+// трёхсотому тику и остаться без армии, а живой противник начинает возить с первых тиков
+const farmHaulBody=(energy)=>{ const k=Math.max(1,Math.min(FARM_BLOCKS,Math.floor(energy/100)));
+  const b=[]; for(let i=0;i<k;i++) b.push(C.MOVE); for(let i=0;i<k;i++) b.push(C.CARRY); return b; };
+// ЕГО ТОЧКИ СДАЧИ. Не украшение сценария, а замеренное поведение: в проигранном матче 08.09 (6a9fcb43)
+// けろびー построил ЧЕТЫРЕ лишних спавна на 4000 энергии и сдавал в пять, отчего его сбор шёл 10.8 в
+// тик против наших 9.4; в матче 6a9ef3be — тоже четыре, по 913-1402 энергии в каждый, и 16.4 против
+// наших 10.0. Без этого ферма стенда собирает 3.4 в тик там, где наш бот на той же карте собирает
+// 12.2, то есть противник у стенда экономику ИМЕЕТ, но не ведёт.
+// Стройка смоделирована стендом, а не отыграна: 1000 списывается сразу, спавн появляется через
+// FARM_BUILD тиков. Это стойка-заменитель — его настоящая бригада (крип m1w1c1w1c1m1 у кучи) здесь не
+// нужна, а её ошибки были бы своим источником вранья. Живой ориентир срока: его спавны появлялись на
+// 242, 269, 442, 544, 589 и 764-м тиках, то есть примерно раз в полтораста тиков после сбора флота
+const FARM_POINTS=parseInt(process.env.FARM_POINTS||'4');
+const FARM_BUILD=parseInt(process.env.FARM_BUILD||'100');
+const FARM_EVERY=parseInt(process.env.FARM_EVERY||'150');
+const farmPending=[]; let farmPoints=0, farmLastPoint=-1e9;
 const farmHaulers=[]; let farmBuilt=0, farmDelivered=0, farmSpent=0, farmKilled=0;
 const KILLSPEC=(process.env.KILL||'').match(/^(\d+)@(\d+)(?::(\d+))?$/);
 const KILL_N=KILLSPEC?parseInt(KILLSPEC[1]):0, KILL_T=KILLSPEC?parseInt(KILLSPEC[2]):0, KILL_EVERY=KILLSPEC&&KILLSPEC[3]?parseInt(KILLSPEC[3]):0;
@@ -159,8 +183,24 @@ for(let t=0;t<TICKS;t++){
   if(TWOSPAWN && t===540) enSpawns.push(new StructureSpawn(50,56,false,1000));
   // с несколькими спавнами очередь льётся из ЛЮБОГО свободного — отсюда два крипа в соседние тики
   while((HEALBALL||STREAM||FORTRESS||CAMPER) && hbQueue.length && enFree()){ const r=enFree().spawnCreep(hbQueue[0]); if(!r.object) break; r.object.hb=CAMPER?Math.floor(hbCount/2):((STREAM||FORTRESS)?hbCount:Math.floor(hbCount/4)); hbCount++; hbQueue.shift(); }
+  if(FARM && farmPoints<FARM_POINTS && farmBuilt>=FARM_FLEET && !farmPending.length && en.store.energy>=1000 && t-farmLastPoint>=FARM_EVERY){
+    // место — у кучи, к которой сейчас едет больше всего его возчиков: точка сдачи ставится ТАМ, ГДЕ
+    // ВОЗЯТ, и это же правило (а не «лучшая клетка карты») けろびー показывает в реплеях
+    const want=new Map();
+    for(const h of farmHaulers){ if(h.exists&&h.pile&&h.pile.exists) want.set(h.pile,(want.get(h.pile)||0)+1); }
+    let best=null,bn=0; for(const [p,n] of want){ if(n>bn && range(p,en)<range(p,my)){bn=n;best=p;} }
+    if(best){ let spot=null;
+      for(let dx=-1;dx<=1&&!spot;dx++) for(let dy=-1;dy<=1;dy++){ if(!dx&&!dy) continue;
+        const x=best.x+dx,y=best.y+dy; if(x<1||y<1||x>98||y>98) continue;
+        if(terrainAt(x,y)===C.TERRAIN_WALL) continue;
+        if(world.objects.some(q=>q.exists&&q.x===x&&q.y===y&&(q instanceof Creep||q instanceof StructureSpawn||q instanceof StructureWall||q instanceof StructureContainer))) continue;
+        spot={x,y}; break; }
+      if(spot){ en.store.energy-=1000; farmSpent+=1000; farmPoints++; farmLastPoint=t; farmPending.push({x:spot.x,y:spot.y,at:t+FARM_BUILD}); } } }
+  for(let i=farmPending.length-1;i>=0;i--){ if(t>=farmPending[i].at){ const p=farmPending.splice(i,1)[0];
+    const sp=new StructureSpawn(p.x,p.y,false,0); enSpawns.push(sp); lines.push('FARM POINT t='+t+' at ('+p.x+','+p.y+')'); } }
   if(FARM && !en.spawning){
-    if(farmBuilt<FARM_FLEET){ const r=en.spawnCreep([C.MOVE,C.CARRY]); if(r.object){ r.object.farmer=true; farmHaulers.push(r.object); farmBuilt++; farmSpent+=100; } }
+    if(farmBuilt<FARM_FLEET){ const body=farmHaulBody(en.store.energy); const r=en.spawnCreep(body);
+      if(r.object){ r.object.farmer=true; farmHaulers.push(r.object); farmBuilt++; farmSpent+=body.reduce((s,p)=>s+C.BODYPART_COST[p],0); } }
     else { const r=en.spawnCreep(pairBody(hbCount)); if(r.object){ r.object.hb=Math.floor(hbCount/2); hbCount++; farmSpent+=1000; } }
   }
   if(FARM && KILL_N && t>=KILL_T && (t===KILL_T || (KILL_EVERY && (t-KILL_T)%KILL_EVERY===0))){
@@ -184,7 +224,10 @@ for(let t=0;t<TICKS;t++){
       else { const haul=mine.filter(c=>c.body.some(p=>p.type===C.CARRY)).sort((a,b)=>range(a,o)-range(b,o))[0];
         if(haul){ if(range(haul,o)>3) o.moveTo(haul); } else if(range(o,my)>3) o.moveTo(my); } } }
   if(FARM){ for(const o of world.objects){ if(!(o instanceof Creep)||o.my||!o.farmer||!o.exists||o.spawning) continue;
-      const home=()=>{ if(range(o,en)<=1){ const had=o.store.energy; o.transfer(en); farmDelivered+=had-o.store.energy; } else o.moveTo(en); };
+      // сдача в БЛИЖАЙШИЙ его живой спавн — в этом и весь смысл точки сдачи; при одном спавне ответ
+      // всегда исходный, поэтому сценарий без FARM_POINTS ведёт себя ровно как прежде
+      const drop=enSpawns.filter(sp=>sp.exists).sort((a,b)=>range(o,a)-range(o,b))[0]||en;
+      const home=()=>{ if(range(o,drop)<=1){ const had=o.store.energy; o.transfer(drop); farmDelivered+=had-o.store.energy; } else o.moveTo(drop); };
       if(o.store.getFreeCapacity()<=0){ o.pile=null; home(); continue; }
       // держится выбранной кучи, пока она жива и не пуста: без этого он каждый тик берёт ближайшую по
       // Чебышёву, а кучи появляются и распадаются — и возчик ходит между двумя, не довозя ни одной
@@ -261,7 +304,7 @@ const skip=/^\d\d:|=== MAP|=== END MAP/;
 for(const l of lines) if(!skip.test(l)) origLog(l);
 origLog('--- loop ms: avg', (loopTotal/world.tick).toFixed(2), 'max', loopMax.toFixed(1));
 origLog('--- ticks run:', world.tick, 'errors:', errors, 'my creeps:', world.objects.filter(o=>o instanceof Creep&&o.my).map(c=>c.body.map(p=>p.type[0]).join('')).join(' '), 'spawnE:', my.store.energy, 'enemySpawnHits:', en.hits);
-if(FARM) origLog('--- farm: delivered', farmDelivered, 'spent', farmSpent, 'haulers', farmHaulers.filter(c=>c.exists).length+'/'+farmBuilt, 'killed', farmKilled,
+if(FARM) origLog('--- farm: points', farmPoints+'/'+FARM_POINTS, 'delivered', farmDelivered, 'spent', farmSpent, 'haulers', farmHaulers.filter(c=>c.exists).length+'/'+farmBuilt, 'killed', farmKilled,
     'army bought', hbCount, 'alive', world.objects.filter(q=>q.exists&&q instanceof Creep&&!q.my&&q.hb!==undefined).length);
 origLog('--- ours: delivered', ourDelivered, 'over', world.tick, 'ticks =', (ourDelivered/Math.max(1,world.tick)).toFixed(1)+'/tick');
 origLog('WALLS:', world.objects.filter(o=>o instanceof StructureWall).map(w=>'('+w.x+','+w.y+')h='+w.hits).join(' '));
