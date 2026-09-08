@@ -17,6 +17,13 @@
 // Ramparts are placed as objects but the stub's movement does not physically block on structures — see
 // docs/spawn-and-swamp.md, the note on what the stub does not model.
 //
+// HUNT=k adds the one behaviour the recording cannot carry and the live matches are decided by: k of
+// his armed creeps walk at our nearest UNARMED creep instead of at our spawn. Calibrated against the
+// match this scenario came from (6a9feeab, a draw): live we lost five haulers of six and spent 12180.
+// HUNT=0 loses none and spends 16380; HUNT=8 loses six, spends 14130 and draws — that is the setting
+// that reproduces the match. Without it the keeper walks to a corner site unmolested and the fixture
+// says a delivery point is cheap, which is exactly the answer that cost four builds on 08.09.2026.
+//
 // So a result here is evidence about THIS opponent on THIS map, not a verdict. Read it next to the live
 // match it came from: if we lost live and the stub wins comfortably, the difference is his behaviour,
 // and that is the next thing to model.
@@ -61,6 +68,14 @@ const BEHAVIOUR = {
   healball: { kite: true,  group: 4, home: null }, // gathers, closes, and backs off a gun at two
 };
 const style = BEHAVIOUR[scen.behaviour.class] || BEHAVIOUR.stream;
+// ОХОТА НА МЯГКОЕ — единственное, чего этому противнику не хватало, и ровно то, чем он выигрывает
+// живьём. Записанные крипы идут на наш спавн и никогда не сворачивают на хаулера или смотрителя, а в
+// живых матчах 133 его выстрела из 133 ушли в наши безоружные (матч 22), и смотрителя площадки в
+// (97,2) гоняли в тридцати клетках от неё с fire=50 (6aa02b06). HUNT=k — первые k его ВООРУЖЁННЫХ
+// крипов идут не на спавн, а на ближайшего нашего безоружного. По умолчанию 0: без него все прежние
+// сценарии и прогоны этой фикстуры остаются такими, какими были
+const HUNT = parseInt(process.env.HUNT || '0');
+let hunters = 0;
 const queue = scen.enemyQueue.slice();
 const structs = scen.enemyStructures.slice();
 const towers = [];
@@ -96,6 +111,7 @@ for (let t = 0; t < TICKS; t++) {
     const r = s.spawnCreep(body(queue[0].body));
     if (r.error !== undefined) break;
     r.object.foe = true;
+    r.object.hunter = body(queue[0].body).some(p => p === C.RANGED_ATTACK || p === C.ATTACK) && hunters++ < HUNT;
     queue.shift();
     spawned++;
   }
@@ -137,6 +153,11 @@ for (let t = 0; t < TICKS; t++) {
       if (best && (best.x !== o.x || best.y !== o.y)) world.intents.push({ creep: o, x: best.x, y: best.y });
       continue;
     }
+    // охотник идёт на ближайшее безоружное наше, а не на спавн; если безоружных не осталось — как все
+    if (o.hunter) {
+      const soft = ours.filter(c => !guns.includes(c)).sort((a, b) => R(a, o) - R(b, o))[0];
+      if (soft) { if (R(soft, o) > 1) o.moveTo(soft); continue; }
+    }
     if (style.home !== null) { if (R(o, en) > style.home) o.moveTo(en); continue; }
     // gathering happens at home; once he has set off, a straggler walks on rather than turning back —
     // a regroup rule without that bound sends a spread-out army back and forth and neuters it
@@ -162,7 +183,7 @@ for (let t = 0; t < TICKS; t++) {
 console.log = origLog;
 const skip = /^\d\d:|=== MAP|=== END MAP/;
 for (const l of lines) if (!skip.test(l)) origLog(l);
-origLog(`--- scenario: ${scen.source} vs ${scen.opponent} (${scen.result} live), behaviour ${scen.behaviour.class}`);
+origLog(`--- scenario: ${scen.source} vs ${scen.opponent} (${scen.result} live), behaviour ${scen.behaviour.class}${HUNT ? ', hunters ' + HUNT : ''}`);
 origLog('--- ticks run:', world.tick, 'errors:', errors, 'spawnE:', my.store.energy,
         'his spawns:', enSpawns.map(s => (s.exists ? s.hits : 'dead')).join('/'),
         'his creeps built:', spawned, 'of', scen.enemyQueue.length);
