@@ -4121,7 +4121,13 @@ cpuMark("a.evade")
                 if (posture != Posture.ANNIHILATE) "posture" else if (enemyRetreating) "retreat"
                 else if (stalledNow) "stall" else if (!theirMeleeIn) "noMelee" else "off"
             if (commanderNow) {
-                if (!USE_SIMULATION) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
+                // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
+                // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
+                // дважды кончилось `Script execution timed out` (матчи 6aa085d7 и 6aa086d3): тик пропал целиком, армия
+                // не сходила. При нехватке времени командир раздаёт клетки одним замыслом, без перебора и прогонов
+                val cpuTight = USE_CPU_GUARD && getTicks() > 1 && cpuMs() > CPU_GUARD_MS
+                if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
+                if (!USE_SIMULATION || cpuTight) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
                 else {
                     // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через SIM_TICKS (v138)
                     var bestScore = -Double.MAX_VALUE
