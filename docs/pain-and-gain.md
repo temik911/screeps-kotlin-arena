@@ -827,6 +827,34 @@ centre creep and every member moves to a point on that route just outside the gr
 contact rather than carried into the fight. Our `TrafficManager` resolves collisions after the fact; computing one
 route for the mass and hanging the creeps off it is a different and untried approach.
 
+**Why the StarCraft algorithm did not work here — two real defects found, and the answer that it is not the legacy
+(08.09.2026).** The operator's objection was right in principle: an algorithm that beats Alpha-Beta and UCT in
+StarCraft should not be bad here, so the fault is likelier ours. Two faults were indeed found by looking.
+
+**The order was checked against the engine and ours was backwards.** Screeps applies MOVEMENT LAST and resolves an
+attack from the position BEFORE it — "by executing creep.move() and then creep.attack() in the same tick, the attack
+still runs from the old coordinates". So a melee can strike AND step away in one tick, but cannot step in and strike.
+Our simulation moved first and struck afterwards, i.e. it scored a fight that the game never plays. Fixed: strike,
+heal, then move. (Also verified from the client's own definitions: RANGED_ATTACK_POWER 10, ATTACK_POWER 30, HEAL_POWER
+12, RANGED_HEAL_POWER 4, mass attack 10/4/1 by distance — our coefficients were right — and damage runs through the
+body from the START of the array, which is why armed parts die first.)
+
+**The commander's order was being ignored by half the army.** `slotHold` ("a melee with an enemy adjacent stands and
+hits") sat SECOND in the target chain, above the order — so in a blob all four of our melee ignored the commander from
+the first tick of contact, while the simulation assumed they walked to their assigned cells. The plan was being scored
+for an army that did not exist. Fixed: the order now outranks `slotHold`.
+
+Both fixes are right and both were measured: portfolio search went from 0-8 / 0-8 to 3-13, and with the corrected
+intent order to 4-12. Still short of v135's kite (7-17 over 24 games).
+
+**So the legacy was tested directly and acquitted.** `USE_PURE_COMBAT` silences the ENTIRE old target chain while the
+commander fights — a creep with an order either goes there or stands, and nothing else may speak. It scored **2-6 and
+2-6: exactly the same as with the full chain**. The bottleneck is therefore not accumulated logic but the QUALITY OF
+THE FORECAST: four ticks with a simplified enemy do not separate good plans from bad ones. A bot rewritten from
+scratch on the same forecast would land in the same place; what has to improve first is the playout — modelling our
+own combat rules inside it rather than "everyone walks to the assigned cell", or a longer horizon, or an evaluation
+fitted to real outcomes rather than assumed.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
