@@ -582,6 +582,21 @@ object PainAndGain {
      *  Один ряд шире, но и тоньше: мили в нём стоят на флангах, а не перед стрелками, и блоб входит в середину линии, где
      *  прикрывать её некому. Правило v113 выключало линию при его мили внутри не по недосмотру. */
     private const val USE_LINE_VS_BLOB = false
+    /** КАЙТ, ПОКА НАШИ СТВОЛЫ НЕ ПОДТЯНУЛИСЬ (v135): на входе в разгромах телеметрия читает `reach=2/5` — из пяти наших
+     *  стрелков цель достают двое, а он бьёт всеми двенадцатью; к 50-му тику достают все пятеро, но входной размен уже
+     *  проигран (9 500–10 600 хитов против его 5 800–6 500 за первые двадцать тиков). Пока достающих меньше двух третей
+     *  живых, держим дистанцию — вступаем в бой целыми, а не частями. ОТВЕРГНУТО в двух формах. Широкая («держим дистанцию,
+     *  пока стволы не готовы, при любой его армии») роняет гейт на четырёх россыпях сразу — scatter m19/m28/m30/m34, где
+     *  наши стрелки редко достают и армия переставала наступать вовсе. Узкая («только при сомкнутой армии держим три
+     *  вместо двух») — 2-4 и 2-4 против 5-7 и 2-10, то есть #11 выровнялся, а #10 просел, суммарно то же, и гейт 130/131
+     *  (match31:camp). Наблюдение остаётся верным: на входе reach=2/5 против его двенадцати. */
+    private const val USE_KITE_UNTIL_READY = false
+    /** ТЫЛ НА КЛЕТКУ ДАЛЬШЕ ПРОТИВ БЛОБА (v135): planBlock ставит лекарей и раненых в ряд 1 — одна клетка за фронтом мили, —
+     *  и его мили, обойдя фронт, достаёт их тем же шагом. Лечение с двух идёт третью (4 за часть против 12), зато лекарь
+     *  жив, а его гибель — середина цепи класса (он бьёт лекарей → лечение перестаёт возвращать части → мы раздеты).
+     *  ОТВЕРГНУТО: 1-5 и 1-5 против 5-7 и 2-10 у v135 при гейте 131/131 — лечение третью не держит фронт, и он рушится
+     *  быстрее, чем экономятся лекари. */
+    private const val USE_REAR_DEEPER_VS_BLOB = false
     /** БЕСПОМОЩНЫЙ УХОДИТ И ИЗ КОНТАКТА (v135): счётчик kite= показал, что кайт работает только ДО контакта, а в тик, когда
      *  его мили встал вплотную, правило отходит в сторону — оттого его мили смежны 79–85 крипо-тиков против наших 16–22
      *  даже в поражениях. Выход стрелка из-под удара уже отвергнут (0-6/0-6: он вплотную стреляет и, уходя, замолкает), но
@@ -4057,6 +4072,14 @@ cpuMark("a.evade")
             // стреляет, мили бьёт, а лекарь и раздетый под ударом — только мясо: они дают 0 урона и держат его мили
             // занятым бесплатной целью. Лечение достаёт на три, так что отойдя, лекарь лечит треть, но живёт
             val helpless = USE_KITE_HELPLESS_OUT && !hasRanged(creep) && !hasMelee(creep)
+            // ...и пока НАШИ СТВОЛЫ НЕ ПОДТЯНУЛИСЬ (v135, см. USE_KITE_UNTIL_READY): на входе телеметрия читает reach=2/5 —
+            // в дальности два наших стрелка из пяти, а он бьёт всеми двенадцатью; к 50-му тику подтягиваются все, но бой
+            // уже проигран. Пока достающих меньше двух третей живых, держим дистанцию, даже если его армия не сомкнута
+            val gunsReady = !USE_KITE_UNTIL_READY || run {
+                val live = combatArmy.count { hasRanged(it) }
+                val reaching = combatArmy.count { c -> hasRanged(c) && combatEnemies.any { getRange(c, it) <= RANGED_RANGE } }
+                live == 0 || reaching * 3 >= live * 2
+            }
             val massKite: Creep? = if (USE_MASS_KITE && (!support || USE_KITE_HEALERS || helpless) && enemyMassedNow &&
                     (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)) || helpless)) {
                 // ОТСКОК, А НЕ СТОЯНИЕ: standoff тянет и НАВСТРЕЧУ, поэтому кайт брался только у тех, кто уже далеко, и вёл их
@@ -4138,7 +4161,10 @@ cpuMark("a.evade")
                 massKite != null -> {
                     kiteNow++
                     val clumped = USE_KITE_MASS_AWARE && combatArmy.count { it.id != creep.id && getRange(creep, it) <= RANGED_RANGE } >= 2
-                    target = massKite; standoff = if (clumped) RANGED_RANGE else KITE_STANDOFF; avoid = true; nearFlow = true
+                    // пока стволы не подтянулись — держим на клетку дальше и в бой не входим (v135, USE_KITE_UNTIL_READY)
+                    target = massKite
+                    standoff = if (clumped || !gunsReady) RANGED_RANGE else KITE_STANDOFF
+                    avoid = true; nearFlow = true
                 }
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
@@ -4577,9 +4603,9 @@ cpuMark("a.evade")
         // арифметика класса в том, что его двенадцать собирают около 750 в тик на ближайшем нашем. Правило выключалось при
         // его мили внутри — то есть ровно в блобе; включаем, когда его вооружённых шесть и больше и две трети из них в
         // MASS_RANGE от их центроида
-        val blobNow = USE_LINE_VS_BLOB && armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
+        val blobNow = (USE_LINE_VS_BLOB || USE_REAR_DEEPER_VS_BLOB) && armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
             armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
-        val standoffLine = rangeds.isNotEmpty() && ((USE_RANGED_FRONT && standoff && !theirMeleeIn) || hisFrontRanged || pokeLine || blobNow)
+        val standoffLine = rangeds.isNotEmpty() && ((USE_RANGED_FRONT && standoff && !theirMeleeIn) || hisFrontRanged || pokeLine || (USE_LINE_VS_BLOB && blobNow))
         val front = if (standoffLine) rangeds else melees.ifEmpty { rangeds }
         // якорь — ПЕРЕДНИЙ боец (ближайший к врагу), не центроид: центроид мили отстаёт от фронта на 1–2 клетки, и ряд
         // стрелков «в 3 − d» от него стоял в 4–5 от линии врага, вставшей в 3 от нашего переднего (матч 18)
@@ -4664,7 +4690,10 @@ cpuMark("a.evade")
         if (melees.isNotEmpty() && rangedRow) assign(rangeds, rowCells(back, rangeds.size, k0))
         // тыл — всегда сразу за фронтом: ряд «за стрелками» при враге вплотную (back=2) ставил лекарей в трёх клетках
         // от мили, лечение 4 за часть вместо 12 (матч 22, t=110–130: лекари в 2–3 клетках от дерущихся мили)
-        assign(rear, rowCells(1, rear.size, k0))
+        // тыл на клетку дальше против СОМКНУТОГО блоба (v135, см. USE_REAR_DEEPER_VS_BLOB): ряд 1 — это одна клетка за
+        // фронтом, и его мили, обойдя фронт, достаёт лекарей тем же шагом; лечение с двух идёт третью (4 за часть против
+        // 12), но лекарь при этом жив, а его смерть — середина цепи, которой класс нас убивает
+        assign(rear, rowCells(if (blobNow) 2 else 1, rear.size, k0))
     }
 
     private class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,

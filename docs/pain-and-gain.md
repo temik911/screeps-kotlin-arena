@@ -673,6 +673,28 @@ his melee inside it is always `planBlock` that runs, never `planFight`. Two earl
 fight does not call, which is why they read 0-6 and changed nothing measurable. Any future placement work against the
 class belongs in `planBlock`.
 
+**The last three variants, and where the campaign stands (08.09.2026).** Now aimed at `planBlock`, the planner the
+blob fight actually runs:
+
+- **the rear one row deeper** (`USE_REAR_DEEPER_VS_BLOB`): `planBlock` puts healers and wounded in row 1 — one cell
+  behind the melee front — so his melee reaches them with the same step it uses to pass the front. Holding them at row
+  2 costs healing (4 a part at two cells against 12 adjacent) but keeps them alive. Gate 131/131, **1-5 / 1-5** against
+  v135's 5-7 / 2-10: a front healed at a third collapses faster than the healers are saved;
+- **kite until our own guns are ready** (`USE_KITE_UNTIL_READY`), from a number in the entry telemetry — at first
+  contact it reads `reach=2/5`, two of our five ranged with a target in range while he fires with all twelve, and by
+  t=50 all five reach but the entry exchange is already lost (9 500–10 600 hits to his 5 800–6 500 over twenty ticks).
+  The broad form (hold off whenever our guns are not up, any enemy) drops four scatter lines at once — there our ranged
+  seldom reach and the army stopped advancing altogether. The narrow form (at a closed blob, hold three instead of two
+  until two thirds of our guns reach) gives **2-4 / 2-4**: #11 comes up, #10 falls back, the sum is unchanged and the
+  gate drops to 130/131 (match31:camp).
+
+Sixteen variants have now been priced against the class on unrated games. One of them won — v135's kite, confirmed by a
+20-match series at 16:4 and +45 rating — and the other fifteen are off with their numbers. Stability against
+MetalicaX#11 is still not there, and the honest summary of every failure is the same: each rule changes what our creeps
+do once his blob is on them, and the entry is lost before that, with two of our five guns in range against his twelve.
+The next idea worth trying is not another rule about the fight but the MARCH — arriving with the army already inside
+its own firing range of the contact point, which no probe so far has touched.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
