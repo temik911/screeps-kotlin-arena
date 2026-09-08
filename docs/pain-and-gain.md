@@ -484,6 +484,27 @@ and raznikk#10, losing to MetalicaX#4 twice and to the two new blob bots #9 (t=1
 the heal-behind rule, not the field, and the class of loss is unchanged: MetalicaX's blobs still wipe us inside two
 hundred ticks, and nothing in this cycle has touched that.
 
+**The capture experiment (08.09.2026): the gate is acquitted, and the flag cut's sharpest split is reverse causation.**
+The cut left one suspect — the parity gate refusing captures while a runner stands beside a free flag — and the way to
+convict or clear it was to find out WHICH of the five gates fires. `captureAllowed` was refactored to name its reason
+(`captureBlock`, the runner line now prints `POISED:<gate>`; the stub gate is identical to the digit, so the refactor
+is inert), and ten matches were played to collect them. The answer is not the parity floor at all: of the runner
+creep-ticks refused beside a flag that was nobody's, **rush 24, parity 5, contact 5** — it is the "a fight is twenty
+ticks away" veto, and the parity floor barely appears (the five it does are end-of-match, our power already at zero).
+
+And the veto is right, because of how this arena's flags work: a flag DEBUFFS ITS OWNER. `stackMul` in the bot says
+−20 % attack or ranged, −25 % heal, +10 % damage taken per flag held, and the live `effects` line confirms it — at
+t=409 of match 6a9fc813 ours read `A×0.8 R×1 H×0.75 D×1` while his read `A×1 R×0.8 H×1 D×1`, each side wearing the
+penalty of what it holds. Capturing is buying points with strength, so taking a flag twenty ticks before contact means
+entering the fight a fifth weaker — exactly what the veto prevents, and exactly what annihilation (a loss at any score)
+punishes. Its price is negligible besides: 24 creep-ticks of waiting across ten matches, worth about a hundred points
+in total where matches end at twenty thousand.
+
+Which means the 80-20 against 23-26 of the occupant cut is REVERSE CAUSATION, and should be read as such: an army that
+is winning its fight can afford to pay strength for points, so it holds flags; an army being wiped cannot, and does
+not. The flags are a symptom of the fight going well, not a cause of it. The doctrine stands unchanged on both counts —
+the post pays in points, and the capture gate earns its refusals.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
