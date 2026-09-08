@@ -616,6 +616,38 @@ object PainAndGain {
      *  но шаг назад отдаёт клетку строю: следом за стрелком отходит прикрывавший его мили, и линия пятится вся. Выхода
      *  из-под удара без потери позиции в этом боте нет — ни через цель, ни через план, ни через дистанцию. */
     private const val USE_KITE_KEEPS_FIRE = false
+    /** ПРОГНОЗ РАЗМЕНА НА ТИК ВПЕРЁД (v136): двадцать проб провалились потому, что каждая приближает потиковый ВЫБОР
+     *  одним постоянным правилом, а числа, которых они не сдвинули, — следствия выбора: его ожидаемый урон 20 000 против
+     *  наших 7 400, смежность его мили 79–85 крипо-тиков против наших 14–22, его мили первым доходит до наших мягких в
+     *  60 % тиков против наших 0–10 %. Здесь крип ВЫБИРАЕТ: своя клетка и восемь соседних, для каждой — что мы с неё
+     *  нанесём и что получим в следующий тик (его мили в MELEE_KEEP_RANGE шагнёт и ударит). Порядок ЛЕКСИКОГРАФИЧЕСКИЙ,
+     *  не взвешенная сумма: сперва больше своего урона, потом меньше входящего — сумма дала бы купить безопасность ценой
+     *  огня, чем и провалились все пробы об отходе. Работает только при сомкнутой армии врага и не для лекарей.
+     *  ЗАМЕРЕНО И ОТЛОЖЕНО: 4-8 и 2-10 против 5-7 и 2-10 у v135 (гейт 131/131), с ярусом выживания (USE_SEARCH_SURVIVAL)
+     *  3-3 и 0-6 — вровень или хуже. Причина названа оператором и подтверждается замерами: КАЖДЫЙ КРИП СЧИТАЕТ ЗА СЕБЯ.
+     *  Двое выбирают одну клетку, третий загораживает четвёртого, и лучший ход каждого не складывается в лучший ход
+     *  армии; его же строй ходит линией шаг в шаг, то есть решение у него ОДНО на всех. Оценка клетки здесь верна и
+     *  остаётся ядром для командира (см. USE_COMMANDER), а покриповое применение выключено. */
+    private const val USE_FORWARD_SEARCH = false
+    /** ВЫЖИТЬ РАНЬШЕ, ЧЕМ УДАРИТЬ (v136b): в первом срезе порядок был «огонь, потом безопасность», и крип не уходил даже
+     *  из клетки, где его снимают за тик — 4-8 и 2-10 против 5-7 и 2-10 у v135, то есть вровень. Клетка считается
+     *  смертельной, когда входящий урон за тик с учётом дебаффа не меньше хитов крипа плюс достающее его лечение; из
+     *  смертельной клетки уходят в любую несмертельную, а среди равных по смертности порядок прежний. */
+    private const val USE_SEARCH_SURVIVAL = true
+    /** КОМАНДИР (v137, оператор): одно решение на всю армию вместо двенадцати самостоятельных. Каждый крип решал сам, и
+     *  двое выбирали одну клетку, третий загораживал четвёртого — лучший ход каждого не складывается в лучший ход армии;
+     *  у него же строй ходит линией шаг в шаг, то есть решение ОДНО. Командир раздаёт клетки, считая опасность СЕЙЧАС и
+     *  НА СЛЕДУЮЩИЙ ТИК (его мили в двух шагнёт и ударит): мили — вплотную к его вооружённым, стрелки — где есть цель и
+     *  меньше входящего, лекари — в лечебной дальности и вне огня; клетка занимается один раз, крипы обслуживаются от
+     *  самого стеснённого. Включён только в бою с сомкнутым блобом; атаки идут своим проходом и не затронуты. */
+    private const val USE_COMMANDER = true
+    /** СИМУЛЯЦИЯ РАЗМЕНА (v138, оператор): командир с одной эвристикой — всё ещё догадка о том, чем кончится обмен, и
+     *  замер это показал (2-4 и 1-5). Поэтому командир предлагает ТРИ замысла — напор, удержание, уступка, — а короткая
+     *  симуляция на SIM_TICKS тиков считает, чем каждый кончится, и выбирает лучший по нашей уцелевшей мощи минус его.
+     *  Врага в симуляции играет модель, снятая с его записей и с формы `brawl` стенда: мили к нашему ближайшему мягкому,
+     *  стрелки держат три, лекари при самом раненом. */
+    private const val USE_SIMULATION = true
+    private const val SIM_TICKS = 4
     /** РЯД СТРЕЛКОВ НЕ ВРОВЕНЬ С ФРОНТОМ ПРОТИВ БЛОБА (v135): planBlock кладёт стрелков в ряд `back` от anchor — переднего
      *  мили, — и при back = 0 они оказываются на одной линии с ним, а прочие три мили сзади; его мили тогда первым доходит
      *  до стрелка или лекаря. Замер по двум записям разгромов (окно входа): у НАС его мили первым достаёт мягкого в 60 %
@@ -1641,7 +1673,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v135"
+    private const val BOT_VERSION = "v138"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -3880,6 +3912,26 @@ cpuMark("a.evade")
             if (DEBUG_LOG && ourYielding && contact && !armiesClosing && !enemyRetreating && !meleeBrawl && yieldingTick != getTicks() - 1) println("plan t=${getTicks()}: our line has yielded ${PRESS_CLOSING}+ cells over $PRESS_PATIENCE ticks — rows behind the front melee, not the plan")
             if (ourYielding) yieldingTick = getTicks()
             val planNow = USE_PLAN && (standoffNow || standingNow)
+            // командир (v137): в бою с сомкнутым блобом решение одно на армию, и оно вытесняет оба планировщика
+            val commanderNow = USE_COMMANDER && enemyMassedNow && contact && posture == Posture.ANNIHILATE
+            if (commanderNow) {
+                if (!USE_SIMULATION) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
+                else {
+                    // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через SIM_TICKS (v138)
+                    var bestScore = -Double.MAX_VALUE
+                    var bestPlan: Map<String, Position>? = null
+                    var bestIntent = Intent.PRESS
+                    for (intent in Intent.values()) {
+                        val trial = HashMap<String, Position>()
+                        commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
+                        val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
+                        if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
+                    }
+                    commandOf.clear()
+                    bestPlan?.let { commandOf.putAll(it) }
+                    if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()}")
+                }
+            } else commandOf.clear()
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget, retreating = enemyRetreating)
         }
@@ -4151,6 +4203,64 @@ cpuMark("a.evade")
                 val best = ourMelee.minOfOrNull { m -> hisMelee.minOfOrNull { getRange(m, it) } ?: 99 } ?: 99
                 if (mine <= best && mine <= ENGAGE_RANGE) ourMelee.minByOrNull { getRange(creep, it) } else null
             } else null
+            // ПРОГНОЗ РАЗМЕНА НА ТИК ВПЕРЁД (v136, см. USE_FORWARD_SEARCH): вместо правила о том, куда встать, — счёт по
+            // клеткам. Для своей клетки и восьми соседних считаем, что мы с неё нанесём и что получим В СЛЕДУЮЩИЙ тик
+            // (его мили в двух шагнёт и ударит), и берём лучшую ЛЕКСИКОГРАФИЧЕСКИ: сперва больше своего урона, потом
+            // меньше входящего. Сумма с весами позволила бы купить безопасность ценой огня — этим провалились все пробы
+            // об отходе; порядок «огонь первым» даёт только лучшую клетку для той же агрессии
+            // ...только В БОЮ и только если клетка СТРОГО лучше нынешней: первый срез стоял в цепочке раньше всего и при
+            // камперах давал 0:20 733 и 0:14 944 — армия перебирала клетки вместо игры за флаги
+            val searchCell: Position? = if (USE_FORWARD_SEARCH && !support && enemyMassedNow &&
+                    posture == Posture.ANNIHILATE && contact &&
+                    combatEnemies.any { getRange(creep, it) <= ENGAGE_RANGE }) {
+                val mineRanged = InfluenceMap.profileOf(creep).ranged
+                val mineMelee = InfluenceMap.profileOf(creep).melee
+                // текущая клетка — точка отсчёта: двигаемся, только если найдётся строго лучшая
+                var best: Position? = null
+                var bestOut = -1.0
+                var bestIn = Double.MAX_VALUE
+                var hereOut = -1.0
+                var hereIn = Double.MAX_VALUE
+                var bestFatal = true
+                var hereFatal = false
+                // лечение, которое достанет крипа на месте: лекари в HEAL_RANGE, вплотную — полное
+                val healOnMe = army.filter { it.id != creep.id && hasHeal(it) && !hasWeapon(it) }
+                    .sumOf { h -> val d = getRange(creep, h); if (d <= 1) InfluenceMap.profileOf(h).heal else if (d <= HEAL_RANGE) InfluenceMap.profileOf(h).heal / 3.0 else 0.0 }
+                for (dx in -1..1) for (dy in -1..1) {
+                    val nx = creep.x + dx; val ny = creep.y + dy
+                    if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                    if (DistanceMap.isTerrainWall(nx, ny)) continue
+                    if ((dx != 0 || dy != 0) && army.any { it.id != creep.id && it.x == nx && it.y == ny }) continue
+                    if (combatEnemies.any { it.x == nx && it.y == ny }) continue
+                    val cell = InfluenceMap.cell(nx, ny)
+                    var out = 0.0
+                    var inc = 0.0
+                    for (e in armedEnemies) {
+                        val d = getRange(cell, e)
+                        val pr = InfluenceMap.profileOf(e)
+                        if (d <= RANGED_RANGE) inc += pr.ranged
+                        if (d <= MELEE_KEEP_RANGE) inc += pr.melee
+                        if (mineRanged > 0.0 && d <= RANGED_RANGE) out = maxOf(out, mineRanged)
+                        if (mineMelee > 0.0 && d <= 1) out = maxOf(out, mineMelee)
+                    }
+                    if (dx == 0 && dy == 0) { hereOut = out; hereIn = inc }
+                    // ВЫЖИТЬ РАНЬШЕ, ЧЕМ УДАРИТЬ (v136b, см. USE_SEARCH_SURVIVAL): если входящее за тик снимает больше,
+                    // чем у крипа осталось хитов с учётом лечения, клетка смертельна — и тогда первым критерием идёт
+                    // не огонь, а входящий урон. Иначе порядок прежний: огонь, потом безопасность
+                    val fatal = USE_SEARCH_SURVIVAL && inc * InfluenceMap.takenOf(creep) >= creep.hits + healOnMe
+                    val better = when {
+                        fatal && !bestFatal -> false
+                        !fatal && bestFatal -> true
+                        else -> out > bestOut || (out == bestOut && inc < bestIn)
+                    }
+                    if (dx == 0 && dy == 0) hereFatal = fatal
+                    if (better || best == null) { bestOut = out; bestIn = inc; bestFatal = fatal; best = cell }
+                }
+                best?.takeIf {
+                    (it.x != creep.x || it.y != creep.y) &&
+                        ((hereFatal && !bestFatal) || (hereFatal == bestFatal && (bestOut > hereOut || (bestOut == hereOut && bestIn < hereIn))))
+                }
+            } else null
             val healerNear: Creep? = if (wounded || rotating) {
                 val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
                 val mine = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
@@ -4224,6 +4334,11 @@ cpuMark("a.evade")
                 rallyBlob -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // за спину мили — раньше кайта: кайт держит два от его мили, но не говорит, КТО стоит между (v135)
                 shieldMate != null -> { target = shieldMate; standoff = 1; avoid = true; nearFlow = true }
+                // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
+                commandOf[creep.id] != null && (commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) ->
+                    { target = commandOf[creep.id]!!; standoff = 0 }
+                // прогноз размена — раньше кайта и слота: он и есть выбор клетки (v136)
+                searchCell != null -> { target = searchCell; standoff = 0 }
                 // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
                 // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
                 // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
@@ -4629,6 +4744,231 @@ cpuMark("a.evade")
      *  ударами (стенд m6 sleeper, армия потеряна). Ряды поперёк оси центр → ближайшая группа врагов с боем; слоты по
      *  порядку SLOT_ORDER от середины ряда, стены и клетки мили пропускаются; крип берёт ближайший свободный слот
      *  своего ряда. */
+    /** КОМАНДИР (v137, см. USE_COMMANDER): одно решение на всю армию в бою с сомкнутым блобом. Раздаёт КЛЕТКИ — по одной
+     *  на крипа, — считая для каждой опасность СЕЙЧАС и опасность НА СЛЕДУЮЩИЙ ТИК (его мили в MELEE_KEEP_RANGE шагнёт и
+     *  ударит). Мили ставятся первыми — туда, где они достают его вооружённых; стрелки вторыми — где есть цель в
+     *  RANGED_RANGE и меньше всего входящего на следующий тик; лекари последними — в HEAL_RANGE от раненого и вне огня.
+     *  Клетка занимается один раз, крипы обслуживаются от самого стеснённого, поэтому свои друг друга не загораживают.
+     *  Атаки идут своим проходом и назначением не затрагиваются: крип, уже стоящий где надо, просто бьёт. */
+    /** Замысел, по которому командир раздаёт клетки (v138): напор, удержание или уступка. */
+    private enum class Intent { PRESS, HOLD, YIELD, FOCUS, KITE }
+
+    private fun commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
+                             out: MutableMap<String, Position>, intent: Intent = Intent.PRESS) {
+        out.clear()
+        val fighters = army.filter { canMove(it) && !it.spawning }
+        if (fighters.isEmpty() || armedEnemies.isEmpty()) return
+        val enemyAt = HashSet<Int>()
+        for (e in combatEnemies) enemyAt.add(e.x * 100 + e.y)
+        // кандидаты: всё проходимое в двух клетках от любого нашего бойца
+        val cells = HashMap<Int, Position>()
+        for (c in fighters) for (dx in -2..2) for (dy in -2..2) {
+            val x = c.x + dx; val y = c.y + dy
+            val key = x * 100 + y
+            if (key in cells || x < 0 || y < 0 || x > 99 || y > 99) continue
+            if (DistanceMap.isTerrainWall(x, y) || key in enemyAt) continue
+            cells[key] = InfluenceMap.cell(x, y)
+        }
+        if (cells.isEmpty()) return
+        // опасность клетки сейчас и на следующий тик
+        val incNow = HashMap<Int, Double>()
+        val incNext = HashMap<Int, Double>()
+        val hits = HashMap<Int, Int>()          // сколько его вооружённых достанет клетку следующим тиком
+        for ((key, p) in cells) {
+            var now = 0.0; var next = 0.0; var n = 0
+            for (e in armedEnemies) {
+                val d = getRange(p, e)
+                val pr = InfluenceMap.profileOf(e)
+                if (d <= RANGED_RANGE) { now += pr.ranged; next += pr.ranged; if (pr.ranged > 0.0) n++ }
+                if (d <= 1) now += pr.melee
+                if (d <= MELEE_KEEP_RANGE) { next += pr.melee; if (pr.melee > 0.0) n++ }
+            }
+            incNow[key] = now; incNext[key] = next; hits[key] = n
+        }
+        val taken = HashSet<Int>()
+        fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double): Boolean {
+            var best: Position? = null; var bestScore = Double.MAX_VALUE
+            for ((key, p) in cells) {
+                if (key in taken || getRange(c, p) > 2) continue
+                if (!wants(p)) continue
+                val sc = rank(p)
+                if (sc < bestScore) { bestScore = sc; best = p }
+            }
+            val b = best ?: return false
+            taken.add(b.x * 100 + b.y); out[c.id] = b
+            return true
+        }
+        val weakestMelee = armedEnemies.minByOrNull { it.hits }
+        val hisMelee = armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
+        val melees = fighters.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) }
+        val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
+        val healers = fighters.filter { !hasWeapon(it) && hasHeal(it) }
+        // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
+        // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
+        for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
+            val ok = when (intent) {
+                Intent.PRESS -> place(c, { p -> armedEnemies.any { getRange(p, it) <= 1 } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+                Intent.HOLD -> place(c, { p -> armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+                Intent.YIELD -> place(c, { p -> true }, { p -> -(armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
+                Intent.FOCUS -> place(c, { p -> weakestMelee != null && getRange(p, weakestMelee) <= 1 },
+                    { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+                // кайт как ЗАМЫСЕЛ (v138): ровно две клетки от его ближайшего мили — правило v135, которое одно и
+                // работало; командир вытеснял его из цепочки, и теперь симуляция может выбрать его наравне с прочими
+                Intent.KITE -> place(c, { p -> hisMelee.isEmpty() || (hisMelee.minOf { getRange(p, it) } == MELEE_HOLD_RANGE) },
+                    { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+            }
+            if (!ok) place(c, { true }, { p -> (armedEnemies.minOfOrNull { getRange(p, it) } ?: 99).toDouble() })
+        }
+        // стрелки: цель в дальности, меньше всего входящего на следующий тик; при равенстве — дальше от его мили
+        // цель концентрации (v138): самый слабый его вооружённый — вокруг него собирается замысел FOCUS
+        val weakest = armedEnemies.minByOrNull { it.hits }
+        for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
+            val ok = when (intent) {
+                // напор: цель в дальности, меньше входящего; удержание: то же, но безопасность решает сильнее
+                Intent.PRESS -> place(c, { p -> armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                    { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 - (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) })
+                Intent.HOLD -> place(c, { p -> armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                    { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 1000 + (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) })
+                // уступка: как можно дальше от его мили, цель — если получится
+                Intent.YIELD -> place(c, { p -> true },
+                    { p -> -(armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
+                // концентрация: все стрелки — в дальности ОДНОЙ цели, самой слабой у него
+                Intent.FOCUS -> place(c, { p -> weakest != null && getRange(p, weakest) <= RANGED_RANGE },
+                    { p -> (incNext[p.x * 100 + p.y] ?: 0.0) })
+                Intent.KITE -> place(c, { p -> (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                        armedEnemies.any { getRange(p, it) <= RANGED_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+            }
+            if (!ok) place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+        }
+        // лекари: в лечебной дальности от раненого бойца, вне огня следующего тика
+        val wounded = fighters.filter { hasWeapon(it) && it.hits < it.hitsMax }
+        for (c in healers) {
+            val mates = wounded.ifEmpty { fighters.filter { hasWeapon(it) } }
+            if (!place(c, { p -> mates.any { getRange(p, it) <= HEAL_RANGE } },
+                    { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 + (mates.minOfOrNull { getRange(p, it) } ?: 0) }))
+                place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+        }
+    }
+
+    /** Мини-состояние для симуляции (v138): позиция, хиты и профиль крипа. */
+    /** Мини-крип симуляции (v138). Хранит ПОЛНЫЙ профиль и число боевых частей: в арене урон снимает части СПЕРЕДИ, а
+     *  боевые стоят в начале тела, поэтому мощь падает вместе с хитами — крип с десятью хитами не бьёт как целый.
+     *  `front` — сколько хитов приходится на боевые части (по 100 за часть); ниже этого порога оружия уже нет. */
+    private class SimC(var x: Int, var y: Int, var hits: Int, val fullMelee: Double, val fullRanged: Double,
+                       val fullHeal: Double, val front: Int, val mine: Boolean) {
+        val melee: Double get() = fullMelee * armedShare()
+        val ranged: Double get() = fullRanged * armedShare()
+        val heal: Double get() = fullHeal * armedShare()
+        /** Доля уцелевшего оружия: боевые части стоят первыми, значит они гибнут ПОСЛЕДНИМИ по счёту хитов —
+         *  пока хитов больше, чем весит хвост, оружие цело; ниже — тает пропорционально. */
+        private fun armedShare(): Double {
+            val tail = hitsMaxTail
+            if (hits <= tail) return 0.0
+            return ((hits - tail).toDouble() / front).coerceIn(0.0, 1.0)
+        }
+        var hitsMaxTail: Int = 0
+    }
+
+    /** СИМУЛЯЦИЯ РАЗМЕНА НА НЕСКОЛЬКО ТИКОВ (v138, см. USE_SIMULATION): обе стороны ходят — мы по предложенному плану,
+     *  он по модели, снятой с его же записей и с формы `brawl` стенда (мили идут к нашему ближайшему МЯГКОМУ крипу,
+     *  стрелки держат три, лекари при самом раненом), — после чего считается урон и лечение по арифметике арены.
+     *  Возвращает нашу уцелевшую боевую мощь минус его: аннигиляция проигрывает матч при любом счёте, поэтому
+     *  максимизируется мощь, а не размен «крип за крипа». */
+    private fun simulate(mine: List<Creep>, his: List<Creep>, plan: Map<String, Position>, ticks: Int): Double {
+        fun mk(c: Creep, ours: Boolean): SimC {
+            val pr = InfluenceMap.profileOf(c)
+            // боевые части (ATTACK / RANGED_ATTACK / HEAL) стоят в начале тела, MOVE и TOUGH — хвост; урон идёт спереди,
+            // так что оружие держится, пока хитов больше веса хвоста, и тает вместе с остатком
+            val armedParts = c.body.count { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
+            val tailParts = c.body.size - armedParts
+            val sc = SimC(c.x, c.y, c.hits, pr.melee, pr.ranged, pr.heal, armedParts * 100, ours)
+            sc.hitsMaxTail = tailParts * 100
+            return sc
+        }
+        val us = mine.map { mk(it, true) }
+        val them = his.map { mk(it, false) }
+        val goal = HashMap<Int, Position>()
+        mine.forEachIndexed { i, c -> plan[c.id]?.let { goal[i] = it } }
+        fun d(a: SimC, b: SimC) = maxOf(abs(a.x - b.x), abs(a.y - b.y))
+        for (t in 0 until ticks) {
+            // наш ход: ПЕРВЫЙ тик — по плану, дальше раскатка по той же политике, что и у него. Фиксированный план на
+            // четыре тика оценивал несуществующий бой: враг маневрирует, а мы шли в клетку, которая уже ничего не значит
+            val liveThem0 = them.filter { it.hits > 0 }
+            us.forEachIndexed { i, c ->
+                if (c.hits <= 0) return@forEachIndexed
+                val g = goal[i]
+                // РАСКАТКА ПО ПОЛИТИКЕ ОТВЕРГНУТА (1-5 и 1-5 против 3-3 при фиксированном плане, гейт 129): политика,
+                // которой мы раскатывали, списана с ЕГО модели и нам не годится, а своей у симуляции нет. План держится
+                // все SIM_TICKS тиков — это грубее, но честнее того, что мы действительно сделаем
+                if (g != null) {
+                    if (c.x != g.x || c.y != g.y) { c.x += (g.x - c.x).coerceIn(-1, 1); c.y += (g.y - c.y).coerceIn(-1, 1) }
+                    return@forEachIndexed
+                }
+                if (liveThem0.isEmpty()) return@forEachIndexed
+                if (c.melee > 0.0) {
+                    val soft = liveThem0.filter { it.melee <= 0.0 }.minByOrNull { d(c, it) } ?: liveThem0.minByOrNull { d(c, it) }!!
+                    if (d(c, soft) > 1) { c.x += (soft.x - c.x).coerceIn(-1, 1); c.y += (soft.y - c.y).coerceIn(-1, 1) }
+                } else if (c.ranged > 0.0) {
+                    val near = liveThem0.minByOrNull { d(c, it) }!!
+                    val dist = d(c, near)
+                    if (dist < RANGED_RANGE) { c.x -= (near.x - c.x).coerceIn(-1, 1); c.y -= (near.y - c.y).coerceIn(-1, 1) }
+                    else if (dist > RANGED_RANGE) { c.x += (near.x - c.x).coerceIn(-1, 1); c.y += (near.y - c.y).coerceIn(-1, 1) }
+                } else {
+                    val hurt = us.filter { it.hits > 0 && it !== c }.minByOrNull { it.hits } ?: return@forEachIndexed
+                    if (d(c, hurt) > 1) { c.x += (hurt.x - c.x).coerceIn(-1, 1); c.y += (hurt.y - c.y).coerceIn(-1, 1) }
+                }
+            }
+            // его ход: мили к нашему ближайшему мягкому, стрелки держат три, лекари к самому раненому своему
+            val liveUs = us.filter { it.hits > 0 }
+            if (liveUs.isEmpty()) break
+            for (e in them) {
+                if (e.hits <= 0) continue
+                if (e.melee > 0.0) {
+                    val soft = liveUs.filter { it.melee <= 0.0 }.minByOrNull { d(e, it) } ?: liveUs.minByOrNull { d(e, it) }!!
+                    if (d(e, soft) > 1) { e.x += (soft.x - e.x).coerceIn(-1, 1); e.y += (soft.y - e.y).coerceIn(-1, 1) }
+                } else if (e.ranged > 0.0) {
+                    val near = liveUs.minByOrNull { d(e, it) }!!
+                    val dist = d(e, near)
+                    if (dist < RANGED_RANGE) { e.x -= (near.x - e.x).coerceIn(-1, 1); e.y -= (near.y - e.y).coerceIn(-1, 1) }
+                    else if (dist > RANGED_RANGE) { e.x += (near.x - e.x).coerceIn(-1, 1); e.y += (near.y - e.y).coerceIn(-1, 1) }
+                } else {
+                    val hurt = them.filter { it.hits > 0 && it !== e }.minByOrNull { it.hits } ?: continue
+                    if (d(e, hurt) > 1) { e.x += (hurt.x - e.x).coerceIn(-1, 1); e.y += (hurt.y - e.y).coerceIn(-1, 1) }
+                }
+            }
+            // урон и лечение обеих сторон
+            // урон: мили по смежному, стрелок — ВЕЕРОМ, когда целей много, иначе одиночным. Веер бьёт всех в трёх с
+            // убыванием 10/4/1 за часть, и без него симуляция недооценивала как раз того противника, который им живёт
+            // (MetalicaX#11 — 63 веера за матч против 37 у #10 и наших 12), и потому охотно сбивала армию в кучу
+            fun strikeSide(from: List<SimC>, to: List<SimC>) {
+                for (a in from) {
+                    if (a.hits <= 0) continue
+                    val adj = to.filter { it.hits > 0 && d(a, it) <= 1 }
+                    if (a.melee > 0.0 && adj.isNotEmpty()) adj.minByOrNull { it.hits }!!.let { it.hits -= a.melee.toInt() }
+                    if (a.ranged > 0.0) {
+                        val inRange = to.filter { it.hits > 0 && d(a, it) <= RANGED_RANGE }
+                        if (inRange.isEmpty()) continue
+                        // веер выгоден с двух целей: доля 1.0 / 0.4 / 0.1 по дистанции, как считает stackMul арены
+                        val massValue = inRange.sumOf { t -> when (d(a, t)) { 0, 1 -> 1.0; 2 -> 0.4; else -> 0.1 } }
+                        if (massValue > 1.0) for (t in inRange) {
+                            val share = when (d(a, t)) { 0, 1 -> 1.0; 2 -> 0.4; else -> 0.1 }
+                            t.hits -= (a.ranged * share).toInt()
+                        } else inRange.minByOrNull { it.hits }!!.let { it.hits -= a.ranged.toInt() }
+                    }
+                }
+            }
+            strikeSide(us, them); strikeSide(them, us)
+            for (side in listOf(us, them)) for (h in side) {
+                if (h.hits <= 0 || h.heal <= 0.0) continue
+                val hurt = side.filter { it.hits > 0 && it !== h }.minByOrNull { it.hits } ?: continue
+                val dd = d(h, hurt)
+                if (dd <= 1) hurt.hits += h.heal.toInt() else if (dd <= HEAL_RANGE) hurt.hits += (h.heal / 3).toInt()
+            }
+        }
+        fun power(side: List<SimC>) = side.filter { it.hits > 0 }.sumOf { it.melee + it.ranged + it.heal / 3.0 }
+        return power(us) - power(them)
+    }
+
     private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>, rangedRow: Boolean = true, standoff: Boolean = false, focusTarget: Creep? = null, retreating: Boolean = false) {
         val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in rotatingIds }
         val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in rotatingIds }
@@ -4773,6 +5113,7 @@ cpuMark("a.evade")
 
     private class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
                             val meleeAdj: Int, val meleeNear: Int, val dist: Int)
+    private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     private val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
     private var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
     private val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
