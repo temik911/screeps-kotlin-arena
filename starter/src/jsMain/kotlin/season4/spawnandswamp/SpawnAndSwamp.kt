@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 56
+    private const val BOT_VERSION = 57
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -331,6 +331,36 @@ object SpawnAndSwamp {
     private val enemyPrevCell = HashMap<String, Int>()
 
     /** id площадки башни врага -> (тик первого наблюдения, прогресс тогда) — темп стройки. */
+    /**
+     * УБИТЫЕ ВОЗЧИКИ — и груз, который ушёл вместе с ними. Прибор, а не правило: разбор двадцати матчей
+     * 08.09.2026 дал цепочку, у которой это первое звено, и только его в НАШЕМ логе не было видно
+     * вовсе. В победе над けろびー он не убил ни одного возчика (7 выстрелов по ним), приток держался
+     * 13.5 в тик, армия стояла 5.0 против его 1.1, и его лекари отменили 3% нашего урона. В двух
+     * поражениях того же ряда он убил семь и четыре (111 и 225 выстрелов), приток упал до 9.2 и 11.6,
+     * армия — до 2.7 против 3.2 и 3.0 против 2.1, а лечение отменило 85% и 55%: ниже своей скорости
+     * лечения урон не убивает никого, поэтому размен переворачивается не на проценты, а с 9:16 в нашу
+     * пользу на 18:3 против нас — в матче, где мы потратили в 1.7 раза БОЛЬШЕ него.
+     * Цепочка сходится на трёх матчах; поле печатается, чтобы `series.py metrics` проверил её на двадцати.
+     */
+    private val knownHaulers = HashSet<String>()
+    private var haulersLost = 0
+    private var haulerCargoLost = 0
+    private val haulerCargo = HashMap<String, Int>()
+
+    private fun measureHaulerLoss(ctx: Ctx) {
+        val alive = ctx.myCreeps.mapTo(HashSet()) { it.id }
+        val gone = knownHaulers.filter { it !in alive }
+        for (id in gone) {
+            haulersLost++
+            haulerCargoLost += haulerCargo.remove(id) ?: 0
+            knownHaulers.remove(id)
+        }
+        for (h in ctx.haulers) {
+            knownHaulers.add(h.id)
+            haulerCargo[h.id] = h.store[RESOURCE_ENERGY] ?: 0
+        }
+    }
+
     private val siteSeen = HashMap<String, Pair<Int, Int>>()
 
     /** Площадка -> (тиков, что смотритель провёл В ДОСЯГАЕМОСТИ от неё; её прогресс на первом таком
@@ -740,6 +770,7 @@ object SpawnAndSwamp {
         measureDelivery(ctx)
         measureSupply(ctx)
         measureSiteWork(ctx)
+        measureHaulerLoss(ctx)
         val breach = breachPlan(ctx)
         if (DEBUG_LOG && breach != null && !breachLogged) {
             breachLogged = true
@@ -784,7 +815,8 @@ object SpawnAndSwamp {
             val usable = usableSites(ctx)
             println(
                 "t=${getTicks()} spawnE=${mySpawn.store[RESOURCE_ENERGY]} spawning=${mySpawn.spawning != null} " +
-                    "haulers=${haulers.size} carried=$carried fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} foeHeal=$foeHeal " +
+                    "haulers=${haulers.size} carried=$carried haulersLost=$haulersLost cargoLost=$haulerCargoLost " +
+                    "fighters=${fighters.size} enemies=${enemyCreeps.size}/${combatEnemies.size} foeHeal=$foeHeal " +
                     "sites=${sites.size} usable=${usable.sumOf { it.energy }} income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()}${realisedIncome().let { if (it < 0) "" else "r" + it.toInt() }}s${supplyRate().toInt()} " +
                     "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawns=${enemySpawns.size}@${enemySpawn?.let { "${it.x},${it.y}" } ?: "-"} enemySpawnHits=${enemySpawn?.hits}+${spawnRampartHits(ctx)} " +
                     "mine=${myTowers.joinToString(",") { "T(${it.x},${it.y})h=${it.hits}e=${it.store[RESOURCE_ENERGY]}" }.ifEmpty { "-" }}${ctx.mySites.joinToString("") { "+site(${it.x},${it.y})${it.progress}/${it.progressTotal}" }} home=${(homeShare() * 100).toInt()}%"
