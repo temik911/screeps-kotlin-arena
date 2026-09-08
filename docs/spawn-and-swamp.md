@@ -1462,6 +1462,59 @@ abandons 0. On the two multi-spawn fixtures the delivery point, now that it real
 `twospawn` 1976 → 2043 and `stream+farm` 911 → 966 — the honest price, against opponents the fixtures
 only stand in for.
 
+### v64: the fleet grew while its own delivery fell (08.09.2026)
+
+The delivery point of v62-v63 was built for the first time in a live match (`6a9ffb75`, second spawn
+standing from t=400) — and the match was still lost, in a shape the log states outright: at t=580-640
+we held **eleven haulers and two fighters**, with measured delivery down from 14-15 to **3-5** a tick.
+The second production line bought carriers, not soldiers.
+
+Two instruments were saying "buy another hauler" and neither was answering the question:
+
+- **`supplyRate` counted energy that APPEARED, not energy we could take.** The map drops 2000 every
+  fifty ticks in several places, so "appeared per tick" reads 80-97 against our 14, and
+  `supplyBound = supply > taking` answers yes forever — including piles that decay long before an empty
+  hauler could reach them. It now counts only what a hauler reaches inside the pile's own lifetime.
+  **Inert on every fixture**, which is worth saying plainly: a correction to a lie in the instrument,
+  not a measured win;
+- **nothing asked whether the LAST hauler had helped.** `fleetDelivers` compared the measurement with
+  the *forecast*, and the forecast falls together with the near piles, so "measured above a collapsed
+  forecast" read as "capacity is the bottleneck".
+
+Now the fleet remembers its own capacity and measured delivery at the moment of the previous purchase,
+and refuses to grow when growth made delivery **worse**. The weaker of the two questions is deliberate:
+asking "did delivery RISE" costs `fortress` three hundred ticks, because in a long build delivery grows
+more slowly than the 300-tick measurement window; asking "did it FALL" keeps that fleet and still closes
+the spiral.
+
+Measured: all 26 gate scenarios pass, `siege6` keeps its tower and abandons 0. The けろびー-shaped
+fixture `twospawn` goes **1976 → 1011** — the first time the delivery-point branch has paid for itself
+anywhere. The price is `fortress` 1281 → 1583, where the fleet's growth does lower measured delivery
+for a while and the guard believes it.
+
+### What sixteen unrated matches say about all of it (08.09.2026)
+
+`series.py versions`, けろびー#19 only — the same opponent bot, the same unrated form, no rating moved:
+
+| our version | matches | W-L-D | what was in it |
+|---|---|---|---|
+| v60 | 12 | 1-7-4 | healer by rate |
+| v61 | 12 | 3-9-0 | delivery point reaches the middle, haul measured to the nearest spawn |
+| v62 | 3 | 0-3-0 | a busy spawn stops blocking placement; the point is placed and never built |
+| v63 | 5 | 0-5-0 | the keeper gets legs — the point is BUILT, and the fleet eats the gain |
+| **v64** | **16** | **6-7-3** | the fleet stops growing once its own growth made delivery worse |
+
+Pooled v60-v63 against him: **4-24-4**, that is 12.5% wins and 75% losses. v64: **37.5% wins and 44%
+losses**. Six wins or more out of sixteen at the old rate happens about one and a half times in a
+hundred, so this is a real move and not a run of good draws — with the usual caveat that sixteen
+matches place the rate somewhere broad, not on a point.
+
+The order of the four versions is the whole argument in miniature and worth keeping: v62 removed what
+stopped the branch from being **considered**, v63 removed what stopped it from being **finished**, and
+both were worth nothing on their own — 0-8 between them — because a second delivery point on this bot
+converted into carriers instead of soldiers. Only v64, which closed that conversion, made the previous
+two pay. Three defects in one chain, and any two of them fixed without the third measure as noise.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
