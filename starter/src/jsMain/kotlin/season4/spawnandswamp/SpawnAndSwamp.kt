@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 60
+    private const val BOT_VERSION = 61
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -610,8 +610,12 @@ object SpawnAndSwamp {
         val blocked: List<Position>,
         val blockedForEnemy: List<Position>,
         val dangerMatrix: CostMatrix,
-        val loadedToSpawn: IntArray,  // гружёный к нашему спавну (болото ×5), наша проходимость
-        val stepsToSpawn: IntArray,   // пустой к нашему спавну, шаги
+        val loadedToSpawn: IntArray,  // гружёный к ДОМУ (болото ×5): геометрия, тревога, «дома ли»
+        val stepsToSpawn: IntArray,   // пустой к ДОМУ, шаги
+        // …а ВОЗКА меряется до БЛИЖАЙШЕГО нашего спавна: хаулер сдаёт туда (dropOff), и в этом весь
+        // смысл второй точки сдачи. Пока спавн один, оба поля совпадают с домашними слово в слово
+        val haulLoaded: IntArray,     // гружёный к ближайшему нашему спавну
+        val haulSteps: IntArray,      // пустой к ближайшему нашему спавну, шаги
         val enemyApproach: IntArray,  // враг к нашему спавну по ЕГО проходимости
         val sites: List<EnergySite>,
         val enemyTowers: List<TowerInfo>,
@@ -772,8 +776,26 @@ object SpawnAndSwamp {
         if (enemyHome != null) DistanceMap.ensureBuilt(mySpawn, enemyHome)
 
         val loadedToSpawn = DistanceMap.flowFieldTo(mySpawn, blocked)
+        /** Поэлементный минимум полей до всех наших спавнов: рейс считается до того, куда сдают. */
+        fun nearestField(steps: Boolean): IntArray {
+            if (mySpawns.size <= 1) return if (steps) DistanceMap.stepFieldTo(mySpawn, blocked) else loadedToSpawn
+            var acc: IntArray? = null
+            for (sp in mySpawns) {
+                val f = if (steps) DistanceMap.stepFieldTo(sp, blocked) else DistanceMap.flowFieldTo(sp, blocked)
+                val cur = acc
+                if (cur == null) acc = f
+                else for (i in cur.indices) {
+                    val a = cur[i]
+                    val b = f[i]
+                    cur[i] = if (a < 0) b else if (b < 0) a else minOf(a, b)
+                }
+            }
+            return acc ?: loadedToSpawn
+        }
         flowCache[mySpawn.x * 100 + mySpawn.y] = loadedToSpawn
         val stepsToSpawn = DistanceMap.stepFieldTo(mySpawn, blocked)
+        val haulLoaded = nearestField(false)
+        val haulSteps = if (mySpawns.size <= 1) stepsToSpawn else nearestField(true)
         val enemyApproach = DistanceMap.flowFieldTo(mySpawn, blockedForEnemy)
         val enemyLoaded = enemyHome?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
 
@@ -781,7 +803,7 @@ object SpawnAndSwamp {
         // ПОТОЛОК ТЕЛА этого тика: спавн плюс досягаемые экстеншены. Считается ДО любого выбора тела
         bodyCap = SPAWN_ENERGY_CAPACITY +
             myExtensions.count { getRange(it, mySpawn) <= EXTENSION_REACH } * EXTENSION_ENERGY_CAPACITY
-        val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, myExtensions, mySites)
+        val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, haulLoaded, haulSteps, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, myExtensions, mySites)
 
         rememberDrops(sites)
         cellStepsCache.clear()
@@ -1212,7 +1234,7 @@ object SpawnAndSwamp {
     /** Рейс хаулера от спавна к точке и обратно: пустым — шаги, гружёным — тики (болото ×5), плюс
      *  withdraw и transfer. */
     private fun tripTicks(ctx: Ctx, site: EnergySite): Int =
-        ctx.stepsToSpawn[site.pos.x * 100 + site.pos.y].coerceAtLeast(0) + site.myTicks + 2
+        ctx.haulSteps[site.pos.x * 100 + site.pos.y].coerceAtLeast(0) + site.myTicks + 2
 
     /** Целевой приток: сколько энергии в тик спавн способен превратить в бойцов — цена части полного
      *  бойца, делённая на время спавна части. Приток выше этого копится в очереди хаулеров у спавна
@@ -1906,7 +1928,14 @@ object SpawnAndSwamp {
                 val ours = ctx.stepsToSpawn[key]
                 val his = enemySteps[key]
                 if (ours < 0) continue
-                if (his >= 0 && ours * 3 / 2 >= his) continue
+                // ЗАПАС В ПОЛТОРА РАЗА БЫЛ МОЙ И ОКАЗАЛСЯ ЗАПРЕТОМ НА ТО, РАДИ ЧЕГО ВСЁ. Он отбрасывал
+                // всю середину карты, а середина — это и есть энергия: в ничьей 6a9feeab наши угловые
+                // кучи выскреблись до 50, а две по 2000 лежали в 52 клетках и распадались за 6 и 56
+                // тиков, отчего приток стал 0 из 33 и мы собрали 10400 против его 42080 при 117400
+                // распавшихся. けろびー ставит точки сдачи в (63,70), (80,91) и даже (36,29) — в НАШЕЙ
+                // половине, — и берёт середину. Условие остаётся только одно и настоящее: клетка не
+                // должна быть ближе к нему, чем к нам; риск за неё платит экономические ворота
+                if (his >= 0 && ours > his) continue
                 val rate = collectRate(ctx, pos, capacity, keepHome = true)
                 if (rate > bestRate) { bestRate = rate; best = pos }
             }
@@ -1974,7 +2003,7 @@ object SpawnAndSwamp {
     /** Через сколько тиков в спавн доедет ещё gap энергии: гружёные хаулеры по тикам гружёного пути,
      *  ближние первыми, пока их груз не покроет разрыв; остаток — по притоку с земли. */
     private fun energyArrivalTicks(ctx: Ctx, gap: Int, income: Double): Double {
-        fun ticksOf(h: Creep) = ctx.loadedToSpawn[h.x * 100 + h.y].let { if (it < 0) Int.MAX_VALUE / 4 else it }
+        fun ticksOf(h: Creep) = ctx.haulLoaded[h.x * 100 + h.y].let { if (it < 0) Int.MAX_VALUE / 4 else it }
         var covered = 0
         var ticks = 0.0
         for (h in ctx.haulers.filter { (it.store[RESOURCE_ENERGY] ?: 0) > 0 }.sortedBy { ticksOf(it) }) {
