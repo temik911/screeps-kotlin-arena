@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 58
+    private const val BOT_VERSION = 59
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -1755,7 +1755,13 @@ object SpawnAndSwamp {
         // ...а лекарь — по третьему ответу того же прогона (assaultWantsHealer). Мили-гарнизон дома
         // старше: против мили-шара у спавна лекарь без урона не держит ничего
         val guard = guardNeeded || assaultWantsMelee
-        val healer = !guard && assaultWantsHealer
+        // ЛЕКАРЬ ПОКУПАЕТСЯ ТОЛЬКО ТОТ, О КОМ СПРАШИВАЛИ. assaultWantsHealer — ответ прогона про ПОЛНОЕ
+        // тело (healerBody(SPAWN_ENERGY_CAPACITY)), а покупка брала healerBody(budget) и на половине
+        // кассы выпускала M8H1: одна часть, двенадцать лечения, против сотен урона. Это тот же дефект,
+        // что нашёлся в v51, — вопрос про одно, ответ применяется к другому (стенд stream17: 888 -> 1329).
+        // Не хватает на настоящего — берём бойца, а не огрызок лекаря; копить незачем, вопрос задаётся
+        // каждый тик заново
+        val healer = !guard && assaultWantsHealer && budget >= SPAWN_ENERGY_CAPACITY
         val body = if (guard) guardBody(budget, spawnLimited) else if (healer) healerBody(budget, spawnLimited) else fighterBody(budget, spawnLimited)
         val full = if (guard) guardBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else if (healer) healerBody(SPAWN_ENERGY_CAPACITY, spawnLimited) else fighterBody(SPAWN_ENERGY_CAPACITY, spawnLimited)
         // Ждём полное тело, если гарнизон и так держит (deficit <= 0: недомерок ничего не добавит) или
@@ -2336,7 +2342,7 @@ object SpawnAndSwamp {
      * (матч 11). Потери пути (attrition) снимаются до осады фокусом по самому раненому. ratio — запас:
      * хиты спавна считаются с этим множителем (1.3 на выход, 0.9 на продолжение), плюс рампарт на нём.
      */
-    private fun siegeOutcome(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int = 0, extra: Array<BodyPartType>? = null): SiegeResult {
+    private fun siegeOutcome(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int = 0, extra: Array<BodyPartType>? = null, approach: Int = 0): SiegeResult {
         if (wave.isEmpty()) return SIEGE_LOSE
         // extra — ещё не купленное тело: тем же прогоном спрашиваем, с каким из них осада кончится раньше
         val units = ArrayList(wave.map { c ->
@@ -2356,13 +2362,31 @@ object SpawnAndSwamp {
             val v = alive.maxByOrNull { it.missing() } ?: return 0.0
             return v.mend(power)
         }
-        var left = attrition
-        while (left > 0.0) {
-            val v = units.filter { it.alive() }.minByOrNull { it.total() } ?: return SIEGE_LOSE
-            val taken = v.hit(left)
-            if (taken <= 0.0) return SIEGE_LOSE
-            left -= taken
+        // МАРШ ТОЖЕ БОЙ, И ЛЕКАРЬ ЛЕЧИТ НА НЁМ. attrition — урон, полученный ПО ДОРОГЕ, и прежде он
+        // вываливался в волну одним куском ДО прогона, где лечение только и работало. То есть ровно в
+        // том месте, ради которого лекарь и нужен, его в модели не было вовсе, и на вопрос «а если
+        // лекарь» симуляция отвечала «строго хуже» по построению: за сорок матчей вердикт «healer»
+        // выиграл 2 раза из 1714, а куплен лекарь не был НИ РАЗУ за семьдесят с лишним живых матчей,
+        // при том что чужое лечение отменяет от 42% до 85% всего, что мы выстрелили.
+        // Разносим урон марша по тикам подхода и лечим каждый тик — тем же mendWave, что и в осаде.
+        // approach = 0 (звонящие, которым ход неизвестен) оставляет прежнее поведение слово в слово.
+        fun absorb(damage: Double): Boolean {
+            var left = damage
+            while (left > 0.0) {
+                val v = units.filter { it.alive() }.minByOrNull { it.total() } ?: return false
+                val taken = v.hit(left)
+                if (taken <= 0.0) return false
+                left -= taken
+            }
+            return true
         }
+        if (approach > 0 && attrition > 0.0) {
+            val perTick = attrition / approach
+            repeat(approach) {
+                if (!absorb(perTick)) return SIEGE_LOSE
+                mendWave()
+            }
+        } else if (!absorb(attrition)) return SIEGE_LOSE
         class Def(val hits: Double, val dps: Double, val heal: Double)
         val defs = ArrayDeque(defenders
             .sortedWith(compareByDescending<Creep> { InfluenceMap.profileOf(it).heal }.thenBy { it.hits })
@@ -2629,8 +2653,11 @@ object SpawnAndSwamp {
             val van = waveMembers.mapNotNull { m -> spawnFlow[m.x * 100 + m.y].takeIf { it >= 0 } }.minOrNull() ?: 0
             waveMembers.filter { m -> spawnFlow[m.x * 100 + m.y].let { it >= 0 && it - van <= COHESION_GAP } }
         } else waveMembers
-        val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
-        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow) else SIEGE_LOSE
+        // ход считается ДО прогонов: он им теперь нужен — по нему разносится урон марша (см. approach)
+        val startTravel = travelTicksOf(staging, assaultFlow, spawnFlow)
+        val frontTravel = travelTicksOf(waveFront, assaultFlow, spawnFlow)
+        val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = startTravel) else SIEGE_LOSE
+        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel) else SIEGE_LOSE
         // осада фронтом ВМЕСТЕ с группой поста: когда волна держит кромку, подкрепление уходит к ней, если
         // сумма выигрывает (с запасом на выход, как siegeStart)
         val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
@@ -2652,8 +2679,11 @@ object SpawnAndSwamp {
         val armoured = spawnRampart > 0 || siegeTowers.isNotEmpty()
         if (enemySpawn == null || siegeCrew.isEmpty()) { assaultWantsMelee = false; assaultWantsHealer = false }
         else {
+            // с тем же маршем: тело выбирается по тому, чем кончится ВЕСЬ поход, а не только работа
+            // под спавном, — иначе лекарь снова оценивается там, где он не нужен
+            val crewTravel = travelTicksOf(siegeCrew, assaultFlow, spawnFlow)
             fun run(extra: Array<BodyPartType>) =
-                siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = extra)
+                siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = extra, approach = crewTravel)
             val withRanged = run(fighterBody(SPAWN_ENERGY_CAPACITY))
             val withMelee = if (armoured) run(guardBody(SPAWN_ENERGY_CAPACITY)) else SIEGE_LOSE
             // ЛЕКАРЬ спрашивается всегда, когда осада вообще считается. Он ничего не ломает, значит по
@@ -2678,8 +2708,6 @@ object SpawnAndSwamp {
         fun budget(travelTicks: Int, siege: SiegeResult) = travelTicks.toLong() + minOf(siege.ticks, SIEGE_LIMIT)
         // ход считается по маршруту подхода и СВОИМ телом (pathTicks), а не по цене поля: цена поля
         // под огнём — это урон, а часам нужны тики. Пустое поле или недостижимая цель — прежний ответ
-        val startTravel = travelTicksOf(staging, assaultFlow, spawnFlow)
-        val frontTravel = travelTicksOf(waveFront, assaultFlow, spawnFlow)
         val never = Long.MAX_VALUE / 4
         val goNeed = minOf(
             if (staging.isEmpty()) never else budget(startTravel, siegeStart),
