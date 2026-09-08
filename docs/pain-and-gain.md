@@ -717,6 +717,27 @@ stand could not build — his fight, tick by tick, from his side. The next thing
 probe but reading HIS replay creep by creep through the entry: which target each of his twelve picks each tick, and
 what our twelve would have had to pick to trade evenly.
 
+**Reading HIS replay creep by creep — the sharpest asymmetry yet, and why fixing it did not help (08.09.2026).** The
+entry trace of a MetalicaX wipeout shows his formation plainly: four melee abreast on ONE row — (48,46) (47,46)
+(46,46) — with his five ranged on the row behind, and the whole army stepping forward together, row by row, until the
+front melee makes contact. Ours on the same ticks have melee at y=55-56 and ranged at y=54, i.e. the ranged AHEAD.
+
+Measured over the entry window of two losses (`tools/frontorder.py`, kept): **his melee reaches one of our soft creeps
+first in 60 % of ticks; our melee reaches one of his soft creeps first in 0-10 %.** Our melee is the nearest in 2-3
+ticks of 28, his in 15-19. His line covers its ranged and healers; ours does not. The bot has a rule for exactly this
+(`behindMelee`, v69) — in `planFight`, which this fight never calls.
+
+Two probes followed, and both failed in an instructive way. Pushing the planned ranged row back against a blob
+(`USE_RANGED_ROW_VS_BLOB`): gate 131/131, games 1-5 / 2-4, **and the measurement did not move — 63 % against 60 %**.
+That is the finding: a slot is a PLAN, and a creep in a fight walks to its TARGET (engage, poker, kite, prey), so
+placement rules barely reach the battlefield at all. Editing the target instead — a ranged whose nearest enemy melee is
+no farther than our nearest melee walks behind that melee (`USE_RANGED_KEEPS_BEHIND`) — gives 1-5 / 1-5 and drops the
+gate: a ranged that hides behind a melee loses its target, since its range is three and the cell behind the melee is
+usually outside it. Being covered costs it its fire.
+
+Nineteen variants priced now, one of them kept (v135's kite). The asymmetry is real and measured; what is missing is a
+way to be covered WITHOUT going silent, and neither placement nor a movement target has provided it.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
