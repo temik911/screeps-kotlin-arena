@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 61
+    private const val BOT_VERSION = 62
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -552,6 +552,20 @@ object SpawnAndSwamp {
     private val delivered = ArrayDeque<Pair<Int, Int>>()
     private val haulerStore = HashMap<String, Int>()
     private var firstHaulerTick = -1
+
+    /**
+     * САМОЕ БОЛЬШОЕ ЧИСЛО ЕГО СПАВНОВ ЗА МАТЧ. Это не счёт целей, а ЕГО ОТВЕТ НА ВОПРОС О ГОРИЗОНТЕ —
+     * тот самый, которого у нас нет и которого четыре попытки подряд требовали от симуляции осады,
+     * получая «никогда». Тысячу в производство кладёт только тот, кто рассчитывает прожить достаточно,
+     * чтобы она отбилась; поставив второй спавн, противник СКАЗАЛ, что матч будет длинным и
+     * экономическим. Против того, кто идёт убивать сразу (все 26 сценариев стенда — один спавн от
+     * начала до конца), та же тысяча — это отнятый боец, и замер это показывает без двусмысленности:
+     * точка сдачи, поставленная безусловно, роняет ВЕСЬ стенд (tower+healball 521->806, tower+stream
+     * 574->992, tower+pairs 538->749, stream17 888->973, siege6 теряет башню). Против けろびー#19 он
+     * доходит до второго спавна к 220-300 тику в шести матчах из шести и кончает с четырьмя-шестью.
+     * Пик, а не текущее число: убитый спавн не отменяет того, что он его строил.
+     */
+    private var foeSpawnPeak = 0
 
     private var lastSpawnEnergy = -1
     private var regenSamples = 0
@@ -1522,7 +1536,16 @@ object SpawnAndSwamp {
     private fun spawnIfNeeded(ctx: Ctx, defenders: List<Creep>, threats: List<Creep>, alarm: Boolean, enemyArrival: Int, spawnUnderFire: Boolean) {
         // ПРОИЗВОДИТ ЛЮБОЙ СВОБОДНЫЙ, и берётся тот, у кого энергии больше: хаулеры сдают в ближайший,
         // поэтому энергия копится там, где короче рейс, и очередь должна идти оттуда же
-        val spawn = ctx.mySpawns.filter { it.spawning == null }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 } ?: return
+        // ПЛОЩАДКУ СТАВИТ НЕ СПАВН. Башня, точка сдачи и проба расстояния — это createConstructionSite:
+        // спавн за них не платит и их не производит, строит смотритель из кучи. А функция уходила из
+        // тика первой же строкой, как только КАЖДЫЙ спавн был занят, — и уносила с собой все три.
+        // Насыщенный спавн занят ПОСТОЯННО: в тестовом матче против けろびー#19 (6a9ffb7f) spawning=true
+        // без перерыва с 200-го тика до конца, спавн стоял полным (1000) при 522-650 груза на хаулерах,
+        // которые не могли сдать, — то есть ровно в тех тиках, когда вторая точка производства нужна
+        // больше всего, ветку её постановки не исполняли ВОВСЕ. Отсюда и «башня в победах 0.45, в
+        // поражениях 0.04»: в победах спавн простаивает, и площадка успевает родиться.
+        val free = ctx.mySpawns.filter { it.spawning == null }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
+        val spawn = free ?: ctx.mySpawns.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 } ?: return
         val energy = spawn.store[RESOURCE_ENERGY] ?: 0
         // БЮДЖЕТ ТЕЛА — спавн плюс досягаемые экстеншены: spawnCreep берёт из них сам, спавн тратится
         // первым. Всё остальное в этой функции (хаулер, бурильщик, смотритель) считается по ЭНЕРГИИ
@@ -1586,41 +1609,6 @@ object SpawnAndSwamp {
         val threatIn = if (alarm) minOf(enemyArrival, SPAWN_ALARM_TICKS) else enemyArrival
         val fighterFirst = (alarm || deficit > 0.0) && threatIn < investReady &&
             (holdReady <= threatIn || holdReady < investReady || closesNow)
-        if (breach != null && !alarm && !fighterFirst && ctx.myCreeps.none { isMelee(it) }) {
-            val order = breacherOrder(ctx, breach, usable, energy, carried, flow)
-            // бурильщик под поток — и копим на него, если по потоку он ближе, чем через хаулера; иначе
-            // хаулер вперёд (ветка хаулера ниже) — после него та же проверка снова укажет на бурильщика
-            if (order != null && order.second) {
-                val k = order.first
-                val breacherCost = k * (cost(MOVE) + cost(ATTACK))
-                if (energy < breacherCost) {
-                    if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: saving for breacher blocks=$k cost=$breacherCost energy=$energy carried=$carried flow=${(flow * 10).toInt() / 10.0} hold=${holdReady.toInt()} invest=${investReady.toInt()}")
-                    return
-                }
-                val r = spawn.spawnCreep(breacherBody(k))
-                if (r.error == null) spentFighters += breacherCost
-                if (DEBUG_LOG) {
-                    val trace = StringBuilder()
-                    val sim = guardReadySim(ctx, breach, energy, trace)
-                    println("spawn: breacher blocks=$k walls=${breach.walls.size} hits=${breach.totalHits} fire=${wallFire(ctx, breach)} trip=${breach.trip} open=${breachOpenIn(ctx, breach, energy, flow)} hold=${holdReady.toInt()} invest=${investReady.toInt()} sim=$sim arrival=$enemyArrival err=${r.error}$trace")
-                }
-                return
-            }
-        }
-        lastSpawnOutlivesFighter = spawnLife > fullBody.size * CREEP_SPAWN_TIME
-        if (DEBUG_LOG && fighterFirst && energy < fullCost && getTicks() % 10 == 0) {
-            println("spawn: fighter first — enemy arrives in $threatIn, hold=${holdReady.toInt()} invest=${investReady.toInt()} deficit=${deficit.toInt()} alarm=$alarm closes=$closesNow flow=${(flow * 10).toInt() / 10.0}")
-        }
-        // хаулер нужен, пока прогноз притока ниже того, что спавн переваривает, И спавн не насыщен:
-        // при полном спавне с грузом в пути приток уже стоит в очереди, и новый хаулер только
-        // отодвигает бойца (стенд: целевой приток 27 при теле M8R4 разгонял флот до 15 при спавне,
-        // простаивающем полным)
-        // ФЛОТ НЕ РАСТЁТ, ПОКА ОН НЕ ВЫВОЗИТ ОБЕЩАННОЕ. Прогноз считает энергию, лежащую на земле,
-        // достижимой; охота на хаулеров, распад точки до приезда и пробки в этот счёт не входят, и в матче 22
-        // флот рос до одиннадцати, пока сдача падала с 22 до 4. Замер (realisedIncome) отвечает на тот же
-        // вопрос фактом; пока он держится у прогноза (с той же гистерезисной долей, что и у наступления),
-        // ёмкость — узкое место и покупка имеет смысл. Ниже — узкое место не ёмкость, и ещё один хаулер
-        // поедет умирать туда же
         val realised = realisedIncome()
         val fleetDelivers = realised < 0.0 || realised >= projectedIncome(ctx, usable) * PUSH_RELEASE_RATIO
         // ПОТОК, А НЕ КУЧА. capacityBound спрашивает, лежит ли на земле на четыре круга всего флота, —
@@ -1636,38 +1624,11 @@ object SpawnAndSwamp {
             !(energy >= SPAWN_ENERGY_CAPACITY && carried > 0) &&
             (supplyBound || capacityBound(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) }, HAULER_BLOCKS_MIN * CARRY_CAPACITY)) &&
             projectedIncome(ctx, usable) < targetIncome()
-        // стража «на всякий случай» нет: армия врага видна с момента его spawnCreep, и боец строится
-        // в ответ на неё (fighterFirst). Страж за 500 стоял 200 тиков без дела, а второй хаулер
-        // из-за него появился на 120-м тике — противник к 70-му вывел в поле вдвое больше ёмкости.
-        // Боец первым — если видимая армия врага перевешивает И успеет дойти раньше, чем мы закроем
-        // дефицит (тел × максимум из времени рождения и накопления энергии). Два разведчика врага
-        // на другом краю карты 170 тиков держали спавн на «боец первым» при притоке 10/23 (02.09).
-        // (income, deficit, fighterFirst — выше, до ветки бурильщика)
-        // ХЕДЖ ПО ЖИВОЙ СИЛЕ, А НЕ ПО КАССЕ. Прежде сравнивались суммы потраченного, и убитый боец
-        // продолжал оправдывать хаулера всю игру: вложив в бойцов восемь тысяч и держа двоих, мы имели
-        // право на девять тысяч флота — и ровно это и вышло (ничья 1999 тиков: 15 хаулеров против трёх
-        // бойцов, чужой спавн отбит с 2200 обратно до 3000). Считаем то, что ЕСТЬ: цену уцелевших
-        // частей живого флота против цены уцелевших частей живых вооружённых
-        val liveHaulers = ctx.haulers.sumOf { liveCost(it) }
-        val liveFighters = defenders.sumOf { liveCost(it) }
-        val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD
 
-        if (haulerTurn) {
-            val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
-            if (affordable < HAULER_BLOCKS_MIN) return // копим
-            // копим на полного, если приток обещает; самого первого хаулера не ждём — без него притока нет
-            val expected = minOf(HAULER_BLOCKS_MAX, (energy + carried) / blockCost())
-            if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return
-            val r = spawn.spawnCreep(haulerBody(affordable))
-            if (r.error == null) spentHaulers += affordable * blockCost()
-            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} live=$liveHaulers/$liveFighters err=${r.error}")
-            return
-        }
-        // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
-        if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return
-
-        if (budget < minFighter) return
-
+        // ПЛОЩАДКИ — ДО ПОКУПОК, А НЕ ПОСЛЕ. Ни одна из трёх не тратит спавна, а стояли они за четырьмя
+        // «return» подряд (коплю на бурильщика, коплю на хаулера, на бойца не хватает) плюс за занятым
+        // спавном. Собственный комментарий башни — «площадка ничего не стоит, поэтому ставится сразу»
+        // — все эти годы был неправдой ровно потому, что стоял ниже них
         // БАШНЯ ДОМА. Площадка ничего не стоит, поэтому ставится сразу, как только счёт (towerWorth)
         // говорит, что дома она даёт больше бойца за ту же энергию. Смотритель — часть цены башни:
         // без него площадку некому строить, а готовая башня молчит (ёмкость — один выстрел)
@@ -1709,22 +1670,41 @@ object SpawnAndSwamp {
         // вопрос снимается сам, если тысяча тратится ТОЛЬКО когда она иначе пролежит: спавн полон, флот
         // собран, дефицита обороны нет и площадок нет вовсе. Так покупает и けろびー — его точки идут
         // после сбора флота, примерно раз в полтораста тиков, из свободных денег
+        val fwdKeeper = if (ctx.builders.isEmpty()) builderBody(builderWork(flow)).sumOf { cost(it) } else 0
+        if (DEBUG_LOG && getTicks() % (LOG_EVERY * 2) == 0) {
+            println("fwd gates: t=${getTicks()} sites=${ctx.mySites.size} spawns=${ctx.mySpawns.size} budget=$budget/$fwdKeeper " +
+                "deficit=${deficit.toInt()} needHauler=$needHauler fighterFirst=$fighterFirst alarm=$alarm")
+        }
         if (ctx.mySites.isEmpty() && ctx.mySpawns.size < FORWARD_SPAWNS &&
-            // ПЛОЩАДКУ ОПЛАЧИВАЕТ НЕ СПАВН. Тысяча уходит в неё из КУЧИ руками смотрителя; спавн платит
-            // только за самого смотрителя, и то лишь если его ещё нет. Условие «в кассе лежит тысяча»
-            // просило денег, которых покупка не требует, и стоило всей ветки: за двадцать живых матчей
-            // спавн был полон 5 тиков, площадка не поставлена ни разу
-            budget >= (if (ctx.builders.isEmpty()) builderBody(builderWork(flow)).sumOf { cost(it) } else 0) &&
-            deficit <= 0.0 && !needHauler && !fighterFirst && !alarm) {
+            // ЦЕНУ СМОТРИТЕЛЯ СПРАШИВАЛИ ДВАЖДЫ — И ОДИН РАЗ НЕ ВОВРЕМЯ. Она уже стоит в price у
+            // forwardWorth, то есть в ответе на «окупится ли»; а здесь её же требовали НАЛИЧНЫМИ в
+            // момент постановки, когда площадки ещё нет и смотритель ещё не нужен. Спавн столько не
+            // держит: после сбора флота в кассе 90-470 при цене смотрителя 600-700 (прогон none,
+            // тики 300-420 — единственное, что осталось запирать ветку после снятия занятого спавна).
+            // Смотрителя покупает своя ветка ниже, и по своим часам: когда площадка ЕСТЬ и успевает
+            // ХАУЛЕР И ТОЧКА СДАЧИ НЕ КОНКУРЕНТЫ, А ГЕЙТ ССОРИЛ ИХ ЗА ДЕНЬГИ, КОТОРЫХ ОНИ НЕ ДЕЛЯТ.
+            // Дефицитен у нас не кошелёк, а ВРЕМЯ СПАВНА: тело растёт по три тика на часть, и пока оно
+            // растёт, спавн не делает больше ничего (в матче 6a9ffb7f spawning=true без перерыва с 200-го
+            // тика). Хаулер съедает это время целиком; площадка не съедает его вовсе — её оплачивает куча
+            // руками смотрителя. Условие «сначала перестань хотеть хаулера» откладывало точку сдачи до
+            // MAX_HAULERS=16, то есть навсегда: за все прогоны ветка добиралась до вопроса трижды, и все
+            // три раза — раньше трёхсотого тика, когда притока ещё не замерено. Окупаемость считает
+            // forwardWorth, и тысяча из кучи в цене у неё уже стоит
+            // ГОРИЗОНТ СПРАШИВАЕМ У НЕГО (см. foeSpawnPeak): пока он держит один спавн, он играет на
+            // убийство, и наша тысяча — это отнятый боец; поставил второй — сам объявил матч длинным
+            foeSpawnPeak > 1 &&
+            deficit <= 0.0 && !fighterFirst && !alarm) {
             val capacity = ctx.haulers.sumOf { h -> h.body.count { it.type == CARRY && it.hits > 0 } } * CARRY_CAPACITY
-            val spot = forwardSpot(ctx, capacity, flow)
+            val why = StringBuilder()
+            val spot = forwardSpot(ctx, capacity, flow, why)
+            if (DEBUG_LOG && spot == null && getTicks() % (LOG_EVERY * 5) == 0) println("fwd spot: none$why")
             if (spot != null) {
                 val trace = StringBuilder()
                 if (forwardWorth(ctx, spot, capacity, flow, energy, trace)) {
                     val r = createConstructionSite(spot.x, spot.y, StructureSpawn::class.js)
                     if (DEBUG_LOG) println("forward spawn: site at (${spot.x},${spot.y})$trace err=${r.error}")
-                } else if (DEBUG_LOG && getTicks() % (LOG_EVERY * 10) == 0) {
-                    println("forward spawn: no (${spot.x},${spot.y})$trace")
+                } else if (DEBUG_LOG && getTicks() % (LOG_EVERY * 2) == 0) {
+                    println("forward spawn: no t=${getTicks()} (${spot.x},${spot.y}) measured=${(realisedIncome() * 10).toInt() / 10.0}$trace")
                 }
             }
         }
@@ -1738,6 +1718,78 @@ object SpawnAndSwamp {
                 if (DEBUG_LOG) println("extprobe site at (${spot.x},${spot.y}) range=${getRange(spot, ctx.mySpawn)} err=${r.error}")
             }
         }
+
+        // ТЕЛО ЗАКАЗЫВАТЬ НЕКУДА, ПОКА ВСЕ СПАВНЫ ЗАНЯТЫ. Всё, что ниже, — это spawnCreep и накопление
+        // под него; площадки выше уже решены
+        if (free == null) return
+
+        if (breach != null && !alarm && !fighterFirst && ctx.myCreeps.none { isMelee(it) }) {
+            val order = breacherOrder(ctx, breach, usable, energy, carried, flow)
+            // бурильщик под поток — и копим на него, если по потоку он ближе, чем через хаулера; иначе
+            // хаулер вперёд (ветка хаулера ниже) — после него та же проверка снова укажет на бурильщика
+            if (order != null && order.second) {
+                val k = order.first
+                val breacherCost = k * (cost(MOVE) + cost(ATTACK))
+                if (energy < breacherCost) {
+                    if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: saving for breacher blocks=$k cost=$breacherCost energy=$energy carried=$carried flow=${(flow * 10).toInt() / 10.0} hold=${holdReady.toInt()} invest=${investReady.toInt()}")
+                    return
+                }
+                val r = spawn.spawnCreep(breacherBody(k))
+                if (r.error == null) spentFighters += breacherCost
+                if (DEBUG_LOG) {
+                    val trace = StringBuilder()
+                    val sim = guardReadySim(ctx, breach, energy, trace)
+                    println("spawn: breacher blocks=$k walls=${breach.walls.size} hits=${breach.totalHits} fire=${wallFire(ctx, breach)} trip=${breach.trip} open=${breachOpenIn(ctx, breach, energy, flow)} hold=${holdReady.toInt()} invest=${investReady.toInt()} sim=$sim arrival=$enemyArrival err=${r.error}$trace")
+                }
+                return
+            }
+        }
+        lastSpawnOutlivesFighter = spawnLife > fullBody.size * CREEP_SPAWN_TIME
+        if (DEBUG_LOG && fighterFirst && energy < fullCost && getTicks() % 10 == 0) {
+            println("spawn: fighter first — enemy arrives in $threatIn, hold=${holdReady.toInt()} invest=${investReady.toInt()} deficit=${deficit.toInt()} alarm=$alarm closes=$closesNow flow=${(flow * 10).toInt() / 10.0}")
+        }
+        // хаулер нужен, пока прогноз притока ниже того, что спавн переваривает, И спавн не насыщен:
+        // при полном спавне с грузом в пути приток уже стоит в очереди, и новый хаулер только
+        // отодвигает бойца (стенд: целевой приток 27 при теле M8R4 разгонял флот до 15 при спавне,
+        // простаивающем полным)
+        // ФЛОТ НЕ РАСТЁТ, ПОКА ОН НЕ ВЫВОЗИТ ОБЕЩАННОЕ. Прогноз считает энергию, лежащую на земле,
+        // достижимой; охота на хаулеров, распад точки до приезда и пробки в этот счёт не входят, и в матче 22
+        // флот рос до одиннадцати, пока сдача падала с 22 до 4. Замер (realisedIncome) отвечает на тот же
+        // вопрос фактом; пока он держится у прогноза (с той же гистерезисной долей, что и у наступления),
+        // ёмкость — узкое место и покупка имеет смысл. Ниже — узкое место не ёмкость, и ещё один хаулер
+        // поедет умирать туда же
+        // стража «на всякий случай» нет: армия врага видна с момента его spawnCreep, и боец строится
+        // в ответ на неё (fighterFirst). Страж за 500 стоял 200 тиков без дела, а второй хаулер
+        // из-за него появился на 120-м тике — противник к 70-му вывел в поле вдвое больше ёмкости.
+        // Боец первым — если видимая армия врага перевешивает И успеет дойти раньше, чем мы закроем
+        // дефицит (тел × максимум из времени рождения и накопления энергии). Два разведчика врага
+        // на другом краю карты 170 тиков держали спавн на «боец первым» при притоке 10/23 (02.09).
+        // (income, deficit, fighterFirst — выше, до ветки бурильщика)
+        // ХЕДЖ ПО ЖИВОЙ СИЛЕ, А НЕ ПО КАССЕ. Прежде сравнивались суммы потраченного, и убитый боец
+        // продолжал оправдывать хаулера всю игру: вложив в бойцов восемь тысяч и держа двоих, мы имели
+        // право на девять тысяч флота — и ровно это и вышло (ничья 1999 тиков: 15 хаулеров против трёх
+        // бойцов, чужой спавн отбит с 2200 обратно до 3000). Считаем то, что ЕСТЬ: цену уцелевших
+        // частей живого флота против цены уцелевших частей живых вооружённых
+        val liveHaulers = ctx.haulers.sumOf { liveCost(it) }
+        val liveFighters = defenders.sumOf { liveCost(it) }
+        val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD
+
+        if (haulerTurn) {
+            val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
+            if (affordable < HAULER_BLOCKS_MIN) return // копим
+            // копим на полного, если приток обещает; самого первого хаулера не ждём — без него притока нет
+            val expected = minOf(HAULER_BLOCKS_MAX, (energy + carried) / blockCost())
+            if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return
+            val r = spawn.spawnCreep(haulerBody(affordable))
+            if (r.error == null) spentHaulers += affordable * blockCost()
+            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} live=$liveHaulers/$liveFighters err=${r.error}")
+            return
+        }
+        // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
+        if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return
+
+        if (budget < minFighter) return
+
         // СМОТРИТЕЛЬ — ЧАСТЬ ЦЕНЫ БАШНИ, И ЧАСЫ У НЕГО ТЕ ЖЕ. Под площадку, которая не достроится
         // в срок, он не покупается: в проигранном матче 22:22 он стоил 700 при притоке 2 в тик и
         // достроил 95 из 482 оставшихся. У готовой башни срока нет — её надо только кормить
@@ -1891,30 +1943,32 @@ object SpawnAndSwamp {
      * 38 по прямой» лежит в 80 шагах в обход. Мера — та же, что у куч (EnergySite.safe), но зеркальная:
      * кучу берут, если успевают раньше врага с запасом, а спавн надо ещё и ДЕРЖАТЬ.
      */
-    private fun forwardSpot(ctx: Ctx, capacity: Int, flow: Double): Position? {
-        val enemy: Position = ctx.enemySpawn ?: return null
-        if (dropHistory.isEmpty()) return null
+    private fun forwardSpot(ctx: Ctx, capacity: Int, flow: Double, why: StringBuilder? = null): Position? {
+        val enemy: Position = ctx.enemySpawn ?: return null.also { why?.append(" noEnemySpawn") }
+        if (dropHistory.isEmpty()) return null.also { why?.append(" noDrops") }
         val enemySteps = DistanceMap.stepFieldTo(enemy, ctx.blockedForEnemy)
         val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
         val price = buildCost("StructureSpawn")
         val keeper = builderBody(builderWork(flow))
         val carry = (ctx.builders.maxOfOrNull { b -> b.body.count { it.type == CARRY && it.hits > 0 } }
             ?: keeper.count { it == CARRY }) * CARRY_CAPACITY
-        if (carry <= 0) return null
+        if (carry <= 0) return null.also { why?.append(" noCarry") }
         var best: Position? = null
         var bestRate = collectRate(ctx, ctx.mySpawn as Position, capacity)
+        var unsafe = 0; var thin = 0; var dying = 0; var noCell = 0; var his = 0; var slower = 0
         for (src in ctx.sites) {
             // КУЧА НЕ ОБЯЗАНА ОПЛАТИТЬ ВСЮ ПЛОЩАДКУ ОДНА. Смотритель ходит к БЛИЖАЙШЕЙ живой куче
             // (supplyFor пересчитывается каждый тик), поэтому от места нужно, чтобы рядом было с чего
             // начать, а не чтобы одна куча держала тысячу. Прежнее требование просило именно этого — и
             // такие кучи выгребают наши же хаулеры: за шесть тестовых матчей против けろびー#19 площадка
             // нашлась один раз из шести, в остальных forwardSpot не возвращал ничего вовсе
-            if (!src.safe || src.container == null || src.energy < carry) continue
+            if (!src.safe) { unsafe++; continue }
+            if (src.container == null || src.energy < carry) { thin++; continue }
             val arrive = if (ctx.builders.isNotEmpty()) ctx.builders.minOf { getRange(it, src.pos) }
                 else ctx.stepsToSpawn[src.pos.x * 100 + src.pos.y].coerceAtLeast(0) + keeper.size * CREEP_SPAWN_TIME
             val work = ceil(price.toDouble() / carry) * 4.0 + price.toDouble() / (builderWork(flow) * BUILD_POWER)
             val life = src.ticksToDecay
-            if (life != null && life < arrive + work) continue
+            if (life != null && life < arrive + work) { dying++; continue }
             for (dx in -1..1) for (dy in -1..1) {
                 if (dx == 0 && dy == 0) continue
                 val x = src.pos.x + dx
@@ -1922,12 +1976,12 @@ object SpawnAndSwamp {
                 if (x !in 1..98 || y !in 1..98) continue
                 val key = x * 100 + y
                 val pos = InfluenceMap.cell(x, y)
-                if (getTerrainAt(pos) == TERRAIN_WALL) continue
-                if (key in busy) continue
-                if (ctx.loadedToSpawn[key] < 0) continue
+                if (getTerrainAt(pos) == TERRAIN_WALL) { noCell++; continue }
+                if (key in busy) { noCell++; continue }
+                if (ctx.loadedToSpawn[key] < 0) { noCell++; continue }
                 val ours = ctx.stepsToSpawn[key]
-                val his = enemySteps[key]
-                if (ours < 0) continue
+                val hisSteps = enemySteps[key]
+                if (ours < 0) { noCell++; continue }
                 // ЗАПАС В ПОЛТОРА РАЗА БЫЛ МОЙ И ОКАЗАЛСЯ ЗАПРЕТОМ НА ТО, РАДИ ЧЕГО ВСЁ. Он отбрасывал
                 // всю середину карты, а середина — это и есть энергия: в ничьей 6a9feeab наши угловые
                 // кучи выскреблись до 50, а две по 2000 лежали в 52 клетках и распадались за 6 и 56
@@ -1935,11 +1989,12 @@ object SpawnAndSwamp {
                 // распавшихся. けろびー ставит точки сдачи в (63,70), (80,91) и даже (36,29) — в НАШЕЙ
                 // половине, — и берёт середину. Условие остаётся только одно и настоящее: клетка не
                 // должна быть ближе к нему, чем к нам; риск за неё платит экономические ворота
-                if (his >= 0 && ours > his) continue
+                if (hisSteps >= 0 && ours > hisSteps) { his++; continue }
                 val rate = collectRate(ctx, pos, capacity, keepHome = true)
-                if (rate > bestRate) { bestRate = rate; best = pos }
+                if (rate > bestRate) { bestRate = rate; best = pos } else slower++
             }
         }
+        why?.append(" piles=${ctx.sites.size} unsafe=$unsafe thin=$thin dying=$dying cell=$noCell his=$his slower=$slower home=${(bestRate * 100).toInt() / 100.0} carry=$carry")
         return best
     }
 
@@ -1953,7 +2008,9 @@ object SpawnAndSwamp {
      * постановки): тысяча, которая иначе пролежала бы в полном спавне, не отнимает бойца.
      */
     private fun forwardWorth(ctx: Ctx, spot: Position, capacity: Int, flow: Double, energy: Int, trace: StringBuilder): Boolean {
-        val measured = realisedIncome()
+        // ПОЛОВИНЫ ОКНА ДОСТАТОЧНО: точка сдачи строится ещё сотню тиков после решения, и целое окно
+        // отодвигало её готовность за пятисотый тик — в матчах против けろびー#19 исход решён к 430-му
+        val measured = realisedIncome(PRODUCTION_WINDOW / 2)
         // «ЕЩЁ НЕ ЗАМЕРЕНО» И «ЗАМЕРЕНО НУЛЁМ» — РАЗНЫЕ ОТВЕТЫ. realisedIncome даёт -1, пока окна
         // производства не набралось (первые триста тиков); в это время цены нет вовсе и вопрос не
         // задаётся. Ноль же — это факт: приток замерен и он нулевой, и вот тут запасная шкала нужна
@@ -3892,6 +3949,7 @@ object SpawnAndSwamp {
         }
         haulerStore.keys.retainAll(ctx.haulers.mapTo(HashSet()) { it.id })
         if (firstHaulerTick < 0 && ctx.haulers.isNotEmpty()) firstHaulerTick = now
+        foeSpawnPeak = maxOf(foeSpawnPeak, ctx.enemySpawns.size)
         if (sum > 0) delivered.addLast(now to sum)
         while (delivered.isNotEmpty() && delivered.first().first < now - PRODUCTION_WINDOW) delivered.removeFirst()
     }
@@ -3916,12 +3974,18 @@ object SpawnAndSwamp {
         return if (span <= 0) 0.0 else appeared.sumOf { it.second }.toDouble() / span
     }
 
-    /** Замеренный приток (энергии в тик) за окно; -1, пока флот не проработал целое окно и мерить нечего. */
-    private fun realisedIncome(): Double {
+    /**
+     * Замеренный приток (энергии в тик); -1, пока флот не проработал [minSpan] тиков и мерить нечего.
+     * ЦЕЛОЕ ОКНО — НЕ УСЛОВИЕ ИЗМЕРЕНИЯ, А ЕГО ТОЧНОСТЬ. Делится всегда на прожитый пролёт, поэтому
+     * ответ на половине окна — такой же замер, только шумнее; требование полных трёхсот было чистотой
+     * ради чистоты и стоило вопросу о точке сдачи полутора сотен тиков. Решениям, которые от шума
+     * ломаются (рост флота), окно по-прежнему нужно целиком — они и спрашивают по умолчанию.
+     */
+    private fun realisedIncome(minSpan: Int = PRODUCTION_WINDOW): Double {
         val now = getTicks()
         if (firstHaulerTick < 0) return -1.0
         val span = minOf(PRODUCTION_WINDOW, now - firstHaulerTick)
-        if (span < PRODUCTION_WINDOW) return -1.0
+        if (span < minSpan) return -1.0
         return delivered.sumOf { it.second }.toDouble() / span
     }
 
