@@ -447,6 +447,43 @@ are both upstream of any target-choice rule — the stand's blob never wins an e
 centre post from t=3 while his blob arrives at t=40 whole. In three of the four wipeouts read in detail we had ZERO
 points at t=100 while holding that post, so the post is not paying for the fight it costs.
 
+**The post cut (08.09.2026): the post pays, the OCCUPIED flag is the strongest split in the store, and the parity gate
+on capture is not convicted.** The suspicion this cut was built to test — that standing at the centre post costs a
+fight and returns nothing — is WRONG, and the store says so over 295 finished matches whose first hundred ticks we
+hold. Posted on the centre flag before contact against not posted: 102-46 (68 %) against 102-42 (70 %) — the outcome
+does not move — but our score at t=100 is 221.7 against 102.9 and his is 300.8 against 414.9. The post is worth roughly
+double the points and takes about a hundred off his; on the recent builds it is 63 % against 64 %, the same picture.
+So the doctrine stands as it is.
+
+What the same cut found instead is the sharpest split any instrument here has produced. Among the matches posted on the
+centre, whether a creep of OURS is standing ON a flag at t=100 divides them 80-20 (80 %) against 23-26 (46 %), and the
+scores by then are 330.6 against **4.8**. Points come from an OCCUPANT, not from guards: in the wipeouts we stand
+twelve creeps around a flag printed `D50g12` — nobody's, no occupant, twelve guards — and take nothing. Flags are
+occupied by the RUNNERS (the two pure-MOVE scouts), and in 6a9fa63e scout_1 spent 37 ticks at (85,80)…(85,50) with the
+flag at (85,49), one cell away, `step=stay`, mode POISED — `captureAllowed` (the parity gate) had refused the capture.
+
+Whether that gate is the cause is NOT established, and the honest control says so. Never poised adjacent to a free flag
+gives 82 % and 301 points; poised at all gives 64 % and 112; poised ten ticks or more, 66 % and zero points. But the
+poised matches are almost entirely against Coldkimchi#1, MetalicaX#2/#3/#4/#8 and けろびー#1/#2/#3, and the never-poised
+ones against ricardo18informatica2020#4/#5 and けろびー#4/#12 — the strong bots fight AT the flags, which is what makes
+the gate fire. Held fixed by his bot the gap survives pooled (poised 48-25, 65 %, against never 52-9, 85 %), but the
+"never" cell inside each strong bot is one or two matches, and inside けろびー#4 the sign reverses (poised 4-1 against
+never 11-8). So: the occupant matters, the parity gate is not convicted of costing it, and separating the two needs an
+experiment rather than another cut of the same records.
+
+The cut is kept as `tools/flagcut.py`, so these questions can be re-asked whenever the doctrine is touched: it reads
+the first hundred ticks of every finished match in the store and prints the post cut, the occupant cut, the poised cut
+and the opponent-held-fixed control (`--builds v133` restricts it to given builds). It is the store-wide counterpart of
+`tools/autopsy.py`, which reads one match, and of `tools/ledger.py`, which adds up diagnoses.
+
+**Matches 537–546 — ten diagnostic matches on v133 (08.09.2026): 6:4, 1 172 → 1 172, and the regression is confirmed
+to be ours.** After v134's 6:14 the question was whether we had got worse or the draw had (MetalicaX had put out three
+new bots in a day). Ten matches on the reverted build answer it: v133 holds the rating exactly level over ten — a
+balance of zero against v134's −4.8 a match — beating けろびー#4 twice, MetalicaX#4 and #6, ricardo18informatica2020#4
+and raznikk#10, losing to MetalicaX#4 twice and to the two new blob bots #9 (t=100) and #11 (t=200). So the −96 was
+the heal-behind rule, not the field, and the class of loss is unchanged: MetalicaX's blobs still wipe us inside two
+hundred ticks, and nothing in this cycle has touched that.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
