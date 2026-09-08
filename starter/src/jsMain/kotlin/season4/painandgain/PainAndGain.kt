@@ -704,6 +704,21 @@ object PainAndGain {
      *  (1-5 и 1-5), потому что наши в ней играли по модели ВРАГА; теперь после первого тика крип продолжает СВОЙ
      *  замысел — напор идёт вплотную, кайт держит две клетки, уступка пятится. */
     private const val USE_ROLLOUT_BY_INTENT = true
+    /** ЛЕКАРЬ ПРИ БОЙЦЕ (v142, оператор увидел это в повторе: «лекари всегда очень далеко»). Замер по записи разгрома
+     *  6aa072a0 (14 наших смертей против 0 его): среднее расстояние от лекаря до БЛИЖАЙШЕГО своего бойца — 4,1 клетки
+     *  у нас против 1,7 у него при дальности лечения 3. То есть наш лекарь в среднем стоял вне дальности и бойцов не
+     *  лечил вовсе. Причина в раздаче клеток: лекарь ранжировался как incNext*100 + расстояние, опасность весила
+     *  стократно, и он выбирал безопасную клетку подальше; а фолбэк, когда клетки в дальности не нашлось, отправлял
+     *  его в САМУЮ безопасную — то есть прочь от боя. Здесь порядок обратный: близость главная (и не 3, а 2, как у
+     *  него), опасность — тай-брейк, фолбэк ведёт к бойцам. */
+    private const val USE_HEALERS_CLOSE = true
+    /** МИЛИ НЕ БРОСАЕТСЯ ПОД ВЕРНУЮ СМЕРТЬ (v143, оператор): «выбрасываться могут либо под фокусфаер чтобы быстро убить
+     *  1 чужого крипа, либо когда у нас преимущество по силе в бою». Прежде замысел напора ставил мили вплотную к его
+     *  вооружённому всегда, а симуляция выбирала напор по мощи, которую сама же и считала. Теперь выброс разрешён
+     *  ровно в двух названных случаях: залп армии по слабейшему за тик перекрывает его хиты вместе с лечением, которое
+     *  до него дотягивается, — или наша мощь не ниже его. Иначе напор исполняется как удержание. */
+    private const val USE_MELEE_COMMIT = true
+    private const val MELEE_COMMIT_EDGE = 1.0
     private const val POWER_REACH_TICKS = 2
     /** ОТКАЗ ОТ ПЕРЕБОЯ (v140): приём из литературы по микроменеджменту RTS — «focus fire, while avoiding overkill by
      *  spreading damage over several units if the focus firing is enough to kill one». В боте его не было вовсе: все
@@ -1767,7 +1782,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v141"
+    private const val BOT_VERSION = "v143"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4963,6 +4978,30 @@ cpuMark("a.evade")
             return true
         }
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
+        // МИЛИ НЕ БРОСАЕТСЯ ПОД ВЕРНУЮ СМЕРТЬ (v143, оператор): вплотную к его строю — только когда это окупается.
+        // Два случая, и оба названы оператором: цель ДОБИВАЕТСЯ этим тиком (фокус-файр по одному крипу) или у нас
+        // ПЕРЕВЕС по силе в бою. Иначе замысел напора у мили исполняется как удержание — он остаётся в строю на
+        // MELEE_HOLD_RANGE, а не идёт в толпу умирать
+        val meleeCommit = if (!USE_MELEE_COMMIT) true else {
+            val adv = ourPowerOf(fighters, armedEnemies) >= enemyPowerOf(armedEnemies, fighters) * MELEE_COMMIT_EDGE
+            val kill = weakestMelee != null && run {
+                // залп армии по цели за тик: стрелки в дальности и мили, доходящие до неё шагом
+                val burst = fighters.sumOf { f ->
+                    val pr = InfluenceMap.profileOf(f)
+                    val d = getRange(f, weakestMelee)
+                    (if (pr.ranged > 0.0 && d <= RANGED_RANGE + 1) pr.ranged else 0.0) +
+                        (if (pr.melee > 0.0 && d <= 2) pr.melee else 0.0)
+                }
+                // ...минус его лечение цели: под лекарями «добивается» превращается в размен, которого мы не хотим
+                val cover = combatEnemies.sumOf { e ->
+                    val pr = InfluenceMap.profileOf(e)
+                    val d = getRange(e, weakestMelee)
+                    if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
+                }
+                burst >= weakestMelee.hits + cover
+            }
+            adv || kill
+        }
         val hisMelee = armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
         val melees = fighters.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) }
         val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
@@ -4973,11 +5012,17 @@ cpuMark("a.evade")
         // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
         for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
             val ok = when (intentOf(c)) {
-                Intent.PRESS -> place(c, { p -> armedEnemies.any { getRange(p, it) <= 1 } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+                Intent.PRESS -> if (meleeCommit)
+                    place(c, { p -> armedEnemies.any { getRange(p, it) <= 1 } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+                else place(c, { p -> armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
                 Intent.HOLD -> place(c, { p -> armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
                 Intent.YIELD -> place(c, { p -> true }, { p -> -(armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
-                Intent.FOCUS -> place(c, { p -> weakestMelee != null && getRange(p, weakestMelee) <= 1 },
-                    { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+                // фокус — как раз тот случай, ради которого выброс и разрешён: сюда мили идёт и без перевеса, но
+                // только если цель добивается (иначе meleeCommit ложен и он держит дистанцию)
+                Intent.FOCUS -> if (meleeCommit)
+                    place(c, { p -> weakestMelee != null && getRange(p, weakestMelee) <= 1 },
+                        { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+                else place(c, { p -> armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
                 // кайт как ЗАМЫСЕЛ (v138): ровно две клетки от его ближайшего мили — правило v135, которое одно и
                 // работало; командир вытеснял его из цепочки, и теперь симуляция может выбрать его наравне с прочими
                 Intent.KITE -> place(c, { p -> hisMelee.isEmpty() || (hisMelee.minOf { getRange(p, it) } == MELEE_HOLD_RANGE) },
@@ -5012,9 +5057,17 @@ cpuMark("a.evade")
         val wounded = fighters.filter { hasWeapon(it) && it.hits < it.hitsMax }
         for (c in healers) {
             val mates = wounded.ifEmpty { fighters.filter { hasWeapon(it) } }
-            if (!place(c, { p -> mates.any { getRange(p, it) <= HEAL_RANGE } },
-                    { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 + (mates.minOfOrNull { getRange(p, it) } ?: 0) }))
-                place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+            // ЛЕКАРЬ ПРИ БОЙЦЕ (v142): близость главная, опасность лишь тай-брейк — прежний порядок весил опасность
+            // стократно, и лекарь уходил в безопасную клетку ВНЕ дальности лечения; фолбэк вёл его туда же
+            val ok = if (USE_HEALERS_CLOSE)
+                place(c, { p -> mates.any { getRange(p, it) <= HEAL_RANGE - 1 } },
+                    { p -> (mates.minOfOrNull { getRange(p, it) } ?: 9).toDouble() * 100 + (incNext[p.x * 100 + p.y] ?: 0.0) })
+            else place(c, { p -> mates.any { getRange(p, it) <= HEAL_RANGE } },
+                    { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 + (mates.minOfOrNull { getRange(p, it) } ?: 0) })
+            if (!ok) {
+                if (USE_HEALERS_CLOSE) place(c, { true }, { p -> (mates.minOfOrNull { getRange(p, it) } ?: 9).toDouble() })
+                else place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
+            }
         }
     }
 
