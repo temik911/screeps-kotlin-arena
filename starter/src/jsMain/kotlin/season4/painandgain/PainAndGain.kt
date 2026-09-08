@@ -563,7 +563,18 @@ object PainAndGain {
      *  ОТВЕРГНУТО тестовыми играми: 0-6 против MetalicaX#10 и 0-6 против #11 при кайте 3-3 и 1-5 (гейт 131/131) — стрелок,
      *  выходящий из-под удара, перестаёт стрелять и тянет за собой строй, а его мили всё равно идёт следом. */
     private const val USE_KITE_BREAKS_CONTACT = false
-    private const val KITE_STANDOFF = MELEE_HOLD_RANGE   // три ронял гейт (match31:camp 10 131:14 582)
+    /** Кайт и для лекарей с ранеными (v135): они идут к подопечным внутрь блоба и гибнут — лечений 85+12r против его 132+65r.
+     *  ОТВЕРГНУТО: пользы столько же (3-3 и 1-5 против 3-3 и 1-5 у шестёрок без него), а гейт падает — match31:camp
+     *  15 878:19 795. Лекарь, который держит дистанцию, перестаёт доставать подопечного. */
+    private const val USE_KITE_HEALERS = false
+    /** Дистанция кайта против ВЕЕРА (v135): масс-атака бьёт в радиусе трёх (10/4/1 за часть), и на трёх стоит ему шесть
+     *  урона вместо шестидесяти. MetalicaX#11 — 63 веера за матч против 37 у MetalicaX#10 и наших 12, и именно он кайту
+     *  не поддавался (1-5 при 5-7 у #10). Стоящий в куче (двое своих в трёх) держит три, одиночка — два.
+     *  ОТВЕРГНУТО: 1-5 против #11 (без изменений) и 1-5 против #10 (было 5-7), гейт 130/131 (match31:camp 10 131:14 582).
+     *  На трёх наш собственный огонь редеет быстрее, чем экономится его веер: одиночный выстрел бьёт на всю дальность, а
+     *  веер на трёх и так почти пуст, так что платим мы, а не он. */
+    private const val USE_KITE_MASS_AWARE = false
+    private const val KITE_STANDOFF = MELEE_HOLD_RANGE   // ОТСКОК (порог 2, отход на 3) отвергнут: 0-6 и 1-5 против 5-7 и 2-10
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
      *  назад» (v15) на входе в рубку уводит наших мили сквозь свой строй, а его мили идут следом и рубят наших стрелков и лекарей.
@@ -1599,6 +1610,8 @@ object PainAndGain {
     private val ourCentroidHist = ArrayDeque<Int>()
     private val enemyCellHist = HashMap<String, ArrayDeque<Int>>()
     private var corneredWas = false
+    private var kiteNow = 0                               // сколько крипов кайтят в этом тике (v135, диагностика)
+    private var kiteMassed = false                        // была ли его армия сомкнута в этом тике (v135, диагностика)
     private var corneredUntil = 0   // залипание corneredInReach (v134, см. USE_CORNERED_STICKY)
     /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
     private val rallyingIds = HashSet<String>()
@@ -1968,7 +1981,7 @@ cpuMark("arrival")
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "kite=$kiteNow massed=$kiteMassed posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -2883,6 +2896,8 @@ cpuMark("r.cands")
         // которых в MASS_RANGE от их центроида. Считается раз на тик, а не на крипа (v135)
         val enemyMassedNow = armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
             armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
+        kiteNow = 0
+        kiteMassed = enemyMassedNow
         // чистый урон врагу за окно: сумма его хитов ниже, чем STALL_TICKS тиков назад (попадание с полным лечением в тот же
         // тик — не прогресс: стрелок россыпи с трёх клеток попадал, лечился, и «обмен уронами» сбрасывал простой);
         // простой — только когда добыча в досягаемости броска, а прогресса нет (на марше к врагу за 20+ клеток простоя
@@ -4019,8 +4034,11 @@ cpuMark("a.evade")
             // КАЙТ ПРОТИВ СОМКНУТОГО БЛОБА (v135, см. USE_MASS_KITE): его мили достаёт на клетку, стрелок — на три, значит
             // в ДВУХ его четыре мили (960 в тик вплотную) не дают ничего, а размен стрелками идёт ровно. Держим два от
             // ближайшего его мили, пока его армия сомкнута и мы сами ещё не в контакте
-            val massKite: Creep? = if (USE_MASS_KITE && !support && enemyMassedNow &&
+            val massKite: Creep? = if (USE_MASS_KITE && (!support || USE_KITE_HEALERS) && enemyMassedNow &&
                     (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)))) {
+                // ОТСКОК, А НЕ СТОЯНИЕ: standoff тянет и НАВСТРЕЧУ, поэтому кайт брался только у тех, кто уже далеко, и вёл их
+                // ПОД удар — диагностика показала kite=0 в шести замерах из десяти при massed=true. Берём цель, только когда
+                // его мили уже в KITE_TRIGGER, и отходим на KITE_STANDOFF (на клетку дальше, чем его шаг)
                 combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE }
                     .minByOrNull { getRange(creep, it) }
             } else null
@@ -4091,7 +4109,14 @@ cpuMark("a.evade")
                 // прикрытие тыла раньше слота (v135): слот ставит мили в строй, а рубят в это время наш тыл
                 guardMate != null -> { target = guardMate; standoff = 1; nearFlow = true }   // цель — его мили у нашего тыла
                 // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
-                massKite != null -> { target = massKite; standoff = KITE_STANDOFF; avoid = true; nearFlow = true }
+                // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
+                // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
+                // где наш собственный огонь плотнее. MetalicaX#11 даёт 63 веера за матч против 37 у #10 и наших 12 (v135)
+                massKite != null -> {
+                    kiteNow++
+                    val clumped = USE_KITE_MASS_AWARE && combatArmy.count { it.id != creep.id && getRange(creep, it) <= RANGED_RANGE } >= 2
+                    target = massKite; standoff = if (clumped) RANGED_RANGE else KITE_STANDOFF; avoid = true; nearFlow = true
+                }
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную

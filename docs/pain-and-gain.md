@@ -628,6 +628,30 @@ with けろびー#4 unchanged at 4-2, and the rating series turned that into 80 
 NOT solved is the fastest form of the class — MetalicaX#9 still took us in a hundred ticks — so the wipeout is now a
 minority case rather than the rule.
 
+**Chasing stability against the blobs: four more variants, all rejected, and what the diagnostics found (08.09.2026).**
+v135's kite wins the series but not the class — MetalicaX#11 stayed at 1-5 in test games and both #10 and #11 wiped us
+again in a refresh series (t=100 and t=200). Four variants were built and priced:
+
+- **the kite as a BOUNCE** (trigger at two, step back to three) instead of a standoff: 0-6 / 1-5 against 5-7 / 2-10.
+  A `standoff` pulls as well as pushes, and the diagnostics (`kite=` in the tick line, added here) showed why it
+  matters — with the standoff form `kite=0` in six samples of ten while `massed=true` throughout, i.e. the rule fires
+  seldom and mostly on creeps already at distance. Making it a pure bounce is WORSE, so the pull is the useful half:
+  it draws our creeps to two, where they shoot, instead of leaving them far and idle;
+- **healers and wounded kite too** (`USE_KITE_HEALERS`): 3-3 / 1-5, the same as without, and the gate drops
+  (match31:camp 15 878:19 795) — a healer keeping its distance stops reaching its patient;
+- **the kite distance follows his FAN** (`USE_KITE_MASS_AWARE`): mass attack hits within three at 10/4/1 per part, so
+  standing at three costs him six damage instead of sixty; MetalicaX#11 throws 63 fans a match against #10's 37 and our
+  12, which is exactly what distinguishes the bot the kite could not move. Holding three when clumped, two when alone:
+  1-5 / 1-5, gate 130/131. Our own fire thins faster at three than his fan does — a single shot carries full damage to
+  three while the fan there is already spent, so the trade is paid by us;
+- **a standoff of three flat**: gate 130/131 (match31:camp), rejected earlier for the same reason.
+
+What the diagnostics leave: the kite fires on few creep-ticks and only before contact — once his melee is adjacent the
+rule steps aside, which is why his melee still stand adjacent 79–85 creep-ticks against our 16–22 even in v135's
+losses. Making it act IN contact was tried (`USE_KITE_BREAKS_CONTACT`, 0-6/0-6) and fails because a ranged that steps
+out stops shooting. So the remaining question is not the distance but the moment: what should a creep do on the tick
+his melee becomes adjacent, when stepping away is worse than standing and standing is what kills us.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
