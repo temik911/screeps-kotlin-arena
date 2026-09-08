@@ -1954,11 +1954,19 @@ object SpawnAndSwamp {
      */
     private fun forwardWorth(ctx: Ctx, spot: Position, capacity: Int, flow: Double, energy: Int, trace: StringBuilder): Boolean {
         val measured = realisedIncome()
-        if (measured <= 0.0) return false
+        // «ЕЩЁ НЕ ЗАМЕРЕНО» И «ЗАМЕРЕНО НУЛЁМ» — РАЗНЫЕ ОТВЕТЫ. realisedIncome даёт -1, пока окна
+        // производства не набралось (первые триста тиков); в это время цены нет вовсе и вопрос не
+        // задаётся. Ноль же — это факт: приток замерен и он нулевой, и вот тут запасная шкала нужна
+        if (measured < 0.0) return false
         val now = collectRate(ctx, ctx.mySpawn as Position, capacity)
         val then = collectRate(ctx, spot, capacity, keepHome = true)
         if (now <= 0.0 || then <= now) return false
-        val gain = measured * (then / now - 1.0)
+        // ШКАЛА — ЗАМЕРЕННЫЙ ПРИТОК, ПОКА ОН ЕСТЬ. Но там, где точка сдачи нужнее всего, притока уже
+        // НЕТ: ближние кучи выскреблены, дальние распадаются раньше, чем до них доедешь, и замер даёт
+        // ноль (ничья 6a9feeab: income=0/33, собрано 10400 против его 42080). Умножать отношение на
+        // ноль — значит запретить лекарство ровно по симптому болезни. Когда замера нет, берётся
+        // АБСОЛЮТНАЯ разница модели: она занижена примерно в 2.7 раза, то есть заведомо осторожна
+        val gain = if (measured > 0.0) measured * (then / now - 1.0) else then - now
         val keeperArrival = if (ctx.builders.isNotEmpty()) ctx.builders.minOf { getRange(it, spot) }
             else ctx.stepsToSpawn[spot.x * 100 + spot.y].coerceAtLeast(0) + builderBody(builderWork(flow)).size * CREEP_SPAWN_TIME
         val (supply, fromSpawn) = supplyFor(ctx, spot, buildCost("StructureSpawn"), arrive = keeperArrival)
