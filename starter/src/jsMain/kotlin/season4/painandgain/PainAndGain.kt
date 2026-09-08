@@ -574,6 +574,22 @@ object PainAndGain {
      *  На трёх наш собственный огонь редеет быстрее, чем экономится его веер: одиночный выстрел бьёт на всю дальность, а
      *  веер на трёх и так почти пуст, так что платим мы, а не он. */
     private const val USE_KITE_MASS_AWARE = false
+    /** ЛИНИЯ ПРОТИВ СОМКНУТОГО БЛОБА (v135): `standoffLine` в planBlock — единственный наш строй, который ставит армию ОДНИМ
+     *  широким рядом, и он выключался при его мили внутри, то есть ровно против блоба. Между тем вся арифметика класса —
+     *  «его двенадцать собирают около 750 в тик на ближайшем нашем», а замер оператора по матчу 67 говорит, что его строй
+     *  шириной 9,7 клетки против наших 4,6. Включается при сомкнутой армии (шесть вооружённых, две трети в MASS_RANGE).
+     *  ОТВЕРГНУТО тестовыми играми: 0-6 против MetalicaX#10 и 0-6 против #11 при 5-7 и 2-10 у v135, гейт при этом 131/131.
+     *  Один ряд шире, но и тоньше: мили в нём стоят на флангах, а не перед стрелками, и блоб входит в середину линии, где
+     *  прикрывать её некому. Правило v113 выключало линию при его мили внутри не по недосмотру. */
+    private const val USE_LINE_VS_BLOB = false
+    /** БЕСПОМОЩНЫЙ УХОДИТ И ИЗ КОНТАКТА (v135): счётчик kite= показал, что кайт работает только ДО контакта, а в тик, когда
+     *  его мили встал вплотную, правило отходит в сторону — оттого его мили смежны 79–85 крипо-тиков против наших 16–22
+     *  даже в поражениях. Выход стрелка из-под удара уже отвергнут (0-6/0-6: он вплотную стреляет и, уходя, замолкает), но
+     *  лекарь и раздетый ответить не могут вовсе: они дают ноль урона и держат его мили на бесплатной цели. Лечение
+     *  достаёт на три — отойдя, лекарь лечит треть, зато живёт. ОТВЕРГНУТО: 1-5 против MetalicaX#10 (было 5-7) и 2-4
+     *  против #11 (было 2-10) — вместе 3-9 против 7-17, и гейт 130/131 (match31:camp). Лекарь, вышедший из-под удара,
+     *  перестаёт доставать подопечного, и фронт остаётся без лечения. */
+    private const val USE_KITE_HELPLESS_OUT = false
     private const val KITE_STANDOFF = MELEE_HOLD_RANGE   // ОТСКОК (порог 2, отход на 3) отвергнут: 0-6 и 1-5 против 5-7 и 2-10
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
@@ -1612,6 +1628,8 @@ object PainAndGain {
     private var corneredWas = false
     private var kiteNow = 0                               // сколько крипов кайтят в этом тике (v135, диагностика)
     private var kiteMassed = false                        // была ли его армия сомкнута в этом тике (v135, диагностика)
+    private var planStrict = 0                            // стрелков, вставших в клетку без его мили в двух (v135)
+    private var planLoose = 0                             // ...и вставших куда придётся
     private var corneredUntil = 0   // залипание corneredInReach (v134, см. USE_CORNERED_STICKY)
     /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
     private val rallyingIds = HashSet<String>()
@@ -1981,7 +1999,7 @@ cpuMark("arrival")
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "kite=$kiteNow massed=$kiteMassed posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -2898,6 +2916,7 @@ cpuMark("r.cands")
             armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
         kiteNow = 0
         kiteMassed = enemyMassedNow
+        planStrict = 0; planLoose = 0
         // чистый урон врагу за окно: сумма его хитов ниже, чем STALL_TICKS тиков назад (попадание с полным лечением в тот же
         // тик — не прогресс: стрелок россыпи с трёх клеток попадал, лечился, и «обмен уронами» сбрасывал простой);
         // простой — только когда добыча в досягаемости броска, а прогресса нет (на марше к врагу за 20+ клеток простоя
@@ -4034,8 +4053,12 @@ cpuMark("a.evade")
             // КАЙТ ПРОТИВ СОМКНУТОГО БЛОБА (v135, см. USE_MASS_KITE): его мили достаёт на клетку, стрелок — на три, значит
             // в ДВУХ его четыре мили (960 в тик вплотную) не дают ничего, а размен стрелками идёт ровно. Держим два от
             // ближайшего его мили, пока его армия сомкнута и мы сами ещё не в контакте
-            val massKite: Creep? = if (USE_MASS_KITE && (!support || USE_KITE_HEALERS) && enemyMassedNow &&
-                    (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)))) {
+            // ...и ТОТ, КТО ОТВЕТИТЬ НЕ МОЖЕТ, уходит и из контакта (v135, см. USE_KITE_HELPLESS_OUT): стрелок вплотную
+            // стреляет, мили бьёт, а лекарь и раздетый под ударом — только мясо: они дают 0 урона и держат его мили
+            // занятым бесплатной целью. Лечение достаёт на три, так что отойдя, лекарь лечит треть, но живёт
+            val helpless = USE_KITE_HELPLESS_OUT && !hasRanged(creep) && !hasMelee(creep)
+            val massKite: Creep? = if (USE_MASS_KITE && (!support || USE_KITE_HEALERS || helpless) && enemyMassedNow &&
+                    (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)) || helpless)) {
                 // ОТСКОК, А НЕ СТОЯНИЕ: standoff тянет и НАВСТРЕЧУ, поэтому кайт брался только у тех, кто уже далеко, и вёл их
                 // ПОД удар — диагностика показала kite=0 в шести замерах из десяти при massed=true. Берём цель, только когда
                 // его мили уже в KITE_TRIGGER, и отходим на KITE_STANDOFF (на клетку дальше, чем его шаг)
@@ -4549,7 +4572,14 @@ cpuMark("a.evade")
         // на выстрел бесплатно не стоит никто, а его стрелкам, чтобы стрелять, надо подойти туда, где достают и наши
         val hisMeleeAdjacent = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && armed.any { getRange(e, it) <= 1 } }
         val pokeLine = USE_LINE_VS_POKE && theirMeleeIn && !hisMeleeAdjacent && inReach && !closing && !retreating
-        val standoffLine = rangeds.isNotEmpty() && ((USE_RANGED_FRONT && standoff && !theirMeleeIn) || hisFrontRanged || pokeLine)
+        // ...И ПРОТИВ СОМКНУТОГО БЛОБА (v135, см. USE_LINE_VS_BLOB): линия одним рядом — единственный строй, который делает нас
+        // ШИРЕ (замер оператора по матчу 67: его девять вооружённых стоят шириной 9,7 клетки поперёк оси, наши 4,6), а вся
+        // арифметика класса в том, что его двенадцать собирают около 750 в тик на ближайшем нашем. Правило выключалось при
+        // его мили внутри — то есть ровно в блобе; включаем, когда его вооружённых шесть и больше и две трети из них в
+        // MASS_RANGE от их центроида
+        val blobNow = USE_LINE_VS_BLOB && armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
+            armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
+        val standoffLine = rangeds.isNotEmpty() && ((USE_RANGED_FRONT && standoff && !theirMeleeIn) || hisFrontRanged || pokeLine || blobNow)
         val front = if (standoffLine) rangeds else melees.ifEmpty { rangeds }
         // якорь — ПЕРЕДНИЙ боец (ближайший к врагу), не центроид: центроид мили отстаёт от фронта на 1–2 клетки, и ряд
         // стрелков «в 3 − d» от него стоял в 4–5 от линии врага, вставшей в 3 от нашего переднего (матч 18)
@@ -4725,8 +4755,9 @@ cpuMark("a.evade")
         fun behindMelee(cell: FightCell) = meleeFrontDist == null || cell.dist >= meleeFrontDist - 1
         val constrained = rangeds.sortedBy { c -> cells.values.count { it.targets > 0 && it.meleeAdj == 0 && getRange(c, it.pos) <= 1 } }
         for (r in constrained) {
-            val cell = place(r, rangedCmp(r), { it.targets > 0 && it.meleeAdj == 0 && it.meleeNear == 0 && behindMelee(it) }) { behindMelee(it) }
-                ?: place(r, rangedCmp(r), null) { true } ?: continue
+            val strict = place(r, rangedCmp(r), { it.targets > 0 && it.meleeAdj == 0 && it.meleeNear == 0 && behindMelee(it) }) { behindMelee(it) }
+            if (strict != null) planStrict++ else planLoose++
+            val cell = strict ?: place(r, rangedCmp(r), null) { true } ?: continue
             rangedCells[r.id] = cell
         }
         // мили без врага вплотную — заслон перед стрелком: клетка рядом с клеткой стрелка и ближе к угрозе, чем она; его мили в

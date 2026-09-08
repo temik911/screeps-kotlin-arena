@@ -652,6 +652,27 @@ losses. Making it act IN contact was tried (`USE_KITE_BREAKS_CONTACT`, 0-6/0-6) 
 out stops shooting. So the remaining question is not the distance but the moment: what should a creep do on the tick
 his melee becomes adjacent, when stepping away is worse than standing and standing is what kills us.
 
+**Three more variants, and the discovery that half the earlier probes edited code the blob fight never runs
+(08.09.2026).** Two rejections and one correction:
+
+- **the helpless leave contact** (`USE_KITE_HELPLESS_OUT`): a ranged shoots while adjacent and a melee swings, but a
+  healer or a stripped creep under a melee is pure meat — zero damage out, a free target held. 1-5 against MetalicaX#10
+  (was 5-7) and 2-4 against #11 (was 2-10) — 3-9 against 7-17 together — and the gate drops (match31:camp). A healer
+  that steps out stops reaching its patient, and the front loses its healing;
+- **one wide line against a closed blob** (`USE_LINE_VS_BLOB`): `standoffLine` in `planBlock` is the only formation
+  that makes us WIDE — the operator's own measurement on match 67 puts his nine armed at 9.7 cells across the axis
+  against our 4.6 — and it was switched off whenever his melee were inside, i.e. exactly in a blob. Turning it on for a
+  massed enemy: gate 131/131 and **0-6 / 0-6**. A single row is wider but also thinner: its melee sit on the flanks
+  rather than in front of the ranged, and the blob walks into the middle where nobody covers it. v113 was not being
+  careless when it excluded this case.
+
+The correction matters more than either. A `plan=` counter added to the tick line reads **0/0 for the whole fight**
+against a blob: `planNow = USE_PLAN && (standoffNow || standingNow)` and `standingNow` requires `!meleeBrawl`, so with
+his melee inside it is always `planBlock` that runs, never `planFight`. Two earlier probes — healers placed by coverage
+(`USE_HEALERS_COVER_OVER_SAFETY`) and everything reasoned from `healerCmp` / `rangedCmp` — were editing a planner this
+fight does not call, which is why they read 0-6 and changed nothing measurable. Any future placement work against the
+class belongs in `planBlock`.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
