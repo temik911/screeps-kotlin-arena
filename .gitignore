@@ -11,6 +11,8 @@ arenas/**/typings
 # per-session tooling
 .claude/worktrees/
 tools/stub/**/out/
+# saved opponent builds for the self-play stand: compiled output, made by snapshot.sh
+tools/stub/**/opponents/
 
 # python bytecode from tools/
 __pycache__/

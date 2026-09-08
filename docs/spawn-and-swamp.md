@@ -1800,6 +1800,55 @@ most reliable fact this bot has about itself**, and it is the thing to fix befor
 the instruments contain an opponent that does not answer, and the arena contains one that does.
 v74-v75 are on the tag `shelf-v74-v75` and are not landed.
 
+### The self-play stand (08.09.2026)
+
+Six builds in a row were better on every offline instrument and worse in the arena. The reason is that
+every opponent this harness had — twenty-six hand-written scenarios and a recorded けろびー — is a FIXED
+one: they model what our bot does to something that does not answer. The literature names the failure
+(overfitting to a fixed opponent) and the remedy (a population: double oracle, PSRO, the AlphaStar
+league). `tools/stub/spawnandswamp/selfplay.mjs` is the smallest instance of that remedy — the only
+opponent available here that answers back is the bot itself.
+
+**How two bots share one world.** The stub's world is global and every object carries `my`, and the bot
+only ever asks "is this mine". So side A runs with the world as stored, every `my` is FLIPPED, side B
+runs — seeing itself as `my=true` and A as the enemy — and the flags are flipped back. Nothing needs a
+notion of "player two": `createConstructionSite` hard-codes `my:true`, `spawnCreep` takes `this.my`,
+`rangedMassAttack` compares `o.my !== this.my`, and every one of those is correct for whoever is
+running, because whoever is running is always `true`.
+
+**How two bots keep separate memories.** `SpawnAndSwamp.mjs` is a Kotlin object — its fields are module
+state, and importing one URL twice returns one module. Side B is therefore imported from a COPY of the
+compiled package placed as a sibling directory at the same depth: sibling so the
+`../../../kotlin-kotlin-stdlib/...` imports still resolve, a copy so `InfluenceMap`, `DistanceMap` and
+`TrafficManager` are separate modules too. The `game/*` imports resolve through the loader hook to one
+URL, which is exactly right — one world, two bots.
+
+**Fairness, and it was not a formality.** The map is generated for one half and mirrored point-wise, so
+the sides face identical terrain, piles and distances. But actions in this stub apply at once, so
+whoever runs first inside a tick is seen by the other — and the first run of the file found that this
+decides the game: the second mover watched the first buy a breacher, read it as an armed enemy, went
+"fighter first" with the opening thousand, never built a hauler, and had one creep against eight by
+t=300. **With the order tied to tick parity the first mover won 8 matches of 8.** The order is now drawn
+per tick from the match's own seeded stream, and every seed is played under two different streams.
+
+**Validated in both directions before being believed:**
+
+| candidate (side A) | opponent (side B) | result |
+|---|---|---|
+| current | current — the null | **9-7-0** over 16 |
+| v72 (melee priced against every spawn) | v73 | 9-7-0 — indistinguishable from the null |
+| v73 with `MAX_HAULERS = 1` — a knowingly broken build | v73 | **0-5-7** over 12 |
+
+So it sits at even when nothing differs, and it routs a build that should be routed. Matches are
+decisive and short (440-850 ticks), and errors are zero.
+
+**How to use it.** `tools/stub/spawnandswamp/snapshot.sh <name>` saves the current compiled bot under
+`opponents/<name>/` (gitignored — it is compiled output); `OPP=<name> tools/stub/spawnandswamp/selfplay.sh
+[seeds] [ticks]` then plays the CURRENT build as side A against that saved one as side B, each seed both
+ways round. Without `OPP` both sides are the current build and the tally is the null. The rule this
+harness was built to serve: **a change is worth landing when it beats the build it would replace against
+an opponent that answers** — not when it is faster on a fixture that cannot.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
