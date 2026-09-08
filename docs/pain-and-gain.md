@@ -738,6 +738,30 @@ usually outside it. Being covered costs it its fire.
 Nineteen variants priced now, one of them kept (v135's kite). The asymmetry is real and measured; what is missing is a
 way to be covered WITHOUT going silent, and neither placement nor a movement target has provided it.
 
+**Twenty variants: the campaign's closing account (08.09.2026).** The last one was aimed at the gap the replay reading
+left — cover without silence. A ranged may step out from under a melee only when TWO or more of his armed stand inside
+its range, so a target is certain to remain after the step (`USE_KITE_KEEPS_FIRE`): gate 131/131 and **1-5 / 0-6**. The
+condition does keep the target, but the step surrenders a cell of the line — the melee that was covering the ranged
+follows it back, and the whole line gives ground. There is no way out from under a hit in this bot that does not cost
+position: not through the movement target, not through the plan, not through distance.
+
+The three axes are now all closed by measurement, and one of them by data that predates this campaign:
+
+- **the moment** — evading a massed unflagged rush works mechanically (EVADE appears where it never did) and does not
+  help: at equal speed there is no escape, as matches 11–12 recorded long ago;
+- **the place** — fighting at a wall is already priced in the code's own comment: lost at 83, 92, 110, 273, 295, won in
+  the open at 66, 75, 79, 93, 96. The edge does not shield a flank, it removes an exit;
+- **the shape and the target** — nineteen probes across `planBlock`, `planFight`, the focus comparator, the give-up
+  bookkeeping, rotation, the kite distance and the movement chain. One survived: the kite at two cells, and the
+  measurement of WHY it survives is that it is the smallest retreat that costs no fire.
+
+The one number that no variant moved: over a 200-tick loss his expected damage is 20 000 against our 7 400, his melee
+adjacent 79–85 creep-ticks against our 14–22, and his melee reaching our soft creeps first in 60 % of ticks against our
+0–10 %. Those are outcomes of his per-tick choices, and every rule tried here is an approximation of a choice. What the
+bot does not have is a way to CHOOSE — to weigh, for this creep on this tick, what the exchange looks like two ticks
+out. That is a different architecture (a short forward search over the exchange), not another toggle, and it should be
+started deliberately rather than bolted on.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
