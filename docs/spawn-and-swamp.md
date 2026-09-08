@@ -1398,6 +1398,70 @@ the stand disagrees flatly: `ball` 663 → 837, `tower+stream` 574 → 1291, `si
 `bodyValue`'s rate × life is not equal between `M10H2` and `M5H3` as I had reckoned — it is 22800
 against 14400 — so a tie-break toward healing rate is inert.
 
+### v62-v63: a busy spawn was forbidding what it does not build (08.09.2026)
+
+Five attempts at a second delivery point had shown nothing, and the reason turned out not to be the
+economics at all. `spawnIfNeeded` left the tick on its **first line** as soon as every spawn was
+spawning — and took the tower, the delivery point and the extension probe with it. None of the three
+is produced or paid for by a spawn: they are `createConstructionSite`, built by a keeper out of a pile.
+
+**A saturated spawn is never idle.** In the test match `6a9ffb7f` against けろびー#19, `spawning=true`
+without a break from t=200 to the end, the spawn standing **full at 1000** while haulers held 522-650
+they could not deliver. That is exactly the state in which a second production line is worth buying —
+and exactly the state in which the branch that buys one was **not executed at all**. The same defect
+reads straight off the series: `series.py metrics` ranks `towers` among the top fields, 0.45 in wins
+against 0.04 in losses. In wins the spawn goes idle and the site is born; in losses it never does.
+
+Three more gates fell with it, all asking for money the purchase does not need:
+
+- **the keeper's price, in cash, at placement time.** It is already inside `forwardWorth`'s payback;
+  demanding it twice, and at the worst moment, closed the branch on its own — after the fleet is
+  assembled the purse holds 90-470 against a keeper of 600-700 (stand `none`, t=300-420);
+- **"stop wanting a hauler first".** The hauler and the delivery point do not compete for money, they
+  compete for nothing: what is scarce is **spawn time** — three ticks per part, and while a body grows
+  the spawn does nothing else — and the point consumes none of it, since a pile pays for it through a
+  keeper's hands. The gate deferred it until `MAX_HAULERS`, that is forever;
+- **the horizon,** which four attempts demanded of the siege simulation and got "never" from. It is
+  answered by the opponent: a thousand goes into production only from someone who expects to live long
+  enough to amortise it. While he holds one spawn he is playing to kill and our thousand is a fighter
+  taken away — and the stand says so without ambiguity: placed unconditionally, the point drops
+  everything (`tower+healball` 521 → 806, `tower+stream` 574 → 992, `tower+pairs` 538 → 749,
+  `stream17` 888 → 973, `siege6` loses its tower). けろびー#19 reaches a second spawn by t=220-300 in
+  six live matches out of six and finishes with four to six. So the gate is `foeSpawnPeak > 1`, and on
+  all 26 fixtures — one enemy spawn from start to finish — it is inert by construction.
+
+And `siegeEndsIn` stopped standing in for the end of the match while he has spares: it answers "when
+will we bring THAT spawn down", which is the end only when that spawn is his last. Live trace
+(`6a9ffb75`, t=360-400): `gain=4.8/t build=94 price=1600` and `ends=64`, so `left=-30` and the question
+closed itself over a horizon of 1640 ticks that actually remained.
+
+**Then the site was placed — and stood at 0/1000 to the end of the match.** The keeper body
+`[MOVE×2, CARRY×2, WORK×k]` is right for standing at a tower three cells from home and cannot cross a
+map: seven non-MOVE parts on two MOVE is 3.5 ticks per plain cell and 17.5 per swamp cell. On the stand
+(`twospawn`) the keeper set out at t=250 for a site fifty steps away and by t=960 was halfway, while the
+site's ready time climbed 60 → 1020 against a falling deadline; they crossed, the job died. **This is
+why none of the five attempts ever measured anything: the point was placed, and nobody could walk to
+it.** Legs are now given when the WALK without them would outlast the BUILD — computed from fatigue per
+step against build power, on plain rates, which is the conservative side of a swamp map.
+
+And `spawnIfNeeded` took one spawn per tick. With one spawn that was the same thing; with two it is not
+— haulers deliver to the nearest, so energy splits between stores while the order still goes to one, and
+neither reaches the thousand a full body costs. Each free spawn now gets its own turn; sites are placed
+by the first turn of the tick, since they are shared.
+
+**Rejected by the same stand, and recorded rather than hidden: scaling `targetIncome` by the number of
+spawns.** The reasoning was sound — his ceiling is six spawns wide, ours one, and one spawn digests
+about 27 energy a tick, which is exactly where the fleet cap sits — but with a ceiling of 83 the fleet
+grows to all sixteen haulers while measured delivery stays at 15-17/tick: six thousand into carriers
+with nothing to carry, and `twospawn`'s win at 1976 turns into no win at all by 2000. With a second
+spawn the bottleneck stops being the spawn and becomes **the map**; the cap belongs where it is until
+growth is bound by delivery instead.
+
+Cost of the whole batch on the fixtures: all 26 gate scenarios unchanged, `siege6` keeps its tower and
+abandons 0. On the two multi-spawn fixtures the delivery point, now that it really gets built, costs
+`twospawn` 1976 → 2043 and `stream+farm` 911 → 966 — the honest price, against opponents the fixtures
+only stand in for.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.

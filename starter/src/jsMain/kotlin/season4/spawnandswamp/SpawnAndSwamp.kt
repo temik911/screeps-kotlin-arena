@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 63
+    private const val BOT_VERSION = 64
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -552,6 +552,21 @@ object SpawnAndSwamp {
     private val delivered = ArrayDeque<Pair<Int, Int>>()
     private val haulerStore = HashMap<String, Int>()
     private var firstHaulerTick = -1
+
+    /**
+     * ОТДАЧА ОТ ПОСЛЕДНЕГО РОСТА ФЛОТА. Ёмкость и ЗАМЕРЕННАЯ сдача в тик покупки прошлого хаулера —
+     * этого хватает, чтобы спросить о следующем то единственное, что имеет значение: подняла ли
+     * прошлая покупка доставку на самом деле.
+     * Прежний сторож (fleetDelivers) сравнивал замер с ПРОГНОЗОМ, а прогноз падает вместе с ближними
+     * кучами — и «замер выше упавшего прогноза» читалось как «ёмкость и есть узкое место». В матче
+     * 6a9ffb75 (けろびー#19, поражение) флот дорос до одиннадцати хаулеров при ДВУХ бойцах, а
+     * замеренная сдача за то же время упала с 14-15 до 3-5 в тик: деньги ушли в возчиков, которым
+     * нечего возить, и армии не осталось. Тот же счёт на стенде: со вторым спавном рейсы короче,
+     * capacityBound охотнее говорит «да», и флот упирается в шестнадцать при сдаче 15-17.
+     */
+    private var fleetMark = 0
+    private var fleetMarkIncome = -1.0
+    private var fleetMarkTick = -1
 
     /**
      * САМОЕ БОЛЬШОЕ ЧИСЛО ЕГО СПАВНОВ ЗА МАТЧ. Это не счёт целей, а ЕГО ОТВЕТ НА ВОПРОС О ГОРИЗОНТЕ —
@@ -1633,7 +1648,16 @@ object SpawnAndSwamp {
         val fighterFirst = (alarm || deficit > 0.0) && threatIn < investReady &&
             (holdReady <= threatIn || holdReady < investReady || closesNow)
         val realised = realisedIncome()
-        val fleetDelivers = realised < 0.0 || realised >= projectedIncome(ctx, usable) * PUSH_RELEASE_RATIO
+        // ПРОШЛАЯ ПОКУПКА НЕ ДОЛЖНА БЫЛА СДЕЛАТЬ ХУЖЕ (см. fleetMark). Спрашивается не «выросла ли
+        // сдача» — в долгой стройке она растёт медленнее окна замера, и требование роста стоило
+        // фикстуре fortress трёхсот тиков, — а «не УПАЛА ли». Падение при выросшей ёмкости значит, что
+        // узкое место не ёмкость, и следующий возчик поедет умирать туда же: в матче 6a9ffb75 флот
+        // дорос до одиннадцати хаулеров при ДВУХ бойцах, пока замеренная сдача падала с 14-15 до 3-5
+        val fleetGrew = ctx.haulers.sumOf { capacityOf(it) } > fleetMark
+        val lastHarmed = fleetMarkIncome >= 0.0 && realised >= 0.0 && fleetGrew &&
+            getTicks() - fleetMarkTick >= PRODUCTION_WINDOW / 2 && realised < fleetMarkIncome
+        val fleetDelivers = !lastHarmed &&
+            (realised < 0.0 || realised >= projectedIncome(ctx, usable) * PUSH_RELEASE_RATIO)
         // ПОТОК, А НЕ КУЧА. capacityBound спрашивает, лежит ли на земле на четыре круга всего флота, —
         // это вопрос про склад. Карта же роняет две точки по 2000 каждые пятьдесят тиков: восемьдесят в
         // тик ПОЯВЛЯЕТСЯ. Пока появляется больше, чем мы увозим, узкое место — ёмкость по определению,
@@ -1805,8 +1829,13 @@ object SpawnAndSwamp {
             val expected = minOf(HAULER_BLOCKS_MAX, (energy + carried) / blockCost())
             if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return
             val r = spawn.spawnCreep(haulerBody(affordable))
-            if (r.error == null) spentHaulers += affordable * blockCost()
-            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} live=$liveHaulers/$liveFighters err=${r.error}")
+            if (r.error == null) {
+                spentHaulers += affordable * blockCost()
+                fleetMark = ctx.haulers.sumOf { capacityOf(it) }
+                fleetMarkIncome = realised
+                fleetMarkTick = getTicks()
+            }
+            if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} live=$liveHaulers/$liveFighters mark=${fleetMark}/${(fleetMarkIncome * 10).toInt() / 10.0} err=${r.error}")
             return
         }
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
@@ -3998,6 +4027,14 @@ object SpawnAndSwamp {
         for (s in ctx.sites) {
             if (siteFirstSeen.containsKey(s.id)) continue
             siteFirstSeen[s.id] = s.energy
+            // ПОЯВИЛОСЬ — НЕ ЗНАЧИТ ДОСТАЛОСЬ. Карта роняет по 2000 каждые полсотни тиков, и сумма
+            // «появилось в тик» выходит 80-97 при нашей сдаче в 14. Ровно это число и держало ворота
+            // хаулера открытыми: supplyBound = «предложение больше того, что мы берём» отвечало «да»
+            // всегда, потому что считало и те кучи, до которых не успеть до распада. В матче 6a9ffb75
+            // флот дорос до одиннадцати при ДВУХ бойцах, а замеренная сдача упала с 14-15 до 3-5.
+            // Куча, до которой пустой хаулер не доедет за её же время жизни, — не предложение
+            val life = s.ticksToDecay
+            if (life != null && ctx.haulSteps[s.pos.x * 100 + s.pos.y].let { it < 0 || it > life }) continue
             fresh += s.energy
         }
         if (fresh > 0) appeared.addLast(now to fresh)
