@@ -516,6 +516,19 @@ above. The gap is not a habit of his we failed to copy; it is that the stand pla
 bot. `+early` is nonetheless the form to price entry rules with, because it is the only one that puts our line against
 his whole army before ours is formed. The stub gate is identical to the digit with every new form off (131/131).
 
+**Unrated test games against one chosen bot — the instrument this whole cycle was missing (08.09.2026).** Every probe
+against the blob class has been priced either by a stand that cannot reproduce the fight or by a live series that costs
+rating (v134's twenty cost 96). The client has a third way and it was never used from here: its tests page posts
+`arena`, `code` and `codeId` to `/api/test/start`, playing ONE game against ONE bot of his, and `/api/test/codes/<arenaId>`
+lists who can be picked — a `system` bot, `recent` (the opponents of the last rating games, each with the code version
+it played) and `favorites`, pinned with POST `/api/test/codes/<arenaId>` `{codeId}`. Measured: a game against
+MetalicaX#10 finished in 258 ticks, `ratingHistory` came back empty and the rating stood at 1183 before and after, and
+the match lands in the store like any other — `autopsy.py`, `series.py` and `replay.py` read it unchanged. `recent`
+currently carries MetalicaX#10, MetalicaX#11, けろびー#4 and Coldkimchi#1, which is precisely the set that wipes us.
+`tools/play.py` gained `--test 'Name#version' -n N` and `--test-list`; the payload POST retries, since the page throws
+`Failed to fetch` on it more readily than on a GET. From here on, a probe against the blob class is measured against
+the blob itself, for free, before anything is spent on a rating series.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a

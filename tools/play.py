@@ -12,6 +12,8 @@ the client itself runs up to three series at once and the server keeps one match
     tools/play.py spawn-and-swamp -n 20 --stop-on-defeat    # a series, stopping at the first loss
     tools/play.py spawn-and-swamp -n 5 --logs runs/         # keep every match's console
     tools/play.py pain-and-gain --history 20                # the arena's last matches FROM THE SERVER: id, opponent, result, rating
+    tools/play.py pain-and-gain --test-list                 # who can be played UNRATED: system, recent opponents, favorites
+    tools/play.py pain-and-gain --test 'MetalicaX#10' -n 5  # five UNRATED games against that one bot of his
 
 `--history` reads results from the server (`/api/arena/<id>/rating-history` has every rating match); the match documents themselves go into the store `tools/match-log.py` keeps (`~/ScreepsArena/games/<id>/`) as each match ends — nothing is read from the client's cache. What the server does not know is which build played
 a match: that is the bot's greeting line in the console, so `--history` shows the code version the server assigned (a
@@ -20,6 +22,13 @@ counter per upload) and the console's greeting comes from `match-log.py` or the 
 Rating matches move your rating; that is the point of playing them. Landing first is NOT required
 (rule 5 in CLAUDE.md): what a match needs is that the code being played is committed on your branch
 and that the bot prints its version in the first log line, so the log can be tied back to a commit.
+
+`--test` plays the arena's TEST games instead: `/test/start` takes the same payload plus a `codeId`, so the match is
+against ONE chosen bot of his and moves NO rating (measured 08.09.2026: a game against MetalicaX#10 left the rating at
+1183, `ratingHistory` empty). `--test-list` prints who is available — the `system` bot, `recent` (whoever the last
+rating games were against, each with the code version it played) and `favorites`, which are pinned in the client. Test
+matches land in the same store, so `tools/autopsy.py`, `series.py` and `replay.py` read them like any other; they are
+the way to price a change against a specific opponent without paying rating for it.
 """
 import argparse, importlib.util, base64, io, json, os, sys, time, uuid, zipfile
 
@@ -140,17 +149,52 @@ def slot(c, arena_id):
     }})()""")
 
 
-def start(c, arena_id, fame=False):
+def test_codes(c, arena_id):
+    """Who can be played unrated here: the system bot, the recent opponents and the pinned favorites, each with the
+    code id `/test/start` wants and the version that code is of his bot (a username is not a bot, the version is)."""
+    return c.json_eval(f"""(async () => {{
+      {JS_GET}
+      const r = await GET('{API}/test/codes/{arena_id}');
+      const j = await r.json();
+      const pick = (rows, list) => (rows || []).map(x => ({{
+        list, name: (x.user && x.user.username) || '?', version: (x.code && x.code.version) || null,
+        codeId: (x.code && x.code._id) || null, note: x.note || ''}}));
+      return JSON.stringify([].concat(pick(j.system, 'system'), pick(j.favorites, 'favorite'), pick(j.recent, 'recent')));
+    }})()""")
+
+
+def resolve_test(rows, spec):
+    """`Name#version`, a bare `Name` (its newest listed code) or a raw code id -> one row of test_codes."""
+    if any(r["codeId"] == spec for r in rows):
+        return next(r for r in rows if r["codeId"] == spec)
+    name, _, ver = spec.partition("#")
+    hits = [r for r in rows if r["name"].lower().startswith(name.lower())]
+    if ver:
+        hits = [r for r in hits if str(r["version"]) == ver]
+    if not hits:
+        raise SystemExit(f"no test opponent matches {spec!r}; --test-list shows who is available")
+    return sorted(hits, key=lambda r: -(r["version"] or 0))[0]
+
+
+def start(c, arena_id, fame=False, code_id=None):
     """One game: a rating game through `/game/start`, or a game of today's fame session through `/fame/start` — the same
     form (the arena and the code zip); the client's FameSeriesAction adds an optional `modifierDefId`, an inventory item
     that multiplies the fame, which this never sends (spending the operator's items is the operator's click)."""
-    ep = '/fame/start' if fame else '/game/start'
+    ep = '/test/start' if code_id else '/fame/start' if fame else '/game/start'
+    # a POST of the payload throws `TypeError: Failed to fetch` on the page more readily than a GET does — measured on
+    # /test/start, where the first attempt failed and the second went through — so it retries like the GETs do
     return c.json_eval(f"""(async () => {{
       const fd = new FormData();
       fd.append('arena', {json.dumps(arena_id)});
       fd.append('code', window[{json.dumps(SLOT)}], 'code.zip');
+      {'fd.append("codeId", ' + json.dumps(code_id) + ');' if code_id else ''}
       {JS_GET}
-      const r = await GET('{API}{ep}', {{method: 'POST', body: fd}});
+      let r = null, fetchErr = null;
+      for (let attempt = 0; attempt < 4; attempt++) {{
+        try {{ r = await fetch('{API}{ep}', {{method: 'POST', body: fd, credentials: 'include'}}); break; }}
+        catch (e) {{ fetchErr = String(e); await sleep(600); }}
+      }}
+      if (!r) return JSON.stringify({{status: 0, id: null, err: fetchErr, fameId: null, raw: null}});
       let id = null, err = null, fameId = null, raw = null;
       try {{ const j = await r.json(); id = (j.game && j.game._id) || j.game || null; err = j.error || null;
              fameId = (j.fame && j.fame._id) || null; raw = JSON.stringify(j).slice(0, 400); }}
@@ -312,6 +356,8 @@ def main():
     ap.add_argument("--list", action="store_true", help="list arenas with their ids, folders and slots")
     ap.add_argument("--fame", action="store_true", help="play games of today's fame session (/fame/start) instead of rating games; never finishes the session")
     ap.add_argument("--fame-collect", action="store_true", help="end today's fame session: take the rewards, then finish it (the operator's two clicks; nothing is played)")
+    ap.add_argument("--test", metavar="BOT", help="play UNRATED test games against one bot: 'Name#version', a bare name, or a code id")
+    ap.add_argument("--test-list", action="store_true", help="list the bots available for unrated test games and exit")
     ap.add_argument("--history", type=int, metavar="N", help="print the arena's last N rating matches from the server and exit")
     ap.add_argument("--us", default="temik911", help="our username prefix (for --history)")
     a = ap.parse_args()
@@ -341,6 +387,14 @@ def main():
             r = h["rating"]
             rating = f"{r[0]}->{r[1]} #{r[2]}" if r else "-"
             print(f"{when}  {h['id']}  {h['result']:<5} {h['ticks']:>5}t  {rating:<16} code {h['code']}  vs {h['opponent']}")
+        return
+    if a.test_list:
+        rows = test_codes(c, arena["id"])
+        if not rows:
+            print(f"{arena['name']}: nothing to test against yet — play a rating game first")
+        for r in rows:
+            who = f"{r['name']}#{r['version']}" if r["version"] else r["name"]
+            print(f"{r['list']:<9} {who:<28} {r['codeId']}  {r['note']}")
         return
     if a.fame_collect:
         f = fame_state(c, arena["id"])
@@ -382,6 +436,12 @@ def main():
         os.makedirs(a.logs, exist_ok=True)
 
     tally = {"won": 0, "lost": 0, "draw": 0}
+    test_code = None
+    if a.test:
+        row = resolve_test(test_codes(c, arena["id"]), a.test)
+        test_code = row["codeId"]
+        who = f"{row['name']}#{row['version']}" if row["version"] else row["name"]
+        print(f"test games against {who} ({row['list']}, code {test_code}) — these move NO rating")
     if a.fame:
         f = fame_state(c, arena["id"])
         if f["qualifying"]:
@@ -393,7 +453,7 @@ def main():
         if payload_size(c) != size:            # the page was reloaded, or the payload was overwritten
             print(f"{i}/{a.count}: the payload is not on the page any more, sending it again")
             size = push_zip(c, data)
-        r = start(c, arena["id"], fame=a.fame)
+        r = start(c, arena["id"], fame=a.fame, code_id=test_code)
         if r["status"] not in (200, 201) or not r.get("id"):
             print(f"{i}/{a.count}: start failed ({r['status']} {r.get('err')}) {r.get('raw') or ''}")
             break
