@@ -695,6 +695,28 @@ do once his blob is on them, and the entry is lost before that, with two of our 
 The next idea worth trying is not another rule about the fight but the MARCH — arriving with the army already inside
 its own firing range of the contact point, which no probe so far has touched.
 
+**The march probe, and what seventeen variants together say (08.09.2026).** The last untouched direction was the
+approach rather than the fight: arrive with the army already inside its own firing range instead of feeding it in.
+`USE_RALLY_BEFORE_BLOB` — while his massed army is not yet in contact and fewer than two thirds of our guns reach,
+walk to the mass of our own rather than at him or into a slot. Without a proximity condition it dropped 29 gate lines
+(six of his armed in a clump is ordinary, so the army gathered instead of playing the flags: army, camp, screen,
+farm+weak, scouts, grab, all on points). With one (his centroid within ENGAGE_RANGE + RANGED_RANGE) the gate is
+131/131 and the result **1-5 / 0-6** against v135's 5-7 / 2-10: the tick spent gathering hands him distance, and we
+still do not finish gathering — he arrives faster than we form.
+
+Seventeen variants have now been priced against the class, and read together they say something the individual numbers
+do not. **Every rule that slows our closing makes it worse** — a standoff of three, a rear row deeper, one wide line,
+holding off until our guns are up, gathering before contact — while the one that works is the smallest possible
+retreat that keeps every gun firing (the kite at two). And every rule that speeds our closing or frees a creep to act
+(breaking contact, the helpless leaving, healers by coverage) makes it worse too. The bot is on a ridge: against an
+equal army fought at parity, both more caution and more aggression cost more than they save, and what remains is the
+per-tick exchange itself, where he lands 20 000 expected damage to our 7 400.
+
+That is not a rule to write; it is the opponent's micro play. The instrument that would let us copy it is the one the
+stand could not build — his fight, tick by tick, from his side. The next thing worth doing is therefore not another
+probe but reading HIS replay creep by creep through the entry: which target each of his twelve picks each tick, and
+what our twelve would have had to pick to trade evenly.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a

@@ -591,6 +591,15 @@ object PainAndGain {
      *  вместо двух») — 2-4 и 2-4 против 5-7 и 2-10, то есть #11 выровнялся, а #10 просел, суммарно то же, и гейт 130/131
      *  (match31:camp). Наблюдение остаётся верным: на входе reach=2/5 против его двенадцати. */
     private const val USE_KITE_UNTIL_READY = false
+    /** СБОР ПЕРЕД БЛОБОМ (v135): пятнадцать отвергнутых проб меняли, ЧТО делают крипы, когда блоб уже на них, а вход
+     *  проигран раньше — на первом контакте телеметрия читает `reach=2/5`: цель достают два наших стрелка из пяти, он бьёт
+     *  двенадцатью, и за двадцать тиков мы теряем 9 500–10 600 хитов против его 5 800–6 500. Пока его сомкнутая армия ещё
+     *  НЕ в контакте (никого ближе RANGED_RANGE + 1) и достающих меньше двух третей, крип идёт к массе своих.
+     *  ОТВЕРГНУТО в двух формах. Без условия близости — 29 упавших строк гейта: шесть его вооружённых кучей это обычное
+     *  дело, и армия собиралась вместо игры за флаги (army, camp, screen, farm+weak, scouts, grab — все по очкам).
+     *  С условием «его центроид ближе ENGAGE_RANGE + RANGED_RANGE» гейт 131/131, но 1-5 и 0-6 против 5-7 и 2-10 у v135:
+     *  тик, потраченный на сбор, отдаёт блобу дистанцию, а собраться всё равно не успеваем — он входит быстрее. */
+    private const val USE_RALLY_BEFORE_BLOB = false
     /** ТЫЛ НА КЛЕТКУ ДАЛЬШЕ ПРОТИВ БЛОБА (v135): planBlock ставит лекарей и раненых в ряд 1 — одна клетка за фронтом мили, —
      *  и его мили, обойдя фронт, достаёт их тем же шагом. Лечение с двух идёт третью (4 за часть против 12), зато лекарь
      *  жив, а его гибель — середина цепи класса (он бьёт лекарей → лечение перестаёт возвращать части → мы раздеты).
@@ -4088,6 +4097,17 @@ cpuMark("a.evade")
                 combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE }
                     .minByOrNull { getRange(creep, it) }
             } else null
+            // ...и только когда блоб УЖЕ БЛИЗКО: первый срез («всякая сомкнутая армия») уронил 29 строк гейта — армия
+            // собиралась вместо игры за флаги, потому что шесть его вооружённых кучей это обычное дело. Нужен вход:
+            // его вооружённый центроид ближе ENGAGE_RANGE + RANGED_RANGE от нашей массы
+            val blobClose = combatEnemies.isNotEmpty() && centroidOf(armedEnemies.ifEmpty { combatEnemies })
+                ?.let { c -> getRange(c, armedCentroid) <= ENGAGE_RANGE + RANGED_RANGE } == true
+            val rallyBlob = USE_RALLY_BEFORE_BLOB && !support && enemyMassedNow && blobClose && !contact &&
+                combatEnemies.none { getRange(creep, it) <= RANGED_RANGE + 1 } && run {
+                    val live = combatArmy.count { hasRanged(it) }
+                    val reaching = combatArmy.count { c -> hasRanged(c) && combatEnemies.any { getRange(c, it) <= RANGED_RANGE + 2 } }
+                    live > 0 && reaching * 3 < live * 2
+                }
             val healerNear: Creep? = if (wounded || rotating) {
                 val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
                 val mine = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
@@ -4154,6 +4174,11 @@ cpuMark("a.evade")
                 USE_ROTATE_OVER_SLOT && rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
                 // прикрытие тыла раньше слота (v135): слот ставит мили в строй, а рубят в это время наш тыл
                 guardMate != null -> { target = guardMate; standoff = 1; nearFlow = true }   // цель — его мили у нашего тыла
+                // СБОР ПЕРЕД БЛОБОМ (v135, см. USE_RALLY_BEFORE_BLOB): вход проигран не тем, что крипы делают в бою, а тем, что
+                // в бой вступает часть — на первом контакте reach=2/5, два наших ствола из пяти против его двенадцати. Пока
+                // его сомкнутая армия ещё не в контакте, а наши стволы не готовы, крип идёт К МАССЕ СВОИХ, а не к врагу и не
+                // в слот: собраться на клетку ближе стоит дешевле, чем встретить блоб половиной армии
+                rallyBlob -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
                 // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
                 // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
