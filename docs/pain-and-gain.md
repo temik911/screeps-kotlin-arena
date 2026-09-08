@@ -882,6 +882,18 @@ stops entering fights it should enter and gives away points instead.
 
 Control is intact: **houshanyun#1 6-0** with the commander on.
 
+**Matches 617–636 — v140's twenty with the commander ON (08.09.2026): 13:7, 1 221 → 1 222.** The series was run
+precisely because the commander had only ever been measured against blobs, and it answers the question it was asked:
+on the FULL field the commander is worse. Thirteen wins to seven, a rating that ended one point above where it began,
+against v135's 16:4 and +45 the same day. By his bot: けろびー#12 2-1, Coldkimchi#1 1-1, MetalicaX#4 1-1,
+ricardo18informatica2020#4 2-0, あぶらむし 2-0, and けろびー#1 — one of the blobs that used to wipe us — beaten. But
+MetalicaX#9 0-2 and #10 0-1, all three of those lost inside 200 ticks.
+
+So the picture is consistent with the test games rather than contradicting them: against blobs the commander is level
+or slightly ahead (31 % against 29 %), and against everyone else it gives away what the kite was winning — 65 % over
+the field against 80 %. The commander is off again and v135 plays; the code and its measurements stay, and the one
+thing that ever moved it — making the forecast predict the fight we actually fight — is where to continue.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
