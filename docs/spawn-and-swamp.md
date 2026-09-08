@@ -1156,6 +1156,53 @@ outcomes stand apart, can test the chain on a full series. v57 is v56 in behavio
 scenarios tick-for-tick, and the field reads 0 on the quiet ones and 7 haulers / 850 cargo on `siege6`,
 the fixture built from the live match where the fleet was shot off the map.
 
+### The chain tested on twenty, and half of it refuted (08.09.2026)
+
+v57's twenty went 14:4:2, rating 1274 → 1274 — the same bot as v56 in behaviour, with `haulersLost`
+printed so the chain drawn from three matches could be judged on twenty. It does not survive whole.
+
+| | haulers lost | his power | our income |
+|---|---|---|---|
+| **lost** けろびー#15 | **7** | 716 | **4.6** |
+| **lost** けろびー#18 | **5** | 1194 | **4.8** |
+| **lost** stachu3478#9 | 1 | 813 | 8.0 |
+| **lost** けろびー#18 | **0** | 1238 | 7.7 |
+| draw けろびー#14 | 2 | 374 | 6.6 |
+| draw けろびー#14 | 0 | 208 | 8.6 |
+| won (14) | 0 in twelve, 2 and 3 in two | 28–633 | 5.4–9.4, twelve of them 7.4–9.4 |
+
+**The link is real in direction and useless as a rule.** Hauler deaths average 3.25 in the losses
+against 0.36 in the wins, and the two matches with the fleet shot off (7 and 5) carry by far the lowest
+income of the series — 4.6 and 4.8 against a normal 8–9. That is the chain, and in those two it holds
+end to end. But it is **neither necessary nor sufficient**: two of the four losses lost nought and one
+hauler at wholly normal income, and two wins lost two and three.
+
+So there are **two loss shapes, not one**, and the account written from v56's two losses generalised
+from a sample that happened to contain only the first:
+
+- **the fleet shot off** — 5–7 haulers dead, income halved, and from there the army ratio falls under
+  his healing rate and the exchange inverts;
+- **out-armied outright** — haulers untouched, income normal, and he simply arrives with twice the
+  power.
+
+**And the sharpest fact of the twenty is not in the chain at all.** His power at the sampled ticks is a
+*perfect* separator here: every loss above **700** (716, 813, 1194, 1238), every win below **640** (28 to
+633), no overlap in twenty matches. Read as "we lose when he is stronger" it is a tautology; read as a
+**threshold** it is the healing argument again — the outcome is a cliff and not a slope, because damage
+below his heal rate kills nobody and above it kills everything. `series.py metrics` ranks the same shape
+from our own logs without knowing it: `spawn.first` fires in **4 of 4** losses against 0.2 in the wins,
+his creep count is 4.96 against 2.30, `spawn.deficit` +458 against −202.
+
+One measured aside: **`cargoLost` is zero in all twenty** while the stand's `siege6` records 850 with
+seven dead, so the accounting works and the reading is real — **his hunting kills our haulers empty, on
+the way out**. What a killed hauler costs is the creep and the trip, not the load.
+
+The honest state after forty matches on the same behaviour (18:2 then 14:4:2, rating 1260 → 1274): the
+hauler-protection subject is **not the dominant lever** and no code should be written for it on this
+evidence. What is worth the next move is the second shape — he arrives with twice the power at normal
+income — and that is the production race, which is where the delivery point and the stand's
+non-competing farm already point.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
