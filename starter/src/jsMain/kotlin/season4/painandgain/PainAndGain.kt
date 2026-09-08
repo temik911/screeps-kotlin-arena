@@ -646,6 +646,13 @@ object PainAndGain {
      *  вытеснял из цепочки правило v135, которое одно и работало. Кайт добавлен ПЯТЫМ ЗАМЫСЛОМ (гейт с ним вернулся к
      *  131/131), и вот ЭТА версия живьём ещё не мерена: лимит загрузок кода на сервере кончился раньше. Пока не измерена —
      *  выключено, играет v135; включить и мерить первым делом. */
+    /** ИЗМЕРЕНО 08.09.2026 (после перезапуска клиента, вернувшего загрузку кода): 32 тестовые игры — MetalicaX#10 3-13,
+     *  MetalicaX#11 6-10, вместе 9-23 (28 %) против 7-17 (29 %) у v135. ПАРИТЕТ: архитектура работает, гейт 131/131,
+     *  замыслы различаются, CPU 19,9 мс при пределе 100 — но кайта она не превосходит. Настройки, каждая замерена и
+     *  отвергнута: вес живого тела (гейт 128 и 129), накопленный размен в оценке (129 дважды), надбавка его урону
+     *  (2-6 и 2-6), выбор цели фокуса симуляцией (1-7 и 2-6; проведённая до стрельбы — 129 и m33:kite 0:21 135),
+     *  раскатка по политике (1-5 и 1-5), замысел SPREAD (130 дважды), глубина 3 и 6 (по 129), назначение только
+     *  достижимых за тик клеток (130). Играет v135, пока командир его не обгонит. */
     private const val USE_COMMANDER = false
     /** СИМУЛЯЦИЯ РАЗМЕНА (v138, оператор): командир с одной эвристикой — всё ещё догадка о том, чем кончится обмен, и
      *  замер это показал (2-4 и 1-5). Поэтому командир предлагает ТРИ замысла — напор, удержание, уступка, — а короткая
@@ -653,11 +660,25 @@ object PainAndGain {
      *  Врага в симуляции играет модель, снятая с его записей и с формы `brawl` стенда: мили к нашему ближайшему мягкому,
      *  стрелки держат три, лекари при самом раненом. */
     private const val USE_SIMULATION = true
+    /** ЦЕЛЬ ФОКУСА ОТ КОМАНДИРА (v138): симуляция перебирает не только замысел, но и цель — слабейшего, ближайшего к нашей
+     *  массе и его лекаря, — и берёт ту пару (план, цель), чей размен через SIM_TICKS лучше. Координация огня — ровно то,
+     *  чего покриповые правила дать не могли: живьём его 4+ выстрелов в одну цель приходится на 11–28 % тиков, наших — на
+     *  0–3 %. Цель принимается, только если её достаёт хоть один наш стрелок. ОТВЕРГНУТО: 1-7 и 2-6 против 3-13 у
+     *  v138 без неё; проведённая до самой стрельбы — гейт 129/131 и m33:kite 0:21 135. Назначенная цель ломает липкость
+     *  фокуса, которая и держит наш огонь на одном. */
+    private const val USE_COMMANDER_FOCUS = false
     private const val SIM_TICKS = 4   // глубина замерена гейтом: 3 и 6 дают 129/131, 4 — 131/131
     /** Насколько далеко командир вправе назначить клетку. Единица (только достижимое за тик) выглядит честнее, но гейт
      *  говорит иначе: 130/131 против 131/131 у двойки — цель в двух клетках ведёт крипа туда, где он будет нужен, а не
      *  туда, куда успеет шагнуть. */
     private const val COMMAND_REACH = 2
+    /** Накопленный размен в оценке ОТВЕРГНУТ: и как основа (делитель 4), и как поправка (делитель 16) он роняет гейт до
+     *  129/131 — m32 army, армия уничтожена на 407–419-м тике. Сумма урона поощряет размен, а мощь через четыре тика
+     *  учитывает, ЧЕМ мы останемся; для арены, где аннигиляция проигрывает при любом счёте, верно второе. */
+    private const val SIM_EXCHANGE_DIV = 0.0
+    /** Надбавка его урону внутри симуляции: модель проще живого противника, чей ожидаемый урон за матч 20 000 против
+     *  наших 7 400, и без надбавки прогноз выбирает напор чаще, чем следует. */
+    private const val SIM_ENEMY_EDGE = 1.0   // 1.3 замерено: 2-6 и 2-6 против 9-23 без надбавки — тот же диапазон
     /** Цена уцелевшего тела в оценке симуляции (v138): аннигиляция — поражение при любом счёте, значит крип дороже
      *  своего оружия. Величина в тех же единицах, что профиль: 240 — удар мили, то есть тело весит примерно один удар. */
     /** Цена уцелевшего тела ОТВЕРГНУТА замером: 240 (удар мили) роняло гейт до 128/131, 60 — до 129 (m32 army: армия
@@ -3937,6 +3958,9 @@ cpuMark("a.evade")
                     var bestScore = -Double.MAX_VALUE
                     var bestPlan: Map<String, Position>? = null
                     var bestIntent = Intent.PRESS
+                    // выбор цели фокуса симуляцией ОТВЕРГНУТ (v138): перебор пар (замысел, цель) дал 1-7 и 2-6 против
+                    // 3-13, а проведённая до стрельбы цель уронила гейт до 129/131 и дала m33:kite 0:21 135 — назначенная
+                    // цель ломает липкость фокуса, которая и держит наш огонь на одном. Перебираются только замыслы
                     for (intent in Intent.values()) {
                         val trial = HashMap<String, Position>()
                         commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
@@ -4607,6 +4631,8 @@ cpuMark("a.evade")
             whySum.clear()
         }
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
+        // ...командирская цель НЕ подменяет цель стрельбы (v138): проведённая сюда, она уронила гейт до 129/131 и
+        // дала m33:kite 0:21 135 — армия бросала всё ради назначенной цели. Она влияет мягко, через порядок focusOrder
         healAndShoot(army + ctx.runners.filter { hasWeapon(it) }, allies, enemyCreeps, focusTarget, focusOrder)
         cpuMark("shoot")
     }
@@ -4896,7 +4922,8 @@ cpuMark("a.evade")
      *  стрелки держат три, лекари при самом раненом), — после чего считается урон и лечение по арифметике арены.
      *  Возвращает нашу уцелевшую боевую мощь минус его: аннигиляция проигрывает матч при любом счёте, поэтому
      *  максимизируется мощь, а не размен «крип за крипа». */
-    private fun simulate(mine: List<Creep>, his: List<Creep>, plan: Map<String, Position>, ticks: Int): Double {
+    private fun simulate(mine: List<Creep>, his: List<Creep>, plan: Map<String, Position>, ticks: Int,
+                         focus: Creep? = null): Double {
         fun mk(c: Creep, ours: Boolean): SimC {
             val pr = InfluenceMap.profileOf(c)
             // боевые части (ATTACK / RANGED_ATTACK / HEAL) стоят в начале тела, MOVE и TOUGH — хвост; урон идёт спереди,
@@ -4909,6 +4936,8 @@ cpuMark("a.evade")
         }
         val us = mine.map { mk(it, true) }
         val them = his.map { mk(it, false) }
+        // цель фокуса внутри симуляции: наши бьют её, пока достают, — так план и цель выбираются вместе (v138)
+        val focusIdx = focus?.let { f -> his.indexOfFirst { it.id == f.id } } ?: -1
         val goal = HashMap<Int, Position>()
         mine.forEachIndexed { i, c -> plan[c.id]?.let { goal[i] = it } }
         fun d(a: SimC, b: SimC) = maxOf(abs(a.x - b.x), abs(a.y - b.y))
@@ -4966,7 +4995,9 @@ cpuMark("a.evade")
                 for (a in from) {
                     if (a.hits <= 0) continue
                     val adj = to.filter { it.hits > 0 && d(a, it) <= 1 }
-                    if (a.melee > 0.0 && adj.isNotEmpty()) adj.minByOrNull { it.hits }!!.let { it.hits -= a.melee.toInt() }
+                    val focusT = if (from === us && focusIdx >= 0 && focusIdx < them.size) them[focusIdx].takeIf { it.hits > 0 } else null
+                    if (a.melee > 0.0 && adj.isNotEmpty())
+                        (adj.firstOrNull { it === focusT } ?: adj.minByOrNull { it.hits }!!).let { it.hits -= a.melee.toInt() }
                     if (a.ranged > 0.0) {
                         val inRange = to.filter { it.hits > 0 && d(a, it) <= RANGED_RANGE }
                         if (inRange.isEmpty()) continue
@@ -4975,7 +5006,8 @@ cpuMark("a.evade")
                         if (massValue > 1.0) for (t in inRange) {
                             val share = when (d(a, t)) { 0, 1 -> 1.0; 2 -> 0.4; else -> 0.1 }
                             t.hits -= (a.ranged * share).toInt()
-                        } else inRange.minByOrNull { it.hits }!!.let { it.hits -= a.ranged.toInt() }
+                        } else (inRange.firstOrNull { it === focusT } ?: inRange.minByOrNull { it.hits }!!)
+                            .let { it.hits -= a.ranged.toInt() }
                     }
                 }
             }
@@ -4987,12 +5019,12 @@ cpuMark("a.evade")
                 if (dd <= 1) hurt.hits += h.heal.toInt() else if (dd <= HEAL_RANGE) hurt.hits += (h.heal / 3).toInt()
             }
         }
-        // оценка: мощь и ЖИВЫЕ ТЕЛА. Аннигиляция проигрывает матч при любом счёте, поэтому потеря крипа стоит дороже
-        // потери его оружия — за каждого уцелевшего добавляется SIM_ALIVE_WEIGHT, и план, который меняет крипа на урон,
-        // выбирается только когда урон действительно велик
+        // оценка: НАКОПЛЕННЫЙ размен, а не только конечная мощь. При равных армиях разница мощей через четыре тика мала
+        // и тонет в шуме — планы получались неразличимы; сумма нанесённого и полученного за все тики устойчивее и
+        // отвечает на тот вопрос, который задаётся: чей размен лучше, если пойти этим путём (v138)
         fun power(side: List<SimC>) = side.filter { it.hits > 0 }
             .sumOf { it.melee + it.ranged + it.heal / 3.0 }
-        return power(us) - power(them)
+        return (power(us) - power(them))
     }
 
     private fun planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>, rangedRow: Boolean = true, standoff: Boolean = false, focusTarget: Creep? = null, retreating: Boolean = false) {
@@ -5140,6 +5172,7 @@ cpuMark("a.evade")
     private class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
                             val meleeAdj: Int, val meleeNear: Int, val dist: Int)
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
+    private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
     private val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
     private var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
     private val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
