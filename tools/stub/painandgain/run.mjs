@@ -753,10 +753,34 @@ function enemyTick() {
       // the nearest ranged unless a mate at three or more from our armed is wounded
       const ourArmed = ourF.filter((o) => live(o, A) + live(o, R) > 0);
       const minOur = (x, y) => ourArmed.length ? Math.min(...ourArmed.map((o) => Math.max(Math.abs(x - o.x), Math.abs(y - o.y)))) : 99;
+      // '+early' (08.09.2026): the arrival, not the fight. Live his blob stands whole on the centre flag at t=40-46 while our
+      // posture has held post=(49,49) since t=3; here contact comes at t=68-127 because the blob walks at our CENTROID, only
+      // advances formed, and opens with the feint. Until one of our armed creeps is within eight of it, every fighter walks at
+      // the CENTRE FLAG at full speed with no formation rule and no feint; after that this is `brawl` unchanged
+      const early = has('early');
+      if (early) {
+        if (!armyState.centreFlag) {
+          const c0 = flags.slice().sort((a, b) => (Math.max(Math.abs(a.x - 50), Math.abs(a.y - 50))) - (Math.max(Math.abs(b.x - 50), Math.abs(b.y - 50))))[0];
+          armyState.centreFlag = c0 ? { x: c0.x, y: c0.y } : { x: 50, y: 50 };
+        }
+        // the march ends when our armed are within eight OR when the blob has ARRIVED (its centroid within three of the
+        // flag): live he takes the centre and then comes at whoever shows up, he does not wait there forever
+        if (!armyState.earlyDone) {
+          const cen = { x: Math.round(fighters.reduce((t, f) => t + f.x, 0) / fighters.length), y: Math.round(fighters.reduce((t, f) => t + f.y, 0) / fighters.length) };
+          if (ourArmed.some((o) => fighters.some((f) => range(f, o) <= 8)) || range(cen, armyState.centreFlag) <= 3) armyState.earlyDone = true;
+        }
+        if (!armyState.earlyDone) {
+          if (isHealer) {
+            const m = fighters.filter((o) => o !== c && live(o, H) === 0).sort((a, b) => range(c, a) - range(c, b))[0];
+            if (m && range(c, m) > 1) stepToward(c, m, 1); else stepToward(c, armyState.centreFlag, 2);
+          } else stepToward(c, armyState.centreFlag, 1);
+          continue;
+        }
+      }
       // the feint (match 249, t=44–49): at first contact the whole blob steps back a cell for three ticks and then comes on —
       // live it marked all twelve of his creeps as 'keeping their distance' for twenty ticks and our melee stood
-      if (armyState.feint === undefined && ourArmed.some((o) => fighters.some((f) => range(f, o) <= 3))) armyState.feint = world.tick;
-      if (armyState.feint !== undefined && world.tick - armyState.feint < 3) { const near = ourArmed.filter((o) => range(c, o) <= 4); if (near.length && !stepBack(c, near)) stepAway(c, near); continue; }
+      if (!early && armyState.feint === undefined && ourArmed.some((o) => fighters.some((f) => range(f, o) <= 3))) armyState.feint = world.tick;
+      if (!early && armyState.feint !== undefined && world.tick - armyState.feint < 3) { const near = ourArmed.filter((o) => range(c, o) <= 4); if (near.length && !stepBack(c, near)) stepAway(c, near); continue; }
       const blobC = { x: Math.round(fighters.reduce((s, f) => s + f.x, 0) / fighters.length), y: Math.round(fighters.reduce((s, f) => s + f.y, 0) / fighters.length) };
       const frontD = Math.min(...fighters.map((f) => minOur(f.x, f.y)));
       const formed = fighters.every((f) => minOur(f.x, f.y) <= frontD + 3);
@@ -779,7 +803,7 @@ function enemyTick() {
         const tgt = soft || nearest;
         if (wasAdj && ourArmed.some((o) => range(c, o) <= 2)) { const near = ourArmed.filter((o) => range(c, o) <= 2); if (!stepBack(c, near)) stepAway(c, near); }
         // '+deep': a melee that has a soft target does not wait for the blob to close up — it goes through our line
-        else if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD || (deep && soft))) stepToward(c, tgt, 1);
+        else if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD || (deep && soft) || early)) stepToward(c, tgt, 1);
       } else if (nearest) {
         // '+far' (08.09.2026): his ranged keep FIVE from our armed, not three — live 369 of 647 creep-ticks at seven cells
         // and `ranged in 3` only 21-47 % against our 63-83 %; at three the stand hands them to us and they strip first

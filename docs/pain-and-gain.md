@@ -505,6 +505,17 @@ is winning its fight can afford to pay strength for points, so it holds flags; a
 not. The flags are a symptom of the fight going well, not a cause of it. The doctrine stands unchanged on both counts —
 the post pays in points, and the capture gate earns its refusals.
 
+**The stand gets the live arrival (08.09.2026): `+early`, and the limit it exposes.** Four cuts of the live blob have
+now been built and priced — `+heals` (his fire at our healers first), `+deep` (his melee through our line to a soft
+target five cells off), `+far` (his ranged at five, not three) and `+early` (his army at the CENTRE FLAG at full speed,
+no formation rule, no feint, until our armed are within eight or it has arrived). The first three describe how he
+fights and none moved the exchange. `+early` describes WHEN he arrives, and it works as intended: contact moves from a
+mean of t=96 to t=58, landing on the live 40–44 on four of the eight fight maps. But the exchange stays ours — in all
+twenty-four runs his army dies, and our losses over the first twenty ticks stay far under his where live they are
+above. The gap is not a habit of his we failed to copy; it is that the stand plays a DESCRIPTION and MetalicaX plays a
+bot. `+early` is nonetheless the form to price entry rules with, because it is the only one that puts our line against
+his whole army before ours is formed. The stub gate is identical to the digit with every new form off (131/131).
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
