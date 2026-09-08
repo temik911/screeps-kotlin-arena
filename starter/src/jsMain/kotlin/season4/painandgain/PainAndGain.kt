@@ -1236,6 +1236,14 @@ object PainAndGain {
      *  побьёт, а двое ближайших вооружённых свободных побьют (по Ланчестеру пары против стаи), получает обоих; пул отпускает
      *  столько, сколько требуют охраны целей (флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного). */
     private const val USE_RUNNER_PAIRS = true
+    /** ПАРА ИДЁТ ВМЕСТЕ (v158): на флаг под стаей USE_RUNNER_PAIRS шлёт ДВОИХ — именно потому, что один не справится, —
+     *  а шли они порознь и приходили по одному против той же стаи. Идущий впереди ждёт отставшего, пока тот дальше
+     *  PAIR_KEEP: тот же единый кулак, только на двоих. НЕ ВКЛЮЧЕНО: на стенде эффекта нет вовсе — camp, farm и split
+     *  дали ЧИСЛО В ЧИСЛО одинаковый счёт с правилом и без (20 265:14 589, 24 007:16 437, 22 838:24 303), то есть пары
+     *  в этих формах не назначаются и правилу не на чем сработать. Гейт при включённом держит 135/135, так что оно
+     *  безвредно, но включать непроверенное незачем: ждёт живого замера, где пары и появляются. */
+    private const val USE_PAIR_TOGETHER = false
+    private const val PAIR_KEEP = 2
     /** ВЫПУСК С ДЕБАФФОМ ЦЕЛИ (v95, решение оператора 06.09.2026): при точном паритете (матч 237, 3507:3679 ↔ 3679:3507)
      *  выпуск одного крипа опускал ядро под порог, как только бегун брал флаг (дебафф холдера ложится на всю сторону), и
      *  одна мера (v94) возвращала его — 56 строк отряда по одному в такт DETACH_WINDOW. Пул проверяет ядро без крипа И с
@@ -1834,7 +1842,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v157"
+    private const val BOT_VERSION = "v158"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2697,7 +2705,13 @@ cpuMark("r.cands")
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)
             // при запрете захвата клетка флага — стена и для его же бегуна: путь к «зазору 1» шёл ЧЕРЕЗ флаг, и скаут брал R3
             // на 49-м при уклонении с 3-го (матч 56), как и в четырёх боях с けろびー до правила v34/v35
-            val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.x * 100 + f.pos.y else -1)) else null
+            // ПАРА ИДЁТ ВМЕСТЕ (v158): на флаг под стаей отправляются двое (см. USE_RUNNER_PAIRS), потому что один не
+            // справится, — но шли они каждый своим путём и приходили порознь, то есть по одному против той же стаи.
+            // Идущий впереди ждёт отставшего: тот же кулак, только на двоих
+            val mate = if (!USE_PAIR_TOGETHER) null else runners.firstOrNull { o ->
+                o.id != s.id && runnerFlag[o.id] == f.id && canMove(o) }
+            val waitForMate = mate != null && getRange(s, mate) > PAIR_KEEP && s.getRangeTo(f.pos) <= mate.getRangeTo(f.pos)
+            val step = if (!waitForMate && s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.x * 100 + f.pos.y else -1)) else null
             if (step != null) { TrafficManager.request(s, step, RUNNER_PRIORITY); planCapture(ctx, step) }
             dbg(s, if (allowed) "TO_FLAG" else "POISED:$block", f, step)
         }
