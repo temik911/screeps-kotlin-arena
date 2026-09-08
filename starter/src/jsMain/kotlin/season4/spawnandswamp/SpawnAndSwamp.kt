@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 70
+    private const val BOT_VERSION = 73
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -372,27 +372,13 @@ object SpawnAndSwamp {
      *  тике). Знаменатель наблюдаемой скорости стройки: см. siteReadyTicks. */
     private val siteWork = HashMap<String, Pair<Int, Int>>()
 
-    /** Тики, когда смотритель был ЖИВ, и прогресс площадки на первом из них (см. measureSiteWork). */
-    private val siteHeld = HashMap<String, Pair<Int, Int>>()
-
     private fun measureSiteWork(ctx: Ctx) {
         for (s in ctx.mySites) {
-            // ДВОЕ ЧАСОВ, И ОНИ РАЗЛИЧАЮТ РАЗНОЕ. siteWork считает тики, когда руки У ПЛОЩАДКИ, и
-            // отвечает на «с какой скоростью строят». siteHeld считает тики, когда смотритель просто
-            // ЖИВ, и отвечает на «доходят ли до неё вообще»: у загнанной площадки первый счётчик стоит
-            // на нуле, и срок берётся из модели, которая про охоту не знает. Живой замер (6aa02b06):
-            // площадке оставалось 281 из 1000, смотрителя гоняли в тридцати клетках от неё с fire=50, а
-            // ready читался как 20 из 610 — и под этот срок купили второго смотрителя, тоже впустую
-            if (ctx.builders.isNotEmpty()) {
-                val held = siteHeld[s.id]
-                siteHeld[s.id] = if (held == null) 1 to (s.progress ?: 0) else (held.first + 1) to held.second
-            }
             if (ctx.builders.none { getRange(it, s) <= BUILD_RANGE }) continue
             val was = siteWork[s.id]
             siteWork[s.id] = if (was == null) 1 to (s.progress ?: 0) else (was.first + 1) to was.second
         }
         siteWork.keys.retainAll { id -> ctx.mySites.any { it.id == id } }
-        siteHeld.keys.retainAll { id -> ctx.mySites.any { it.id == id } }
     }
 
     /** Кончится ли осада раньше, если следующее тело — мили: ответ СИМУЛЯЦИИ, снятый в runFighters и
@@ -1697,8 +1683,7 @@ object SpawnAndSwamp {
             // ...и пока идёт ПРОБА, других площадок нет вовсе: один смотритель на две стройки не кончает
             // ни одной (первый матч пробы: экстеншен 100/200, башня 20/1250, ответа нет). Ветка живёт
             // только при включённой EXT_PROBE и снимается вместе с ней
-            var towerWanted = false
-        if (ctx.myTowers.isEmpty() && !(EXT_PROBE && !extAnswered)) {
+            if (ctx.myTowers.isEmpty() && !(EXT_PROBE && !extAnswered)) {
                 // площадка уже стоит — спрашиваем про ОСТАТОК: бросить недостроенное дороже, чем достроить.
                 // Спрашиваем при этом про ПЛОЩАДКУ БАШНИ, а не про ближайшую: чужая по назначению стройка
                 // рядом с домом отвечала за башню и на «стоит ли уже», и на «успеем ли»
@@ -1713,7 +1698,6 @@ object SpawnAndSwamp {
                 // сроки: жизнь спавна под нынешним огнём и остаток матча
                 val inTime = job?.inTime ?: false
                 val worth = inTime && towerWorth(defenders, threats, flow, left, trace)
-            towerWanted = worth || site != null
                 if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && (trace.isNotEmpty() || site != null)) {
                     println("tower: worth=$worth inTime=$inTime job=${job ?: "-"} jobs=${siteJobs.size}$trace")
                 }
@@ -1739,14 +1723,7 @@ object SpawnAndSwamp {
                 println("fwd gates: t=${getTicks()} sites=${ctx.mySites.size} spawns=${ctx.mySpawns.size} budget=$budget/$fwdKeeper " +
                     "deficit=${deficit.toInt()} needHauler=$needHauler fighterFirst=$fighterFirst alarm=$alarm")
             }
-            // У БАШНИ ПРАВО ПРОЕЗДА. Смотритель один, а площадок он может набрать две — ветка башни
-        // спрашивает только про СВОЮ, и в живых матчах v64 обе стояли по нулю в один момент
-        // (`site(2,2)0/1000+site(7,48)0/1250`). Считать площадки — мало: запрет по их числу
-        // отдаёт очередь тому, кто успел первым, и точка сдачи, которую не достроить, запирает башню
-        // до конца матча (в v68 площадка башни не поставлена НИ РАЗУ из четырёх против четырёх из
-        // десяти у v64). Право проезда у обороны: пока башня нужна или её площадка стоит, точка сдачи
-        // ждёт — она экономика, а башня держит дом, и в победах она стоит вчетверо чаще, чем в поражениях
-        if (!towerWanted && ctx.mySites.isEmpty() && ctx.mySpawns.size < FORWARD_SPAWNS &&
+            if (ctx.mySites.isEmpty() && ctx.mySpawns.size < FORWARD_SPAWNS &&
                 // ЦЕНУ СМОТРИТЕЛЯ СПРАШИВАЛИ ДВАЖДЫ — И ОДИН РАЗ НЕ ВОВРЕМЯ. Она уже стоит в price у
                 // forwardWorth, то есть в ответе на «окупится ли»; а здесь её же требовали НАЛИЧНЫМИ в
                 // момент постановки, когда площадки ещё нет и смотритель ещё не нужен. Спавн столько не
@@ -4325,20 +4302,7 @@ object SpawnAndSwamp {
             val hop = if (here == null) 0 else stepsFrom(cellSteps(ctx, supply.x * 100 + supply.y), here).coerceAtLeast(0)
             if (carry <= 0) Double.MAX_VALUE / 4 else ceil(siteLeft.toDouble() / carry) * (2.0 * hop + 2.0)
         }
-        val modelled = maxOf(supplied, siteLeft / rate + ferry) + born
-        // СМОТРИТЕЛЬ ЖИВ ДОЛЬШЕ, ЧЕМ МОДЕЛЬ ОБЕЩАЛА ВСЮ СТРОЙКУ, А ПЛОЩАДКА НЕ СДВИНУЛАСЬ — значит до
-        // неё не доходят, и срок у неё не «двадцать тиков», а «никогда». Часы присутствия (siteWork)
-        // этого не ловят по построению: они считают тики У ПЛОЩАДКИ, а у загнанного смотрителя их ноль,
-        // и ответ каждый раз берётся из модели, которая про охоту не знает. Живой замер (6aa02b06):
-        // площадке оставалось 281 из 1000, смотрителя гоняли в тридцати клетках от неё с fire=50, а
-        // ready читался как 20 из 610 — и под этот срок купили второго смотрителя, тоже впустую.
-        // Порог не назначен: это ОТВЕТ САМОЙ МОДЕЛИ, в котором поход уже учтён (born + ferry), поэтому
-        // правило не срабатывает, пока смотритель просто идёт
-        if (site != null && work > 0 && modelled < Double.MAX_VALUE / 8) {
-            val held = siteHeld[site.id]
-            if (held != null && held.first > modelled && (site.progress ?: 0) <= held.second) return Double.MAX_VALUE / 4
-        }
-        return modelled
+        return maxOf(supplied, siteLeft / rate + ferry) + born
     }
 
     /** Окупается ли башня против бойца за ту же энергию. Мера одна и та же — ПРИБАВКА к мощи обороны

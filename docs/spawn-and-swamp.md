@@ -1679,6 +1679,82 @@ working; restarting the client was not mine to do — the other arenas' sessions
 version rests on the stand and on the calibrated recording, and the first thing the next session should
 do is play it.
 
+### v71-v72: two bans that outlived their reasons, found with the reacting fixture (08.09.2026)
+
+Once `HUNT` made the recorded けろびー#19 hunt our unarmed creeps, the fixture started paying for
+itself, and the first thing it did was reproduce two live verdicts for free: **the second keeper**
+(fighters 13 → 1 at HUNT=8, exactly what twenty live matches said of v67-v68) and **the clock gate
+instead of the defence deficit** (fighters 13 → 8, our spawn lost at HUNT=4). It also settled that the
+delivery-point ceiling never binds — with five allowed instead of three the runs are byte-identical, so
+the keeper is the throughput, not the number.
+
+**v71: the keeper's pile is chosen for the SITE, not for himself.** The cost of the work is the round
+trip from pile to site; who is nearest the keeper has nothing to do with it. On the recording the point
+reached 978 of 1000 and stalled because at t=1970 the keeper stood twenty-seven cells away carrying a
+hundred, having walked to the pile nearest ITSELF. This exact change was tried earlier the same day and
+reverted — it cost `siege6` its tower. With v70's held clock it costs nothing: **the regression was a
+symptom of the missing clock**, and with the clock in place all 26 are byte-identical while the army we
+end with grows in four settings of five. v71 is the first build that carries the economic chain through
+under hunting: three spawns, no abandoned sites.
+
+**v72: melee is priced against every spawn, not only an armoured one** — and this is the largest single
+find of the day. The ban was put there correctly and off a correct measurement: without it the bot took
+melee against a stream and lost home (`stream17`, our spawn destroyed at 1357 where it used to win at
+888). **That defeat no longer exists.** With the ban lifted `stream17` is won at 1639 and keeps its
+tower; the reason the ban was written was fixed somewhere in the thirty versions since, and the ban
+stayed and cost everything melee can do.
+
+What it can do is arithmetic: **ATTACK is 30 damage for 80 energy against RANGED's 10 for 150** — five
+and a half times cheaper — and that is the only thing that breaks massed healing, which is why our
+Lanchester power against his ball reads **zero with eight fighters alive**. Twenty-six scenarios: ten
+faster (`ball` 663 → 383, `healball` 428 → 384, `stream` 481 → 414, `pairs` 494 → 415, `none`
+428 → 369, `swarm`, `raider`, `rush`, `enemy`), two slower (`harass` 779 → 1151, `stream17` 888 → 1639),
+all pass. On the recording: without the option a draw at every hunting setting, with it **his spawn
+destroyed at 1428, 1382 and 1119** at HUNT=0/2/4. The price is named, not hidden — at HUNT=6/8, where he
+hunts in earnest, our own spawn falls around t=1800-1900 where it used to draw.
+
+**Live:** v70 was stopped at twenty-one matches with **no wins at all**, which is worse than v64's
+pooled seven in twenty-eight (p about 0.02) — the site-death clock alone survives more and wins less.
+v72 over thirty matches: **4-23-3**. And the mechanism shows in the logs rather than only in the record:
+across the first six matches the two wins bought nine and six melee bodies against three ranged, every
+loss and the draw bought one to three. That reading has a caveat worth keeping — `assaultWantsMelee`
+comes from the siege simulation, so a bot that is already winning will also be told to buy melee.
+
+### v73 — back to v64, and the finding that is worth more than any of the six (08.09.2026)
+
+Six builds were made after v64 today. Every one of them was better on the instruments and worse in the
+arena, and the totals are no longer arguable:
+
+| build | what was in it | matches vs けろびー#19 | W-L-D |
+|---|---|---|---|
+| **v64** | landed, two blocks | **28** | **7-15-6** |
+| v65-v68 | wave size, reach filter, economy package, second keeper | 20 | 0-11-9 |
+| v69 | tower's right of way over a delivery point | 13 | 1-7-5 |
+| v70 | + a site that outlives its prediction is dead | 21 | **0-14-7** |
+| v72 | + melee priced against every spawn | 30 | 4-23-3 |
+
+**Five wins in eighty-four after v64, against seven in twenty-eight before it — Fisher's exact test
+gives about four chances in a thousand.** So `main` goes back to v64's behaviour, renumbered v73 so a
+live log names which build it is; all 26 gate scenarios are byte-identical to the v64 that scored those
+seven wins.
+
+What that leaves is not a failure to find defects — the defects were real and each was measured. It is
+this: **on this arena, against this opponent, our two offline instruments and the live game disagree
+systematically, and the disagreement is not noise.** The 26 hand-built scenarios said v72 was ten
+scenarios faster; the recorded けろびー with hunting said v72 destroys his spawn at 1119-1428 where v71
+draws; the arena said 4-23-3. The instruments model what our bot does to a fixed opponent; the arena
+contains one that answers. Nothing built today closed that gap, and no amount of further tuning against
+either instrument will, because they are the thing being disagreed with.
+
+**So the next attempt should not be another change measured on the stand.** It should be an instrument
+that answers back — the stub playing our own bundle against itself, or a scripted opponent whose
+economy and hunting are policies rather than a recording. Until then a change is worth landing only if
+it survives thirty live matches, and today that is a bar none of the six cleared.
+
+Everything else built today stays, because it is not the bot: `scenarios/kerobi19.json`, `HUNT=k` in
+`replayrun.mjs` with its calibration, and these notes. The six builds are on the local tag
+`shelf-v69-v72` and in `shelf-v65-v68`.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
