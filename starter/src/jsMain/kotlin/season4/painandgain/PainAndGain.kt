@@ -519,6 +519,35 @@ object PainAndGain {
      *  MetalicaX#10 и 0-6 против #11 при базе 1-5 и 1-5 (гейт 131/131) — лекарь, севший к раненому в блобе, гибнет сам,
      *  и лечений становится меньше, а не больше. Цифра 60 из 600 верна, но лечится она не расстановкой лекаря. */
     private const val USE_HEALERS_COVER_OVER_SAFETY = false
+    /** «БРОСОК ДАЛЕКО» ЗНАЧИТ ДАЛЕКО (v135): rushFar (v100) гасил уклонение от безфлагового броска по одной только СИЛЕ —
+     *  `theirsFight < oursFight * RETREAT_RATIO`, — и при паритете это срабатывало на любом расстоянии, вплоть до вплотную.
+     *  В разгромах от блоба видно прямо: `rush=true` с 10-го тика, posture HOLD на посту (49,49) до 39-го, контакт, мощь
+     *  ноль к 81-му; после контакта retreatFeasible уже false, и решение уклониться принять негде. Теперь бросок считается
+     *  далёким, только пока его вооружённый центроид дальше EVADE_RANGE от нашей массы. РАБОТАЕТ МЕХАНИЧЕСКИ И НЕ ПОМОГАЕТ:
+     *  постура EVADE появилась там, где её не было (57-й и 73-й тик до контакта), гейт 131/131, но исход тот же — 1-5 и 0-6;
+     *  со залипанием (USE_EVADE_STICKY_RUSH) 1-5 и 1-5, ровно база. Уйти от равного по скорости блоба нельзя — старое
+     *  «бежать на равной скорости значит быть пойманным с растянутым хвостом» (матчи 11–12) подтвердилось живьём. */
+    private const val USE_RUSH_FAR_NEEDS_RANGE = false
+    /** УКЛОНЕНИЕ ОТ БЛИЗКОГО СОМКНУТОГО БРОСКА НЕ ЖДЁТ `hunted` (v135): с одним лишь USE_RUSH_FAR_NEEDS_RANGE постура EVADE
+     *  появлялась на 57-м тике и отпускалась на 62-м (потом снова на 73-м) — армия дёргалась и всё равно входила в контакт.
+     *  Пока идёт безфлаговый бросок сомкнутой армии, чей центроид ближе EVADE_RANGE и чья сила не ниже нашей, уклонение
+     *  держится само по себе. */
+    private const val USE_EVADE_STICKY_RUSH = false
+    /** РОТИРУЮЩИЙ ТОЖЕ ЗАЩИЩАЕТ ТЫЛ (v135): `poker` пропускался целиком для бойца в ротации, а в разгромах ротация — это
+     *  25–44 крипо-тика простоя из 53–62 при его смежности 84–143 против наших 14–20. Боец с тремя живыми ATTACK из восьми
+     *  бьёт на 90, и лекарь, к которому он идёт лечиться, — тот самый, которого в это время рубят. Ротация перестаёт
+     *  отменять poker, пока у бойца жива хоть одна часть оружия; на всё остальное (цель, слот, отход) ротация действует.
+     *  ОТВЕРГНУТО тестовыми играми вместе с USE_GIVEUP_LIFTS_ON_BACK: 1-5 и 1-5 при базе 1-5 и 1-5, гейт 131/131. */
+    private const val USE_POKER_WHILE_ROTATING = false
+    /** ОТКАЗ ОТ ПОГОНИ НЕ ЕСТЬ ОТКАЗ ОТ ЗАЩИТЫ (v135): `poker` (v43) — правило ровно про класс блоба: его мили вплотную к
+     *  нашему стрелку, лекарю или раненому становится целью ближайшего нашего мили в ENGAGE_RANGE. Но фильтр poker'а
+     *  пропускает цели из отказа (PRESS_GIVEUP), а отказ снимался только возвращением врага в три клетки от САМОГО МИЛИ.
+     *  Значит крип, от погони за которым мили отказался, может стоять в нашем тылу и рубить лекаря, а отказавшийся мили его
+     *  не видит: в разгромах `giveup` — 131 из 274 крипо-тиков простоя (6a9fb006, Coldkimchi) и 38 отказов за 38 тиков
+     *  контакта (6a9fa63e, MetalicaX#10) при его 143 крипо-тиках смежности против наших 20. Отказ снимается, когда цель
+     *  стоит вплотную к любому нашему НЕ-мили — тому самому множеству, которое защищает poker.
+     *  ОТВЕРГНУТО тестовыми играми вместе с USE_POKER_WHILE_ROTATING: 1-5 и 1-5 при базе 1-5 и 1-5, гейт 131/131. */
+    private const val USE_GIVEUP_LIFTS_ON_BACK = false
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
      *  назад» (v15) на входе в рубку уводит наших мили сквозь свой строй, а его мили идут следом и рубят наших стрелков и лекарей.
@@ -3325,9 +3354,17 @@ cpuMark("a.escape")
         }
         val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted, if (cpuGuardArmy) objectiveFlagId else null)
 cpuMark("a.obj")
-        // дебют без угла (v100, USE_OPENING_AT_POST): бросок далеко — не уклонение, а пост
-        val rushFar = USE_OPENING_AT_POST && unflaggedRushNow && theirsFight < oursFight * RETREAT_RATIO
-        val evadeTo = evadeFirst ?: (if (hunted && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
+        // дебют без угла (v100, USE_OPENING_AT_POST): бросок далеко — не уклонение, а пост. И «далеко» значит ДАЛЕКО
+        // (v135, см. USE_RUSH_FAR_NEEDS_RANGE): условие правила было только про силу, поэтому при паритете оно гасило
+        // уклонение и вплотную — в разгромах от блоба `rush=true` с 10-го тика, HOLD на посту до 39-го, контакт, и наша
+        // мощь ноль к 81-му. Пока его вооружённый центроид дальше EVADE_RANGE, бросок — повод занять пост; ближе — повод
+        // уклоняться, как и говорит доктрина (EVADE_EQUAL_RATIO: от сомкнутой безфлаговой армии не слабее нас уклоняемся)
+        val rushCentroidFar = !USE_RUSH_FAR_NEEDS_RANGE || (centroidOf(armedEnemies)?.let { c -> getRange(c, massCentroid) > EVADE_RANGE } ?: true)
+        val rushFar = USE_OPENING_AT_POST && unflaggedRushNow && theirsFight < oursFight * RETREAT_RATIO && rushCentroidFar
+        // уклонение от БЛИЗКОГО сомкнутого броска не ждёт `hunted` и не мигает (v135, см. USE_EVADE_STICKY_RUSH): в первой
+        // пробе EVADE появлялась на 57-м и отпускалась на 62-м, армия дёргалась и всё равно попадала в контакт
+        val rushEvade = USE_EVADE_STICKY_RUSH && unflaggedRushNow && !rushCentroidFar && theirsFight >= oursFight * EVADE_EQUAL_RATIO
+        val evadeTo = evadeFirst ?: (if ((hunted || rushEvade) && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
 cpuMark("a.evade")
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
@@ -3848,8 +3885,11 @@ cpuMark("a.evade")
             val pack = pressOn && isMelee(creep) && !hasRanged(creep) && hasMelee(creep) && !rotating && localAggressive &&
                 (combatArmy.any { it.id != creep.id && isMelee(it) && !hasRanged(it) && hasMelee(it) && getRange(creep, it) <= PRESS_PACK } ||
                     localEnemies.any { getRange(creep, it) <= 1 })
-            // отказ (см. PRESS_GIVEUP) действует, пока цель не вернулась в три (v111, USE_GIVEUP_RETURNS)
-            fun givenUp(e: Creep) = e.id in pressGiveUp && !(USE_GIVEUP_RETURNS && getRange(creep, e) <= MELEE_HOLD_RANGE + 1)
+            // отказ (см. PRESS_GIVEUP) действует, пока цель не вернулась в три (v111, USE_GIVEUP_RETURNS), и снимается,
+            // когда цель стоит ВПЛОТНУЮ к нашему не-мили (v135, см. USE_GIVEUP_LIFTS_ON_BACK): отказ — про погоню, а
+            // враг у нашего лекаря никуда не бежит
+            fun givenUp(e: Creep) = e.id in pressGiveUp && !(USE_GIVEUP_RETURNS && getRange(creep, e) <= MELEE_HOLD_RANGE + 1) &&
+                !(USE_GIVEUP_LIFTS_ON_BACK && army.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 })
             // прижим — только под прикрытием стрелков (v122, USE_PRESS_COVER): та же мера, что у броска (см. covered, v55) —
             // MELEE_COVER стрелков в RANGED_RANGE + 1 от цели или свой вплотную к ней; иначе мили прижимают шагающую назад линию
             // в одиночку под её огонь (серия 307–326: けろびー#1 дважды за 240 тиков, наш мили 1600 → 752 за 14 тиков погони,
@@ -3873,7 +3913,11 @@ cpuMark("a.evade")
             // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
             // били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7, наши мили держали линию в 2–3 от его линии и не
             // доставали; стрельба при трёх лекарях с обеих сторон вылечена целиком, армия потеряна к 240-му при его 16000/16000
-            val poker: Creep? = if (isMelee(creep) && !hasRanged(creep) && !support && !rotating && !stalled) combatEnemies.filter { e ->
+            // ...и ротирующий защищает тыл (v135, см. USE_POKER_WHILE_ROTATING): ротация значит «оружия меньше половины, иду
+            // лечиться», но три живых ATTACK из восьми — это 90 урона в удар, а лекарь, к которому он идёт, — тот самый,
+            // которого рубят. Ротация не отменяет poker, пока у бойца есть чем ударить
+            val pokerRot = USE_POKER_WHILE_ROTATING && rotating && creep.body.any { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
+            val poker: Creep? = if (isMelee(creep) && !hasRanged(creep) && !support && (!rotating || pokerRot) && !stalled) combatEnemies.filter { e ->
                 InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && !givenUp(e) &&
                     army.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 }
             }.minByOrNull { getRange(creep, it) } else null

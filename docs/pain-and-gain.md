@@ -568,6 +568,35 @@ failed. What survives is the arithmetic: at first contact his twelve concentrate
 of ours is nearest, and nothing in our fight rules changes who is nearest. The next thing to price is therefore the
 approach itself — how our army meets a closed mass at all — and `+early` is the stand form built for exactly that.
 
+**Seven probes, 72 unrated games, and the class still stands (08.09.2026, second half).** After the first five probes
+the campaign continued into the approach itself, which is where the wipeouts are actually decided. Two more readings
+were built and measured, and two written earlier were finally priced:
+
+- **the give-up is about a chase, not defence** (`USE_GIVEUP_LIFTS_ON_BACK`) and **a rotating melee still guards the
+  back rank** (`USE_POKER_WHILE_ROTATING`), together: `poker` (v43) is the rule for exactly this class, and it is
+  skipped both for a target our melee once gave up on and for any melee in rotation — 94 and 114 tags across the twelve
+  baseline losses. Gate 131/131, **1-5 / 1-5**, the baseline to the game;
+- **"a far rush" must mean FAR** (`USE_RUSH_FAR_NEEDS_RANGE`): the wipeouts are settled before contact — `rush=true`
+  from t=10, `posture=HOLD` on the post until t=39, contact, our power at zero by t=81, and after contact
+  `retreatFeasible` is false forever, so there is no later moment to decide. The bot SEES the unflagged rush and
+  refuses to evade it, because v100's `rushFar` cancels the evade on STRENGTH alone (`theirs < ours * 1.15`), which at
+  parity fires at any distance. Requiring his centroid to be farther than EVADE_RANGE restored the evade — `EVADE`
+  appeared at t=57 and t=73 where it never had — gate 131/131, and the result was **1-5 / 0-6**;
+- **the evade held steady** (`USE_EVADE_STICKY_RUSH`), since the first cut flickered EVADE→HOLD→EVADE: gate 131/131,
+  **1-5 / 1-5**, again exactly the baseline.
+
+So evading works mechanically and does not help: at equal speed there is no escape from a closed blob, which is what
+the code has said since matches 11–12 ("running from it at equal speed is being caught with a stretched tail") and
+what these games confirm. All seven probes are off with their numbers.
+
+**What the campaign establishes.** The class is not a defect of target choice, of healer or melee placement, of charge
+timing, of give-up bookkeeping, or of the decision to accept the fight — each was stated from state, gated, and priced
+on the blob itself. What remains is the arithmetic nobody has moved: at contact his twelve concentrate about 750
+damage a tick on whichever of ours stands nearest, our creep dies in two or three ticks, and its death exposes the
+next. Every rule tried so far changes what our creeps DO; none changes WHO IS NEAREST — that is decided by the shape
+our army meets him in (`planFight`/`planBlock`), and that is the one place left to look. The played build is v133,
+unchanged, gate 131/131.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
