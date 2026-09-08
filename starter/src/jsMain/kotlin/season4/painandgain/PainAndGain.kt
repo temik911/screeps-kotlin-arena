@@ -657,8 +657,10 @@ object PainAndGain {
      *  есть +1 — против 16:4 и +45 у v135. По его ботам: けろびー#12 2-1, Coldkimchi#1 1-1, MetalicaX#4 1-1, ricardo 2-0,
      *  побеждён даже けろびー#1, но MetalicaX#9 0-2 и #10 0-1 — все три разгрома за 200 тиков. На блобах командир не хуже
      *  (31 % против 29 %), а на ПОЛНОМ поле теряет там, где кайт выигрывал: 65 % против 80 %. Серия — судья. Выключено,
-     *  играет v135; включать снова только после того, как прогноз станет точнее (см. согласование с целью фокуса). */
-    private const val USE_COMMANDER = false
+     *  играет v135; включать снова только после того, как прогноз станет точнее (см. согласование с целью фокуса).
+     *  ВКЛЮЧЁН СНОВА (v141, 08.09.2026): прогноз стал точнее раскаткой по замыслу — けろびー#1 4-4 (50 %) против 31 % у
+     *  v140 на блобах и 29 % у кайта. Мерится рейтинговой серией на полном поле; судья прежний — серия. */
+    private const val USE_COMMANDER = true
     /** СИМУЛЯЦИЯ РАЗМЕНА (v138, оператор): командир с одной эвристикой — всё ещё догадка о том, чем кончится обмен, и
      *  замер это показал (2-4 и 1-5). Поэтому командир предлагает ТРИ замысла — напор, удержание, уступка, — а короткая
      *  симуляция на SIM_TICKS тиков считает, чем каждый кончится, и выбирает лучший по нашей уцелевшей мощи минус его.
@@ -696,6 +698,12 @@ object PainAndGain {
      *  sqrt(dps × hits), то есть произведение огня на живучесть — это и есть квадратичный закон, выраженный линейно,
      *  и сравнение отношений от корня не страдает. */
     private const val USE_POWER_BY_REACH = false
+    /** РАСКАТКА ПО ЗАМЫСЛУ (v141): единственное, что двигало командира, — сближение прогноза с настоящим боем (согласие
+     *  с целью фокуса подняло его с 25 % до 31 % и впервые принесло победу над けろびー#1). Следующее расхождение — в
+     *  движении: план в прогоне держится все четыре тика, а в бою пересчитывается каждый. Прежняя раскатка провалилась
+     *  (1-5 и 1-5), потому что наши в ней играли по модели ВРАГА; теперь после первого тика крип продолжает СВОЙ
+     *  замысел — напор идёт вплотную, кайт держит две клетки, уступка пятится. */
+    private const val USE_ROLLOUT_BY_INTENT = true
     private const val POWER_REACH_TICKS = 2
     /** ОТКАЗ ОТ ПЕРЕБОЯ (v140): приём из литературы по микроменеджменту RTS — «focus fire, while avoiding overkill by
      *  spreading damage over several units if the focus firing is enough to kill one». В боте его не было вовсе: все
@@ -1759,7 +1767,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v135"
+    private const val BOT_VERSION = "v141"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4023,7 +4031,7 @@ cpuMark("a.evade")
                         commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
                         // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                         // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
-                        val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget)
+                        val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget, intent)
                         if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
                     }
                     // ...восхождение идёт по ГРУППАМ РОЛЕЙ, а не по отдельным крипам (v139): в литературе это называют
@@ -5035,7 +5043,7 @@ cpuMark("a.evade")
      *  Возвращает нашу уцелевшую боевую мощь минус его: аннигиляция проигрывает матч при любом счёте, поэтому
      *  максимизируется мощь, а не размен «крип за крипа». */
     private fun simulate(mine: List<Creep>, his: List<Creep>, plan: Map<String, Position>, ticks: Int,
-                         focus: Creep? = null): Double {
+                         focus: Creep? = null, intent: Intent? = null): Double {
         fun mk(c: Creep, ours: Boolean): SimC {
             val pr = InfluenceMap.profileOf(c)
             // боевые части (ATTACK / RANGED_ATTACK / HEAL) стоят в начале тела, MOVE и TOUGH — хвост; урон идёт спереди,
@@ -5067,9 +5075,23 @@ cpuMark("a.evade")
             us.forEachIndexed { i, c ->
                 if (c.hits <= 0) return@forEachIndexed
                 val g = goal[i]
-                // РАСКАТКА ПО ПОЛИТИКЕ ОТВЕРГНУТА (1-5 и 1-5 против 3-3 при фиксированном плане, гейт 129): политика,
-                // которой мы раскатывали, списана с ЕГО модели и нам не годится, а своей у симуляции нет. План держится
-                // все SIM_TICKS тиков — это грубее, но честнее того, что мы действительно сделаем
+                // РАСКАТКА ПО ЗАМЫСЛУ (v141): прежняя раскатка провалилась (1-5 и 1-5), потому что после первого тика
+                // наши в ней играли по модели ВРАГА — мили на мягкую цель, стрелки на три, — а это не наш замысел.
+                // Теперь после первого тика крип продолжает СВОЙ замысел: напор идёт к ближайшему, кайт держит две
+                // клетки от его мили, уступка пятится. План в реальности пересчитывается каждый тик, и это ближе к нему,
+                // чем стоять четыре тика в одной клетке
+                if (USE_ROLLOUT_BY_INTENT && intent != null && t > 0 && liveThem0.isNotEmpty()) {
+                    val near = liveThem0.minByOrNull { d(c, it) }!!
+                    val dist = d(c, near)
+                    val want = when (intent) {
+                        Intent.PRESS, Intent.FOCUS -> if (c.melee > 0.0) 1 else RANGED_RANGE
+                        Intent.HOLD, Intent.KITE -> if (c.melee > 0.0) MELEE_HOLD_RANGE else RANGED_RANGE
+                        Intent.YIELD -> RANGED_RANGE + 1
+                    }
+                    if (dist > want) { c.x += (near.x - c.x).coerceIn(-1, 1); c.y += (near.y - c.y).coerceIn(-1, 1) }
+                    else if (dist < want) { c.x -= (near.x - c.x).coerceIn(-1, 1); c.y -= (near.y - c.y).coerceIn(-1, 1) }
+                    return@forEachIndexed
+                }
                 if (g != null) {
                     if (c.x != g.x || c.y != g.y) { c.x += (g.x - c.x).coerceIn(-1, 1); c.y += (g.y - c.y).coerceIn(-1, 1) }
                     return@forEachIndexed
