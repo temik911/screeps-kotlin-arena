@@ -423,6 +423,30 @@ condition itself, not in giving it a memory. The opening against けろびー#12
 only the blobs drain rating (MetalicaX#10 −22, けろびー#2, MetalicaX#8 and けろびー#1 at −10…−13), and けろびー#12 is not
 in the leak list at all.
 
+**Matches 517–536 — v134's twenty (08.09.2026): 6:14, 1 268 → 1 172, and the live series rejects the rule the stand
+could not price.** Against v133's 15:5 and −20 on the same day, v134 lost 96 rating in twenty matches. The draw changed
+under us — MetalicaX#9 and #11 are new bots (0-3 and 0-1 against them), ricardo18informatica2020#4/#6 and raznikk#19
+are new and beaten 4-0 — so the reading is per HIS BOT, and the rows with both versions in them are what count:
+**Coldkimchi#1 3-1 (+16) → 0-3 (−18)**, MetalicaX#4 3-1 (+8) → 0-1 (−9), MetalicaX#3 0-1 → 1-2, けろびー#4 1-1 → 1-1,
+MetalicaX#10 0-2 → 0-3. Two rows where v133 won are lost outright, and one of them is the bot v133's own cycle had
+turned around, so the regression is real and not a draw effect.
+
+The mechanism is in the three Coldkimchi losses, and it is not the rule's target but its second group. All three carry
+`entry lost` — 4 226:1 326, 3 522:1 514 and 3 218:1 728 hits over the first twenty ticks of contact — and in all three
+our armed ranged had a target within three about HALF as often as his (26:56, 45:66, 34:49 creep-ticks), where v133's
+three wins over the same bot carried neither diagnosis at all. `USE_HEAL_BEHIND` applied to `wounded || rotating`, and
+a ROTATING ranged is not stripped: it can still shoot. Sending it to a healer standing farther back took it out of
+range and silenced it — the entry was lost by the guns that walked away from it. On the rule's own group the number
+moved the right way wherever a healer behind existed at all (stripped within three of his armed 176 of 803 creep-ticks
+against 88 of 88 in a match where none did), so the subject is right and the price was being paid by the wrong creeps.
+The rule is off; narrowing it to `wounded` alone is an open hypothesis that only another series can price.
+
+What the twenty say beyond the rule: the class is unchanged and now costs more, because MetalicaX has three bots doing
+it (#9, #10, #11 — 0-7 between them). Every wipeout is the same chain read on 07–08.09, and the two subjects it leaves
+are both upstream of any target-choice rule — the stand's blob never wins an entry against us, and live we stand at the
+centre post from t=3 while his blob arrives at t=40 whole. In three of the four wipeouts read in detail we had ZERO
+points at t=100 while holding that post, so the post is not paying for the fight it costs.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
