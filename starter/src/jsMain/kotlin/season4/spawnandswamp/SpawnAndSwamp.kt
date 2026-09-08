@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 59
+    private const val BOT_VERSION = 60
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -1688,7 +1688,12 @@ object SpawnAndSwamp {
         // собран, дефицита обороны нет и площадок нет вовсе. Так покупает и けろびー — его точки идут
         // после сбора флота, примерно раз в полтораста тиков, из свободных денег
         if (ctx.mySites.isEmpty() && ctx.mySpawns.size < FORWARD_SPAWNS &&
-            budget >= buildCost("StructureSpawn") && deficit <= 0.0 && !needHauler && !fighterFirst && !alarm) {
+            // ПЛОЩАДКУ ОПЛАЧИВАЕТ НЕ СПАВН. Тысяча уходит в неё из КУЧИ руками смотрителя; спавн платит
+            // только за самого смотрителя, и то лишь если его ещё нет. Условие «в кассе лежит тысяча»
+            // просило денег, которых покупка не требует, и стоило всей ветки: за двадцать живых матчей
+            // спавн был полон 5 тиков, площадка не поставлена ни разу
+            budget >= (if (ctx.builders.isEmpty()) builderBody(builderWork(flow)).sumOf { cost(it) } else 0) &&
+            deficit <= 0.0 && !needHauler && !fighterFirst && !alarm) {
             val capacity = ctx.haulers.sumOf { h -> h.body.count { it.type == CARRY && it.hits > 0 } } * CARRY_CAPACITY
             val spot = forwardSpot(ctx, capacity, flow)
             if (spot != null) {
@@ -1794,7 +1799,7 @@ object SpawnAndSwamp {
             extAnswered = true
             if (DEBUG_LOG) println("extprobe t=${getTicks()} spawnE=$energy extE=$extEnergy exts=${ctx.myExtensions.size} range=${ctx.myExtensions.minOfOrNull { getRange(it, spawn) } ?: -1} cost=$price parts=${body.size} err=${r.error} reach=$ok")
         }
-        if (DEBUG_LOG) println("spawn: ${if (guard) "guard" else if (healer) "healer" else "fighter"} parts=${body.size} cost=${body.sumOf { cost(it) }} energy=$energy alarm=$alarm first=$fighterFirst our=${ourPower.toInt()}/${enemyPower.toInt()} deficit=${deficit.toInt()} fire=$spawnUnderFire arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
+        if (DEBUG_LOG) println("spawn: ${if (guard) "guard" else if (healer) "healer" else "fighter"} parts=${body.size} cost=${body.sumOf { cost(it) }} energy=$energy want=${if (assaultWantsMelee) "melee" else if (assaultWantsHealer) "healer" else "ranged"} alarm=$alarm first=$fighterFirst our=${ourPower.toInt()}/${enemyPower.toInt()} deficit=${deficit.toInt()} fire=$spawnUnderFire arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} spent=$spentHaulers/$spentFighters err=${r.error}")
     }
 
     /**
@@ -2071,6 +2076,7 @@ object SpawnAndSwamp {
             val block = cost(HEAL) + cost(MOVE)
             var best: Array<BodyPartType>? = null
             var bestValue = -1.0
+            var bestHeals = 0
             var h = 1
             while (h * block <= cap && 2 * h <= MAX_CREEP_SIZE) {
                 val maxExtra = minOf((cap - h * block) / cost(MOVE), MAX_CREEP_SIZE - 2 * h)
@@ -2084,7 +2090,14 @@ object SpawnAndSwamp {
                     repeat(h) { body.add(HEAL) }
                     val arr = body.toTypedArray()
                     val value = bodyValue(scored.toTypedArray()).toDouble() / (if (spawnLimited) arr.size * CREEP_SPAWN_TIME else 1)
-                    if (value > bestValue) { bestValue = value; best = arr }
+                    // РАВНЫЙ СЧЁТ РЕШАЕТСЯ В ПОЛЬЗУ СТАВКИ, А НЕ ЗАПАСНЫХ НОГ. bodyValue считает
+                    // лечение суммой по хитам, и на тысячу M10H2 (24 в тик, 1200 хитов) и M5H3 (36 и
+                    // 800) дают РОВНО одно и то же — 28800; выбор между ними делал порядок перебора, и
+                    // выпадал M10H2. Но лечение упирается не в свою жизнь, а в чужой урон: у けろびー#19
+                    // это 400 в тик, и при таком входящем лишний хит не отменяет ничего, а лишняя часть
+                    // HEAL отменяет двенадцать. Его собственный лекарь — ровно M5H3.
+                    val heals = arr.count { it == HEAL }
+                    if (value > bestValue || (value == bestValue && heals > bestHeals)) { bestValue = value; bestHeals = heals; best = arr }
                 }
                 h++
             }
