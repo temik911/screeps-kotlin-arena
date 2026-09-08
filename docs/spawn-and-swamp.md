@@ -1551,6 +1551,67 @@ So the `foeSpawnPeak > 1` gate is not one-opponent tuning; it separates the shap
 from the shape we beat, and stachu3478#9 — five wins and a draw, one spawn all match — never sees any of
 the new branch at all.
 
+### The control that broke the day's arithmetic, and a recorded けろびー#19 (08.09.2026)
+
+Four builds were made after v64 and none is landed. The reason they are not is worth reading together
+with the reason the evidence for that is weaker than it looked.
+
+**The instrument.** `tools/replay.py scenario` turns the drawn match `6a9feeab` into
+`tools/stub/spawnandswamp/scenarios/kerobi19.json`: his real map, his real piles, his real queue — forty
+creeps and all eight of his spawn constructions on the ticks they were built. `replay.sh` plays the
+current build against it in thirty seconds where a live series costs twenty minutes, and it reproduces
+the live draw exactly — v64 spends 16380, never leaves home, and all nine of his spawns end at 3000
+hits, untouched.
+
+**What it found, and it found real things.** v67 removed three obstacles between us and his economy: the
+tower branch placed a second site while the keeper was still on the first (`site(1,2)0/1000` +
+`site(7,48)0/1250`, both at zero, in three matches — and in the v64 control too); the defence deficit
+forbade the cure by the symptom again (1714 and 2256 against an army of 845, where one more fighter
+closes a seventh of it); and the ceiling of three delivery points was never his ceiling. On the fixture
+that lifts spend 16380 → 25380 and the army 1314 → 2488. v68 added a second keeper — for a **pile-fed**
+site only, since a site at the energy is bound by hands and legs while the home tower is bound by
+income, and without that distinction `siege6` abandons 860 in a dead site — and the fixture went from
+*nine spawns untouched, never attacked* to **eight of nine destroyed, wave out at t=1208**.
+
+**The live series said the opposite — and then the control said the live series cannot be trusted at
+this length.** Same opponent bot, same unrated form, the same code id `6a9f1dea` in every series, and
+his shape identical throughout (16-18 creeps at t=400 in every single series):
+
+| version | matches | W-L-D |
+|---|---|---|
+| v64, first block | 16 | 6-7-3 |
+| v65, wave one bigger while he has spares | 5 | 0-2-3 |
+| v66, siege defended only by who can reach it | 6 | 0-4-2 |
+| v67, the economy package | 5 | 0-3-2 |
+| v68, + the second keeper | 4 | 0-2-2 |
+| **v64 again, as a control, after all four** | **12** | **1-8-3** |
+
+**The same build scored 37.5 % and 8 %.** Fisher's exact on those two blocks alone gives about 0.09 —
+the swing between two series of one build is nearly as large as anything I was measuring between
+builds. Pooled, v64 is 7 wins in 28 and the four are 0 in 20 (p ≈ 0.016), so they are probably worse
+and rightly unlanded; but **every ranking made today off five or six matches was noise being read as
+signal**, and that includes the confident line in the previous section that six wins in sixteen "is a
+real move and not a run of good draws". Against v60-v63's 4 in 32, v64's 7 in 28 no longer separates
+either (p ≈ 0.15). What survives of v62-v64 is what the stand measured — `twospawn` 1976 → 1011, 26
+gate scenarios unchanged — and the defects themselves, which are plain: a busy spawn was carrying the
+whole placement routine out of the tick, and a keeper body could not cross a map.
+
+**The rule for the next attempt, then, before any change:** thirty matches minimum to rank two builds
+here, or a paired design that plays both against the same seeds. Twelve is not enough and five is
+worthless.
+
+**And why the fixture disagreed, in one line: a replay opponent does not react.** Live, v68 completed
+**no** delivery point at all (`spawns=1` in all four matches, the site at 0-100/1000) and v67 at most
+one, the same as v64 — but v64 buys one keeper, v67 one to three, v68 two in every match. Seven hundred
+to two thousand eight hundred energy of non-combat body against sites that are then never finished: on
+the fixture the piles by those corner sites are quiet and the keepers finish, live they are contested
+and both keepers walk. The one-site rule has its own trap besides — an unfinishable delivery point
+blocks the tower for the rest of the match (v64 places a tower site in four matches of ten, v68 in none
+of four), so whatever replaces it must give the tower right of way rather than merely count sites.
+
+The scenario is landed even though the four builds are not: it prices OUR collection faithfully on his
+real map, and its blind spot is now written down beside it.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.
