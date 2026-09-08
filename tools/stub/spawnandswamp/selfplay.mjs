@@ -139,6 +139,11 @@ for (let t = 0; t < TICKS; t++) {
   // with parity the decisive opening tick always fell to the same side and the first mover won 8 of 8
   if (ornd() < 0.5) { run('A'); flip(); run('B'); flip(); }
   else { flip(); run('B'); flip(); run('A'); }
+  // the spawn regenerates one a tick, as in the game and as every other runner here already models it
+  // (run2.mjs:292, run3.mjs:87, replayrun.mjs:177). Leaving it out of THIS runner was my omission, and
+  // it mattered: a side that spent its opening thousand could never recover, which made the opening
+  // look more fatal than it is
+  for (const o of world.objects) if (o.exists && o instanceof StructureSpawn && o.store.energy < 1000) o.store.energy++;
   endTick();
   const a = spawnsOf(true).length, b = spawnsOf(false).length;
   if (a === 0 || b === 0) { result = a === 0 && b === 0 ? 'both' : a === 0 ? 'B' : 'A'; break; }
