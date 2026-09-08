@@ -197,7 +197,8 @@ let focusAnchor = null;
 // brawl: an armed ranged of ours first (r->ranged 152 of 367 in match 249 — our ranged were disarmed 113 creep-ticks against
 // his 42), then the lowest hits
 // ghost: the same key — the recorded lines and blobs both put half their fire into our ranged (match 273: 575 of 1 139 shots)
-const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : (has('brawl') || has('ghost')) ? (live(o, R) > 0 ? 0 : 1) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
+// '+heals' (08.09.2026): our HEALERS first, then our ranged — the order the four wipeout replays measured on his side
+const targetKey = (o) => has('screen') && focusAnchor ? range(o, focusAnchor) * 100000 + o.hits : has('heals') ? (healerOf(o) ? 0 : live(o, R) > 0 ? 1 : 2) * 100000 + o.hits : (has('brawl') || has('ghost')) ? (live(o, R) > 0 ? 0 : 1) * 100000 + o.hits : (NINE && healerOf(o) ? 0 : 1) * 100000 + o.hits;
 // the enemy's fire concentration, as tools/replay.py's conc counts it live: per tick the largest number of its single-target
 // shots on one of ours; reported at the end as a histogram (matches 140–179: the live lines put four or more on one creep in
 // 11–28 % of their firing ticks, the bot 0–3 %)
@@ -773,10 +774,12 @@ function enemyTick() {
         armyState.adjTick = armyState.adjTick || {};
         const wasAdj = dart && armyState.adjTick[c.id] === world.tick - 1;
         if (ourF.some((o) => range(c, o) <= 1)) armyState.adjTick[c.id] = world.tick;
-        const soft = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= (dart ? 3 : 2)).sort((a, b) => range(c, a) - range(c, b))[0];
+        const deep = has('deep');
+        const soft = ourF.filter((o) => live(o, A) === 0 && range(c, o) <= (deep ? 5 : dart ? 3 : 2)).sort((a, b) => range(c, a) - range(c, b))[0];
         const tgt = soft || nearest;
         if (wasAdj && ourArmed.some((o) => range(c, o) <= 2)) { const near = ourArmed.filter((o) => range(c, o) <= 2); if (!stepBack(c, near)) stepAway(c, near); }
-        else if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD)) stepToward(c, tgt, 1);
+        // '+deep': a melee that has a soft target does not wait for the blob to close up — it goes through our line
+        else if (tgt && range(c, tgt) > 1 && (formed || minOur(c.x, c.y) > frontD || (deep && soft))) stepToward(c, tgt, 1);
       } else if (nearest) {
         const d = minOur(c.x, c.y);
         if (d <= 2) { if (!stepBack(c, ourArmed.filter((o) => range(c, o) <= 3))) stepAway(c, ourArmed.filter((o) => range(c, o) <= 3)); }
@@ -966,6 +969,14 @@ const t0 = Date.now();
 // three and shots (matches 238/249 live: healers 81–94 %, melee 47–83 % of only 18–23 creep-ticks against his 59–75, ranged
 // 70–76 %; his 100 % / 86–97 % / 89–100 %). The melee adjacency itself — how often our melee ARE adjacent — is the gap
 const oAct = { h_can: 0, h_did: 0, m_can: 0, m_did: 0, m_ticks: 0, r_can: 0, r_did: 0, r_ticks: 0, e_can: 0, e_ticks: 0 };
+// stripped in reach (08.09.2026), the counter `tools/autopsy.py` has and the stand did not: a creep that WAS born with a
+// weapon or a heal part and has none of them alive any more is a body of 1200 hits that cannot fight, cannot heal and is
+// still worth killing — and annihilation loses the match at any score. Counted are its creep-ticks and how many of them it
+// spent within three of an armed enemy. Live it splits outcomes: 31 % of losses, 0 % of wins; 178 of 196 against his 40
+// of 44 in the MetalicaX#10 wipeout 6a9fa63e. `born` excludes the scouts, whose body is pure MOVE and never had a part
+const born = (c, t) => c.body.reduce((n, p) => n + (p.type === t ? 1 : 0), 0);
+const stripped = (c) => (born(c, A) + born(c, R) + born(c, H)) > 0 && live(c, A) === 0 && live(c, R) === 0 && live(c, H) === 0;
+const oStrip = { o_ticks: 0, o_in: 0, e_ticks: 0, e_in: 0 };
 function oursAct() {
   const c0 = creeps().filter((c) => c.owner === 0 && !c.spawning), c1 = creeps().filter((c) => c.owner === 1 && !c.spawning);
   if (!c1.some((e) => c0.some((c) => range(c, e) <= 8))) return;   // in contact only
@@ -978,6 +989,9 @@ function oursAct() {
   }
   // his ranged with one of ours within three — the same share for the other side (live 506: ours 42 %, his 57 %)
   for (const e of c1) if (live(e, R) > 0) { oAct.e_ticks++; if (c0.some((c) => range(c, e) <= 3)) oAct.e_can++; }
+  // the stripped of both sides, and how much of their time they spend inside his reach
+  for (const c of c0) if (stripped(c)) { oStrip.o_ticks++; if (c1.some((e) => (live(e, A) > 0 || live(e, R) > 0) && range(c, e) <= 3)) oStrip.o_in++; }
+  for (const e of c1) if (stripped(e)) { oStrip.e_ticks++; if (c0.some((c) => (live(c, A) > 0 || live(c, R) > 0) && range(e, c) <= 3)) oStrip.e_in++; }
 }
 // the enemy's focus and our healers (v109): per tick the creep of ours the enemy's single-target intents put the most damage on
 // — did a heal of ours land on it, and was a healer of ours adjacent to it. Live (entry-heal.py on the replays): the most-hit
@@ -1104,6 +1118,7 @@ if (has('ghost')) {
   const rec = (d) => rc === null ? '-' : `${lost(ghostMeta.recHits[0], rc, d)}/${lost(ghostMeta.recHits[1], rc, d)}`;
   origLog(`ghost entry (hits lost ours/his): stand contact t=${sc} +20 ${stub(20)} +50 ${stub(50)} +100 ${stub(100)} | record contact t=${rc} +20 ${rec(20)} +50 ${rec(50)} +100 ${rec(100)}`);
 }
+origLog(`stripped: ours ${oStrip.o_in}/${oStrip.o_ticks} creep-ticks within 3 of his armed, his ${oStrip.e_in}/${oStrip.e_ticks}`);
 origLog(`ours act: healers adjacent-to-wounded ${pc(oAct.h_did, oAct.h_can)}, melee adjacent ${pc(oAct.m_did, oAct.m_can)} of ${oAct.m_ticks} melee creep-ticks in contact (${oAct.m_ticks ? Math.round(100 * oAct.m_can / oAct.m_ticks) : 0}% adjacent), ranged with target in 3 ${pc(oAct.r_did, oAct.r_can)} of ${oAct.r_ticks} (${oAct.r_ticks ? Math.round(100 * oAct.r_can / oAct.r_ticks) : 0}% in reach, his ${oAct.e_ticks ? Math.round(100 * oAct.e_can / oAct.e_ticks) : 0}%); his focus target healed ${pc(oFocus.healed, oFocus.ticks)}, a healer adjacent to it ${pc(oFocus.adjacent, oFocus.ticks)}; OUR focus target healed by him ${pc(eFocus.healed, eFocus.ticks)}, his healer adjacent to it ${pc(eFocus.adjacent, eFocus.ticks)}; target rank by our reach 1:${(eFocus.rank || [0,0,0,0,0])[1]} 2:${(eFocus.rank || [0,0,0,0,0])[2]} 3:${(eFocus.rank || [0,0,0,0,0])[3]} 4+:${(eFocus.rank || [0,0,0,0,0])[4]}, no free cell beside it ${eFocus.noFree || 0}`);
 origLog(`enemy conc: ticks with shots ${eConc.ticks}; most shots on one target per tick 1:${eConc.hist[1]} 2:${eConc.hist[2]} 3:${eConc.hist[3]} 4:${eConc.hist[4]} 5+:${eConc.hist[5]}; 4+ in ${eConc.ticks ? Math.round(100 * (eConc.hist[4] + eConc.hist[5]) / eConc.ticks) : 0} %`);
 const errs = lines.filter((l) => l.startsWith('loop error'));

@@ -375,6 +375,54 @@ the parallel-sessions rules in `CLAUDE.md`).
 
 **Matches 487–506 — v133's twenty (08.09.2026, night): 14:6, 1 306 → 1 291, a different draw and an old class.** By his bot: Coldkimchi#1 3-1 (+16 — before this series 3-16 against him over the season, 1-2 in v131's twenty), MetalicaX#4 2-1, MetalicaX#6 2-0, けろびー#12 1-0, けろびー#4 1-1, 欢欢#7, Xeon_Lagunas#3, arukuka#1, houshanyun#1 and けろびー#3 1-0 each; the losses けろびー#1, けろびー#2, MetalicaX#8 (three blobs), Coldkimchi#1, MetalicaX#4 and けろびー#4. CPU as before (no timeout, the slowest warm tick 57 ms). Five of the six losses are lost FIGHTS of one shape, and three of them are opening wipeouts the v131/v132 series never met because they never drew these bots: MetalicaX#8 14:0 by t=165 (contact at 39, both armies on D5 at once), けろびー#2 14:0 by 142, けろびー#1 14:1 by 166, then MetalicaX#4 twelve on nine at 670–730 (six of ours for one of his) and Coldkimchi#1 at the edge (78–303, 14:1). In every one his melee out-swing ours by three to ten (82/85/48/35/55 against 21/8/11/9/16 in the first hundred ticks, adjacency 131/101/55/37/55 against 37/42/21/15/23), his melee reach our ranged and healers with our nearest melee five and more away, and our melee's first idle reason in `why-sum` is `!inLine` (31/33/38/21 of 35–49 idle ticks at t=100) — the formation gate, a rule of ENTRY (match 4: nobody enters the enemy's range before the share gathers within two of the van), re-evaluated every tick of the contact, where the van changes with every step, the gathering flickers and the patience resets on every gathered tick (v120e), so a melee already at two or three of his creeps under fire is "not in line" and does not lunge. The ghost A/B on the three records (v133 and v132 builds, `ghost-ab.sh`) is byte-identical — the same contact ticks, the same exchange — so v133's cuts did not make these; the ledger's `melee adjacency` (45 % of losses, 0 % of wins) and `entry lost` rules had named the class since 06.09. The sixth loss is the quiet tourer again: けろびー#4 with his eleven in one group, the quiet chain released five of ours at t=988 (the pool by power — the ranged first) with his group 117 ticks away, the core "fell under 0.97" and three were recalled within 26 ticks, and he held all seven flags at t=1000 (rate 0/25) — v133's ranged guard stood only under the race. The two forms this names went to the stand as v134 and both are off with their numbers. The formation gate waived in the fight: as "an enemy within three or in the fire field" — gate 131, entries +20 worse 10 / better 13, blitz 7-1 → 5-3 (m28 5 890:23 972, m30 5 956:22 619, m33 3 817:24 121), split 6-2 → 5-3, tour m33 his 3 alive → 12: a farmer's picket at three lifts the gate and the melee dance with it instead of marching, which is what the gate is for; as "only a creep hit last tick" — entries +20 worse 7 / better 2, split m28/m32 to 15 994:24 297 and 14 859:24 290, blitz m31/m32 to 9 584:23 893 and 9 199:23 790 — the picket's fire pulls the melee out of the march the same way. The ranged guard against a compact largest group: at four — split 6-2 → 4-4 (m28, m32 to losses), all else identical; at two thirds of his armed — identical everywhere but split m32 (24 291:20 558 → 23 651:24 298). So the entry class is open with its shape measured (his melee reach our ranged and healers with our nearest melee five and more away in 61 of 114 adjacent pairs against MetalicaX#8), and the whole-army tourer's release is one match of a 1-1. The played build stays v133.
 
+**Matches 507–516 — the day of fame on v133 (08.09.2026): 7:3, 1 291 → 1 268, and the class named on five records.**
+Ten fame games: six wins in a row (あぶらむし#12/#10/#13, raznikk#6, stachu3478#3, System), then three losses to
+MetalicaX — **#10 twice, at t=100 and t=200** and #3 on points — and a win over #4. The chest walked 6 → 1 (a win is
++1, a loss −2) and was taken at level 1: 12 Key Fragments, 1 Tenacity (a fame modifier: +1 level on a draw), 10 Orange
+Paint. The two MetalicaX#10 wipeouts are the same class as the three of v133's twenty (MetalicaX#8, けろびー#1,
+けろびー#2), so the class now has five records, and read together they are ONE CHAIN, not five accidents. His fire goes
+at our HEALERS: 100 shots of 287 (6a9fa63e), 83 of 236 (6a9fa64c), 89 of 266 (6a9f2c45), 59 of 338 (けろびー#2) — 17–35 %
+of the volley; ours into his healers are 0, 2, 1 and 17 of 86, 82, 130 and 187 — 0–9 %. Next link: healing stops
+GIVING PARTS BACK, and our creeps strip — a melee carries its eight ATTACK first in the body, so 600 damage takes all
+of them, and at 1 034 hits of 1 600 three of eight are alive. A stripped creep walks to the NEAREST healer, and in a
+fight the healer stands at the front (`engagedNear → fighters`: in a fight he does not count the stripped as a patient
+and never comes to them), so the wounded walks FORWARD, into the focus: **178 of 196 creep-ticks within three of his
+armed against his 40 of 44** (6a9fa63e), 155 of 186 against 32 of 58 (6a9fa64c). The end of the chain is the swings:
+his melee adjacent 143 creep-ticks against our 20, swinging 145 against 20 (6a9fa63e), 82 against 20 (6a9fa64c), 48
+against 21 (6a9f2c45), 51 against 8 (けろびー#2). What holds ours back is `!inLine` 56 creep-ticks and `rotating` 34 of
+62; in けろびー#2 melee_4 walks between (49,47) and (52,48) for thirty ticks with `slot`, `giveup`, `rotating` while an
+enemy stands two cells away, and never swings once. And all of it is decided in the first twenty ticks of the entry:
+three deaths of ours to his none, 14 swings to his 43 — after which nothing changes, and he ends these matches without
+losing a single creep.
+
+**v134 — the stripped walk to a healer BEHIND them, and four probes rejected with their numbers.** The one change that
+plays: a stripped or rotating creep goes to the nearest healer standing FARTHER from his armed than itself
+(`USE_HEAL_BEHIND`), so the step towards healing stops being a step towards the front; walking it out of the fight
+altogether is wrong, because healing gives parts back and a healed creep picks its weapon up again. The stand cannot
+see the rule — gate 131/131, entries +20 worse 7 / better 7, +50 worse 9 / better 8, the split/spread/tour families and
+blitz identical to the digit — and a new counter says why: `stripped:` in `run.mjs` (see the harness README) shows that
+across twenty scenarios **the stand strips HIM, not us** (ours 0–28 creep-ticks against his 0–255). The counter was
+added because no rule about our stripped creeps can be priced without it; the stand also gained two cuts of the live
+blob, `+heals` (his fire at our healers first) and `+deep` (his melee drawn to a soft target from five cells, through
+the line rather than at it). Both play; neither turns the exchange — in fifteen of sixteen runs the stand still strips
+him and his army still dies. The live blob is not reproduced, and that subject is now in the INSTRUMENT, not the bot.
+Four probes were rejected: **his healer as the first focus tier** (`USE_FOCUS_HEALER_FIRST`), twice — "any killable
+healer above the ranged" gave entries +20 worse 11 / better 9, +50 worse 15 / better 7 and split m34 21 210:24 100 →
+15 365:24 095; "only the healer the target does not die because of" (within HEAL_RANGE of an unkillable candidate) gave
+10/7 and 11/9 and turned blitz m29 from a win 23 954:23 223 into a loss 4 413:23 964 — the reason has been in the code
+since v9: **the stand does not shoot healers at all** and holds its own adjacent, so firing at his healers here is pure
+lost tempo while live it is a third of his volley; **the front is not thinned by rotation**
+(`USE_ROTATE_KEEP_FRONT`) — the exit is refused while our armed at the contact would drop below his — gate 131/131 but
+entries +20 worse 10 / better 6 and tour m28 23 298:19 604 → 20 938:23 289, a fighter held at the front with a quarter
+of his weapon catching the focus instead of swinging; **a sticky cornered group** (`USE_CORNERED_STICKY`) — the state
+flickered 154 times in match 6a9fa6ad and `keepsDistance` with it, "stand" and "go" on alternate ticks — holding it for
+eight ticks took split m35 FROM A LOSS 18 717:24 303 TO A WIN 24 303:22 567 and blitz m28 from 23 613:23 978 to
+23 935:16 456, but dropped the gate on match30:camp (19 645:23 689), and at four ticks the gate falls the same way
+while blitz m28 and m30 go to 4 780:23 951 and 4 245:23 484. The flicker stays open: the cure looks to be in the
+condition itself, not in giving it a memory. The opening against けろびー#12 was deferred by price — over forty matches
+only the blobs drain rating (MetalicaX#10 −22, けろびー#2, MetalicaX#8 and けろびー#1 at −10…−13), and けろびー#12 is not
+in the leak list at all.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a

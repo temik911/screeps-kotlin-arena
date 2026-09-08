@@ -209,6 +209,21 @@ object PainAndGain {
      *  тиков; наши стрелки молчали разоружёнными 78 крип-тиков против 9 у него. Стрелок — то, что убивает (369 выстрелов
      *  против 150), и то, что снимается быстрее всего: 600 хитов до разоружения против 800 у мили. */
     private const val USE_FOCUS_RANGED_FIRST = true
+    /** ЕГО ЛЕКАРЬ ПЕРВЫМ, ЕСЛИ СНИМАЕТСЯ (v134): правило «стрелки первыми» писалось в матче 140, когда он бил НАШИХ стрелков.
+     *  Четыре разгрома 08.09 говорят другое — он бьёт наших ЛЕКАРЕЙ: 100 выстрелов из 287 (MetalicaX#10, 6a9fa63e), 83 из 236
+     *  (6a9fa64c), 89 из 266 (MetalicaX#8, 6a9f2c45), 59 из 338 (けろびー#2), то есть 17–35 % залпа; мы по его лекарям — 0, 2,
+     *  1 и 17 из 86, 82, 130 и 187, то есть 0–9 %. Цена видна дальше по цепи: его лекари живы → его крипы не раздеваются →
+     *  его мили бьют 145 раз против наших 20; наши лекари гибнут → лечение перестаёт ВОЗВРАЩАТЬ ЧАСТИ, и наши раздетые стоят
+     *  под огнём 178 из 196 крипо-тиков против его 40 из 44. Лекарь и дороже стрелка: 12 за часть вплотную — 72 лечения в тик
+     *  против 60 урона у стрелка, и разоружается он за те же 600. Ярус стоит ВЫШЕ стрелков и только для лекаря с конечным
+     *  killTicks — огонь по лекарю, которого лечат быстрее, чем мы бьём, это тот самый провал m2 rush (см. focusCmp).
+     *  ОТВЕРГНУТО стендом дважды. «Всякий снимаемый лекарь выше стрелков»: гейт 131, входы +20 хуже 11 / лучше 9, +50 хуже 15 /
+     *  лучше 7, split m34 21 210:24 100 → 15 365:24 095. «Только лекарь, из-за которого цель не умирает» (savesSomeone, в
+     *  HEAL_RANGE от неубиваемого кандидата): входы +20 хуже 10 / лучше 7, +50 хуже 11 / лучше 9, blitz m29 из победы
+     *  23 954:23 223 в поражение 4 413:23 964, m35 23 714:23 404 → 13 437:23 706. Причина отказа известна с v9 и записана там
+     *  же: СТЕНД ПО ЛЕКАРЯМ НЕ БЬЁТ и своих держит вплотную, поэтому огонь по его лекарям на стенде — чистая потеря темпа,
+     *  а живьём это 17–35 % его залпа. Предмет открыт, и он не в боте, а в приборе (см. docs, «форма блоба»). */
+    private const val USE_FOCUS_HEALER_FIRST = false
     /** БОЛЬШЕ СТВОЛОВ (v70): среди целей одного яруса — та, которую достают больше наших стрелков, и липкость уступает цели,
      *  которую достают на FOCUS_GUNS_SWITCH стволов больше. Матч 173 (боевой けろびー, армия стёрта к 260-му): его 4+ выстрелов в одну
      *  цель в 13 % тиков, наши — 0 %; за двадцать тиков (220–240) четверо наших стрелков из пяти и все лекари разоружены, наши
@@ -444,6 +459,26 @@ object PainAndGain {
      *  возврат при 5 из 8 — 10 хуже / 11 лучше (нейтрально), при 6 из 8 — 11/10. Живьём ротация в проигранных боях длится
      *  50–97 тиков (в выигранных 5–22): боец висит у фронта в равновесии огня и лечения и не бьёт. */
     private const val USE_ROTATE_IN_ONE_PART = true
+    /** ФРОНТ НЕ ОСЛАБЛЯЕТСЯ РОТАЦИЕЙ (v134): выход в ротацию отклоняется, пока наших вооружённых у контакта не больше, чем его.
+     *  Замер: в разгроме от MetalicaX#10 (6a9fa63e) наши мили простояли с врагом в дальности 62 крипо-тика, из них `rotating`
+     *  34 (делали `rotate` 19, `slot` 14), а его мили были смежны 143 крипо-тика против наших 20 и ударили 145 раз против 20.
+     *  Само правило ротации верно (без него стенд 18 хуже / 6 лучше), её ДЛИНУ уже сузил USE_ROTATE_IN_ONE_PART — не мерялся
+     *  ВЫХОД: боец с тремя живыми ATTACK из восьми всё ещё бьёт на 90, а уходя, отдаёт фронту дыру, в которую его мили и идут.
+     *  ОТВЕРГНУТО стендом: гейт 131/131, но входы +20 хуже 10 / лучше 6, +50 хуже 9 / лучше 8, tour m28 23 298:19 604 →
+     *  20 938:23 289 (лидерство сжалось до его счёта), m34 22 447:5 287 → 21 097:5 216; blitz и split тождественны. Удержанный
+     *  у фронта боец с четвертью оружия ловит фокус и умирает, а не бьёт — стенд говорит это ровно там, где меряет обмен. */
+    private const val USE_ROTATE_KEEP_FRONT = false
+    /** РАЗДЕТЫЙ ИДЁТ К ЛЕКАРЮ, СТОЯЩЕМУ ДАЛЬШЕ ОТ ВРАГА, ЧЕМ ОН (v134): раздетый (без оружия и лечения) и ротирующий идут к
+     *  БЛИЖАЙШЕМУ лекарю, а в бою лекарь стоит у фронта — и раненый идёт ВПЕРЁД, под фокус. Замер: в разгроме от MetalicaX#10
+     *  (матч 6a9fa63e, 14:0 к 173-му) наши раздетые стояли в трёх клетках от его вооружённых 178 из 196 крипо-тиков, его — 40 из
+     *  44 («он вытаскивает раздетых, мы оставляем их в огне»). Причина структурная: в бою лекарь считает подопечными только
+     *  ВООРУЖЁННЫХ (engagedNear → fighters), поэтому за раздетым он не идёт, и встреча возможна только у фронта. Уводить
+     *  раздетого совсем нельзя — лечение возвращает части, и вылеченный снова берёт оружие; поэтому срез не «домой», а «к тому
+     *  лекарю, что дальше от врага»: шаг к лечению становится шагом ОТ боя. СТЕНД ЕГО НЕ ВИДИТ: гейт 131/131, входы +20 хуже 7 /
+     *  лучше 7, +50 хуже 9 / лучше 8, семьи split/spread/tour и blitz ТОЖДЕСТВЕННЫ до цифры — новый счётчик стенда (`stripped:`
+     *  в run.mjs) объясняет почему: во всех 20 сценариях раздевают ЕГО, а не нас (наши 0–28 крипо-тиков против его 0–255), и
+     *  формы `+heals` и `+deep`, снятые с живого блоба, этого не переворачивают. Прибор здесь — живая серия, не стенд. */
+    private const val USE_HEAL_BEHIND = true
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
      *  назад» (v15) на входе в рубку уводит наших мили сквозь свой строй, а его мили идут следом и рубят наших стрелков и лекарей.
@@ -737,6 +772,17 @@ object PainAndGain {
      *  один в ENGAGE_RANGE + RANGED_RANGE от наших ударников, и группа слабее ударников в PUSH_RATIO — пока она есть, застой
      *  «держит дистанцию» не наступает; одиночки россыпи в группу не складываются, и застой там как был. */
     private const val USE_STALL_CORNERED_GROUP = true
+    /** ЗАЛИПАНИЕ ЗАГНАННОЙ ГРУППЫ (v134): corneredInReach сидит на границе (неподвижность его группы за окно против нашего
+     *  перевеса) и в матче 6a9fa6ad переключился 154 раза за 1900 тиков; печать была с гистерезисом, дребезжало РЕШЕНИЕ, а с
+     *  ним keepsDistance — «стой» и «иди» через тик. Держится CORNERED_STICK тиков после срабатывания, как сам застой.
+     *  ОТВЕРГНУТО стендом в двух длинах, обе валят гейт на match30:camp. Восемь тиков (CHASE_WINDOW): гейт 130/131 (camp
+     *  19 645:23 689), зато split m35 ИЗ ПОРАЖЕНИЯ 18 717:24 303 В ПОБЕДУ 24 303:22 567 и blitz m28 из 23 613:23 978 в
+     *  23 935:16 456; против — blitz m30 23 421:19 516 → 21 902:21 746. Четыре тика: гейт 130/131 (camp 20 447:23 687) и
+     *  заметно хуже восьми — blitz m28 4 780:23 951, m30 4 245:23 484, а победа split m35 не повторилась. Дребезг решения
+     *  (154 переключения за матч 6a9fa6ad) — предмет открытый: залипание его убирает, но заодно держит застой там, где
+     *  лагерю (camp) нужно отпускать; лекарство, видимо, в самом условии, а не в его памяти. */
+    private const val USE_CORNERED_STICKY = false
+    private const val CORNERED_STICK = 4
     /** АВАНГАРД СБОРА — ИЗ МАССЫ (v120, стенд split m28): точка сбора марша к флагу (rallyTo) выбиралась ближайшим к флагу
      *  вооружённым по обходному полю среди ВСЕХ ходячих, и на 701–822-м тиках ею стал стрелок, застрявший с тремя лекарями по ту
      *  сторону его шестёрки на D5 (53,35) в 24 клетках от массы: масса шла «к авангарду» в обход его группы, стрелок — по
@@ -1434,7 +1480,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v133"
+    private const val BOT_VERSION = "v134"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -1468,6 +1514,7 @@ object PainAndGain {
     private val ourCentroidHist = ArrayDeque<Int>()
     private val enemyCellHist = HashMap<String, ArrayDeque<Int>>()
     private var corneredWas = false
+    private var corneredUntil = 0   // залипание corneredInReach (v134, см. USE_CORNERED_STICKY)
     /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
     private val rallyingIds = HashSet<String>()
     private var huntingThreat = false
@@ -2840,9 +2887,13 @@ cpuMark("a.hunt")
             group.isNotEmpty() && group.any { e -> chasers.any { getRange(it, e) <= ENGAGE_RANGE + RANGED_RANGE } } &&
                 ourPowerOf(chasers, group) >= enemyPowerOf(group, chasers) * PUSH_RATIO
         }
-        if (DEBUG_LOG && corneredInReach != corneredWas) println("cornered t=$now: ${if (corneredInReach) "a still weak group of his in reach — no distance stall" else "gone"}")
-        corneredWas = corneredInReach
-        val keepsDistance = !corneredInReach && ((USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)) ||
+        // залипание (v134, см. USE_CORNERED_STICKY): условие сидит на границе и в матче 6a9fa6ad переключалось 154 раза,
+        // а вместе с ним и keepsDistance — армии на чётных тиках говорили «стой», на нечётных «иди»
+        if (corneredInReach) corneredUntil = now + CORNERED_STICK
+        val cornered = corneredInReach || (USE_CORNERED_STICKY && now < corneredUntil)
+        if (DEBUG_LOG && cornered != corneredWas) println("cornered t=$now: ${if (cornered) "a still weak group of his in reach — no distance stall" else "gone"}")
+        corneredWas = cornered
+        val keepsDistance = !cornered && ((USE_KEEPS_DISTANCE_STALL && combatEnemies.isNotEmpty() && kept(CHASE_WINDOW)) ||
             (USE_KEEPS_DISTANCE_STALL_WINDOW && (distanceKept || (USE_KEEPS_DISTANCE_ANY_MOVE && combatEnemies.isNotEmpty() && kept(DETACH_WINDOW, needMoved = false)))))
         while (marchHist.size > MARCH_STALL_TICKS) marchHist.removeFirst()
         // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
@@ -3356,9 +3407,19 @@ cpuMark("a.evade")
         // потом угроза на хит — «угроза на хит» слала огонь в лекарей врага за строем, которых лечили друг друга
         // быстрее, чем мы били (стенд m2 rush: выигранный без потерь рывок стал разгромом)
         fun armedRanged(e: Creep?) = e != null && InfluenceMap.profileOf(e).ranged > 0.0
+        // его лекарь: живое лечение и никакого живого оружия (v134, см. USE_FOCUS_HEALER_FIRST)
+        fun armedHealer(e: Creep?) = e != null && InfluenceMap.profileOf(e).heal > 0.0 &&
+            InfluenceMap.profileOf(e).ranged == 0.0 && InfluenceMap.profileOf(e).melee == 0.0
+        // лекарь, из-за которого цель не умирает: в HEAL_RANGE от вооружённого врага, которого нам не убить
+        fun savesSomeone(h: Creep) = focusPool.any { c -> c.id != h.id && InfluenceMap.profileOf(c).let { it.melee + it.ranged > 0.0 } &&
+            getRange(h, c) <= HEAL_RANGE && killTicks(c).isInfinite() }
         // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
         fun gunsAt(e: Creep?) = if (e == null) 0 else combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
         val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+            // ...первый срез «всякий снимаемый лекарь выше стрелков» ОТВЕРГНУТ стендом: гейт 131, но входы +20 хуже 11 / лучше 9,
+            // +50 хуже 15 / лучше 7, m34 split 21 210:24 100 → 15 365:24 095. Второй срез: не «лекарь вообще», а ТОТ, ИЗ-ЗА КОГО
+            // цель не умирает — лекарь в HEAL_RANGE от неубиваемого кандидата (живьём его лекарь у нашей цели 62–83 % тиков)
+            .thenBy { if (USE_FOCUS_HEALER_FIRST && armedHealer(it) && !killTicks(it).isInfinite() && savesSomeone(it)) 1 else 0 }
             // стрелки первыми (v60, см. USE_FOCUS_RANGED_FIRST)
             .thenBy { if (USE_FOCUS_RANGED_FIRST && armedRanged(it)) 1 else 0 }
             // больше стволов (v70)
@@ -3652,7 +3713,18 @@ cpuMark("a.evade")
                 // (матч 506, melee_4 116–212; 602, melee_3 314–372) — ноль ударов. Его мили (матч 14) вернулся при 5 из 8
                 val backIn = if (USE_ROTATE_IN_ONE_PART) live >= kotlin.math.ceil(weapons * ROTATE_OUT).toInt() + 1 else frac >= ROTATE_IN
                 if (creep.id in rotatingIds) { if (backIn) { rotatingIds.remove(creep.id); if (DEBUG_LOG) println("rot t=$now in ${creep.id} frac=$frac took=${now - (rotateSince[creep.id] ?: now)}"); false } else true }
-                else if (frac < ROTATE_OUT) { rotatingIds.add(creep.id); rotateSince[creep.id] = now; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}"); true } else false
+                else if (frac < ROTATE_OUT) {
+                    // фронт не ослабляется (v134, см. USE_ROTATE_KEEP_FRONT): пока его вооружённых у контакта не меньше наших,
+                    // уходить некому — оставшийся один встречает блоб, а ушедший лечится под тем же огнём
+                    val e = combatEnemies.minByOrNull { getRange(creep, it) }
+                    val keep = USE_ROTATE_KEEP_FRONT && e != null && getRange(creep, e) <= ENGAGE_RANGE && run {
+                        val ours = army.count { hasWeapon(it) && it.id != creep.id && getRange(it, e) <= ENGAGE_RANGE }
+                        val his = armedEnemies.count { getRange(it, e) <= ENGAGE_RANGE }
+                        ours < his
+                    }
+                    if (keep) false
+                    else { rotatingIds.add(creep.id); rotateSince[creep.id] = now; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}"); true }
+                } else false
             }
             val support = healer || wounded
             val nearestEnemyRange = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
@@ -3805,8 +3877,14 @@ cpuMark("a.evade")
                     ?: fighters.minByOrNull { getRange(creep, it) }
                     ?: patients.minByOrNull { getRange(creep, it) }
             } else null
-            // раненый идёт к ближайшему лекарю (вплотную — лечение 12 за часть против 4 на дистанции)
-            val healerNear: Creep? = if (wounded || rotating) army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }.minByOrNull { getRange(creep, it) } else null
+            // раненый идёт к ближайшему лекарю (вплотную — лечение 12 за часть против 4 на дистанции), а при USE_HEAL_BEHIND —
+            // к ближайшему из тех, кто стоит ДАЛЬШЕ него от вооружённого врага: иначе дорога к лечению ведёт на фронт
+            val healerNear: Creep? = if (wounded || rotating) {
+                val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
+                val mine = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
+                (if (USE_HEAL_BEHIND) hs.filter { h -> (combatEnemies.minOfOrNull { getRange(h, it) } ?: 99) > mine }.minByOrNull { getRange(creep, it) } else null)
+                    ?: hs.minByOrNull { getRange(creep, it) }
+            } else null
             // под огнём без двух бойцов вплотную — назад к строю, не вперёд: шип в строй врага бьют трое-четверо, а он один
             // вплотную, не «в двух клетках»: со счётом союзников в двух клетках мили под огнём не отходили и ныряли в блоб
             // врага по одному — три мили за восемь тиков при одном убитом (стенд m5 army, v22, t=300–308)
