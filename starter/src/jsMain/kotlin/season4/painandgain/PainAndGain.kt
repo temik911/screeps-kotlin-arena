@@ -209,6 +209,16 @@ object PainAndGain {
      *  тиков; наши стрелки молчали разоружёнными 78 крип-тиков против 9 у него. Стрелок — то, что убивает (369 выстрелов
      *  против 150), и то, что снимается быстрее всего: 600 хитов до разоружения против 800 у мили. */
     private const val USE_FOCUS_RANGED_FIRST = true
+    /** ЕГО МИЛИ, КОТОРЫЙ УЖЕ БЬЁТ, — В ОДНОМ ЯРУСЕ СО СТРЕЛКАМИ (v135): «стрелки первыми» (v60) стоит ВЫШЕ яруса угрозы,
+     *  поэтому вооружённый стрелок обходит всё безусловно — даже его мили, рубящего нашего лекаря на 240 в тик, пока
+     *  `threatOf` эти самые 240 уже считает. Замер тестовыми играми против MetalicaX#10/#11 (двенадцать поражений): его
+     *  мили махнули 85 раз за матч в 200 тиков (около 20 000 урона) против наших 14, стрелки дали 155 выстрелов (около
+     *  9 000) — а наш огонь шёл в СТРЕЛКОВ; наши мили живут 50 крипо-тиков против его 664. Внутри яруса порядок прежний
+     *  (стволы, затем угроза на тик убийства), и там мили вплотную обходит стрелка сам. На его мили ВНЕ контакта правило
+     *  v60 действует как прежде. ОТВЕРГНУТО тестовыми играми: 0-6 против MetalicaX#10 и 0-6 против #11 при базе 1-5 и 1-5
+     *  (гейт при этом 131/131) — огонь, переведённый на его мили в контакте, перестаёт снимать стрелков, а мили его блоба
+     *  всё равно не убить, пока его лекари целы. Предмет не в выборе цели: наши мили не промахиваются, они гибнут. */
+    private const val USE_FOCUS_MELEE_IN_CONTACT = false
     /** ЕГО ЛЕКАРЬ ПЕРВЫМ, ЕСЛИ СНИМАЕТСЯ (v134): правило «стрелки первыми» писалось в матче 140, когда он бил НАШИХ стрелков.
      *  Четыре разгрома 08.09 говорят другое — он бьёт наших ЛЕКАРЕЙ: 100 выстрелов из 287 (MetalicaX#10, 6a9fa63e), 83 из 236
      *  (6a9fa64c), 89 из 266 (MetalicaX#8, 6a9f2c45), 59 из 338 (けろびー#2), то есть 17–35 % залпа; мы по его лекарям — 0, 2,
@@ -486,6 +496,29 @@ object PainAndGain {
      *  при этом улучшилась там, где лекарь позади вообще был (176 из 803 крипо-тиков под огнём против 88 из 88), — то есть
      *  предмет верен, а цена берётся не с той группы. Сузить до `wounded` — открытая гипотеза, её проверит только серия. */
     private const val USE_HEAL_BEHIND = false
+    /** ПРИКРЫТИЕ ТЫЛА (v135): мили, которому некого бить, идёт не в слот строя, а к тому нашему стрелку, лекарю или
+     *  раненому, к которому ближе всего его вооружённый мили, и встаёт рядом. Замер по двенадцати поражениям от блобов
+     *  (тестовые игры 08.09.2026): его мили смежны 84–143 крипо-тика против наших 14–20, наш ближайший мили дальше пяти
+     *  клеток в 61 из 114 смежных пар, а верхние блокировки решения — `!covered` (1183) и `!inLine` (1035), которые poker
+     *  и так обходит. То есть мили не мешают бить: они стоят в строю, пока его мили идут мимо них в наш тыл. */
+    private const val USE_MELEE_GUARD = false
+    /** ПРОТИВ СОМКНУТОГО БЛОБА МИЛИ НЕ БРОСАЕТСЯ (v135): три пробы о том, КАК наши мили выбирают цель, провалились
+     *  (прикрытие подопечного 1-5/2-4, прикрытие с целью-врагом 1-5/1-5, фокус на его бьющем мили 0-6/0-6), потому что
+     *  посылка была неверна. Наши мили не промахиваются — они ГИБНУТ: за матч в 200 тиков наши живут 50 крипо-тиков против
+     *  его 664 и бьют 14 раз против 85. Вошедший в двенадцать крипов получает около 750 в тик и живёт два-три тика, а его
+     *  смерть и открывает тыл. Пока его вооружённые — сомкнутая масса (мера enemyMassed, уже считается) и местного
+     *  перевеса нет, мили держит линию в MELEE_HOLD_RANGE и бьёт подошедшее; poker остаётся выше. Тестовые игры: 1-5 и
+     *  2-4 при базе 1-5 и 1-5, гейт 131/131 — в пределах шума, предмет не закрыт. Оставлено выключенным. */
+    private const val USE_MELEE_HOLD_VS_MASS = false
+    /** ЛЕКАРЬ ПРОТИВ БЛОБА САДИТСЯ ПО ТЕМ, КОГО ЛЕЧИТ (v135): в planFight первым ярусом клетки лекаря стоит «рядом нет его
+     *  мили», и против сомкнутого блоба это отправляет лекарей туда, где лечить некого — у блоба каждая клетка возле
+     *  раненого соседствует с его мили. Замер (тестовые игры 08.09.2026, поражение в 200 тиков): наши лекари имели
+     *  раненого вплотную 60 крипо-тиков из примерно шестисот, его — 129; лечений 85+12r против его 132+65r, при том что
+     *  uptime лекарей у обеих сторон 100 % — наши лечили всегда, когда МОГЛИ, и почти никогда не могли. При сомкнутой массе
+     *  ярус безопасности уходит НИЖЕ покрытия; вне блоба порядок прежний. ОТВЕРГНУТО тестовыми играми: 0-6 против
+     *  MetalicaX#10 и 0-6 против #11 при базе 1-5 и 1-5 (гейт 131/131) — лекарь, севший к раненому в блобе, гибнет сам,
+     *  и лечений становится меньше, а не больше. Цифра 60 из 600 верна, но лечится она не расстановкой лекаря. */
+    private const val USE_HEALERS_COVER_OVER_SAFETY = false
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
      *  назад» (v15) на входе в рубку уводит наших мили сквозь свой строй, а его мили идут следом и рубят наших стрелков и лекарей.
@@ -2801,6 +2834,10 @@ cpuMark("r.cands")
         // скаутах (сила 0) не повод для боя: два уцелевших лекаря врага кайтили в четырёх клетках 1700 тиков, армия
         // в ДОБИТЬ то гналась, то сбивалась в кучу и не шла за флагами, пока скауты врага брали пять (m7 rush)
         val armedEnemies = combatEnemies.filter { threatening(it, enemyCreeps) }
+        // сомкнутая масса врага — та же мера, что в postureOf (см. enemyMassed): шесть и больше вооружённых, две трети
+        // которых в MASS_RANGE от их центроида. Считается раз на тик, а не на крипа (v135)
+        val enemyMassedNow = armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
+            armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
         // чистый урон врагу за окно: сумма его хитов ниже, чем STALL_TICKS тиков назад (попадание с полным лечением в тот же
         // тик — не прогресс: стрелок россыпи с трёх клеток попадал, лечился, и «обмен уронами» сбрасывал простой);
         // простой — только когда добыча в досягаемости броска, а прогресса нет (на марше к врагу за 20+ клеток простоя
@@ -3420,6 +3457,9 @@ cpuMark("a.evade")
         // потом угроза на хит — «угроза на хит» слала огонь в лекарей врага за строем, которых лечили друг друга
         // быстрее, чем мы били (стенд m2 rush: выигранный без потерь рывок стал разгромом)
         fun armedRanged(e: Creep?) = e != null && InfluenceMap.profileOf(e).ranged > 0.0
+        // его мили, стоящий вплотную к кому-то из наших: он бьёт ПРЯМО СЕЙЧАС на 240 в тик (v135)
+        fun meleeHitting(e: Creep?) = e != null && InfluenceMap.profileOf(e).melee > 0.0 &&
+            combatArmy.any { getRange(e, it) <= 1 }
         // его лекарь: живое лечение и никакого живого оружия (v134, см. USE_FOCUS_HEALER_FIRST)
         fun armedHealer(e: Creep?) = e != null && InfluenceMap.profileOf(e).heal > 0.0 &&
             InfluenceMap.profileOf(e).ranged == 0.0 && InfluenceMap.profileOf(e).melee == 0.0
@@ -3433,8 +3473,10 @@ cpuMark("a.evade")
             // +50 хуже 15 / лучше 7, m34 split 21 210:24 100 → 15 365:24 095. Второй срез: не «лекарь вообще», а ТОТ, ИЗ-ЗА КОГО
             // цель не умирает — лекарь в HEAL_RANGE от неубиваемого кандидата (живьём его лекарь у нашей цели 62–83 % тиков)
             .thenBy { if (USE_FOCUS_HEALER_FIRST && armedHealer(it) && !killTicks(it).isInfinite() && savesSomeone(it)) 1 else 0 }
-            // стрелки первыми (v60, см. USE_FOCUS_RANGED_FIRST)
-            .thenBy { if (USE_FOCUS_RANGED_FIRST && armedRanged(it)) 1 else 0 }
+            // стрелки первыми (v60, см. USE_FOCUS_RANGED_FIRST), и вместе с ними — его мили, КОТОРЫЙ УЖЕ БЬЁТ (v135,
+            // см. USE_FOCUS_MELEE_IN_CONTACT): внутри яруса порядок решает угроза за тик, а там мили вплотную (240) выше
+            // стрелка (60) сам собой
+            .thenBy { if (USE_FOCUS_RANGED_FIRST && (armedRanged(it) || (USE_FOCUS_MELEE_IN_CONTACT && meleeHitting(it)))) 1 else 0 }
             // больше стволов (v70)
             .thenBy { if (USE_FOCUS_GUNS) gunsAt(it) else 0 }
             .thenBy { val t = killTicks(it); if (t.isInfinite()) 0.0 else threatOf(it) / t }
@@ -3819,8 +3861,14 @@ cpuMark("a.evade")
                 focusTarget?.takeIf { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && !givenUp(it) && pressCovered(it) }
                     ?: localEnemies.filter { getRange(creep, it) <= PRESS_RANGE && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && pressCovered(it) }.minByOrNull { getRange(creep, it) }
             val pressRanged = USE_PRESS_RING && pressOn && hasRanged(creep) && !rotating && localAggressive
-            val holdMelee = isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
+            // против СОМКНУТОГО блоба мили не бросается (v135, см. USE_MELEE_HOLD_VS_MASS): наш мили, вошедший в двенадцать,
+            // получает около 750 в тик (пять стрелков и четыре мили достают его) и живёт два-три тика — за матч наши мили
+            // живут 50 крипо-тиков против его 664 и бьют 14 раз против 85. Держим линию и бьём то, что подошло; poker
+            // (защита тыла) по-прежнему выше и работает
+            val massHold = USE_MELEE_HOLD_VS_MASS && isMelee(creep) && !hasRanged(creep) && enemyMassedNow && !localAggressive &&
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
+            val holdMelee = massHold || (isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
+                localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
             // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
             // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
             // били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7, наши мили держали линию в 2–3 от его линии и не
@@ -3892,6 +3940,22 @@ cpuMark("a.evade")
             } else null
             // раненый идёт к ближайшему лекарю (вплотную — лечение 12 за часть против 4 на дистанции), а при USE_HEAL_BEHIND —
             // к ближайшему из тех, кто стоит ДАЛЬШЕ него от вооружённого врага: иначе дорога к лечению ведёт на фронт
+            // ПРИКРЫТИЕ ТЫЛА (v135, см. USE_MELEE_GUARD): мили без цели идёт не в слот, а к тому нашему не-мили, к которому
+            // ближе всего его вооружённый мили, — и встаёт рядом. Замер: в двенадцати поражениях базы наши мили смежны 14–20
+            // крипо-тиков против его 84–143, а наш ближайший мили — в пяти и дальше в 61 из 114 смежных пар; мили не мешают
+            // бить, они стоят не там. Берётся только тот подопечный, до которого его мили ближе, чем любой наш чистый мили
+            val guardMate: Creep? = if (USE_MELEE_GUARD && isMelee(creep) && !hasRanged(creep) && !support && !rotating && !stalled &&
+                    engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
+                // ...первый срез вёл мили К ПОДОПЕЧНОМУ и смежности не поднял (80:14 против 84:20 базы): встать рядом с
+                // лекарем не значит достать того, кто его рубит. Цель — САМ ЕГО МИЛИ, идущий в наш тыл: ближайший к нашему
+                // не-мили из тех, кого мы достаём в ENGAGE_RANGE, и притом ближе к нему, чем любой другой наш мили
+                val backs = army.filter { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) }
+                val ourMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) }
+                combatEnemies.filter { e -> InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE }
+                    .mapNotNull { e -> (backs.minOfOrNull { a -> getRange(e, a) } ?: 99).let { d -> if (d <= MELEE_HOLD_RANGE + 1) e to d else null } }
+                    .filter { (e, _) -> ourMelee.none { m -> m.id != creep.id && getRange(m, e) < getRange(creep, e) } }
+                    .minByOrNull { (e, d) -> d * 100 + getRange(creep, e) }?.first
+            } else null
             val healerNear: Creep? = if (wounded || rotating) {
                 val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
                 val mine = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
@@ -3956,6 +4020,8 @@ cpuMark("a.evade")
                 slotHold -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 // ротация раньше слота (v126, USE_ROTATE_OVER_SLOT): слот ротирующего — тыловой ряд, а лекарь ходит за своим подопечным
                 USE_ROTATE_OVER_SLOT && rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
+                // прикрытие тыла раньше слота (v135): слот ставит мили в строй, а рубят в это время наш тыл
+                guardMate != null -> { target = guardMate; standoff = 1; nearFlow = true }   // цель — его мили у нашего тыла
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
@@ -4599,8 +4665,14 @@ cpuMark("a.evade")
         // покрытие — по бойцам, у которых ЕЩЁ нет лекаря вплотную (жадное покрытие): по простому числу соседей трое лекарей
         // сбегались к одной плотной группе и бросали остальных (v128a: brawl m31 из победы в уничтожение армии)
         fun coverAt(cell: FightCell): Int = fighterCells.count { f -> getRange(cell.pos, f.pos) <= 1 && healerCells.none { h -> getRange(h.pos, f.pos) <= 1 } }
-        fun healerCmp(c: Creep) = compareBy<FightCell> { if (it.meleeNear == 0) 1 else 0 }
+        // против сомкнутого блоба «клетка без его мили» уступает покрытию (v135, см. USE_HEALERS_COVER_OVER_SAFETY):
+        // у блоба КАЖДАЯ клетка рядом с раненым соседствует с его мили, и лекари садились туда, где лечить некого —
+        // 60 крипо-тиков с раненым вплотную из шестисот против его 129, лечений 85+12r против 132+65r
+        val healSafetyLast = USE_HEALERS_COVER_OVER_SAFETY && armedEnemies.size >= 6 &&
+            centroidOf(armedEnemies)?.let { c -> armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
+        fun healerCmp(c: Creep) = compareBy<FightCell> { if (healSafetyLast) 0 else if (it.meleeNear == 0) 1 else 0 }
             .thenBy { if (USE_HEALERS_COVER) coverAt(it) else 0 }
+            .thenBy { if (healSafetyLast && it.meleeNear == 0) 1 else 0 }
             .thenBy { needAt(it) }
             .thenBy { -it.dmg }
             .thenBy { -getRange(c, it.pos) }

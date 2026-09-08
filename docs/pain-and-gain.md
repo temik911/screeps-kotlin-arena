@@ -529,6 +529,45 @@ currently carries MetalicaX#10, MetalicaX#11, けろびー#4 and Coldkimchi#1, w
 `Failed to fetch` on it more readily than on a GET. From here on, a probe against the blob class is measured against
 the blob itself, for free, before anything is spent on a rating series.
 
+**The blob campaign on unrated test games (08.09.2026): a baseline, five probes, and the mechanism narrowed — but no
+win yet.** With `--test` costing no rating, the class was attacked directly. Baseline over 24 test games on v133:
+**MetalicaX#10 1-5, MetalicaX#11 1-5, Coldkimchi#1 1-5, けろびー#4 4-2** — three of his bots are the class, the fourth
+is the control. Every loss is the same shape: 100–200 ticks, our first death at t=46–49, his none.
+
+What the games measure, and it corrects the earlier reading. Ours against his over a 200-tick loss: melee alive **50
+creep-ticks against his 664**, swings **14 against 85**, shots 87 against 155, mass attacks 21 against 60, healers with
+a wounded mate within one **60 creep-ticks of about 600 against his 129**, heals 85+12r against 132+65r, expected
+damage 7 350 against 20 870. Both sides' `uptime` reads 100 %: ours did whatever they COULD, every tick they could. So
+our melee do not mis-aim — **they die**: one that walks into twelve creeps takes about 750 a tick (five ranged and four
+melee all reach it) and lasts two or three ticks, and its death is what opens the back rank. And the debuffs are HIS,
+not ours — at the end of these matches he reads `A×0.6 R×0.6 H×0.5 D×1.1` from the flags he took while we read
+`A×1 R×1 H×1 D×1`; the flags come after the wipe, so the entry itself is fought at 4 087 against 4 087, and our power
+falls to zero in 42 ticks.
+
+Five probes, each measured against both blobs (6 games apiece) with the stub gate as the control on everyone else. All
+five are off with their numbers, the toggles and the reasoning kept in the code:
+
+- **melee guard, at the mate** (`USE_MELEE_GUARD`): a melee with no target goes to the creep of ours his melee is
+  closest to. 1-5 / 2-4, gate 130/131 (match34:camp) — and adjacency did not move (80:14 against the baseline's 84:20):
+  standing beside a healer is not reaching the creep that hits it;
+- **melee guard, at the enemy**: same rule aimed at his melee entering our back rank instead. 1-5 / 1-5, gate 130/131
+  (match12:twelve, our army destroyed);
+- **his hitting melee in the first focus tier** (`USE_FOCUS_MELEE_IN_CONTACT`): `ranged first` (v60) outranks the threat
+  tier unconditionally, so a melee of his hitting our healer for 240 a tick is never shot while any ranged of his is in
+  range. Gate 131/131 and **0-6 / 0-6** — moving fire off his ranged is worse, his melee cannot be killed while his
+  healers stand;
+- **no charge into a closed blob** (`USE_MELEE_HOLD_VS_MASS`): while his armed are a closed mass and we have no local
+  advantage, our melee hold at MELEE_HOLD_RANGE instead of charging. Gate 131/131, 1-5 / 2-4 — noise;
+- **healers placed by whom they can heal** (`USE_HEALERS_COVER_OVER_SAFETY`): against a blob every cell beside a wounded
+  creep has his melee next to it, so the `meleeNear == 0` tier sends our healers where nobody needs them. Gate 131/131
+  and **0-6 / 0-6** — a healer that sits by the wounded inside a blob dies itself, and the heals go down, not up.
+
+What this narrows: the class is not a target-choice defect, not a placement defect and not a charge-timing defect —
+three separate readings of "our melee are in the wrong place or hitting the wrong thing" were all tested and all
+failed. What survives is the arithmetic: at first contact his twelve concentrate about 750 damage a tick on whichever
+of ours is nearest, and nothing in our fight rules changes who is nearest. The next thing to price is therefore the
+approach itself — how our army meets a closed mass at all — and `+early` is the stand form built for exactly that.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a
