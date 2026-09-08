@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 69
+    private const val BOT_VERSION = 70
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -372,13 +372,27 @@ object SpawnAndSwamp {
      *  тике). Знаменатель наблюдаемой скорости стройки: см. siteReadyTicks. */
     private val siteWork = HashMap<String, Pair<Int, Int>>()
 
+    /** Тики, когда смотритель был ЖИВ, и прогресс площадки на первом из них (см. measureSiteWork). */
+    private val siteHeld = HashMap<String, Pair<Int, Int>>()
+
     private fun measureSiteWork(ctx: Ctx) {
         for (s in ctx.mySites) {
+            // ДВОЕ ЧАСОВ, И ОНИ РАЗЛИЧАЮТ РАЗНОЕ. siteWork считает тики, когда руки У ПЛОЩАДКИ, и
+            // отвечает на «с какой скоростью строят». siteHeld считает тики, когда смотритель просто
+            // ЖИВ, и отвечает на «доходят ли до неё вообще»: у загнанной площадки первый счётчик стоит
+            // на нуле, и срок берётся из модели, которая про охоту не знает. Живой замер (6aa02b06):
+            // площадке оставалось 281 из 1000, смотрителя гоняли в тридцати клетках от неё с fire=50, а
+            // ready читался как 20 из 610 — и под этот срок купили второго смотрителя, тоже впустую
+            if (ctx.builders.isNotEmpty()) {
+                val held = siteHeld[s.id]
+                siteHeld[s.id] = if (held == null) 1 to (s.progress ?: 0) else (held.first + 1) to held.second
+            }
             if (ctx.builders.none { getRange(it, s) <= BUILD_RANGE }) continue
             val was = siteWork[s.id]
             siteWork[s.id] = if (was == null) 1 to (s.progress ?: 0) else (was.first + 1) to was.second
         }
         siteWork.keys.retainAll { id -> ctx.mySites.any { it.id == id } }
+        siteHeld.keys.retainAll { id -> ctx.mySites.any { it.id == id } }
     }
 
     /** Кончится ли осада раньше, если следующее тело — мили: ответ СИМУЛЯЦИИ, снятый в runFighters и
@@ -4311,7 +4325,20 @@ object SpawnAndSwamp {
             val hop = if (here == null) 0 else stepsFrom(cellSteps(ctx, supply.x * 100 + supply.y), here).coerceAtLeast(0)
             if (carry <= 0) Double.MAX_VALUE / 4 else ceil(siteLeft.toDouble() / carry) * (2.0 * hop + 2.0)
         }
-        return maxOf(supplied, siteLeft / rate + ferry) + born
+        val modelled = maxOf(supplied, siteLeft / rate + ferry) + born
+        // СМОТРИТЕЛЬ ЖИВ ДОЛЬШЕ, ЧЕМ МОДЕЛЬ ОБЕЩАЛА ВСЮ СТРОЙКУ, А ПЛОЩАДКА НЕ СДВИНУЛАСЬ — значит до
+        // неё не доходят, и срок у неё не «двадцать тиков», а «никогда». Часы присутствия (siteWork)
+        // этого не ловят по построению: они считают тики У ПЛОЩАДКИ, а у загнанного смотрителя их ноль,
+        // и ответ каждый раз берётся из модели, которая про охоту не знает. Живой замер (6aa02b06):
+        // площадке оставалось 281 из 1000, смотрителя гоняли в тридцати клетках от неё с fire=50, а
+        // ready читался как 20 из 610 — и под этот срок купили второго смотрителя, тоже впустую.
+        // Порог не назначен: это ОТВЕТ САМОЙ МОДЕЛИ, в котором поход уже учтён (born + ferry), поэтому
+        // правило не срабатывает, пока смотритель просто идёт
+        if (site != null && work > 0 && modelled < Double.MAX_VALUE / 8) {
+            val held = siteHeld[site.id]
+            if (held != null && held.first > modelled && (site.progress ?: 0) <= held.second) return Double.MAX_VALUE / 4
+        }
+        return modelled
     }
 
     /** Окупается ли башня против бойца за ту же энергию. Мера одна и та же — ПРИБАВКА к мощи обороны
