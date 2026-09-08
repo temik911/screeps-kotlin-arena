@@ -597,6 +597,25 @@ next. Every rule tried so far changes what our creeps DO; none changes WHO IS NE
 our army meets him in (`planFight`/`planBlock`), and that is the one place left to look. The played build is v133,
 unchanged, gate 131/131.
 
+**v135 — the kite at two cells, the first thing in eight probes that moves the class.** The arithmetic that survived
+every earlier probe named its own cure. His melee carry the damage that kills us — four creeps at 8 ATTACK are 960 a
+tick in contact against his five ranged at 300 — and a melee reaches ONE cell while a ranged reaches three. So at a
+standoff of two his four melee contribute nothing, our five ranged and his five trade evenly, and an even ranged trade
+is not a 14:0. While his armed are a closed mass (`enemyMassed`), every creep of ours not already adjacent to something
+takes the nearest of his melee as its target with a standoff of MELEE_HOLD_RANGE, avoiding fire; melee still swing at
+whatever closes to one cell and `poker` still answers anything that reaches the back rank.
+
+Measured on unrated test games, six per bot per run, gate 131/131 throughout: **MetalicaX#10 5-7 against a baseline of
+1-5**, **Coldkimchi#1 2-4 against 1-5**, **けろびー#4 4-2 — exactly the baseline, so the control is intact**, and
+MetalicaX#11 2-10, unmoved. Over the three blob bots that is **9-21 against the baseline's 3-15**. Two variants were
+tried and rejected with numbers: a standoff of three drops the gate (match31:camp 10 131:14 582), and letting our
+ranged break an already-started contact gives 0-6 / 0-6 — a ranged stepping out from under a melee stops shooting and
+drags the line with it, while his melee follows anyway.
+
+This is not yet regular winning against blobs — 30 % against 17 % is a real move, not a solved class — and MetalicaX#11
+in particular is untouched. But it is the first cut that changes WHO IS NEAREST rather than what our creeps do with
+whoever is, which is the direction the previous seven probes narrowed the search to.
+
 ## Stub harness
 
 `tools/stub/painandgain/` (see its `README.md`): the compiled bundle of this worktree's build runs under Node against a

@@ -548,6 +548,22 @@ object PainAndGain {
      *  стоит вплотную к любому нашему НЕ-мили — тому самому множеству, которое защищает poker.
      *  ОТВЕРГНУТО тестовыми играми вместе с USE_POKER_WHILE_ROTATING: 1-5 и 1-5 при базе 1-5 и 1-5, гейт 131/131. */
     private const val USE_GIVEUP_LIFTS_ON_BACK = false
+    /** КАЙТ ПРОТИВ СОМКНУТОГО БЛОБА (v135): после семи отвергнутых проб осталась одна арифметика — его двенадцать
+     *  собирают около 750 в тик на ближайшем нашем, и тот гибнет за два-три тика. Носители этого числа — его МИЛИ: четыре
+     *  по восемь ATTACK дают 960 в тик вплотную против 300 у пяти его стрелков, и за матч они были смежны 85 крипо-тиков
+     *  против наших 14. Уйти от блоба нельзя (замерено), но держать ДВА — не уход: мили достаёт на клетку, стрелок на три,
+     *  то есть в двух его мили не дают ничего, а размен стрелками идёт ровно, и ровный размен — это уже не 14:0.
+     *  ПРИНЯТО по тестовым играм (08.09.2026, гейт 131/131): MetalicaX#10 5-7 против базы 1-5, Coldkimchi#1 2-4 против
+     *  1-5, けろびー#4 4-2 — ровно база, MetalicaX#11 2-10 — без изменений; по трём блобам 9-21 против 3-15. Первая правка
+     *  за восемь проб, сдвинувшая класс. Дистанция три роняет гейт (match31:camp 10 131:14 582), разрыв уже начатого
+     *  контакта — 0-6/0-6 (см. USE_KITE_BREAKS_CONTACT). */
+    private const val USE_MASS_KITE = true
+    /** Дистанция кайта: два — его мили не достаёт, но входит одним шагом; три — нужен шаг и удар, зато наш веер слабее. */
+    /** Кайт разрывает и УЖЕ начатый контакт, но только у стрелков: мили, до которого дошли, бьёт (v135).
+     *  ОТВЕРГНУТО тестовыми играми: 0-6 против MetalicaX#10 и 0-6 против #11 при кайте 3-3 и 1-5 (гейт 131/131) — стрелок,
+     *  выходящий из-под удара, перестаёт стрелять и тянет за собой строй, а его мили всё равно идёт следом. */
+    private const val USE_KITE_BREAKS_CONTACT = false
+    private const val KITE_STANDOFF = MELEE_HOLD_RANGE   // три ронял гейт (match31:camp 10 131:14 582)
     private const val USE_ALONE_FIRE = true   // под огнём без двух бойцов вплотную — назад (v15)
     /** МИЛИ НЕ ОТХОДИТ ОТ ЕГО МИЛИ (v110, вход в рубку с блобом — первый пункт сводки ledger.py): «под огнём без двух вплотную —
      *  назад» (v15) на входе в рубку уводит наших мили сквозь свой строй, а его мили идут следом и рубят наших стрелков и лекарей.
@@ -1549,7 +1565,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v133"
+    private const val BOT_VERSION = "v135"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4000,6 +4016,14 @@ cpuMark("a.evade")
                     .filter { (e, _) -> ourMelee.none { m -> m.id != creep.id && getRange(m, e) < getRange(creep, e) } }
                     .minByOrNull { (e, d) -> d * 100 + getRange(creep, e) }?.first
             } else null
+            // КАЙТ ПРОТИВ СОМКНУТОГО БЛОБА (v135, см. USE_MASS_KITE): его мили достаёт на клетку, стрелок — на три, значит
+            // в ДВУХ его четыре мили (960 в тик вплотную) не дают ничего, а размен стрелками идёт ровно. Держим два от
+            // ближайшего его мили, пока его армия сомкнута и мы сами ещё не в контакте
+            val massKite: Creep? = if (USE_MASS_KITE && !support && enemyMassedNow &&
+                    (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)))) {
+                combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE }
+                    .minByOrNull { getRange(creep, it) }
+            } else null
             val healerNear: Creep? = if (wounded || rotating) {
                 val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
                 val mine = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
@@ -4066,6 +4090,8 @@ cpuMark("a.evade")
                 USE_ROTATE_OVER_SLOT && rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
                 // прикрытие тыла раньше слота (v135): слот ставит мили в строй, а рубят в это время наш тыл
                 guardMate != null -> { target = guardMate; standoff = 1; nearFlow = true }   // цель — его мили у нашего тыла
+                // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
+                massKite != null -> { target = massKite; standoff = KITE_STANDOFF; avoid = true; nearFlow = true }
                 slot != null -> { target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
