@@ -2004,6 +2004,9 @@ object PainAndGain {
      *  Теперь он сам приказывает держать наш флаг и сам уводит того, кому грозит гибель. */
     private const val USE_COMMAND_HOLDS_FLAGS = true
     private const val USE_COMMAND_RETREATS = true
+    /** НИ ОДНОЙ КЛЕТКИ ДВОИМ (v176, оператор): раздача держит своё множество занятых, но источников приказа несколько,
+     *  и на стыке коллизия случалась — одна на 431 приказ. Здесь она снимается безусловно. */
+    private const val USE_ORDER_NO_DUPES = true
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
     private const val ORDER_PRIORITY_HEAL = 5
@@ -4463,7 +4466,23 @@ cpuMark("a.evade")
         if (USE_ORDER_AUDIT) {
             val seen = HashMap<Int, Int>()
             commandOf.values.forEach { p -> seen[p.x * 100 + p.y] = (seen[p.x * 100 + p.y] ?: 0) + 1 }
-            orderClash += seen.values.count { it > 1 }
+            val dup = seen.values.count { it > 1 }
+            orderClash += dup
+            // ГАРАНТИЯ, А НЕ НАБЛЮДЕНИЕ (v176, оператор: «не должно быть такого, что по приказам командира в одну
+            // клетку собрались двое»). Раздача держит своё множество занятых, но источников приказа несколько — бой,
+            // гонка, марш, хранители, отход, — и на стыке коллизия всё же случалась (одна на 431 приказ, режим боя).
+            // Здесь она снимается: клетка остаётся за первым, второй теряет приказ и идёт по общим правилам
+            if (dup > 0 && USE_ORDER_NO_DUPES) {
+                val used = HashSet<Int>()
+                val drop = ArrayList<String>()
+                for ((id, p) in commandOf) { val k = p.x * 100 + p.y; if (!used.add(k)) drop.add(id) }
+                drop.forEach { commandOf.remove(it) }
+            }
+            if (dup > 0 && DEBUG_LOG) {
+                val where = seen.entries.firstOrNull { it.value > 1 }?.key ?: 0
+                val who = commandOf.filterValues { it.x * 100 + it.y == where }.keys.joinToString(",")
+                println("clash t=${getTicks()}: mode=$cmdMode cell=(${where / 100},${where % 100}) who=$who")
+            }
         }
         if (USE_ORDER_AUDIT) {
             orderPrev.forEach { (id, cell) ->
@@ -5719,7 +5738,8 @@ cpuMark("a.evade")
             }
             return if (best == Double.MAX_VALUE) PATH_BLOCKED_COST else best * PATH_DANGER_W
         }
-        fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0): Boolean {
+        fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0,
+                  rescue: Boolean = false): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
             var bestTenant: Creep? = null
             // ПРИКАЗ ОБЯЗАН БЫТЬ ИСПОЛНИМ (v172, оператор): «командир должен быть уверен, что каждый крип на следующем
@@ -5738,6 +5758,7 @@ cpuMark("a.evade")
                 val tenant = if (self) null else allyOf[key]?.takeIf { t ->
                     t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true)
                 }
+
                 // клетка под своим дороже: приказ туда исполним, только если жильца удастся сдвинуть
                 val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
@@ -5746,15 +5767,41 @@ cpuMark("a.evade")
             val tenant = bestTenant
             if (tenant != null && USE_ORDER_CHAINS) {
                 if (depth >= CHAIN_DEPTH) return false
+                // СПАСЕНИЕ СТАРШЕ ЛЮБОГО ПРИКАЗА (v176, оператор): если самая безопасная клетка занята крипом, которому
+                // велено стоять, приказ стоять снимается и жилец уводится цепочкой — беречь расстановку ценой крипа
+                // армия из четырнадцати не может. Снимается он ТОЛЬКО у выбранного жильца: первая редакция снимала
+                // приказы прямо в переборе кандидатов, у всех подряд, и прибор поймал это коллизией (clash=1)
+                var undo: Position? = null
+                if (rescue) { undo = out.remove(tenant.id); taken.remove(tenant.x * 100 + tenant.y) }
                 // своп: жилец встаёт на клетку просителя — так делается ротация состава
                 val swapCell = cells[c.x * 100 + c.y]
                 val moved = (swapCell != null && place(tenant, { p -> p.x == c.x && p.y == c.y }, { 0.0 }, depth + 1)) ||
                     place(tenant, { p -> p.x != b.x || p.y != b.y }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 }, depth + 1)
-                if (!moved) return false
+                // ...и при неудаче цепочки снятый приказ ВОЗВРАЩАЕТСЯ: без отката жилец оставался без приказа, его
+                // клетка свободной, и позже она доставалась двоим — прибор ловил это как clash=1 (v176)
+                if (!moved) {
+                    // ...и вернуть приказ можно, только если его клетку за это время никто не занял: слепое
+                    // восстановление отдавало одну клетку двоим (clash в режиме боя, t=808)
+                    val back = undo
+                    if (back != null && back.x * 100 + back.y !in taken) { out[tenant.id] = back; taken.add(back.x * 100 + back.y) }
+                    return false
+                }
             }
             taken.add(b.x * 100 + b.y); out[c.id] = b
             if (b.x != c.x || b.y != c.y) allyOf.remove(c.x * 100 + c.y)
             return true
+        }
+        // ОТХОД — ТОЖЕ ПРИКАЗ (v174, оператор: «не должно быть ничего, что идёт мимо него»): бегство было веткой ВЫШЕ
+        // командира. Теперь он сам уводит того, кому грозит гибель, — потерявшего за тик больше половины остатка или
+        // стоящего под огнём без лечения рядом
+        if (USE_COMMAND_RETREATS) for (c in fighters) {
+            if (c.id in out) continue
+            val hurtBadly = (lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
+            val alone = InfluenceMap.damageAt(c.x, c.y, combatEnemies) > 0.0 &&
+                army.none { it.id != c.id && hasHeal(it) && getRange(c, it) <= HEAL_RANGE }
+            if (!hurtBadly && !alone) continue
+            place(c, { true }, rescue = true, rank = { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 -
+                (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
         }
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
         // МИЛИ НЕ БРОСАЕТСЯ ПОД ВЕРНУЮ СМЕРТЬ (v143, оператор): вплотную к его строю — только когда это окупается.
@@ -5861,23 +5908,14 @@ cpuMark("a.evade")
                 else place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
             }
         }
-        // ОТХОД — ТОЖЕ ПРИКАЗ (v174, оператор: «не должно быть ничего, что идёт мимо него»): бегство было веткой ВЫШЕ
-        // командира. Теперь он сам уводит того, кому грозит гибель, — потерявшего за тик больше половины остатка или
-        // стоящего под огнём без лечения рядом
-        if (USE_COMMAND_RETREATS) for (c in fighters) {
-            if (c.id in out) continue
-            val hurtBadly = (lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
-            val alone = InfluenceMap.damageAt(c.x, c.y, combatEnemies) > 0.0 &&
-                army.none { it.id != c.id && hasHeal(it) && getRange(c, it) <= HEAL_RANGE }
-            if (!hurtBadly && !alone) continue
-            place(c, { true }, { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 -
-                (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
-        }
         // ХРАНИТЕЛЬ ФЛАГА — ПО ПРИКАЗУ (v174): крип на НАШЕМ флаге стоит по приказу командира, а не по отдельной ветке
         // удержания; снять его может только командир — решив собрать отряд — или опасность, которая приходит приказом
         if (USE_COMMAND_HOLDS_FLAGS) for (c in fighters) {
             if (c.id in out) continue
-            if (ourFlagCells.contains(c.x * 100 + c.y)) { taken.add(c.x * 100 + c.y); out[c.id] = InfluenceMap.cell(c.x, c.y) }
+            // ...и клетку, уже отданную кому-то приказом, хранитель не занимает повторно: без этой проверки одна
+            // клетка доставалась двоим — прибор ловил это как clash=1 (v176)
+            val key = c.x * 100 + c.y
+            if (ourFlagCells.contains(key) && key !in taken) { taken.add(key); out[c.id] = InfluenceMap.cell(c.x, c.y) }
         }
         // раздетые: прочь из огня — в бою от них пользы нет, а его выстрелы они на себя собирают исправно
         if (USE_COMMAND_STRIPPED_OUT) for (c in stripped)
