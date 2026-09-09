@@ -1996,6 +1996,10 @@ object PainAndGain {
     /** ИСПОЛНИМОСТЬ ПРИКАЗА (v172, оператор): командир назначает только то, что крип может сделать ЭТИМ тиком —
      *  уставшему можно приказать лишь стоять. Иначе приказ ложь, и прогноз считает бой, которого не будет. */
     private const val USE_ORDER_FEASIBLE = true
+    /** ХРАНИТЕЛЬ ПОД КОМАНДИРОМ (v173, оператор): «уйти с флага крип должен только если командир решит собрать отряд,
+     *  или если крип может попасть в опасность». Прежде хранитель был невидим для командира (mobileArmy исключает
+     *  keeperIds) и приказа не видел; теперь он в поле зрения и снимается с флага решением, а не случайно. */
+    private const val USE_ORDER_OVER_KEEPER = true
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
     private const val ORDER_PRIORITY_HEAL = 5
@@ -2004,7 +2008,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v171"
+    private const val BOT_VERSION = "v173"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -3355,6 +3359,9 @@ cpuMark("r.cands")
         val exchangePaying = ourHitsHist.size < STALL_TICKS ||
             (enemyHitsHist.first() - enemyHitsNow) >= (ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
         val mobileArmy = army.filter { canMove(it) && it.id !in keeperIds }
+        // ...а командир видит ВСЁ поле, включая хранителей флагов: решение снять хранителя — его, а не следствие того,
+        // что он невидим (v173, оператор). Держат флаг они по-прежнему сами, пока приказа нет
+        val commandArmy = if (USE_ORDER_OVER_KEEPER) army.filter { canMove(it) } else mobileArmy
         val chasers = strikers.ifEmpty { mobileArmy }
         // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
         // пикет простоя — поэтому охота посчитана здесь, до простоя
@@ -4338,7 +4345,7 @@ cpuMark("a.evade")
             // не сходила. При нехватке времени командир раздаёт клетки одним замыслом, без перебора и прогонов
             val cpuTight = USE_CPU_GUARD && getTicks() > 1 && cpuMs() > CPU_GUARD_MS
             if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
-            if (!USE_SIMULATION || cpuTight) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
+            if (!USE_SIMULATION || cpuTight) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf)
             else {
                 // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через SIM_TICKS (v138)
                 var bestScore = -Double.MAX_VALUE
@@ -4352,7 +4359,7 @@ cpuMark("a.evade")
                 // смешивает поведение, чего единая политика не умеет
                 for (intent in Intent.values()) {
                     val trial = HashMap<String, Position>()
-                    commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
+                    commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent)
                     // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                     // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
                     val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget, intent)
@@ -4378,7 +4385,7 @@ cpuMark("a.evade")
                                 if (i == was) continue
                                 for (c in g) per[c.id] = i
                                 val trial = HashMap<String, Position>()
-                                commandFight(mobileArmy, combatEnemies, armedEnemies, trial, bestIntent, per)
+                                commandFight(commandArmy, combatEnemies, armedEnemies, trial, bestIntent, per)
                                 val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
                                 if (sc > bestScore) { bestScore = sc; bestPlan = trial; localBest = i }
                             }
@@ -4412,7 +4419,10 @@ cpuMark("a.evade")
                 }
                 if (USE_ORDER_AUDIT) {
                     orderPrev.forEach { (id, cell) ->
-                        val c = mobileArmy.firstOrNull { it.id == id } ?: return@forEach
+                        // ...и захватчик из аудита исключается: его приказ — ФЛАГ, а не клетка, и ведёт его свой цикл;
+                        // считать его ослушником было бы неверно (v173)
+                        if (id in cmdDetach) return@forEach
+                        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
                         orderAuditN++
                         if (c.x == cell.x && c.y == cell.y) orderAuditOk++
                         else {
@@ -4436,14 +4446,14 @@ cpuMark("a.evade")
                     // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
                     // и доля исполнения ограничена этим по построению (v170)
                     commandOf.forEach { (id, p) ->
-                        val c = mobileArmy.firstOrNull { it.id == id } ?: return@forEach
+                        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
                         if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
                     }
                     orderWas.clear(); orderFatigue.clear()
-                    mobileArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
+                    commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
                     orderDist.clear()
                     commandOf.forEach { (id, p) ->
-                        val c = mobileArmy.firstOrNull { it.id == id }
+                        val c = commandArmy.firstOrNull { it.id == id }
                         if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
                     }
                     orderPrev.clear()
@@ -4462,7 +4472,7 @@ cpuMark("a.evade")
                     }
                     simPending.keys.filter { it < getTicks() }.forEach { simPending.remove(it) }
                 }
-                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash fled=$orderFled lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
         } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
             // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
@@ -4474,7 +4484,7 @@ cpuMark("a.evade")
             commandOf.putAll(keep)
         } else if (raceCommandNow) {
             cmdTicks++
-            commandRace(ctx, mobileArmy, armedEnemies, ctx.flags, commandOf)
+            commandRace(ctx, commandArmy, armedEnemies, ctx.flags, commandOf)
             // ...и ядро, оставшееся после раздачи заданий, идёт СТРОЕМ к цели (v163): прежде командир раздавал только
             // задания на захват, а ядро шло врозь по прежним веткам и приходило к бою растянутым
             // ...и только пока враг ДАЛЕКО: рядом с ним решают тактические ветки — экран, добыча, перехват, — а строй,
@@ -5040,8 +5050,18 @@ cpuMark("a.evade")
 
             val step: Position? = when {
                 !canMove(creep) -> null
+                // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
+                // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
+                // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
+                USE_ORDER_OVER_KEEPER && keeper && commandOf.containsKey(creep.id) -> commandOf[creep.id]!!
+                    .takeIf { it.x != creep.x || it.y != creep.y }
                 keeper -> null
-                mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                mustFlee -> {
+                    // сколько приказов ломает бегство: оно стоит выше приказа намеренно (это спасение), но цену надо
+                    // знать — прибор исполнения записывает такой случай как «ушёл в другую клетку» (v173)
+                    if (commandOf.containsKey(creep.id)) orderFled++
+                    fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                }
                 slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet())
                 // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
                 // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
@@ -5461,9 +5481,14 @@ cpuMark("a.evade")
         val sy = if (step != null) (step.y - lead.y).coerceIn(-1, 1) else (goal.y - ay).coerceIn(-1, 1)
         if (sx == 0 && sy == 0) return
         val taken = HashSet<Int>()
+        // ...и марш даёт те же гарантии, что бой (v173): клетка не занята своим, крип способен шагнуть, одна клетка —
+        // одному. Прежде колонна раздавала клетки своим кодом без этих проверок, и приказы выходили неисполнимыми
+        val occupied = HashSet<Int>()
+        for (a in core) occupied.add(a.x * 100 + a.y)
         for (c in core.sortedBy { maxOf(abs(it.x - ax), abs(it.y - ay)) }) {
             // лекарь идёт за подопечным, а не в строю: его место задаёт лечение, и приказ марша только уводил его
             if (hasHeal(c) && !hasWeapon(c)) continue
+            if (USE_ORDER_FEASIBLE && c.fatigue > 0) continue
             val far = maxOf(abs(c.x - ax), abs(c.y - ay)) > FIST_RADIUS
             val tx = if (far) ax else c.x + sx * 2
             val ty = if (far) ay else c.y + sy * 2
@@ -5476,12 +5501,15 @@ cpuMark("a.evade")
                 if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
                 if (DistanceMap.isTerrainWall(nx, ny)) continue
                 if (nx * 100 + ny in taken) continue
+                // под своим — не запрет, а цена: запрет останавливал колонну целиком (гейт 133 из 135,
+                // army и camp), ровно как в бою, где полный запрет тоже пришлось заменить штрафом
                 if (maxOf(abs(nx - ax), abs(ny - ay)) > FIST_RADIUS + 1) continue
-                val d = maxOf(abs(nx - tx), abs(ny - ty))
+                val d = maxOf(abs(nx - tx), abs(ny - ty)) * 2 + (if (nx * 100 + ny in occupied) 3 else 0)
                 if (d < bestD) { bestD = d; best = InfluenceMap.cell(nx, ny) }
             }
             val b = best ?: continue
             taken.add(b.x * 100 + b.y); out[c.id] = b
+            occupied.remove(c.x * 100 + c.y)               // покинутая клетка освобождается для следующего в колонне
         }
     }
 
@@ -6196,7 +6224,8 @@ cpuMark("a.evade")
     private var orderAuditCloser = 0
     private var orderAuditSame = 0
     private var orderFar = 0
-    private var orderClash = 0     // сколько раз одна клетка была назначена двоим (v172)
+    private var orderClash = 0
+    private var orderFled = 0      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
     private val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
     private val orderFatigue = HashMap<String, Int>()
     private var lostStay = 0        // приказ был «стой», а крип ушёл
