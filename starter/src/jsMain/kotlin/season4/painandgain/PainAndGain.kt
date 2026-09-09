@@ -786,11 +786,18 @@ object PainAndGain {
      *  распорядитель: приказ командира стоит выше слота в цепочке, и слот достаётся только тому, кому командир клетки
      *  не дал. Это запасной исполнитель, и отнимать его незачем. */
     private const val USE_COMMAND_OWNS_SLOTS = false
-    /** СТРЕЛОК ЗА МИЛИ (v165): правило рядов, которое даёт расстановка, перенесённое в раздачу клеток. НЕ ВКЛЮЧЕНО:
-     *  писалось, чтобы закрыть разрыв при молчащей расстановке, и не закрыло его (те же 134 из 135 и те же числа
-     *  3 738:2 708), а раз расстановка осталась работать, предмета нет. Лежит готовым на случай, когда командир
-     *  всё-таки заберёт слоты себе. */
-    private const val USE_COMMAND_RANGED_BEHIND = false
+    /** СТРЕЛОК ЗА МИЛИ (v165): правило рядов, которое даёт расстановка, перенесённое в раздачу клеток. Лежало
+     *  ВЫКЛЮЧЕННЫМ с выводом «расстановка осталась работать, предмета нет» — и вывод оказался неверным (v183). Замер
+     *  разгрома 3d9532 в общей рамке обеих армий: наши мили на 0,6 клетки ПОЗАДИ своего центра, стрелки на 0,9
+     *  ВПЕРЕДИ; у него мили +0,5, стрелки −0,4. Строй был вывернут наизнанку весь бой, то есть предмет всё это время
+     *  существовал — просто мерили его не тем прибором. Включено вместе с USE_RANGED_BEHIND_HARD. */
+    private const val USE_COMMAND_RANGED_BEHIND = true
+    /** ...и медианная линия вместо передовой: один выдвинутый мили не должен открывать всем стрелкам право стоять
+     *  там же, где он. */
+    private const val USE_RANGED_BEHIND_MEDIAN = true
+    /** ...и ЗАПРЕТ вместо слагаемого: RANGED_BEHIND_COST = 40 стоял рядом с incNext × 100, то есть с десятками тысяч,
+     *  и в выборе клетки не решал ничего. Клетка ближе к его строю, чем линия наших мили, стрелку не предлагается. */
+    private const val USE_RANGED_BEHIND_HARD = true
     /** ОТХОД ПО ПРОГНОЗУ (v165, оператор): решение «бежать» принимала постура, а прибор для него есть у командира —
      *  симуляция размена. Если лучший из замыслов кончается перевесом врага по уцелевшей мощи, командир объявляет
      *  отход сам, не дожидаясь, пока это заметят счётчики постуры.
@@ -1953,6 +1960,16 @@ object PainAndGain {
      *  25/17 и 22/25. Тумблеры выключены, счётчики стенда (`entry:`, «его фокус-цель вылечена») остаются инструментами. */
     private const val USE_HEAL_UNDER_FIRE = false
     private const val USE_WARD_UNDER_FIRE = false   // v109b: подопечный лекаря — терявший хиты; отвергнуто (см. healMate)
+    /** ПРИКАЗ КОМАНДИРА НА ЛЕЧЕНИЕ ДЕЙСТВУЕТ И ИЗДАЛИ (v183): назначенный пациент брался, только если он вплотную,
+     *  иначе выбор перехватывал местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит. */
+    private const val USE_HEAL_ORDER_WINS = true
+    /** РАНА ВАЖНЕЕ СОСЕДСТВА (v183, оператор): ближняя ветка бралась раньше дальней всегда, поэтому полный сосед —
+     *  включая самого лекаря — обходил раненого в двух клетках. 8 лечений из 55 в разгроме 3d9532 ушли в цель на
+     *  полных хитах, не получившую в этот тик урона; у соперника таких 0 из 172. */
+    private const val USE_HEAL_DEFICIT_FIRST = true
+    /** ...и ценность пациента для КОНКРЕТНОГО лекаря: вплотную он лечит вчетверо сильнее, чем издали, поэтому приказ
+     *  ранжирует цели по дошедшему лечению, а не по чужой нужде. */
+    private const val USE_HEAL_ORDER_DELIVERED = true
     private const val HEAL_FIRE_RANK = 100000   // ранг, не величина: под огнём — впереди любого дефицита
     private const val HEAL_FIRE_ROOM = 2        // запас под огнём: дефицит + столько потерь прошлого тика (фокус растёт, 2–5 выстрелов в тик)
     private const val USE_COMPACT_CLOSE = true  // снаружи зоны плотности шаг к центру открыт (v9)
@@ -2039,6 +2056,21 @@ object PainAndGain {
     private const val USE_CAPTURE_NEEDS_EDGE = true
     private const val CAPTURE_EDGE = 1.1
     private const val USE_COMMAND_BRACE = true
+    /** ИЗГОТОВКА ВКЛЮЧАЛАСЬ НИКОГДА (v183, оператор: «делай строй до боя»). Гейт требовал `!contact && armiesClosing`,
+     *  но armiesClosing набирается только В контакте, поэтому commandBrace не выполнялся ни одного тика за матч.
+     *  Признак сближения теперь считается и без контакта; «враг в десяти клетках» без признака сближения уже пробовали
+     *  в v179 — армия строилась вместо захвата и гейт падал до 122 из 135, поэтому условие именно «он ИДЁТ на нас». */
+    private const val USE_BRACE_ON_APPROACH = true
+    /** ...и строимся ПРОТИВ СОМКНУТОГО: рассыпавшемуся за флагами врагу строй противопоставлять нечему — его надо
+     *  обгонять. Без этого условия сценарий scatter уходил в гонку очков 22 207:24 315 (гейт 134 из 135). */
+    private const val USE_BRACE_VS_MASSED = true
+    /** ...и строится ЯДРО: отпущенных командиром за флагами изготовка в строй не отзывает — у марша ядра это правило
+     *  уже есть, у изготовки его не было. */
+    private const val USE_BRACE_KEEPS_RUNNERS = true
+    /** ...и изготовка НЕ ПОДМЕНЯЕТ АТАКУ: когда размен уже посчитан выгодным (pushing), армия идёт вперёд, а не
+     *  строится у своего якоря. Со строем поверх напора сценарий camp переставал добивать врага — было «армия
+     *  соперника уничтожена на t=986 при 14 живых у нас», стало 15 983:16 266 без единого уничтожения. */
+    private const val USE_BRACE_NOT_WHEN_PUSHING = true
     private const val BRACE_RANGE = 10
     private const val BRACE_WIDTH = 3
     private const val USE_NO_LETHAL_CELLS = true
@@ -2052,7 +2084,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v181"
+    private const val BOT_VERSION = "v183"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2718,6 +2750,7 @@ cpuMark("arrival")
     private var pressing = false                          // прижим включён (см. USE_PRESS)
     private val meleeDistHist = ArrayDeque<Int>()         // дистанция их мили до наших вооружённых за окно терпения (см. PRESS_CLOSING)
     private val centreDistHist = ArrayDeque<Int>()        // дистанция между центрами вооружённых армий за то же окно (см. standingNow)
+    private val approachHist = ArrayDeque<Int>()          // то же расстояние, но пишется и БЕЗ контакта (см. enemyApproaching)
     /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
     private class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
     private val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
@@ -4253,6 +4286,16 @@ cpuMark("a.evade")
         if (contact && ourArmedC != null && theirArmedC != null) centreDistHist.addLast(getRange(ourArmedC, theirArmedC)) else centreDistHist.clear()
         while (centreDistHist.size > PRESS_PATIENCE + 1) centreDistHist.removeFirst()
         val armiesClosing = centreDistHist.size > PRESS_PATIENCE && centreDistHist.first() - centreDistHist.last() >= PRESS_CLOSING
+        // СБЛИЖЕНИЕ БЕЗ КОНТАКТА (v183, оператор: «делай строй до боя»). Изготовка требовала `!contact && armiesClosing`,
+        // а armiesClosing набирается ТОЛЬКО в контакте: строкой выше история центров чистится, едва контакт пропал.
+        // Условия взаимоисключающие — commandBrace не выполнялся НИ РАЗУ, и прибор это подтвердил на разгроме 3d9532:
+        // за весь подход командир отдал ноль приказов (cmd=0/50 … cmd=0/90), к первому выстрелу армия стояла смазкой
+        // 5,8×6,1 клетки против его кирпича 4,5×3,9. Здесь то же расстояние пишется ВСЕГДА, и «он идёт на нас»
+        // становится измеримым до первого выстрела
+        if (ourArmedC != null && theirArmedC != null) approachHist.addLast(getRange(ourArmedC, theirArmedC)) else approachHist.clear()
+        while (approachHist.size > PRESS_PATIENCE + 1) approachHist.removeFirst()
+        val enemyApproaching = USE_BRACE_ON_APPROACH && approachHist.size > PRESS_PATIENCE &&
+            approachHist.first() - approachHist.last() >= PRESS_CLOSING
         // наша линия отступает (v96, USE_STANDING_LINE_HOLDS): центр наших вооружённых за окно терпения отдалился от его
         // НЫНЕШНЕГО центра на PRESS_CLOSING и больше — бой не стоячий, это отход под огнём, и расстановке в нём места нет
         if (contact && ourArmedC != null) ourCentreHist.addLast(ourArmedC.x * 100 + ourArmedC.y) else ourCentreHist.clear()
@@ -4495,11 +4538,22 @@ cpuMark("a.evade")
             commandOf.putAll(keep)
         // ...и ТОЛЬКО когда он ИДЁТ на нас: изготовка при всяком враге в десяти клетках вставала поперёк гонки за
         // флагами — армия строилась вместо захвата, и гейт рухнул до 122 из 135 (roost трижды)
-        } else if (USE_COMMAND_BRACE && !contact && armiesClosing &&
+        } else if (USE_COMMAND_BRACE && !contact && !(USE_BRACE_NOT_WHEN_PUSHING && pushing) &&
+                (armiesClosing || (enemyApproaching && (!USE_BRACE_VS_MASSED || enemyMassedNow))) &&
                 armedEnemies.any { e -> commandArmy.any { getRange(e, it) <= BRACE_RANGE } }) {
             // ИЗГОТОВКА (v179): враг идёт, контакта ещё нет — строим фронт, а не ждём его растянутыми
+            // ...и строится ЯДРО, а отпущенные за флагами своего задания не бросают (v183) — ровно как в марше ядра.
+            // Изготовка отзывала в строй и захватчиков, и гонка очков от этого проседала: сценарий camp 15 983:16 266
             cmdTicks++
-            commandBrace(commandArmy, armedEnemies, commandOf)
+            if (USE_BRACE_KEEPS_RUNNERS) {
+                // ...и гонка идёт ПАРАЛЛЕЛЬНО строю: изготовка стояла В ЦЕПОЧКЕ ПЕРЕД гонкой, поэтому, пока враг
+                // подходил, командир не отпускал за флагами вовсе — ни одного захватчика не назначалось, и сценарий
+                // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
+                commandRace(ctx, commandArmy, armedEnemies, ctx.flags, commandOf)
+                val runners = HashMap(commandOf)
+                commandBrace(commandArmy.filter { it.id !in cmdDetach }, armedEnemies, commandOf)
+                commandOf.putAll(runners)
+            } else commandBrace(commandArmy, armedEnemies, commandOf)
         } else if (raceCommandNow) {
             cmdTicks++
             commandRace(ctx, commandArmy, armedEnemies, ctx.flags, commandOf)
@@ -5403,8 +5457,29 @@ cpuMark("a.evade")
                 val candidates = allies.filter { !it.spawning && need(it) > 0 && creep.getRangeTo(it) <= HEAL_RANGE }
                 // приказ командира первым (v162): он назначил пациента, зная, кого враг добивает и кого лечение спасёт
                 val ordered = healOf[creep.id]?.let { id -> candidates.firstOrNull { it.id == id } }
-                val closeTarget = ordered?.takeIf { creep.getRangeTo(it) <= 1 }
-                    ?: candidates.filter { creep.getRangeTo(it) <= 1 }.maxByOrNull { rank(it) }
+                // ...И ПРИКАЗ ДЕЙСТВУЕТ НА ВСЕЙ ЛЕЧЕБНОЙ ДАЛЬНОСТИ (v183, оператор: «не должно быть ничего, что идёт
+                // мимо командира»). Прежде назначенный пациент брался, только если он ВПЛОТНУЮ; иначе выбор перехватывал
+                // местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит
+                if (USE_HEAL_ORDER_WINS && ordered != null) {
+                    val parts = healParts
+                    if (creep.getRangeTo(ordered) <= 1) {
+                        creep.heal(ordered)
+                        healDone[ordered.id] = (healDone[ordered.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, parts * HEAL_POWER.toDouble()).toInt()
+                        shoot(creep, enemyCreeps, focusTarget, focusOrder)
+                    } else {
+                        creep.rangedHeal(ordered)
+                        healDone[ordered.id] = (healDone[ordered.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, parts * RANGED_HEAL_POWER.toDouble()).toInt()
+                    }
+                    continue
+                }
+                // ...и СОСЕДСТВО НЕ ВАЖНЕЕ РАНЫ (v183, оператор: «лекари лечат себя фулловыми, хотя могли бы лечить
+                // того, кто под огнём»). Ближняя ветка бралась раньше дальней всегда, поэтому полный сосед — включая
+                // самого лекаря — обходил раненого в двух клетках. Замер разгрома 3d9532: 8 лечений из 55 (14 %) ушли
+                // в цель на полных хитах, не получившую в этот тик урона, — у него таких 0 из 172; в трёх из этих
+                // случаев рядом стоял крип с потерей 900–1 060. Полный сосед лечится, только если раненых нет вовсе
+                val anyWounded = USE_HEAL_DEFICIT_FIRST && candidates.any { it.hitsMax - it.hits > 0 }
+                val closeTarget = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
+                    .maxByOrNull { rank(it) }
                 if (closeTarget != null) {
                     creep.heal(closeTarget)
                     healDone[closeTarget.id] = (healDone[closeTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
@@ -5577,24 +5652,39 @@ cpuMark("a.evade")
             else -> -1
         }
         val taken = HashSet<Int>()
-        for (c in core.sortedByDescending { rowOf(it) }) {
-            val row = rowOf(c)
-            var best: Position? = null; var bestScore = Int.MAX_VALUE
-            for (side in -BRACE_WIDTH..BRACE_WIDTH) {
-                // поперёк оси: перпендикуляр к направлению на врага
+        // МЕСТ РОВНО ПО ЧИСЛУ КРИПОВ, И ОТ СЕРЕДИНЫ НАРУЖУ (v183). Прежде каждый ряд был шириной 2×BRACE_WIDTH+1 = семь
+        // клеток, и крип занимал БЛИЖАЙШУЮ к себе, — четыре мили растягивались на семь клеток, потому что каждый шёл в
+        // своё место. Замер по разгрому 3d9532: наш строй 5,8 в ширину и 6,1 в глубину (35 клеток на 12 крипов) против
+        // его 4,5 и 3,9 (17 клеток) — вдвое рыхлее. Здесь ряд получает СТОЛЬКО мест, сколько в нём крипов, места
+        // берутся от середины наружу, а крипы разбираются по местам ближайшими парами: строй выходит плотным
+        for (row in 1 downTo -1) {
+            val mine = core.filter { rowOf(it) == row }
+            if (mine.isEmpty()) continue
+            val slots = ArrayList<Position>()
+            var side = 0
+            while (slots.size < mine.size && abs(side) <= BRACE_WIDTH + 2) {
                 val px = ax + dx * row - dy * side
                 val py = ay + dy * row + dx * side
-                if (px < 0 || py < 0 || px > 99 || py > 99) continue
-                if (DistanceMap.isTerrainWall(px, py)) continue
                 val key = px * 100 + py
-                if (key in taken) continue
-                if (enemies.any { it.x == px && it.y == py }) continue
-                val cost = maxOf(abs(px - c.x), abs(py - c.y)) * 2 + abs(side)
-                if (cost < bestScore) { bestScore = cost; best = InfluenceMap.cell(px, py) }
+                if (px in 0..99 && py in 0..99 && !DistanceMap.isTerrainWall(px, py) && key !in taken &&
+                    enemies.none { it.x == px && it.y == py }) {
+                    taken.add(key); slots.add(InfluenceMap.cell(px, py))
+                }
+                // 0, −1, +1, −2, +2, … — середина ряда заполняется первой
+                side = if (side <= 0) -side + 1 else -side
             }
-            val b = best ?: continue
-            taken.add(b.x * 100 + b.y)
-            if (b.x != c.x || b.y != c.y) out[c.id] = b
+            // ближайшими парами: и место, и крип выбираются вместе, иначе дальний крип отбирает чужое место
+            val free = mine.toMutableList()
+            val open = slots.toMutableList()
+            while (free.isNotEmpty() && open.isNotEmpty()) {
+                var bc = free[0]; var bs = open[0]; var bd = Int.MAX_VALUE
+                for (c in free) for (s in open) {
+                    val d = maxOf(abs(s.x - c.x), abs(s.y - c.y))
+                    if (d < bd) { bd = d; bc = c; bs = s }
+                }
+                free.remove(bc); open.remove(bs)
+                if (bs.x != bc.x || bs.y != bc.y) out[bc.id] = bs
+            }
         }
     }
 
@@ -5718,10 +5808,21 @@ cpuMark("a.evade")
                 out[h.id] = t.id; free.remove(h)
             }
         }
-        // ...остальные — по наибольшей нужде: дефицит плюс то, что прилетит
+        // ...остальные — по ДОШЕДШЕМУ лечению, а не по наибольшей нужде (v183). Ранг по нужде не знает, сколько этот
+        // лекарь реально снимет: вплотную он лечит вчетверо сильнее, чем издали (HEAL_POWER против RANGED_HEAL_POWER),
+        // и приказ уводил его лечить издали чуть более нуждающегося вместо соседа. Пока приказ отбрасывался ближней
+        // веткой исполнителя, это было незаметно; едва приказ стал действовать на всей дальности (USE_HEAL_ORDER_WINS),
+        // гейт потерял обе строки kite. Ценность цели — min(нужда, сколько дойдёт), нужда остаётся тай-брейком
         for (h in free) {
+            val pr = InfluenceMap.profileOf(h)
             val t = mates.filter { h.getRangeTo(it) <= HEAL_RANGE && it.id != h.id }
-                .maxByOrNull { (it.hitsMax - it.hits) + (incoming[it.id] ?: 0.0) }
+                .maxByOrNull { m ->
+                    val need = (m.hitsMax - m.hits) + (incoming[m.id] ?: 0.0)
+                    if (!USE_HEAL_ORDER_DELIVERED) need else {
+                        val amount = if (h.getRangeTo(m) <= 1) pr.heal else pr.heal / 3.0
+                        minOf(need, amount) + need / 1e6
+                    }
+                }
             if (t != null) out[h.id] = t.id
         }
     }
@@ -6031,11 +6132,26 @@ cpuMark("a.evade")
         // ...и СТРЕЛОК НЕ ВПЕРЕДИ МИЛИ (v165): это правило давала расстановка рядами, а при командире она молчит —
         // сценарий match32:army кончался уничтожением армии на 370-м тике, потому что стрелки оказывались первой
         // линией. Штраф за клетку, которая ближе к его строю, чем стоят наши мили
-        val meleeLine = melees.mapNotNull { m -> armedEnemies.minOfOrNull { getRange(m, it) } }.minOrNull()
+        // ...и ЛИНИЯ МИЛИ — МЕДИАННАЯ, А НЕ ПЕРЕДОВАЯ (v183). Прежде за линию бралось расстояние САМОГО выдвинутого
+        // мили, поэтому один смелый мили открывал всем стрелкам право стоять там же. Замер по разгрому 3d9532 в общей
+        // рамке обеих армий: наши мили стояли на 0,6 клетки ПОЗАДИ своего центра, а стрелки на 0,9 ВПЕРЕДИ — строй
+        // вывернут наизнанку; у него ровно наоборот (мили +0,5, стрелки −0,4). Медиана не даёт одному крипу задать
+        // линию за всех
+        val meleeDists = melees.mapNotNull { m -> armedEnemies.minOfOrNull { getRange(m, it) } }.sorted()
+        val meleeLine = if (meleeDists.isEmpty()) null else
+            if (USE_RANGED_BEHIND_MEDIAN) meleeDists[meleeDists.size / 2] else meleeDists.first()
         fun aheadOfMelee(p: Position): Double {
             if (!USE_COMMAND_RANGED_BEHIND || meleeLine == null) return 0.0
             val d = armedEnemies.minOfOrNull { getRange(p, it) } ?: return 0.0
             return if (d < meleeLine) (meleeLine - d) * RANGED_BEHIND_COST else 0.0
+        }
+        // ...и это ЗАПРЕТ, а не слагаемое (v183, оператор: «впереди стояло несколько рэнж-крипов»). Штраф в 40 стоял
+        // рядом с членом incNext × 100 — десятками тысяч, — и решал в выборе клетки ровно ничего. Клетка ближе к его
+        // строю, чем стоят наши мили, стрелку теперь не предлагается вовсе; если других нет, работает общий фолбэк
+        fun behindMelee(p: Position): Boolean {
+            if (!USE_RANGED_BEHIND_HARD || meleeLine == null) return true
+            val d = armedEnemies.minOfOrNull { getRange(p, it) } ?: return true
+            return d >= meleeLine
         }
         // СТРЕЛКУ ПОД МИЛИ НЕЛЬЗЯ (v177, оператор: «рэнжи лезут под мили крипов соперников, хотя им туда должно быть
         // запрещено даже близко подходить»). Замер по записи разгрома 6aa1a6ad: наши стрелки стояли вплотную к его
@@ -6046,15 +6162,15 @@ cpuMark("a.evade")
         for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
             val ok = when (intentOf(c)) {
                 // напор: цель в дальности, меньше входящего; удержание: то же, но безопасность решает сильнее
-                Intent.PRESS -> place(c, { p -> safeForRanged(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                Intent.PRESS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 - (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) + aheadOfMelee(p) })
-                Intent.HOLD -> place(c, { p -> safeForRanged(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                Intent.HOLD -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 1000 + (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) })
                 // уступка: как можно дальше от его мили, цель — если получится
                 Intent.YIELD -> place(c, { p -> true },
                     { p -> -(armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
                 // концентрация: все стрелки — в дальности ОДНОЙ цели, самой слабой у него
-                Intent.FOCUS -> place(c, { p -> safeForRanged(p) && weakest != null && getRange(p, weakest) <= RANGED_RANGE },
+                Intent.FOCUS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && weakest != null && getRange(p, weakest) <= RANGED_RANGE },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) })
                 Intent.KITE -> place(c, { p -> safeForRanged(p) && (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
                         armedEnemies.any { getRange(p, it) <= RANGED_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
