@@ -850,6 +850,18 @@ object PainAndGain {
     /** ОШИБКА ПРОГНОЗА (v166): прибор, а не правило. Командир обещает разность мощи через SIM_TICKS; здесь обещание
      *  сверяется с фактом, и в лог идут средняя ошибка и число случаев, когда прогноз обещал прибыль, а вышел убыток. */
     private const val USE_SIM_ERROR = true
+    private const val USE_ORDER_AUDIT = true
+    /** ПРИКАЗ КАК ПРЯМОЙ ШАГ (v167): назначенная клетка была лишь одним слагаемым в оценке шага, и опасность её
+     *  перевешивала — прибор показал, что до своей клетки доходят 7 % (10 из 144), приближаются 32 %. ОТВЕРГНУТО: с
+     *  прямым шагом гейт 133 из 135 (camp 17 686:20 345, brawl+heals с уничтожением армии), а доля дошедших даже
+     *  упала до 3 % — крип, которому приказано шагнуть строго в клетку, теряет право обойти опасность и застревает.
+     *  Приказ остаётся ЦЕЛЬЮ, а не шагом. */
+    private const val USE_ORDER_DIRECT = false
+    /** ПРИКАЗ В СВОБОДНУЮ КЛЕТКУ (v167): командир назначал клетки, на которых стоят свои же крипы, — такой приказ
+     *  неисполним, пока сосед не ушёл, и прибор исполнения показывал 7 %. Клетка под своим больше не назначается,
+     *  кроме собственной клетки крипа, что означает «стой». */
+    private const val USE_ORDER_FREE_CELLS = true
+    private const val ALLY_CELL_COST = 25.0
     /** РАЗДЕТЫЙ УХОДИТ И В ПРОГНОЗЕ (v166): командир приказывает ему прочь из огня, а в прогоне он стоял и собирал
      *  урон. Замер: средняя ошибка 1 063 против 1 071, доля неверных знаков та же (24 %). Выигрыш мал, но модель
      *  перестала расходиться с приказом. */
@@ -1946,6 +1958,7 @@ object PainAndGain {
 
     private const val FIGHTER_PRIORITY = 3
     private const val RUNNER_PRIORITY = 2
+    private const val ORDER_PRIORITY = 3   // приказ командира выше захватчика: он считает всю армию сразу (v167)
     /** Раненый уступает дорогу всем: его место — за лекарями, а не между ними и строем. */
     private const val WOUNDED_PRIORITY = 1
 
@@ -4345,6 +4358,29 @@ cpuMark("a.evade")
                 // а на SIM_TICKS-м тике сверяется с тем, что вышло на самом деле. Прибор нужен потому, что оценка НИ
                 // РАЗУ не уходит в минус (см. USE_COMMAND_RETREAT): пока неизвестно, на сколько она врёт, командир
                 // выбирает замысел числом, которому нельзя верить
+                // ИСПОЛНЕНИЕ ПРИКАЗА (v167): прогноз считает, что крип встанет туда, куда назначено, а между приказом и
+                // клеткой стоят трафик, свопы и фатиг. Здесь считается доля тех, кто на следующем тике оказался ровно
+                // на своей клетке: если она мала, ошибка прогноза объясняется не моделью, а неисполнением
+                if (USE_ORDER_AUDIT) {
+                    orderPrev.forEach { (id, cell) ->
+                        val c = mobileArmy.firstOrNull { it.id == id } ?: return@forEach
+                        orderAuditN++
+                        if (c.x == cell.x && c.y == cell.y) orderAuditOk++
+                        // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
+                        val wasD = orderDist[id] ?: 99
+                        val nowD = maxOf(abs(c.x - cell.x), abs(c.y - cell.y))
+                        if (nowD < wasD) orderAuditCloser++
+                        // ...и ДЕРЖИТСЯ ЛИ приказ: та же клетка, что была назначена в прошлый тик
+                        if (commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
+                    }
+                    orderDist.clear()
+                    commandOf.forEach { (id, p) ->
+                        val c = mobileArmy.firstOrNull { it.id == id }
+                        if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
+                    }
+                    orderPrev.clear()
+                    commandOf.forEach { (id, p) -> orderPrev[id] = p }
+                }
                 if (USE_SIM_ERROR) {
                     // ...и факт меряется ТОЙ ЖЕ формулой, что прогноз: сравнивать оценку симуляции с ланчестеровской
                     // мощью — сравнивать разные величины, и первая редакция прибора именно этим и занималась
@@ -4358,7 +4394,7 @@ cpuMark("a.evade")
                     }
                     simPending.keys.filter { it < getTicks() }.forEach { simPending.remove(it) }
                 }
-                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
         } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
             // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
@@ -4995,7 +5031,18 @@ cpuMark("a.evade")
                         }
                         if (front.isNotEmpty()) myBlocked = myBlocked + front
                     }
-                    bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
+                    // ПРИКАЗ ИСПОЛНЯЕТСЯ, А НЕ ПЕРЕСЧИТЫВАЕТСЯ (v167): назначенная клетка была лишь ОДНИМ слагаемым в
+                    // оценке шага наравне с опасностью и соседями, и опасность её перевешивала — прибор показал, что
+                    // крип доходит до своей клетки в 7 % случаев (10 из 144) и даже приближается лишь в 32 %. Прогноз
+                    // при этом считает, что армия встанет по плану: он опирался на фикцию. Клетка в ОДНОМ шаге теперь
+                    // запрашивается напрямую, как это делают захватчики
+                    val ordered: Position? = if (!USE_ORDER_DIRECT) null else commandOf[creep.id]?.let { cell ->
+                        val ok = maxOf(abs(cell.x - creep.x), abs(cell.y - creep.y)) == 1 &&
+                            !DistanceMap.isTerrainWall(cell.x, cell.y) &&
+                            enemyCreeps.none { e -> e.x == cell.x && e.y == cell.y }
+                        if (ok) cell else null
+                    }
+                    ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
                 }
             }
             if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
@@ -5498,18 +5545,28 @@ cpuMark("a.evade")
             incNow[key] = now; incNext[key] = next; hits[key] = n
         }
         val taken = HashSet<Int>()
+        // клетки, где стоят СВОИ: назначать их нельзя — приказ туда неисполним, пока сосед не ушёл, а прибор показал,
+        // что до назначенной клетки доходят 7 % (v167). Своя собственная клетка при этом разрешена: это «стой»
+        val allyAt = HashSet<Int>()
+        if (USE_ORDER_FREE_CELLS) for (a in army) if (a.hits > 0) allyAt.add(a.x * 100 + a.y)
         fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
             for ((key, p) in cells) {
+                // клетка под своим не запрещена, а ДОРОЖЕ: приказ туда исполним, если сосед уйдёт, но полный запрет
+                // связывал плотный строй по рукам — 134 из 135 в двух редакциях подряд (v167)
+                val allyHere = USE_ORDER_FREE_CELLS && key in allyAt && !(p.x == c.x && p.y == c.y)
                 // назначаем только ДОСТИЖИМОЕ за тик: крип проходит клетку, и план в двух клетках он исполнит лишь на
                 // втором тике, когда обстановка уже другая (v138)
                 if (key in taken || getRange(c, p) > COMMAND_REACH) continue
                 if (!wants(p)) continue
-                val sc = rank(p)
+                val sc = rank(p) + (if (allyHere) ALLY_CELL_COST else 0.0)
                 if (sc < bestScore) { bestScore = sc; best = p }
             }
             val b = best ?: return false
             taken.add(b.x * 100 + b.y); out[c.id] = b
+            // ...и клетка, с которой крип уходит, ОСВОБОЖДАЕТСЯ для следующего: без этого в плотном строю все клетки
+            // заняты своими, назначать некуда и строй не может перетечь — гейт ловил это как 134 из 135
+            if (USE_ORDER_FREE_CELLS && (b.x != c.x || b.y != c.y)) allyAt.remove(c.x * 100 + c.y)
             return true
         }
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
@@ -5988,6 +6045,12 @@ cpuMark("a.evade")
     private var cmdMode = CmdMode.MARCH
     private val cmdDetach = HashSet<String>()      // кого командир отправил за флагами (v160, режимы RACE и MARCH)
     private val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
+    private val orderPrev = HashMap<String, Position>()   // приказы прошлого тика — для проверки исполнения (v167)
+    private var orderAuditOk = 0
+    private var orderAuditN = 0
+    private var orderAuditCloser = 0
+    private var orderAuditSame = 0
+    private val orderDist = HashMap<String, Int>()
     private val simPending = HashMap<Int, Pair<Double, Double>>()  // тик сверки → (обещано, разность на момент прогноза)
     private var simErrSum = 0.0                    // сумма модулей ошибки прогноза (v166)
     private var simErrN = 0
