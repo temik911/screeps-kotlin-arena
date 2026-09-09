@@ -1988,6 +1988,14 @@ object PainAndGain {
     /** ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): приказ задавал ЦЕЛЬ, но в выборе ШАГА не участвовал — его перехватывали
      *  слот строя и hold. Разбор потерь: из 143 приказов 50 кончались уходом в другую клетку, 36 — стоянием. */
     private const val USE_ORDER_OVER_SLOT = true
+    /** ПРИКАЗ — ЗАКОН (v172, оператор): назначенная клетка исполняется буквально, без пересчёта весов движения. Чтобы
+     *  это работало, командир обязан считать при раздаче то же, что считает крип: огонь на клетке, свой огонь с неё,
+     *  тесноту и цену пути (см. rankStep). */
+    private const val USE_ORDER_IS_LAW = true
+    private const val USE_ORDER_EVERY_MODE = true
+    /** ИСПОЛНИМОСТЬ ПРИКАЗА (v172, оператор): командир назначает только то, что крип может сделать ЭТИМ тиком —
+     *  уставшему можно приказать лишь стоять. Иначе приказ ложь, и прогноз считает бой, которого не будет. */
+    private const val USE_ORDER_FEASIBLE = true
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
     private const val ORDER_PRIORITY_HEAL = 5
@@ -2368,6 +2376,7 @@ cpuMark("arrival")
         cpuMark("runners")
         runArmy(ctx)
 
+        TrafficManager.markOrdered(commandOf.keys)
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
         cpuMark("resolve")
         cpuSummary()
@@ -4393,6 +4402,14 @@ cpuMark("a.evade")
                 // ИСПОЛНЕНИЕ ПРИКАЗА (v167): прогноз считает, что крип встанет туда, куда назначено, а между приказом и
                 // клеткой стоят трафик, свопы и фатиг. Здесь считается доля тех, кто на следующем тике оказался ровно
                 // на своей клетке: если она мала, ошибка прогноза объясняется не моделью, а неисполнением
+                // КОЛЛИЗИИ ПРИКАЗОВ (v172, оператор: «не должно быть такого, что по приказам командира в одну клетку
+                // собрались двое»). Внутри одной раздачи это исключено множеством taken, но приказы приходят из РАЗНЫХ
+                // мест — бой, гонка, марш ядра, — и вот там пересечение возможно; здесь оно считается
+                if (USE_ORDER_AUDIT) {
+                    val seen = HashMap<Int, Int>()
+                    commandOf.values.forEach { p -> seen[p.x * 100 + p.y] = (seen[p.x * 100 + p.y] ?: 0) + 1 }
+                    orderClash += seen.values.count { it > 1 }
+                }
                 if (USE_ORDER_AUDIT) {
                     orderPrev.forEach { (id, cell) ->
                         val c = mobileArmy.firstOrNull { it.id == id } ?: return@forEach
@@ -4445,7 +4462,7 @@ cpuMark("a.evade")
                     }
                     simPending.keys.filter { it < getTicks() }.forEach { simPending.remove(it) }
                 }
-                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
         } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
             // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
@@ -5030,11 +5047,23 @@ cpuMark("a.evade")
                 // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
                 // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
                 // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
-                USE_ORDER_OVER_SLOT && cmdMode == CmdMode.FIGHT && commandOf.containsKey(creep.id) -> {
-                    orderPull = if (USE_ORDER_PULL) ORDER_PULL else 1.0
-                    val st = bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt, healerFireW)
-                    orderPull = 1.0
-                    st
+                // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
+                // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
+                // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
+                // считая того, что считает крип, — теперь считает (см. rankStep в commandFight), и цена ошибки лежит
+                // на нём, а не на непослушании
+                // ...и во ВСЕХ режимах, а не только в бою (v172, оператор): «все крипы должны двигаться ТОЛЬКО по
+                // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
+                USE_ORDER_OVER_SLOT && (USE_ORDER_EVERY_MODE || cmdMode == CmdMode.FIGHT) && commandOf.containsKey(creep.id) -> {
+                    val cell = commandOf[creep.id]!!
+                    if (cell.x == creep.x && cell.y == creep.y) null
+                    else if (USE_ORDER_IS_LAW) cell
+                    else {
+                        orderPull = if (USE_ORDER_PULL) ORDER_PULL else 1.0
+                        val st = bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt, healerFireW)
+                        orderPull = 1.0
+                        st
+                    }
                 }
                 hold -> null
                 else -> {
@@ -5656,7 +5685,12 @@ cpuMark("a.evade")
         fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
             var bestTenant: Creep? = null
+            // ПРИКАЗ ОБЯЗАН БЫТЬ ИСПОЛНИМ (v172, оператор): «командир должен быть уверен, что каждый крип на следующем
+            // шагу сможет выполнить приказ». Уставший крип в этот тик не двинется вовсе — ему можно приказать только
+            // стоять, и приказ «шагни» от него был бы ложью, которую потом считает прогноз
+            val canStep = USE_ORDER_FEASIBLE.not() || (canMove(c) && c.fatigue == 0)
             for ((key, p) in cells) {
+                if (!canStep && !(p.x == c.x && p.y == c.y)) continue
                 if (key in taken || getRange(c, p) > COMMAND_REACH) continue
                 if (!wants(p)) continue
                 val self = p.x == c.x && p.y == c.y
@@ -6162,6 +6196,7 @@ cpuMark("a.evade")
     private var orderAuditCloser = 0
     private var orderAuditSame = 0
     private var orderFar = 0
+    private var orderClash = 0     // сколько раз одна клетка была назначена двоим (v172)
     private val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
     private val orderFatigue = HashMap<String, Int>()
     private var lostStay = 0        // приказ был «стой», а крип ушёл

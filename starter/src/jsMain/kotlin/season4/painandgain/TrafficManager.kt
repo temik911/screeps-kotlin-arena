@@ -29,6 +29,13 @@ object TrafficManager {
      *  больше цикла усталости гружёного хаулера на болоте (5 тиков), иначе ложные срабатывания. */
     const val STUCK_TICKS = 8
 
+    /** Своп не ломает чужой замысел (v172): крипа, который сам просил конкретную клетку, нельзя разменять в другую. */
+    const val SWAP_RESPECTS_INTENT = true
+
+    /** Крипы, идущие по приказу командира: их своп не разменивает в чужую клетку (v172). Заполняется ботом раз в тик. */
+    private val ordered = HashSet<String>()
+    fun markOrdered(ids: Collection<String>) { ordered.clear(); ordered.addAll(ids) }
+
     /** moverId -> упакованная желаемая клетка. */
     private val desired = HashMap<String, Int>()
 
@@ -157,6 +164,13 @@ object TrafficManager {
 
             // клетку освобождает вызывающий — занимаем (swap/цепочка)
             if (coord == fromCoord) {
+                // ...но НЕ ПРОТИВ СОБСТВЕННОГО ЖЕЛАНИЯ крипа (v172): своп ставил его в клетку соседа вместо той, которую
+                // он просил, и именно так терялись приказы командира — прибор исполнения считал это «ушёл в другую
+                // клетку». Крип без своего желания разменивается свободно, крип с желанием — только в свою клетку
+                // ...и неприкосновенны только те, у кого ПРИКАЗ командира: запрет для всякого желания сломал развязку
+                // заторов (гейт 132 из 135) — своп и нужен затем, чтобы двое разошлись
+                val want = desired[creep.id]
+                if (SWAP_RESPECTS_INTENT && creep.id in ordered && want != null && want != coord) continue
                 place(coord, creep, KIND_SWAP, movement, assignedCoord, kindOf)
                 return true
             }
