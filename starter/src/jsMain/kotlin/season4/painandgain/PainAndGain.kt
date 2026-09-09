@@ -684,10 +684,13 @@ object PainAndGain {
     /** Насколько далеко командир вправе назначить клетку. Единица (только достижимое за тик) выглядит честнее, но гейт
      *  говорит иначе: 130/131 против 131/131 у двойки — цель в двух клетках ведёт крипа туда, где он будет нужен, а не
      *  туда, куда успеет шагнуть. */
-    // ...на ДВЕ клетки, а не на одну: «приказ, достижимый ровно за шаг» звучит как отсутствие толканий, но замерен как
-    // 2-6 против MetalicaX#10 при 8-8 у двойки — командиру нужен горизонт шире шага, иначе он не может ни развернуть
-    // строй, ни увести лекаря за спины: всё это дальше одного шага (v153)
-    private const val COMMAND_REACH = 2
+    /** ПРИКАЗ — РОВНО НА ШАГ (v170). Прежде клетка назначалась в двух шагах, и прибор показал цену: 84 приказа из 141
+     *  были на расстоянии два, то есть НЕИСПОЛНИМЫ за тик по построению, а исполнялось всего 10 %. Двойка была принята
+     *  в v153 замером 2-6 против MetalicaX#10 — но тогда у командира не было ни цепочек, ни притяжения к приказу, ни
+     *  цены пути, и приказ на шаг просто не давал ему развернуть строй. Теперь всё это есть, и приказ строго на шаг
+     *  даёт исполнение 34 % против 10 % на match28 (48 из 143) и 29 % против 7 % на match35, ошибку прогноза 1 219
+     *  против 1 390, ноль недостижимых приказов и гейт 135/135. */
+    private const val COMMAND_REACH = 1
     /** Накопленный размен в оценке ОТВЕРГНУТ: и как основа (делитель 4), и как поправка (делитель 16) он роняет гейт до
      *  129/131 — m32 army, армия уничтожена на 407–419-м тике. Сумма урона поощряет размен, а мощь через четыре тика
      *  учитывает, ЧЕМ мы останемся; для арены, где аннигиляция проигрывает при любом счёте, верно второе. */
@@ -1976,13 +1979,21 @@ object PainAndGain {
 
     private const val FIGHTER_PRIORITY = 3
     private const val RUNNER_PRIORITY = 2
-    private const val ORDER_PRIORITY = 3   // приказ командира выше захватчика: он считает всю армию сразу (v167)
+    private const val ORDER_PRIORITY = 4   // приказ командира выше прочих: он считает всю армию сразу (v167)
+    /** ОЧЕРЕДЬ ДВИЖЕНИЯ ОТ КОМАНДИРА (v170, оператор: «командир должен согласовать все движения»). Механика разрешения
+     *  конфликтов — поиск в глубину с цепочками и свопами по приоритету — уже есть и делает ровно то, что нужно;
+     *  недоставало того, чтобы очередь задавал ЗАМЫСЕЛ. Мили, выходящий в контакт, важнее стрелка, стрелок важнее
+     *  лекаря, а любой приказ важнее движения без приказа. */
+    private const val USE_COMMAND_TRAFFIC = true
+    private const val ORDER_PRIORITY_MELEE = 7
+    private const val ORDER_PRIORITY_RANGED = 6
+    private const val ORDER_PRIORITY_HEAL = 5
     /** Раненый уступает дорогу всем: его место — за лекарями, а не между ними и строем. */
     private const val WOUNDED_PRIORITY = 1
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v169"
+    private const val BOT_VERSION = "v170"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4391,6 +4402,12 @@ cpuMark("a.evade")
                         // ...и ДЕРЖИТСЯ ЛИ приказ: та же клетка, что была назначена в прошлый тик
                         if (commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
                     }
+                    // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
+                    // и доля исполнения ограничена этим по построению (v170)
+                    commandOf.forEach { (id, p) ->
+                        val c = mobileArmy.firstOrNull { it.id == id } ?: return@forEach
+                        if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
+                    }
                     orderDist.clear()
                     commandOf.forEach { (id, p) ->
                         val c = mobileArmy.firstOrNull { it.id == id }
@@ -4412,7 +4429,7 @@ cpuMark("a.evade")
                     }
                     simPending.keys.filter { it < getTicks() }.forEach { simPending.remove(it) }
                 }
-                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
         } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
             // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
@@ -5111,7 +5128,23 @@ cpuMark("a.evade")
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
                 println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (wounded) " WOUNDED" else ""}${if (pressTarget != null || pressRanged) " PRESS" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
             }
-            if (step != null) { TrafficManager.request(creep, step, if (wounded) WOUNDED_PRIORITY else FIGHTER_PRIORITY); planCapture(ctx, step) }
+            // СОГЛАСОВАНИЕ ДВИЖЕНИЙ — ЗА КОМАНДИРОМ (v170, оператор). Разрешение конфликтов уже устроено правильно:
+            // поиск в глубину с цепочками и свопами, по ПРИОРИТЕТУ. Но приоритет задавали разрозненные места — раненый,
+            // боец, захватчик, — и замысел в нём не участвовал. Теперь очередь назначает командир: крип, исполняющий
+            // приказ, идёт первым, а среди приказов вперёд пропускается тот, чья клетка важнее для боя — мили,
+            // выходящий в контакт, затем стрелок с целью, затем лекарь к подопечному, и лишь потом все прочие
+            val prio = when {
+                !USE_COMMAND_TRAFFIC -> if (wounded) WOUNDED_PRIORITY else FIGHTER_PRIORITY
+                commandOf.containsKey(creep.id) -> when {
+                    hasWeapon(creep) && hasMelee(creep) && !hasRanged(creep) -> ORDER_PRIORITY_MELEE
+                    hasWeapon(creep) -> ORDER_PRIORITY_RANGED
+                    hasHeal(creep) -> ORDER_PRIORITY_HEAL
+                    else -> ORDER_PRIORITY
+                }
+                wounded -> WOUNDED_PRIORITY
+                else -> FIGHTER_PRIORITY
+            }
+            if (step != null) { TrafficManager.request(creep, step, prio); planCapture(ctx, step) }
             lastHits[creep.id] = creep.hits
             lastCell[creep.id] = creep.x * 100 + creep.y
         }
@@ -6102,6 +6135,7 @@ cpuMark("a.evade")
     private var orderAuditN = 0
     private var orderAuditCloser = 0
     private var orderAuditSame = 0
+    private var orderFar = 0
     private val orderDist = HashMap<String, Int>()
     private val simPending = HashMap<Int, Pair<Double, Double>>()  // тик сверки → (обещано, разность на момент прогноза)
     private var simErrSum = 0.0                    // сумма модулей ошибки прогноза (v166)
