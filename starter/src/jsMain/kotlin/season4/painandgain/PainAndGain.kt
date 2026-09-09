@@ -4180,6 +4180,10 @@ cpuMark("a.evade")
                     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()}")
                 }
             } else commandOf.clear()
+            // цена командира отдельной строкой в разбивке (v158): она была спрятана в фазе «plan» вместе с обеими
+            // расстановками, и когда живьём дважды сработал `Script execution timed out`, сказать по логу, чей это
+            // расход, было нечем. На стенде вопрос не решается — там весь тик стоит 2,4 мс на пике
+            cpuMark("commander")
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget, retreating = enemyRetreating)
         }
