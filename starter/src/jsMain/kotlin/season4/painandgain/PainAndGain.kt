@@ -2000,6 +2000,10 @@ object PainAndGain {
      *  или если крип может попасть в опасность». Прежде хранитель был невидим для командира (mobileArmy исключает
      *  keeperIds) и приказа не видел; теперь он в поле зрения и снимается с флага решением, а не случайно. */
     private const val USE_ORDER_OVER_KEEPER = true
+    /** УДЕРЖАНИЕ ФЛАГА И ОТХОД — ПРИКАЗОМ (v174, оператор): обе ветки шли МИМО командира и стояли выше его приказа.
+     *  Теперь он сам приказывает держать наш флаг и сам уводит того, кому грозит гибель. */
+    private const val USE_COMMAND_HOLDS_FLAGS = true
+    private const val USE_COMMAND_RETREATS = true
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
     private const val ORDER_PRIORITY_HEAL = 5
@@ -2008,7 +2012,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v173"
+    private const val BOT_VERSION = "v174"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4325,6 +4329,7 @@ cpuMark("a.evade")
                 else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget, retreating = enemyRetreating)
             } else slotOf.clear()
         }
+        val ourFlagCells = ctx.flags.filter { it.ours }.mapTo(HashSet()) { it.pos.x * 100 + it.pos.y }
         val commanderNow = USE_COMMANDER && cmdMode == CmdMode.FIGHT
         // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
         // он перестаёт молчать там, где раньше просто уступал место старым правилам
@@ -4345,7 +4350,7 @@ cpuMark("a.evade")
             // не сходила. При нехватке времени командир раздаёт клетки одним замыслом, без перебора и прогонов
             val cpuTight = USE_CPU_GUARD && getTicks() > 1 && cpuMs() > CPU_GUARD_MS
             if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
-            if (!USE_SIMULATION || cpuTight) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf)
+            if (!USE_SIMULATION || cpuTight) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf, ourFlagCells = ourFlagCells)
             else {
                 // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через SIM_TICKS (v138)
                 var bestScore = -Double.MAX_VALUE
@@ -4359,7 +4364,7 @@ cpuMark("a.evade")
                 // смешивает поведение, чего единая политика не умеет
                 for (intent in Intent.values()) {
                     val trial = HashMap<String, Position>()
-                    commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent)
+                    commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
                     // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                     // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
                     val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget, intent)
@@ -4385,7 +4390,7 @@ cpuMark("a.evade")
                                 if (i == was) continue
                                 for (c in g) per[c.id] = i
                                 val trial = HashMap<String, Position>()
-                                commandFight(commandArmy, combatEnemies, armedEnemies, trial, bestIntent, per)
+                                commandFight(commandArmy, combatEnemies, armedEnemies, trial, bestIntent, per, ourFlagCells)
                                 val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
                                 if (sc > bestScore) { bestScore = sc; bestPlan = trial; localBest = i }
                             }
@@ -5056,17 +5061,6 @@ cpuMark("a.evade")
                 USE_ORDER_OVER_KEEPER && keeper && commandOf.containsKey(creep.id) -> commandOf[creep.id]!!
                     .takeIf { it.x != creep.x || it.y != creep.y }
                 keeper -> null
-                mustFlee -> {
-                    // сколько приказов ломает бегство: оно стоит выше приказа намеренно (это спасение), но цену надо
-                    // знать — прибор исполнения записывает такой случай как «ушёл в другую клетку» (v173)
-                    if (commandOf.containsKey(creep.id)) orderFled++
-                    fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
-                }
-                slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet())
-                // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
-                // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
-                // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
-                // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
                 // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
                 // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
                 // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
@@ -5086,6 +5080,17 @@ cpuMark("a.evade")
                         st
                     }
                 }
+                mustFlee -> {
+                    // сколько приказов ломает бегство: оно стоит выше приказа намеренно (это спасение), но цену надо
+                    // знать — прибор исполнения записывает такой случай как «ушёл в другую клетку» (v173)
+                    if (commandOf.containsKey(creep.id)) orderFled++
+                    fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                }
+                slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet())
+                // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
+                // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
+                // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
+                // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
                 hold -> null
                 else -> {
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
@@ -5641,7 +5646,7 @@ cpuMark("a.evade")
 
     private fun commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                              out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
-                             per: Map<String, Intent>? = null) {
+                             per: Map<String, Intent>? = null, ourFlagCells: Set<Int> = emptySet()) {
         out.clear()
         val fighters = army.filter { canMove(it) && !it.spawning }
         if (fighters.isEmpty() || armedEnemies.isEmpty()) return
@@ -5846,6 +5851,24 @@ cpuMark("a.evade")
                 if (USE_HEALERS_CLOSE) place(c, { true }, { p -> (mates.minOfOrNull { getRange(p, it) } ?: 9).toDouble() })
                 else place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
             }
+        }
+        // ОТХОД — ТОЖЕ ПРИКАЗ (v174, оператор: «не должно быть ничего, что идёт мимо него»): бегство было веткой ВЫШЕ
+        // командира. Теперь он сам уводит того, кому грозит гибель, — потерявшего за тик больше половины остатка или
+        // стоящего под огнём без лечения рядом
+        if (USE_COMMAND_RETREATS) for (c in fighters) {
+            if (c.id in out) continue
+            val hurtBadly = (lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
+            val alone = InfluenceMap.damageAt(c.x, c.y, combatEnemies) > 0.0 &&
+                army.none { it.id != c.id && hasHeal(it) && getRange(c, it) <= HEAL_RANGE }
+            if (!hurtBadly && !alone) continue
+            place(c, { true }, { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 -
+                (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
+        }
+        // ХРАНИТЕЛЬ ФЛАГА — ПО ПРИКАЗУ (v174): крип на НАШЕМ флаге стоит по приказу командира, а не по отдельной ветке
+        // удержания; снять его может только командир — решив собрать отряд — или опасность, которая приходит приказом
+        if (USE_COMMAND_HOLDS_FLAGS) for (c in fighters) {
+            if (c.id in out) continue
+            if (ourFlagCells.contains(c.x * 100 + c.y)) { taken.add(c.x * 100 + c.y); out[c.id] = InfluenceMap.cell(c.x, c.y) }
         }
         // раздетые: прочь из огня — в бою от них пользы нет, а его выстрелы они на себя собирают исправно
         if (USE_COMMAND_STRIPPED_OUT) for (c in stripped)
