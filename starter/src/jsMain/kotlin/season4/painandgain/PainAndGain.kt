@@ -2030,6 +2030,10 @@ object PainAndGain {
      *  конца, когда отрыв уже сделан; теперь оно снимается, как только мы отстаём и по счёту, и по скорости. Паритет
      *  мощи остаётся — доктрина не в том, чтобы не брать флаги, а в том, чтобы не брать их ценой армии. */
     private const val USE_CAPTURE_WHEN_LOSING = true
+    /** ...и только при ПЕРЕВЕСЕ (v181): без этого условия снятие вето вернуло очки, но стоило армии — разгромов в
+     *  серии стало пять вместо двух. Флаг под его ударом берётся, когда мы сильнее, а не когда просто равны. */
+    private const val USE_CAPTURE_NEEDS_EDGE = true
+    private const val CAPTURE_EDGE = 1.1
     private const val USE_COMMAND_BRACE = true
     private const val BRACE_RANGE = 10
     private const val BRACE_WIDTH = 3
@@ -2044,7 +2048,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v180"
+    private const val BOT_VERSION = "v181"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2660,7 +2664,11 @@ cpuMark("arrival")
         // тик против его 13-15. Вето контакта не давало взять четвёртый почти весь матч, а снималось лишь за
         // LAST_CALL_TICKS до конца — то есть после того, как отрыв уже сделан. Паритет мощи при этом остаётся: доктрина
         // не в том, чтобы не брать флаги, а в том, чтобы не брать их ценой армии
-        val losingRace = USE_CAPTURE_WHEN_LOSING && behindOnScore && enemyRate > ourRate
+        // ...и снятие вето стоит АРМИИ, если брать флаг под его ударом без запаса: серия v180 дала 12-8 с рейтингом
+        // +16, гонок-поражений стало три вместо пяти, но разгромов пять вместо двух — армия гибла к 200-300 тику.
+        // Поэтому вето снимается только при ПЕРЕВЕСЕ, а не при простом паритете (v181)
+        val losingRace = USE_CAPTURE_WHEN_LOSING && behindOnScore && enemyRate > ourRate &&
+            (!USE_CAPTURE_NEEDS_EDGE || ourPowerOf(ctx.army, ctx.combatEnemies) >= enemyPowerOf(ctx.combatEnemies, ctx.army) * CAPTURE_EDGE)
         if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
