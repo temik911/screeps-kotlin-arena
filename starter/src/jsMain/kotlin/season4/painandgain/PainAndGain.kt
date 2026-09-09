@@ -1985,6 +1985,9 @@ object PainAndGain {
      *  недоставало того, чтобы очередь задавал ЗАМЫСЕЛ. Мили, выходящий в контакт, важнее стрелка, стрелок важнее
      *  лекаря, а любой приказ важнее движения без приказа. */
     private const val USE_COMMAND_TRAFFIC = true
+    /** ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): приказ задавал ЦЕЛЬ, но в выборе ШАГА не участвовал — его перехватывали
+     *  слот строя и hold. Разбор потерь: из 143 приказов 50 кончались уходом в другую клетку, 36 — стоянием. */
+    private const val USE_ORDER_OVER_SLOT = true
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
     private const val ORDER_PRIORITY_HEAL = 5
@@ -1993,7 +1996,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v170"
+    private const val BOT_VERSION = "v171"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4395,6 +4398,17 @@ cpuMark("a.evade")
                         val c = mobileArmy.firstOrNull { it.id == id } ?: return@forEach
                         orderAuditN++
                         if (c.x == cell.x && c.y == cell.y) orderAuditOk++
+                        else {
+                            // ...и КУДА делись остальные (v170): приказ был «стой», а крип ушёл; крип не двинулся
+                            // вовсе; двинулся, но в другую клетку; или не мог двигаться от усталости
+                            val here = orderWas[id]
+                            when {
+                                cell.x == here?.first && cell.y == here.second -> lostStay++
+                                c.x == here?.first && c.y == here.second -> lostStuck++
+                                (orderFatigue[id] ?: 0) > 0 -> lostFatigue++
+                                else -> lostElsewhere++
+                            }
+                        }
                         // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
                         val wasD = orderDist[id] ?: 99
                         val nowD = maxOf(abs(c.x - cell.x), abs(c.y - cell.y))
@@ -4408,6 +4422,8 @@ cpuMark("a.evade")
                         val c = mobileArmy.firstOrNull { it.id == id } ?: return@forEach
                         if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
                     }
+                    orderWas.clear(); orderFatigue.clear()
+                    mobileArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
                     orderDist.clear()
                     commandOf.forEach { (id, p) ->
                         val c = mobileArmy.firstOrNull { it.id == id }
@@ -4429,7 +4445,7 @@ cpuMark("a.evade")
                     }
                     simPending.keys.filter { it < getTicks() }.forEach { simPending.remove(it) }
                 }
-                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
         } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
             // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
@@ -5010,6 +5026,16 @@ cpuMark("a.evade")
                 keeper -> null
                 mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
                 slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet())
+                // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
+                // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
+                // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
+                // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
+                USE_ORDER_OVER_SLOT && cmdMode == CmdMode.FIGHT && commandOf.containsKey(creep.id) -> {
+                    orderPull = if (USE_ORDER_PULL) ORDER_PULL else 1.0
+                    val st = bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt, healerFireW)
+                    orderPull = 1.0
+                    st
+                }
                 hold -> null
                 else -> {
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
@@ -6136,6 +6162,12 @@ cpuMark("a.evade")
     private var orderAuditCloser = 0
     private var orderAuditSame = 0
     private var orderFar = 0
+    private val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
+    private val orderFatigue = HashMap<String, Int>()
+    private var lostStay = 0        // приказ был «стой», а крип ушёл
+    private var lostStuck = 0       // крип остался на месте, хотя приказ был другой
+    private var lostFatigue = 0     // не мог двигаться от усталости
+    private var lostElsewhere = 0   // двинулся, но в другую клетку
     private val orderDist = HashMap<String, Int>()
     private val simPending = HashMap<Int, Pair<Double, Double>>()  // тик сверки → (обещано, разность на момент прогноза)
     private var simErrSum = 0.0                    // сумма модулей ошибки прогноза (v166)
