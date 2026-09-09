@@ -850,6 +850,17 @@ object PainAndGain {
     /** ОШИБКА ПРОГНОЗА (v166): прибор, а не правило. Командир обещает разность мощи через SIM_TICKS; здесь обещание
      *  сверяется с фактом, и в лог идут средняя ошибка и число случаев, когда прогноз обещал прибыль, а вышел убыток. */
     private const val USE_SIM_ERROR = true
+    /** КЛЕТКА ЗАНЯТА (v166): в прогоне крипы проходили сквозь друг друга, в бою нет. Замерено прибором ошибки по
+     *  четырём картам: средняя ошибка 1 016 против 1 302 без запрета — точнее на 22 %, доля неверных знаков та же
+     *  (27 % против 26 %). Отдельно по картам разброс есть (match28 971 против 854, match35 1 165 против 1 971), и
+     *  именно поэтому мерилось по нескольким, а не по одной. */
+    private const val SIM_BLOCKED = true
+    /** Проба (v166): его стрелок СТОИТ, а не пятится, когда мы ближе трёх. ОТВЕРГНУТО прибором — 882 против 854 на
+     *  match28 при том же 1 971 на match35: пятящийся стрелок точнее описывает то, что он делает. */
+    private const val SIM_FOE_RANGED_HOLDS = false
+    /** Проба модели врага (v166): его мили идут к ближайшему ВООБЩЕ, а не к ближайшему мягкому. ОТВЕРГНУТО прибором
+     *  ошибки прогноза — 1 035 против 854 на match28 и 2 392 против 1 971 на match35: «к мягкому» ближе к правде. */
+    private const val SIM_FOE_NEAREST = false
     private const val USE_SIM_TAKEN = true
     private const val USE_SIM_FIST = false
     private const val USE_FIST = true
@@ -5656,6 +5667,11 @@ cpuMark("a.evade")
         val goal = HashMap<Int, Position>()
         mine.forEachIndexed { i, c -> plan[c.id]?.let { goal[i] = it } }
         fun d(a: SimC, b: SimC) = maxOf(abs(a.x - b.x), abs(a.y - b.y))
+        // КЛЕТКА ЗАНЯТА (v166): в прогоне крипы проходили сквозь друг друга, а в бою нет — и это вторая по величине
+        // причина расхождения после глубины. Шаг разрешается, только если клетка свободна от живых обеих сторон
+        val all = us + them
+        fun free(x: Int, y: Int, self: SimC) = !SIM_BLOCKED || all.none { it !== self && it.hits > 0 && it.x == x && it.y == y }
+        fun step(c: SimC, nx: Int, ny: Int) { if (free(nx, ny, c)) { c.x = nx; c.y = ny } }
         for (t in 0 until ticks) {
             // ПОРЯДОК ИНТЕНТОВ, КАК В ДВИЖКЕ (v139, сверено с документацией Screeps): движение применяется ПОСЛЕДНИМ, а
             // атака считается по позиции ДО него — «the attack still runs from the old coordinates». Значит ударить и
@@ -5704,7 +5720,7 @@ cpuMark("a.evade")
                     return@forEachIndexed
                 }
                 if (g != null) {
-                    if (c.x != g.x || c.y != g.y) { c.x += (g.x - c.x).coerceIn(-1, 1); c.y += (g.y - c.y).coerceIn(-1, 1) }
+                    if (c.x != g.x || c.y != g.y) step(c, c.x + (g.x - c.x).coerceIn(-1, 1), c.y + (g.y - c.y).coerceIn(-1, 1))
                     return@forEachIndexed
                 }
                 if (liveThem0.isEmpty()) return@forEachIndexed
@@ -5727,16 +5743,21 @@ cpuMark("a.evade")
             for (e in them) {
                 if (e.hits <= 0) continue
                 if (e.melee > 0.0) {
-                    val soft = liveUs.filter { it.melee <= 0.0 }.minByOrNull { d(e, it) } ?: liveUs.minByOrNull { d(e, it) }!!
-                    if (d(e, soft) > 1) { e.x += (soft.x - e.x).coerceIn(-1, 1); e.y += (soft.y - e.y).coerceIn(-1, 1) }
+                    // проба модели (v166): «к ближайшему МЯГКОМУ» или «к ближайшему вообще» — что ближе к его настоящему
+                    // поведению, теперь решает не догадка, а ошибка прогноза (см. USE_SIM_ERROR)
+                    val soft = if (SIM_FOE_NEAREST) liveUs.minByOrNull { d(e, it) }!!
+                        else liveUs.filter { it.melee <= 0.0 }.minByOrNull { d(e, it) } ?: liveUs.minByOrNull { d(e, it) }!!
+                    if (d(e, soft) > 1) step(e, e.x + (soft.x - e.x).coerceIn(-1, 1), e.y + (soft.y - e.y).coerceIn(-1, 1))
                 } else if (e.ranged > 0.0) {
                     val near = liveUs.minByOrNull { d(e, it) }!!
                     val dist = d(e, near)
-                    if (dist < RANGED_RANGE) { e.x -= (near.x - e.x).coerceIn(-1, 1); e.y -= (near.y - e.y).coerceIn(-1, 1) }
-                    else if (dist > RANGED_RANGE) { e.x += (near.x - e.x).coerceIn(-1, 1); e.y += (near.y - e.y).coerceIn(-1, 1) }
+                    // проба (v166): пятится ли его стрелок, когда мы ближе трёх. В записях он чаще СТОИТ и стреляет —
+                    // прибор ошибки прогноза и рассудит
+                    if (dist < RANGED_RANGE && !SIM_FOE_RANGED_HOLDS) step(e, e.x - (near.x - e.x).coerceIn(-1, 1), e.y - (near.y - e.y).coerceIn(-1, 1))
+                    else if (dist > RANGED_RANGE) step(e, e.x + (near.x - e.x).coerceIn(-1, 1), e.y + (near.y - e.y).coerceIn(-1, 1))
                 } else {
                     val hurt = them.filter { it.hits > 0 && it !== e }.minByOrNull { it.hits } ?: continue
-                    if (d(e, hurt) > 1) { e.x += (hurt.x - e.x).coerceIn(-1, 1); e.y += (hurt.y - e.y).coerceIn(-1, 1) }
+                    if (d(e, hurt) > 1) step(e, e.x + (hurt.x - e.x).coerceIn(-1, 1), e.y + (hurt.y - e.y).coerceIn(-1, 1))
                 }
             }
             // урон: мили по смежному, стрелок — ВЕЕРОМ, когда целей много, иначе одиночным. Веер бьёт всех в трёх с
