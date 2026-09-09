@@ -2056,6 +2056,9 @@ object PainAndGain {
     /** ГИСТЕРЕЗИС ПОСТУРЫ (v181): в разгроме 3d94bf одиннадцать переходов за сто тиков, пять пар EVADE↔HOLD подряд.
      *  Постура держится POSTURE_HOLD тиков; раньше срока меняется только в сторону спасения. */
     private const val USE_POSTURE_HYSTERESIS = true
+    /** ...и EVADE ТОЖЕ ЖДЁТ СРОКА (v183): изъятие для него делало пилу с периодом ровно POSTURE_HOLD и отодвигало
+     *  армию к стене перед каждым боем. Без срока остаётся только RETREAT — настоящее спасение. */
+    private const val USE_POSTURE_HOLDS_EVADE = true
     private const val POSTURE_HOLD = 5
     private const val USE_CAPTURE_NEEDS_EDGE = true
     private const val CAPTURE_EDGE = 1.1
@@ -3979,7 +3982,12 @@ cpuMark("a.evade")
         // дёргалась EVADE↔HOLD, теряя и темп, и строй; сам диагноз это и называл («a hysteresis is missing somewhere»).
         // Постура держится минимум POSTURE_HOLD тиков, и раньше срока меняется только в сторону спасения — на RETREAT
         // или EVADE, потому что решение бежать ждать нельзя
-        val escape = newPosture == Posture.RETREAT || newPosture == Posture.EVADE
+        // ...и ИЗЪЯТИЕ ДЛЯ EVADE САМО РОЖДАЛО ПИЛУ (v183). Уход в спасение не ждёт срока, но EVADE — не спасение, а
+        // «отступи на шаг», и без срока получалась ровно пила с периодом POSTURE_HOLD: EVADE на 54-м, HOLD на 59-м
+        // (срок вышел), EVADE на 62-м, HOLD на 67-м, EVADE на 74-м — семь переходов за сто тиков перед контактом в
+        // тестовой игре 3d95b5, и каждый EVADE отодвигал армию назад, пока он шёл вперёд: к первому выстрелу наш центр
+        // стоял в восьми клетках от края, и все 37 тиков боя прошли спиной к стене. Срока не ждёт только RETREAT
+        val escape = newPosture == Posture.RETREAT || (!USE_POSTURE_HOLDS_EVADE && newPosture == Posture.EVADE)
         if (!USE_POSTURE_HYSTERESIS || newPosture == posture || escape || getTicks() - postureSince >= POSTURE_HOLD) {
             if (newPosture != posture) postureSince = getTicks()
             posture = newPosture
