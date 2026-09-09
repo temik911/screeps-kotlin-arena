@@ -745,6 +745,10 @@ object PainAndGain {
     /** ПОХОД У КОМАНДИРА (v160): третий режим — врага рядом нет, и командир ведёт армию по флагам теми же заданиями,
      *  что и в гонке. Не путать с отвергнутым USE_COMMANDER_APPROACH: там поход вела РАЗДАЧА КЛЕТОК против строя. */
     private const val USE_COMMAND_MARCH = true
+    /** ОГОНЬ ПО ПРИКАЗУ (v161, оператор): «переведи выбор целей на командира». Прежде расстановку решал командир, а
+     *  цели — отдельный проход со своим фокусом: два решения об одном размене. Теперь цель назначает командир, зная
+     *  всю армию сразу — и первым делом ищет того, кого армия ДОБИВАЕТ этим тиком с учётом его лечения. */
+    private const val USE_COMMAND_FIRE = true
     private const val MARCH_SAFE = 12
     private const val RACE_PARTY = 3
     /** РАЗДЕТЫЕ ПОД ПРИКАЗОМ (v144): крип без боевых частей не попадал ни в одну группу командира и приказа не получал
@@ -1871,7 +1875,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v160"
+    private const val BOT_VERSION = "v161"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2281,7 +2285,7 @@ cpuMark("arrival")
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -4915,6 +4919,9 @@ cpuMark("a.evade")
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
         // ...командирская цель НЕ подменяет цель стрельбы (v138): проведённая сюда, она уронила гейт до 129/131 и
         // дала m33:kite 0:21 135 — армия бросала всё ради назначенной цели. Она влияет мягко, через порядок focusOrder
+        // огонь тоже по приказу командира (v161): назначения считаются на всю силу, включая захватчиков с оружием
+        if (USE_COMMAND_FIRE) commandFire(army + ctx.runners.filter { hasWeapon(it) }, enemyCreeps, focusTarget, focusOrder, fireOf)
+        else fireOf.clear()
         healAndShoot(army + ctx.runners.filter { hasWeapon(it) }, allies, enemyCreeps, focusTarget, focusOrder)
         cpuMark("shoot")
     }
@@ -4926,8 +4933,13 @@ cpuMark("a.evade")
         // вооружённый мили врага вплотную (см. USE_STRIKE_MELEE_FIRST): ближайший к разоружению, если цель фокуса не добивается за тик
         val armedMelee = if (!USE_STRIKE_MELEE_FIRST) null else adjacent.filter { hasMelee(it) }.minByOrNull { InfluenceMap.profileOf(it).melee }
         val focusDying = focusTarget != null && creep.getRangeTo(focusTarget) <= 1 && focusTarget.hits <= InfluenceMap.profileOf(creep).melee
+        val ordered = fireOf[creep.id]?.let { id -> adjacent.firstOrNull { it.id == id } }
         val target: Creep? = when {
-            armedMelee != null && !focusDying -> armedMelee
+            // приказ командира и для удара (v161): цель назначена по всей армии, а не по тому, кто оказался рядом.
+            // Исключение одно — крип, которого мы ДОБИВАЕМ этим ударом: добить дороже, чем исполнить приказ
+            focusDying -> focusTarget
+            ordered != null -> ordered
+            armedMelee != null -> armedMelee
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
             adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
             else -> null
@@ -5030,7 +5042,10 @@ cpuMark("a.evade")
                 .sumOf { h -> val d = h.getRangeTo(t); if (d <= 1) InfluenceMap.profileOf(h).heal else if (d <= HEAL_RANGE) InfluenceMap.profileOf(h).heal / 3.0 else 0.0 }
             fun dead(t: Creep) = USE_NO_OVERKILL && booked(t) >= t.hits + healNear(t)
             // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
+            val ordered = fireOf[creep.id]?.let { id -> enemyCreeps.firstOrNull { it.id == id } }
             val target = when {
+                // приказ командира — первым: он назначал цель, зная всю армию и всё, что до цели дотягивается (v161)
+                ordered != null && creep.getRangeTo(ordered) <= RANGED_RANGE && !dead(ordered) -> ordered
                 focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE && !dead(focusTarget) -> focusTarget
                 else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE && !dead(it) }
                     ?: focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE }
@@ -5102,6 +5117,42 @@ cpuMark("a.evade")
      *  крипу на свободный флаг и по двое на тот, у которого стоят его вооружённые; ядро (половина армии) остаётся
      *  целым, потому что аннигиляция проигрывает матч при любом счёте. Назначение идёт той же картой commandOf, что и
      *  в бою, поэтому исполняют его те же правила движения. */
+    /** ОГОНЬ ПО ПРИКАЗУ (v161, оператор: перевести выбор целей на командира). Прежде «кто куда встал» решал командир, а
+     *  «кто в кого бьёт» — отдельный проход со своим липким фокусом, и это два решения об одном размене. Здесь цель
+     *  назначается ПОИМЁННО, одной политикой: сперва ищем того, кого армия ДОБИВАЕТ этим тиком (залп всех, кто его
+     *  достаёт, перекрывает хиты вместе с лечением, которое до него дотягивается) — на него идут все достающие; если
+     *  добить некого, огонь сходится на прежней липкой цели, а кто её не достаёт, бьёт ближайшего вооружённого. */
+    private fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?, order: List<Creep>,
+                            out: MutableMap<String, String>) {
+        out.clear()
+        val shooters = army.filter { hasWeapon(it) && !it.spawning }
+        if (shooters.isEmpty() || enemies.isEmpty()) return
+        val live = enemies.filter { it.hits > 0 }
+        fun reach(c: Creep, e: Creep) = if (hasRanged(c)) c.getRangeTo(e) <= RANGED_RANGE else c.getRangeTo(e) <= 1
+        // ...кого добиваем ЭТИМ тиком: залп достающих минус лечение, дотягивающееся до цели
+        val killable = live.filter { e ->
+            val burst = shooters.filter { reach(it, e) }.sumOf { c ->
+                val pr = InfluenceMap.profileOf(c)
+                (if (hasRanged(c)) pr.ranged else pr.melee) * InfluenceMap.takenOf(e)
+            }
+            val cover = enemies.sumOf { h ->
+                val pr = InfluenceMap.profileOf(h)
+                val d = h.getRangeTo(e)
+                if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
+            }
+            burst >= e.hits + cover
+        }.minByOrNull { it.hits }
+        for (c in shooters) {
+            val t = when {
+                killable != null && reach(c, killable) -> killable
+                focus != null && focus.hits > 0 && reach(c, focus) -> focus
+                else -> order.firstOrNull { reach(c, it) && it.hits > 0 }
+                    ?: live.filter { reach(c, it) }.minByOrNull { it.hits }
+            }
+            if (t != null) out[c.id] = t.id
+        }
+    }
+
     private fun commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>,
                             out: MutableMap<String, Position>) {
         out.clear()
@@ -5643,6 +5694,7 @@ cpuMark("a.evade")
     private enum class CmdMode { FIGHT, RACE, MARCH }
     private var cmdMode = CmdMode.MARCH
     private val cmdDetach = HashSet<String>()      // кого командир отправил за флагами (v160, режимы RACE и MARCH)
+    private val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
     private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
     private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
