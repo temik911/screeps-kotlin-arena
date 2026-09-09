@@ -2007,6 +2007,10 @@ object PainAndGain {
     /** НИ ОДНОЙ КЛЕТКИ ДВОИМ (v176, оператор): раздача держит своё множество занятых, но источников приказа несколько,
      *  и на стыке коллизия случалась — одна на 431 приказ. Здесь она снимается безусловно. */
     private const val USE_ORDER_NO_DUPES = true
+    /** СТРЕЛОК ДЕРЖИТСЯ ОТ ЕГО МИЛИ (v177, оператор): замер по записи разгрома — наши стрелки стояли вплотную к его
+     *  вооружённому мили 33 крипо-тика и в двух клетках ещё 41 из 242 стрелковых. Клетка ближе MELEE_KEEP_RANGE к его
+     *  мили стрелку не назначается. */
+    private const val USE_RANGED_KEEPS_OFF_MELEE = true
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
     private const val ORDER_PRIORITY_HEAL = 5
@@ -5874,20 +5878,26 @@ cpuMark("a.evade")
             val d = armedEnemies.minOfOrNull { getRange(p, it) } ?: return 0.0
             return if (d < meleeLine) (meleeLine - d) * RANGED_BEHIND_COST else 0.0
         }
+        // СТРЕЛКУ ПОД МИЛИ НЕЛЬЗЯ (v177, оператор: «рэнжи лезут под мили крипов соперников, хотя им туда должно быть
+        // запрещено даже близко подходить»). Замер по записи разгрома 6aa1a6ad: наши стрелки стояли вплотную к его
+        // вооружённому мили 33 крипо-тика и в двух клетках ещё 41 — из 242 стрелковых, то есть треть времени. Клетка
+        // ближе MELEE_KEEP_RANGE к его мили теперь не назначается стрелку вовсе; если других нет, работает фолбэк
+        fun safeForRanged(p: Position) = !USE_RANGED_KEEPS_OFF_MELEE ||
+            hisMelee.none { getRange(p, it) <= MELEE_KEEP_RANGE }
         for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
             val ok = when (intentOf(c)) {
                 // напор: цель в дальности, меньше входящего; удержание: то же, но безопасность решает сильнее
-                Intent.PRESS -> place(c, { p -> armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                Intent.PRESS -> place(c, { p -> safeForRanged(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 - (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) + aheadOfMelee(p) })
-                Intent.HOLD -> place(c, { p -> armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                Intent.HOLD -> place(c, { p -> safeForRanged(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 1000 + (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) })
                 // уступка: как можно дальше от его мили, цель — если получится
                 Intent.YIELD -> place(c, { p -> true },
                     { p -> -(armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
                 // концентрация: все стрелки — в дальности ОДНОЙ цели, самой слабой у него
-                Intent.FOCUS -> place(c, { p -> weakest != null && getRange(p, weakest) <= RANGED_RANGE },
+                Intent.FOCUS -> place(c, { p -> safeForRanged(p) && weakest != null && getRange(p, weakest) <= RANGED_RANGE },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) })
-                Intent.KITE -> place(c, { p -> (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                Intent.KITE -> place(c, { p -> safeForRanged(p) && (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
                         armedEnemies.any { getRange(p, it) <= RANGED_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
             }
             if (!ok) place(c, { true }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
