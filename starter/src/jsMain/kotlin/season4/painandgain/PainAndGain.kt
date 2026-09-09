@@ -760,6 +760,11 @@ object PainAndGain {
     /** ЯДРО СТРОЕМ ВНЕ БОЯ (v163, оператор): в гонке и походе командир раздавал только задания на захват, а ядро шло
      *  врозь по прежним веткам и приходило к бою растянутым. Теперь он ведёт его как одно тело. */
     private const val USE_COMMAND_CORE_MARCH = true
+    /** ЦЕЛЬ ПОХОДА ОТ КОМАНДИРА (v164, оператор): он вёл ядро к цели, выбранной не им. Теперь выбирает сам — ближайший
+     *  разрешённый гейтом захвата флаг, со штрафом за его вооружённых у флага. */
+    private const val USE_COMMAND_GOAL = true
+    private const val USE_COMMAND_GOAL_OWN = false
+    private const val GOAL_GUARD_COST = 6
     private const val MARCH_SAFE = 12
     private const val RACE_PARTY = 3
     /** РАЗДЕТЫЕ ПОД ПРИКАЗОМ (v144): крип без боевых частей не попадал ни в одну группу командира и приказа не получал
@@ -1886,7 +1891,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v163"
+    private const val BOT_VERSION = "v164"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4269,7 +4274,9 @@ cpuMark("a.evade")
             // ...и только пока враг ДАЛЕКО: рядом с ним решают тактические ветки — экран, добыча, перехват, — а строй,
             // ведущий ядро на флаг мимо них, ронял screen и scatter (гейт 131 из 135)
             if (USE_COMMAND_CORE_MARCH && armedEnemies.none { e -> mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
-                val goal = objectiveFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id }?.pos }
+                // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
+                val goal = if (USE_COMMAND_GOAL) commandGoal(ctx, mobileArmy, armedEnemies)
+                    else objectiveFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id }?.pos }
                 val steps = HashMap<String, Position>()
                 commandMarch(ctx, mobileArmy.filter { it.id !in cmdDetach }, goal, steps)
                 commandOf.putAll(steps)
@@ -5160,6 +5167,26 @@ cpuMark("a.evade")
      *  сторону цели, клетки раздаются по одной на крипа, отставший подтягивается к якорю, и ни одна клетка не выходит
      *  за FIST_RADIUS. Это НЕ отвергнутый USE_COMMANDER_APPROACH: тот вёл поход РАССТАНОВКОЙ ПРОТИВ СТРОЯ, которой в
      *  походе нечего расставлять, и потому упирался в фолбэк «ближе к врагу». */
+    /** ЦЕЛЬ ПОХОДА ВЫБИРАЕТ КОМАНДИР (v164, оператор). Прежде он вёл ядро строем к цели, которую выбрал НЕ ОН:
+     *  objectiveFlagId считается раньше, отдельной логикой ценности флага. Здесь цель — его решение, и по его же
+     *  правилам: флаг, который БРАТЬ МОЖНО (флаг дебаффает владельца, поэтому мимо гейта захвата ходить незачем),
+     *  ближайший к армии, со штрафом за его вооружённых рядом — заслонённый берётся боем, а не строевым шагом. */
+    private fun commandGoal(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>): Position? {
+        if (army.isEmpty()) return null
+        // ...и оценку флага командир не изобретает заново, а ВЫЗЫВАЕТ: chooseFlagObjective считает ценность, путь,
+        // пачку у флага и возможность отхода — всё, чего не знает «ближайший разрешённый». Своя формула была написана
+        // и отвергнута замером: по близости 131 из 135 (camp дважды, screen, brawl+heals), по ценности на шаг 132,
+        // с квадратичным штрафом расстояния снова 131. Решение остаётся командирским — он спрашивает и решает
+        if (!USE_COMMAND_GOAL_OWN) return chooseFlagObjective(ctx, army, PUSH_RATIO)?.flag?.pos
+        val best = ctx.flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) }
+            .maxByOrNull { f ->
+                val near = army.minOf { getRange(it, f.pos) }
+                val guards = armedEnemies.count { getRange(it, f.pos) <= ENGAGE_RANGE }
+                f.score.toDouble() / (near + 1 + guards * GOAL_GUARD_COST)
+            }
+        return best?.pos
+    }
+
     private fun commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: MutableMap<String, Position>) {
         out.clear()
         if (goal == null) return
