@@ -2032,6 +2032,10 @@ object PainAndGain {
     private const val USE_CAPTURE_WHEN_LOSING = true
     /** ...и только при ПЕРЕВЕСЕ (v181): без этого условия снятие вето вернуло очки, но стоило армии — разгромов в
      *  серии стало пять вместо двух. Флаг под его ударом берётся, когда мы сильнее, а не когда просто равны. */
+    /** ГИСТЕРЕЗИС ПОСТУРЫ (v181): в разгроме 3d94bf одиннадцать переходов за сто тиков, пять пар EVADE↔HOLD подряд.
+     *  Постура держится POSTURE_HOLD тиков; раньше срока меняется только в сторону спасения. */
+    private const val USE_POSTURE_HYSTERESIS = true
+    private const val POSTURE_HOLD = 5
     private const val USE_CAPTURE_NEEDS_EDGE = true
     private const val CAPTURE_EDGE = 1.1
     private const val USE_COMMAND_BRACE = true
@@ -2067,6 +2071,7 @@ object PainAndGain {
     private var posture = Posture.HOLD
     private var objectiveFlagId: String? = null
     private var postureLogged = ""
+    private var postureSince = 0                    // тик последней смены постуры (v181, гистерезис)
 
     /** Стартовые центры армий — «дома» сторон (спавнов нет): половины карты и точка поста. */
     private var homePos: Position? = null
@@ -3933,7 +3938,15 @@ cpuMark("a.evade")
                 "obj=${objective?.let { "(${it.flag.pos.x},${it.flag.pos.y})${typeChar(it.flag.type)}${it.flag.score} pack=${it.pack.size} travel=${it.travel} v=${(it.value * 100).toInt()}" } ?: "-"} " +
                 "retreatTo=${retreatTo?.let { "(${it.x},${it.y})" } ?: "-"} evadeTo=${evadeTo?.let { "(${it.x},${it.y})" } ?: "-"} approach=${(approachRate * 100).toInt()} post=(${post.x},${post.y}) behind=$behindOnScore/$behindTicks hunt=$huntingThreat fight=${theirsFight.toInt()}/${fightPack.size}${if (fightAll) "" else " ourFight=${oursFight.toInt()}"} push=${theirsPush.toInt()}/${pushPack.size}${if (pushAll) "" else " ourPush=${oursPush.toInt()}"}")
         }
-        posture = newPosture
+        // ГИСТЕРЕЗИС ПОСТУРЫ (v181, разбор разгрома 3d94bf): одиннадцать переходов за сто тиков — армия пять раз подряд
+        // дёргалась EVADE↔HOLD, теряя и темп, и строй; сам диагноз это и называл («a hysteresis is missing somewhere»).
+        // Постура держится минимум POSTURE_HOLD тиков, и раньше срока меняется только в сторону спасения — на RETREAT
+        // или EVADE, потому что решение бежать ждать нельзя
+        val escape = newPosture == Posture.RETREAT || newPosture == Posture.EVADE
+        if (!USE_POSTURE_HYSTERESIS || newPosture == posture || escape || getTicks() - postureSince >= POSTURE_HOLD) {
+            if (newPosture != posture) postureSince = getTicks()
+            posture = newPosture
+        }
 
         // ---- общие цели ----
         val centroid = ctx.ourCentroid
@@ -5849,6 +5862,17 @@ cpuMark("a.evade")
             }
             return if (best == Double.MAX_VALUE) PATH_BLOCKED_COST else best * PATH_DANGER_W
         }
+        // кандидаты вокруг крипа: приказ ровно на шаг, значит их девять — а цикл шёл по всей раздаче (около трёхсот
+        // клеток) и отбрасывал лишние проверкой дальности. При рекурсии цепочек и переборе замыслов это и давало
+        // `Script execution timed out` почти в каждом матче (v181)
+        fun nearCells(c: Creep): List<Pair<Int, Position>> {
+            val near = ArrayList<Pair<Int, Position>>(9)
+            for (dx in -COMMAND_REACH..COMMAND_REACH) for (dy in -COMMAND_REACH..COMMAND_REACH) {
+                val key = (c.x + dx) * 100 + (c.y + dy)
+                cells[key]?.let { near.add(key to it) }
+            }
+            return near
+        }
         fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0,
                   rescue: Boolean = false): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
@@ -5857,9 +5881,13 @@ cpuMark("a.evade")
             // шагу сможет выполнить приказ». Уставший крип в этот тик не двинется вовсе — ему можно приказать только
             // стоять, и приказ «шагни» от него был бы ложью, которую потом считает прогноз
             val canStep = USE_ORDER_FEASIBLE.not() || (canMove(c) && c.fatigue == 0)
+            // ...дальность проверяется по координатам, а не вызовом getRange: порядок перебора остаётся прежним (его
+            // смена меняла выбор при равных оценках и роняла строку гейта), но отбрасывание дальних клеток становится
+            // дешёвым — а их около трёхсот на каждого крипа при девяти нужных (v181)
             for ((key, p) in cells) {
+                if (abs(p.x - c.x) > COMMAND_REACH || abs(p.y - c.y) > COMMAND_REACH) continue
                 if (!canStep && !(p.x == c.x && p.y == c.y)) continue
-                if (key in taken || getRange(c, p) > COMMAND_REACH) continue
+                if (key in taken) continue
                 if (!wants(p)) continue
                 val self = p.x == c.x && p.y == c.y
                 // ...и жилец, которому приказано СТОЯТЬ, остаётся препятствием (v175): прежде всякий, кто уже получил
@@ -5878,6 +5906,8 @@ cpuMark("a.evade")
                 val lethal = USE_NO_LETHAL_CELLS && (incNext[key] ?: 0.0) >= c.hits
                 val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p) +
                     (if (lethal) LETHAL_CELL_COST else 0.0)
+                // ...и при РАВНЫХ оценках выбор не должен зависеть от порядка перебора: раньше порядок задавала общая
+                // раздача, теперь — обход соседей, и одна строка гейта поменяла исход именно из-за этого (v181)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
             }
             val b = best ?: return false
