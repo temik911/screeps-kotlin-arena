@@ -33,6 +33,9 @@ object TrafficManager {
     const val SWAP_RESPECTS_INTENT = true
 
     /** Крипы, идущие по приказу командира: их своп не разменивает в чужую клетку (v172). Заполняется ботом раз в тик. */
+    private var orderedIssued = 0
+    private var orderedChanged = 0
+    private var orderedDenied = 0
     private val ordered = HashSet<String>()
     fun markOrdered(ids: Collection<String>) { ordered.clear(); ordered.addAll(ids) }
 
@@ -78,7 +81,8 @@ object TrafficManager {
 
     /** Строка аудита «вид ok/fail» с обнулением счётчиков. */
     fun audit(): String {
-        val s = "moves: free ${okCount[0]}/${failCount[0]} chain ${okCount[1]}/${failCount[1]} swap ${okCount[2]}/${failCount[2]}"
+        val s = "moves: free ${okCount[0]}/${failCount[0]} chain ${okCount[1]}/${failCount[1]} swap ${okCount[2]}/${failCount[2]}" +
+            " ordered ${orderedIssued - orderedChanged}/$orderedIssued kept, denied $orderedDenied"
         for (i in 0..2) { okCount[i] = 0; failCount[i] = 0 }
         return s
     }
@@ -132,6 +136,8 @@ object TrafficManager {
                 issued[creep.id] = Issued(coord, kindOf[creep.id] ?: KIND_FREE)
             }
         }
+        // ...и сколько приказов трафик не выдал ВООБЩЕ: крип просил клетку, а хода не получил
+        for ((id, want) in desired) if (id in ordered && assignedCoordOf(id, movement) == null && want != null) orderedDenied++
         lastDesired.clear()
         lastDesired.putAll(desired)
         desired.clear()
@@ -209,7 +215,13 @@ object TrafficManager {
         return false
     }
 
+    private fun assignedCoordOf(id: String, movement: Map<Int, Creep>): Int? =
+        movement.entries.firstOrNull { it.value.id == id }?.key
+
     private fun place(coord: Int, creep: Creep, kind: Int, movement: HashMap<Int, Creep>, assignedCoord: HashMap<String, Int>, kindOf: HashMap<String, Int>) {
+        // сколько раз трафик выдал крипу с ПРИКАЗОМ не ту клетку, которую тот просил (v173): это и есть та часть
+        // неисполнения, которую нельзя объяснить ни бегством, ни усталостью
+        if (creep.id in ordered) { orderedIssued++; if (desired[creep.id] != coord) orderedChanged++ }
         movement[coord] = creep
         assignedCoord[creep.id] = coord
         kindOf[creep.id] = kind

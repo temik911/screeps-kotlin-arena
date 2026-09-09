@@ -2419,7 +2419,7 @@ cpuMark("arrival")
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -4316,7 +4316,7 @@ cpuMark("a.evade")
             // цена командира отдельной строкой в разбивке (v158): она была спрятана в фазе «plan» вместе с обеими
             // расстановками, и когда живьём дважды сработал `Script execution timed out`, сказать по логу, чей это
             // расход, было нечем. На стенде вопрос не решается — там весь тик стоит 2,4 мс на пике
-            cpuMark("commander")
+        cpuMark("commander")
             // РАССТАНОВКА МОЛЧИТ ПРИ КОМАНДИРЕ (v165, оператор: продолжать переносить логику в командира). Слоты и
             // командирские клетки — два ответа на один вопрос «кто где стоит»; пока командир ведёт бой, спрашивать
             // второй раз незачем, и крип, которому клетки не досталось, шёл в слот прежней расстановки
@@ -4406,59 +4406,6 @@ cpuMark("a.evade")
                 // а на SIM_TICKS-м тике сверяется с тем, что вышло на самом деле. Прибор нужен потому, что оценка НИ
                 // РАЗУ не уходит в минус (см. USE_COMMAND_RETREAT): пока неизвестно, на сколько она врёт, командир
                 // выбирает замысел числом, которому нельзя верить
-                // ИСПОЛНЕНИЕ ПРИКАЗА (v167): прогноз считает, что крип встанет туда, куда назначено, а между приказом и
-                // клеткой стоят трафик, свопы и фатиг. Здесь считается доля тех, кто на следующем тике оказался ровно
-                // на своей клетке: если она мала, ошибка прогноза объясняется не моделью, а неисполнением
-                // КОЛЛИЗИИ ПРИКАЗОВ (v172, оператор: «не должно быть такого, что по приказам командира в одну клетку
-                // собрались двое»). Внутри одной раздачи это исключено множеством taken, но приказы приходят из РАЗНЫХ
-                // мест — бой, гонка, марш ядра, — и вот там пересечение возможно; здесь оно считается
-                if (USE_ORDER_AUDIT) {
-                    val seen = HashMap<Int, Int>()
-                    commandOf.values.forEach { p -> seen[p.x * 100 + p.y] = (seen[p.x * 100 + p.y] ?: 0) + 1 }
-                    orderClash += seen.values.count { it > 1 }
-                }
-                if (USE_ORDER_AUDIT) {
-                    orderPrev.forEach { (id, cell) ->
-                        // ...и захватчик из аудита исключается: его приказ — ФЛАГ, а не клетка, и ведёт его свой цикл;
-                        // считать его ослушником было бы неверно (v173)
-                        if (id in cmdDetach) return@forEach
-                        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
-                        orderAuditN++
-                        if (c.x == cell.x && c.y == cell.y) orderAuditOk++
-                        else {
-                            // ...и КУДА делись остальные (v170): приказ был «стой», а крип ушёл; крип не двинулся
-                            // вовсе; двинулся, но в другую клетку; или не мог двигаться от усталости
-                            val here = orderWas[id]
-                            when {
-                                cell.x == here?.first && cell.y == here.second -> lostStay++
-                                c.x == here?.first && c.y == here.second -> lostStuck++
-                                (orderFatigue[id] ?: 0) > 0 -> lostFatigue++
-                                else -> lostElsewhere++
-                            }
-                        }
-                        // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
-                        val wasD = orderDist[id] ?: 99
-                        val nowD = maxOf(abs(c.x - cell.x), abs(c.y - cell.y))
-                        if (nowD < wasD) orderAuditCloser++
-                        // ...и ДЕРЖИТСЯ ЛИ приказ: та же клетка, что была назначена в прошлый тик
-                        if (commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
-                    }
-                    // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
-                    // и доля исполнения ограничена этим по построению (v170)
-                    commandOf.forEach { (id, p) ->
-                        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
-                        if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
-                    }
-                    orderWas.clear(); orderFatigue.clear()
-                    commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
-                    orderDist.clear()
-                    commandOf.forEach { (id, p) ->
-                        val c = commandArmy.firstOrNull { it.id == id }
-                        if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
-                    }
-                    orderPrev.clear()
-                    commandOf.forEach { (id, p) -> orderPrev[id] = p }
-                }
                 if (USE_SIM_ERROR) {
                     // ...и факт меряется ТОЙ ЖЕ формулой, что прогноз: сравнивать оценку симуляции с ланчестеровской
                     // мощью — сравнивать разные величины, и первая редакция прибора именно этим и занималась
@@ -4472,7 +4419,7 @@ cpuMark("a.evade")
                     }
                     simPending.keys.filter { it < getTicks() }.forEach { simPending.remove(it) }
                 }
-                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash fled=$orderFled lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash fled=$orderFled branch=$orderBranch lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
         } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
             // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
@@ -4502,6 +4449,59 @@ cpuMark("a.evade")
             // оставался захватчиком НАВСЕГДА — армия таяла тик за тиком, и сценарий kite давал 0 очков (v160)
             else { commandOf.clear(); cmdDetach.clear() }
 
+            // ИСПОЛНЕНИЕ ПРИКАЗА (v167): прогноз считает, что крип встанет туда, куда назначено, а между приказом и
+        // клеткой стоят трафик, свопы и фатиг. Здесь считается доля тех, кто на следующем тике оказался ровно
+        // на своей клетке: если она мала, ошибка прогноза объясняется не моделью, а неисполнением
+        // КОЛЛИЗИИ ПРИКАЗОВ (v172, оператор: «не должно быть такого, что по приказам командира в одну клетку
+        // собрались двое»). Внутри одной раздачи это исключено множеством taken, но приказы приходят из РАЗНЫХ
+        // мест — бой, гонка, марш ядра, — и вот там пересечение возможно; здесь оно считается
+        if (USE_ORDER_AUDIT) {
+            val seen = HashMap<Int, Int>()
+            commandOf.values.forEach { p -> seen[p.x * 100 + p.y] = (seen[p.x * 100 + p.y] ?: 0) + 1 }
+            orderClash += seen.values.count { it > 1 }
+        }
+        if (USE_ORDER_AUDIT) {
+            orderPrev.forEach { (id, cell) ->
+                // ...и захватчик из аудита исключается: его приказ — ФЛАГ, а не клетка, и ведёт его свой цикл;
+                // считать его ослушником было бы неверно (v173)
+                if (id in cmdDetach) return@forEach
+                val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
+                orderAuditN++
+                if (c.x == cell.x && c.y == cell.y) orderAuditOk++
+                else {
+                    // ...и КУДА делись остальные (v170): приказ был «стой», а крип ушёл; крип не двинулся
+                    // вовсе; двинулся, но в другую клетку; или не мог двигаться от усталости
+                    val here = orderWas[id]
+                    when {
+                        cell.x == here?.first && cell.y == here.second -> lostStay++
+                        c.x == here?.first && c.y == here.second -> lostStuck++
+                        (orderFatigue[id] ?: 0) > 0 -> lostFatigue++
+                        else -> lostElsewhere++
+                    }
+                }
+                // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
+                val wasD = orderDist[id] ?: 99
+                val nowD = maxOf(abs(c.x - cell.x), abs(c.y - cell.y))
+                if (nowD < wasD) orderAuditCloser++
+                // ...и ДЕРЖИТСЯ ЛИ приказ: та же клетка, что была назначена в прошлый тик
+                if (commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
+            }
+            // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
+            // и доля исполнения ограничена этим по построению (v170)
+            commandOf.forEach { (id, p) ->
+                val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
+                if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
+            }
+            orderWas.clear(); orderFatigue.clear()
+            commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
+            orderDist.clear()
+            commandOf.forEach { (id, p) ->
+                val c = commandArmy.firstOrNull { it.id == id }
+                if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
+            }
+            orderPrev.clear()
+            commandOf.forEach { (id, p) -> orderPrev[id] = p }
+        }
         // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
         lostTick.clear()
         for (c in army) lostTick[c.id] = ((lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
@@ -5075,6 +5075,7 @@ cpuMark("a.evade")
                 // ...и во ВСЕХ режимах, а не только в бою (v172, оператор): «все крипы должны двигаться ТОЛЬКО по
                 // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
                 USE_ORDER_OVER_SLOT && (USE_ORDER_EVERY_MODE || cmdMode == CmdMode.FIGHT) && commandOf.containsKey(creep.id) -> {
+                    orderBranch++          // сколько приказов реально дошло до ветки исполнения (v173)
                     val cell = commandOf[creep.id]!!
                     if (cell.x == creep.x && cell.y == creep.y) null
                     else if (USE_ORDER_IS_LAW) cell
@@ -6225,7 +6226,8 @@ cpuMark("a.evade")
     private var orderAuditSame = 0
     private var orderFar = 0
     private var orderClash = 0
-    private var orderFled = 0      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
+    private var orderFled = 0
+    private var orderBranch = 0      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
     private val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
     private val orderFatigue = HashMap<String, Int>()
     private var lostStay = 0        // приказ был «стой», а крип ушёл
