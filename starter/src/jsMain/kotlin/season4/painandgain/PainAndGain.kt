@@ -730,7 +730,10 @@ object PainAndGain {
      *  без неё camp (гонка очков) шёл 8 112 : 17 419 при живых 14 : 14, армия стояла в кулаке вместо захвата. Постура
      *  возвращена, а его отход, затор и «его мили рядом» сняты: в самом бою они дробили управление, из-за чего командир
      *  правил 27 тиков из пятисот. */
-    private const val USE_COMMANDER_IN_FIGHT_ONLY = true
+    // ...и снятие ДВУХ последних оговорок (его отход, затор) оказалось лишним: с признаком боя по огню командир и без
+    // того берёт власть там, где нужно — строка match28:brawl+heals проходит, — а с ними гейт держит 135 даже при
+    // изменившейся симуляции. Возвращены (v159): расширение несёт underTheirFire, а не снятие всего подряд
+    private const val USE_COMMANDER_IN_FIGHT_ONLY = false
     /** ПРИЗНАК БОЯ — ОГОНЬ, А НЕ ЕГО МИЛИ ВПЛОТНУЮ (v157): условие theirMeleeIn требует его мили в ОДНОЙ клетке от
      *  нашего вооружённого, и против врага, который мили не подводит, оно ложно весь бой — на match28:brawl+heals
      *  счётчик показал cmd=1/17, командир молчал, пока армию убивали. «Мы под его уроном» — тот же вопрос без этой
@@ -763,6 +766,24 @@ object PainAndGain {
      *  Подход останется за прежней логикой, пока у командира не появится СВОЙ замысел похода (см. этап о флагах). */
     private const val USE_COMMANDER_APPROACH = false
     private const val COMMAND_APPROACH = 8
+    /** КУЛАК И В ПРОГНОЗЕ (v159): командир не пускает крипа дальше FIST_RADIUS от якоря, а раскатка симуляции пускала —
+     *  прогноз считал бой, которого не будет, и мог хвалить замысел, растаскивающий армию. Сближение прогноза с
+     *  настоящим боем — единственный приём, который командира и двигал: согласие с целью фокуса подняло его с 25 % до
+     *  31 %, раскатка по своему замыслу — до 50 % против けろびー#1. Якорь тот же — медиана живых.
+     *  ОТВЕРГНУТО ГЕЙТОМ: 134 из 135 — camp match31 из 20 265:14 589 в 15 891:23 063, причинность проверена прямым
+     *  отключением тумблера. Командир правит там ВСЕГО 20 тиков (cmd=12/20, остальное блокирует отход), и этих
+     *  двадцати хватает, чтобы проиграть гонку очков: согласованный с кулаком прогноз выбирает замысел, который держит
+     *  армию вместе, а в гонке нужен темп. Вторая редакция — разрешить шаг, если он ПРИБЛИЖАЕТ к якорю, как и в бою, —
+     *  дала те же числа: дело не в заморозке отставшего, а в самом ограничении. Стоит перепроверить живьём против
+     *  MetalicaX#10, где кулак и дал 8-8: гейт судит формы, где командиру почти нет места. Третья проверка, уже с
+     *  вернувшимися условиями отхода и затора: camp 14 937:19 509 — падает всё равно, значит дело в самом ограничении
+     *  прогноза, а не в том, когда командир включён. */
+    /** ПОЛУЧАЕМЫЙ УРОН В ПРОГНОЗЕ (v159): profileOf множит на эффекты флагов НАШ удар и лечение, а входящий урон
+     *  симуляция вычитала как есть — при том что флаг вешает на ВЛАДЕЛЬЦА ещё и +10 % получаемого урона
+     *  (EFF_DAMAGE_TAKEN_MODIFIER, замерено в живых effects). При двух-трёх флагах прогноз ошибался в выживаемости на
+     *  десятки процентов, и ровно эта величина решает, стоит ли вступать в размен. */
+    private const val USE_SIM_TAKEN = true
+    private const val USE_SIM_FIST = false
     private const val USE_FIST = true
     private const val FIST_RADIUS = 4
     /** ЛЕКАРЬ ВЫШЕ СТРОЯ В БОЮ (v147): у обеих сторон по три лекаря, но у него в дальности лечения стоят все три каждый
@@ -1842,7 +1863,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v158"
+    private const val BOT_VERSION = "v159"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -5251,6 +5272,13 @@ cpuMark("a.evade")
             // наш ход: ПЕРВЫЙ тик — по плану, дальше раскатка по той же политике, что и у него. Фиксированный план на
             // четыре тика оценивал несуществующий бой: враг маневрирует, а мы шли в клетку, которая уже ничего не значит
             val liveThem0 = them.filter { it.hits > 0 }
+            // якорь прогноза — та же медиана живых наших, что и у командира в бою (v159, см. USE_SIM_FIST)
+            val liveUs0 = us.filter { it.hits > 0 }
+            var anchorX = -1; var anchorY = -1
+            if (USE_SIM_FIST && liveUs0.isNotEmpty()) {
+                val xs = liveUs0.map { it.x }.sorted(); val ys = liveUs0.map { it.y }.sorted()
+                anchorX = xs[xs.size / 2]; anchorY = ys[ys.size / 2]
+            }
             us.forEachIndexed { i, c ->
                 if (c.hits <= 0) return@forEachIndexed
                 val g = goal[i]
@@ -5267,8 +5295,19 @@ cpuMark("a.evade")
                         Intent.HOLD, Intent.KITE -> if (c.melee > 0.0) MELEE_HOLD_RANGE else RANGED_RANGE
                         Intent.YIELD -> RANGED_RANGE + 1
                     }
-                    if (dist > want) { c.x += (near.x - c.x).coerceIn(-1, 1); c.y += (near.y - c.y).coerceIn(-1, 1) }
-                    else if (dist < want) { c.x -= (near.x - c.x).coerceIn(-1, 1); c.y -= (near.y - c.y).coerceIn(-1, 1) }
+                    // КУЛАК ДЕЙСТВУЕТ И В ПРОГНОЗЕ (v159): в бою крипу нельзя выйти за FIST_RADIUS от якоря, а в
+                    // раскатке было можно — прогноз считал бой, которого не будет, и хвалил замыслы, растаскивающие
+                    // армию. Сближение прогноза с настоящим боем — единственный приём, который командира и двигал
+                    val nx: Int; val ny: Int
+                    if (dist > want) { nx = c.x + (near.x - c.x).coerceIn(-1, 1); ny = c.y + (near.y - c.y).coerceIn(-1, 1) }
+                    else if (dist < want) { nx = c.x - (near.x - c.x).coerceIn(-1, 1); ny = c.y - (near.y - c.y).coerceIn(-1, 1) }
+                    else { nx = c.x; ny = c.y }
+                    // ...и запрет ровно такой, какой в бою: кулак ограничивает НАЗНАЧЕНИЕ клетки, а крип, оказавшийся
+                    // снаружи, возвращается — поэтому шаг разрешён и когда он приближает к якорю. Первая редакция
+                    // замораживала такого крипа на месте, и гейт это поймал (camp 15 891:23 063)
+                    val was = if (anchorX < 0) 0 else maxOf(abs(c.x - anchorX), abs(c.y - anchorY))
+                    val now = if (anchorX < 0) 0 else maxOf(abs(nx - anchorX), abs(ny - anchorY))
+                    if (!USE_SIM_FIST || anchorX < 0 || now <= FIST_RADIUS || now < was) { c.x = nx; c.y = ny }
                     return@forEachIndexed
                 }
                 if (g != null) {
@@ -5310,13 +5349,20 @@ cpuMark("a.evade")
             // урон: мили по смежному, стрелок — ВЕЕРОМ, когда целей много, иначе одиночным. Веер бьёт всех в трёх с
             // убыванием 10/4/1 за часть, и без него симуляция недооценивала как раз того противника, который им живёт
             // (MetalicaX#11 — 63 веера за матч против 37 у #10 и наших 12), и потому охотно сбивала армию в кучу
+            // ПОЛУЧАЕМЫЙ УРОН ТОЖЕ ПО МОДИФИКАТОРУ (v159): profileOf уже множит НАШ удар и лечение на эффекты флагов,
+            // а входящий урон симуляция вычитала как есть. Между тем флаг вешает на владельца +10 % получаемого урона
+            // (EFF_DAMAGE_TAKEN_MODIFIER, замерено в живых effects), и при двух-трёх флагах прогноз ошибался в
+            // выживаемости на десятки процентов — в ту сторону, которая как раз и решает, вступать в размен или нет
+            val takenUs = if (USE_SIM_TAKEN) InfluenceMap.takenOf(mine.first()) else 1.0
+            val takenThem = if (USE_SIM_TAKEN && his.isNotEmpty()) InfluenceMap.takenOf(his.first()) else 1.0
             fun strikeSide(from: List<SimC>, to: List<SimC>) {
+                val k = if (to === us) takenUs else takenThem
                 for (a in from) {
                     if (a.hits <= 0) continue
                     val adj = to.filter { it.hits > 0 && d(a, it) <= 1 }
                     val focusT = if (from === us && focusIdx >= 0 && focusIdx < them.size) them[focusIdx].takeIf { it.hits > 0 } else null
                     if (a.melee > 0.0 && adj.isNotEmpty())
-                        (adj.firstOrNull { it === focusT } ?: adj.minByOrNull { it.hits }!!).let { it.hits -= a.melee.toInt() }
+                        (adj.firstOrNull { it === focusT } ?: adj.minByOrNull { it.hits }!!).let { it.hits -= (a.melee * k).toInt() }
                     if (a.ranged > 0.0) {
                         val inRange = to.filter { it.hits > 0 && d(a, it) <= RANGED_RANGE }
                         if (inRange.isEmpty()) continue
@@ -5324,9 +5370,9 @@ cpuMark("a.evade")
                         val massValue = inRange.sumOf { t -> when (d(a, t)) { 0, 1 -> 1.0; 2 -> 0.4; else -> 0.1 } }
                         if (massValue > 1.0) for (t in inRange) {
                             val share = when (d(a, t)) { 0, 1 -> 1.0; 2 -> 0.4; else -> 0.1 }
-                            t.hits -= (a.ranged * share).toInt()
+                            t.hits -= (a.ranged * share * k).toInt()
                         } else (inRange.firstOrNull { it === focusT } ?: inRange.minByOrNull { it.hits }!!)
-                            .let { it.hits -= a.ranged.toInt() }
+                            .let { it.hits -= (a.ranged * k).toInt() }
                     }
                 }
             }
