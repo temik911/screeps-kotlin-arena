@@ -2025,6 +2025,11 @@ object PainAndGain {
      *  мили, — не должна предлагаться вовсе. Опасность была слагаемым, которое перевешивали другие члены. */
     /** СТРОЙ ДО БОЯ (v179, оператор): пока враг идёт, а контакта нет, командир строит фронт вокруг своего якоря —
      *  мили к нему лицом, стрелки за ними, лекари в тылу. Ширина ряда — BRACE_WIDTH в каждую сторону. */
+    /** ЗАХВАТ ПРИ ОТСТАВАНИИ (v180, разбор серии): пять поражений из семи — гонка очков, где обе армии целы, а мы
+     *  держим три флага против четырёх и отстаём по скорости. Вето контакта снималось лишь за LAST_CALL_TICKS до
+     *  конца, когда отрыв уже сделан; теперь оно снимается, как только мы отстаём и по счёту, и по скорости. Паритет
+     *  мощи остаётся — доктрина не в том, чтобы не брать флаги, а в том, чтобы не брать их ценой армии. */
+    private const val USE_CAPTURE_WHEN_LOSING = true
     private const val USE_COMMAND_BRACE = true
     private const val BRACE_RANGE = 10
     private const val BRACE_WIDTH = 3
@@ -2039,7 +2044,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v179"
+    private const val BOT_VERSION = "v180"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2650,7 +2655,13 @@ cpuMark("arrival")
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
         // при бесплодной охоте (см. STALL_TICKS) контакт мнимый — висящие в трёх-шести клетках крипы россыпи мигали
         // контактом, и цель-флаг пропадала через тик после назначения (стенд m19 spread)
-        if (!stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
+        // ...и ВЕТО КОНТАКТА СНИМАЕТСЯ, КОГДА МЫ ОТСТАЁМ ПО СКОРОСТИ ОЧКОВ (v180). Разбор семи поражений серии: пять из
+        // них — не бой, а гонка, где обе армии целы, а мы держим ТРИ флага против его четырёх и набираем 10-12 очков в
+        // тик против его 13-15. Вето контакта не давало взять четвёртый почти весь матч, а снималось лишь за
+        // LAST_CALL_TICKS до конца — то есть после того, как отрыв уже сделан. Паритет мощи при этом остаётся: доктрина
+        // не в том, чтобы не брать флаги, а в том, чтобы не брать их ценой армии
+        val losingRace = USE_CAPTURE_WHEN_LOSING && behindOnScore && enemyRate > ourRate
+        if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
         val (ours, theirs) = powerAfter(ctx, f)
