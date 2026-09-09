@@ -764,6 +764,10 @@ object PainAndGain {
      *  разрешённый гейтом захвата флаг, со штрафом за его вооружённых у флага. */
     private const val USE_COMMAND_GOAL = true
     private const val USE_COMMAND_GOAL_OWN = false
+    /** ОТРЯД ПОД КОМАНДИРОМ (v164, оператор): выпуск захватчиков был вторым распорядителем — он решал сам, когда
+     *  отпускать. Механика остаётся (она знает сухую охоту, гонку и охрану стрелков, чего командирская раздача не
+     *  покрывает: полная замена дала 133 из 135), но включает её РЕЖИМ командира. */
+    private const val USE_COMMAND_OWNS_DETACH = true
     private const val GOAL_GUARD_COST = 6
     private const val MARCH_SAFE = 12
     private const val RACE_PARTY = 3
@@ -3593,7 +3597,12 @@ cpuMark("a.retreat")
             farmerOffTicks = if (farmer) 0 else farmerOffTicks + 1
             // сброс отряда по «не фермер» — только продержавшись FARMER_OFF_TICKS (v115): одноткового моргания признака не хватает
             if (!farmer) { if (farmerOffTicks >= FARMER_OFF_TICKS) detachedIds.clear() }
-            else if ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
+            // ...и ОТПУСКАЕТ ЛИ ОТРЯД — решает командир (v164): механика выпуска проверена годом замеров и остаётся, но
+            // включает её его режим, а не собственные условия. Полная замена командирской раздачей отвергнута замером:
+            // 133 из 135 (roost 7 615:24 325, camp 22 304:23 966) — прежняя логика знает и сухую охоту, и гонку, и
+            // охрану стрелков, чего своя раздача не покрывает
+            else if ((!USE_COMMAND_OWNS_DETACH || cmdMode != CmdMode.FIGHT) &&
+                (!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
                 // столько, сколько требуют охраны целей (v94): флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного
                 val unmanned = if (USE_RUNNER_PAIRS) ctx.flags.sumOf { f -> if (f.occupant?.my == true) 0 else if (armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }) 2 else 1 }
@@ -4266,6 +4275,14 @@ cpuMark("a.evade")
                 bestPlan?.let { commandOf.putAll(it) }
                 if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()}")
             }
+        } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
+            // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
+            // отряда при ХОЛОДНОМ контакте, и без неё гейт терял roost и camp (133 из 135). Клетки боя раздаются
+            // первыми, задания получают только те, кому клетки не досталось (v164)
+            val fighters = mobileArmy.filter { it.id !in commandOf }
+            val keep = HashMap(commandOf)
+            commandRace(ctx, fighters, armedEnemies, ctx.flags, commandOf)
+            commandOf.putAll(keep)
         } else if (raceCommandNow) {
             cmdTicks++
             commandRace(ctx, mobileArmy, armedEnemies, ctx.flags, commandOf)
@@ -5319,7 +5336,7 @@ cpuMark("a.evade")
         // мимо неё — не гонка, а разоружение. Первая редакция это правило игнорировала, и гейт поймал: camp
         // 7 911:17 364, scatter 15 273:24 303 против 22 810:19 091 и 24 268:17 098 без режима
         val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) }
-            .filter { f -> ctx.runners.none { r -> runnerFlag[r.id] == f.id } }   // не дублируем захватчиков
+
             .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
         for (f in wanted) {
             if (budget <= 0) break
@@ -5328,6 +5345,12 @@ cpuMark("a.evade")
             // вовсе (0 : 22 469). Одиночка посылается, только когда перехватывать некому
             val guarded = armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }
             val loose = armedEnemies.count { e -> canMove(e) } >= COMMAND_MIN_FOES
+            // ...идущий туда бегун ЗАСЧИТЫВАЕТСЯ в группу, а не отменяет её: прежний фильтр выкидывал флаг целиком, и
+            // когда бегуны разбирали все доступные флаги, командир не отпускал никого вовсе — гейт терял roost
+            // (7 597:24 268) и camp, где прежняя логика отряда выпускала бойцов
+            // ...а флаг, который уже берёт бегун, командир не дублирует: засчитывать бегуна в группу и досылать бойца
+            // замерено хуже — 131 из 135 против 133 (roost трижды, camp)
+            if (ctx.runners.any { r -> runnerFlag[r.id] == f.id }) continue
             val need = if (guarded) 2 else if (loose) RACE_PARTY else 1
             if (budget < need) continue
             val party = free.sortedBy { getRange(it, f.pos) }.take(need)
