@@ -749,6 +749,10 @@ object PainAndGain {
      *  цели — отдельный проход со своим фокусом: два решения об одном размене. Теперь цель назначает командир, зная
      *  всю армию сразу — и первым делом ищет того, кого армия ДОБИВАЕТ этим тиком с учётом его лечения. */
     private const val USE_COMMAND_FIRE = true
+    /** ЛЕЧЕНИЕ ПО ПРИКАЗУ (v162, оператор): лекарь выбирал пациента сам и не знал, кого враг добивает этим тиком —
+     *  а командир это уже считает для своего огня. Пациент назначается поимённо, и лечение не тратится в того, кого
+     *  всё равно не спасти. */
+    private const val USE_COMMAND_HEAL = true
     private const val MARCH_SAFE = 12
     private const val RACE_PARTY = 3
     /** РАЗДЕТЫЕ ПОД ПРИКАЗОМ (v144): крип без боевых частей не попадал ни в одну группу командира и приказа не получал
@@ -1875,7 +1879,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v161"
+    private const val BOT_VERSION = "v162"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4922,6 +4926,7 @@ cpuMark("a.evade")
         // огонь тоже по приказу командира (v161): назначения считаются на всю силу, включая захватчиков с оружием
         if (USE_COMMAND_FIRE) commandFire(army + ctx.runners.filter { hasWeapon(it) }, enemyCreeps, focusTarget, focusOrder, fireOf)
         else fireOf.clear()
+        if (USE_COMMAND_HEAL) commandHeal(army, enemyCreeps, healOf) else healOf.clear()
         healAndShoot(army + ctx.runners.filter { hasWeapon(it) }, allies, enemyCreeps, focusTarget, focusOrder)
         cpuMark("shoot")
     }
@@ -4995,14 +5000,18 @@ cpuMark("a.evade")
             val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
             if (healParts > 0) {
                 val candidates = allies.filter { !it.spawning && need(it) > 0 && creep.getRangeTo(it) <= HEAL_RANGE }
-                val closeTarget = candidates.filter { creep.getRangeTo(it) <= 1 }.maxByOrNull { rank(it) }
+                // приказ командира первым (v162): он назначил пациента, зная, кого враг добивает и кого лечение спасёт
+                val ordered = healOf[creep.id]?.let { id -> candidates.firstOrNull { it.id == id } }
+                val closeTarget = ordered?.takeIf { creep.getRangeTo(it) <= 1 }
+                    ?: candidates.filter { creep.getRangeTo(it) <= 1 }.maxByOrNull { rank(it) }
                 if (closeTarget != null) {
                     creep.heal(closeTarget)
                     healDone[closeTarget.id] = (healDone[closeTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
                 }
-                val farTarget = candidates.filter { it.hitsMax - it.hits > 0 || (USE_HEAL_UNDER_FIRE && (lostTick[it.id] ?: 0) > 0) }.maxByOrNull { rank(it) }
+                val farTarget = ordered?.takeIf { creep.getRangeTo(it) <= HEAL_RANGE }
+                    ?: candidates.filter { it.hitsMax - it.hits > 0 || (USE_HEAL_UNDER_FIRE && (lostTick[it.id] ?: 0) > 0) }.maxByOrNull { rank(it) }
                 if (farTarget != null) {
                     creep.rangedHeal(farTarget)
                     healDone[farTarget.id] = (healDone[farTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt()
@@ -5150,6 +5159,48 @@ cpuMark("a.evade")
                     ?: live.filter { reach(c, it) }.minByOrNull { it.hits }
             }
             if (t != null) out[c.id] = t.id
+        }
+    }
+
+    /** ЛЕЧЕНИЕ ПО ПРИКАЗУ (v162, оператор: перевести всё на командира). Лекарь выбирал пациента сам — по дефициту
+     *  хитов плюс ожидаемый входящий урон, — и не знал того, что командир уже посчитал: кого враг ДОБИВАЕТ этим тиком.
+     *  Здесь пациент назначается поимённо: сперва тот, кого убивают сейчас и кого лечение ещё СПАСАЕТ (иначе это
+     *  лечение в труп), и на него ставится ровно столько лекарей, сколько нужно, чтобы перекрыть входящий; остальные
+     *  идут по наибольшей нужде. Порядок лекарей — от дальнего к ближнему, чтобы ближний добирал остаток. */
+    private fun commandHeal(army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, String>) {
+        out.clear()
+        val healers = army.filter { hasHeal(it) && !it.spawning }
+        if (healers.isEmpty()) return
+        val mates = army.filter { it.hits < it.hitsMax || InfluenceMap.damageAt(it.x, it.y, enemies) > 0.0 }
+        if (mates.isEmpty()) return
+        val incoming = HashMap<String, Double>()
+        for (m in mates) incoming[m.id] = InfluenceMap.damageAt(m.x, m.y, enemies) * InfluenceMap.takenOf(m)
+        // сколько лечения дотянется до цели от ещё не занятых лекарей
+        fun healPool(t: Creep, free: List<Creep>) = free.sumOf { h ->
+            val d = h.getRangeTo(t); val pr = InfluenceMap.profileOf(h)
+            if (d <= 1) pr.heal else if (d <= HEAL_RANGE) pr.heal / 3.0 else 0.0
+        }
+        val free = healers.toMutableList()
+        // ...сперва те, кого убивают ЭТИМ тиком и кого лечение ещё спасает
+        val dying = mates.filter { (incoming[it.id] ?: 0.0) >= it.hits }
+            .sortedByDescending { it.hits }
+        for (t in dying) {
+            if (free.isEmpty()) break
+            if (healPool(t, free) + t.hits < (incoming[t.id] ?: 0.0)) continue   // не спасаем — не тратим лечение в труп
+            var got = 0.0
+            for (h in free.sortedByDescending { it.getRangeTo(t) }.toList()) {
+                if (got + t.hits >= (incoming[t.id] ?: 0.0)) break
+                val d = h.getRangeTo(t); val pr = InfluenceMap.profileOf(h)
+                if (d > HEAL_RANGE) continue
+                got += if (d <= 1) pr.heal else pr.heal / 3.0
+                out[h.id] = t.id; free.remove(h)
+            }
+        }
+        // ...остальные — по наибольшей нужде: дефицит плюс то, что прилетит
+        for (h in free) {
+            val t = mates.filter { h.getRangeTo(it) <= HEAL_RANGE && it.id != h.id }
+                .maxByOrNull { (it.hitsMax - it.hits) + (incoming[it.id] ?: 0.0) }
+            if (t != null) out[h.id] = t.id
         }
     }
 
@@ -5695,6 +5746,7 @@ cpuMark("a.evade")
     private var cmdMode = CmdMode.MARCH
     private val cmdDetach = HashSet<String>()      // кого командир отправил за флагами (v160, режимы RACE и MARCH)
     private val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
+    private val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
     private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
     private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
