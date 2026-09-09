@@ -2423,7 +2423,7 @@ cpuMark("arrival")
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -4479,6 +4479,9 @@ cpuMark("a.evade")
                     val here = orderWas[id]
                     when {
                         cell.x == here?.first && cell.y == here.second -> lostStay++
+                        // ...клетку мог занять ВРАГ: он ходит одновременно с нами, и его шаг делает приказ
+                        // неисполнимым задним числом — это неустранимо в принципе, и считать надо отдельно (v175)
+                        ctx.enemyCreeps.any { e -> e.x == cell.x && e.y == cell.y } -> lostEnemy++
                         c.x == here?.first && c.y == here.second -> lostStuck++
                         (orderFatigue[id] ?: 0) > 0 -> lostFatigue++
                         else -> lostElsewhere++
@@ -5728,7 +5731,13 @@ cpuMark("a.evade")
                 if (key in taken || getRange(c, p) > COMMAND_REACH) continue
                 if (!wants(p)) continue
                 val self = p.x == c.x && p.y == c.y
-                val tenant = if (self) null else allyOf[key]?.takeIf { it.id != c.id && it.id !in out }
+                // ...и жилец, которому приказано СТОЯТЬ, остаётся препятствием (v175): прежде всякий, кто уже получил
+                // приказ, считался уходящим — а приказ «стой» (хранитель флага, крип на своём месте) никуда его не
+                // уводит, и назначенная поверх него клетка оказывалась неисполнимой. Это и есть весь оставшийся
+                // процент неисполнения: 17 случаев на 5 294 приказа, все вида «крип остался на месте»
+                val tenant = if (self) null else allyOf[key]?.takeIf { t ->
+                    t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true)
+                }
                 // клетка под своим дороже: приказ туда исполним, только если жильца удастся сдвинуть
                 val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
@@ -6250,7 +6259,8 @@ cpuMark("a.evade")
     private var orderFar = 0
     private var orderClash = 0
     private var orderFled = 0
-    private var orderBranch = 0      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
+    private var orderBranch = 0
+    private var lostEnemy = 0      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
     private val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
     private val orderFatigue = HashMap<String, Int>()
     private var lostStay = 0        // приказ был «стой», а крип ушёл
