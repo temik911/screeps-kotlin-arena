@@ -2011,6 +2011,11 @@ object PainAndGain {
      *  вооружённому мили 33 крипо-тика и в двух клетках ещё 41 из 242 стрелковых. Клетка ближе MELEE_KEEP_RANGE к его
      *  мили стрелку не назначается. */
     private const val USE_RANGED_KEEPS_OFF_MELEE = true
+    /** ВЫРВАВШИЙСЯ ВПЕРЁД ВОЗВРАЩАЕТСЯ (v177, оператор): кулак ограничивал кандидатные клетки, но крипа, уже стоящего
+     *  вне кулака, не возвращал — замер даёт отрыв до 10 клеток при среднем 1,8, и это тот самый одиночка, которого
+     *  быстро убивают. Такому назначается шаг к якорю прежде всех прочих приказов. */
+    private const val USE_PULL_STRAGGLERS = true
+    private const val STRAGGLER_SLACK = 2
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
     private const val ORDER_PRIORITY_HEAL = 5
@@ -2019,7 +2024,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v176"
+    private const val BOT_VERSION = "v177"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -5806,6 +5811,22 @@ cpuMark("a.evade")
             if (!hurtBadly && !alone) continue
             place(c, { true }, rescue = true, rank = { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 -
                 (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
+        }
+        // ОТСТАВШИЙ И ВЫРВАВШИЙСЯ ПОДТЯГИВАЮТСЯ (v177, оператор: «в момент начала боя у нас всегда был 1 крип где-то
+        // впереди, и его очень быстро убивали»). Кулак ограничивал КАНДИДАТНЫЕ клетки, но крипа, уже стоящего вне
+        // кулака, никто не возвращал: замер по записи разгрома — боевой крип отрывался от своих на 10 клеток при
+        // среднем 1,8. Такому назначается шаг К ЯКОРЮ, и раньше всех прочих назначений
+        if (USE_FIST && USE_PULL_STRAGGLERS && fighters.size >= 3) {
+            val xs = fighters.map { it.x }.sorted(); val ys = fighters.map { it.y }.sorted()
+            val ax = xs[xs.size / 2]; val ay = ys[ys.size / 2]
+            for (c in fighters.sortedByDescending { maxOf(abs(it.x - ax), abs(it.y - ay)) }) {
+                if (c.id in out) continue
+                if (maxOf(abs(c.x - ax), abs(c.y - ay)) <= FIST_RADIUS + STRAGGLER_SLACK) continue
+                // ...но НЕ того, кто уже бьёт: увести мили из контакта — отдать разменную клетку даром (гейт 134/135)
+                if (armedEnemies.any { getRange(c, it) <= 1 }) continue
+                place(c, { p -> maxOf(abs(p.x - ax), abs(p.y - ay)) < maxOf(abs(c.x - ax), abs(c.y - ay)) },
+                    { p -> (incNext[p.x * 100 + p.y] ?: 0.0) + maxOf(abs(p.x - ax), abs(p.y - ay)) })
+            }
         }
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
         // МИЛИ НЕ БРОСАЕТСЯ ПОД ВЕРНУЮ СМЕРТЬ (v143, оператор): вплотную к его строю — только когда это окупается.
