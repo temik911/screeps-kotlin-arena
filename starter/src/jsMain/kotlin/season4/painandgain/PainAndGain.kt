@@ -2023,6 +2023,11 @@ object PainAndGain {
     private const val USE_FIST_NO_WALL = true
     /** СМЕРТЕЛЬНАЯ КЛЕТКА (v178, оператор): клетка, где входящий за тик снимает крипу всю жизнь — шаг под двух его
      *  мили, — не должна предлагаться вовсе. Опасность была слагаемым, которое перевешивали другие члены. */
+    /** СТРОЙ ДО БОЯ (v179, оператор): пока враг идёт, а контакта нет, командир строит фронт вокруг своего якоря —
+     *  мили к нему лицом, стрелки за ними, лекари в тылу. Ширина ряда — BRACE_WIDTH в каждую сторону. */
+    private const val USE_COMMAND_BRACE = true
+    private const val BRACE_RANGE = 10
+    private const val BRACE_WIDTH = 3
     private const val USE_NO_LETHAL_CELLS = true
     private const val LETHAL_CELL_COST = 10000.0
     private const val STRAGGLER_SLACK = 2
@@ -2034,7 +2039,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v178"
+    private const val BOT_VERSION = "v179"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4456,6 +4461,13 @@ cpuMark("a.evade")
             val keep = HashMap(commandOf)
             commandRace(ctx, fighters, armedEnemies, ctx.flags, commandOf)
             commandOf.putAll(keep)
+        // ...и ТОЛЬКО когда он ИДЁТ на нас: изготовка при всяком враге в десяти клетках вставала поперёк гонки за
+        // флагами — армия строилась вместо захвата, и гейт рухнул до 122 из 135 (roost трижды)
+        } else if (USE_COMMAND_BRACE && !contact && armiesClosing &&
+                armedEnemies.any { e -> commandArmy.any { getRange(e, it) <= BRACE_RANGE } }) {
+            // ИЗГОТОВКА (v179): враг идёт, контакта ещё нет — строим фронт, а не ждём его растянутыми
+            cmdTicks++
+            commandBrace(commandArmy, armedEnemies, commandOf)
         } else if (raceCommandNow) {
             cmdTicks++
             commandRace(ctx, commandArmy, armedEnemies, ctx.flags, commandOf)
@@ -5510,6 +5522,48 @@ cpuMark("a.evade")
                 f.score.toDouble() / (near + 1 + guards * GOAL_GUARD_COST)
             }
         return best?.pos
+    }
+
+    /** СТРОЙ ДО БОЯ (v179, оператор): «мы стояли на флаге 30-40 тиков, и всё равно, когда враг подошёл, мы были не
+     *  готовы — отряд растянут, впереди стояли рэнж-крипы, а у него компактный отряд с милишниками спереди». Пока враг
+     *  ИДЁТ, но контакта ещё нет, командир строит фронт: ось — направление на его центр, мили на ближней к нему линии,
+     *  стрелки за ними, лекари в тылу. Это не отвергнутый USE_COMMANDER_APPROACH: тот вёл армию ВПЛОТНУЮ к врагу
+     *  раздачей клеток по его строю, а здесь никто не сближается — строй ставится вокруг своего же якоря. */
+    private fun commandBrace(army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, Position>) {
+        out.clear()
+        val core = army.filter { canMove(it) && !it.spawning }
+        if (core.size < 3 || enemies.isEmpty()) return
+        val xs = core.map { it.x }.sorted(); val ys = core.map { it.y }.sorted()
+        val ax = xs[xs.size / 2]; val ay = ys[ys.size / 2]
+        val ex = enemies.sumOf { it.x } / enemies.size; val ey = enemies.sumOf { it.y } / enemies.size
+        val dx = (ex - ax).coerceIn(-1, 1); val dy = (ey - ay).coerceIn(-1, 1)
+        if (dx == 0 && dy == 0) return
+        // ряд крипа по роли: мили +1 к врагу, стрелки на якоре, лекари −1 (в тыл)
+        fun rowOf(c: Creep) = when {
+            hasWeapon(c) && hasMelee(c) && !hasRanged(c) -> 1
+            hasWeapon(c) -> 0
+            else -> -1
+        }
+        val taken = HashSet<Int>()
+        for (c in core.sortedByDescending { rowOf(it) }) {
+            val row = rowOf(c)
+            var best: Position? = null; var bestScore = Int.MAX_VALUE
+            for (side in -BRACE_WIDTH..BRACE_WIDTH) {
+                // поперёк оси: перпендикуляр к направлению на врага
+                val px = ax + dx * row - dy * side
+                val py = ay + dy * row + dx * side
+                if (px < 0 || py < 0 || px > 99 || py > 99) continue
+                if (DistanceMap.isTerrainWall(px, py)) continue
+                val key = px * 100 + py
+                if (key in taken) continue
+                if (enemies.any { it.x == px && it.y == py }) continue
+                val cost = maxOf(abs(px - c.x), abs(py - c.y)) * 2 + abs(side)
+                if (cost < bestScore) { bestScore = cost; best = InfluenceMap.cell(px, py) }
+            }
+            val b = best ?: continue
+            taken.add(b.x * 100 + b.y)
+            if (b.x != c.x || b.y != c.y) out[c.id] = b
+        }
     }
 
     private fun commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: MutableMap<String, Position>) {
