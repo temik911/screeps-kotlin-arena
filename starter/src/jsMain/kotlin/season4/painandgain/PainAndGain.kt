@@ -862,6 +862,18 @@ object PainAndGain {
      *  кроме собственной клетки крипа, что означает «стой». */
     private const val USE_ORDER_FREE_CELLS = true
     private const val ALLY_CELL_COST = 25.0
+    /** ПЛАН ВГЛУБЬ (v168, оператор): занятую клетку освобождает ЦЕПОЧКА — жилец сдвигается, его жилец тоже, и так до
+     *  CHAIN_DEPTH звеньев; обмен местами разрешён как цепочка длины два, чем и делается ротация состава. */
+    private const val USE_ORDER_CHAINS = true
+    private const val CHAIN_DEPTH = 4
+    /** ПРИТЯЖЕНИЕ К ПРИКАЗУ (v168): расстояние до назначенной клетки весило столько же, сколько влияние, угроза мили и
+     *  разделение, и они его перевешивали — исполнение 7 %. Здесь оно множится, но обход опасности остаётся: жёсткий
+     *  шаг уже отвергнут замером (133 из 135 и падение исполнения до 3 %). */
+    private const val USE_ORDER_PULL = true
+    // множитель замерен: при 4 приборы лучше всего (исполнение 9 % против 7,6 %, приближение 36 % против 33 %, ошибка
+    // прогноза 832 против 956), но гейт падает до 133 из 135 (camp 19 521:20 793, brawl+heals с потерей армии) —
+    // слишком сильное притяжение ведёт крипа в клетку сквозь огонь. При 2 гейт держит 135, приближение 34 %
+    private const val ORDER_PULL = 2.0
     /** РАЗДЕТЫЙ УХОДИТ И В ПРОГНОЗЕ (v166): командир приказывает ему прочь из огня, а в прогоне он стоял и собирал
      *  урон. Замер: средняя ошибка 1 063 против 1 071, доля неверных знаков та же (24 %). Выигрыш мал, но модель
      *  перестала расходиться с приказом. */
@@ -5042,7 +5054,10 @@ cpuMark("a.evade")
                             enemyCreeps.none { e -> e.x == cell.x && e.y == cell.y }
                         if (ok) cell else null
                     }
-                    ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
+                    orderPull = if (USE_ORDER_PULL && commandOf.containsKey(creep.id)) ORDER_PULL else 1.0
+                    val chosen = ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
+                    orderPull = 1.0
+                    chosen
                 }
             }
             if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
@@ -5549,24 +5564,38 @@ cpuMark("a.evade")
         // что до назначенной клетки доходят 7 % (v167). Своя собственная клетка при этом разрешена: это «стой»
         val allyAt = HashSet<Int>()
         if (USE_ORDER_FREE_CELLS) for (a in army) if (a.hits > 0) allyAt.add(a.x * 100 + a.y)
-        fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double): Boolean {
+        // кто стоит в клетке (для цепочек): ключ клетки → крип
+        val allyOf = HashMap<Int, Creep>()
+        for (a in army) if (a.hits > 0) allyOf[a.x * 100 + a.y] = a
+        // ПЛАН СТРОИТСЯ ВГЛУБЬ (v168, оператор): «если крипу необходимо уйти на клетку, на которой сейчас стоит крип,
+        // зачем этому крипу необходимо сдвинуться на другую, и если там стоит крип, то сдвинуть и его, и так далее».
+        // Раздача рекурсивна: занятая клетка не отвергается и не просто дорожает — её жилец получает приказ уйти,
+        // а если и его клетка занята, цепочка идёт дальше, до CHAIN_DEPTH звеньев. Обмен местами — вырожденная
+        // цепочка длины два, и он разрешён отдельно: ротация состава (раненого назад, свежего вперёд) это ровно своп
+        fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
+            var bestTenant: Creep? = null
             for ((key, p) in cells) {
-                // клетка под своим не запрещена, а ДОРОЖЕ: приказ туда исполним, если сосед уйдёт, но полный запрет
-                // связывал плотный строй по рукам — 134 из 135 в двух редакциях подряд (v167)
-                val allyHere = USE_ORDER_FREE_CELLS && key in allyAt && !(p.x == c.x && p.y == c.y)
-                // назначаем только ДОСТИЖИМОЕ за тик: крип проходит клетку, и план в двух клетках он исполнит лишь на
-                // втором тике, когда обстановка уже другая (v138)
                 if (key in taken || getRange(c, p) > COMMAND_REACH) continue
                 if (!wants(p)) continue
-                val sc = rank(p) + (if (allyHere) ALLY_CELL_COST else 0.0)
-                if (sc < bestScore) { bestScore = sc; best = p }
+                val self = p.x == c.x && p.y == c.y
+                val tenant = if (self) null else allyOf[key]?.takeIf { it.id != c.id && it.id !in out }
+                // клетка под своим дороже: приказ туда исполним, только если жильца удастся сдвинуть
+                val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0)
+                if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
             }
             val b = best ?: return false
+            val tenant = bestTenant
+            if (tenant != null && USE_ORDER_CHAINS) {
+                if (depth >= CHAIN_DEPTH) return false
+                // своп: жилец встаёт на клетку просителя — так делается ротация состава
+                val swapCell = cells[c.x * 100 + c.y]
+                val moved = (swapCell != null && place(tenant, { p -> p.x == c.x && p.y == c.y }, { 0.0 }, depth + 1)) ||
+                    place(tenant, { p -> p.x != b.x || p.y != b.y }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 }, depth + 1)
+                if (!moved) return false
+            }
             taken.add(b.x * 100 + b.y); out[c.id] = b
-            // ...и клетка, с которой крип уходит, ОСВОБОЖДАЕТСЯ для следующего: без этого в плотном строю все клетки
-            // заняты своими, назначать некуда и строй не может перетечь — гейт ловил это как 134 из 135
-            if (USE_ORDER_FREE_CELLS && (b.x != c.x || b.y != c.y)) allyAt.remove(c.x * 100 + c.y)
+            if (b.x != c.x || b.y != c.y) allyOf.remove(c.x * 100 + c.y)
             return true
         }
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
@@ -6047,6 +6076,7 @@ cpuMark("a.evade")
     private val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
     private val orderPrev = HashMap<String, Position>()   // приказы прошлого тика — для проверки исполнения (v167)
     private var orderAuditOk = 0
+    private var orderPull = 1.0                    // множитель притяжения к назначенной клетке (v168)
     private var orderAuditN = 0
     private var orderAuditCloser = 0
     private var orderAuditSame = 0
@@ -6333,7 +6363,9 @@ cpuMark("a.evade")
         val outgoing = if (!aggressive && damage > 0.0) 0.0 else if (meleeSelf) (if (enemyCreeps.any { getRange(InfluenceMap.cell(x, y), it) <= 1 }) 1.0 else 0.0) else if (hasRanged(creep)) outgoingValue(x, y, enemyCreeps) else 0.0
         val damageTerm = if (aggressive) 0.0 else damage * PAIR_W_DAMAGE
         val pinned = (periodAt(creep, x, y) - 1) * InfluenceMap.fireAt(x, y, enemyCreeps) * PAIR_W_DAMAGE
-        return -firePenalty * PAIR_W_DIST - damageTerm + influence * PAIR_W_INFLUENCE +
+        // ...и притяжение к ПРИКАЗУ сильнее (v168, см. orderPull): назначенная клетка была одним слагаемым наравне с
+        // влиянием, угрозой мили и разделением, и они её перевешивали — до своей клетки доходили 7 % крипов
+        return -firePenalty * PAIR_W_DIST * orderPull - damageTerm + influence * PAIR_W_INFLUENCE +
             outgoing * PAIR_W_OUTGOING - meleeThreat - separation - swampPenalty - pinned
     }
 
