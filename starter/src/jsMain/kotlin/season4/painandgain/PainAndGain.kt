@@ -2015,6 +2015,16 @@ object PainAndGain {
      *  вне кулака, не возвращал — замер даёт отрыв до 10 клеток при среднем 1,8, и это тот самый одиночка, которого
      *  быстро убивают. Такому назначается шаг к якорю прежде всех прочих приказов. */
     private const val USE_PULL_STRAGGLERS = true
+    /** ОГОНЬ МИМО РАЗОРУЖЁННЫХ (v178, оператор): добиваемость считалась по хитам, а у разоружённого их мало — он и
+     *  выходил лучшей целью, хотя не наносит урона вовсе. Цель ищется среди тех, кто ещё вооружён. */
+    private const val USE_FIRE_SKIPS_DISARMED = true
+    /** КУЛАК НЕ ЧЕРЕЗ СТЕНУ (v178, оператор): расстояние мерилось по прямой, и клетка за стеной считалась «рядом» —
+     *  так армия и распадалась на две половины, дерущиеся порознь. */
+    private const val USE_FIST_NO_WALL = true
+    /** СМЕРТЕЛЬНАЯ КЛЕТКА (v178, оператор): клетка, где входящий за тик снимает крипу всю жизнь — шаг под двух его
+     *  мили, — не должна предлагаться вовсе. Опасность была слагаемым, которое перевешивали другие члены. */
+    private const val USE_NO_LETHAL_CELLS = true
+    private const val LETHAL_CELL_COST = 10000.0
     private const val STRAGGLER_SLACK = 2
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
@@ -2024,7 +2034,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v177"
+    private const val BOT_VERSION = "v178"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -5558,7 +5568,13 @@ cpuMark("a.evade")
         val live = enemies.filter { it.hits > 0 }
         fun reach(c: Creep, e: Creep) = if (hasRanged(c)) c.getRangeTo(e) <= RANGED_RANGE else c.getRangeTo(e) <= 1
         // ...кого добиваем ЭТИМ тиком: залп достающих минус лечение, дотягивающееся до цели
-        val killable = live.filter { e ->
+        // РАЗОРУЖЁННЫЙ — НЕ ЦЕЛЬ (v178, оператор: «наши крипы во время боя зачем-то начали добивать разоружённых,
+        // которые в текущий момент нам никак не вредят, вместо того чтобы снимать хиты тем, кто наносит урон прямо
+        // сейчас»). Добиваемость считалась по ХИТАМ, а у разоружённого их мало — он и выходил лучшей целью, тогда как
+        // не бьёт вовсе. Огонь идёт по тем, кто ещё вооружён; безоружные оставляются на потом
+        val dangerous = live.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } }
+        val pool = if (USE_FIRE_SKIPS_DISARMED && dangerous.isNotEmpty()) dangerous else live
+        val killable = pool.filter { e ->
             val burst = shooters.filter { reach(it, e) }.sumOf { c ->
                 val pr = InfluenceMap.profileOf(c)
                 (if (hasRanged(c)) pr.ranged else pr.melee) * InfluenceMap.takenOf(e)
@@ -5574,7 +5590,8 @@ cpuMark("a.evade")
             val t = when {
                 killable != null && reach(c, killable) -> killable
                 focus != null && focus.hits > 0 && reach(c, focus) -> focus
-                else -> order.firstOrNull { reach(c, it) && it.hits > 0 }
+                else -> order.firstOrNull { reach(c, it) && it.hits > 0 && (!USE_FIRE_SKIPS_DISARMED || it in dangerous) }
+                    ?: pool.filter { reach(c, it) }.minByOrNull { it.hits }
                     ?: live.filter { reach(c, it) }.minByOrNull { it.hits }
             }
             if (t != null) out[c.id] = t.id
@@ -5700,7 +5717,19 @@ cpuMark("a.evade")
         if (USE_FIST) {
             val xs = fighters.map { it.x }.sorted(); val ys = fighters.map { it.y }.sorted()
             val ax = xs[xs.size / 2]; val ay = ys[ys.size / 2]
-            val keep = cells.filterValues { maxOf(abs(it.x - ax), abs(it.y - ay)) <= FIST_RADIUS }
+            // ...и КЛЕТКА НЕ ЗА СТЕНОЙ (v178, оператор: «наша армия распалась на 2 половины из-за стены, так не должно
+            // происходить»). Кулак мерил расстояние по прямой, а стена между якорем и клеткой делает две половины из
+            // одной армии: соседи по числу оказываются в разных боях. Проверяется прямая от якоря к клетке
+            fun clear(px: Int, py: Int): Boolean {
+                if (!USE_FIST_NO_WALL) return true
+                var x = ax; var y = ay
+                while (x != px || y != py) {
+                    x += (px - x).coerceIn(-1, 1); y += (py - y).coerceIn(-1, 1)
+                    if (DistanceMap.isTerrainWall(x, y)) return false
+                }
+                return true
+            }
+            val keep = cells.filterValues { maxOf(abs(it.x - ax), abs(it.y - ay)) <= FIST_RADIUS && clear(it.x, it.y) }
             if (keep.isNotEmpty()) { cells.clear(); cells.putAll(keep) }
         }
         // опасность клетки сейчас и на следующий тик
@@ -5769,7 +5798,13 @@ cpuMark("a.evade")
                 }
 
                 // клетка под своим дороже: приказ туда исполним, только если жильца удастся сдвинуть
-                val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p)
+                // СМЕРТЕЛЬНАЯ КЛЕТКА НЕ ПРЕДЛАГАЕТСЯ (v178, оператор: «наш мили крип шагнул сразу под 2 мили крипов
+                // соперника — для него это должно было быть смертельно, и эта точка никак не могла ему выдаваться»).
+                // Опасность клетки входила слагаемым и её перевешивали другие члены; теперь клетка, где входящий за
+                // тик снимает крипу всю жизнь, стоит запретительно дорого и берётся, только если других нет вовсе
+                val lethal = USE_NO_LETHAL_CELLS && (incNext[key] ?: 0.0) >= c.hits
+                val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p) +
+                    (if (lethal) LETHAL_CELL_COST else 0.0)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
             }
             val b = best ?: return false
