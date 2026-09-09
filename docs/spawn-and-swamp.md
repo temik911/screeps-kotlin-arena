@@ -1929,6 +1929,64 @@ evidence about the instrument before it is evidence about the subject, and the c
 caught this costs one command: run the new runner and an old one on the same scenario and compare a
 number they must agree on.
 
+### The shelf re-judged on the league — nothing on it passes (09.09.2026)
+
+Nine shelved builds (`shelf-v65-v68`, `shelf-v69-v72`, `shelf-v74-v75`) were each extracted, built and
+put through `league.sh v73`. Every one of them had been better than v73 on the instruments that existed
+when it was made; every one that got a live series was worse in the arena. The question was whether the
+three-opponent gate, with its numbers now verified, says anything different.
+
+| build | 26 gate scenarios vs v73's table | recorded けろびー#19 at HUNT=0 / 4 / 8 | self-play vs v73 | live |
+|---|---|---|---|---|
+| **v73 — the null** | baseline | draw / draw / draw | 9-6-1 | **7-15-6** over 28 |
+| v65 wave one bigger | identical | draw / draw / draw | identical to the null | 0-2-3 |
+| v66 siege defended by who can reach it | `freeze` 543 → 546 | draw / **our spawn at 1609** / **our spawn at 1810** | identical to the null | 0-4-2 |
+| v67 the economy package | identical | draw (25380 spent) / draw / **our spawn at 1784** | identical to the null | 0-3-2 |
+| v68 + a second keeper | identical | draw / draw / draw | identical to the null | 0-2-2 |
+| v69 tower's right of way | identical | draw / draw / draw | identical to the null | 1-7-5 |
+| v70 + the dead-site clock | identical | draw / draw / draw | identical to the null | **0-14-7** |
+| v71 + the pile chosen for the site | identical | draw / draw / draw | identical to the null | — |
+| v72 + melee priced everywhere | twelve moved: `ball` 663 → 383, `stream17` 888 → **1639**, `harass` 779 → **1151**, `siege6` abandons **10** | **his spawn at 1428** / **his spawn at 1119** / **our spawn at 1792** | 9-6-1, eight games moved, no winner changed | 4-23-3 |
+| v75 melee from the opening | `towersite` 437 → 402, rest identical | **his spawn at 1547** / **our spawn at 1479** / **his spawn at 826** | identical to the null | 3-24-2 |
+
+**Verdict: none of the nine passes, and none is landed.** Five are inert — they change nothing any of
+the three opponents can see. Four lose our own spawn at a hunting setting where v73 draws.
+
+**The gate now disagrees with the old instruments in the right direction.** Take the rule the table
+suggests — *a hunting setting at which our spawn falls where v73 draws condemns the build* — and it
+condemns v66, v67, v72 and v75: four of the seven builds that have a live series, including the two
+with thirty matches each. It calls v68, v69 and v70 inert rather than bad, so it does not catch
+everything (v70 went 0-14-7 live). But it calls **nothing** better than v73, where the pre-league
+instruments called all six better. That is the whole improvement, stated at its true size: the gate has
+stopped manufacturing false positives; it has not started predicting the arena.
+
+**And the second finding is about the gate itself, found by its own numbers refusing to move.** Seven
+builds in a row returned the identical self-play tally 9-6-1. That is a contradiction, not a
+confirmation, and the diff says why: the sixteen matches are **byte-identical to the null apart from the
+greeting line carrying the version number**. Mirror matches end at 416-607 ticks by a spawn kill, and
+everything v65-v71 changes — wave size, defence reach, delivery points, a second keeper, the tower's
+right of way, the dead-site clock, the keeper's pile — happens later than that or not at all. v75's
+melee opening never fires either: its condition is not met against its own opening. Only v72 moves the
+games, and it moves eight of sixteen tick counts without changing a single winner.
+
+So the self-play arm, as built, discriminates the **opening** and nothing else — which is exactly the
+one thing it was validated on (`MAX_HAULERS = 1` is an opening defect, and it was routed 0-5-7). Its
+silence on an economic change is not a tie and must never again read as one:
+
+- `league.sh` now diffs the candidate's sixteen games against the null vector saved with the snapshot
+  and prints **"every game identical to the null — this instrument did not execute anything the
+  candidate changed"** when they match, or the games that moved when they do not;
+- `snapshot.sh` saves that null vector beside the gate table, since at snapshot time the current build
+  IS the snapshot and the run is the null by construction.
+
+**What would remove the blindness rather than merely report it.** The mirror match is decided by the
+first wave because the loser's spawn falls at t≈460, while live matches against けろびー#19 run the full
+2000 and draw. The self-play world is more violent than the arena, and the nearest measurable cause is
+geometry: its spawns stand 89 cells apart against the recorded map's 151-step walk. Calibrating that
+distance against the real map — the same way `HUNT` was calibrated against a real match — is the next
+thing to try, and it is a change to the instrument, to be judged by whether the null stays near even and
+`MAX_HAULERS = 1` is still routed.
+
 ## Offline stub harness
 
 **Offline smoke test** (no client needed): the compiled `SpawnAndSwamp.export.mjs` can be driven by a stub `game` package (constants, prototypes, Dijkstra `searchPath`, simultaneous movement with swaps/chains, **fatigue** (weight by part type, dead parts included, live MOVEs shed it) and front-to-back part damage as in the engine) via a Node loader hook that redirects `game/*` imports to the stubs — it catches tick-1 crashes and gross logic loops (stuck haulers, spawn starvation, swamp freezes) before a live match. A second runner loads a **live map dumped from a match log** (the `DEBUG_MAP` block, 100 rows) and places stationary enemy guards / a pre-built traffic jam, which is how the swamp-edge freeze was reproduced. The stub tower uses the Arena numbers (1000 at range 1, −50/cell, cooldown 10, capacity 10) with a feeder AI (M1C1 haulers drawing from the enemy spawn's store) and, since 05.09.2026, `heal` as well. **The stub builds**: `createConstructionSite(pos|x,y, prototype)` places a real site (cost from `CONSTRUCTION_COST`, road cost multiplied on swamp, refused on a wall, on an occupied cell, over another site, or past `MAX_CONSTRUCTION_SITES`), `Creep.build` spends `BUILD_POWER` per live `WORK` out of its own cargo and turns the finished site into the owner's structure. `Creep.repair` was written and then deleted: **the Arena `Creep` prototype has no `repair` and no `dismantle`** (client typings, `game/prototypes/creep.d.ts`), and a stub method the game does not have is a trap — a change would pass the gate and do nothing in a match. The stub's structure constants were wrong until the same reading fixed them: `RAMPART_HITS` and `WALL_HITS` are **10000**, not 1, `ROAD_HITS` 500, `EXTENSION_HITS` 100. Scenarios: `node --import ./register.mjs run2.mjs <ticks> none|enemy|swarm|ball|raider|tower|harass|towersite|healball|hover|rush|camp|stream` (modes combine with `+`, e.g. `tower+enemy`, `tower+hover`; `harass` and `healball` order their creeps through the enemy spawn so the `spawning` intel path is exercised; the stub `ConstructionSite` carries `progress/progressTotal/my` and `CONSTRUCTION_COST` has the Arena values, so tower sites are detectable by cost as in the live API) `twospawn` is けろびー#16 — his real bodies, a second spawn built mid-map at t=240 and a third at t=540, so his production moves towards us and the runner calls the match won only when every one of them is down (kept out of `regress.sh`: the current build clears it at 1945 of 2000 ticks, and a gate that close to the limit is a coin toss for every other session); `rush` is the match-14 opponent — two M5R1 through the enemy spawn from tick 1 and a third at 200 that park within three cells of our spawn and never kite; `camp` drops those two three cells from the breacher at t=60; `stream` is the match-15 opponent — M3R3 and M4H2 alternating every 40 ticks from t=280, each walking to our spawn alone, usually combined as `tower+stream`; `pairs` is the match-24/25 opponent — M5R5 and M5H3 alternating every 90 ticks from t=250, grouped two by two so the healer heals its own shooter at range 1, and the only opponent in the harness that does **not** retreat from a fighter: it camps at our spawn) and `run3.mjs <ticks> freeze|rush|stream17` on the live map (`rush` there replays match 14 exactly, `stream17` match 17); `zsh regress.sh <tag>` in the harness dir (or `tools/land.sh`, which runs it as the landing gate) runs every scenario for 2000 ticks and prints one line per scenario (outcome tick, errors, ghost hits); `node` is not on PATH here — use the Gradle-downloaded one under `~/.gradle/nodejs/`. The harness is committed under `tools/stub/spawnandswamp/` (stub `game` package, runners, live map, `regress.sh`) and imports the bundle from the worktree it lives in (`../../../build/js/...`), so it always tests what that worktree built. A stub without fatigue never shows swamp problems — every creep moves one cell per tick there.

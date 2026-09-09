@@ -46,4 +46,24 @@ done
 
 echo
 echo "=== 3. self-play against $OPP"
-OPP=$OPP zsh ./selfplay.sh 8 1200 2>/dev/null | tail -1
+OPP=$OPP zsh ./selfplay.sh 8 1200 2>/dev/null > out/league_selfplay_raw.txt
+# the per-game lines come from the match files, not from selfplay.sh's stdout: that already strips
+# the prefix and pads the columns, so a pattern written against the raw line matches nothing there
+cat out/selfplay_*.txt | strip | grep -E '^--- selfplay: ' | sed -E 's/^--- selfplay: //; s/ errors=[0-9]+//' | sort > out/league_selfplay.txt
+strip < out/league_selfplay_raw.txt | tail -1
+# THE TALLY ALONE CANNOT SAY "THE CANDIDATE CHANGED NOTHING HERE", and on 09.09.2026 that mattered:
+# re-judging the whole shelf gave seven builds in a row the identical 9-6-1, and only a diff of the
+# games showed why — every match was byte-identical to the null but for the greeting line. Mirror
+# matches end at 416-607 ticks by a spawn kill, and every economic mechanism those builds changed
+# fires later, so the instrument never executed them. Printed as a verdict, that is visible; printed
+# as a tally, it reads like a tie.
+if [[ -f "opponents/$OPP/selfplay.txt" ]]; then
+  if diff -q "opponents/$OPP/selfplay.txt" out/league_selfplay.txt > /dev/null; then
+    echo "  ⚠ every game identical to the null — this instrument did not execute anything the candidate changed"
+  else
+    echo "  games that moved against the null:"
+    diff "opponents/$OPP/selfplay.txt" out/league_selfplay.txt | grep -E '^[<>]' | sed 's/^/    /'
+  fi
+else
+  echo "  (no null vector saved with the snapshot — re-run snapshot.sh to get one)"
+fi
