@@ -742,6 +742,11 @@ object PainAndGain {
     /** РЕЖИМ ГОНКИ У КОМАНДИРА (v160, оператор): «перевести все действия на него». Раздача клеток против строя — один
      *  режим из трёх; в гонке очков командир раздаёт задания по флагам небольшими группами, оставляя ядро целым. */
     private const val USE_COMMAND_RACE = true
+    /** ПОХОД У КОМАНДИРА (v160): третий режим — врага рядом нет, и командир ведёт армию по флагам теми же заданиями,
+     *  что и в гонке. Не путать с отвергнутым USE_COMMANDER_APPROACH: там поход вела РАЗДАЧА КЛЕТОК против строя. */
+    private const val USE_COMMAND_MARCH = true
+    private const val MARCH_SAFE = 12
+    private const val RACE_PARTY = 3
     /** РАЗДЕТЫЕ ПОД ПРИКАЗОМ (v144): крип без боевых частей не попадал ни в одну группу командира и приказа не получал
      *  вовсе — стоял, где стоял, и собирал выстрелы. В каждом разборе это первая строка диагноза: наши раздетые под
      *  огнём 172 крипо-тика из 238 против его 7 из 11. Теперь им назначается клетка прочь из огня. */
@@ -2135,8 +2140,11 @@ object PainAndGain {
         val healersAlive = active.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
         fun wounded(c: Creep) = USE_WOUNDED && healersAlive && !hasWeapon(c) && !hasHeal(c) && c.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
         detachedIds.retainAll { id -> active.any { it.id == id && hasWeapon(it) && canMove(it) } }
-        val army = active.filter { (hasWeapon(it) || hasHeal(it) || wounded(it)) && it.id !in detachedIds }
-        val runners = active.filter { (!hasWeapon(it) && !hasHeal(it) && !wounded(it)) || it.id in detachedIds }
+        // ...и зачисленные КОМАНДИРОМ (v160, см. commandRace): его задание на захват действует так же, как detach —
+        // иначе крип, посланный за флагом, остаётся бойцом строя и флага не берёт
+        val takers = { id: String -> id in detachedIds || (USE_COMMAND_RACE && id in cmdDetach) }
+        val army = active.filter { (hasWeapon(it) || hasHeal(it) || wounded(it)) && !takers(it.id) }
+        val runners = active.filter { (!hasWeapon(it) && !hasHeal(it) && !wounded(it)) || takers(it.id) }
         val immobile = active.filter { !canMove(it) }
 
         val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }
@@ -4127,91 +4135,6 @@ cpuMark("a.evade")
             // флагах или разбегается, и командир строил кулак против того, кто строем не дерётся. Условие по существу
             // не «сомкнут ли он», а «сколько его вооружённых стоит у нашей армии»: группа — дело командира, одиночка —
             // нет (v155)
-            val foesAtHand = armedEnemies.count { e -> massArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
-            // РЕЖИМЫ КОМАНДИРА (v160, оператор: «командир должен оркестрировать всю игру»). Раздача клеток против его
-            // строя — это ОДИН режим, и все формы, на которых расширение окна падало (camp, roost, scatter, kite),
-            // просят другого: там враг строем не дерётся, а сидит на флагах, разбегается или держит дистанцию, и
-            // выигрывает не кулак, а счёт. Поэтому командир сперва называет РЕЖИМ, а уже режим решает, что делать
-            cmdMode = when {
-                !contact -> CmdMode.MARCH                                   // врага рядом нет — идём и берём флаги
-                enemyRetreating || stalledNow -> CmdMode.RACE               // он не дерётся: гонка очков, а не погоня
-                underTheirFire && (enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES) &&
-                    posture == Posture.ANNIHILATE -> CmdMode.FIGHT          // настоящая рубка со строем
-                else -> CmdMode.RACE
-            }
-            // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
-            // (контакт, сомкнутость или шесть рядом, постура, огонь, отсутствие отхода и затора) целиком перешли в
-            // выбор режима выше — это то же самое, сказанное один раз, и дальше режимы можно наполнять по одному
-            val commanderNow = USE_COMMANDER && cmdMode == CmdMode.FIGHT
-            // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
-            // он перестаёт молчать там, где раньше просто уступал место старым правилам
-            val raceCommandNow = USE_COMMANDER && USE_COMMAND_RACE && cmdMode == CmdMode.RACE
-            // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
-            // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
-            if (commanderNow) cmdTicks++ else if (contact && enemyMassedNow) cmdBlocked =
-                if (posture != Posture.ANNIHILATE) "posture" else if (enemyRetreating) "retreat"
-                else if (stalledNow) "stall" else if (!theirMeleeIn) "noMelee" else "off"
-            if (commanderNow) {
-                // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
-                // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
-                // дважды кончилось `Script execution timed out` (матчи 6aa085d7 и 6aa086d3): тик пропал целиком, армия
-                // не сходила. При нехватке времени командир раздаёт клетки одним замыслом, без перебора и прогонов
-                val cpuTight = USE_CPU_GUARD && getTicks() > 1 && cpuMs() > CPU_GUARD_MS
-                if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
-                if (!USE_SIMULATION || cpuTight) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
-                else {
-                    // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через SIM_TICKS (v138)
-                    var bestScore = -Double.MAX_VALUE
-                    var bestPlan: Map<String, Position>? = null
-                    var bestIntent = Intent.PRESS
-                    // выбор цели фокуса симуляцией ОТВЕРГНУТ (v138): перебор пар (замысел, цель) дал 1-7 и 2-6 против
-                    // 3-13, а проведённая до стрельбы цель уронила гейт до 129/131 и дала m33:kite 0:21 135 — назначенная
-                    // цель ломает липкость фокуса, которая и держит наш огонь на одном. Перебираются только замыслы
-                    // ПОРТФЕЛЬНЫЙ ЖАДНЫЙ ПОИСК (v139, Churchill & Buro 2013): сперва лучший ЕДИНЫЙ замысел, затем
-                    // восхождение — крип за крипом пробуем все замыслы и оставляем тот, чей прогон лучше. Так армия
-                    // смешивает поведение, чего единая политика не умеет
-                    for (intent in Intent.values()) {
-                        val trial = HashMap<String, Position>()
-                        commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
-                        // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
-                        // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
-                        val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget, intent)
-                        if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
-                    }
-                    // ...восхождение идёт по ГРУППАМ РОЛЕЙ, а не по отдельным крипам (v139): в литературе это называют
-                    // кластеризацией юнитов, и при нашей грубой оценке она обязательна — назначая замысел каждому крипу
-                    // порознь, поиск рвал строй (гейт 128/131, m30:kite 0:21 899 при CPU всего 3,8 мс, то есть дело не
-                    // в цене, а в том, что смешанные наборы получают завышенную оценку)
-                    if (USE_PORTFOLIO_SEARCH && bestPlan != null) {
-                        val groups = listOf(
-                            mobileArmy.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) },
-                            mobileArmy.filter { hasWeapon(it) && hasRanged(it) },
-                            mobileArmy.filter { !hasWeapon(it) && hasHeal(it) })
-                        val per = HashMap<String, Intent>()
-                        for (c in mobileArmy) per[c.id] = bestIntent
-                        repeat(PGS_ROUNDS) {
-                            for (g in groups) {
-                                if (g.isEmpty()) continue
-                                val was = per[g[0].id] ?: bestIntent
-                                var localBest = was
-                                for (i in Intent.values()) {
-                                    if (i == was) continue
-                                    for (c in g) per[c.id] = i
-                                    val trial = HashMap<String, Position>()
-                                    commandFight(mobileArmy, combatEnemies, armedEnemies, trial, bestIntent, per)
-                                    val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
-                                    if (sc > bestScore) { bestScore = sc; bestPlan = trial; localBest = i }
-                                }
-                                for (c in g) per[c.id] = localBest
-                            }
-                        }
-                    }
-                    commandOf.clear()
-                    bestPlan?.let { commandOf.putAll(it) }
-                    if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()}")
-                }
-            } else if (raceCommandNow) { cmdTicks++; commandRace(ctx, mobileArmy, armedEnemies, ctx.flags, commandOf) }
-            else commandOf.clear()
             // цена командира отдельной строкой в разбивке (v158): она была спрятана в фазе «plan» вместе с обеими
             // расстановками, и когда живьём дважды сработал `Script execution timed out`, сказать по логу, чей это
             // расход, было нечем. На стенде вопрос не решается — там весь тик стоит 2,4 мс на пике
@@ -4219,6 +4142,110 @@ cpuMark("a.evade")
             if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
             else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf, rangedRow = !(pressOn && USE_PRESS_RING), standoff = standoffNow, focusTarget = focusTarget, retreating = enemyRetreating)
         }
+        // КОМАНДИР ВНЕ БЛОКА СТРОЯ (v160): весь его расчёт стоял внутри `if (blockOn)`, а blockOn требует постуры
+        // ANNIHILATE, врагов в поле и отсутствия добивания — то есть командир молчал везде, кроме рубки, что бы ни
+        // говорил его собственный режим: замер показал mode=FIGHT в 150 строках лога при cmdTicks=26. Теперь он
+        // считается всегда и сам решает по режиму
+        // РЕЖИМЫ КОМАНДИРА (v160, оператор: «командир должен оркестрировать всю игру»). Раздача клеток против его
+        // строя — это ОДИН режим, и все формы, на которых расширение окна падало (camp, roost, scatter, kite),
+        // просят другого: там враг строем не дерётся, а сидит на флагах, разбегается или держит дистанцию, и
+        // выигрывает не кулак, а счёт. Поэтому командир сперва называет РЕЖИМ, а уже режим решает, что делать
+        // сколько его вооружённых стоит у нашей армии: группа — дело командира, одиночка — нет
+        val foesAtHand = armedEnemies.count { e -> massArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
+        cmdMode = when {
+            // ПОХОД — это когда врага рядом НЕТ, а не «нет контакта»: кайтер держится в двух шагах за границей
+            // контакта, и командир, раздавая задания на захват, разбирал против него армию по одному — сценарий
+            // match29:kite давал 0 очков против 22 644, а с выключенным походом кончается уничтожением его армии.
+            // Порог MARCH_SAFE и отделяет поход от боя, который просто не начался (v160)
+            !contact && armedEnemies.none { e -> massArmy.any { getRange(e, it) <= MARCH_SAFE } } -> CmdMode.MARCH
+            enemyRetreating || stalledNow -> CmdMode.RACE               // он не дерётся: гонка очков, а не погоня
+            // ...и НЕ ДОБИВАНИЕ: это условие несло старое ограничение blockOn, и без него командир строил кулак в
+            // погоне за кайтером — match29:kite шёл 0 : 22 644, а без командира кончается уничтожением его армии на
+            // 299-м тике. Добивание ведёт охота, а не строй (v160)
+            !pushing && underTheirFire && (enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES) &&
+                posture == Posture.ANNIHILATE -> CmdMode.FIGHT          // настоящая рубка со строем
+            else -> CmdMode.RACE
+        }
+        // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
+        // (контакт, сомкнутость или шесть рядом, постура, огонь, отсутствие отхода и затора) целиком перешли в
+        // выбор режима выше — это то же самое, сказанное один раз, и дальше режимы можно наполнять по одному
+        val commanderNow = USE_COMMANDER && cmdMode == CmdMode.FIGHT
+        // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
+        // он перестаёт молчать там, где раньше просто уступал место старым правилам
+        // ...и ПОХОД — тот же вопрос, что гонка, только врага рядом нет: командир так же раздаёт флаги группами,
+        // а ядро держит вместе. Прежняя попытка вести поход (v151) провалилась 0-8 потому, что вела его РАЗДАЧА
+        // КЛЕТОК ПРОТИВ СТРОЯ — расстановка, которой в походе нечего расставлять; здесь у похода свой режим (v160)
+        val raceCommandNow = USE_COMMANDER && USE_COMMAND_RACE &&
+            (cmdMode == CmdMode.RACE || (USE_COMMAND_MARCH && cmdMode == CmdMode.MARCH))
+        // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
+        // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
+        if (commanderNow) cmdTicks++ else if (contact && enemyMassedNow) cmdBlocked =
+            if (posture != Posture.ANNIHILATE) "posture" else if (enemyRetreating) "retreat"
+            else if (stalledNow) "stall" else if (!theirMeleeIn) "noMelee" else "off"
+        if (commanderNow) {
+            // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
+            // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
+            // дважды кончилось `Script execution timed out` (матчи 6aa085d7 и 6aa086d3): тик пропал целиком, армия
+            // не сходила. При нехватке времени командир раздаёт клетки одним замыслом, без перебора и прогонов
+            val cpuTight = USE_CPU_GUARD && getTicks() > 1 && cpuMs() > CPU_GUARD_MS
+            if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
+            if (!USE_SIMULATION || cpuTight) commandFight(mobileArmy, combatEnemies, armedEnemies, commandOf)
+            else {
+                // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через SIM_TICKS (v138)
+                var bestScore = -Double.MAX_VALUE
+                var bestPlan: Map<String, Position>? = null
+                var bestIntent = Intent.PRESS
+                // выбор цели фокуса симуляцией ОТВЕРГНУТ (v138): перебор пар (замысел, цель) дал 1-7 и 2-6 против
+                // 3-13, а проведённая до стрельбы цель уронила гейт до 129/131 и дала m33:kite 0:21 135 — назначенная
+                // цель ломает липкость фокуса, которая и держит наш огонь на одном. Перебираются только замыслы
+                // ПОРТФЕЛЬНЫЙ ЖАДНЫЙ ПОИСК (v139, Churchill & Buro 2013): сперва лучший ЕДИНЫЙ замысел, затем
+                // восхождение — крип за крипом пробуем все замыслы и оставляем тот, чей прогон лучше. Так армия
+                // смешивает поведение, чего единая политика не умеет
+                for (intent in Intent.values()) {
+                    val trial = HashMap<String, Position>()
+                    commandFight(mobileArmy, combatEnemies, armedEnemies, trial, intent)
+                    // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
+                    // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
+                    val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget, intent)
+                    if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
+                }
+                // ...восхождение идёт по ГРУППАМ РОЛЕЙ, а не по отдельным крипам (v139): в литературе это называют
+                // кластеризацией юнитов, и при нашей грубой оценке она обязательна — назначая замысел каждому крипу
+                // порознь, поиск рвал строй (гейт 128/131, m30:kite 0:21 899 при CPU всего 3,8 мс, то есть дело не
+                // в цене, а в том, что смешанные наборы получают завышенную оценку)
+                if (USE_PORTFOLIO_SEARCH && bestPlan != null) {
+                    val groups = listOf(
+                        mobileArmy.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) },
+                        mobileArmy.filter { hasWeapon(it) && hasRanged(it) },
+                        mobileArmy.filter { !hasWeapon(it) && hasHeal(it) })
+                    val per = HashMap<String, Intent>()
+                    for (c in mobileArmy) per[c.id] = bestIntent
+                    repeat(PGS_ROUNDS) {
+                        for (g in groups) {
+                            if (g.isEmpty()) continue
+                            val was = per[g[0].id] ?: bestIntent
+                            var localBest = was
+                            for (i in Intent.values()) {
+                                if (i == was) continue
+                                for (c in g) per[c.id] = i
+                                val trial = HashMap<String, Position>()
+                                commandFight(mobileArmy, combatEnemies, armedEnemies, trial, bestIntent, per)
+                                val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS)
+                                if (sc > bestScore) { bestScore = sc; bestPlan = trial; localBest = i }
+                            }
+                            for (c in g) per[c.id] = localBest
+                        }
+                    }
+                }
+                commandOf.clear()
+                bestPlan?.let { commandOf.putAll(it) }
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()}")
+            }
+        } else if (raceCommandNow) { cmdTicks++; commandRace(ctx, mobileArmy, armedEnemies, ctx.flags, commandOf) }
+            // ...и задания на захват снимаются вместе с режимом: без этого крип, отпущенный командиром за флагом,
+            // оставался захватчиком НАВСЕГДА — армия таяла тик за тиком, и сценарий kite давал 0 очков (v160)
+            else { commandOf.clear(); cmdDetach.clear() }
+
         // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
         lostTick.clear()
         for (c in army) lostTick[c.id] = ((lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
@@ -5078,7 +5105,12 @@ cpuMark("a.evade")
     private fun commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>,
                             out: MutableMap<String, Position>) {
         out.clear()
-        val free = army.filter { canMove(it) && !it.spawning && hasWeapon(it) }.toMutableList()
+        cmdDetach.clear()
+        // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
+        // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
+        // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
+        val mine = army + ctx.runners.filter { it.id in cmdDetach }
+        val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) }.toMutableList()
         if (free.isEmpty()) return
         val core = (free.size + 1) / 2               // ядро не отпускаем: аннигиляция — поражение при любом счёте
         var budget = free.size - core
@@ -5093,12 +5125,25 @@ cpuMark("a.evade")
             .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
         for (f in wanted) {
             if (budget <= 0) break
+            // ...и размер горстки задаёт НЕ флаг, а его армия: пока она цела и на ходу, одиночку она перехватывает и
+            // бьёт — на match29:kite наши уходили за флагами по одному, армия таяла до двух крипов, а очков не было
+            // вовсе (0 : 22 469). Одиночка посылается, только когда перехватывать некому
             val guarded = armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }
-            val need = if (guarded) 2 else 1
+            val loose = armedEnemies.count { e -> canMove(e) } >= COMMAND_MIN_FOES
+            val need = if (guarded) 2 else if (loose) RACE_PARTY else 1
             if (budget < need) continue
             val party = free.sortedBy { getRange(it, f.pos) }.take(need)
             if (party.size < need) continue
-            for (c in party) { out[c.id] = f.pos; free.remove(c) }
+            // ...и ЯДРО ОБЯЗАНО ОСТАТЬСЯ СИЛЬНЕЕ ЕГО АРМИИ — та же проверка, которой держится отряд (см. USE_DETACH):
+            // аннигиляция проигрывает матч при любом счёте, поэтому отпускать можно лишь до тех пор, пока оставшиеся
+            // держат паритет. Без неё командир растаскивал армию грубее прежней логики и ронял army-сценарии (гейт 127)
+            val without = free.filter { c -> party.none { it.id == c.id } }
+            if (without.none { hasWeapon(it) }) break
+            if (ourPowerOf(without, armedEnemies) < enemyPowerOf(armedEnemies, without) * PARITY_FLOOR) break
+            // ...и ЗАДАНИЕ — это зачисление в захватчики с целью, а не клетка: вооружённый крип, приведённый к флагу
+            // как боец, флага НЕ БЕРЁТ (захват делают бегуны), и первая редакция на сценарии kite набрала 0 очков.
+            // Командир решает КТО и КУДА, а ведёт и берёт существующий механизм захвата (v160)
+            for (c in party) { cmdDetach.add(c.id); runnerFlag[c.id] = f.id; free.remove(c) }
             budget -= need
         }
     }
@@ -5597,6 +5642,7 @@ cpuMark("a.evade")
     /** Режим командира (v160): рубка со строем, гонка очков или поход. Раздача клеток — только режим FIGHT. */
     private enum class CmdMode { FIGHT, RACE, MARCH }
     private var cmdMode = CmdMode.MARCH
+    private val cmdDetach = HashSet<String>()      // кого командир отправил за флагами (v160, режимы RACE и MARCH)
     private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
     private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
