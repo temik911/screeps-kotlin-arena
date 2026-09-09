@@ -874,6 +874,12 @@ object PainAndGain {
     // прогноза 832 против 956), но гейт падает до 133 из 135 (camp 19 521:20 793, brawl+heals с потерей армии) —
     // слишком сильное притяжение ведёт крипа в клетку сквозь огонь. При 2 гейт держит 135, приближение 34 %
     private const val ORDER_PULL = 2.0
+    /** ОПАСНОСТЬ ПУТИ (v169, оператор): клетка в двух шагах достигается через промежуточную, и командир оценивал
+     *  только конечную. Если промежуточная под огнём, движение честно отказывается туда идти — и приказ терялся. */
+    private const val USE_ORDER_PATH_DANGER = true
+    // вес замерен: тройка гейт роняет (134 из 135) и исполнения не добавляет (те же 14 из 141), единица держит 135
+    private const val PATH_DANGER_W = 1.0
+    private const val PATH_BLOCKED_COST = 1000.0
     /** РАЗДЕТЫЙ УХОДИТ И В ПРОГНОЗЕ (v166): командир приказывает ему прочь из огня, а в прогоне он стоял и собирал
      *  урон. Замер: средняя ошибка 1 063 против 1 071, доля неверных знаков та же (24 %). Выигрыш мал, но модель
      *  перестала расходиться с приказом. */
@@ -1976,7 +1982,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v166"
+    private const val BOT_VERSION = "v169"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -5572,6 +5578,22 @@ cpuMark("a.evade")
         // Раздача рекурсивна: занятая клетка не отвергается и не просто дорожает — её жилец получает приказ уйти,
         // а если и его клетка занята, цепочка идёт дальше, до CHAIN_DEPTH звеньев. Обмен местами — вырожденная
         // цепочка длины два, и он разрешён отдельно: ротация состава (раненого назад, свежего вперёд) это ровно своп
+        // ОПАСНОСТЬ ПУТИ, А НЕ ТОЛЬКО КЛЕТКИ (v169, оператор). Клетка в двух шагах достигается ЧЕРЕЗ промежуточную, и
+        // если та под огнём, приказ либо не исполняется, либо исполняется ценой крипа: движение честно отказывается
+        // идти сквозь огонь, и именно так приказ терялся. Стоимость пути — самая безопасная из промежуточных клеток
+        fun pathDanger(c: Creep, p: Position): Double {
+            if (!USE_ORDER_PATH_DANGER || getRange(c, p) <= 1) return 0.0
+            var best = Double.MAX_VALUE
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val x = c.x + dx; val y = c.y + dy
+                if (maxOf(abs(x - p.x), abs(y - p.y)) > 1) continue          // должна быть смежной с целью
+                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
+                val d = incNext[x * 100 + y] ?: 0.0
+                if (d < best) best = d
+            }
+            return if (best == Double.MAX_VALUE) PATH_BLOCKED_COST else best * PATH_DANGER_W
+        }
         fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
             var bestTenant: Creep? = null
@@ -5581,7 +5603,7 @@ cpuMark("a.evade")
                 val self = p.x == c.x && p.y == c.y
                 val tenant = if (self) null else allyOf[key]?.takeIf { it.id != c.id && it.id !in out }
                 // клетка под своим дороже: приказ туда исполним, только если жильца удастся сдвинуть
-                val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0)
+                val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
             }
             val b = best ?: return false
