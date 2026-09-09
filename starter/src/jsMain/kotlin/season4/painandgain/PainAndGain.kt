@@ -757,6 +757,9 @@ object PainAndGain {
      *  была она, а не он. Теперь режим определяется по существу боя, а постуру ставит режим: решил драться — армия
      *  уничтожает. */
     private const val USE_COMMAND_POSTURE = true
+    /** ЯДРО СТРОЕМ ВНЕ БОЯ (v163, оператор): в гонке и походе командир раздавал только задания на захват, а ядро шло
+     *  врозь по прежним веткам и приходило к бою растянутым. Теперь он ведёт его как одно тело. */
+    private const val USE_COMMAND_CORE_MARCH = true
     private const val MARCH_SAFE = 12
     private const val RACE_PARTY = 3
     /** РАЗДЕТЫЕ ПОД ПРИКАЗОМ (v144): крип без боевых частей не попадал ни в одну группу командира и приказа не получал
@@ -1883,7 +1886,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v162"
+    private const val BOT_VERSION = "v163"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4258,7 +4261,20 @@ cpuMark("a.evade")
                 bestPlan?.let { commandOf.putAll(it) }
                 if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()}")
             }
-        } else if (raceCommandNow) { cmdTicks++; commandRace(ctx, mobileArmy, armedEnemies, ctx.flags, commandOf) }
+        } else if (raceCommandNow) {
+            cmdTicks++
+            commandRace(ctx, mobileArmy, armedEnemies, ctx.flags, commandOf)
+            // ...и ядро, оставшееся после раздачи заданий, идёт СТРОЕМ к цели (v163): прежде командир раздавал только
+            // задания на захват, а ядро шло врозь по прежним веткам и приходило к бою растянутым
+            // ...и только пока враг ДАЛЕКО: рядом с ним решают тактические ветки — экран, добыча, перехват, — а строй,
+            // ведущий ядро на флаг мимо них, ронял screen и scatter (гейт 131 из 135)
+            if (USE_COMMAND_CORE_MARCH && armedEnemies.none { e -> mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
+                val goal = objectiveFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id }?.pos }
+                val steps = HashMap<String, Position>()
+                commandMarch(ctx, mobileArmy.filter { it.id !in cmdDetach }, goal, steps)
+                commandOf.putAll(steps)
+            }
+        }
             // ...и задания на захват снимаются вместе с режимом: без этого крип, отпущенный командиром за флагом,
             // оставался захватчиком НАВСЕГДА — армия таяла тик за тиком, и сценарий kite давал 0 очков (v160)
             else { commandOf.clear(); cmdDetach.clear() }
@@ -5140,6 +5156,50 @@ cpuMark("a.evade")
      *  назначается ПОИМЁННО, одной политикой: сперва ищем того, кого армия ДОБИВАЕТ этим тиком (залп всех, кто его
      *  достаёт, перекрывает хиты вместе с лечением, которое до него дотягивается) — на него идут все достающие; если
      *  добить некого, огонь сходится на прежней липкой цели, а кто её не достаёт, бьёт ближайшего вооружённого. */
+    /** ЯДРО ИДЁТ СТРОЕМ (v163, оператор: перевести на командира и движение вне боя). Ведёт ядро как одно тело: шаг в
+     *  сторону цели, клетки раздаются по одной на крипа, отставший подтягивается к якорю, и ни одна клетка не выходит
+     *  за FIST_RADIUS. Это НЕ отвергнутый USE_COMMANDER_APPROACH: тот вёл поход РАССТАНОВКОЙ ПРОТИВ СТРОЯ, которой в
+     *  походе нечего расставлять, и потому упирался в фолбэк «ближе к врагу». */
+    private fun commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: MutableMap<String, Position>) {
+        out.clear()
+        if (goal == null) return
+        val core = army.filter { canMove(it) && !it.spawning }
+        if (core.size < 2) return
+        val xs = core.map { it.x }.sorted(); val ys = core.map { it.y }.sorted()
+        val ax = xs[xs.size / 2]; val ay = ys[ys.size / 2]
+        // ...и направление задаёт ПУТЬ, а не прямая на цель: жадный шаг упирался в стену и строй застревал целиком —
+        // сценарий screen шёл в режиме марша все 185 строк лога и проигрывал счёт 10 782:14 471. Ведущий — тот, кто
+        // ближе всех к якорю; его шаг по полю потока и есть направление колонны (v163)
+        val lead = core.minByOrNull { maxOf(abs(it.x - ax), abs(it.y - ay)) }!!
+        val step = pathStep(lead, goal, 1, crowdMatrixOf(ctx, goal.x * 100 + goal.y))
+        val sx = if (step != null) (step.x - lead.x).coerceIn(-1, 1) else (goal.x - ax).coerceIn(-1, 1)
+        val sy = if (step != null) (step.y - lead.y).coerceIn(-1, 1) else (goal.y - ay).coerceIn(-1, 1)
+        if (sx == 0 && sy == 0) return
+        val taken = HashSet<Int>()
+        for (c in core.sortedBy { maxOf(abs(it.x - ax), abs(it.y - ay)) }) {
+            // лекарь идёт за подопечным, а не в строю: его место задаёт лечение, и приказ марша только уводил его
+            if (hasHeal(c) && !hasWeapon(c)) continue
+            val far = maxOf(abs(c.x - ax), abs(c.y - ay)) > FIST_RADIUS
+            val tx = if (far) ax else c.x + sx * 2
+            val ty = if (far) ay else c.y + sy * 2
+            // ...и шаг ВЫБИРАЕТСЯ из восьми, а не идёт напролом: прямой упирался в стену и в занятую клетку, и строй
+            // застревал целиком — гейт поймал шестью строками (scouts, screen, army, camp, scatter)
+            var best: Position? = null; var bestD = Int.MAX_VALUE
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = c.x + dx; val ny = c.y + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                if (DistanceMap.isTerrainWall(nx, ny)) continue
+                if (nx * 100 + ny in taken) continue
+                if (maxOf(abs(nx - ax), abs(ny - ay)) > FIST_RADIUS + 1) continue
+                val d = maxOf(abs(nx - tx), abs(ny - ty))
+                if (d < bestD) { bestD = d; best = InfluenceMap.cell(nx, ny) }
+            }
+            val b = best ?: continue
+            taken.add(b.x * 100 + b.y); out[c.id] = b
+        }
+    }
+
     private fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?, order: List<Creep>,
                             out: MutableMap<String, String>) {
         out.clear()
