@@ -674,7 +674,13 @@ object PainAndGain {
      *  v138 без неё; проведённая до самой стрельбы — гейт 129/131 и m33:kite 0:21 135. Назначенная цель ломает липкость
      *  фокуса, которая и держит наш огонь на одном. */
     private const val USE_COMMANDER_FOCUS = false
-    private const val SIM_TICKS = 4   // глубина замерена гейтом: 3 и 6 дают 129/131, 4 — 131/131
+    // ГЛУБИНА ПРОГНОЗА (v166): прежде мерилась только гейтом (3 и 6 давали 129/131, 4 — 131/131), а теперь измерена
+    // ОШИБКА самого прогноза — прибором USE_SIM_ERROR, который сверяет обещание с фактом через SIM_TICKS тиков.
+    // Ошибка растёт с глубиной почти линейно: 854 при единице, 1 304 при двойке, 3 855 при четвёрке, — а неверный знак
+    // (обещали прибыль, вышел убыток) 33 %, 38 % и 44 %. На четвёрке прогноз не отличает хороший замысел от плохого:
+    // ошибка втрое больше самой оценки (та держится около 1 200–1 400). Единица и точнее, и вчетверо дешевле по CPU —
+    // а таймаут тика живьём мы уже ловили. Гейт при ней 135/135
+    private const val SIM_TICKS = 1
     /** Насколько далеко командир вправе назначить клетку. Единица (только достижимое за тик) выглядит честнее, но гейт
      *  говорит иначе: 130/131 против 131/131 у двойки — цель в двух клетках ведёт крипа туда, где он будет нужен, а не
      *  туда, куда успеет шагнуть. */
@@ -841,6 +847,9 @@ object PainAndGain {
      *  симуляция вычитала как есть — при том что флаг вешает на ВЛАДЕЛЬЦА ещё и +10 % получаемого урона
      *  (EFF_DAMAGE_TAKEN_MODIFIER, замерено в живых effects). При двух-трёх флагах прогноз ошибался в выживаемости на
      *  десятки процентов, и ровно эта величина решает, стоит ли вступать в размен. */
+    /** ОШИБКА ПРОГНОЗА (v166): прибор, а не правило. Командир обещает разность мощи через SIM_TICKS; здесь обещание
+     *  сверяется с фактом, и в лог идут средняя ошибка и число случаев, когда прогноз обещал прибыль, а вышел убыток. */
+    private const val USE_SIM_ERROR = true
     private const val USE_SIM_TAKEN = true
     private const val USE_SIM_FIST = false
     private const val USE_FIST = true
@@ -1922,7 +1931,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v165"
+    private const val BOT_VERSION = "v166"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -4312,7 +4321,24 @@ cpuMark("a.evade")
                     posture = Posture.RETREAT
                     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("cmd t=${getTicks()}: the forecast is lost (${bestScore.toInt()}) — retreat")
                 }
-                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()}")
+                // ОШИБКА ПРОГНОЗА (v166): командир обещает разность мощи через SIM_TICKS тиков — здесь она запоминается,
+                // а на SIM_TICKS-м тике сверяется с тем, что вышло на самом деле. Прибор нужен потому, что оценка НИ
+                // РАЗУ не уходит в минус (см. USE_COMMAND_RETREAT): пока неизвестно, на сколько она врёт, командир
+                // выбирает замысел числом, которому нельзя верить
+                if (USE_SIM_ERROR) {
+                    // ...и факт меряется ТОЙ ЖЕ формулой, что прогноз: сравнивать оценку симуляции с ланчестеровской
+                    // мощью — сравнивать разные величины, и первая редакция прибора именно этим и занималась
+                    val nowDiff = simulate(mobileArmy, armedEnemies, emptyMap(), 0, focusTarget, null)
+                    simPending[getTicks() + SIM_TICKS] = bestScore to nowDiff
+                    simPending.remove(getTicks())?.let { (predicted, was) ->
+                        val actual = nowDiff - was          // как разность изменилась НА САМОМ ДЕЛЕ за SIM_TICKS
+                        val expected = predicted - was      // как её обещал изменить прогноз
+                        simErrSum += abs(actual - expected); simErrN++
+                        if (expected > 0 && actual < 0) simErrWrongSign++
+                    }
+                    simPending.keys.filter { it < getTicks() }.forEach { simPending.remove(it) }
+                }
+                if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
         } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
             // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
@@ -5921,6 +5947,10 @@ cpuMark("a.evade")
     private var cmdMode = CmdMode.MARCH
     private val cmdDetach = HashSet<String>()      // кого командир отправил за флагами (v160, режимы RACE и MARCH)
     private val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
+    private val simPending = HashMap<Int, Pair<Double, Double>>()  // тик сверки → (обещано, разность на момент прогноза)
+    private var simErrSum = 0.0                    // сумма модулей ошибки прогноза (v166)
+    private var simErrN = 0
+    private var simErrWrongSign = 0                // сколько раз прогноз обещал прибыль, а вышел убыток
     private val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
     private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
     private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
