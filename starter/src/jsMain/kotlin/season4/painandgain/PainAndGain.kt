@@ -420,6 +420,8 @@ object PainAndGain {
      *  все дебаффы (A×0.6 R×0.6 H×0.5 D×1.1 на 1302-м) и снимает с него все (×1); гейт захвата при CAPTURE_FLOOR пропустил его
      *  при мере 2247:1925, а очков седьмой флаг добавляет +3/т. См. captureAllowed. */
     private const val USE_NO_SEVENTH_FLAG = true
+    /** Сила врага в паритетном поле считается по тем, кто за ЭТОТ флаг дерётся, а не по всей его армии (v214). */
+    private const val USE_LOCAL_PARITY = true
     /** БЕГУН БЕРЁТ ФЛАГ НАШЕЙ ПОЛОВИНЫ ПОД БРОСКОМ (проба после серии 387–406, дебют против гастролёра — MetalicaX#3/#4, けろびー#12):
      *  см. captureAllowed. ОТВЕРГНУТО таблицей входов: 17 хуже / 5 лучше по +20, brawl m33 из уничтожения его в уничтожение НАШЕЙ
      *  армии (2628:11684 → 8051:6038 по +50), m32 brawl живых 11 → 7, m30 brawl +50 3028:12818 → 5940:5767 — дебафф бегуна перед
@@ -2257,6 +2259,12 @@ object PainAndGain {
     // отказа построчно, но накопительного числа не было, и сравнивать версии было нечем.
     // Пара — «блокировано/рассмотрено», причины врозь: `rush` разложен на дебютный бросок и на сближение,
     // `contact` — на бой у МАССЫ армии и на стычку одиночки. Это решает, сколько отказов снимает какая правка.
+    /** Состав ИДУЩЕГО боя — его крипы, успевающие прийти к нашей массе (см. fightPack). Считается в runArmy,
+     *  читается гейтом захвата на следующем тике: задержка в тик здесь законна, та же, что у stalledNow. */
+    private var fightPackIds: Set<String> = emptySet()
+    /** Прибор локализации: |opp| против |combatEnemies| — если держится единицей, локализация ничего не меняет. */
+    private var capOppSum = 0
+    private var capAllSum = 0
     private val capBlocked = HashMap<String, Int>()
     private var capOffered = 0
     private val capSeen = HashSet<String>()      // (тик, флаг) считается один раз, а не по разу на вызывающего
@@ -2751,7 +2759,7 @@ cpuMark("arrival")
                 "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
                 "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll " +
+                " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -3013,7 +3021,23 @@ cpuMark("arrival")
         }
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
-        val (ours, theirs) = powerAfter(ctx, f)
+        // СИЛА ВРАГА ДЛЯ ЭТОГО ФЛАГА (v214, решение оператора: вето становится местным). Здесь стояло
+        // `powerAfter(ctx, f)`, где сторона врага — ВСЯ его армия без учёта расстояния: крип в шестидесяти клетках
+        // весил столько же, сколько стоящий вплотную. Дебафф флага глобален, поэтому его цену платит тот бой,
+        // который РЕАЛЬНО случится, — это либо идущий бой (fightPack, «кто успевает прийти к нашей массе»), либо
+        // бой за сам флаг (его боевые в FLAG_GUARD_RANGE, уже посчитаны в collectFlags как guards).
+        // Кто не участвует ни в одном, не платит и не считается. Доктрина паритета остаётся: powerAfterFor
+        // по-прежнему берёт нашу мощь С дебаффом флага против его без дебаффа и требует пол.
+        // Взято дешёвое множество (guards вместо packAt): оно не стоит ни одного BFS. Если прибор capopp покажет,
+        // что локализация мало что меняет, следующим шагом сюда войдёт packAt с полем пути к флагу.
+        val opp = if (!USE_LOCAL_PARITY) ctx.combatEnemies else
+            ctx.combatEnemies.filter { it.id in fightPackIds || f.guards.any { g -> g.id == it.id } }
+                .ifEmpty { ctx.combatEnemies }
+        capOppSum += opp.size
+        capAllSum += ctx.combatEnemies.size
+        val (ours, theirs) = powerAfterFor(ctx,
+            if (USE_CAPTURE_MEASURES_CORE) ctx.army else ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) },
+            opp, f)
         // ИНВЕРСИЯ СНЯТА (v214). Здесь стояло `needed = ourScore <= enemyScore || ourRate <= enemyRate`, и когда
         // мы ВЕДЁМ по счёту и по темпу, пол становился CAPTURE_FLOOR = 1.0 — СТРОЖЕ, чем PARITY_FLOOR = 0.97 при
         // отставании. То есть выигранная позиция запрещала закреплять выигрыш. Замер по 12 живым матчам говорит,
@@ -3981,6 +4005,7 @@ cpuMark("a.retreat")
             }
             pack
         }
+        fightPackIds = fightPack.mapTo(HashSet()) { it.id }
         val fightAll = fightPack.size == combatEnemies.size
         val oursFight = if (fightAll) ours else ourPowerOf(army, fightPack)
         val theirsFight = if (fightAll) theirs else enemyPowerOf(fightPack, army)
