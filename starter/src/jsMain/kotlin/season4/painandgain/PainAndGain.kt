@@ -130,17 +130,10 @@ object PainAndGain {
      *  первыми. Живые числа согласны: гибнут только атакующие части (0–16 из 32), стрелковые целы (24–30 из 30), то
      *  есть тела мили работают самой дешёвой бронёй, какая у нас есть. Убирать броню, которая всё равно ничего не
      *  бьёт, — значит подставить под тот же огонь единственное, чем мы бьём. */
-    /** СОГЛАСОВАННОСТЬ СТРОЯ (v200, оператор). Два жёстких условия в расстановке командира — там, где решается, кто
-     *  где стоит: мили не получает клетку вне дальности лечения от живого лекаря, а лекарь не получает клетку впереди
-     *  строя (хотя бы один свой вооружённый обязан стоять к врагу ближе). Оба измерены на реплее 3d9943: под лечением
-     *  1 мили из 4 на первом тике контакта; глубина по оси мили −1,35, стрелки +0,68, ЛЕКАРИ +0,32, и в 155 тиках из
-     *  335 лекари ближе к врагу, чем мили; на t=63 первый лекарь уже без лечащих частей. Оба условия — фильтры в
-     *  `place`, поэтому при отсутствии подходящей клетки работает прежний добор, и строй не может замереть. */
-    /** УПРЕЖДЕНИЕ ПО УХОДЯЩЕМУ (v201, см. gunReach в commandFight): клетка стрелка берётся с запасом на его шаг. */
-    private const val USE_RANGED_LEADS_TARGET = true
-    private const val USE_RANGED_LINE_CAP = true   // линия «не впереди мили» не дальше дальности выстрела (v200)
-    private const val USE_MELEE_IN_HEAL_REACH = true
-    private const val USE_HEALER_BEHIND_LINE = true
+    // СОГЛАСОВАННОСТЬ СТРОЯ жёсткими условиями (v200–v201) снята этапом 6: «мили в дальности лечения», «лекарь за
+    // линией», «стрелок не впереди мили» и упреждение по уходящему были ЗАПРЕТАМИ там, где нужны предпочтения, и
+    // запирали друг друга — стрелок выталкивался за собственную дальность выстрела. Теперь это слагаемые оценки
+    // (см. scoreMelee/scoreRanged/scoreHeal), а замеры, которыми они обосновывались, перенесены в docs.
     private const val USE_MELEE_BEHIND_WHEN_IDLE = false
     /** РЯД ЦЕЛИТСЯ НА КЛЕТКУ БЛИЖЕ, КОГДА ОН УКЛОНЯЕТСЯ (v196). Ряд стрелков ставится в RANGED_RANGE от ближайшей
      *  угрозы — ровно в три, — но его блок меняет клетку 71–76 % тиков контакта, и шаг делается ОДНОВРЕМЕННО с нашим:
@@ -727,15 +720,10 @@ object PainAndGain {
      *  стократно, и он выбирал безопасную клетку подальше; а фолбэк, когда клетки в дальности не нашлось, отправлял
      *  его в САМУЮ безопасную — то есть прочь от боя. Здесь порядок обратный: близость главная (и не 3, а 2, как у
      *  него), опасность — тай-брейк, фолбэк ведёт к бойцам. */
-    private const val USE_HEALERS_CLOSE = true
     /** ЛЕКАРЬ — В САМОЙ БЕЗОПАСНОЙ КЛЕТКЕ, ОТКУДА ДОСТАЁТ (v183). Не «ближе всех к раненому»: ближайший раненый —
      *  тот, кто в контакте, и лекарь шёл за ним в рубку. Отбор клеток уже гарантирует лечебную дальность. */
-    private const val USE_HEALERS_SAFE_IN_RANGE = false
-    private const val HEALER_REACH_COST = 10000.0   // клетка не вплотную к своему: лечение втрое слабее — берётся последней
     /** ЛЕКАРЬ ПРИКРЫТ ТЕЛАМИ СВОИХ (v186): его лекари сохраняют лечащие части 100 % боя, наши 8 % — при одном и том же
      *  теле `h6m6`, где лечение стоит первым и гибнет первым. Решает не открытость клетки, а число своих вплотную. */
-    private const val USE_HEALERS_SCREENED = true
-    private const val HEALER_SCREEN = 1000.0        // одно прикрывающее тело весит больше тысячи входящего урона
     /** МИЛИ НЕ БРОСАЕТСЯ ПОД ВЕРНУЮ СМЕРТЬ (v143, оператор): «выбрасываться могут либо под фокусфаер чтобы быстро убить
      *  1 чужого крипа, либо когда у нас преимущество по силе в бою». Прежде замысел напора ставил мили вплотную к его
      *  вооружённому всегда, а симуляция выбирала напор по мощи, которую сама же и считала. Теперь выброс разрешён
@@ -803,17 +791,13 @@ object PainAndGain {
      *  разгрома 3d9532 в общей рамке обеих армий: наши мили на 0,6 клетки ПОЗАДИ своего центра, стрелки на 0,9
      *  ВПЕРЕДИ; у него мили +0,5, стрелки −0,4. Строй был вывернут наизнанку весь бой, то есть предмет всё это время
      *  существовал — просто мерили его не тем прибором. Включено вместе с USE_RANGED_BEHIND_HARD. */
-    private const val USE_COMMAND_RANGED_BEHIND = false
     /** ...и медианная линия вместо передовой: один выдвинутый мили не должен открывать всем стрелкам право стоять
      *  там же, где он. */
-    private const val USE_RANGED_BEHIND_MEDIAN = false
     /** ...и ЗАПРЕТ вместо слагаемого: RANGED_BEHIND_COST = 40 стоял рядом с incNext × 100, то есть с десятками тысяч,
      *  и в выборе клетки не решал ничего. Клетка ближе к его строю, чем линия наших мили, стрелку не предлагается. */
-    private const val USE_RANGED_BEHIND_HARD = false
     /** ...и когда «стрелять» и «уцелеть» несовместимы — уцелеть (v183): все замыслы стрелка требуют разом быть вне
      *  досягаемости его мили и доставать цель, а рядом с его строем такой клетки часто нет, и общий фолбэк оставлял
      *  стрелка под ударом. Выстрел стоит 60, стрелок — 1 200. */
-    private const val USE_RANGED_FLEES_MELEE = false
     /** ОТХОД ПО ПРОГНОЗУ (v165, оператор): решение «бежать» принимала постура, а прибор для него есть у командира —
      *  симуляция размена. Если лучший из замыслов кончается перевесом врага по уцелевшей мощи, командир объявляет
      *  отход сам, не дожидаясь, пока это заметят счётчики постуры.
@@ -826,7 +810,6 @@ object PainAndGain {
     // порог откалиброван по логу: оценка замысла держится около 1 200–1 400 при живой армии, поэтому «минус два»
     // не срабатывало ни разу — правило было мёртвым. Отход объявляется, когда прогноз ушёл в заметный минус
     private const val COMMAND_RETREAT_SCORE = 0.0
-    private const val RANGED_BEHIND_COST = 40.0
     private const val GOAL_GUARD_COST = 6
     private const val MARCH_SAFE = 12
     private const val RACE_PARTY = 3
@@ -2057,7 +2040,6 @@ object PainAndGain {
     /** СТРЕЛОК ДЕРЖИТСЯ ОТ ЕГО МИЛИ (v177, оператор): замер по записи разгрома — наши стрелки стояли вплотную к его
      *  вооружённому мили 33 крипо-тика и в двух клетках ещё 41 из 242 стрелковых. Клетка ближе MELEE_KEEP_RANGE к его
      *  мили стрелку не назначается. */
-    private const val USE_RANGED_KEEPS_OFF_MELEE = true
     /** ВЫРВАВШИЙСЯ ВПЕРЁД ВОЗВРАЩАЕТСЯ (v177, оператор): кулак ограничивал кандидатные клетки, но крипа, уже стоящего
      *  вне кулака, не возвращал — замер даёт отрыв до 10 клеток при среднем 1,8, и это тот самый одиночка, которого
      *  быстро убивают. Такому назначается шаг к якорю прежде всех прочих приказов. */
@@ -2192,11 +2174,11 @@ object PainAndGain {
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
     private const val BOT_VERSION = "v208"
     private const val DEBUG_LOG = true
-    /** Сверка полей влияния с ПРЯМЫМ пересчётом по крипам (этап 3). Стоит два десятка клеток за тик и
-     *  обязана держаться нуля: ненулевой числитель chk значит, что штамп сдвинут, и это видно за 3,5
-     *  минуты стенда, а не за час игр. Сверка со старым incNext (fldcmp) сняла свой вопрос на этапе 3 —
-     *  0 из 304 950 клеток — и удалена вместе с incNext на этапе 4. */
-    private const val FIELD_CHECK = true
+    /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
+     *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
+     *  0 из 22 355 494 сверок по 135 сценариям. Осталось то, что отвечает на живой вопрос, — пики полей:
+     *  обнулившееся поле обязано быть ВИДНО, а не тихо давать нули. */
+    private const val FIELD_LOG = true
 
     // ---------- поле цели (v204, этап 5) ----------
     /**
@@ -2207,13 +2189,6 @@ object PainAndGain {
      * оставался на месте с оценкой «везде одинаково безопасно».
      */
     // ---------- оценка клетки полем (v206, этап 6) ----------
-    /**
-     * Оценка клетки ПОЛЕМ вместо россыпи ранговых формул и жёстких отборов. Тумблер живёт до этапа 8 — он
-     * единственный способ сыграть контроль тем же вечером против того же соперника; дата смерти назначена,
-     * иначе он станет двадцать первым мёртвым тумблером в этом файле.
-     */
-    private const val USE_FIELD_SCORE = true
-
     // ДИСЦИПЛИНА ЕДИНИЦ — главная защита от повторения `PAIR_W_INFLUENCE = 0.1` рядом с 30 и 50, и от
     // `RANGED_BEHIND_COST = 40` рядом с incNext × 100. Каждое слагаемое оценки — в единицах УРОНА ЗА ТИК
     // (то, что возвращает profileOf), каждый вес безразмерный в диапазоне [0.1, 2.0]. Слагаемое больше не
@@ -2559,8 +2534,6 @@ object PainAndGain {
         // по клеткам. Опасность клетки в раздаче читается отсюда (см. inc в commandFight).
         InfluenceMap.buildFields(active, enemyCreeps)
         cpuMark("fields")
-        if (FIELD_CHECK) InfluenceMap.checkFields(active, enemyCreeps)
-        cpuMark("fldchk")
         val rawDanger = InfluenceMap.dangerCostMatrix(enemyCreeps, blocked)
         // флаг берётся тем, кто на него ВСТАЛ, — и любой шаг армии через чужой флаг был захватом: в матче 3 армия
         // на марше взяла D5 и второй A3 (occupant=none в журнале) и дралась при A×0.6 D×1.1 против врага, с
@@ -2710,9 +2683,9 @@ cpuMark("arrival")
                 " step=" + stepCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " pass=" + passCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " sum=${stepCount.values.sum()}")
-            // ПОЛЯ: chk — расхождение поля с прямым пересчётом по крипам. Пики печатаются, чтобы обнулившееся
-            // поле было ВИДНО: прибор, умеющий сказать только «поле построено», прибором не является
-            if (FIELD_CHECK) println("fld t=${getTicks()}: chk=${InfluenceMap.checkBad()}/${InfluenceMap.checkAll()} hdbf=${InfluenceMap.healDebuffStats()}" +
+            // ПОЛЯ: пики печатаются, чтобы обнулившееся поле было ВИДНО — прибор, умеющий сказать только
+            // «поле построено», прибором не является
+            if (FIELD_LOG) println("fld t=${getTicks()}: hdbf=${InfluenceMap.healDebuffStats()}" +
                 " eM=${InfluenceMap.fieldPeak(InfluenceMap.eMelee).toInt()} eR=${InfluenceMap.fieldPeak(InfluenceMap.eRanged).toInt()}" +
                 " eH=${InfluenceMap.fieldPeak(InfluenceMap.eHeal).toInt()} aM=${InfluenceMap.fieldPeak(InfluenceMap.aMelee).toInt()}" +
                 " aR=${InfluenceMap.fieldPeak(InfluenceMap.aRanged).toInt()} aH=${InfluenceMap.fieldPeak(InfluenceMap.aHeal).toInt()}" +
@@ -6444,7 +6417,7 @@ cpuMark("a.evade")
             // временное отталкивание в занятой клетке (Hagelbäck & Johansson): следующий крип видит её как
             // тесную. Без этого двое выбирают одну клетку, третий загораживает четвёртого — записанная причина
             // провала USE_FORWARD_SEARCH: «каждый крип считает за себя»
-            if (USE_FIELD_SCORE) InfluenceMap.addClaim(b.x, b.y)
+            InfluenceMap.addClaim(b.x, b.y)
             if (b.x != c.x || b.y != c.y) allyOf.remove(c.x * 100 + c.y)
             if (depth == 0) passCount[passTag] = (passCount[passTag] ?: 0) + 1
             return true
@@ -6520,14 +6493,8 @@ cpuMark("a.evade")
         val stripped = fighters.filter { !hasWeapon(it) && !hasHeal(it) }
         // ...и замысел может быть СВОЙ у каждого крипа (v139, портфельный поиск): армия смешивает поведение
         fun intentOf(c: Creep) = per?.get(c.id) ?: intent
-        // МИЛИ НЕ УХОДИТ ИЗ-ПОД ЛЕЧЕНИЯ (v200, оператор): «наши мили крипы уезжают из-под хилеров, и они больше не
-        // дотягиваются до них». Замер реплея 3d9943 на первом тике контакта: под лечением 1 мили из 4 (t=60–61), и
-        // это начало той же цепочки, что описана в v186, — мили теряет атакующие части, лечение их не возвращает,
-        // и к двухсотому тику у наших мили 0–16 частей ATTACK из 32 против его 24–32. Лекари ставятся ПОСЛЕ мили,
-        // поэтому опорой служат их нынешние клетки: наступление согласуется с тем, где лечение есть СЕЙЧАС
+        // клетки лекарей — прибор согласованности `mheal` ниже: сколько мили осталось в дальности лечения
         val healerCells = healers.map { InfluenceMap.cell(it.x, it.y) }
-        fun inHealReach(p: Position) = !USE_MELEE_IN_HEAL_REACH || healerCells.isEmpty() ||
-            healerCells.any { maxOf(abs(p.x - it.x), abs(p.y - it.y)) <= HEAL_RANGE }
         // ==================== ОЦЕНКА КЛЕТКИ ПОЛЕМ (v206, этап 6) ====================
         // Заменяет собой отборы `safeForRanged`, `behindMelee`, `behindLine`, `inHealReach` и россыпь ранговых
         // формул. Все они говорили ЗАПРЕТАМИ то, что является предпочтением, и потому запирали друг друга:
@@ -6535,9 +6502,9 @@ cpuMark("a.evade")
         // дальность выстрела, отбор пустел, и крип падал в общий добор, который про дальность не знает вовсе.
         // Запрет здесь ровно один и он о жизни: клетка, где крип не переживёт хода.
         InfluenceMap.clearClaim()
-        if (USE_FIELD_SCORE) InfluenceMap.stampHealNeed(army.filter { it.hits > 0 })
+        InfluenceMap.stampHealNeed(army.filter { it.hits > 0 })
         var maxV = 0.0
-        if (USE_FIELD_SCORE) for ((k, _) in cells) {
+        for ((k, _) in cells) {
             val v = InfluenceMap.vulnerabilityOf(k)
             if (v > maxV) maxV = v
         }
@@ -6651,115 +6618,28 @@ cpuMark("a.evade")
         // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
         // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
         for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
-            val ok = if (USE_FIELD_SCORE) placeScored(c, 0, intentOf(c)) else when (intentOf(c)) {
-                Intent.PRESS -> if (meleeCommit)
-                    place(c, { p -> inHealReach(p) && armedEnemies.any { getRange(p, it) <= 1 } }, { p -> inc(p.x * 100 + p.y) })
-                else place(c, { p -> inHealReach(p) && armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> inc(p.x * 100 + p.y) })
-                Intent.HOLD -> place(c, { p -> inHealReach(p) && armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> inc(p.x * 100 + p.y) })
-                Intent.YIELD -> place(c, { p -> true }, { p -> -(armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
-                // фокус — как раз тот случай, ради которого выброс и разрешён: сюда мили идёт и без перевеса, но
-                // только если цель добивается (иначе meleeCommit ложен и он держит дистанцию)
-                Intent.FOCUS -> if (meleeCommit)
-                    place(c, { p -> inHealReach(p) && weakestMelee != null && getRange(p, weakestMelee) <= 1 },
-                        { p -> inc(p.x * 100 + p.y) })
-                else place(c, { p -> inHealReach(p) && armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> inc(p.x * 100 + p.y) })
-                // кайт как ЗАМЫСЕЛ (v138): ровно две клетки от его ближайшего мили — правило v135, которое одно и
-                // работало; командир вытеснял его из цепочки, и теперь симуляция может выбрать его наравне с прочими
-                Intent.KITE -> place(c, { p -> hisMelee.isEmpty() || (hisMelee.minOf { getRange(p, it) } == MELEE_HOLD_RANGE) },
-                    { p -> inc(p.x * 100 + p.y) })
-                // рассредоточение (v138): веер бьёт всех в трёх, поэтому за клетку рядом со своим — штраф. MetalicaX#11
-                // даёт 63 веера за матч против 37 у #10 и наших 12, и именно он кайту не поддавался
-            }
+            val ok = placeScored(c, 0, intentOf(c))
             // ДОБОР МИЛИ ПОМЕНЯЛ СМЫСЛ ВМЕСТЕ С ВОРОТАМИ (v208). Прежде `ok = false` значило «нет клетки вплотную
             // к его вооружённому, куда дотягивается лекарь», и шаг к врагу был верным ответом. С воротами
             // выживания `ok = false` значит «нет клетки, где я переживу ход», и тот же шаг посылает крипа
             // умирать: на стенде этот добор срабатывает в 3 % размещений. Ответ обратный — самая безопасная
-            if (!ok) {
-                if (USE_FIELD_SCORE) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
-                else place(c, { true }, { p -> (armedEnemies.minOfOrNull { getRange(p, it) } ?: 99).toDouble() })
-            }
+            if (!ok) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
         }
         passTag = "ranged"
         // стрелки: цель в дальности, меньше всего входящего на следующий тик; при равенстве — дальше от его мили
-        // цель концентрации (v138): самый слабый его вооружённый — вокруг него собирается замысел FOCUS
-        val weakest = armedEnemies.minByOrNull { it.hits }
-        // ...и СТРЕЛОК НЕ ВПЕРЕДИ МИЛИ (v165): это правило давала расстановка рядами, а при командире она молчит —
-        // сценарий match32:army кончался уничтожением армии на 370-м тике, потому что стрелки оказывались первой
-        // линией. Штраф за клетку, которая ближе к его строю, чем стоят наши мили
-        // ...и ЛИНИЯ МИЛИ — МЕДИАННАЯ, А НЕ ПЕРЕДОВАЯ (v183). Прежде за линию бралось расстояние САМОГО выдвинутого
-        // мили, поэтому один смелый мили открывал всем стрелкам право стоять там же. Замер по разгрому 3d9532 в общей
-        // рамке обеих армий: наши мили стояли на 0,6 клетки ПОЗАДИ своего центра, а стрелки на 0,9 ВПЕРЕДИ — строй
-        // вывернут наизнанку; у него ровно наоборот (мили +0,5, стрелки −0,4). Медиана не даёт одному крипу задать
-        // линию за всех
-        val meleeDists = melees.mapNotNull { m -> armedEnemies.minOfOrNull { getRange(m, it) } }.sorted()
-        val meleeLine = if (meleeDists.isEmpty()) null else
-            if (USE_RANGED_BEHIND_MEDIAN) meleeDists[meleeDists.size / 2] else meleeDists.first()
-        fun aheadOfMelee(p: Position): Double {
-            if (!USE_COMMAND_RANGED_BEHIND || meleeLine == null) return 0.0
-            val d = armedEnemies.minOfOrNull { getRange(p, it) } ?: return 0.0
-            return if (d < meleeLine) (meleeLine - d) * RANGED_BEHIND_COST else 0.0
-        }
-        // ...и это ЗАПРЕТ, а не слагаемое (v183, оператор: «впереди стояло несколько рэнж-крипов»). Штраф в 40 стоял
-        // рядом с членом incNext × 100 — десятками тысяч, — и решал в выборе клетки ровно ничего. Клетка ближе к его
-        // строю, чем стоят наши мили, стрелку теперь не предлагается вовсе; если других нет, работает общий фолбэк
-        // ...И ЗАПРЕТ НЕ ДОЛЖЕН ВЫТАЛКИВАТЬ СТРЕЛКА ЗА ДАЛЬНОСТЬ ВЫСТРЕЛА (v200, оператор: «4 наших рэнж крипа стоят в
-        // нескольких клетках от боя и не могут ни в кого стрелять»). Запрет и линия замкнуты в круг: мили по замеру
-        // стоит ПОЗАДИ (глубина по оси −1,35 против +0,68 у стрелков), значит линия мили уходит на 4–5, стрелку
-        // запрещается всё, что ближе, отбор пустеет — и он попадает в общий добор, который про дальность не знает
-        // вовсе. Замер того же реплея: в дальности выстрела 0–3 стрелка из 5, на t=133,134,136,140,144 — НОЛЬ из
-        // пяти. Смысл запрета — «не быть первой линией», и он сохраняется: линия для запрета берётся не дальше
-        // RANGED_RANGE, поэтому пока мили действительно в контакте (линия 3 и ближе) правило прежнее
-        fun behindMelee(p: Position): Boolean {
-            if (!USE_RANGED_BEHIND_HARD || meleeLine == null) return true
-            val d = armedEnemies.minOfOrNull { getRange(p, it) } ?: return true
-            val line = if (USE_RANGED_LINE_CAP) minOf(meleeLine, RANGED_RANGE) else meleeLine
-            return d >= line
-        }
-        // СТРЕЛКУ ПОД МИЛИ НЕЛЬЗЯ (v177, оператор: «рэнжи лезут под мили крипов соперников, хотя им туда должно быть
-        // запрещено даже близко подходить»). Замер по записи разгрома 6aa1a6ad: наши стрелки стояли вплотную к его
-        // вооружённому мили 33 крипо-тика и в двух клетках ещё 41 — из 242 стрелковых, то есть треть времени. Клетка
-        // ближе MELEE_KEEP_RANGE к его мили теперь не назначается стрелку вовсе; если других нет, работает фолбэк
-        fun safeForRanged(p: Position) = !USE_RANGED_KEEPS_OFF_MELEE ||
-            hisMelee.none { getRange(p, it) <= MELEE_KEEP_RANGE }
-        // УПРЕЖДЕНИЕ ПО УХОДЯЩЕМУ (v201). Замер серии v200 развёл план и явь: командир назначает стрелку клетку с целью
-        // в дальности в 69 % случаев (прибор `guns`), а фактически в дальности стоят 1,11 стрелка из пяти — 22 %
-        // (прибор `reach`), при послушании приказа 99,9 %. Крипы идут ровно туда, куда велено; расхождение целиком в
-        // том, что клетка выбрана по СЕГОДНЯШНИМ его позициям, а его блок меняет клетку 71–76 % тиков контакта и
-        // шагает ОДНОВРЕМЕННО с нами. Поэтому цель должна быть в дальности с запасом на его шаг. Признак ухода не
-        // назначен, а измерен долей касаний мили: против идущего в контакт она равна единице и запаса не берётся
-        val leadNow = USE_RANGED_LEADS_TARGET && touchShare < TOUCH_MIN
-        val gunReach = if (leadNow) RANGED_RANGE - 1 else RANGED_RANGE
-        if (leadNow) leadTicks++
         for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
-            val ok = if (USE_FIELD_SCORE) placeScored(c, 1, intentOf(c)) else when (intentOf(c)) {
-                // напор: цель в дальности, меньше входящего; удержание: то же, но безопасность решает сильнее
-                Intent.PRESS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= gunReach } },
-                    { p -> inc(p.x * 100 + p.y) * 100 - (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) + aheadOfMelee(p) })
-                Intent.HOLD -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= gunReach } },
-                    { p -> inc(p.x * 100 + p.y) * 1000 + (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) })
-                // уступка: как можно дальше от его мили, цель — если получится
-                Intent.YIELD -> place(c, { p -> true },
-                    { p -> -(armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
-                // концентрация: все стрелки — в дальности ОДНОЙ цели, самой слабой у него
-                Intent.FOCUS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && weakest != null && getRange(p, weakest) <= gunReach },
-                    { p -> inc(p.x * 100 + p.y) })
-                Intent.KITE -> place(c, { p -> safeForRanged(p) && (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
-                        armedEnemies.any { getRange(p, it) <= RANGED_RANGE } }, { p -> inc(p.x * 100 + p.y) })
-            }
+            val ok = placeScored(c, 1, intentOf(c))
             // ...и КОГДА ВЫБОРА НЕТ, СТРЕЛОК ВЫХОДИТ ИЗ-ПОД МИЛИ, А НЕ ОСТАЁТСЯ СТРЕЛЯТЬ (v183, оператор: «рэнжи не
             // должны быть рядом с его мили»). Все замыслы требуют разом двух вещей — быть вне досягаемости его мили и
             // при этом доставать цель, — а такой клетки рядом с его строем часто нет вовсе, и общий фолбэк «любая
             // клетка, где меньше входящего» оставлял стрелка под ударом: замер тестовой игры 3d95be — наши стрелки в
             // одной клетке от его вооружённого 28 крипо-тиков и в двух ещё 31 из 117. Между «выстрелить» и «уцелеть»
             // выбирается уцелеть: выстрел стоит 60, стрелок — 1 200
-            if (!ok && USE_RANGED_FLEES_MELEE) place(c, { p -> safeForRanged(p) }, { p -> inc(p.x * 100 + p.y) })
             if (c.id !in out) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
         }
         // лекари: в лечебной дальности от раненого бойца, вне огня следующего тика
-        val wounded = fighters.filter { hasWeapon(it) && it.hits < it.hitsMax }
         passTag = "healer"
         for (c in healers) {
-            val mates = wounded.ifEmpty { fighters.filter { hasWeapon(it) } }
             // ЛЕКАРЬ ПРИ БОЙЦЕ (v142): близость главная, опасность лишь тай-брейк — прежний порядок весил опасность
             // стократно, и лекарь уходил в безопасную клетку ВНЕ дальности лечения; фолбэк вёл его туда же
             // ...и САМАЯ БЕЗОПАСНАЯ ИЗ ТЕХ, ОТКУДА ДОСТАЁТ (v183). Ранг вёл лекаря к БЛИЖАЙШЕМУ раненому (дистанция
@@ -6791,34 +6671,10 @@ cpuMark("a.evade")
             // ЛЕКАРЕЙ +0,32 — они впереди мили, и в 155 тиках из 335 лекари в среднем ближе к врагу, чем мили; на
             // t=63, через три тика после контакта, один лекарь уже без лечащих частей. Условие простое и жёсткое:
             // хотя бы один свой боец стоит к врагу БЛИЖЕ, чем клетка лекаря, — считая по уже назначенным клеткам
-            fun behindLine(p: Position): Boolean {
-                if (!USE_HEALER_BEHIND_LINE) return true
-                val dp = foeDist(p.x, p.y)
-                return fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp }
-            }
-            // НАСЫЩЕНИЕ (этап 7): назначенный лекарь снимает с подопечных покрытую им нужду, и следующий лекарь
-            // видит уже второй очаг, а не тот же самый. Без этого поле нужды тянет всех троих в одну точку —
-            // ровно то, чем провалилось прежнее правило `mates`, бравшее ближайшего раненого
-            val ok = if (USE_FIELD_SCORE) placeScored(c, 2, intentOf(c)).also { placed ->
+            val ok = placeScored(c, 2, intentOf(c)).also { placed ->
                 if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
             }
-            else if (USE_HEALERS_SCREENED)
-                place(c, { p -> behindLine(p) && mates.any { getRange(p, it) <= HEAL_RANGE - 1 } },
-                    { p -> -(fighters.count { it.id != c.id && getRange(p, it) <= 1 }).toDouble() * HEALER_SCREEN +
-                        inc(p.x * 100 + p.y) })
-            else if (USE_HEALERS_SAFE_IN_RANGE)
-                place(c, { p -> mates.any { getRange(p, it) <= HEAL_RANGE - 1 } },
-                    { p -> (if (mates.any { getRange(p, it) <= 1 }) 0.0 else HEALER_REACH_COST) +
-                        inc(p.x * 100 + p.y) })
-            else if (USE_HEALERS_CLOSE)
-                place(c, { p -> mates.any { getRange(p, it) <= HEAL_RANGE - 1 } },
-                    { p -> (mates.minOfOrNull { getRange(p, it) } ?: 9).toDouble() * 100 + inc(p.x * 100 + p.y) })
-            else place(c, { p -> mates.any { getRange(p, it) <= HEAL_RANGE } },
-                    { p -> inc(p.x * 100 + p.y) * 100 + (mates.minOfOrNull { getRange(p, it) } ?: 0) })
-            if (!ok) {
-                if (USE_HEALERS_CLOSE) place(c, { true }, { p -> (mates.minOfOrNull { getRange(p, it) } ?: 9).toDouble() })
-                else place(c, { true }, { p -> inc(p.x * 100 + p.y) })
-            }
+            if (!ok) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
         }
         // ХРАНИТЕЛЬ ФЛАГА — ПО ПРИКАЗУ (v174): крип на НАШЕМ флаге стоит по приказу командира, а не по отдельной ветке
         // удержания; снять его может только командир — решив собрать отряд — или опасность, которая приходит приказом

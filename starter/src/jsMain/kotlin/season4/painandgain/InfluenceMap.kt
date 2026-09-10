@@ -822,63 +822,6 @@ object InfluenceMap {
 
     fun claimAt(key: Int): Double = claim[key].toDouble()
 
-    // ---------------- сверка полей (этап 3) ----------------
-    // Прибор, умеющий напечатать только «поле построено», прибором не является. Здесь поле сверяется с
-    // ПРЯМЫМ пересчётом по крипам в выборке клеток: расхождение печатается числом клеток, а не флагом.
-
-    private var chkBad = 0
-    private var chkAll = 0
-
-    fun checkBad(): Int = chkBad
-    fun checkAll(): Int = chkAll
-
-    /** Прямой пересчёт базовых полей в клетке — независимая от штампа замкнутая форма. */
-    private fun directAt(key: Int, allies: List<Creep>, enemies: List<Creep>): DoubleArray {
-        val x = key / 100
-        val y = key % 100
-        val r = DoubleArray(7)
-        for (e in enemies) {
-            val d = maxOf(abs(e.x - x), abs(e.y - y))
-            val p = profileOf(e)
-            if (d <= R_MELEE) r[0] += p.melee
-            if (d <= R_RANGED) r[1] += p.ranged
-            if (d <= R_HEAL) r[2] += p.heal * K_HEAL[d]
-            if (d <= 1) r[6] += p.melee
-            if (d <= R_FIRE) r[6] += p.ranged
-        }
-        for (a in allies) {
-            val d = maxOf(abs(a.x - x), abs(a.y - y))
-            val p = profileOf(a)
-            if (d <= R_MELEE) r[3] += p.melee * theirTaken
-            if (d <= R_RANGED) r[4] += p.ranged * theirTaken
-            if (d <= R_HEAL) r[5] += p.heal * K_HEAL[d]
-        }
-        return r
-    }
-
-    /**
-     * Сверяет выборку клеток с прямым пересчётом. Выборка бежит по полю шагом-простым числом и сдвигается
-     * каждый тик — за матч она покрывает всё поле, а за тик стоит два десятка клеток. Расхождение больше
-     * половины единицы фиксированной точки считается ошибкой: округление штампа допустимо, сдвиг — нет.
-     */
-    fun checkFields(allies: List<Creep>, enemies: List<Creep>) {
-        val step = 373
-        var key = (fieldTick * 17) % step
-        while (key < FIELD_CELLS) {
-            val d = directAt(key, allies, enemies)
-            val got = doubleArrayOf(
-                eMelee[key] / FP.toDouble(), eRanged[key] / FP.toDouble(), eHeal[key] / FP.toDouble(),
-                aMelee[key] / FP.toDouble(), aRanged[key] / FP.toDouble(), aHeal[key] / FP.toDouble(),
-                eFire[key] / FP.toDouble(),
-            )
-            for (i in got.indices) {
-                chkAll++
-                if (abs(got[i] - d[i]) > 0.5) chkBad++
-            }
-            key += step
-        }
-    }
-
     /** Максимум поля — «поле живое»: обнулившееся поле обязано быть видно, а не тихо давать нули. */
     fun fieldPeak(field: IntArray): Double {
         var best = 0
