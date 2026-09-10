@@ -2070,6 +2070,12 @@ object PainAndGain {
     private const val POSTURE_HOLD = 5
     private const val USE_CAPTURE_NEEDS_EDGE = true
     private const val CAPTURE_EDGE = 1.1
+    /** ЦЕЛАЯ АРМИЯ — ЭТО И ЕСТЬ ЗАПАС (v187): против соперника, чьё лечение перекрывает наш урон, порог по МОЩИ не
+     *  берётся никогда, и матч кончается «обе армии целы, флаги 1:4, счёт 3 210:18 145». Пока потерь почти нет и мы
+     *  отстаём по скорости очков, флаг берётся; цену дебаффа по-прежнему считает паритетный пол. */
+    private const val USE_CAPTURE_WHEN_WHOLE = true
+    private const val CAPTURE_WHOLE_CREEPS = 10      // бойцов и лекарей в строю
+    private const val CAPTURE_WHOLE_HITS = 0.75      // и хитов не меньше трёх четвертей
     private const val USE_COMMAND_BRACE = true
     /** ИЗГОТОВКА ВКЛЮЧАЛАСЬ НИКОГДА (v183, оператор: «делай строй до боя»). Гейт требовал `!contact && armiesClosing`,
      *  но armiesClosing набирается только В контакте, поэтому commandBrace не выполнялся ни одного тика за матч.
@@ -2140,7 +2146,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v186"
+    private const val BOT_VERSION = "v187"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2764,8 +2770,17 @@ cpuMark("arrival")
         // ...и снятие вето стоит АРМИИ, если брать флаг под его ударом без запаса: серия v180 дала 12-8 с рейтингом
         // +16, гонок-поражений стало три вместо пяти, но разгромов пять вместо двух — армия гибла к 200-300 тику.
         // Поэтому вето снимается только при ПЕРЕВЕСЕ, а не при простом паритете (v181)
+        // ...и ЦЕЛАЯ АРМИЯ САМА ПО СЕБЕ ЕСТЬ ЗАПАС (v187, разбор Coldkimchi#2). Вето существует ради одного — не терять
+        // армию за флаги; когда армия цела, оно защищает уже не её, а нулевой счёт. Против Coldkimchi#2 наша мощь
+        // структурно ниже его (лечение блока перекрывает наш урон, потому Ланчестер и даёт нам около нуля), поэтому
+        // порог CAPTURE_EDGE не берётся НИКОГДА, и матч кончается «обе армии целы, флаги 1:4, счёт 3 210:18 145».
+        // Условие здесь не про мощь, а про потери: пока армия почти не тронута и мы отстаём по скорости очков, флаг
+        // берётся. Дебафф флага ложится на владельца — эту цену считает паритетный пол ниже, он остаётся на месте
+        val whole = USE_CAPTURE_WHEN_WHOLE && ctx.army.count { hasWeapon(it) || hasHeal(it) } >= CAPTURE_WHOLE_CREEPS &&
+            ctx.army.sumOf { it.hits } >= ctx.army.sumOf { it.hitsMax } * CAPTURE_WHOLE_HITS
         val losingRace = USE_CAPTURE_WHEN_LOSING && behindOnScore && enemyRate > ourRate &&
-            (!USE_CAPTURE_NEEDS_EDGE || ourPowerOf(ctx.army, ctx.combatEnemies) >= enemyPowerOf(ctx.combatEnemies, ctx.army) * CAPTURE_EDGE)
+            (whole || !USE_CAPTURE_NEEDS_EDGE ||
+                ourPowerOf(ctx.army, ctx.combatEnemies) >= enemyPowerOf(ctx.combatEnemies, ctx.army) * CAPTURE_EDGE)
         if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
