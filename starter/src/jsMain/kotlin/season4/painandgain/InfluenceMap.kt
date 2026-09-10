@@ -601,7 +601,7 @@ object InfluenceMap {
     fun vulnerabilityOf(key: Int): Double = 2.0 * minOf(ourBurstAt(key), dangerAt(key))
 
     private fun stamp(field: IntArray, cx: Int, cy: Int, kernel: DoubleArray, weight: Double, wallGate: Boolean) {
-        if (weight <= 0.0) return
+        if (weight == 0.0) return   // вес может быть ОТРИЦАТЕЛЬНЫМ: насыщение снимает покрытую нужду
         val radius = kernel.size - 1
         val x0 = maxOf(0, cx - radius)
         val x1 = minOf(FIELD_MAX, cx + radius)
@@ -667,13 +667,60 @@ object InfluenceMap {
         // рана. Полный мили, которому сейчас прилетит 560, важнее полураненого в чистом поле. Сегодняшнее
         // правило берёт раненых, то есть по определению тех, кто уже на фронте, и тянет лекарей вперёд —
         // это ровно механизм жалобы оператора «хилеры выбегают вперёд под прямой урон».
+        stampHealNeed(allies)
+    }
+
+    /** Непокрытая нужда каждого своего по id — уменьшается по мере назначения лекарей (см. saturateHeal). */
+    private val needLeft = HashMap<String, Double>()
+
+    /**
+     * Поле нужды строится заново перед каждой раздачей: она идёт ПЯТЬ раз за тик, по разу на замысел, и
+     * насыщение одного замысла не должно просачиваться в следующий — ровно та же причина, что у clearClaim.
+     */
+    fun stampHealNeed(allies: List<Creep>) {
+        attHeal.fill(0)
+        needLeft.clear()
+        var total = 0.0
         for (a in allies) {
             val key = a.x * 100 + a.y
             val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
             val need = minOf(dangerAt(key), a.hits.toDouble()) * (if (armed) 1.0 else NEED_DISARMED)
+            needLeft[a.id] = need
+            total += need
             stamp(attHeal, a.x, a.y, K_ATT_HEAL, need, false)
         }
+        totalNeed = total
     }
+
+    /**
+     * НАСЫЩЕНИЕ (этап 7): назначенный лекарь снимает с подопечных ту нужду, которую покроет собой, — иначе трое
+     * лекарей встанут на одного раненого, а второй очаг останется без помощи вовсе. Снимается ровно покрытое:
+     * подопечный, чья нужда больше одного лекаря, продолжает тянуть второго.
+     */
+    fun saturateHeal(healer: Creep, x: Int, y: Int, allies: List<Creep>) {
+        val h = profileOf(healer).heal
+        if (h <= 0.0) return
+        for (a in allies) {
+            if (a.id == healer.id) continue
+            val d = maxOf(abs(a.x - x), abs(a.y - y))
+            if (d >= K_ATT_HEAL.size) continue
+            val left = needLeft[a.id] ?: continue
+            if (left <= 0.0) continue
+            val covered = minOf(left, h * K_ATT_HEAL[d])
+            if (covered <= 0.0) continue
+            needLeft[a.id] = left - covered
+            stamp(attHeal, a.x, a.y, K_ATT_HEAL, -covered, false)
+        }
+    }
+
+    /** Доля нужды, покрытая назначенными лекарями: 0 — никто никого не прикрывает, 1 — покрыты все. */
+    fun healCoverage(): Pair<Double, Double> {
+        var left = 0.0
+        for (v in needLeft.values) left += v
+        return left to totalNeed
+    }
+
+    private var totalNeed = 0.0
 
     /** Занятость клеток уже розданными приказами: раздача идёт пять раз за тик, по разу на замысел, и
      *  притязания одного замысла не должны просачиваться в следующий (Hagelbäck: временное отталкивание

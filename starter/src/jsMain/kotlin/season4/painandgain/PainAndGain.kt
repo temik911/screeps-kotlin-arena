@@ -2190,7 +2190,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v206"
+    private const val BOT_VERSION = "v207"
     private const val DEBUG_LOG = true
     /** Сверка полей влияния с ПРЯМЫМ пересчётом по крипам (этап 3). Стоит два десятка клеток за тик и
      *  обязана держаться нуля: ненулевой числитель chk значит, что штамп сдвинут, и это видно за 3,5
@@ -2688,6 +2688,13 @@ cpuMark("arrival")
                 "spread=${army.filter { hasWeapon(it) && hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${army.count { hasWeapon(it) && getRange(it, armedCentroid) > LEASH_RANGE }} " +
                 // ...и отдельно ЛЕКАРИ за поводком (v202): именно они разъезжались, а прибор их не считал вовсе
                 "hfar=${army.count { !hasWeapon(it) && hasHeal(it) && getRange(it, armedCentroid) > LEASH_RANGE }}/${army.count { !hasWeapon(it) && hasHeal(it) }} " +
+                // ЛЕКАРИ СУДЯТСЯ ВЫЖИВАНИЕМ, А НЕ ДОСТАВЛЕННЫМ ЛЕЧЕНИЕМ (этап 7): v202 поднял лечение и дал 0:3.
+                // Тело лекаря — h6m6, лечащие части СПЕРЕДИ, поэтому урон уничтожает именно их и первыми; замер
+                // разгрома 3d97c4 говорит, что его лекари сохраняют 100 % лечащих частей, наши 8 %. hcov — доля
+                // нужды, покрытая назначенными клетками: прибор раздачи, а не исхода
+                "hparts=${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
+                "ehparts=${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
+                "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6519,6 +6526,7 @@ cpuMark("a.evade")
         // дальность выстрела, отбор пустел, и крип падал в общий добор, который про дальность не знает вовсе.
         // Запрет здесь ровно один и он о жизни: клетка, где крип не переживёт хода.
         InfluenceMap.clearClaim()
+        if (USE_FIELD_SCORE) InfluenceMap.stampHealNeed(army.filter { it.hits > 0 })
         var maxV = 0.0
         if (USE_FIELD_SCORE) for ((k, _) in cells) {
             val v = InfluenceMap.vulnerabilityOf(k)
@@ -6762,7 +6770,12 @@ cpuMark("a.evade")
                 val dp = foeDist(p.x, p.y)
                 return fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp }
             }
-            val ok = if (USE_FIELD_SCORE) placeScored(c, 2, intentOf(c))
+            // НАСЫЩЕНИЕ (этап 7): назначенный лекарь снимает с подопечных покрытую им нужду, и следующий лекарь
+            // видит уже второй очаг, а не тот же самый. Без этого поле нужды тянет всех троих в одну точку —
+            // ровно то, чем провалилось прежнее правило `mates`, бравшее ближайшего раненого
+            val ok = if (USE_FIELD_SCORE) placeScored(c, 2, intentOf(c)).also { placed ->
+                if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
+            }
             else if (USE_HEALERS_SCREENED)
                 place(c, { p -> behindLine(p) && mates.any { getRange(p, it) <= HEAL_RANGE - 1 } },
                     { p -> -(fighters.count { it.id != c.id && getRange(p, it) <= 1 }).toDouble() * HEALER_SCREEN +
