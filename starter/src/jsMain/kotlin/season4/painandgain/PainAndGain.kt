@@ -430,10 +430,23 @@ object PainAndGain {
     private const val USE_SPOT_MELEE = true
     /** Пока рядом идёт бой, который мы выигрываем, флаг-цель через полкарты не берётся (v214). */
     private const val USE_SPOT_FIRST = true
+    /** ПОСТ НА ФЛАГЕ ВМЕСТО ГЕОМЕТРИЧЕСКОЙ ТОЧКИ (v214) — ОТВЕРГНУТО ЗАМЕРОМ. Замысел: когда флаг-цели нет,
+     *  постура становится HOLD и армия идёт на `postPoint` — центроид наших флагов, стояние на котором не даёт
+     *  ни одного очка; пусть вместо этого стоит на ближайшем своём или свободном флаге.
+     *  ПРАВИЛО ЖИВОЕ И НЕ ОКУПАЕТСЯ. Широкая редакция (любой не его флаг): срабатывала в 57 % тиков, 17 строк
+     *  лучше против 24, суммарный отрыв −23 570. Суженная (только флаги, которые и так разрешает гейт захвата,
+     *  то есть с уплатой дебаффа по доктрине паритета): 40 % тиков, 6 лучше против 11, отрыв −6905. Причина в
+     *  обоих случаях одна и она записана в доках: садясь на свободный флаг, армия берёт его дебафф на себя, и
+     *  платит за очки боем. Живой вопрос остаётся ОТКРЫТЫМ — постура FLAG занимает 9 % матча против 53 % у
+     *  ANNIHILATE, — но закрывать его этой ценой оказалось дороже, чем стоять. */
+    private const val USE_POST_ON_FLAG = false
     /** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
     private var spotMeleeTicks = 0
     /** Вето «сперва туши очаг»: тиков с очагом и из них тех, где вето ИЗМЕНИЛО решение о постуре. */
     private var spotHoldAll = 0
+    /** Пара: тиков, когда пост стал флагом, и тиков с постом вообще. */
+    private var postOnFlag = 0
+    private var postAll = 0
     private var spotHoldNew = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
@@ -2778,7 +2791,7 @@ cpuMark("arrival")
                 "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
-                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll " +
+                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll postflag=$postOnFlag/$postAll " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4415,7 +4428,21 @@ cpuMark("a.evade")
         // где стоит» стенд отверг (v42: 58 хуже / 48 лучше — возврат к посту добивает отбитый рывок); здесь — только свой флаг под
         // ногами
         val standingFlag = if (USE_HOLD_OWN_FLAG && enemyNear) ctx.flags.firstOrNull { it.ours && getRange(it.pos, ctx.ourCentroid) <= POST_STANDOFF } else null
-        val post = standingFlag?.pos ?: if (interceptFlag?.ours == true) interceptFlag.pos else postPoint(ctx)
+        // ПОСТ НА ФЛАГЕ, А НЕ В ГЕОМЕТРИЧЕСКОЙ ТОЧКЕ (v214, оператор: «после битвы очень долго стоим и не идём
+        // перебивать флаги, даже если сильнее»). Когда флаг-цели нет, постура становится HOLD, и цепочка целей
+        // отправляет крипа на `post` — центроид наших флагов, стояние на котором не даёт НИ ОДНОГО очка.
+        // `standingFlag` уже делает половину работы: при враге рядом постом становится наш флаг под ногами.
+        // Достраиваем симметрично: врага рядом нет, цели нет, на флаге не стоим — постом становится ближайший
+        // свой или свободный флаг. Армия, которой некуда идти, стоит НА очках.
+        val idlePost = if (!USE_POST_ON_FLAG || standingFlag != null || objective != null || enemyNear) null
+            // ...и только тот флаг, который гейт И ТАК РАЗРЕШАЕТ взять: садясь на свободный флаг, армия берёт
+            // его дебафф на себя, а доктрина паритета для того и существует. Первая редакция звала любой не его
+            // флаг и дала на стенде 24 строки хуже против 17 при отрыве −23 570 — именно ценой дебаффов
+            else ctx.flags.filter { !it.theirs && it.occupant?.my != true && (it.ours || captureAllowed(ctx, it)) }
+                .minByOrNull { getRange(it.pos, ctx.ourCentroid) }
+        if (idlePost != null) postOnFlag++
+        postAll++
+        val post = standingFlag?.pos ?: idlePost?.pos ?: if (interceptFlag?.ours == true) interceptFlag.pos else postPoint(ctx)
         val postureKey = "$newPosture:${objectiveFlagId ?: ""}"
         if (DEBUG_LOG && (postureKey != postureLogged || getTicks() % (LOG_EVERY * 10) == 0)) {
             postureLogged = postureKey
