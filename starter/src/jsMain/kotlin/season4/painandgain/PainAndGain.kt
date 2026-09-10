@@ -422,6 +422,8 @@ object PainAndGain {
     private const val USE_NO_SEVENTH_FLAG = true
     /** Сила врага в паритетном поле считается по тем, кто за ЭТОТ флаг дерётся, а не по всей его армии (v214). */
     private const val USE_LOCAL_PARITY = true
+    /** Вето «в контакте» смотрит на массу армии, а не на любого отбившегося крипа (v214). */
+    private const val USE_CONTACT_BY_MASS = true
     /** БЕГУН БЕРЁТ ФЛАГ НАШЕЙ ПОЛОВИНЫ ПОД БРОСКОМ (проба после серии 387–406, дебют против гастролёра — MetalicaX#3/#4, けろびー#12):
      *  см. captureAllowed. ОТВЕРГНУТО таблицей входов: 17 хуже / 5 лучше по +20, brawl m33 из уничтожения его в уничтожение НАШЕЙ
      *  армии (2628:11684 → 8051:6038 по +50), m32 brawl живых 11 → 7, m30 brawl +50 3028:12818 → 5940:5767 — дебафф бегуна перед
@@ -3011,14 +3013,22 @@ cpuMark("arrival")
         // ...и ПАТ СНИМАЕТ ВЕТО КОНТАКТА (v189): бой, в котором за целое окно ни одна сторона не потеряла заметной
         // доли хитов, армии не угрожает, а дебафф флага в нём ничего не решает — решают очки (см. stalemateNow)
         val stalemate = USE_CAPTURE_IN_STALEMATE && stalemateTicks >= STALEMATE_HOLD
-        if (!losingRace && !stalemate && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) {
-            // разложение на бой у МАССЫ и стычку одиночки: массу считает та же мера, что в runArmy (см. massArmy),
-            // и она же станет единственной на этапе 1.1
-            val foes = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
-            val mass = centroidOf(ctx.army)
-            val massArmy = if (mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
-            return capCount(f, if (inContact(foes, massArmy)) "contact.mass" else "contact.edge")
-        }
+        // ВЕТО КОНТАКТА — ПО МАССЕ АРМИИ, А НЕ ПО ЛЮБОМУ КРИПУ (v214, решение оператора: вето становится местным).
+        // Контакт определялся в файле дважды: в runArmy по МАССЕ (см. massArmy), а здесь — по любому нашему
+        // вооружённому на полной скорости. Одного отбившегося крипа, задетого его пикетом на другом конце карты,
+        // хватало, чтобы закрыть разом ВСЕ семь флагов. Живой замер по 12 матчам: `contact` — 512 отказов в
+        // поражениях против 99 в победах, то есть главный дискриминатор исхода.
+        // ⚠️ Это НЕ отвергнутая правка про `enemyNear` (см. комментарий там же): та меняла постуру, из-за чего
+        // висящий у хранителя враг переставал отменять цель-флаг, и m20 spread перешёл из победы в поражение.
+        // Здесь меняется потребитель — гейт захвата, — а постура не трогается вовсе.
+        val foes = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        val mass = centroidOf(ctx.army)
+        val contactArmy = if (!USE_CONTACT_BY_MASS || mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
+        if (!losingRace && !stalemate && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy))
+            return capCount(f, "contact.mass")
+        // ...и отдельно считаем то, что этой правкой снято: стычка одиночки вне массы
+        if (!losingRace && !stalemate && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army))
+            capCount(f, "contact.edge.lifted")
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
         // СИЛА ВРАГА ДЛЯ ЭТОГО ФЛАГА (v214, решение оператора: вето становится местным). Здесь стояло
