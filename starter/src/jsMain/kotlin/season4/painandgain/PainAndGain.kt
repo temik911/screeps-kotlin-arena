@@ -529,6 +529,13 @@ object PainAndGain {
      *  граница времени подхода это расстояние между центрами армий в клетках, — то слово «близко» перестало быть
      *  правдой. Тем же приёмом уже снимает это вето простой (USE_STALL_LIFTS_RUSH_VETO), только по другому признаку. */
     private const val USE_RUSH_VETO_EXPIRES = true
+    /** СОСТАВ ДЛЯ ГОНКИ СЧИТАЕТСЯ ВМЕСТЕ С УЖЕ ОТПУЩЕННЫМИ (v215) — то, что комментарий в `commandRace` обещал с
+     *  v160 и чего код не делал. `cmdDetach.clear()` стояло СТРОКОЙ ВЫШЕ чтения `cmdDetach`, поэтому фильтр
+     *  `ctx.runners.filter { it.id in cmdDetach }` был пуст ВСЕГДА, и `mine` равнялось `army`. Последствие названо
+     *  в том же комментарии как причина, ради которой правило и писалось: командир каждый тик берёт долю
+     *  ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны, — армия распадается экспоненциально. С v214 симметрия
+     *  считает ядро по типам, и ошибка стала мягче, но не исчезла: `free` по-прежнему не видит отпущенных. */
+    private const val USE_RACE_COUNTS_RELEASED = true
     private val PUSH_DWELL = CHASE_WINDOW
     private const val LETHAL_PENALTY = 1e6      // не запрет, а вес: если смертельны все клетки, порядок между ними цел
     /** Пара: сколько оставлено в ядре против сколько было свободных. */
@@ -3163,7 +3170,8 @@ cpuMark("arrival")
         // а не бросается» в боте уже есть — простой «держит дистанцию» (окно DETACH_WINDOW, срабатывал в 277 на 221-м: «флаги до
         // 521» — и в этом окне цель мигала): простой снимает вето «бой близко», как снимает вето «в контакте» ниже
         // (USE_STALL_LIFTS_RUSH_VETO); настоящий бросок дистанцию сокращает и простоя не даёт
-        val current = f.id == objectiveFlagId
+        // ⚠️ Здесь стояла `val current = f.id == objectiveFlagId` — объявлена и не читалась ни разу (остаток
+        // отвергнутой липкости v114b). Снята в v215; дифф отчёта пуст побайтово, как и обязан быть у мёртвого
         // бегун берёт флаг НАШЕЙ половины и под броском (v128, USE_RUNNER_HALF_UNDER_RUSH): вето «бой близко» держало и скаутов —
         // матчи 5, 8, 19 серий 367–406: rush=true с 10-го по 39-й, бегуны 0 detached, наш первый флаг на 42–98-м при его шести к
         // 80–91-му; пол паритета ниже по-прежнему считает цену дебаффа
@@ -5391,14 +5399,12 @@ cpuMark("a.evade")
                 }
                 if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash fled=$orderFled branch=$orderBranch lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (simErrN > 0) (simErrSum / simErrN).toInt() else 0} wrongSign=$simErrWrongSign/$simErrN")
             }
-        } else if (commanderNow && USE_COMMAND_RACE && !underTheirFire) {
-            // ...и в бою, пока по нам не стреляют, командир тоже отпускает за флагами: это делала прежняя логика
-            // отряда при ХОЛОДНОМ контакте, и без неё гейт терял roost и camp (133 из 135). Клетки боя раздаются
-            // первыми, задания получают только те, кому клетки не досталось (v164)
-            val fighters = mobileArmy.filter { it.id !in commandOf }
-            val keep = HashMap(commandOf)
-            commandRace(ctx, fighters, armedEnemies, ctx.flags, commandOf)
-            commandOf.putAll(keep)
+        // ⚠️ Здесь стояла ветка «в бою, пока по нам не стреляют, командир тоже отпускает за флагами». Она
+        // НЕДОСТИЖИМА ДВАЖДЫ: стоит в `else` от `if (commanderNow)`, то есть `commanderNow` здесь ложно по
+        // построению, — и вдобавок сам режим боя требует `underTheirFire`, поэтому `commanderNow && !underTheirFire`
+        // противоречиво и само по себе. Комментарий при ней утверждал обратное и ссылался на замер, которого она
+        // никогда не проходила. Снята в v215; дифф отчёта пуст побайтово. Оживлять её было бы и незачем: с v215
+        // отпускать в бою запрещено вовсе (см. USE_NO_SPLIT_IN_FIGHT)
         // ...и ТОЛЬКО когда он ИДЁТ на нас: изготовка при всяком враге в десяти клетках вставала поперёк гонки за
         // флагами — армия строилась вместо захвата, и гейт рухнул до 122 из 135 (roost трижды)
         } else if (USE_COMMAND_BRACE && !contact && !(USE_BRACE_NOT_WHEN_PUSHING && pushing) &&
@@ -6774,6 +6780,8 @@ cpuMark("a.evade")
     private fun commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>,
                             out: MutableMap<String, Position>) {
         out.clear()
+        // ...и состав берётся ДО очистки (v215, см. USE_RACE_COUNTS_RELEASED): очистка стояла строкой выше чтения
+        val alreadyOut = if (!USE_RACE_COUNTS_RELEASED) emptyList() else ctx.runners.filter { it.id in cmdDetach }
         cmdDetach.clear()
         // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
         // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
@@ -6782,7 +6790,7 @@ cpuMark("a.evade")
         // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
         // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
         // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
-        val mine = army + ctx.runners.filter { it.id in cmdDetach }
+        val mine = army + (if (USE_RACE_COUNTS_RELEASED) alreadyOut else ctx.runners.filter { it.id in cmdDetach })
         val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) }.toMutableList()
         if (free.isEmpty()) return
         // СИММЕТРИЧНАЯ АРМИЯ (v214, решение оператора): «держать в основной армии столько же крипов, сколько у
