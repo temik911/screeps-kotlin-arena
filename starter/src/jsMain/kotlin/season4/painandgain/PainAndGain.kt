@@ -2172,7 +2172,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v208"
+    private const val BOT_VERSION = "v209"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -2210,6 +2210,15 @@ object PainAndGain {
     /** Экран своих входит ДЕЛИТЕЛЕМ входящего, а не слагаемым в тысячу: ровно та ошибка, что записана в
      *  коде про HEALER_SCREEN = 1000. Каждое тело рядом снимает четверть доли входящего. */
     private const val SCREEN_SHARE = 0.25
+    // ОСТОВЫ ВРАГА (v209): крип, у которого выбито всё оружие, но тело его помнит. Пока у врага жив лекарь,
+    // такой крип — вооружённый на таймере: лечение возвращает части. Прибор считает, сколько их, сколько
+    // крипо-тиков они простояли в нашей дальности выстрела и сколько РАЗ ОНИ ВОССТАНОВИЛИСЬ. Последнее число —
+    // цена бездействия, названная напрямую, и его нельзя спутать с «ситуация не возникала»
+    private val disarmedFoe = HashSet<String>()
+    private var hulkTicks = 0
+    private var hulkInReach = 0
+    private var hulkRevived = 0
+
     /** Крипов, вставших на каждом уровне ворот (индекс = порог выживания в тиках), и добор мимо ворот. */
     private val gateLevels = IntArray(8)
     private var gateFell = 0
@@ -2533,6 +2542,21 @@ object PainAndGain {
         // пересобирал ту же опасность пять раз за тик, по разу на замысел, и звал profileOf внутри цикла
         // по клеткам. Опасность клетки в раздаче читается отсюда (см. inc в commandFight).
         InfluenceMap.buildFields(active, enemyCreeps)
+        // остовы: считаются ПОСЛЕ построения полей, чтобы потенциал тела уже был известен
+        for (e in enemyCreeps) {
+            val live = InfluenceMap.profileOf(e)
+            val pot = InfluenceMap.potentialOf(e)
+            val armable = pot.melee + pot.ranged > 0.0
+            val disarmed = armable && live.melee + live.ranged <= 0.0
+            if (disarmed) {
+                disarmedFoe.add(e.id)
+                hulkTicks++
+                if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) hulkInReach++
+            } else if (e.id in disarmedFoe) {
+                disarmedFoe.remove(e.id)
+                if (live.melee + live.ranged > 0.0) hulkRevived++
+            }
+        }
         cpuMark("fields")
         val rawDanger = InfluenceMap.dangerCostMatrix(enemyCreeps, blocked)
         // флаг берётся тем, кто на него ВСТАЛ, — и любой шаг армии через чужой флаг был захватом: в матче 3 армия
@@ -2671,6 +2695,7 @@ cpuMark("arrival")
                 "hparts=${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
                 "ehparts=${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
                 "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
+                "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +

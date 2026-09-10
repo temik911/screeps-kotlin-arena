@@ -128,6 +128,30 @@ object InfluenceMap {
         )
     }
 
+    /**
+     * Мощь ВСЕХ боевых частей тела — живых и МЁРТВЫХ: то, чем крип станет, если его вылечат.
+     * Лечение возвращает части — записанная механика этой арены и причина, по которой наш раздетый крип
+     * остаётся в армии (матч 8: melee_1 из M5 с 416 хитами стал M8A8 к 199-му тику у одного лекаря).
+     * Значит выбитая часть врага не убрана, а лишь ВЫКЛЮЧЕНА, пока у него жив хоть один лекарь.
+     */
+    fun potentialOf(creep: Creep): CombatProfile {
+        var attack = 0
+        var ranged = 0
+        var heal = 0
+        for (part in creep.body) {
+            when {
+                part.type == ATTACK -> attack++
+                part.type == RANGED_ATTACK -> ranged++
+                part.type == HEAL -> heal++
+            }
+        }
+        return CombatProfile(
+            melee = if (attack == 0) 0.0 else modified(creep, EFF_ATTACK_MODIFIER, (attack * ATTACK_POWER).toDouble()),
+            ranged = if (ranged == 0) 0.0 else modified(creep, EFF_RANGED_ATTACK_MODIFIER, (ranged * RANGED_ATTACK_POWER).toDouble()),
+            heal = if (heal == 0) 0.0 else modified(creep, EFF_HEAL_MODIFIER, (heal * HEAL_POWER).toDouble()),
+        )
+    }
+
     // ---------------- эффекты (Pain and Gain) ----------------
 
     /** Модификаторы СТОРОНЫ (глобальный дебафф владельца флагов очков) — запасной источник, когда API не
@@ -581,6 +605,9 @@ object InfluenceMap {
 
     fun fieldsBuiltAt(): Int = fieldTick
 
+    /** Жив ли у врага хоть один лечащий крип: пока да, любая выбитая его часть возвращается. */
+    private var enemyCanHeal = false
+
     /** Множитель ВХОДЯЩЕГО урона по ЕГО крипам — зеркало ourTaken, нужен нашим полям урона. */
     private var theirTaken = 1.0
 
@@ -628,6 +655,7 @@ object InfluenceMap {
     fun buildFields(allies: List<Creep>, enemies: List<Creep>) {
         fieldTick = getTicks()
         targetValueCache.clear()
+        enemyCanHeal = enemies.any { profileOf(it).heal > 0.0 }
         for (f in allFields) f.fill(0)
 
         for (e in enemies) {
@@ -772,7 +800,18 @@ object InfluenceMap {
     }
 
     private fun targetValueOf(e: Creep): Double {
-        val p = profileOf(e)
+        // ЦЕНА ЦЕЛИ — ЭТО ТО, ЧЕМ ОНА СТАНЕТ, А НЕ ТО, ЧТО ОНА ЕСТЬ (v209, оператор по записи): «мы разделили армию
+        // кимчи на 2 части, у одной из половин выбили все боевые части и перестали их добивать, за счёт чего они
+        // спокойно прошли мимо нас к своей второй половине, где был лекарь, и вылечились до полного здоровья,
+        // восстановив полную свою мощь». Пока у врага жив лекарь, выбитая часть не убрана — она выключена, и
+        // единственный способ убрать её насовсем это убить крипа. Поэтому притяжение считается по ПОТЕНЦИАЛУ тела.
+        // Замер по пяти матчам v208: 13 восстановлений; r6m6 простоял разоружённым 42 тика, из них 29 в нашей
+        // дальности выстрела, с минимумом в 16 хитов — и ушёл лечиться.
+        // ⚠️ Правится ПРИТЯЖЕНИЕ (куда идти), а НЕ порядок огня: два способа перенести огонь на остов уже отвергнуты
+        // стендом (см. focusPool) — «отрастающая угроза» и «остов в два залпа сразу после добиваемых за тик». Оба
+        // ставили остов в очередь ПРОТИВ живой угрозы; здесь он не конкурирует с ней за выстрел, он лишь перестаёт
+        // быть невидимым для ног. Опасность его при этом по-прежнему нулевая: он и правда ничем не бьёт.
+        val p = if (enemyCanHeal) potentialOf(e) else profileOf(e)
         val value = p.melee + p.ranged + HEAL_VALUE * p.heal
         if (value <= 0.0) return 0.0
         val key = e.x * 100 + e.y
