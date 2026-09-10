@@ -424,6 +424,14 @@ object PainAndGain {
     private const val USE_LOCAL_PARITY = true
     /** Вето «в контакте» смотрит на массу армии, а не на любого отбившегося крипа (v214). */
     private const val USE_CONTACT_BY_MASS = true
+    /** Скаут врага, сидящий на не нашем флаге и добиваемый одним залпом, входит в пул огня (v214). */
+    private const val USE_SHOOT_SCOUTS = true
+    /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
+    /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
+    private var flagsNow: List<FlagInfo> = emptyList()
+    private var scoutShots = 0
+    private var scoutReach = 0
+    private var scoutTicks = 0
     /** БЕГУН БЕРЁТ ФЛАГ НАШЕЙ ПОЛОВИНЫ ПОД БРОСКОМ (проба после серии 387–406, дебют против гастролёра — MetalicaX#3/#4, けろびー#12):
      *  см. captureAllowed. ОТВЕРГНУТО таблицей входов: 17 хуже / 5 лучше по +20, brawl m33 из уничтожения его в уничтожение НАШЕЙ
      *  армии (2628:11684 → 8051:6038 по +50), m32 brawl живых 11 → 7, m30 brawl +50 3028:12818 → 5940:5767 — дебафф бегуна перед
@@ -2569,6 +2577,7 @@ object PainAndGain {
         val enemyHome = enemyHomePos ?: InfluenceMap.cell(99 - home.x, 99 - home.y)
 
         val flags = collectFlags(myCreeps, enemyCreeps, combatEnemies)
+        flagsNow = flags
         applyEffects(flags, myCreeps, enemyCreeps)
         accountScore(flags)
 
@@ -2606,6 +2615,12 @@ object PainAndGain {
         // пересобирал ту же опасность пять раз за тик, по разу на замысел, и звал profileOf внутри цикла
         // по клеткам. Опасность клетки в раздаче читается отсюда (см. inc в commandFight).
         InfluenceMap.buildFields(active, enemyCreeps)
+        // скауты врага: сколько их и сколько крипо-тиков они провели в дальности наших стволов. Знаменатель
+        // большой при нулевом числителе — это и есть «мы их пропускаем», сказанное числом
+        for (e in enemyCreeps) if (scoutFoe(e)) {
+            scoutTicks++
+            if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) scoutReach++
+        }
         // остовы: считаются ПОСЛЕ построения полей, чтобы потенциал тела уже был известен
         for (e in enemyCreeps) {
             val live = InfluenceMap.profileOf(e)
@@ -2761,7 +2776,8 @@ cpuMark("arrival")
                 "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
                 "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum " +
+                " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
+                " scout=$scoutShots/$scoutReach/$scoutTicks " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -3452,6 +3468,18 @@ cpuMark("r.cands")
      * Существующие `localAllies`/`localEnemies` меряют радиусы 8 и 11 — то есть почти всю армию, и потому на
      * вопрос «сильнее ли мы ЗДЕСЬ» ответить не могут.
      */
+    /**
+     * СКАУТ ВРАГА (v214, наблюдение оператора: «мы игнорируем крипов, у которых есть только мув-части — они
+     * спокойно гуляют возле нашей армии, мы их пропускаем и не нападаем»). У каждой стороны их по два:
+     * тело `M1h=100`, одна часть MOVE, сто хитов. Замер по записям: ОБА его скаута доживают до конца матча с
+     * полными ста хитами, ни разу не обстрелянные, — и это они берут ему флаги.
+     * Различитель точен и уже есть: `potentialOf` считает части ТЕЛА без проверки хитов, поэтому у остова
+     * потенциал есть, а у скаута нулевой. Значит распоряжение v178 («разоружённый — не цель») не ослабляется
+     * ни на йоту: оно про того, у кого оружие БЫЛО, а у скаута его не было никогда.
+     */
+    private fun scoutFoe(e: Creep): Boolean =
+        InfluenceMap.potentialOf(e).let { it.melee + it.ranged + it.heal <= 0.0 } && canMove(e)
+
     private fun spotEdgeAt(e: Creep): Double {
         val k = e.x * 100 + e.y
         val d = InfluenceMap.dangerAt(k)
@@ -4468,7 +4496,17 @@ cpuMark("a.evade")
             enemyCreeps.any { h -> h.id != e.id && InfluenceMap.profileOf(h).heal > 0.0 } &&  // и есть кому вернуть
             e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)          // и он умирает от уже доступного залпа
         }
-        val focusPool = (inFireRange.filter { e -> combatEnemies.any { it.id == e.id } } + killableHulk)
+        // СКАУТ У ФЛАГА — ЦЕЛЬ ЦЕНОЙ ОДНОГО ЗАЛПА (v214). Форма взята у killableHulk и она уже проверена живьём:
+        // срабатывала 739 раз в 102 логах из 135, то есть в очередь встаёт и стреляет. Остова она не спасала лишь
+        // потому, что его лечили обратно, — у скаута этой причины нет, он умирает насовсем и перестаёт брать флаги.
+        // Его угроза (threatOf) равна нулю, поэтому внутри верхнего яруса focusCmp он стоит ПОСЛЕДНИМ: любой живой
+        // добиваемый враг выше. Условие «на флаге или в шаге от него» не даёт огню уходить в скаута, гуляющего мимо.
+        val scoutTargets = if (!USE_SHOOT_SCOUTS) emptyList() else inFireRange.filter { e ->
+            scoutFoe(e) && ctx.flags.any { !it.ours && getRange(e, it.pos) <= 1 } &&
+                e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)
+        }
+        scoutShots += scoutTargets.size
+        val focusPool = (inFireRange.filter { e -> combatEnemies.any { it.id == e.id } } + killableHulk + scoutTargets)
             .ifEmpty { inFireRange }
         finishableHulks += killableHulk.size
         fun fireAvailableAt(e: Creep) = fireAvailable(e)
@@ -6245,7 +6283,12 @@ cpuMark("a.evade")
         // которые в текущий момент нам никак не вредят, вместо того чтобы снимать хиты тем, кто наносит урон прямо
         // сейчас»). Добиваемость считалась по ХИТАМ, а у разоружённого их мало — он и выходил лучшей целью, тогда как
         // не бьёт вовсе. Огонь идёт по тем, кто ещё вооружён; безоружные оставляются на потом
-        val dangerous = live.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } }
+        // ...И СКАУТ У ФЛАГА (v214): без этого приказ командира расходится с фокусом — `order.firstOrNull { ... in
+        // dangerous }` ниже отфильтровал бы его обратно, и стрелок, которому фокус назначил скаута, молчал бы.
+        // Распоряжение v178 не тронуто: остов сюда по-прежнему не попадает (у него потенциал есть, у скаута нет)
+        val scoutsHere = if (!USE_SHOOT_SCOUTS) emptyList() else live.filter { e ->
+            scoutFoe(e) && flagsNow.any { !it.ours && getRange(e, it.pos) <= 1 } }
+        val dangerous = live.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } } + scoutsHere
         val pool = if (USE_FIRE_SKIPS_DISARMED && dangerous.isNotEmpty()) dangerous else live
         val killable = pool.filter { e ->
             val burst = shooters.filter { reach(it, e) }.sumOf { c ->
