@@ -123,6 +123,8 @@ object PainAndGain {
      *  ПРЕЖНЕЙ проверенной цепочкой с её паритетными полами, а те после v193 считают вклад мили по измеренной доле —
      *  то есть модель сама разрешает отпустить того, кто ничего не даёт, и сама запретит, когда он начнёт бить. */
     private const val USE_IDLE_MELEE_RUNS = true
+    /** Мили встаёт позади стрелков, когда по замеру не достаёт (v195, см. inFront в planFight). */
+    private const val USE_MELEE_BEHIND_WHEN_IDLE = true
 
     /** Перевес, при котором армия идёт добивать, и порог продолжения. Порог продолжения выше единицы: прежний
      *  0.9 вместе со входом «по контакту» открывал лазейку — контакт с ОДНИМ стрелком включал ДОБИТЬ, а дальше
@@ -2197,7 +2199,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v194"
+    private const val BOT_VERSION = "v195"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2617,7 +2619,7 @@ cpuMark("arrival")
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             concSum = 0; concTicks = 0
@@ -2893,6 +2895,7 @@ cpuMark("arrival")
     private val touchHist = ArrayDeque<Int>()              // доля наших мили, стоявших вплотную к врагу, по тикам контакта
     private var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
     private var touchMin = 1.0                            // минимум за матч — прибор
+    private var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
     private var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
     private var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     private var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
@@ -7070,7 +7073,18 @@ cpuMark("a.evade")
             .thenBy { -it.dmg }
             .thenBy { -getRange(c, it.pos) }
         val frontDist = front.minOfOrNull { it.dist } ?: RANGED_RANGE
-        fun inFront(cell: FightCell) = front.any { rc -> getRange(cell.pos, rc.pos) <= 1 && cell.dist < rc.dist }
+        // ЗАСЛОН ИМЕЕТ СМЫСЛ, ПОКА ЗАСЛОНЯЮЩИЙ БЬЁТ (v195, USE_MELEE_BEHIND_WHEN_IDLE). Клетка мили выбиралась смежной с
+        // клеткой стрелка и БЛИЖЕ к врагу, чем она, — то есть на клетку впереди строя; при стрелках в трёх это ровно
+        // двойка, где его пятеро стрелков достают, а наш ATTACK (дальность 1) не достаёт. Замер против Coldkimchi#2:
+        // мили стоит вплотную к врагу 1 % крипо-тиков, его блок меняет клетку 71–76 % тиков, урона мы получаем в
+        // 1,5–3,9 раза больше, чем наносим, и к двухсотому тику у наших мили 0–16 атакующих частей из 32 против его
+        // 24–32. Роль щита размен не спасает: его пятеро дают 300 в тик, наши трое лекарей возвращают 216. Пока доля
+        // касаний измеряется единицей (стенд, всякий соперник, идущий в контакт) — всё как было; упала — мили встаёт
+        // ПОЗАДИ стрелков. Это же место, а не ступень движения: в бою клетки раздаёт командир, и slot старше holdMelee
+        val meleeIdleNow = USE_MELEE_BEHIND_WHEN_IDLE && touchShare < TOUCH_MIN
+        fun inFront(cell: FightCell) = front.any { rc -> getRange(cell.pos, rc.pos) <= 1 &&
+            (if (meleeIdleNow) cell.dist > rc.dist else cell.dist < rc.dist) }
+        if (meleeIdleNow && meleeFree.isNotEmpty()) meleeBackTicks++
         for (m in meleeFree.sortedBy { c -> front.minOfOrNull { getRange(c, it.pos) } ?: 0 }) {
             place(m, meleeCmp(m), { it.meleeAdj <= 1 && inFront(it) }) { cell -> inFront(cell) }
                 ?: place(m, meleeCmp(m), null) { cell -> cell.dist == frontDist && front.any { rc -> getRange(cell.pos, rc.pos) <= 2 } }
