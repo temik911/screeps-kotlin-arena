@@ -627,6 +627,7 @@ object InfluenceMap {
      */
     fun buildFields(allies: List<Creep>, enemies: List<Creep>) {
         fieldTick = getTicks()
+        targetValueCache.clear()
         for (f in allFields) f.fill(0)
 
         for (e in enemies) {
@@ -758,7 +759,19 @@ object InfluenceMap {
     }
 
     /** Цена цели — боевые части, умноженные на нашу способность их выбить (см. buildFields). */
+    /** Цена цели за тик: поля строятся раз в тик, значит и она постоянна — а зовут её из внутреннего цикла
+     *  по девяти клеткам на каждый замысел, и там она тянула за собой profileOf с обходом тела через границу
+     *  изоляции. Кэш живёт ровно один тик и сбрасывается вместе с полями. */
+    private val targetValueCache = HashMap<String, Double>()
+
     fun targetValue(e: Creep): Double {
+        targetValueCache[e.id]?.let { return it }
+        val v = targetValueOf(e)
+        targetValueCache[e.id] = v
+        return v
+    }
+
+    private fun targetValueOf(e: Creep): Double {
         val p = profileOf(e)
         val value = p.melee + p.ranged + HEAL_VALUE * p.heal
         if (value <= 0.0) return 0.0
