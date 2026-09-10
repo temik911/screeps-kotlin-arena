@@ -136,6 +136,8 @@ object PainAndGain {
      *  1 мили из 4 на первом тике контакта; глубина по оси мили −1,35, стрелки +0,68, ЛЕКАРИ +0,32, и в 155 тиках из
      *  335 лекари ближе к врагу, чем мили; на t=63 первый лекарь уже без лечащих частей. Оба условия — фильтры в
      *  `place`, поэтому при отсутствии подходящей клетки работает прежний добор, и строй не может замереть. */
+    /** УПРЕЖДЕНИЕ ПО УХОДЯЩЕМУ (v201, см. gunReach в commandFight): клетка стрелка берётся с запасом на его шаг. */
+    private const val USE_RANGED_LEADS_TARGET = true
     private const val USE_RANGED_LINE_CAP = true   // линия «не впереди мили» не дальше дальности выстрела (v200)
     private const val USE_MELEE_IN_HEAL_REACH = true
     private const val USE_HEALER_BEHIND_LINE = true
@@ -2230,7 +2232,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v200"
+    private const val BOT_VERSION = "v201"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -6564,18 +6566,27 @@ cpuMark("a.evade")
         // ближе MELEE_KEEP_RANGE к его мили теперь не назначается стрелку вовсе; если других нет, работает фолбэк
         fun safeForRanged(p: Position) = !USE_RANGED_KEEPS_OFF_MELEE ||
             hisMelee.none { getRange(p, it) <= MELEE_KEEP_RANGE }
+        // УПРЕЖДЕНИЕ ПО УХОДЯЩЕМУ (v201). Замер серии v200 развёл план и явь: командир назначает стрелку клетку с целью
+        // в дальности в 69 % случаев (прибор `guns`), а фактически в дальности стоят 1,11 стрелка из пяти — 22 %
+        // (прибор `reach`), при послушании приказа 99,9 %. Крипы идут ровно туда, куда велено; расхождение целиком в
+        // том, что клетка выбрана по СЕГОДНЯШНИМ его позициям, а его блок меняет клетку 71–76 % тиков контакта и
+        // шагает ОДНОВРЕМЕННО с нами. Поэтому цель должна быть в дальности с запасом на его шаг. Признак ухода не
+        // назначен, а измерен долей касаний мили: против идущего в контакт она равна единице и запаса не берётся
+        val leadNow = USE_RANGED_LEADS_TARGET && touchShare < TOUCH_MIN
+        val gunReach = if (leadNow) RANGED_RANGE - 1 else RANGED_RANGE
+        if (leadNow) leadTicks++
         for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
             val ok = when (intentOf(c)) {
                 // напор: цель в дальности, меньше входящего; удержание: то же, но безопасность решает сильнее
-                Intent.PRESS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                Intent.PRESS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= gunReach } },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 - (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) + aheadOfMelee(p) })
-                Intent.HOLD -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } },
+                Intent.HOLD -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= gunReach } },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 1000 + (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) })
                 // уступка: как можно дальше от его мили, цель — если получится
                 Intent.YIELD -> place(c, { p -> true },
                     { p -> -(armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
                 // концентрация: все стрелки — в дальности ОДНОЙ цели, самой слабой у него
-                Intent.FOCUS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && weakest != null && getRange(p, weakest) <= RANGED_RANGE },
+                Intent.FOCUS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && weakest != null && getRange(p, weakest) <= gunReach },
                     { p -> (incNext[p.x * 100 + p.y] ?: 0.0) })
                 Intent.KITE -> place(c, { p -> safeForRanged(p) && (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
                         armedEnemies.any { getRange(p, it) <= RANGED_RANGE } }, { p -> incNext[p.x * 100 + p.y] ?: 0.0 })
