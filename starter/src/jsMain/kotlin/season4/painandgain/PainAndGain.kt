@@ -480,6 +480,12 @@ object PainAndGain {
      *  вопрос задаётся на шаге. Читается штампованное поле (O(1) на клетку), а не поцелевой пересчёт: тик уже
      *  стоит 99,9 мс на пике при лимите 100 (задача №13). */
     private const val USE_LETHAL_CELL_VETO = true
+    /** ЧАСЫ ГИСТЕРЕЗИСА ИДУТ ОДНИ (v215). Два дефекта в паре, оба про то, что решение «постура принята» и его
+     *  последствия жили в разных местах: (1) командир писал постуру в обход гистерезиса и БЕЗ обновления
+     *  `postureSince`, поэтому срок POSTURE_HOLD оказывался уже вышедшим и постуру можно было сменить обратно
+     *  следующим же тиком; (2) `objectiveFlagId` обнулялся безусловно, хотя постура могла остаться прежней, — и
+     *  цель армии теряла бонус ×1,25 за текущий флаг, после чего выбиралась заново по всей карте. */
+    private const val USE_ONE_POSTURE_CLOCK = true
     private const val LETHAL_PENALTY = 1e6      // не запрет, а вес: если смертельны все клетки, порядок между ними цел
     /** Пара: сколько оставлено в ядре против сколько было свободных. */
     private var symCore = 0
@@ -4530,7 +4536,17 @@ cpuMark("a.evade")
             retreat -> Posture.RETREAT
             else -> Posture.HOLD
         }
-        objectiveFlagId = objective?.flag?.id
+        // ПРИНЯЛА ЛИ ПОСТУРА НОВОЕ ЗНАЧЕНИЕ — считается ЗДЕСЬ, до всех, кто от этого зависит (v215). Прежде
+        // решение принималось на сорок строк ниже, а `objectiveFlagId` присваивался выше и безусловно
+        val escape = newPosture == Posture.RETREAT || (!USE_POSTURE_HOLDS_EVADE && newPosture == Posture.EVADE)
+        val postureTakes = !USE_POSTURE_HYSTERESIS || newPosture == posture || escape || getTicks() - postureSince >= POSTURE_HOLD
+        // ЦЕЛЬ-ФЛАГ НЕ ОБНУЛЯЕТСЯ, ПОКА ПОСТУРА УДЕРЖАНА (v215). Дефект был в паре: гистерезис держит ANNIHILATE,
+        // а `objective` при аннигиляции равен null — и `objectiveFlagId` обнулялся, хотя постура осталась прежней.
+        // Следствие через тик: `chooseFlagObjective` теряет бонус ×1,25 за текущую цель (3545) и послабление
+        // LOCAL_ENTER_RATIO (3535), и цель выбирается заново ПО ВСЕЙ КАРТЕ. Ровно это оператор и видел: «пару тиков
+        // погоня, потом разворот». Новое значение берётся всегда; ОБНУЛЕНИЕ — только вместе с постурой
+        val newFlagId = objective?.flag?.id
+        if (newFlagId != null || postureTakes || !USE_ONE_POSTURE_CLOCK) objectiveFlagId = newFlagId
         if (newPosture != Posture.RETREAT) retreatTarget = null
         val retreatTo = if (newPosture == Posture.RETREAT) retreatPoint(ctx) else null
         // ДЕРЖИ, ЧТО ДЕРЖИШЬ (v66): армия, стоящая на своём флаге при враге рядом, постом считает этот флаг, а не дальний пост.
@@ -4571,8 +4587,7 @@ cpuMark("a.evade")
         // (срок вышел), EVADE на 62-м, HOLD на 67-м, EVADE на 74-м — семь переходов за сто тиков перед контактом в
         // тестовой игре 3d95b5, и каждый EVADE отодвигал армию назад, пока он шёл вперёд: к первому выстрелу наш центр
         // стоял в восьми клетках от края, и все 37 тиков боя прошли спиной к стене. Срока не ждёт только RETREAT
-        val escape = newPosture == Posture.RETREAT || (!USE_POSTURE_HOLDS_EVADE && newPosture == Posture.EVADE)
-        if (!USE_POSTURE_HYSTERESIS || newPosture == posture || escape || getTicks() - postureSince >= POSTURE_HOLD) {
+        if (postureTakes) {
             if (newPosture != posture) postureSince = getTicks()
             posture = newPosture
         }
@@ -5108,12 +5123,21 @@ cpuMark("a.evade")
         // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
         // (контакт, сомкнутость или шесть рядом, постура, огонь, отсутствие отхода и затора) целиком перешли в
         // выбор режима выше — это то же самое, сказанное один раз, и дальше режимы можно наполнять по одному
-        if (USE_COMMAND_POSTURE && cmdMode == CmdMode.FIGHT && posture != Posture.ANNIHILATE) posture = Posture.ANNIHILATE
+        // ...и ЗАПИСЬ ИДЁТ ЧЕРЕЗ ТЕ ЖЕ ЧАСЫ (v215). Здесь и ниже постура присваивалась в обход гистерезиса и БЕЗ
+        // обновления `postureSince`: часы оставались от прошлой смены, срок POSTURE_HOLD оказывался уже вышедшим, и
+        // на следующем же тике постуру можно было сменить обратно. То есть единственный гистерезис в файле ломался
+        // именно там, где он нужнее всего — в бою. Замер по двадцати рейтинговым матчам: в худших матчах 352 смены
+        // постуры за 1700 тиков, медиана удержания ОДИН тик, 71–81 % смен живут не дольше трёх тиков
+        if (USE_COMMAND_POSTURE && cmdMode == CmdMode.FIGHT && posture != Posture.ANNIHILATE) {
+            posture = Posture.ANNIHILATE
+            if (USE_ONE_POSTURE_CLOCK) postureSince = getTicks()
+        }
         // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
         // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
         // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
         if (USE_COMMAND_BREAKS_OFF && outmatchedTicks >= BREAK_OFF_TICKS && posture != Posture.RETREAT) {
             posture = Posture.RETREAT
+            if (USE_ONE_POSTURE_CLOCK) postureSince = getTicks()
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("cmd t=${getTicks()}: outmatched for $outmatchedTicks ticks — break off")
         }
         if (blockOn) {
