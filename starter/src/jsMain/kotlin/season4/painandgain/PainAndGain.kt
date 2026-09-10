@@ -2797,6 +2797,8 @@ cpuMark("arrival")
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
                 " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
+                "split=$splitFight/$splitAll healgap=$healGap/$healGapN flip=$aimFlips/$aimTicks blind=$dangerBlind/$dangerMoves " +
+                "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4024,6 +4026,10 @@ cpuMark("a.hunt")
         val massCentroid = clusterCentroid(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
         val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
         val contact = inContact(armedEnemies, massArmy)
+        // ИДЁТ ЛИ БОЙ (v215): контакт по МАССЕ армии либо размен за последние STALL_TICKS тиков. Считается
+        // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
+        // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
+        fightOnNow = contact || exchangeRecent
         val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
         val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
         val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4
@@ -4294,6 +4300,7 @@ cpuMark("a.retreat")
                         }
                     }
                     detachedIds.add(c.id)
+                    splitAll++; if (fightOnNow) splitFight++
                     remaining = without
                 }
             }
@@ -4784,6 +4791,23 @@ cpuMark("a.evade")
         // трёх снимали наших мили по одному (r→melee 132 из 180), а прижим считал «мили в трёх» атакой и молчал до 104-го
         val theirMeleeIn = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && combatArmy.any { hasWeapon(it) && getRange(e, it) <= 1 } }
         val underTheirFire = combatArmy.any { InfluenceMap.damageAt(it.x, it.y, combatEnemies) > 0.0 }
+        // ЕСТЬ ЛИ ЛЕКАРЬ У ТОГО, КТО ДЕРЁТСЯ (v215, оператор: «без хиллеров ни один бой выиграть невозможно»).
+        // Прежний `hfar` мерил другое — расстояние лекаря до центроида ВООРУЖЁННЫХ; у армии, растянутой на
+        // тридцать клеток, этот центроид стоит посреди пустоты, и «лекарь при армии» там ничего не значит.
+        // Здесь вопрос задан по КАЖДОМУ дерущемуся: есть ли свой лекарь в дальности лечения
+        val medsNow = army.filter { !hasWeapon(it) && hasHeal(it) }
+        for (c in combatArmy) {
+            if (!hasWeapon(c) || armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 1 }) continue
+            healGapN++
+            if (medsNow.none { getRange(c, it) <= HEAL_RANGE }) healGap++
+        }
+        // СМЕНА НАПРАВЛЕНИЯ АРМИИ (v215, оператор: «пару тиков погоня, потом разворот, и так много раз»).
+        // Направление — это то, КУДА армия идёт: флаг-цель, добыча или пост. Одна смена за матч — это план,
+        // сто — это дрожь, и пара «смен/тиков» отличает одно от другого
+        val aimNow = objective?.flag?.id?.let { "F$it" } ?: prey?.id?.let { "E$it" } ?: "P"
+        aimTicks++
+        if (lastAim.isNotEmpty() && aimNow != lastAim) aimFlips++
+        lastAim = aimNow
         // «их мили идут» (см. PRESS_CLOSING): дистанция их мили до наших вооружённых за окно терпения
         val theirMeleeDist = combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
             .minOfOrNull { e -> combatArmy.filter { hasWeapon(it) }.minOfOrNull { getRange(e, it) } ?: 99 } ?: 99
@@ -4961,6 +4985,23 @@ cpuMark("a.evade")
                 posture != Posture.RETREAT && posture != Posture.EVADE -> CmdMode.FIGHT
             else -> CmdMode.RACE
         }
+        // ...И ПРИЧИНА БЕРЁТСЯ ИЗ ТОЙ ЖЕ ЦЕПОЧКИ (v215, см. cmdWhy). Порядок веток здесь ровно тот же, что
+        // выше: прибор, повторяющий решение своим порядком, рассказывает о боте неправду ровно тогда, когда
+        // бот меняется. Знаменатель — все тики, а не только контактные: «командир молчал, потому что боя не
+        // было» и «командир молчал в бою» — разные вещи, и их надо уметь отличить числом
+        val cmdWhyNow = when {
+            cmdMode == CmdMode.FIGHT -> "fight"
+            cmdMode == CmdMode.MARCH -> "march"
+            outmatchedTicks >= BREAK_OFF_TICKS -> "outmatched"
+            stalledNow -> "stall"
+            enemyRetreating && !(USE_FIGHT_OVER_CHASE && underTheirFire && theirMeleeIn) -> "retreat"
+            pushing -> "push"
+            !underTheirFire -> "nofire"
+            !(enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES) -> "few"
+            else -> "posture"
+        }
+        cmdWhy[cmdWhyNow] = (cmdWhy[cmdWhyNow] ?: 0) + 1
+        cmdWhyN++
         // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
         // (контакт, сомкнутость или шесть рядом, постура, огонь, отсутствие отхода и затора) целиком перешли в
         // выбор режима выше — это то же самое, сказанное один раз, и дальше режимы можно наполнять по одному
@@ -5038,9 +5079,7 @@ cpuMark("a.evade")
             (cmdMode == CmdMode.RACE || (USE_COMMAND_MARCH && cmdMode == CmdMode.MARCH))
         // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
         // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
-        if (commanderNow) cmdTicks++ else if (contact && enemyMassedNow) cmdBlocked =
-            if (posture != Posture.ANNIHILATE) "posture" else if (enemyRetreating) "retreat"
-            else if (stalledNow) "stall" else if (!theirMeleeIn) "noMelee" else "off"
+        if (commanderNow) cmdTicks++ else cmdBlocked = cmdWhyNow
         // ПОГОНЯ НАЗНАЧАЕТСЯ ДО ПЕРЕБОРА (v211): раздача прогоняется пять раз, по разу на замысел, и отряд обязан
         // быть один и тот же во всех пяти — иначе прогноз оценивает пять разных армий.
         // ...И НЕ ЗАВИСИТ ОТ ТОГО, ПРАВИТ ЛИ КОМАНДИР (v212). Первая редакция стояла под `commanderNow`, и первый же
@@ -5863,6 +5902,16 @@ cpuMark("a.evade")
                     chosen
                 }
             }
+            // СЛЕПОТА К ОПАСНОСТИ НА ШАГЕ (v215, оператор: «линия фронта должна работать ВСЕГДА на
+            // передвижение»). Пара: шагов в клетку, несущую урон, при ВЫКЛЮЧЕННОМ слагаемом опасности —
+            // против всех шагов. Слагаемое выключено в двух местах: вне боя `scoreCell` возвращается до него
+            // вовсе, а при агрессии оно обнуляется. Приказ командира слепым не считается: он один и считается
+            // по полям (см. scoreMelee/scoreRanged/scoreHeal)
+            if (step != null) {
+                dangerMoves++
+                if (stepTag != "order" && (!inCombat || localAggressive || spotNow) &&
+                    InfluenceMap.dangerAt(step.x * 100 + step.y) > 0.0) dangerBlind++
+            }
             if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
                 // только враг «с боем» (см. threatening): праздность при небоевых остатках после выигранного боя — не находка
                 val near = combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && threatening(it, enemyCreeps) }.minByOrNull { getRange(creep, it) }
@@ -6564,7 +6613,7 @@ cpuMark("a.evade")
             // ...и ЗАДАНИЕ — это зачисление в захватчики с целью, а не клетка: вооружённый крип, приведённый к флагу
             // как боец, флага НЕ БЕРЁТ (захват делают бегуны), и первая редакция на сценарии kite набрала 0 очков.
             // Командир решает КТО и КУДА, а ведёт и берёт существующий механизм захвата (v160)
-            for (c in party) { cmdDetach.add(c.id); runnerFlag[c.id] = f.id; free.remove(c) }
+            for (c in party) { cmdDetach.add(c.id); runnerFlag[c.id] = f.id; free.remove(c); splitAll++; if (fightOnNow) splitFight++ }
             budget -= need
         }
     }
@@ -7475,6 +7524,28 @@ cpuMark("a.evade")
     private val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
     private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
     private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
+    /** РАЗЛОЖЕНИЕ НЕВХОДА В РЕЖИМ БОЯ (v215). Прежний `cmdBlocked` НАЗЫВАЛ причину, не проверив её: он писал
+     *  «posture», если постура не ANNIHILATE, — а условие боя постуры ANNIHILATE не требует вовсе, оно требует
+     *  `!pushing && underTheirFire && (сомкнут || шесть рядом) && постура не отход`. По логам рейтинговой серии
+     *  из-за этого выходило, будто виновата постура. Прибор, называющий не тот множитель, отправляет чинить не
+     *  то место, поэтому причина берётся из ТОЙ ЖЕ цепочки веток, что и сам режим. */
+    private val cmdWhy = HashMap<String, Int>()
+    private var cmdWhyN = 0
+    /** Пара «отпущено во время боя / отпущено всего» (v215, наблюдение оператора «отряд распадается»). */
+    private var splitFight = 0
+    private var splitAll = 0
+    /** Пара «крипо-тиков боя без своего лекаря в дальности лечения / крипо-тиков боя» (v215). */
+    private var healGap = 0
+    private var healGapN = 0
+    /** Пара «смен направления армии / тиков» (v215, наблюдение «разворачиваемся много раз»). */
+    private var aimFlips = 0
+    private var aimTicks = 0
+    private var lastAim = ""
+    /** Пара «шагов в клетку под уроном при выключенном слагаемом опасности / всех шагов» (v215). */
+    private var dangerBlind = 0
+    private var dangerMoves = 0
+    /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
+    private var fightOnNow = false
     private var outmatchedTicks = 0                // сколько тиков подряд наша мощь ниже BREAK_OFF_RATIO от его (v185)
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
