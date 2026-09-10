@@ -2190,13 +2190,47 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v204"
+    private const val BOT_VERSION = "v205"
     private const val DEBUG_LOG = true
     /** Сверка полей влияния с ПРЯМЫМ пересчётом по крипам (этап 3). Стоит два десятка клеток за тик и
      *  обязана держаться нуля: ненулевой числитель chk значит, что штамп сдвинут, и это видно за 3,5
      *  минуты стенда, а не за час игр. Сверка со старым incNext (fldcmp) сняла свой вопрос на этапе 3 —
      *  0 из 304 950 клеток — и удалена вместе с incNext на этапе 4. */
     private const val FIELD_CHECK = true
+
+    // ---------- поле цели (v204, этап 5) ----------
+    /**
+     * Один тик пути стоит одной единицы урона в тик. Это не подобранный вес, а решение о том, ГДЕ цель имеет
+     * право решать: опасность клетки в бою — десятки и сотни, поэтому направление разбивает ничьи там, где
+     * опасность плоская, и не перебивает её нигде. Ровно в плоской области и стоял прежний провал: когда ни
+     * одна из восьми соседних клеток не удовлетворяла требованию роли, требование молча отбрасывалось, и крип
+     * оставался на месте с оценкой «везде одинаково безопасно».
+     */
+    /** Спуск по полю цели в раздаче командира (v204, этап 5). */
+    private const val USE_GOAL_FIELD = true
+    private const val GOAL_STEP_COST = 1.0
+    /** Недостижимая клетка: дороже любого достижимого пути по полю 100x100, но не запрет. */
+    private const val GOAL_UNREACHABLE = 300.0
+    /** Затравка — клетка, откуда строй достаёт не меньше этой доли лучшего в округе. */
+    private const val SEED_ENTER = 0.60
+    /** ...и удерживается, пока не упала ниже этой: гистерезис против мигания очага (доля, а не абсолют —
+     *  масштаб поля меняется втрое за матч, и абсолютный порог однажды перестанет совпадать). */
+    private const val SEED_HOLD = 0.45
+    /** Затравки ищутся в коробке вокруг медианы армии: кулак плюс запас на подход. */
+    private const val SEED_BOX = FIST_RADIUS + 8
+    /** Очаг сменился, только если его центр уехал дальше этого — иначе держим прежний. */
+    private const val SEED_MOVE = 6
+
+    private var goalTick = -1
+    private var goalField: IntArray? = null
+    private var goalSeeds: IntArray = IntArray(0)
+    private var goalCx = -1
+    private var goalCy = -1
+    private var goalRebuilds = 0
+    private var goalHolds = 0
+    /** Решений раздачи, где слагаемое цели изменило выбранную клетку, и решений всего. */
+    private var goalFlips = 0
+    private var goalDecisions = 0
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
      *  первый тик матча 7 вылетел по таймауту именно в drawDebug; журнал даёт всё, что нужно для разбора. */
@@ -2640,7 +2674,11 @@ cpuMark("arrival")
                 " eH=${InfluenceMap.fieldPeak(InfluenceMap.eHeal).toInt()} aM=${InfluenceMap.fieldPeak(InfluenceMap.aMelee).toInt()}" +
                 " aR=${InfluenceMap.fieldPeak(InfluenceMap.aRanged).toInt()} aH=${InfluenceMap.fieldPeak(InfluenceMap.aHeal).toInt()}" +
                 " eF=${InfluenceMap.fieldPeak(InfluenceMap.eFire).toInt()} atM=${InfluenceMap.fieldPeak(InfluenceMap.attMelee).toInt()}" +
-                " atR=${InfluenceMap.fieldPeak(InfluenceMap.attRanged).toInt()} atH=${InfluenceMap.fieldPeak(InfluenceMap.attHeal).toInt()}")
+                " atR=${InfluenceMap.fieldPeak(InfluenceMap.attRanged).toInt()} atH=${InfluenceMap.fieldPeak(InfluenceMap.attHeal).toInt()}" +
+                // ЦЕЛЬ (этап 5): затравок в очаге, перестроек против удержаний очага, и — главное — доля решений
+                // раздачи, которые слагаемое цели ИЗМЕНИЛО. flips=0 за сто тиков есть операционное определение
+                // мёртвого кода
+                " seeds=${goalSeeds.size} goal=(${goalCx},${goalCy}) rebuild=$goalRebuilds/$goalHolds flips=$goalFlips/$goalDecisions")
             concSum = 0; concTicks = 0
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
@@ -6122,6 +6160,54 @@ cpuMark("a.evade")
         }
     }
 
+    /**
+     * Поле расстояний до ОЧАГА — клеток, откуда наш строй достаёт самое ценное у врага. Спуск по нему и есть
+     * многотиковое направление: `COMMAND_REACH = 1` предлагает только соседнюю клетку, и требование роли,
+     * которому ни одна из восьми не удовлетворяет, прежде молча отбрасывалось в общий добор.
+     * Очаг ОДИН на армию — это и есть починка «армия развалилась на две половины»: покриповая цель уводила
+     * соседей по строю в разные бои. Затравок при этом много, и армия растекается по ФРОНТУ, приходя к
+     * ближайшему его участку, а не толпясь в одной точке.
+     */
+    private fun ensureGoalField(fighters: List<Creep>, combatEnemies: List<Creep>): IntArray? {
+        if (!USE_GOAL_FIELD) return null
+        if (goalTick == getTicks()) return goalField
+        goalTick = getTicks()
+        if (fighters.isEmpty() || combatEnemies.isEmpty()) { goalField = null; goalSeeds = IntArray(0); return null }
+        val xs = fighters.map { it.x }.sorted(); val ys = fighters.map { it.y }.sorted()
+        val ax = xs[xs.size / 2]; val ay = ys[ys.size / 2]
+        var peak = 0
+        for (x in maxOf(0, ax - SEED_BOX)..minOf(99, ax + SEED_BOX))
+            for (y in maxOf(0, ay - SEED_BOX)..minOf(99, ay + SEED_BOX)) {
+                val v = InfluenceMap.attRanged[x * 100 + y]
+                if (v > peak) peak = v
+            }
+        if (peak <= 0) { goalField = null; goalSeeds = IntArray(0); return null }
+        val held = goalSeeds.toHashSet()
+        val enter = (peak * SEED_ENTER).toInt()
+        val hold = (peak * SEED_HOLD).toInt()
+        val seeds = ArrayList<Int>(64)
+        for (x in maxOf(0, ax - SEED_BOX)..minOf(99, ax + SEED_BOX))
+            for (y in maxOf(0, ay - SEED_BOX)..minOf(99, ay + SEED_BOX)) {
+                val key = x * 100 + y
+                if (DistanceMap.isTerrainWall(x, y)) continue
+                val v = InfluenceMap.attRanged[key]
+                if (v >= enter || (key in held && v >= hold)) seeds.add(key)
+            }
+        if (seeds.isEmpty()) { goalField = null; goalSeeds = IntArray(0); return null }
+        val cx = seeds.sumOf { it / 100 } / seeds.size
+        val cy = seeds.sumOf { it % 100 } / seeds.size
+        // очаг держится, пока его центр не уехал: без этого армия ходит между двумя равными очагами и не доходит
+        // ни до одного. Геометрия при этом СВЕЖАЯ каждый тик — держится решение, а не карта: враг ходит, и поле,
+        // сохранённое на десять тиков, показывало бы на то место, где он был
+        if (goalCx >= 0 && maxOf(abs(cx - goalCx), abs(cy - goalCy)) < SEED_MOVE && goalSeeds.isNotEmpty()) {
+            goalHolds++
+        } else {
+            goalCx = cx; goalCy = cy; goalSeeds = seeds.toIntArray(); goalRebuilds++
+        }
+        goalField = DistanceMap.goalField(goalSeeds, combatEnemies.map { InfluenceMap.cell(it.x, it.y) })
+        return goalField
+    }
+
     private fun commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                              out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
                              per: Map<String, Intent>? = null, ourFlagCells: Set<Int> = emptySet()) {
@@ -6169,6 +6255,13 @@ cpuMark("a.evade")
         // Мёртвыми оказались incNow и hits: обе карты считались в том же цикле и не читались НИКЕМ — их удалила
         // перепись, а не чтение кода
         fun inc(key: Int): Double = InfluenceMap.dangerAt(key)
+        val goal = ensureGoalField(fighters, combatEnemies)
+        /** Цена клетки по направлению: сколько тиков пути от неё до ближайшего очага. */
+        fun goalCost(key: Int): Double {
+            val g = goal ?: return 0.0
+            val d = g[key]
+            return if (d < 0) GOAL_UNREACHABLE else d.toDouble()
+        }
         val taken = HashSet<Int>()
         // клетки, где стоят СВОИ: назначать их нельзя — приказ туда неисполним, пока сосед не ушёл, а прибор показал,
         // что до назначенной клетки доходят 7 % (v167). Своя собственная клетка при этом разрешена: это «стой»
@@ -6216,6 +6309,9 @@ cpuMark("a.evade")
                   rescue: Boolean = false): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
             var bestTenant: Creep? = null
+            // ПРИБОР СЛАГАЕМОГО — «сколько решений ИЗМЕНИЛОСЬ», а не «сколько раз код исполнился». Ровно этого не
+            // хватало v196: счётчик доказывал, что код работает, и не доказывал, что он поменял хоть одну клетку
+            var bare: Position? = null; var bareScore = Double.MAX_VALUE
             // ПРИКАЗ ОБЯЗАН БЫТЬ ИСПОЛНИМ (v172, оператор): «командир должен быть уверен, что каждый крип на следующем
             // шагу сможет выполнить приказ». Уставший крип в этот тик не двинется вовсе — ему можно приказать только
             // стоять, и приказ «шагни» от него был бы ложью, которую потом считает прогноз
@@ -6251,13 +6347,23 @@ cpuMark("a.evade")
                 // против семи у него. Шаг В болото стоит четырёх тиков неподвижности; стоять НА болоте бесплатно,
                 // поэтому дорожает только переход
                 val bog = USE_ORDER_AVOIDS_SWAMP && !self && DistanceMap.isSwamp(p.x, p.y)
-                val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p) +
+                val sc0 = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p) +
                     (if (lethal) LETHAL_CELL_COST else 0.0) + (if (bog) SWAMP_CELL_COST else 0.0)
+                // СПУСК К ОЧАГУ (v204, этап 5) — слагаемое в той же оценке, а не отдельная ветка: вблизи врага все
+                // затравки на нуле и оно плоское, решает тактика; вдали оно единственное, что отличает клетки друг
+                // от друга. Переход непрерывный, режима, который можно перепутать, нет
+                val sc = sc0 + GOAL_STEP_COST * goalCost(key)
                 // ...и при РАВНЫХ оценках выбор не должен зависеть от порядка перебора: раньше порядок задавала общая
                 // раздача, теперь — обход соседей, и одна строка гейта поменяла исход именно из-за этого (v181)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
+                if (sc0 < bareScore) { bareScore = sc0; bare = p }
             }
             val b = best ?: return false
+            if (USE_GOAL_FIELD) {
+                goalDecisions++
+                val bs = bare
+                if (bs == null || bs.x != b.x || bs.y != b.y) goalFlips++
+            }
             val tenant = bestTenant
             if (tenant != null && USE_ORDER_CHAINS) {
                 if (depth >= CHAIN_DEPTH) return false

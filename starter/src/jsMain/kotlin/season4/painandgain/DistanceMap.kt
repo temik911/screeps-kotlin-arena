@@ -167,6 +167,21 @@ object DistanceMap {
         return bfs(target.x, target.y, block, swampCost, maxDist)
     }
 
+    /**
+     * Поле расстояний до БЛИЖАЙШЕЙ из затравок (v204, этап 5). Затравки — клетки, откуда наш строй достаёт
+     * самое ценное у врага; спуск по этому полю и есть многотиковое направление, которого у командира не было:
+     * `COMMAND_REACH = 1` предлагает только соседнюю клетку, и когда ни одна из восьми не удовлетворяет
+     * требованию роли, требование прежде молча отбрасывалось. Теперь оно не отбрасывается — поле показывает
+     * на ближайшую клетку, которая ему удовлетворяет.
+     */
+    fun goalField(seeds: IntArray, extraBlocked: List<Position>, maxDist: Int = Int.MAX_VALUE): IntArray {
+        ensureStaticBlocked()
+        val block = staticBlocked!!.copyOf()
+        for (p in extraBlocked) if (inBounds(p.x, p.y)) block[index(p.x, p.y)] = true
+        for (s in seeds) if (s >= 0 && s < block.size) block[s] = false // затравка всегда достижима
+        return bfs(seeds, block, SWAMP_COST, maxDist)
+    }
+
     /** Поле в ШАГАХ (болото = равнина): пустой CARRY усталости не даёт, пустой хаулер идёт по болоту
      *  как по суше — его дорогу к энергии считаем этим полем, обратную (с грузом) — обычным. */
     fun stepFieldTo(target: Position, extraBlocked: List<Position>): IntArray = flowFieldTo(target, extraBlocked, 1)
@@ -363,14 +378,29 @@ object DistanceMap {
      * корзинами (Dial): цены целые и малые, куча не нужна.
      */
     private fun bfs(startX: Int, startY: Int, blocked: BooleanArray, swampCost: Int = SWAMP_COST, maxDist: Int = Int.MAX_VALUE): IntArray {
+        if (!inBounds(startX, startY)) return IntArray(FIELD * FIELD) { -1 }
+        return bfs(intArrayOf(index(startX, startY)), blocked, swampCost, maxDist)
+    }
+
+    /**
+     * Тот же обход, но от МНОЖЕСТВА клеток сразу: все затравки лежат в нулевом ведре, и поле сразу считает
+     * расстояние до БЛИЖАЙШЕЙ из них. Это ровно три строки разницы с одноисточниковым — и именно та разница,
+     * которой не хватало командиру: одна клетка-цель на армию заставляет всех идти в одну точку, а множество
+     * клеток даёт ФРОНТ, вдоль которого армия растекается, приходя к ближайшему его участку.
+     */
+    private fun bfs(starts: IntArray, blocked: BooleanArray, swampCost: Int = SWAMP_COST, maxDist: Int = Int.MAX_VALUE): IntArray {
         val dist = IntArray(FIELD * FIELD) { -1 }
-        if (!inBounds(startX, startY)) return dist
+        if (starts.isEmpty()) return dist
         val swamp = ensureSwamp()
         val buckets = Array(swampCost + 1) { ArrayDeque<Int>() }
-        dist[index(startX, startY)] = 0
-        buckets[0].addLast(index(startX, startY))
+        var queued = 0
+        for (s in starts) {
+            if (s < 0 || s >= dist.size || dist[s] == 0) continue
+            dist[s] = 0
+            buckets[0].addLast(s)
+            queued++
+        }
         var current = 0
-        var queued = 1
 
         while (queued > 0) {
             val bucket = buckets[current % (swampCost + 1)]
