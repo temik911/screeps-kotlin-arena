@@ -462,6 +462,25 @@ object PainAndGain {
      *  ⚠️ Цена названа заранее: пока идёт бой, флаговый забег стоит на двух скаутах M1h. Прибор `split` и темп очков
      *  в окне боя её измерят. */
     private const val USE_NO_SPLIT_IN_FIGHT = true
+    /** ЛИНИЯ ФРОНТА РАБОТАЕТ НА КАЖДОМ ШАГЕ (v215, оператор: «убедись, что линия фронта работает всегда на
+     *  передвижение, а не только в каком-то отдельном режиме»).
+     *  ⚠️ Сперва про то, чего в коде НЕ ОКАЗАЛОСЬ, хотя я это предполагал. Выход `if (!inCombat) return` в
+     *  scoreCell выглядит гейтом режима, но им не является: `damageAt` отбрасывает всё дальше RANGED_RADIUS = 4
+     *  (это уже С шагом сближения врага, см. effectiveRangeTo), а `inCombat` — это враг в RANGED_RANGE + 2 = 5 от
+     *  КРИПА, то есть не ближе 4 от любой соседней клетки. Опасность в этой ветке равна нулю по арифметике, и
+     *  добавлять её туда — писать мёртвый код. Тем же счётом закрываются марш и гонка: `commandMarch` выдаёт
+     *  клетки, только когда его вооружённых нет ближе MARCH_SAFE = 12, а `commandRace` клеток не выдаёт вовсе
+     *  (`out` остаётся пустым — задание там это зачисление в захватчики), и крип идёт обычной оценкой.
+     *  Настоящий выключатель ровно один, и он не про режим, а про АГРЕССИЮ: `damageTerm = if (aggressive) 0.0`,
+     *  а `localAggressive` при постуре ANNIHILATE истинен почти всегда. Решение оператора: масштабировать, а не
+     *  обнулять, и сверху поставить жёсткий потолок на смертельную клетку. */
+    private const val USE_DANGER_SCALED_BY_AGGRO = true
+    /** ...и ЖЁСТКИЙ ПОТОЛОК: клетка, где урон за два тика не меньше хитов крипа, не выбирается никакой агрессией.
+     *  Признак взят готовый — `lethal` в commandFight считает ровно это (`inc(key) >= c.hits`); здесь тот же
+     *  вопрос задаётся на шаге. Читается штампованное поле (O(1) на клетку), а не поцелевой пересчёт: тик уже
+     *  стоит 99,9 мс на пике при лимите 100 (задача №13). */
+    private const val USE_LETHAL_CELL_VETO = true
+    private const val LETHAL_PENALTY = 1e6      // не запрет, а вес: если смертельны все клетки, порядок между ними цел
     /** Пара: сколько оставлено в ядре против сколько было свободных. */
     private var symCore = 0
     private var symFree = 0
@@ -2863,7 +2882,7 @@ cpuMark("arrival")
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
                 " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
-                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks blind=$dangerBlind/$dangerMoves " +
+                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves lethal=$lethalHits/$lethalCells " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
@@ -5993,8 +6012,9 @@ cpuMark("a.evade")
             // по полям (см. scoreMelee/scoreRanged/scoreHeal)
             if (step != null) {
                 dangerMoves++
-                if (stepTag != "order" && (!inCombat || localAggressive || spotNow) &&
-                    InfluenceMap.dangerAt(step.x * 100 + step.y) > 0.0) dangerBlind++
+                if (stepTag != "order" && InfluenceMap.dangerAt(step.x * 100 + step.y) > 0.0) {
+                    if (!inCombat) dangerBlindFar++ else if (localAggressive || spotNow) dangerBlind++
+                }
             }
             if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
                 // только враг «с боем» (см. threatening): праздность при небоевых остатках после выигранного боя — не находка
@@ -7633,6 +7653,12 @@ cpuMark("a.evade")
     private var lastAim = ""
     /** Пара «шагов в клетку под уроном при выключенном слагаемом опасности / всех шагов» (v215). */
     private var dangerBlind = 0
+    /** ...и отдельно — та же слепота ВНЕ боя. Ноль здесь не дефект прибора, а арифметика: поле урона достаёт
+     *  на 4 клетки, а `inCombat` стоит на 5 (см. USE_DANGER_SCALED_BY_AGGRO). */
+    private var dangerBlindFar = 0
+    /** Пара «клеток, отвергнутых как смертельные / оценённых клеток» (v215, см. USE_LETHAL_CELL_VETO). */
+    private var lethalHits = 0
+    private var lethalCells = 0
     private var dangerMoves = 0
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     private var fightOnNow = false
@@ -7874,13 +7900,19 @@ cpuMark("a.evade")
         if (bx != creep.x || by != creep.y) return InfluenceMap.cell(bx, by)
         if (pushX >= 0) return InfluenceMap.cell(pushX, pushY)
         if (blockedByStatic && hereDist >= 0) {
-            var dx0 = 0; var dy0 = 0; var best = hereDist + DistanceMap.SWAMP_COST
+            // ...и ОПАСНОСТЬ УЧАСТВУЕТ И ЗДЕСЬ (v215): это единственный шаг, который считался по чистому потоку,
+            // мимо оценки клетки. При равном расстоянии по потоку берётся клетка под меньшим огнём — тай-брейк, а
+            // не приоритет: выбраться из-за статической помехи всё равно важнее
+            var dx0 = 0; var dy0 = 0; var best = hereDist + DistanceMap.SWAMP_COST; var bestDan = Double.MAX_VALUE
             for ((dx, dy) in DIRECTIONS) {
                 if (dx == 0 && dy == 0) continue
                 val x = creep.x + dx; val y = creep.y + dy
                 if (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(x * 100 + y)) continue
                 val fd = flow[x * 100 + y]
-                if (fd in 0..best && (dx0 == 0 && dy0 == 0 || fd < best)) { best = fd; dx0 = dx; dy0 = dy }
+                val dan = InfluenceMap.dangerAt(x * 100 + y)
+                if (fd in 0..best && (dx0 == 0 && dy0 == 0 || fd < best || (fd == best && dan < bestDan))) {
+                    best = fd; bestDan = dan; dx0 = dx; dy0 = dy
+                }
             }
             if (dx0 != 0 || dy0 != 0) return InfluenceMap.cell(creep.x + dx0, creep.y + dy0)
         }
@@ -7907,6 +7939,16 @@ cpuMark("a.evade")
         if (!inCombat) return -firePenalty * PAIR_W_DIST - (if ((USE_HEALER_ADJ && !hasWeapon(creep)) || flowDist > standoff + ARRIVED_SLACK) 0.0 else separation)
 
         val damage = InfluenceMap.netDamageAt(x, y, enemyCreeps, allies)
+        // ЖЁСТКИЙ ПОТОЛОК (v215, см. USE_LETHAL_CELL_VETO): два тика урона по штампованному полю против хитов
+        // крипа. Стоит ДО ветки лекаря — она возвращается раньше, а лекарь под смертельным залпом это те самые
+        // «пара крипов, покалеченных первым же ударом». Не запрет, а вес: когда смертельны все восемь клеток и
+        // своя, порядок между ними остаётся осмысленным
+        // ...и считается ЧИСТЫЙ урон, тот же, что и в самой оценке: штампованное поле не знает про наше лечение, и
+        // крип в кулаке из трёх лекарей объявлял смертельной клетку, которую лекари держат. Замер поймал это одной
+        // строкой: match28:farm+weak 24 003:14 553 -> 22 407:23 999, то есть выигранный флаговый забег стал
+        // проигранным — крипы переставали вставать на спорные флаги. Одна величина опасности на две надобности
+        val lethalTerm = if (USE_LETHAL_CELL_VETO && damage * 2.0 >= creep.hits) LETHAL_PENALTY.also { lethalHits++ } else 0.0
+        lethalCells++
         // лекарь: вплотную к подопечному (поле), из клеток равной близости — под меньшим ФАКТИЧЕСКИМ огнём (fireAt:
         // без шага сближения мили — иначе клетка рядом с бойцом, который рубится вплотную, «стоит» 720 и лекарь
         // стоит в трёх клетках; от мили, что действительно подошёл, лекарь отойдёт следующим тиком)
@@ -7916,7 +7958,7 @@ cpuMark("a.evade")
             // вплотную к мили врага — прочь (см. HEALER_W_MELEE): штраф в 2 клетках бил по всем клеткам у подопечного, когда
             // мили стоял по другую его сторону, и лекарь уходил на 4 (вне даже дистанционного лечения) — стенд m2 rush
             val meleeReach = meleeEnemies.count { getRange(InfluenceMap.cell(x, y), it) <= 1 } * HEALER_W_MELEE
-            return -firePenalty * PAIR_W_DIST - fire * healerFireW - meleeReach - (if (USE_HEALER_ADJ) 0.0 else separation) - pinnedHealer
+            return -firePenalty * PAIR_W_DIST - fire * healerFireW - meleeReach - (if (USE_HEALER_ADJ) 0.0 else separation) - pinnedHealer - lethalTerm
         }
         val meleeSelf = isMelee(creep) && !hasRanged(creep)
         val meleeWeight = if (aggressive) PAIR_W_MELEE * AGGRO_MELEE_FACTOR else PAIR_W_MELEE
@@ -7924,12 +7966,25 @@ cpuMark("a.evade")
         val swampPenalty = if (!aggressive && DistanceMap.isSwamp(x, y)) PAIR_W_SWAMP else 0.0
         val influence = if (meleeSelf && aggressive) 0.0 else InfluenceMap.influenceAt(x, y, allies, enemyCreeps)
         val outgoing = if (!aggressive && damage > 0.0) 0.0 else if (meleeSelf) (if (enemyCreeps.any { getRange(InfluenceMap.cell(x, y), it) <= 1 }) 1.0 else 0.0) else if (hasRanged(creep)) outgoingValue(x, y, enemyCreeps) else 0.0
-        val damageTerm = if (aggressive) 0.0 else damage * PAIR_W_DAMAGE
+        // АГРЕССИЯ МАСШТАБИРУЕТ ОПАСНОСТЬ, А НЕ ОБНУЛЯЕТ (v215, решение оператора). Множитель берётся
+        // существующий — тот же AGGRO_MELEE_FACTOR, которым агрессия уже режет штраф за зону мили; новой
+        // константы здесь заводить нечего. Разница не косметическая: при уроне 600 член оценки был 0, стал 54,
+        // а шаг по потоку стоит 10 — то есть напор сохраняется, но клетка под залпом перестаёт быть бесплатной
+        // ...и НЕ ВЕЗДЕ, А ЗА ЛИНИЕЙ ФРОНТА. Первая редакция брала скидку по всей карте и уронила гейт одной
+        // строкой: match28:farm+weak 24 003:14 553 -> 22 407:23 999, причём НАШ счёт почти не изменился, а ЕГО
+        // вырос с 14 553 до 23 999 — то есть мы не перестали брать флаги, мы перестали давить на его. Это и есть
+        // цена платы за опасность там, где мы сильнее. Линия фронта — это `influenceOf`: где наш залп перебивает
+        // его, агрессия остаётся бесплатной и напор цел; где перебивает он, опасность считается даже при агрессии,
+        // и «первым же ударом калечит пару наших» становится дорогим шагом. Одно обращение к штампованному массиву
+        val damageTerm = if (!aggressive) damage * PAIR_W_DAMAGE
+            else if (USE_DANGER_SCALED_BY_AGGRO && InfluenceMap.influenceOf(x * 100 + y) < 0.0)
+                damage * PAIR_W_DAMAGE * AGGRO_MELEE_FACTOR
+            else 0.0
         val pinned = (periodAt(creep, x, y) - 1) * InfluenceMap.fireAt(x, y, enemyCreeps) * PAIR_W_DAMAGE
         // ...и притяжение к ПРИКАЗУ сильнее (v168, см. orderPull): назначенная клетка была одним слагаемым наравне с
         // влиянием, угрозой мили и разделением, и они её перевешивали — до своей клетки доходили 7 % крипов
         return -firePenalty * PAIR_W_DIST * orderPull - damageTerm + influence * PAIR_W_INFLUENCE +
-            outgoing * PAIR_W_OUTGOING - meleeThreat - separation - swampPenalty - pinned
+            outgoing * PAIR_W_OUTGOING - meleeThreat - separation - swampPenalty - pinned - lethalTerm
     }
 
     private fun outgoingValue(x: Int, y: Int, enemyCreeps: List<Creep>): Double {
