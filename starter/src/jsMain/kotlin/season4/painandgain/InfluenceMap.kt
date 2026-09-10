@@ -452,18 +452,37 @@ object InfluenceMap {
      */
     fun healAt(x: Int, y: Int, allies: List<Creep>): Double {
         var heal = 0.0
+        var raw = 0.0
         for (ally in allies) {
-            val healParts = ally.body.count { it.type == HEAL && it.hits > 0 }
-            if (healParts == 0) continue
+            // ДЕБАФФ ЛЕЧЕНИЯ (v204, этап 4). Здесь считалось healParts * HEAL_POWER — по НОМИНАЛУ части, мимо
+            // EFF_HEAL_MODIFIER, который вешают на владельца флаги очков (H×0.8 за один флаг типа, H×0.6 за два).
+            // Единственное место модели, где это было так: profileOf применяет модификатор с самого начала, и
+            // потому урон врага мы считали дебаффнутым, а СВОЁ лечение — полным. Ошибка одностороння и всегда в
+            // одну сторону: netDamageAt = damageAt − healAt занижал чистый входящий ровно на разницу, то есть
+            // клетка под огнём выглядела тем безопаснее, чем больше лечащих флагов мы держим.
+            val full = profileOf(ally).heal          // уже с EFF_HEAL_MODIFIER
+            if (full <= 0.0) continue
             val distance = getRange(ally, cell(x, y)) // лечение, как и стрельба, работает сквозь стены
-            heal += when {
-                distance <= 1 -> healParts * HEAL_POWER.toDouble()
-                distance <= 3 -> healParts * RANGED_HEAL_POWER.toDouble()
+            val rate = when {
+                distance <= 1 -> 1.0
+                distance <= 3 -> HEAL_FALLOFF
                 else -> 0.0
             }
+            heal += full * rate
+            raw += ally.body.count { it.type == HEAL && it.hits > 0 } * HEAL_POWER.toDouble() * rate
         }
+        // прибор: доля вызовов, где дебафф вообще что-то изменил. Ноль на матче без лечащих флагов — правильный
+        // ноль, а не мёртвый код; ненулевой числитель называет цену прежней ошибки числом
+        healAtAll++
+        if (abs(raw - heal) > 0.5) healAtDebuffed++
         return heal
     }
+
+    /** Вызовов healAt и вызовов, где дебафф лечения изменил ответ. */
+    private var healAtAll = 0
+    private var healAtDebuffed = 0
+
+    fun healDebuffStats(): String = "$healAtDebuffed/$healAtAll"
 
     /** Чистый входящий урон с учётом нашего лечения (>= 0): сколько HP крип реально потеряет. */
     fun netDamageAt(x: Int, y: Int, enemies: List<Creep>, allies: List<Creep>): Double =
