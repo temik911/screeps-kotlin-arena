@@ -2172,7 +2172,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v209"
+    private const val BOT_VERSION = "v211"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -2214,6 +2214,30 @@ object PainAndGain {
     // такой крип — вооружённый на таймере: лечение возвращает части. Прибор считает, сколько их, сколько
     // крипо-тиков они простояли в нашей дальности выстрела и сколько РАЗ ОНИ ВОССТАНОВИЛИСЬ. Последнее число —
     // цена бездействия, названная напрямую, и его нельзя спутать с «ситуация не возникала»
+    // ---------- ПОГОНЯ ОТРЯДОМ ЗА ОСТОВОМ (v211, решение оператора) ----------
+    // Замер закрыл два других объяснения: по остовам в нашей дальности мы УЖЕ стреляем (65 % стрелко-тиков), и
+    // притяжение всей армии за ними не идёт (очаг один и держится на главном блоке). Остаётся то, что оператор и
+    // выбрал: за уходящим остовом отправляется горстка, добивает и возвращается. Отряд — это отдельный ПРИКАЗ,
+    // а не отдельный механизм: погоня выражена уже существующими словами модели — «фокус на этой цели» плюс
+    // освобождение от кулака, — потому что кулак и есть то единственное, что мешает крипу за ним пойти.
+    private const val USE_CHASE_HULKS = true
+    /** Больше двух за остовами не уходит: аннигиляция проигрывает матч при любом счёте. */
+    private const val CHASE_MAX = 2
+    /** Тиков, которые преследователь обязан пережить в клетке остова, — иначе это не погоня, а подарок. */
+    private const val CHASE_TTL = 4
+    /** Меньше этого в армии — не до погони. */
+    private const val CHASE_MIN_ARMY = 6
+    /** Кто из наших назначен добить какой остов: id нашего -> id остова. Считается РАЗ в тик, до перебора
+     *  замыслов, иначе пять прогонов раздачи дали бы пять разных отрядов. */
+    private val chaseOf = HashMap<String, String>()
+    /** ...и сам объект цели. Искать остов в combatEnemies/armedEnemies НЕЛЬЗЯ: он по определению не входит ни в
+     *  один из них — это ровно та невидимость, из-за которой предмет и возник. Первая редакция погони искала там,
+     *  фокус не назначался никогда, и стенд показал 13 назначений при нуле добитых. */
+    private val chaseTarget = HashMap<String, Creep>()
+    private var chaseTicks = 0
+    private var chaseKills = 0
+    private val chasedIds = HashSet<String>()
+
     /** ДОБИТЬ ОСТОВ, УМИРАЮЩИЙ ОТ ОДНОГО ЗАЛПА (v210) — ОТВЕРГНУТО ЗАМЕРОМ, третьим подряд по этому предмету.
      *  Замысел: остов входит в пул огня, только когда умирает от УЖЕ доступного залпа, то есть попадает ровно в
      *  верхний ярус «добиваемые за тик», где живой угрозе не мешает — она в том же ярусе стоит выше по своей
@@ -2708,7 +2732,7 @@ cpuMark("arrival")
                 "hparts=${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
                 "ehparts=${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
                 "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
-                "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived finish=$finishableHulks " +
+                "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4844,6 +4868,9 @@ cpuMark("a.evade")
         if (commanderNow) cmdTicks++ else if (contact && enemyMassedNow) cmdBlocked =
             if (posture != Posture.ANNIHILATE) "posture" else if (enemyRetreating) "retreat"
             else if (stalledNow) "stall" else if (!theirMeleeIn) "noMelee" else "off"
+        // ПОГОНЯ НАЗНАЧАЕТСЯ ДО ПЕРЕБОРА (v211): раздача прогоняется пять раз, по разу на замысел, и отряд обязан
+        // быть один и тот же во всех пяти — иначе прогноз оценивает пять разных армий
+        if (commanderNow) assignChase(commandArmy, enemyCreeps, armedEnemies) else chaseOf.clear()
         if (commanderNow) {
             // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
             // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
@@ -6193,6 +6220,53 @@ cpuMark("a.evade")
         }
     }
 
+    /**
+     * Назначает погоню за остовами: крипами врага, у которых выбито всё оружие, но тело его помнит, — пока у него
+     * жив лекарь, такой крип это полная его мощь на таймере. Условие на цель одно и оно из той же модели, что всё
+     * остальное: ОПАСНОСТЬ В ЕГО КЛЕТКЕ должна быть настолько мала, чтобы преследователь прожил там CHASE_TTL
+     * тиков. Этим одним условием сказано и «он оторвался от своего блока», и «нашему там не смертельно», и
+     * отзыв погони: как только остов вернулся под прикрытие, опасность растёт и назначение само перестаёт
+     * выдаваться. Отдельного правила отзыва не нужно.
+     */
+    private fun assignChase(army: List<Creep>, enemyCreeps: List<Creep>, armedEnemies: List<Creep>) {
+        chaseOf.clear()
+        chaseTarget.clear()
+        if (!USE_CHASE_HULKS) return
+        val fighters = army.filter { canMove(it) && !it.spawning && hasWeapon(it) }
+        if (fighters.size < CHASE_MIN_ARMY) return
+        if (enemyCreeps.none { InfluenceMap.profileOf(it).heal > 0.0 }) return   // лечить некому — остов и так труп
+        val hulks = enemyCreeps.filter { e ->
+            val pot = InfluenceMap.potentialOf(e)
+            val live = InfluenceMap.profileOf(e)
+            pot.melee + pot.ranged > 0.0 && live.melee + live.ranged <= 0.0
+        }
+        if (hulks.isEmpty()) return
+        val free = fighters.toMutableList()
+        // ...и НЕ БОЛЬШЕ ПОЛОВИНЫ, как у гонки за флагами: ядро остаётся сильнее его армии, иначе погоня покупает
+        // остова ценой боя. Та же проверка паритета, тот же довод — аннигиляция это поражение при любом счёте
+        var budget = minOf(CHASE_MAX, (free.size - 1) / 2)
+        for (h in hulks.sortedBy { e -> free.minOfOrNull { getRange(it, e) } ?: 99 }) {
+            if (budget <= 0) break
+            val key = h.x * 100 + h.y
+            val danger = InfluenceMap.dangerAt(key)
+            // преследователь выбирается ближайший, стрелок вперёд мили: он добивает с трёх и не лезет под ответ
+            val chaser = free.filter { c -> c.hits > danger * CHASE_TTL }
+                .minWithOrNull(compareBy({ if (hasRanged(it)) 0 else 1 }, { getRange(it, h) })) ?: continue
+            val without = free.filter { it.id != chaser.id }
+            if (without.none { hasWeapon(it) }) break
+            if (ourPowerOf(without, armedEnemies) < enemyPowerOf(armedEnemies, without) * PARITY_FLOOR) break
+            chaseOf[chaser.id] = h.id
+            chaseTarget[chaser.id] = h
+            fireOf[chaser.id] = h.id            // и стреляет он именно в него: приказ командира в shoot идёт первым
+            free.remove(chaser)
+            budget--
+        }
+        if (chaseOf.isNotEmpty()) chaseTicks++
+        // прибор: остов, за которым была погоня и который перестал существовать, — это её результат
+        for (id in chasedIds.toList()) if (enemyCreeps.none { it.id == id }) { chaseKills++; chasedIds.remove(id) }
+        chasedIds.addAll(chaseOf.values)
+    }
+
     private fun commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>,
                             out: MutableMap<String, Position>) {
         out.clear()
@@ -6330,8 +6404,16 @@ cpuMark("a.evade")
                 }
                 return true
             }
-            val keep = cells.filterValues { maxOf(abs(it.x - ax), abs(it.y - ay)) <= FIST_RADIUS && clear(it.x, it.y) }
-            if (keep.isNotEmpty()) { cells.clear(); cells.putAll(keep) }
+            val keep = HashMap(cells.filterValues { maxOf(abs(it.x - ax), abs(it.y - ay)) <= FIST_RADIUS && clear(it.x, it.y) })
+            if (keep.isNotEmpty()) {
+                // ...КРОМЕ ПРЕСЛЕДОВАТЕЛЯ (v211): кулак и есть то единственное, что мешает крипу пойти за остовом,
+                // поэтому отряд освобождается от него — и ровно на девять своих клеток, а не на всё поле
+                val chasers = fighters.filter { it.id in chaseOf }
+                if (chasers.isNotEmpty()) for ((k, p) in cells) {
+                    if (chasers.any { maxOf(abs(p.x - it.x), abs(p.y - it.y)) <= COMMAND_REACH }) keep[k] = p
+                }
+                cells.clear(); cells.putAll(keep)
+            }
         }
         // ОПАСНОСТЬ КЛЕТКИ ЧИТАЕТСЯ ИЗ ПОЛЯ (v204, этап 4). Прежде она строилась здесь, то есть ПЯТЬ раз за тик —
         // по разу на замысел, над одним и тем же множеством врагов, — и внутри цикла по клеткам звалась profileOf,
@@ -6653,7 +6735,10 @@ cpuMark("a.evade")
          */
         fun placeScored(c: Creep, role: Int, i: Intent): Boolean {
             val (att, dan, ttlMin) = weightsOf(i)
-            val focus = if (i == Intent.FOCUS) (if (role == 0) weakestMelee else weakestFoe) else null
+            // ПРЕСЛЕДОВАТЕЛЬ СМОТРИТ НА СВОЙ ОСТОВ (v211) — тем же полем притяжения, что и фокус: у мили пик
+            // вплотную, у стрелка на дальности три. Отдельной формулы у погони нет и не нужно
+            val chased = chaseTarget[c.id]
+            val focus = chased ?: if (i == Intent.FOCUS) (if (role == 0) weakestMelee else weakestFoe) else null
             val kite = i == Intent.KITE
             val rank = { p: Position ->
                 val key = p.x * 100 + p.y
