@@ -2079,6 +2079,13 @@ object PainAndGain {
      *  условие само себя отменяет через десяток тиков. Пол паритета считает эту цену для ОДНОГО флага, а не для
      *  режима «берём, пока целы». Что осталось верным: счёт против него мы не набираем, и предмет открыт. */
     private const val USE_CAPTURE_WHEN_WHOLE = false
+    /** ПАТ СНИМАЕТ ВЕТО ЗАХВАТА (v189): бой, где за целое окно ни одна сторона не потеряла заметной доли хитов, армии
+     *  не угрожает, и дебафф флага в нём ничего не решает — решают очки. Отличие от отвергнутого v187 в том, что пат
+     *  меряется ВРЕМЕНЕМ: «армия цела» истинно и на входе в размен, а пат — только после сотни тиков без потерь. */
+    private const val USE_CAPTURE_IN_STALEMATE = true
+    private const val STALEMATE_WINDOW = 100     // окно наблюдения за хитами обеих сторон
+    private const val STALEMATE_LOSS = 0.05      // «заметная доля»: за окно упало меньше пяти процентов
+    private const val STALEMATE_HOLD = 5         // и признак держится подряд, чтобы не мигал
     private const val CAPTURE_WHOLE_CREEPS = 10      // бойцов и лекарей в строю
     private const val CAPTURE_WHOLE_HITS = 0.75      // и хитов не меньше трёх четвертей
     private const val USE_COMMAND_BRACE = true
@@ -2151,7 +2158,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v188"
+    private const val BOT_VERSION = "v189"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2786,7 +2793,10 @@ cpuMark("arrival")
         val losingRace = USE_CAPTURE_WHEN_LOSING && behindOnScore && enemyRate > ourRate &&
             (whole || !USE_CAPTURE_NEEDS_EDGE ||
                 ourPowerOf(ctx.army, ctx.combatEnemies) >= enemyPowerOf(ctx.combatEnemies, ctx.army) * CAPTURE_EDGE)
-        if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
+        // ...и ПАТ СНИМАЕТ ВЕТО КОНТАКТА (v189): бой, в котором за целое окно ни одна сторона не потеряла заметной
+        // доли хитов, армии не угрожает, а дебафф флага в нём ничего не решает — решают очки (см. stalemateNow)
+        val stalemate = USE_CAPTURE_IN_STALEMATE && stalemateTicks >= STALEMATE_HOLD
+        if (!losingRace && !stalemate && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
         val (ours, theirs) = powerAfter(ctx, f)
@@ -2796,6 +2806,9 @@ cpuMark("arrival")
         // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
         val lostRace = lostRaceNow()
         val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else if (needed) PARITY_FLOOR else CAPTURE_FLOOR
+        // ...и в ПАТУ паритетный пол тоже молчит: он сравнивает мощь, а в бою, где никто никого не убивает, мощь
+        // обеих сторон ланчестером считается около нуля, и сравнивать нечего (v189)
+        if (stalemate) return null
         return if (ours >= theirs * floor) null else "parity(${ours.toInt()}/${(theirs * floor).toInt()})"
     }
 
@@ -2831,6 +2844,9 @@ cpuMark("arrival")
     private val meleeDistHist = ArrayDeque<Int>()         // дистанция их мили до наших вооружённых за окно терпения (см. PRESS_CLOSING)
     private val centreDistHist = ArrayDeque<Int>()        // дистанция между центрами вооружённых армий за то же окно (см. standingNow)
     private val approachHist = ArrayDeque<Int>()          // то же расстояние, но пишется и БЕЗ контакта (см. enemyApproaching)
+    private val stalemateOurHist = ArrayDeque<Int>()      // сумма наших хитов за окно (см. stalemateNow)
+    private val stalemateHisHist = ArrayDeque<Int>()      // и его — чтобы отличить пат от проигранного размена
+    private var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
     private class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
     private val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
@@ -4387,6 +4403,27 @@ cpuMark("a.evade")
         while (approachHist.size > PRESS_PATIENCE + 1) approachHist.removeFirst()
         val enemyApproaching = USE_BRACE_ON_APPROACH && approachHist.size > PRESS_PATIENCE &&
             approachHist.first() - approachHist.last() >= PRESS_CLOSING
+        // ПАТ: БОЙ, В КОТОРОМ НИКТО НИКОГО НЕ УБЬЁТ (v189, разбор Coldkimchi#2). Замер матча 3d97d8 за 1400 тиков:
+        // наших выстрелов 2 639 против его 1 234, нашего урона 156 100 против его 78 310 — и при этом его лечение
+        // 237 228, наше 158 400. Обе стороны перелечивают входящее, никто не гибнет, и матч решают ФЛАГИ: у него
+        // четыре, у нас один, счёт 3 210:18 145. В таком бою дебафф флага БЕСПЛАТЕН: он режет урон и лечение, но
+        // «убить нельзя» от этого не меняется, пока запас лечения велик, — и соперник этим пользуется, а мы нет,
+        // потому что вето захвата считает нас слабее и запрещает всё. Пат меряется временем: за окно STALEMATE_WINDOW
+        // ни одна сторона не потеряла больше STALEMATE_LOSS своих хитов. Именно временем, и в этом отличие от
+        // отвергнутого USE_CAPTURE_WHEN_WHOLE (v187, 0:12): «армия цела» истинно и на входе в размен, до всякого пата,
+        // поэтому та правка брала флаг ровно тогда, когда дебафф решал бой, — и армия гибла девять раз из двенадцати
+        val stalemateOurNow = combatArmy.sumOf { it.hits }
+        val stalemateHisNow = combatEnemies.sumOf { it.hits }
+        if (contact) { stalemateOurHist.addLast(stalemateOurNow); stalemateHisHist.addLast(stalemateHisNow) }
+        else { stalemateOurHist.clear(); stalemateHisHist.clear() }
+        while (stalemateOurHist.size > STALEMATE_WINDOW) stalemateOurHist.removeFirst()
+        while (stalemateHisHist.size > STALEMATE_WINDOW) stalemateHisHist.removeFirst()
+        val stalemateNow = USE_CAPTURE_IN_STALEMATE && stalemateOurHist.size >= STALEMATE_WINDOW && run {
+            val ourDrop = stalemateOurHist.first() - stalemateOurHist.last()
+            val hisDrop = stalemateHisHist.first() - stalemateHisHist.last()
+            ourDrop < stalemateOurHist.first() * STALEMATE_LOSS && hisDrop < stalemateHisHist.first() * STALEMATE_LOSS
+        }
+        stalemateTicks = if (stalemateNow) stalemateTicks + 1 else 0
         // наша линия отступает (v96, USE_STANDING_LINE_HOLDS): центр наших вооружённых за окно терпения отдалился от его
         // НЫНЕШНЕГО центра на PRESS_CLOSING и больше — бой не стоячий, это отход под огнём, и расстановке в нём места нет
         if (contact && ourArmedC != null) ourCentreHist.addLast(ourArmedC.x * 100 + ourArmedC.y) else ourCentreHist.clear()
