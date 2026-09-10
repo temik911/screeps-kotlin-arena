@@ -123,8 +123,22 @@ object PainAndGain {
      *  ПРЕЖНЕЙ проверенной цепочкой с её паритетными полами, а те после v193 считают вклад мили по измеренной доле —
      *  то есть модель сама разрешает отпустить того, кто ничего не даёт, и сама запретит, когда он начнёт бить. */
     private const val USE_IDLE_MELEE_RUNS = true
-    /** Мили встаёт позади стрелков, когда по замеру не достаёт (v195, см. inFront в planFight). */
-    private const val USE_MELEE_BEHIND_WHEN_IDLE = true
+    /** ОТВЕРГНУТО (v195, см. inFront в planFight): мили вставал позади стрелков, когда по замеру не достаёт. Правило
+     *  почти не срабатывало — прибор `back` дал 2 тика за матч, — потому что против СОМКНУТОГО блока строй раздаёт
+     *  planBlock, а не planFight. И посылка неверна: в planBlock мили стоит в общей линии со стрелками НАМЕРЕННО, и
+     *  рядом записан замер, который это держит, — строй «стрелки впереди, мили позади» (v37) кайтер стенда разоружал
+     *  первыми. Живые числа согласны: гибнут только атакующие части (0–16 из 32), стрелковые целы (24–30 из 30), то
+     *  есть тела мили работают самой дешёвой бронёй, какая у нас есть. Убирать броню, которая всё равно ничего не
+     *  бьёт, — значит подставить под тот же огонь единственное, чем мы бьём. */
+    private const val USE_MELEE_BEHIND_WHEN_IDLE = false
+    /** РЯД ЦЕЛИТСЯ НА КЛЕТКУ БЛИЖЕ, КОГДА ОН УКЛОНЯЕТСЯ (v196). Ряд стрелков ставится в RANGED_RANGE от ближайшей
+     *  угрозы — ровно в три, — но его блок меняет клетку 71–76 % тиков контакта, и шаг делается ОДНОВРЕМЕННО с нашим:
+     *  ряд, нацеленный в три, приходит в четыре. Замер по консоли: медиана дистанции наших стрелков до ближайшего его
+     *  крипа — 4 при дальности выстрела 3, в дальности они 41 % замеров, прибор `reach` даёт 1,5–2 из 5, а `conc` —
+     *  1,3–1,8 из 5 при том, что трое его лекарей возвращают 216 хитов в тик и цель начинает терять хиты только под
+     *  залпом ЧЕТЫРЁХ. Один шаг упреждения — и ряд приходит туда, откуда стреляют. Признак уклонения не назначен, а
+     *  измерен той же долей касаний: против соперника, идущего в контакт, она равна единице и прицел прежний. */
+    private const val USE_ROW_LEADS_KITER = true
 
     /** Перевес, при котором армия идёт добивать, и порог продолжения. Порог продолжения выше единицы: прежний
      *  0.9 вместе со входом «по контакту» открывал лазейку — контакт с ОДНИМ стрелком включал ДОБИТЬ, а дальше
@@ -2199,7 +2213,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v195"
+    private const val BOT_VERSION = "v196"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2619,7 +2633,7 @@ cpuMark("arrival")
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks lead=$leadTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             concSum = 0; concTicks = 0
@@ -2896,6 +2910,7 @@ cpuMark("arrival")
     private var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
     private var touchMin = 1.0                            // минимум за матч — прибор
     private var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
+    private var leadTicks = 0                             // прибор: тиков, в которые ряд целился на клетку ближе (v196)
     private var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
     private var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     private var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
@@ -6888,6 +6903,9 @@ cpuMark("a.evade")
         // m13/m28/m31/m32/m33 из уничтожения в лидерство, m34 camp 817 → 1615, m5 army 161 → 223)
         val dR = threats.filter { InfluenceMap.profileOf(it).ranged > 0.0 }.minOfOrNull { getRange(pair.first, it) }
         val d = if (USE_ROW_TO_RANGED && dR != null && dR <= RANGED_RANGE + 1) dR else pair.third
+        // ...и прицел ряда — на клетку ближе против уклоняющегося (v196, см. USE_ROW_LEADS_KITER)
+        val rowAim = if (USE_ROW_LEADS_KITER && touchShare < TOUCH_MIN) RANGED_RANGE - 1 else RANGED_RANGE
+        if (rowAim < RANGED_RANGE) leadTicks++
         if (standoffLine) {
             // ОДИН ряд из стрелков и мили в RANGED_RANGE от ближайшей угрозы (анкер в d: отрицательное back — шаг вперёд):
             // стрелки в середине (ближайшие к своим клеткам), мили на флангах; тыл на клетку позади. Мили вплотную к врагу
@@ -6898,7 +6916,7 @@ cpuMark("a.evade")
             // кайтер стенда разоружал первыми — здесь мили в той же линии делят его огонь. Но загораживания замер по всем
             // вооружённым НЕ подтвердил: наши стрелки в 4+ от цели стоят со свободной клеткой впереди 42 раза против 6 за
             // своим — они не заперты, а на ряд дальше (см. USE_RANGED_FRONT, threatOf)
-            val backR = (RANGED_RANGE - d).coerceIn(-1, 2)
+            val backR = (rowAim - d).coerceIn(-1, 2)
             assign(rangeds, rowCells(backR, rangeds.size))
             assign(melees.filter { m -> combatEnemies.none { getRange(m, it) <= 1 } }, rowCells(backR, melees.size))
             assign(rear, rowCells(backR + 1, rear.size))
@@ -6909,7 +6927,7 @@ cpuMark("a.evade")
         // двум записям (6aa0008a, 6aa0037a, окно входа 30–120): у нас его мили первым доходит до стрелка или лекаря в 60 %
         // тиков, у него — в 0–10 %; наш мили ближе лишь в 2–3 тиках из 28, его — в 15–19. Правило `behindMelee` (v69)
         // ровно про это, но живёт в planFight, который в бою с блобом не вызывается
-        var back = (RANGED_RANGE - d).coerceIn(if (USE_RANGED_ROW_VS_BLOB && blobNow) 1 else 0, 2)
+        var back = (rowAim - d).coerceIn(if (USE_RANGED_ROW_VS_BLOB && blobNow) 1 else 0, 2)
         // фокус-огонь (v45): ряд стрелков строится ВОКРУГ цели фокуса — центром на её проекции на ряд (не дальше двух клеток от
         // оси, чтобы ряд не уходил от мили) и на том ряду, где центр ряда стоит в RANGED_RANGE от неё: тогда все пять
         // стрелков достают ОДНУ цель. Ряд поперёк оси на центроид группы ставил каждого стрелка против своего (см. focusTarget)
