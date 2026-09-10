@@ -2214,6 +2214,19 @@ object PainAndGain {
     // такой крип — вооружённый на таймере: лечение возвращает части. Прибор считает, сколько их, сколько
     // крипо-тиков они простояли в нашей дальности выстрела и сколько РАЗ ОНИ ВОССТАНОВИЛИСЬ. Последнее число —
     // цена бездействия, названная напрямую, и его нельзя спутать с «ситуация не возникала»
+    /** ДОБИТЬ ОСТОВ, УМИРАЮЩИЙ ОТ ОДНОГО ЗАЛПА (v210) — ОТВЕРГНУТО ЗАМЕРОМ, третьим подряд по этому предмету.
+     *  Замысел: остов входит в пул огня, только когда умирает от УЖЕ доступного залпа, то есть попадает ровно в
+     *  верхний ярус «добиваемые за тик», где живой угрозе не мешает — она в том же ярусе стоит выше по своей
+     *  угрозе. Это не повтор двух прежних попыток (см. focusPool): те ставили остов ПРОТИВ живой угрозы.
+     *  ПРАВИЛО ЖИВОЕ И НЕ РАБОТАЕТ: сработало 739 раз в 102 логах из 135, а восстановлений на крипо-тик остова
+     *  0,0099 -> 0,0103, то есть ноль; решающих уничтожений армии врага 65 -> 62, и приходят они на 22 тика позже.
+     *  ПРИЧИНА названа замером, который стоило сделать первым (см. потолок ниже): когда остов у нас в дальности,
+     *  мы по нему УЖЕ СТРЕЛЯЕМ — из 209 стрелко-тиков с остовом в дальности 65 % это выстрел, 25 % правильный
+     *  выстрел в живую цель и лишь 9 % пустые. Порядком огня этот предмет не чинится вовсе. */
+    private const val USE_FINISH_HULKS = false
+    /** Прибор: сколько раз остов попадал в пул огня как добиваемый за тик. Ноль при живом revived значит,
+     *  что правило до дела не дошло; ненулевой числитель при неподвижном revived значит, что дошло и не помогло. */
+    private var finishableHulks = 0
     private val disarmedFoe = HashSet<String>()
     private var hulkTicks = 0
     private var hulkInReach = 0
@@ -2695,7 +2708,7 @@ cpuMark("arrival")
                 "hparts=${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
                 "ehparts=${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
                 "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
-                "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived " +
+                "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived finish=$finishableHulks " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4315,9 +4328,30 @@ cpuMark("a.evade")
         // оружия × 0.5 в угрозе любой цели) проиграла m9 hunter, m3 army и все рубки sleeper; «остов, добиваемый за
         // два залпа, — сразу после добиваемых за тик» проиграла m3 army, рубки sleeper и m18 spread. Огонь по живой
         // угрозе, а не по раненым, — то, на чём стенд стоит; остов на лечении врага — открытая находка
-        val focusPool = inFireRange.filter { e -> combatEnemies.any { it.id == e.id } }.ifEmpty { inFireRange }
-        fun fireAvailableAt(e: Creep) = army.filter { it.getRangeTo(e) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged } +
+        fun fireAvailable(e: Creep) = army.filter { it.getRangeTo(e) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged } +
             army.filter { it.getRangeTo(e) <= 1 }.sumOf { InfluenceMap.profileOf(it).melee }
+        // ОСТОВ, КОТОРЫЙ УМИРАЕТ ОТ ОДНОГО ЗАЛПА, — НЕ РАЗМЕН, А БЕСПЛАТНОЕ УБИЙСТВО (v210, оператор по записи:
+        // «выбили все боевые части и перестали их добивать, за счёт чего они прошли мимо нас к своей второй половине,
+        // где был лекарь, и вылечились до полного здоровья»). Пока у врага жив лекарь, выбитая часть не убрана, а
+        // выключена: единственный способ убрать её насовсем — убить крипа. Замер по пяти матчам v208: 13
+        // восстановлений; r6m6 простоял разоружённым 42 тика, из них 29 в НАШЕЙ ДАЛЬНОСТИ ВЫСТРЕЛА, с минимумом в
+        // 16 хитов — залп по нему стоил одного тика огня и вернул бы шесть стрелковых частей навсегда.
+        // ⚠️ Это НЕ третья попытка тех двух, что стенд уже отверг. «Отрастающая угроза» и «остов в два залпа сразу
+        // после добиваемых за тик» ставили остов в очередь ПРОТИВ живой угрозы — здесь он входит в пул ТОЛЬКО когда
+        // умирает от уже доступного залпа, то есть попадает ровно в верхний ярус `focusCmp` («добиваемые за тик»),
+        // где живой угрозе он не мешает: та в этом ярусе стоит по своей же угрозе выше.
+        // ⚠️ И это НЕ притяжение: правка v209 (цена цели по потенциалу тела) свой прибор не сдвинула ни на стенде
+        // (137 -> 130 восстановлений на 135 сценариях), ни живьём (2,6 -> 3,0 на матч) и снята.
+        val killableHulk = if (!USE_FINISH_HULKS) emptyList() else inFireRange.filter { e ->
+            combatEnemies.none { it.id == e.id } &&                       // оружия и лечения уже нет
+            InfluenceMap.potentialOf(e).let { it.melee + it.ranged > 0.0 } &&   // но тело их помнит
+            enemyCreeps.any { h -> h.id != e.id && InfluenceMap.profileOf(h).heal > 0.0 } &&  // и есть кому вернуть
+            e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)          // и он умирает от уже доступного залпа
+        }
+        val focusPool = (inFireRange.filter { e -> combatEnemies.any { it.id == e.id } } + killableHulk)
+            .ifEmpty { inFireRange }
+        finishableHulks += killableHulk.size
+        fun fireAvailableAt(e: Creep) = fireAvailable(e)
         // лечение, которое враг получит на этой цели: вплотную — полное, на дистанции — треть (rangedHeal 4 против 12)
         fun healOn(e: Creep) = enemyCreeps.filter { h -> h.id != e.id && getRange(h, e) <= HEAL_RANGE }.sumOf { h -> val q = InfluenceMap.profileOf(h); if (getRange(h, e) <= 1) q.heal else q.heal / 3.0 }
         // дистанция каждого врага до ближайшего нашего боеспособного сейчас и тик назад — «идёт ли» (см. threatOf)
