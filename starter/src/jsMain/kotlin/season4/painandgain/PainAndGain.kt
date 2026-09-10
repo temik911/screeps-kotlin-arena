@@ -426,6 +426,10 @@ object PainAndGain {
     private const val USE_CONTACT_BY_MASS = true
     /** Скаут врага, сидящий на не нашем флаге и добиваемый одним залпом, входит в пул огня (v214). */
     private const val USE_SHOOT_SCOUTS = true
+    /** Мили идёт вплотную, когда МЕСТНАЯ арифметика даёт перевес, даже вне радиуса лекаря (v214). */
+    private const val USE_SPOT_MELEE = true
+    /** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
+    private var spotMeleeTicks = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
     private var flagsNow: List<FlagInfo> = emptyList()
@@ -2777,7 +2781,7 @@ cpuMark("arrival")
                 "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
-                " scout=$scoutShots/$scoutReach/$scoutTicks " +
+                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -5325,7 +5329,19 @@ cpuMark("a.evade")
             // пикет фермера в трёх снимал ворота, и мили танцевали с ним вместо марша (то, против чего ворота и стоят); второй срез:
             // только крип, КОТОРОГО БЬЮТ (потеря хитов за прошлый тик)
             val inFight = USE_INLINE_CONTACT_FREE && (lostTick[creep.id] ?: 0) > 0
-            val inLine = !USE_INLINE || inFight || (formationReady && combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
+            // МЕСТНЫЙ ПЕРЕВЕС (v214, решение оператора: «локальный перевес снимает требование прикрытия»).
+            // Считается полем удара в ЕГО клетке (см. spotEdgeAt), а не мощью армии: наш залп по нему против его
+            // залпа по клетке рядом с ним. Порог — существующий PUSH_RATIO = 1.3, нового числа не заводим:
+            // у сомкнутого блока dangerAt в его клетке 700–1500 против нашего залпа 200–500, отношение меньше
+            // единицы и очаг не возникает; против одиночки 720/240 = 3.0 — возникает.
+            // Добиваемость обязательна (killTicks конечен): очаг у трёх его лекарей — не очаг.
+            // ⚠️ Это НЕ второе издание отвергнутого USE_INLINE_CONTACT_FREE: тот открывал ворота «врагом в трёх»,
+            // и одиночный пикет фермера снимал их (blitz 7-1 -> 5-3). Здесь пикет даёт 240/240 = 1.0 и ворот
+            // не открывает — открывает только настоящий численный перевес.
+            val spotNow = USE_SPOT_MELEE && isMelee(creep) && !hasRanged(creep) && !support && !rotating &&
+                localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && spotEdgeAt(e) >= PUSH_RATIO && !killTicks(e).isInfinite() }
+            if (spotNow) spotMeleeTicks++
+            val inLine = !USE_INLINE || inFight || spotNow || (formationReady && combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
             // при бесплодной охоте (см. STALL_TICKS) броска нет: висящие крипы россыпи «ловимы» (не уходят стабильно), и
             // каждый наш крип танцевал со своим соседом вместо марша к флагу-цели (стенд m19 spread, travel=23 четыреста тиков)
             // «держит линию» — про мили В ЛИНИИ, а не про любого мили в бою: без этого условия мили, до которого враг
@@ -5358,8 +5374,11 @@ cpuMark("a.evade")
             // (защита тыла) по-прежнему выше и работает
             val massHold = USE_MELEE_HOLD_VS_MASS && isMelee(creep) && !hasRanged(creep) && enemyMassedNow && !localAggressive &&
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
+            // ...И НЕ ДЕРЖИМ ЛИНИЮ, КОГДА РЯДОМ ПЕРЕВЕС (v214): здесь мили получал цель «своя клетка», то есть
+            // буквально стоял, как только любой враг оказывался в трёх клетках. Замер по 12 живым матчам: доля
+            // касаний наших мили в затяжном бою 1,4 %, то есть четверо из четырнадцати не бьют вовсе
             val holdMelee = massHold || (isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
-                localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
+                !spotNow && localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
             // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
             // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
             // били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7, наши мили держали линию в 2–3 от его линии и не
@@ -5384,7 +5403,9 @@ cpuMark("a.evade")
             // m33 farm+weak красная; «только без толчка» (pushing) — 123/125, 10 лучше / 19 хуже, m28 farm+weak и m29 camp
             // красные. Строки «стёрт → лидируем» в rush-сценариях — не это правило: там последний крип (лекарь, равная
             // скорость) уходит от погони при любом варианте, бой окончен на 94-м
-            fun covered(e: Creep) = !USE_MELEE_COVER || holdMelee ||
+            // ...и ПЕРЕВЕС НАД ЭТОЙ ЦЕЛЬЮ снимает требование прикрытия (v214, решение оператора). Порог берётся по
+            // КОНКРЕТНОЙ цели, а не по spotNow: перевес над одним не должен открывать бросок на другого
+            fun covered(e: Creep) = !USE_MELEE_COVER || holdMelee || (USE_SPOT_MELEE && spotEdgeAt(e) >= PUSH_RATIO) ||
                 combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
                 army.any { a -> a.id != creep.id && getRange(e, a) <= 1 }
             // ОДНА ДОБЫЧА НА ВСЕХ в толчке (v71): бросок — только на цель в ENGAGE_RANGE от добычи армии (prey — ближайший к центру по
@@ -5399,7 +5420,7 @@ cpuMark("a.evade")
             fun paired(e: Creep) = !USE_MELEE_PAIR_GATE || !meleeOnly || army.any { a -> a.id != creep.id && getRange(e, a) <= 1 } || mateNear(e, MELEE_HOLD_RANGE + 1)
             // ...и присоединяется к напарнику, уже стоящему в MELEE_HOLD_RANGE от цели: досягаемость на клетку больше
             fun holdReach(e: Creep) = if (USE_MELEE_PAIR_ENGAGE && meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
-            val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
+            val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру.
             // ПОВОДОК НЕ ТЯНУЛ ИМЕННО ТОГО, КТО УБЕЖАЛ (v191, USE_LEASH_IN_CONTACT): условие требовало врага РЯДОМ С
@@ -5716,7 +5737,7 @@ cpuMark("a.evade")
                     else if (USE_ORDER_IS_LAW) cell
                     else {
                         orderPull = if (USE_ORDER_PULL) ORDER_PULL else 1.0
-                        val st = bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt, healerFireW)
+                        val st = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt, healerFireW)
                         orderPull = 1.0
                         st
                     }
@@ -5802,7 +5823,7 @@ cpuMark("a.evade")
                         if (ok) cell else null
                     }
                     orderPull = if (USE_ORDER_PULL && commandOf.containsKey(creep.id)) ORDER_PULL else 1.0
-                    val chosen = ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
+                    val chosen = ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
                     orderPull = 1.0
                     chosen
                 }
