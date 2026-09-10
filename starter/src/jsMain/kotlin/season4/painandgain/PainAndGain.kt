@@ -2192,6 +2192,13 @@ object PainAndGain {
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
     private const val BOT_VERSION = "v203"
     private const val DEBUG_LOG = true
+    /** Сверка полей влияния с прямым пересчётом и со старым incNext (этап 3). Стоит два десятка клеток
+     *  за тик и обязана держаться нуля: ненулевой числитель fldcmp значит, что перенос неверен, и это
+     *  видно за 3,5 минуты стенда, а не за час игр. Снимается на этапе 8 вместе с incNext. */
+    private const val FIELD_CHECK = true
+    /** Клеток, где поле разошлось со старым incNext, и клеток, где сверялось. */
+    private var fldBad = 0
+    private var fldAll = 0
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
      *  первый тик матча 7 вылетел по таймауту именно в drawDebug; журнал даёт всё, что нужно для разбора. */
@@ -2479,6 +2486,13 @@ object PainAndGain {
 
         InfluenceMap.setProtectedCells(ramparts.filter { it.my == true }.mapTo(HashSet()) { it.x * 100 + it.y })
         InfluenceMap.setEnemyBlocked(blockedForEnemy.mapTo(HashSet()) { it.x * 100 + it.y })
+        // ПОЛЯ ВЛИЯНИЯ (v204, этап 3): строятся ОДИН раз за тик над одним множеством крипов — против
+        // сегодняшнего incNext, который commandFight пересобирает пять раз за тик, по разу на замысел.
+        // Пока их не читает никто: этап 3 доказывает только правильность переноса (см. fldcmp).
+        InfluenceMap.buildFields(active, enemyCreeps)
+        cpuMark("fields")
+        if (FIELD_CHECK) InfluenceMap.checkFields(active, enemyCreeps)
+        cpuMark("fldchk")
         val rawDanger = InfluenceMap.dangerCostMatrix(enemyCreeps, blocked)
         // флаг берётся тем, кто на него ВСТАЛ, — и любой шаг армии через чужой флаг был захватом: в матче 3 армия
         // на марше взяла D5 и второй A3 (occupant=none в журнале) и дралась при A×0.6 D×1.1 против врага, с
@@ -2621,6 +2635,15 @@ cpuMark("arrival")
                 " step=" + stepCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " pass=" + passCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " sum=${stepCount.values.sum()}")
+            // ПОЛЯ (этап 3): fldcmp — расхождение с переносимым incNext, chk — расхождение с прямым пересчётом
+            // по крипам. Пики печатаются, чтобы обнулившееся поле было ВИДНО: прибор, умеющий сказать только
+            // «поле построено», прибором не является
+            if (FIELD_CHECK) println("fld t=${getTicks()}: fldcmp=$fldBad/$fldAll chk=${InfluenceMap.checkBad()}/${InfluenceMap.checkAll()}" +
+                " eM=${InfluenceMap.fieldPeak(InfluenceMap.eMelee).toInt()} eR=${InfluenceMap.fieldPeak(InfluenceMap.eRanged).toInt()}" +
+                " eH=${InfluenceMap.fieldPeak(InfluenceMap.eHeal).toInt()} aM=${InfluenceMap.fieldPeak(InfluenceMap.aMelee).toInt()}" +
+                " aR=${InfluenceMap.fieldPeak(InfluenceMap.aRanged).toInt()} aH=${InfluenceMap.fieldPeak(InfluenceMap.aHeal).toInt()}" +
+                " eF=${InfluenceMap.fieldPeak(InfluenceMap.eFire).toInt()} atM=${InfluenceMap.fieldPeak(InfluenceMap.attMelee).toInt()}" +
+                " atR=${InfluenceMap.fieldPeak(InfluenceMap.attRanged).toInt()} atH=${InfluenceMap.fieldPeak(InfluenceMap.attHeal).toInt()}")
             concSum = 0; concTicks = 0
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
@@ -2740,8 +2763,9 @@ cpuMark("arrival")
         InfluenceMap.setSideMods(ours, theirs)
         val sample = myCreeps.firstOrNull { InfluenceMap.hasEffectsApi(it) }
         InfluenceMap.setOurTaken(if (sample != null) InfluenceMap.takenOf(sample) else ours.taken)
+        val enemySample = enemyCreeps.firstOrNull { InfluenceMap.hasEffectsApi(it) }
+        InfluenceMap.setTheirTaken(if (enemySample != null) InfluenceMap.takenOf(enemySample) else theirs.taken)
         if (DEBUG_LOG) {
-            val enemySample = enemyCreeps.firstOrNull { InfluenceMap.hasEffectsApi(it) }
             val key = "$ours|$theirs|${sample?.let { JSON.stringify(it.effects) }}|${enemySample?.let { JSON.stringify(it.effects) }}"
             if (key != lastEffectsKey) {
                 lastEffectsKey = key
@@ -6155,6 +6179,15 @@ cpuMark("a.evade")
                 if (d <= MELEE_KEEP_RANGE) { next += pr.melee; if (pr.melee > 0.0) n++ }
             }
             incNow[key] = now; incNext[key] = next; hits[key] = n
+        }
+        // СВЕРКА ПЕРЕНОСА (этап 3): поле E обязано давать ровно то же, что incNext, в каждой клетке раздачи.
+        // Пара «разошлось/сверено», а не флаг: ноль в числителе при живом знаменателе — перенос верен, оба
+        // нуля значат, что до сверки не дошли, и это тоже находка
+        if (FIELD_CHECK) {
+            for ((key, _) in cells) {
+                fldAll++
+                if (abs(InfluenceMap.dangerAt(key) - (incNext[key] ?: 0.0)) > 0.05) fldBad++
+            }
         }
         val taken = HashSet<Int>()
         // клетки, где стоят СВОИ: назначать их нельзя — приказ туда неисполним, пока сосед не ушёл, а прибор показал,

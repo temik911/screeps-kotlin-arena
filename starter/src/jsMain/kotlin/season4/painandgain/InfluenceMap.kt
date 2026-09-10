@@ -29,6 +29,7 @@ import screeps.api.TextVisualStyle
 import screeps.api.Visual
 import screeps.api.getRange
 import screeps.api.getTerrainAt
+import screeps.api.getTicks
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -467,6 +468,257 @@ object InfluenceMap {
     /** Чистый входящий урон с учётом нашего лечения (>= 0): сколько HP крип реально потеряет. */
     fun netDamageAt(x: Int, y: Int, enemies: List<Creep>, allies: List<Creep>): Double =
         maxOf(0.0, damageAt(x, y, enemies) - healAt(x, y, allies))
+
+
+    // ---------------- поля влияния (v204, этап 3) ----------------
+    // Одиннадцать плотных массивов вместо ленивых поцелевых вызовов. Довод не в CPU (хотя и в нём:
+    // profileOf зовётся сегодня ВНУТРИ поцелевых циклов, а incNext строится пять раз за тик над одним
+    // множеством врагов), а в том, что ленивая точка не умеет ответить на вопросы «где линия фронта»,
+    // «где фронт проседает» и «куда идти, если ни одна из восьми соседних клеток не годится». На них
+    // отвечает только матрица целиком: у поля есть градиент, у точки — нет.
+    //
+    // ⚠️ E = eMelee + eRanged — ТОЧНЫЙ ПЕРЕНОС incNext из commandFight: сумма профилей врага без скидок,
+    // без множителя входящего урона и без гейта стены. Так сделано намеренно. Этапы 3–4 обещают ПУСТОЙ
+    // дифф отчёта стенда, и любое уточнение модели, внесённое заодно с переносом, этот дифф ломает — а
+    // вместе с ним и единственное дешёвое доказательство, что перенос ничего не сдвинул.
+    // Уточнения (скидка γ на шаг сближения, стрелковый радиус 4, измеренная доля касаний touchShare,
+    // множитель входящего ourTaken, гейт стены на вражеский вклад) вводит ЭТАП 6 вместе с воротами: там
+    // они меняют поведение открыто, и там их цена меряется серией. Гейт стены стоит отдельного замера:
+    // модель командира — ЕДИНСТВЕННАЯ в боте, красящая опасность СКВОЗЬ стену (damageAt и dangerCostMatrix
+    // её режут), и это кандидат в механизм жалобы «армия распалась на две половины».
+
+    /** Клеток в поле: 100x100, индекс x*100+y. */
+    private const val FIELD_CELLS = 10_000
+
+    /** Фиксированная точка: поля целочисленные, ×16. Урон за тик у нас 30–300, ×16 не переполняет Int
+     *  даже суммой по всем крипам, а деление на 16 — сдвиг. */
+    private const val FP = 16
+
+    // Радиусы штампов. Первые два ОБЯЗАНЫ совпадать с MELEE_KEEP_RANGE и RANGED_RANGE бота — на этом
+    // держится точность переноса; менять их можно только вместе с проверкой fldcmp.
+    private const val R_MELEE = 2
+    private const val R_RANGED = 3
+    private const val R_HEAL = 4
+    private const val R_FIRE = 3
+
+    /** Доля эффективности rangedHeal против heal вплотную (4/12). */
+    private val HEAL_FALLOFF = RANGED_HEAL_POWER.toDouble() / HEAL_POWER
+
+    /** Скидка на действие, требующее шага: оно придёт следующим тиком, а не этим. */
+    private const val GAMMA = 0.7
+
+    // Ядра: индекс = расстояние Чебышева от источника до клетки.
+    /** Опасность мили: он бьёт вплотную и шагнёт-ударит с двойки. Плоское ядро — это сегодняшний incNext;
+     *  внешнее кольцо со скидкой GAMMA вводит этап 6 (см. предупреждение выше). */
+    private val K_MELEE = doubleArrayOf(1.0, 1.0, 1.0)
+    /** Опасность стрелка: полный урон по одиночной цели на всей дистанции 1..3 (falloff — у массовой атаки). */
+    private val K_RANGED = doubleArrayOf(1.0, 1.0, 1.0, 1.0)
+    /** Лечение с шагом: healRate(max(0, d-1)) — вплотную и с двойки полное, с тройки и четвёрки rangedHeal. */
+    private val K_HEAL = doubleArrayOf(1.0, 1.0, 1.0, HEAL_FALLOFF, HEAL_FALLOFF)
+    /** Огонь ЭТИМ тиком, без шага: мили только вплотную. */
+    private val K_FIRE_MELEE = doubleArrayOf(1.0, 1.0)
+    private val K_FIRE_RANGED = doubleArrayOf(1.0, 1.0, 1.0, 1.0)
+    /** Притяжение мили: «бью сейчас / через шаг / через два». Дальше трёх мили не тянет — до цели он не дойдёт
+     *  раньше, чем цель уйдёт. */
+    private val K_ATT_MELEE = doubleArrayOf(1.0, 1.0, GAMMA, GAMMA * GAMMA)
+    /**
+     * Притяжение стрелка: ПИК НА ДАЛЬНОСТИ 3, чтобы стрелок останавливался сам, а не влезал в мили-радиус
+     * (Hagelbäck & Johansson: пик потенциала ставится на МАКСИМАЛЬНОЙ дальности оружия). Наклон внутри
+     * пологий НАМЕРЕННО — десять процентов: он лишь разбивает ничьи среди клеток, которые уже отранжировала
+     * опасность, и не должен перебивать её. Не «чинить» крутизну: круче — значит вернуть подгонянный вес.
+     */
+    private val K_ATT_RANGED = doubleArrayOf(0.90, 0.90, 0.95, 1.00, GAMMA, GAMMA * GAMMA)
+    /** Притяжение лекаря: он сам стоит в клетке, поэтому шага нет — healRate(d), плюс кольцо со скидкой. */
+    private val K_ATT_HEAL = doubleArrayOf(1.0, 1.0, HEAL_FALLOFF, HEAL_FALLOFF, GAMMA * HEAL_FALLOFF)
+
+    /** Вес лечащей части врага в цене цели: минимум, при котором поле вообще выбирает лекаря целью.
+     *  Его лечащие части стоят ПЕРВЫМИ в теле, один сосредоточенный залп снимает три части = 36 лечения
+     *  навсегда, а замер говорит, что его лекари сохраняют 100 % частей против наших 8 %. */
+    private const val HEAL_VALUE = 1.5
+
+    /** Нижняя граница pressure: даже наглухо перелеченная цель не бесполезна — иначе армия бросит блок целиком. */
+    private const val PRESSURE_MIN = 0.25
+
+    /** Вес безоружного (уже разоружённого) своего в поле нужды: лечить его стоит, но не вперёд вооружённого. */
+    private const val NEED_DISARMED = 0.35
+
+    val eMelee = IntArray(FIELD_CELLS)
+    val eRanged = IntArray(FIELD_CELLS)
+    val eHeal = IntArray(FIELD_CELLS)
+    val aMelee = IntArray(FIELD_CELLS)
+    val aRanged = IntArray(FIELD_CELLS)
+    val aHeal = IntArray(FIELD_CELLS)
+    val eFire = IntArray(FIELD_CELLS)
+    val attMelee = IntArray(FIELD_CELLS)
+    val attRanged = IntArray(FIELD_CELLS)
+    val attHeal = IntArray(FIELD_CELLS)
+    val claim = IntArray(FIELD_CELLS)
+
+    private val allFields = arrayOf(eMelee, eRanged, eHeal, aMelee, aRanged, aHeal, eFire,
+        attMelee, attRanged, attHeal, claim)
+
+    /** Тик, на котором поля построены: чтение с другого тика — баг, и он должен быть виден, а не тих. */
+    private var fieldTick = -1
+
+    fun fieldsBuiltAt(): Int = fieldTick
+
+    /** Множитель ВХОДЯЩЕГО урона по ЕГО крипам — зеркало ourTaken, нужен нашим полям урона. */
+    private var theirTaken = 1.0
+
+    fun setTheirTaken(v: Double) {
+        theirTaken = v
+    }
+
+    /** Опасность клетки (его урон в тик по нашему крипу здесь) — E = eMelee + eRanged. */
+    fun dangerAt(key: Int): Double = (eMelee[key] + eRanged[key]).toDouble() / FP
+
+    /** Наш урон в тик по его крипу в этой клетке — A. */
+    fun ourBurstAt(key: Int): Double = (aMelee[key] + aRanged[key]).toDouble() / FP
+
+    /** Влияние: наши минус его. Больше нуля — здесь мы сильнее (Dave Mark, Game AI Pro 2 гл. 30). */
+    fun influenceOf(key: Int): Double = ourBurstAt(key) - dangerAt(key)
+
+    /** Уязвимость = 2·min(наши, его): пик там, где силы равны, то есть ЛИНИЯ ФРОНТА. */
+    fun vulnerabilityOf(key: Int): Double = 2.0 * minOf(ourBurstAt(key), dangerAt(key))
+
+    private fun stamp(field: IntArray, cx: Int, cy: Int, kernel: DoubleArray, weight: Double, wallGate: Boolean) {
+        if (weight <= 0.0) return
+        val radius = kernel.size - 1
+        val x0 = maxOf(0, cx - radius)
+        val x1 = minOf(FIELD_MAX, cx + radius)
+        val y0 = maxOf(0, cy - radius)
+        val y1 = minOf(FIELD_MAX, cy + radius)
+        for (x in x0..x1) {
+            val ax = abs(x - cx)
+            val base = x * 100
+            for (y in y0..y1) {
+                val d = maxOf(ax, abs(y - cy))
+                val k = kernel[d]
+                if (k <= 0.0) continue
+                if (wallGate && wallBetween(cx, cy, x, y)) continue
+                field[base + y] += (weight * k * FP).roundToInt()
+            }
+        }
+    }
+
+    /**
+     * Строит все поля за один проход по крипам. Порядок обязателен: сначала базовые (урон и лечение
+     * обеих сторон), потом производные — цена убийства врага читает НАШЕ поле урона в ЕГО клетке,
+     * а нужда своего читает ЕГО поле урона в клетке своего.
+     */
+    fun buildFields(allies: List<Creep>, enemies: List<Creep>) {
+        fieldTick = getTicks()
+        for (f in allFields) f.fill(0)
+
+        for (e in enemies) {
+            val p = profileOf(e)
+            stamp(eMelee, e.x, e.y, K_MELEE, p.melee, false)
+            stamp(eRanged, e.x, e.y, K_RANGED, p.ranged, false)
+            stamp(eHeal, e.x, e.y, K_HEAL, p.heal, false)
+            stamp(eFire, e.x, e.y, K_FIRE_MELEE, p.melee, false)
+            stamp(eFire, e.x, e.y, K_FIRE_RANGED, p.ranged, false)
+        }
+        for (a in allies) {
+            val p = profileOf(a)
+            // наш урон — с ЕГО множителем входящего (его флаги D×...): это урон, который получит он
+            stamp(aMelee, a.x, a.y, K_MELEE, p.melee * theirTaken, false)
+            stamp(aRanged, a.x, a.y, K_RANGED, p.ranged * theirTaken, false)
+            stamp(aHeal, a.x, a.y, K_HEAL, p.heal, false)
+        }
+
+        // ЦЕНА УБИЙСТВА (оператор: «сосредоточиться на самых опасных частях, выбить их и перейти к
+        // следующему очагу»). Ценность врага — его боевые части, УМНОЖЕННЫЕ на нашу способность их
+        // выбить: хорошо прикрытый лечением враг — цель дешёвая, и армия сама сползает к неприкрытому
+        // краю блока. Отдельного правила «бей того, кого не лечат» для этого не нужно.
+        for (e in enemies) {
+            val p = profileOf(e)
+            val value = p.melee + p.ranged + HEAL_VALUE * p.heal
+            if (value <= 0.0) continue
+            val key = e.x * 100 + e.y
+            val burst = ourBurstAt(key)
+            val pressure = (burst / (burst + eHeal[key].toDouble() / FP + 1.0)).coerceIn(PRESSURE_MIN, 1.0)
+            val w = value * pressure
+            // мили тянет только туда, КУДА ОН ДОЙДЁТ: притяжение сквозь стену увело бы его в стену.
+            // Стрелковое притяжение стены не знает намеренно — выстрелы в игре стены не блокируют.
+            stamp(attMelee, e.x, e.y, K_ATT_MELEE, w, true)
+            stamp(attRanged, e.x, e.y, K_ATT_RANGED, w, false)
+        }
+
+        // ПОЛЕ НУЖДЫ ЛЕКАРЕЙ: нужда — это ОПАСНОСТЬ, прочитанная в клетке подопечного, а не его нынешняя
+        // рана. Полный мили, которому сейчас прилетит 560, важнее полураненого в чистом поле. Сегодняшнее
+        // правило берёт раненых, то есть по определению тех, кто уже на фронте, и тянет лекарей вперёд —
+        // это ровно механизм жалобы оператора «хилеры выбегают вперёд под прямой урон».
+        for (a in allies) {
+            val key = a.x * 100 + a.y
+            val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
+            val need = minOf(dangerAt(key), a.hits.toDouble()) * (if (armed) 1.0 else NEED_DISARMED)
+            stamp(attHeal, a.x, a.y, K_ATT_HEAL, need, false)
+        }
+    }
+
+    // ---------------- сверка полей (этап 3) ----------------
+    // Прибор, умеющий напечатать только «поле построено», прибором не является. Здесь поле сверяется с
+    // ПРЯМЫМ пересчётом по крипам в выборке клеток: расхождение печатается числом клеток, а не флагом.
+
+    private var chkBad = 0
+    private var chkAll = 0
+
+    fun checkBad(): Int = chkBad
+    fun checkAll(): Int = chkAll
+
+    /** Прямой пересчёт базовых полей в клетке — независимая от штампа замкнутая форма. */
+    private fun directAt(key: Int, allies: List<Creep>, enemies: List<Creep>): DoubleArray {
+        val x = key / 100
+        val y = key % 100
+        val r = DoubleArray(7)
+        for (e in enemies) {
+            val d = maxOf(abs(e.x - x), abs(e.y - y))
+            val p = profileOf(e)
+            if (d <= R_MELEE) r[0] += p.melee
+            if (d <= R_RANGED) r[1] += p.ranged
+            if (d <= R_HEAL) r[2] += p.heal * K_HEAL[d]
+            if (d <= 1) r[6] += p.melee
+            if (d <= R_FIRE) r[6] += p.ranged
+        }
+        for (a in allies) {
+            val d = maxOf(abs(a.x - x), abs(a.y - y))
+            val p = profileOf(a)
+            if (d <= R_MELEE) r[3] += p.melee * theirTaken
+            if (d <= R_RANGED) r[4] += p.ranged * theirTaken
+            if (d <= R_HEAL) r[5] += p.heal * K_HEAL[d]
+        }
+        return r
+    }
+
+    /**
+     * Сверяет выборку клеток с прямым пересчётом. Выборка бежит по полю шагом-простым числом и сдвигается
+     * каждый тик — за матч она покрывает всё поле, а за тик стоит два десятка клеток. Расхождение больше
+     * половины единицы фиксированной точки считается ошибкой: округление штампа допустимо, сдвиг — нет.
+     */
+    fun checkFields(allies: List<Creep>, enemies: List<Creep>) {
+        val step = 373
+        var key = (fieldTick * 17) % step
+        while (key < FIELD_CELLS) {
+            val d = directAt(key, allies, enemies)
+            val got = doubleArrayOf(
+                eMelee[key] / FP.toDouble(), eRanged[key] / FP.toDouble(), eHeal[key] / FP.toDouble(),
+                aMelee[key] / FP.toDouble(), aRanged[key] / FP.toDouble(), aHeal[key] / FP.toDouble(),
+                eFire[key] / FP.toDouble(),
+            )
+            for (i in got.indices) {
+                chkAll++
+                if (abs(got[i] - d[i]) > 0.5) chkBad++
+            }
+            key += step
+        }
+    }
+
+    /** Максимум поля — «поле живое»: обнулившееся поле обязано быть видно, а не тихо давать нули. */
+    fun fieldPeak(field: IntArray): Double {
+        var best = 0
+        for (v in field) if (v > best) best = v
+        return best.toDouble() / FP
+    }
 
     /**
      * CostMatrix, где опасные (под вражеским огнём) клетки дороги для прохода,
