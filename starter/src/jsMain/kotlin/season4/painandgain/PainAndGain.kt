@@ -2071,7 +2071,7 @@ object PainAndGain {
      *  но armiesClosing набирается только В контакте, поэтому commandBrace не выполнялся ни одного тика за матч.
      *  Признак сближения теперь считается и без контакта; «враг в десяти клетках» без признака сближения уже пробовали
      *  в v179 — армия строилась вместо захвата и гейт падал до 122 из 135, поэтому условие именно «он ИДЁТ на нас». */
-    private const val USE_BRACE_ON_APPROACH = true
+    private const val USE_BRACE_ON_APPROACH = false
     /** ...и строимся ПРОТИВ СОМКНУТОГО: рассыпавшемуся за флагами врагу строй противопоставлять нечему — его надо
      *  обгонять. Без этого условия сценарий scatter уходил в гонку очков 22 207:24 315 (гейт 134 из 135). */
     private const val USE_BRACE_VS_MASSED = true
@@ -2110,7 +2110,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v183"
+    private const val BOT_VERSION = "v183-nobrace"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
