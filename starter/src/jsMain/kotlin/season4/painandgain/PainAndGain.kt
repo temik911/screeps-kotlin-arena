@@ -2096,6 +2096,13 @@ object PainAndGain {
     /** БОЙ ВАЖНЕЕ ПОГОНИ (v184): признак «враг отступает» уводил командира в гонку за флагами прямо под огнём, и
      *  армия рассыпалась за десять тиков с десяти крипов до одного. Пока по нам стреляют — драться. */
     private const val USE_FIGHT_OVER_CHASE = true
+    /** РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185, разбор серии из двадцати). Прибор разделил её начисто: в восьми
+     *  поражениях армия дралась при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 из 512), в одиннадцати
+     *  победах из двенадцати — ноль таких тиков (3 из 236 по всей пачке). Признак — измеренная мощь обеих сторон,
+     *  а не прогноз командира: тот в минус не уходит никогда (см. USE_COMMAND_RETREAT). */
+    private const val USE_COMMAND_BREAKS_OFF = true
+    private const val BREAK_OFF_RATIO = 0.6
+    private const val BREAK_OFF_TICKS = 3       // срок, чтобы одиночный просадочный тик не выдёргивал из выигрышного боя
     /** СТРОЙ НЕ ПРИНИМАЕТ БОЙ У КРАЯ. НЕ ВКЛЮЧЕНО — правило выведено из СОВПАДЕНИЯ и не пережило широкой выборки
      *  (v184). Повод: в двенадцати тестовых играх против MetalicaX#10 проигранные сшибки шли при нашем центре в
      *  десяти клетках от края карты, выигранные — в сорока двух, при разнице во всём остальном (сомкнутость 2,4/5
@@ -2129,7 +2136,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v184"
+    private const val BOT_VERSION = "v185"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2546,7 +2553,7 @@ cpuMark("arrival")
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "weak=$outmatchedTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             concSum = 0; concTicks = 0
@@ -4415,6 +4422,19 @@ cpuMark("a.evade")
         // ...и режим НАЗНАЧАЕТ постуру: командир решил драться — значит армия уничтожает, а не держит и не бежит
         // сколько его вооружённых стоит у нашей армии: группа — дело командира, одиночка — нет
         val foesAtHand = armedEnemies.count { e -> massArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
+        // РАЗМЕН, КОТОРЫЙ УЖЕ ПРОИГРАН, НАДО ПРЕКРАЩАТЬ (v185, разбор серии). Прибор разделил двадцать матчей начисто:
+        // в ВОСЬМИ поражениях армия стояла в бою при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 тиков из
+        // 512), в ОДИННАДЦАТИ победах из двенадцати — НОЛЬ таких тиков (3 из 236 по всей пачке). Против Coldkimchi это
+        // видно построчно: его мощь держится около 4 000 весь бой, наша падает до 1 500–2 000 при живых одиннадцати
+        // крипах — он вылечивает своих обратно, мы нет, а армия продолжает стоять и таять. Доктрина паритета говорит
+        // ровно это: не менять, когда мы слабее. Признак — ИЗМЕРЕННАЯ мощь обеих сторон, а не прогноз командира: тот
+        // в минус не уходит никогда (см. USE_COMMAND_RETREAT), и потому основанием служить не может
+        val outmatched = USE_COMMAND_BREAKS_OFF && contact && armedEnemies.isNotEmpty() && run {
+            val oursNow = ourPowerOf(combatArmy, combatEnemies)
+            val theirsNow = enemyPowerOf(combatEnemies, combatArmy)
+            theirsNow > 0.0 && oursNow < theirsNow * BREAK_OFF_RATIO
+        }
+        outmatchedTicks = if (outmatched) outmatchedTicks + 1 else 0
         cmdMode = when {
             // ПОХОД — это когда врага рядом НЕТ, а не «нет контакта»: кайтер держится в двух шагах за границей
             // контакта, и командир, раздавая задания на захват, разбирал против него армию по одному — сценарий
@@ -4430,6 +4450,9 @@ cpuMark("a.evade")
             // РУБЯТ наших под огнём, его отход — повод добивать, а не повод расходиться. Условие именно «мили в
             // контакте», а не «по нам стреляют»: перестрелка у флага — это как раз гонка очков, и без этой оговорки
             // сценарий camp уходил в 17 508:22 337. Затор (stalledNow) остаётся как был
+            // ...и РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185): срок в BREAK_OFF_TICKS тиков нужен, чтобы одиночный
+            // просадочный тик не выдёргивал армию из выигрышного боя
+            outmatchedTicks >= BREAK_OFF_TICKS -> CmdMode.RACE
             (stalledNow || (enemyRetreating && !(USE_FIGHT_OVER_CHASE && underTheirFire && theirMeleeIn))) -> CmdMode.RACE
             // ...и НЕ ДОБИВАНИЕ: это условие несло старое ограничение blockOn, и без него командир строил кулак в
             // погоне за кайтером — match29:kite шёл 0 : 22 644, а без командира кончается уничтожением его армии на
@@ -4445,6 +4468,13 @@ cpuMark("a.evade")
         // (контакт, сомкнутость или шесть рядом, постура, огонь, отсутствие отхода и затора) целиком перешли в
         // выбор режима выше — это то же самое, сказанное один раз, и дальше режимы можно наполнять по одному
         if (USE_COMMAND_POSTURE && cmdMode == CmdMode.FIGHT && posture != Posture.ANNIHILATE) posture = Posture.ANNIHILATE
+        // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
+        // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
+        // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
+        if (USE_COMMAND_BREAKS_OFF && outmatchedTicks >= BREAK_OFF_TICKS && posture != Posture.RETREAT) {
+            posture = Posture.RETREAT
+            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("cmd t=${getTicks()}: outmatched for $outmatchedTicks ticks — break off")
+        }
         if (blockOn) {
             // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
             // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
@@ -6749,6 +6779,7 @@ cpuMark("a.evade")
     private val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
     private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
     private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
+    private var outmatchedTicks = 0                // сколько тиков подряд наша мощь ниже BREAK_OFF_RATIO от его (v185)
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
     private val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
