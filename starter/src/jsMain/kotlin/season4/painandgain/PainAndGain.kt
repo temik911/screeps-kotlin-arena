@@ -4839,6 +4839,11 @@ cpuMark("a.evade")
                     val sc = simulate(mobileArmy, armedEnemies, trial, SIM_TICKS, focusTarget, intent)
                     if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
                 }
+                // ГИСТОГРАММА ЗАМЫСЛА (этап 8): перебор из пяти стоит пяти раздач за тик, и окупается ли он —
+                // вопрос к числу, а не к мнению. Счётчик стоит ЗДЕСЬ, где замысел действительно выбирается:
+                // первая редакция поставила его внутрь блока USE_PORTFOLIO_SEARCH, который выключен, — то есть
+                // я едва не отправил в бой мёртвый прибор, ровно тот отказ, о котором вся эта пачка
+                if (bestPlan != null) intentHist[bestIntent.name] = (intentHist[bestIntent.name] ?: 0) + 1
                 // ...восхождение идёт по ГРУППАМ РОЛЕЙ, а не по отдельным крипам (v139): в литературе это называют
                 // кластеризацией юнитов, и при нашей грубой оценке она обязательна — назначая замысел каждому крипу
                 // порознь, поиск рвал строй (гейт 128/131, m30:kite 0:21 899 при CPU всего 3,8 мс, то есть дело не
@@ -4849,7 +4854,6 @@ cpuMark("a.evade")
                         mobileArmy.filter { hasWeapon(it) && hasRanged(it) },
                         mobileArmy.filter { !hasWeapon(it) && hasHeal(it) })
                     val per = HashMap<String, Intent>()
-                    intentHist[bestIntent.name] = (intentHist[bestIntent.name] ?: 0) + 1
                     for (c in mobileArmy) per[c.id] = bestIntent
                     repeat(PGS_ROUNDS) {
                         for (g in groups) {
