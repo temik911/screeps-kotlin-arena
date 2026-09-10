@@ -486,6 +486,23 @@ object PainAndGain {
      *  следующим же тиком; (2) `objectiveFlagId` обнулялся безусловно, хотя постура могла остаться прежней, — и
      *  цель армии теряла бонус ×1,25 за текущий флаг, после чего выбиралась заново по всей карте. */
     private const val USE_ONE_POSTURE_CLOCK = true
+    /** СРОК НА РЕШЕНИИ «НАСТУПАЕМ ЛИ МЫ» (v215, оператор: «пару тиков погоня, потом разворачиваемся и пару тиков
+     *  идём куда-то в другое место, потом опять разворачиваемся»).
+     *  Замер по двадцати рейтинговым матчам называет виновника поимённо: из 1 189 быстрых смен постуры (соседние
+     *  тики) **852 несут смену `pushing`**. У порога по ЗНАЧЕНИЮ гистерезис есть (PUSH_RATIO 1,3 -> PUSH_RELEASE_RATIO
+     *  1,1), у решения по ВРЕМЕНИ — нет никакого, а `pushing` состоит ещё из пяти множителей, и каждый мигает сам:
+     *  `huntable` пустеет на CHASE_WINDOW тиков, едва его блок шагнул назад на две клетки (это записано соседним
+     *  комментарием как ОТКРЫТАЯ находка), `leadHolds` переворачивается от сравнения проекций счёта, `chaseVeto` —
+     *  от того, дерётся ли он прямо сейчас.
+     *  ⚠️ ЭТО НЕ ВТОРОЕ ИЗДАНИЕ ОТВЕРГНУТОГО. Отвергали два средства, и оба про ЦЕЛЬ: гистерезис по ЛОВИМОСТИ
+     *  (наступление снимается лишь после целого окна без ловимых) — 51 хуже / 51 лучше, и порог `evasive` «больше
+     *  половины окна» — 66 хуже / 44 лучше. Здесь срок ставится на решении АРМИИ о себе, а не на ярлыке врага, и
+     *  настоящая слабость его снимает немедленно: мощь ниже порога отпускания и затор кончают наступление в тот же
+     *  тик. Держится ровно то, что мигает без причины.
+     *  Длительность НЕ НАЗНАЧЕНА, а вычислена: `evasive` мислейблит шагнувшего назад врага ровно CHASE_WINDOW
+     *  тиков, поэтому срок равен этому окну — держать дольше нечего, короче бессмысленно. */
+    private const val USE_PUSH_DWELL = true
+    private val PUSH_DWELL = CHASE_WINDOW
     private const val LETHAL_PENALTY = 1e6      // не запрет, а вес: если смертельны все клетки, порядок между ними цел
     /** Пара: сколько оставлено в ядре против сколько было свободных. */
     private var symCore = 0
@@ -2446,6 +2463,11 @@ object PainAndGain {
     private var objectiveFlagId: String? = null
     private var postureLogged = ""
     private var postureSince = 0                    // тик последней смены постуры (v181, гистерезис)
+    private var pushSince = 0                       // тик начала наступления (v215, см. USE_PUSH_DWELL)
+    private var pushHeld = false                    // наступление держится сроком, а не признаками
+    /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
+    private var pushHeldTicks = 0
+    private var pushTicks = 0
 
     /** Стартовые центры армий — «дома» сторон (спавнов нет): половины карты и точка поста. */
     private var homePos: Position? = null
@@ -2888,7 +2910,7 @@ cpuMark("arrival")
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
                 " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
-                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves lethal=$lethalHits/$lethalCells " +
+                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
@@ -4438,7 +4460,32 @@ cpuMark("a.sweep")
         val leadHolds = USE_LEAD_HOLDS && !behindOnScore && ourScore > enemyScore && armedEnemies.isNotEmpty()
         if (DEBUG_LOG && leadHolds != leadHoldsWas) println("lead t=$now: holds ${if (leadHolds) "on" else "off"} score=$ourScore:$enemyScore rate=$ourRate:$enemyRate push=${oursPush.toInt()}:${theirsPush.toInt()}")
         leadHoldsWas = leadHolds
-        pushing = !stalled && !leadHolds && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && oursPush >= theirsPush * (if (pushing) pushRelease else pushRatio)))
+        val pushRaw = !stalled && !leadHolds && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && oursPush >= theirsPush * (if (pushing) pushRelease else pushRatio)))
+        // ...и СРОК (v215, см. USE_PUSH_DWELL): начатое наступление живёт минимум PUSH_DWELL тиков, и снимают его
+        // досрочно только затор и настоящая слабость — мощь ниже порога отпускания. Мигание любого из пяти прочих
+        // множителей за этот срок армию не разворачивает.
+        // ...ТОЛЬКО В ИДУЩЕМ БОЮ, и это не осторожность, а замер: без оговорки строка match28:scatter перестала
+        // проходить гейт, а отрыв упал на 40 509. Причина по существу записана соседним комментарием: быстрое
+        // снятие наступления, когда ловимых нет, — это ровно то, чем армия не гонится за кайтером и за рассыпавшимся
+        // фермером. Разворот, на который жалуется оператор, случается В БОЮ; вне боя мигание `huntable` полезно.
+        // ⚠️ Мерились три редакции, и средняя выбрана не по вкусу, а по числам:
+        //   без оговорки вовсе — строка match28:scatter НЕ ПРОХОДИТ гейт, отрыв −40 509;
+        //   `fightOnNow` (эта) — FAIL нет, отрыв −3 545, 90 строк не тронуты, срок срабатывает на 0,6 % тиков,
+        //      смен постуры 5,12 -> 4,74 на сто тиков, и все пять «потерянных» уничтожений стали крупными
+        //      победами по очкам (match31:camp: уничтожение при ПРОИГРЫШЕ 4 391:6 400 -> отрыв 23 245:18 056);
+        //   `meleeAdjacent` (его мили вплотную) — стенд ровный (134 строки без изменений), но срок срабатывает
+        //      ОДИН раз на 125 110 тиков. Это не осторожная редакция, а мёртвый код, и потому отвергнута.
+        // Живое основание сильнее стендового: из 1 189 быстрых смен постуры в рейтинговой серии 852 несут смену
+        // `pushing`, а стенд в режим боя почти не входит (cmdwhy fight:8 из 570 тиков). Судит живая серия
+        pushHeld = false
+        pushing = if (!USE_PUSH_DWELL) pushRaw else when {
+            pushRaw -> { if (!pushing) pushSince = now; true }
+            pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease -> {
+                pushHeld = true; pushHeldTicks++; true
+            }
+            else -> false
+        }
+        pushTicks++
         // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
         // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
