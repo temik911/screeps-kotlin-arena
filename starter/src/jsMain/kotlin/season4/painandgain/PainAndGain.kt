@@ -1752,6 +1752,7 @@ object PainAndGain {
      *  `melee_1@(x,y)d2>ranged_3[hold:d2>2,!covered]holdMelee/stay` — и сводка `why-sum t=N:` раз в сто тиков по причинам;
      *  читает tools/autopsy.py (строка «melee idle» и диагноз). Объём — не больше строки на контактный тик. */
     private const val TRACE_WHY = true
+    private const val USE_LEASH_IN_CONTACT = true
     private const val LEASH_RANGE = 8
 
     /** Плотность строя при враге рядом (см. compact): шаг разрешён только на клетку в COMPACT_RANGE от центра
@@ -2171,7 +2172,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v190"
+    private const val BOT_VERSION = "v191"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2585,10 +2586,13 @@ cpuMark("arrival")
             println(
                 "t=${getTicks()} army=${army.size} runners=${runners.size}(${detachedIds.size} detached) enemies=${enemyCreeps.size}/${combatEnemies.size} " +
                 "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
+                // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
+                // центра. Реплеи говорят, что стирание приходит на диаметре 21, а пат — на диаметре 3
+                "spread=${army.filter { hasWeapon(it) && hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${army.count { hasWeapon(it) && getRange(it, armedCentroid) > LEASH_RANGE }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "weak=$outmatchedTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             concSum = 0; concTicks = 0
@@ -2860,6 +2864,8 @@ cpuMark("arrival")
     private val stalemateOurHist = ArrayDeque<Int>()      // сумма наших хитов за окно (см. stalemateNow)
     private val stalemateHisHist = ArrayDeque<Int>()      // и его — чтобы отличить пат от проигранного размена
     private var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
+    private var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
+    private var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
     /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
     private class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
     private val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
@@ -4431,12 +4437,16 @@ cpuMark("a.evade")
         else { stalemateOurHist.clear(); stalemateHisHist.clear() }
         while (stalemateOurHist.size > STALEMATE_WINDOW) stalemateOurHist.removeFirst()
         while (stalemateHisHist.size > STALEMATE_WINDOW) stalemateHisHist.removeFirst()
-        val stalemateNow = USE_CAPTURE_IN_STALEMATE && stalemateOurHist.size >= STALEMATE_WINDOW && run {
+        // ПРИБОР, а не правило: счётчик пата считается всегда, независимо от того, кто им пользуется. Он был
+        // загейчен на USE_CAPTURE_IN_STALEMATE, и когда тот выключили после отказа v189, счётчик замер на нуле —
+        // вместе с ним умерло правило v190, которое на него опиралось: двенадцать игр измерили не его, а v186
+        val stalemateNow = stalemateOurHist.size >= STALEMATE_WINDOW && run {
             val ourDrop = stalemateOurHist.first() - stalemateOurHist.last()
             val hisDrop = stalemateHisHist.first() - stalemateHisHist.last()
             ourDrop < stalemateOurHist.first() * STALEMATE_LOSS && hisDrop < stalemateHisHist.first() * STALEMATE_LOSS
         }
         stalemateTicks = if (stalemateNow) stalemateTicks + 1 else 0
+        if (stalemateTicks > patMax) patMax = stalemateTicks
         // наша линия отступает (v96, USE_STANDING_LINE_HOLDS): центр наших вооружённых за окно терпения отдалился от его
         // НЫНЕШНЕГО центра на PRESS_CLOSING и больше — бой не стоячий, это отход под огнём, и расстановке в нём места нет
         if (contact && ourArmedC != null) ourCentreHist.addLast(ourArmedC.x * 100 + ourArmedC.y) else ourCentreHist.clear()
@@ -4993,8 +5003,17 @@ cpuMark("a.evade")
             fun holdReach(e: Creep) = if (USE_MELEE_PAIR_ENGAGE && meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
             val engage = if (pressTarget != null) pressTarget else poker ?: if (localAggressive && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
-            // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру
-            val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE && localEnemies.isNotEmpty() && getRange(creep, armedCentroid) > LEASH_RANGE
+            // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру.
+            // ПОВОДОК НЕ ТЯНУЛ ИМЕННО ТОГО, КТО УБЕЖАЛ (v191, USE_LEASH_IN_CONTACT): условие требовало врага РЯДОМ С
+            // КРИПОМ, а у крипа, отставшего от боя, врагов рядом уже нет — и он оставался стоять там, где остановился.
+            // Замер по реплеям против Coldkimchi#2: в матче со стиранием (3d97c4) диаметр группы наших стрелков в
+            // контакте 21 клетка против восьми у него, и 3,7 крипа из 9,8 стояли дальше пяти от центра собственной
+            // армии; в матче, который стиранием не кончился (3d97d8), диаметр 3 и дальше пяти — никого. Пятеро
+            // стрелков, растянутые на двадцать клеток, не могут бить одну цель: conc даёт 1,3 из 5, а трое его
+            // лекарей возвращают 216 хитов в тик — цель начинает терять хиты только под залпом ЧЕТЫРЁХ разом.
+            // Поэтому поводок теперь действует, пока в контакте АРМИЯ, а не пока враг стоит рядом с самим крипом
+            val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE &&
+                (localEnemies.isNotEmpty() || (USE_LEASH_IN_CONTACT && contact)) && getRange(creep, armedCentroid) > LEASH_RANGE
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
             val melee = isMelee(creep) && !hasRanged(creep)
             val meleeMate: Creep? = if (melee) combatArmy.filter { it.id != creep.id && isMelee(it) && !hasRanged(it) && hasMelee(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
@@ -5996,6 +6015,7 @@ cpuMark("a.evade")
         val strip = if (!USE_FIRE_STRIPS_HEALERS || stalemateTicks < STALEMATE_HOLD) null else
             live.filter { hasHeal(it) && !hasWeapon(it) && healLeft(it) > 0 && shooters.any { s -> reach(s, it) } }
                 .minByOrNull { healLeft(it) }
+        if (strip != null) stripTicks++
         for (c in shooters) {
             val t = when {
                 strip != null && reach(c, strip) -> strip
