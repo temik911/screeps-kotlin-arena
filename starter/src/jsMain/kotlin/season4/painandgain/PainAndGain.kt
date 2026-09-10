@@ -440,6 +440,11 @@ object PainAndGain {
      *  платит за очки боем. Живой вопрос остаётся ОТКРЫТЫМ — постура FLAG занимает 9 % матча против 53 % у
      *  ANNIHILATE, — но закрывать его этой ценой оказалось дороже, чем стоять. */
     private const val USE_POST_ON_FLAG = false
+    /** Размер ядра — симметрия по типам с его живой боевой армией, а не половина нашей (v214). */
+    private const val USE_SYMMETRIC_ARMY = true
+    /** Пара: сколько оставлено в ядре против сколько было свободных. */
+    private var symCore = 0
+    private var symFree = 0
     /** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
     private var spotMeleeTicks = 0
     /** Вето «сперва туши очаг»: тиков с очагом и из них тех, где вето ИЗМЕНИЛО решение о постуре. */
@@ -2791,7 +2796,7 @@ cpuMark("arrival")
                 "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
-                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll postflag=$postOnFlag/$postAll " +
+                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6508,7 +6513,21 @@ cpuMark("a.evade")
         val mine = army + ctx.runners.filter { it.id in cmdDetach }
         val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) }.toMutableList()
         if (free.isEmpty()) return
-        val core = (free.size + 1) / 2               // ядро не отпускаем: аннигиляция — поражение при любом счёте
+        // СИММЕТРИЧНАЯ АРМИЯ (v214, решение оператора): «держать в основной армии столько же крипов, сколько у
+        // врага, симметрично по типам боевых; лекари всегда остаются в основной армии; остальных отпустить».
+        // Считается по ВСЕМ его живым боевым крипам, как он и просил. Лекари сюда не попадают вовсе: `free`
+        // отбирается по hasWeapon, а лекарь без оружия в него не входит.
+        // ⚠️ Арифметика, о которой надо помнить: при целых армиях 14 на 14 у нас 4 мили и 5 стрелков, у него
+        // столько же — симметрия оставляет в ядре все девять и не отпускает НИКОГО. Это ровно то, чего просит
+        // оператор, и это безопаснее прежней половины (match29:kite: армия таяла до двух крипов при нуле очков).
+        // Флаговый забег при этом ложится на двух наших скаутов и на флаг-цель армии, открытую локализацией вето.
+        val core = if (!USE_SYMMETRIC_ARMY) (free.size + 1) / 2 else {
+            val hisMelee = ctx.combatEnemies.count { hasMelee(it) }
+            val hisRanged = ctx.combatEnemies.count { hasRanged(it) }
+            minOf(free.count { hasMelee(it) && !hasRanged(it) }, hisMelee) + minOf(free.count { hasRanged(it) }, hisRanged)
+        }
+        symCore += core
+        symFree += free.size
         var budget = free.size - core
         if (budget <= 0) return
         // флаги — от ближайшего к армии; занятые нами пропускаем
