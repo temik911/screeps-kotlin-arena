@@ -442,6 +442,26 @@ object PainAndGain {
     private const val USE_POST_ON_FLAG = false
     /** Размер ядра — симметрия по типам с его живой боевой армией, а не половина нашей (v214). */
     private const val USE_SYMMETRIC_ARMY = true
+    /** В БОЮ ОТРЯД НЕ ДЕЛИТСЯ (v215, решение оператора: «в контактном матче, где идёт бой, отделять бойцов из
+     *  отряда — плохая идея; нам нужна максимальная плотность и максимальный напор во время боя; без хиллеров ни
+     *  один бой выиграть невозможно»).
+     *  Замер по двадцати рейтинговым матчам назвал предмет числом: отпусканий из ядра НА ТИК БОЯ 1,02 в поражениях
+     *  против 0,68 в победах, размах армии во время боя до 54 и 68 клеток. Лекарь при этом формально «с армией»:
+     *  поводок держит его в LEASH_RANGE от центроида ВООРУЖЁННЫХ, а у армии, растянутой на тридцать клеток, этот
+     *  центроид стоит посреди пустоты — отсюда «в бою нет ни одного хиллера» при соблюдённом правиле.
+     *  Путей разделения три, и запрета «не в бою» не было ни у одного:
+     *   1) `commandRace` вызывается при cmdMode == RACE, а RACE — это ветка `else`, то есть значение по умолчанию;
+     *      внутри проверки «мы в контакте» нет вовсе;
+     *   2) `USE_DETACH` защиту имел, но ОБЕ её половины снимал флаг `meleeIdle` — ровно то, что наши мили не
+     *      дотягиваются, и запускало разделение посреди рубки;
+     *   3) выйдя из RACE, командир не звал `commandRace` вовсе, и `cmdDetach` оставался с прошлого тика — отпущенные
+     *      не возвращались никогда, потому что очистка живёт ВНУТРИ той функции, которую перестали звать.
+     *  Здесь один предикат `fightOnNow` (контакт по массе ИЛИ размен за STALL_TICKS) закрывает все три, и отзыв
+     *  обязателен: без него остаётся ровно та картина, которую оператор видел на записи — часть дерётся, часть в
+     *  другом конце карты.
+     *  ⚠️ Цена названа заранее: пока идёт бой, флаговый забег стоит на двух скаутах M1h. Прибор `split` и темп очков
+     *  в окне боя её измерят. */
+    private const val USE_NO_SPLIT_IN_FIGHT = true
     /** Пара: сколько оставлено в ядре против сколько было свободных. */
     private var symCore = 0
     private var symFree = 0
@@ -2843,7 +2863,7 @@ cpuMark("arrival")
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
                 " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
-                "split=$splitFight/$splitAll healgap=$healGap/$healGapN flip=$aimFlips/$aimTicks blind=$dangerBlind/$dangerMoves " +
+                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks blind=$dangerBlind/$dangerMoves " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
@@ -4076,6 +4096,15 @@ cpuMark("a.hunt")
         // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
         // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
         fightOnNow = contact || exchangeRecent
+        // ОТЗЫВ (v215, см. USE_NO_SPLIT_IN_FIGHT): едва бой начался, отпущенные возвращаются в кулак. Очистка стоит
+        // ЗДЕСЬ, а не внутри `commandRace`: выйдя из режима гонки, командир эту функцию не зовёт вовсе, и `cmdDetach`
+        // оставался с прошлого тика — отпущенные не возвращались никогда
+        if (USE_NO_SPLIT_IN_FIGHT && fightOnNow) {
+            fightTicksNow++
+            recalled += cmdDetach.size + detachedIds.size
+            cmdDetach.clear()
+            detachedIds.clear()
+        }
         val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
         val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
         val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4
@@ -4309,8 +4338,14 @@ cpuMark("a.retreat")
             // включает её его режим, а не собственные условия. Полная замена командирской раздачей отвергнута замером:
             // 133 из 135 (roost 7 615:24 325, camp 22 304:23 966) — прежняя логика знает и сухую охоту, и гонку, и
             // охрану стрелков, чего своя раздача не покрывает
-            else if (((!USE_COMMAND_OWNS_DETACH || cmdMode != CmdMode.FIGHT) || meleeIdle) &&
-                ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) || meleeIdle) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
+            // ...и `meleeIdle` БОЛЬШЕ НЕ СНИМАЕТ ЗАЩИТУ (v215, см. USE_NO_SPLIT_IN_FIGHT). Он стоял оговоркой к
+            // обеим половинам гейта — «командир в режиме боя» и «мы в контакте», — и снимал их обе. Смысл был
+            // «мили всё равно не дерутся, пусть идут за флагами», а следствие — отряд набирался посреди рубки
+            // ровно тогда, когда наши мили не дотягивались, то есть по первой же жалобе оператора
+            else if ((if (USE_NO_SPLIT_IN_FIGHT) !fightOnNow
+                      else ((!USE_COMMAND_OWNS_DETACH || cmdMode != CmdMode.FIGHT) || meleeIdle) &&
+                          ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) || meleeIdle)) &&
+                (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
                 // столько, сколько требуют охраны целей (v94): флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного
                 val unmanned = if (USE_RUNNER_PAIRS) ctx.flags.sumOf { f -> if (f.occupant?.my == true) 0 else if (armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }) 2 else 1 }
@@ -4846,6 +4881,9 @@ cpuMark("a.evade")
             if (!hasWeapon(c) || armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 1 }) continue
             healGapN++
             if (medsNow.none { getRange(c, it) <= HEAL_RANGE }) healGap++
+            // ...и ОТДЕЛЬНО — жалоба оператора дословно: «в бою не оказывается НИ ОДНОГО хиллера». Это не «лекарь в
+            // четырёх клетках вместо трёх», это «лекаря рядом нет вовсе»: боец дерётся там, куда лекарь не придёт
+            if (medsNow.none { getRange(c, it) <= MASS_RANGE }) noMedic++
         }
         // СМЕНА НАПРАВЛЕНИЯ АРМИИ (v215, оператор: «пару тиков погоня, потом разворот, и так много раз»).
         // Направление — это то, КУДА армия идёт: флаг-цель, добыча или пост. Одна смена за матч — это план,
@@ -6602,6 +6640,10 @@ cpuMark("a.evade")
                             out: MutableMap<String, Position>) {
         out.clear()
         cmdDetach.clear()
+        // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
+        // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
+        // перестали стрелять, и командир раздавал задания на захват посреди рубки
+        if (USE_NO_SPLIT_IN_FIGHT && fightOnNow) return
         // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
         // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
         // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
@@ -7582,6 +7624,8 @@ cpuMark("a.evade")
     private var splitAll = 0
     /** Пара «крипо-тиков боя без своего лекаря в дальности лечения / крипо-тиков боя» (v215). */
     private var healGap = 0
+    /** ...и крипо-тики боя, где своего лекаря нет и в MASS_RANGE — «в бою ни одного хиллера» (v215). */
+    private var noMedic = 0
     private var healGapN = 0
     /** Пара «смен направления армии / тиков» (v215, наблюдение «разворачиваемся много раз»). */
     private var aimFlips = 0
@@ -7592,6 +7636,9 @@ cpuMark("a.evade")
     private var dangerMoves = 0
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     private var fightOnNow = false
+    /** Пара «крипов отозвано в кулак / тиков боя» (v215). */
+    private var recalled = 0
+    private var fightTicksNow = 0
     private var outmatchedTicks = 0                // сколько тиков подряд наша мощь ниже BREAK_OFF_RATIO от его (v185)
     private val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
