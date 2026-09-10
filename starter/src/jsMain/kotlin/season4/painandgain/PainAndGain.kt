@@ -2269,6 +2269,10 @@ object PainAndGain {
     private const val USE_CPU_GUARD = true
     private const val USE_FLAG_FLOW_PREFETCH = true   // потоки ко всем флагам считаются на первом тике (лимит 1000 мс), см. tick()
     private const val CPU_GUARD_MS = 50.0
+    /** ...и сторож действует на BFS полей потока (v184): счётчик BFS_BUDGET считает ПОЛЯ, а не миллисекунды, и на
+     *  втором тике матча их ещё мало — сторож срабатывал, а полное поле всё равно запускалось и роняло тик в
+     *  `Script execution timed out` (пять матчей из двенадцати). Сверх времени поле считается ограниченным. */
+    private const val USE_FLOW_CPU_GUARD = true
     /** Бюджет полных полей в тик (поле «вблизи» — четверть): сверх него устаревшее поле отдаётся как есть, а НОВАЯ
      *  цель получает ограниченное поле (см. NEAR_FLOW) с пометкой «устарело» — полное досчитается следующим тиком в
      *  пределах бюджета. Без этого начало боя (клетки врагов для броска и добычи, точки уклонения, флаги, вычищенные
@@ -3021,7 +3025,13 @@ cpuMark("r.cands")
         val ttl = if (near) 1 else if (USE_FLAG_FLOW_TTL && !avoid && flowFull[key] == true && ctx.flags.any { it.pos.x == target.x && it.pos.y == target.y }) FLOW_TTL_FLAG else FLOW_TTL
         if (hit != null && at != null && now - at < ttl) return hit
         if (hit != null && bfsCost >= BFS_BUDGET) return hit   // сверх бюджета — устаревшее поле
-        val bounded = near || bfsCost >= BFS_BUDGET            // сверх бюджета новая цель — ограниченное поле
+        // ...и СВЕРХ ВРЕМЕНИ ТОЖЕ, а не только сверх счётчика BFS (v184). Счётчик считает поля, а не миллисекунды, и
+        // на втором тике матча их ещё мало: первый тик тратит около 185 мс из тысячи (built 55, prefetch 28, plan 25),
+        // сторож на втором честно срабатывает на 63 мс, а следом всё равно запускается ПОЛНОЕ поле — и тик уходит
+        // целиком с `Script execution timed out` в bfs. В двенадцати тестовых играх это случилось в пяти, поровну в
+        // победах и поражениях, то есть разгромов не объясняет, но тик пропадает даром
+        val bounded = near || bfsCost >= BFS_BUDGET ||
+            (USE_CPU_GUARD && USE_FLOW_CPU_GUARD && now > 1 && cpuMs() > CPU_GUARD_MS)
         bfsThisTick++
         bfsCost += if (bounded) 0.25 else 1.0
         val f = DistanceMap.flowFieldTo(target, ctx.flagBlocked + (if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked),
