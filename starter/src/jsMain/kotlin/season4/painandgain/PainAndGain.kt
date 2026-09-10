@@ -428,8 +428,13 @@ object PainAndGain {
     private const val USE_SHOOT_SCOUTS = true
     /** Мили идёт вплотную, когда МЕСТНАЯ арифметика даёт перевес, даже вне радиуса лекаря (v214). */
     private const val USE_SPOT_MELEE = true
+    /** Пока рядом идёт бой, который мы выигрываем, флаг-цель через полкарты не берётся (v214). */
+    private const val USE_SPOT_FIRST = true
     /** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
     private var spotMeleeTicks = 0
+    /** Вето «сперва туши очаг»: тиков с очагом и из них тех, где вето ИЗМЕНИЛО решение о постуре. */
+    private var spotHoldAll = 0
+    private var spotHoldNew = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
     private var flagsNow: List<FlagInfo> = emptyList()
@@ -2781,7 +2786,7 @@ cpuMark("arrival")
                 "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
-                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks " +
+                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4324,7 +4329,27 @@ cpuMark("a.sweep")
         // sleeper при 0.83 это 10:0; «поймали — деремся до конца контакта» дало 2:11, «слабее — только отход» 2:6
         val hotContact = contact && (!USE_COLD_CONTACT_POSTURE || fightOn || meleeAdjacent)
         val contactFight = !stalled && armedEnemies.isNotEmpty() && strikers.isNotEmpty() && hotContact && !(retreatFeasible && weakerContact)
-        val annihilate = pushing || contactFight
+        // СПЕРВА ТУШИМ МЕСТНЫЙ ОЧАГ (v214, оператор по записи: «загнали в угол 2-3 крипа, мы там значительно
+        // сильнее, но армия разворачивается и убегает в другой конец карты; нужен механизм, который сперва тушит
+        // местный очаг, если мы сильнее, и лишь затем бежит на помощь»).
+        // Причина ухода: гаснет pushing — от leadHolds (мы ВПЕРЕДИ по счёту, значит толчок запрещён), от простоя,
+        // от пустого huntable, от отношения мощи, — и строкой ниже флаг-цель выбирается ПО ВСЕЙ КАРТЕ. Вето поверх
+        // результата ловит все четыре причины разом, а не каждую по отдельности.
+        // Три сомножителя, все уже посчитаны: бой идёт у МАССЫ армии; среди его крипов в контакте есть тот, по
+        // которому наш залп в его клетке сильнее его залпа в PUSH_RATIO раз и которого мы добиваем; и стая,
+        // УСПЕВАЮЩАЯ прийти (fightPack), слабее нас с запасом наступления — то есть «выигрываем» здесь значит
+        // выигрываем по Ланчестеру с лечением, а не «бьём сильнее».
+        val spotFoes = if (!USE_SPOT_FIRST) emptyList() else armedEnemies.filter { e ->
+            army.any { getRange(e, it) <= RANGED_RANGE + 1 } && spotEdgeAt(e) >= PUSH_RATIO }
+        // ⚠️ добиваемость (killTicks) здесь НЕ проверяется намеренно: она объявлена ниже постуры. Её роль тут
+        // исполняет третий сомножитель — oursFight >= theirsFight * PUSH_RATIO считает лечение по Ланчестеру,
+        // то есть очаг у трёх его лекарей этот порог не берёт. В цепочке целей (см. spotNow) killTicks на месте
+        val holdingSpot = USE_SPOT_FIRST && contact && spotFoes.isNotEmpty() && oursFight >= theirsFight * PUSH_RATIO
+        if (holdingSpot) {
+            spotHoldAll++
+            if (!(pushing || contactFight)) spotHoldNew++     // пара: сколько раз вето ИЗМЕНИЛО постуру
+        }
+        val annihilate = pushing || contactFight || holdingSpot
         // непобедимая армия (см. EVADE_SAFE): с ней не деремся — флаг-цель только с выходом, иначе уклонение на любой
         // дистанции: держимся там, откуда есть выход, и уходим, когда она подходит
         // уклонение — только от ЯВНО сильнейшей армии (см. RETREAT_RATIO): при паритете флагов (v14) бой равный, и бежать
