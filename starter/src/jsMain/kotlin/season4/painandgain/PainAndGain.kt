@@ -2240,7 +2240,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v202"
+    private const val BOT_VERSION = "v203"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2665,6 +2665,12 @@ cpuMark("arrival")
                     "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks lead=$leadTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
+            // ПЕРЕПИСЬ (v203): только ненулевые ветки, накопительно за матч. Сумма stepCount обязана равняться
+            // размеру армии, умноженному на число тиков, — если не равна, перепись врёт, и всё на ней построенное тоже
+            println("rung t=${getTicks()}: why=" + rungCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+                " step=" + stepCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+                " pass=" + passCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+                " sum=${stepCount.values.sum()}")
             concSum = 0; concTicks = 0
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
@@ -2940,6 +2946,9 @@ cpuMark("arrival")
     private var touchMin = 1.0                            // минимум за матч — прибор
     private var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
     private var leadTicks = 0                             // прибор: тиков, в которые ряд целился на клетку ближе (v196)
+    private val rungCount = HashMap<String, Int>()        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
+    private val stepCount = HashMap<String, Int>()        // ...и какая ветка ШАГА
+    private val passCount = HashMap<String, Int>()        // ...и какой проход раздачи командира сколько клеток назначил
     private var planGunsIn = 0; private var planGunsAll = 0        // прибор согласованности строя (v200)
     private var planMeleeHealed = 0; private var planMeleeAll = 0
     private var planHealBehind = 0; private var planHealAll = 0
@@ -5359,36 +5368,41 @@ cpuMark("a.evade")
             var nearFlow = false   // цель-крип рядом: поле «вблизи» (см. NEAR_FLOW)
             // в строю (см. USE_BLOCK): мили вплотную к врагу стоит и рубит, остальные — в свой слот
             val slotHold = slot != null && melee && localEnemies.any { getRange(creep, it) <= 1 }
+            // ПЕРЕПИСЬ РЕШЕНИЙ (v203, этап 1): каждая ветка обеих цепочек называет себя, и счётчик копится за матч.
+            // Повод — пять правил за сутки, которые прошли гейт и не исполнились ни разу: по коду нельзя было
+            // сказать, какая ветка живая. Перепись отвечает на это числом, а не чтением. Она же заменяет ручной
+            // дубль цепочки в TRACE_WHY, который успел рассинхронизироваться и рассказывал о боте неправду
+            var whyTag = "?"
             when {
-                keeper -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
-                slotHold -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
+                keeper -> { whyTag = "keeper"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
+                slotHold -> { whyTag = "slotHold"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 // ротация раньше слота (v126, USE_ROTATE_OVER_SLOT): слот ротирующего — тыловой ряд, а лекарь ходит за своим подопечным
-                USE_ROTATE_OVER_SLOT && rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
+                USE_ROTATE_OVER_SLOT && rotating && healerNear != null -> { whyTag = "rotSlot"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
                 // прикрытие тыла раньше слота (v135): слот ставит мили в строй, а рубят в это время наш тыл
-                guardMate != null -> { target = guardMate; standoff = 1; nearFlow = true }   // цель — его мили у нашего тыла
+                guardMate != null -> { whyTag = "guard"; target = guardMate; standoff = 1; nearFlow = true }   // цель — его мили у нашего тыла
                 // СБОР ПЕРЕД БЛОБОМ (v135, см. USE_RALLY_BEFORE_BLOB): вход проигран не тем, что крипы делают в бою, а тем, что
                 // в бой вступает часть — на первом контакте reach=2/5, два наших ствола из пяти против его двенадцати. Пока
                 // его сомкнутая армия ещё не в контакте, а наши стволы не готовы, крип идёт К МАССЕ СВОИХ, а не к врагу и не
                 // в слот: собраться на клетку ближе стоит дешевле, чем встретить блоб половиной армии
-                rallyBlob -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
+                rallyBlob -> { whyTag = "rallyBlob"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // за спину мили — раньше кайта: кайт держит два от его мили, но не говорит, КТО стоит между (v135)
-                shieldMate != null -> { target = shieldMate; standoff = 1; avoid = true; nearFlow = true }
+                shieldMate != null -> { whyTag = "shield"; target = shieldMate; standoff = 1; avoid = true; nearFlow = true }
                 // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
                 commandOf[creep.id] != null && (commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) ->
-                    { target = commandOf[creep.id]!!; standoff = 0 }
+                    { whyTag = "order"; target = commandOf[creep.id]!!; standoff = 0 }
                 // ЧИСТЫЙ БОЙ (v139, см. USE_PURE_COMBAT): пока командир ведёт бой, ВСЁ остальное наследие молчит — крип,
                 // которому приказано стоять, стоит, а не подхватывает одно из двух десятков прежних правил. Это прямая
                 // проверка того, мешает ли накопленная неявная логика алгоритму, который в литературе работает
                 USE_PURE_COMBAT && commandOf.containsKey(creep.id) ->
-                    { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
+                    { whyTag = "pure"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 // прогноз размена — раньше кайта и слота: он и есть выбор клетки (v136)
-                searchCell != null -> { target = searchCell; standoff = 0 }
+                searchCell != null -> { whyTag = "search"; target = searchCell; standoff = 0 }
                 // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
                 // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
                 // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
                 // где наш собственный огонь плотнее. MetalicaX#11 даёт 63 веера за матч против 37 у #10 и наших 12 (v135)
                 massKite != null -> {
-                    kiteNow++
+                    whyTag = "kite"; kiteNow++
                     val clumped = USE_KITE_MASS_AWARE && combatArmy.count { it.id != creep.id && getRange(creep, it) <= RANGED_RANGE } >= 2
                     // пока стволы не подтянулись — держим на клетку дальше и в бой не входим (v135, USE_KITE_UNTIL_READY)
                     target = massKite
@@ -5400,51 +5414,52 @@ cpuMark("a.evade")
                 // Причина в порядке цепочки: слот стоял выше подопечного, а расстановка не знает, кого лечить, и уводила
                 // лекаря в строй за пределы дальности. Лекарь вне HEAL_RANGE не лечит вовсе — в бою подопечный главнее
                 USE_HEALER_OVER_SLOT && healer && healMate != null && contact ->
-                    { target = healMate; standoff = 1; nearFlow = true }
-                slot != null -> { target = slot; standoff = 0 }
+                    { whyTag = "healMate"; target = healMate; standoff = 1; nearFlow = true }
+                slot != null -> { whyTag = "slot"; target = slot; standoff = 0 }
                 // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
                 // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
-                healer && healMate != null -> { target = healMate; standoff = 1; nearFlow = true }
+                healer && healMate != null -> { whyTag = "healMateOut"; target = healMate; standoff = 1; nearFlow = true }
                 // отход — по обычному полю: поле «в обход» стоящих врагов (а дерущиеся стоят) увело пару в обход
                 // стенного блока на другой край карты (матч 4)
-                posture == Posture.EVADE && evadeTo != null -> { target = evadeTo; standoff = 1 }
-                posture == Posture.RETREAT && retreatTo != null -> { target = retreatTo; standoff = 1 }
-                formGo -> { target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
-                wounded && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
-                rotating && healerNear != null -> { target = healerNear; standoff = 1; avoid = true; nearFlow = true }
+                posture == Posture.EVADE && evadeTo != null -> { whyTag = "evade"; target = evadeTo; standoff = 1 }
+                posture == Posture.RETREAT && retreatTo != null -> { whyTag = "retreat"; target = retreatTo; standoff = 1 }
+                formGo -> { whyTag = "formGo"; target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
+                wounded && healerNear != null -> { whyTag = "wounded"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
+                rotating && healerNear != null -> { whyTag = "rotate"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
                 // сбор пачки (см. USE_REGROUP, REGROUP_TICKS): одинокий мили под смертельным огнём — к ближайшему мили-напарнику
-                USE_REGROUP && aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) * REGROUP_TICKS >= creep.hits -> { target = meleeMate; standoff = 1; avoid = true; nearFlow = true }
-                aloneInFire -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
-                leashed -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
+                USE_REGROUP && aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) * REGROUP_TICKS >= creep.hits -> { whyTag = "regroup"; target = meleeMate; standoff = 1; avoid = true; nearFlow = true }
+                aloneInFire -> { whyTag = "alone"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
+                leashed -> { whyTag = "leash"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // прижим стрелка (см. USE_PRESS): кольцо ровно в RANGED_RANGE от цели фокуса, не ряд
-                pressRanged && focusTarget != null && getRange(creep, focusTarget) <= ENGAGE_RANGE -> { target = focusTarget; standoff = RANGED_RANGE; nearFlow = true }
-                engage != null -> { target = engage; standoff = if (melee) 1 else closeIn; nearFlow = true }
+                pressRanged && focusTarget != null && getRange(creep, focusTarget) <= ENGAGE_RANGE -> { whyTag = "pressRing"; target = focusTarget; standoff = RANGED_RANGE; nearFlow = true }
+                engage != null -> { whyTag = "engage"; target = engage; standoff = if (melee) 1 else closeIn; nearFlow = true }
                 // МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, УХОДИТ ИЗ ЕГО КОЛЬЦА (v192, см. USE_MELEE_OUT_OF_FIRE): держать линию имеет
                 // смысл, пока за неё кто-то цепляется; против блока, меняющего клетку три тика из четырёх, «линия» —
                 // это стоянка в трёх клетках, где его пятеро стрелков достают, а наш ATTACK нет
-                meleeOutOfFire -> { outOfFireTicks++; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
+                meleeOutOfFire -> { whyTag = "outOfFire"; outOfFireTicks++; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // мили держит линию (см. MELEE_HOLD_RANGE): что подошло на две клетки — рубит, за экраном не гонится
-                holdMelee -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
-                grab != null -> { target = grab.pos; standoff = 0; avoid = true }
+                holdMelee -> { whyTag = "holdMelee"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
+                grab != null -> { whyTag = "grab"; target = grab.pos; standoff = 0; avoid = true }
                 // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»; без
                 // ловимой добычи (кайтеры) — тоже к массе: стоим строем и стреляем в то, что подойдёт
-                posture == Posture.ANNIHILATE && !support && (!localAggressive || prey == null) -> { target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
-                prey != null -> { target = prey; standoff = if (melee) 1 else closeIn; nearFlow = true }
-                rallyTo != null -> { target = rallyTo; standoff = CLOSE_STANDOFF; avoid = true }
+                posture == Posture.ANNIHILATE && !support && (!localAggressive || prey == null) -> { whyTag = "toCentroid"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
+                prey != null -> { whyTag = "prey"; target = prey; standoff = if (melee) 1 else closeIn; nearFlow = true }
+                rallyTo != null -> { whyTag = "rally"; target = rallyTo; standoff = CLOSE_STANDOFF; avoid = true }
                 objective != null -> {
+                    whyTag = "objective"
                     val capturer = objectiveCapturer == creep.id
                     target = objective.flag.pos
                     standoff = if (capturer) 0 else CLOSE_STANDOFF
                     avoid = true
                 }
-                threat != null && huntingThreat && mobile -> { target = threat; standoff = if (melee) 1 else closeIn }
-                raider != null && mobile && !support -> { target = raider; standoff = if (melee) 1 else RANGED_RANGE }
+                threat != null && huntingThreat && mobile -> { whyTag = "threat"; target = threat; standoff = if (melee) 1 else closeIn }
+                raider != null && mobile && !support -> { whyTag = "raider"; target = raider; standoff = if (melee) 1 else RANGED_RANGE }
                 // ОТВЕРГНУТО стендом (v42): «держать линию там, где она стоит» (holdLine → armedCentroid вместо поста) — в матче 70
                 // пост при враге рядом был точкой в 35 клетках позади, и каждый тик ДЕРЖАТЬ между тиками ДОБИТЬ разворачивал
                 // армию к нему. Но возврат к посту делает работу в десятках сценариев (после отбитого рывка остаток добивается у
                 // поста): 58 строк хуже / 48 лучше, гейтовая m33 farm+weak и m29 farm красные. Мигание лечится у корня — см.
                 // chaseVeto и evasive
-                else -> { target = post; standoff = POST_STANDOFF; avoid = true }
+                else -> { whyTag = "post"; target = post; standoff = POST_STANDOFF; avoid = true }
             }
             val flow0 = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep, nearFlow) else flowTo(ctx, target, near = nearFlow)
             // за пределом поля «вблизи» — полное поле
@@ -5524,14 +5539,15 @@ cpuMark("a.evade")
             } else { holdSince.remove(creep.id); impatientIds.remove(creep.id) }
             val hold = (cohesionHold && creep.id !in impatientIds) || formHold || retreatHold
 
+            var stepTag = "?"
             val step: Position? = when {
-                !canMove(creep) -> null
+                !canMove(creep) -> { stepTag = "immobile"; null }
                 // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
                 // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
                 // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
                 USE_ORDER_OVER_KEEPER && keeper && commandOf.containsKey(creep.id) -> commandOf[creep.id]!!
-                    .takeIf { it.x != creep.x || it.y != creep.y }
-                keeper -> null
+                    .takeIf { it.x != creep.x || it.y != creep.y }.also { stepTag = "keeperOrder" }
+                keeper -> { stepTag = "keeperStay"; null }
                 // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
                 // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
                 // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
@@ -5541,6 +5557,7 @@ cpuMark("a.evade")
                 // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
                 USE_ORDER_OVER_SLOT && (USE_ORDER_EVERY_MODE || cmdMode == CmdMode.FIGHT) && commandOf.containsKey(creep.id) -> {
                     orderBranch++          // сколько приказов реально дошло до ветки исполнения (v173)
+                    stepTag = "order"
                     val cell = commandOf[creep.id]!!
                     if (cell.x == creep.x && cell.y == creep.y) null
                     else if (USE_ORDER_IS_LAW) cell
@@ -5554,16 +5571,18 @@ cpuMark("a.evade")
                 mustFlee -> {
                     // сколько приказов ломает бегство: оно стоит выше приказа намеренно (это спасение), но цену надо
                     // знать — прибор исполнения записывает такой случай как «ушёл в другую клетку» (v173)
+                    stepTag = "flee"
                     if (commandOf.containsKey(creep.id)) orderFled++
                     fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
                 }
-                slot != null -> if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet())
+                slot != null -> { stepTag = if (slotHold) "slotHold" else "slotStep"; if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet()) }
                 // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
                 // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
                 // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
                 // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
-                hold -> null
+                hold -> { stepTag = "hold"; null }
                 else -> {
+                    stepTag = "free"
                     // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
                     val designated = grab?.pos ?: objective?.flag?.pos?.takeIf { objectiveCapturer == creep.id }
                     var myBlocked = if (designated != null) blockedSet - (designated.x * 100 + designated.y) else blockedSet
@@ -5653,24 +5672,11 @@ cpuMark("a.evade")
                     if (!withPrey(near)) r.add("!withPrey")
                     if (!paired(near)) r.add("!paired")
                     if (r.isEmpty()) r.add("?")
-                    val did = when {
-                        keeper -> "keeper"
-                        slotHold -> "slotHold"
-                        slot != null -> "slot"
-                        formGo -> "formGo"
-                        rotating && healerNear != null -> "rotate"
-                        aloneInFire -> "aloneInFire"
-                        leashed -> "leash"
-                        holdMelee -> "holdMelee"
-                        grab != null -> "grab"
-                        posture == Posture.ANNIHILATE && (!localAggressive || prey == null) -> "toCentroid"
-                        prey != null -> "prey"
-                        rallyTo != null -> "rally"
-                        objective != null -> "objective"
-                        threat != null && huntingThreat && mobile -> "threat"
-                        raider != null && mobile -> "raider"
-                        else -> "post"
-                    }
+                    // ДУБЛЬ ЦЕПОЧКИ УДАЛЁН (v203): здесь стояла вторая, написанная руками копия цепочки целей — и она
+                    // успела рассинхронизироваться (в ней не было guardMate, rallyBlob, shieldMate, приказа, поиска,
+                    // кайта, ухода из кольца и кольца прижима). Прибор, повторяющий решение вручную, рассказывает о
+                    // боте неправду ровно тогда, когда бот меняется; настоящая ветка называет себя сама
+                    val did = whyTag
                     val short = { id: String -> id.replace(Regex("^pg_player\\d_"), "") }
                     whyLines.add("${short(creep.id)}@(${creep.x},${creep.y})d$d>${short(near.id)}[${r.joinToString(",")}]$did${if (hold) "+hold" else ""}/${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
                     for (k in r) whySum[k] = (whySum[k] ?: 0) + 1
@@ -5696,6 +5702,8 @@ cpuMark("a.evade")
                 wounded -> WOUNDED_PRIORITY
                 else -> FIGHTER_PRIORITY
             }
+            rungCount[whyTag] = (rungCount[whyTag] ?: 0) + 1
+            stepCount[stepTag] = (stepCount[stepTag] ?: 0) + 1
             if (step != null) { TrafficManager.request(creep, step, prio); planCapture(ctx, step) }
             lastHits[creep.id] = creep.hits
             lastCell[creep.id] = creep.x * 100 + creep.y
@@ -6366,6 +6374,9 @@ cpuMark("a.evade")
             }
             return near
         }
+        // ПЕРЕПИСЬ ПРОХОДОВ (v203): какой проход раздачи сколько клеток реально назначил. Пара «удалось/попыток» —
+        // ноль в числителе при живом знаменателе значит «проход отказался», оба нуля значат «до прохода не дошли»
+        var passTag = "-"
         fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0,
                   rescue: Boolean = false): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
@@ -6437,11 +6448,13 @@ cpuMark("a.evade")
             }
             taken.add(b.x * 100 + b.y); out[c.id] = b
             if (b.x != c.x || b.y != c.y) allyOf.remove(c.x * 100 + c.y)
+            if (depth == 0) passCount[passTag] = (passCount[passTag] ?: 0) + 1
             return true
         }
         // ОТХОД — ТОЖЕ ПРИКАЗ (v174, оператор: «не должно быть ничего, что идёт мимо него»): бегство было веткой ВЫШЕ
         // командира. Теперь он сам уводит того, кому грозит гибель, — потерявшего за тик больше половины остатка или
         // стоящего под огнём без лечения рядом
+        passTag = "retreat"
         if (USE_COMMAND_RETREATS) for (c in fighters) {
             if (c.id in out) continue
             val hurtBadly = (lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
@@ -6455,6 +6468,7 @@ cpuMark("a.evade")
         // впереди, и его очень быстро убивали»). Кулак ограничивал КАНДИДАТНЫЕ клетки, но крипа, уже стоящего вне
         // кулака, никто не возвращал: замер по записи разгрома — боевой крип отрывался от своих на 10 клеток при
         // среднем 1,8. Такому назначается шаг К ЯКОРЮ, и раньше всех прочих назначений
+        passTag = "straggler"
         if (USE_FIST && USE_PULL_STRAGGLERS && fighters.size >= 3) {
             val xs = fighters.map { it.x }.sorted(); val ys = fighters.map { it.y }.sorted()
             val ax = xs[xs.size / 2]; val ay = ys[ys.size / 2]
@@ -6516,6 +6530,7 @@ cpuMark("a.evade")
         val healerCells = healers.map { InfluenceMap.cell(it.x, it.y) }
         fun inHealReach(p: Position) = !USE_MELEE_IN_HEAL_REACH || healerCells.isEmpty() ||
             healerCells.any { maxOf(abs(p.x - it.x), abs(p.y - it.y)) <= HEAL_RANGE }
+        passTag = "melee"
         // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
         // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
         for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
@@ -6540,6 +6555,7 @@ cpuMark("a.evade")
             }
             if (!ok) place(c, { true }, { p -> (armedEnemies.minOfOrNull { getRange(p, it) } ?: 99).toDouble() })
         }
+        passTag = "ranged"
         // стрелки: цель в дальности, меньше всего входящего на следующий тик; при равенстве — дальше от его мили
         // цель концентрации (v138): самый слабый его вооружённый — вокруг него собирается замысел FOCUS
         val weakest = armedEnemies.minByOrNull { it.hits }
@@ -6617,6 +6633,7 @@ cpuMark("a.evade")
         }
         // лекари: в лечебной дальности от раненого бойца, вне огня следующего тика
         val wounded = fighters.filter { hasWeapon(it) && it.hits < it.hitsMax }
+        passTag = "healer"
         for (c in healers) {
             val mates = wounded.ifEmpty { fighters.filter { hasWeapon(it) } }
             // ЛЕКАРЬ ПРИ БОЙЦЕ (v142): близость главная, опасность лишь тай-брейк — прежний порядок весил опасность
@@ -6683,12 +6700,14 @@ cpuMark("a.evade")
             if (ourFlagCells.contains(key) && key !in taken) { taken.add(key); out[c.id] = InfluenceMap.cell(c.x, c.y) }
         }
         // раздетые: прочь из огня — в бою от них пользы нет, а его выстрелы они на себя собирают исправно
+        passTag = "stripped"
         if (USE_COMMAND_STRIPPED_OUT) for (c in stripped)
             place(c, { true }, { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 100 -
                 (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
         // ...и ВООРУЖЁННЫЙ не остаётся без места (v165): расстановка при командире молчит, и тот, кому клетки не
         // хватило, уходил по общим веткам — гейт ловил это как уничтоженную армию (match32:army). Лекарей и раздетых
         // этот добор не трогает: у них свои назначения выше, и перехват их портил (133 из 135)
+        passTag = "catchall"
         for (c in melees + rangeds) {
             if (c.id in out) continue
             place(c, { true }, { p -> (incNext[p.x * 100 + p.y] ?: 0.0) * 10 +
