@@ -6155,6 +6155,13 @@ cpuMark("a.evade")
                 .minByOrNull { healLeft(it) }
         if (strip != null) stripTicks++
         for (c in shooters) {
+            // ПРЕСЛЕДОВАТЕЛЬ СТРЕЛЯЕТ В СВОЙ ОСТОВ (v211). Общее правило «разоружённый — не цель» поставил оператор
+            // в v178 и оно остаётся в силе для ВСЕЙ армии: пока идёт бой, огонь идёт по тем, кто бьёт сейчас.
+            // Но преследователь для того и отделён, чтобы добить одного конкретного, — и назначение ему делается
+            // ЗДЕСЬ, потому что commandFire начинается с out.clear() и всякий приказ, поставленный раньше, стирает.
+            // Первая редакция ставила приказ в assignChase, и он не доживал до выстрела: крип догонял и молчал
+            val chased = chaseTarget[c.id]
+            if (chased != null && chased.hits > 0 && reach(c, chased)) { out[c.id] = chased.id; continue }
             val t = when {
                 strip != null && reach(c, strip) -> strip
                 killable != null && reach(c, killable) -> killable
@@ -6257,7 +6264,6 @@ cpuMark("a.evade")
             if (ourPowerOf(without, armedEnemies) < enemyPowerOf(armedEnemies, without) * PARITY_FLOOR) break
             chaseOf[chaser.id] = h.id
             chaseTarget[chaser.id] = h
-            fireOf[chaser.id] = h.id            // и стреляет он именно в него: приказ командира в shoot идёт первым
             free.remove(chaser)
             budget--
         }
