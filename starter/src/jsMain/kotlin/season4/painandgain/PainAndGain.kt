@@ -2172,7 +2172,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v213"
+    private const val BOT_VERSION = "v214"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -2251,6 +2251,23 @@ object PainAndGain {
     /** Прибор: сколько раз остов попадал в пул огня как добиваемый за тик. Ноль при живом revived значит,
      *  что правило до дела не дошло; ненулевой числитель при неподвижном revived значит, что дошло и не помогло. */
     private var finishableHulks = 0
+    // ---------- ПРИБОРЫ ГЕЙТА ЗАХВАТА (v214, этап 0) ----------
+    // Замер по 12 живым матчам сказал, что матч решают флаги, а не бой: три поражения из шести — при ЖИВОЙ армии
+    // с разрывом 603/1628/292 очка из ~18 000, то есть 60–100 тиков ОДНОГО флага. Прибор POISED показывал причину
+    // отказа построчно, но накопительного числа не было, и сравнивать версии было нечем.
+    // Пара — «блокировано/рассмотрено», причины врозь: `rush` разложен на дебютный бросок и на сближение,
+    // `contact` — на бой у МАССЫ армии и на стычку одиночки. Это решает, сколько отказов снимает какая правка.
+    private val capBlocked = HashMap<String, Int>()
+    private var capOffered = 0
+    private val capSeen = HashSet<String>()      // (тик, флаг) считается один раз, а не по разу на вызывающего
+    private var capTick = -1
+    /** Тиков, когда бегун стоял вплотную к назначенному флагу и не брал его, и тиков с назначенным флагом. */
+    private var poisedTicks = 0
+    private var poisedAll = 0
+    /** Очаг: тиков-мили с врагом в ENGAGE_RANGE (знаменатель) и из них тех, где МЕСТНАЯ арифметика даёт перевес,
+     *  а армейская мера при этом говорит «не наступать». Ненулевой числитель — отпечаток расхождения масштабов. */
+    private var edgeSpot = 0
+    private var edgeAll = 0
     private val disarmedFoe = HashSet<String>()
     private var hulkTicks = 0
     private var hulkInReach = 0
@@ -2733,6 +2750,8 @@ cpuMark("arrival")
                 "ehparts=${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
                 "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
                 "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${chaseOf.size}/$chaseTicks kills=$chaseKills " +
+                "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+                " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -2922,6 +2941,8 @@ cpuMark("arrival")
      *  флага. Условия и их порядок те же, что были в captureAllowed. */
     private fun captureBlock(ctx: Ctx, f: FlagInfo, runner: Boolean = false): String? {
         if (f.ours) return null
+        if (capTick != getTicks()) { capTick = getTicks(); capSeen.clear() }
+        if (f.id !in capSeen) capOffered++
         if (ctx.combatEnemies.isEmpty()) return null
         // седьмой флаг — никогда при живой его армии (v127, USE_NO_SEVENTH_FLAG): все дебаффы наши, ни одного его
         if (USE_NO_SEVENTH_FLAG && ctx.flags.count { it.ours } + 1 >= ctx.flags.size) return "seventh"
@@ -2953,7 +2974,8 @@ cpuMark("arrival")
         // матчи 5, 8, 19 серий 367–406: rush=true с 10-го по 39-й, бегуны 0 detached, наш первый флаг на 42–98-м при его шести к
         // 80–91-му; пол паритета ниже по-прежнему считает цену дебаффа
         val runnerHalf = USE_RUNNER_HALF_UNDER_RUSH && runner && DistanceMap.inOurHalf(f.pos.x, f.pos.y)
-        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow) && !runnerHalf) return "rush"
+        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow) && !runnerHalf)
+            return capCount(f, if (unflaggedRushNow) "rush.unflagged" else "rush.approach")
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -2981,7 +3003,14 @@ cpuMark("arrival")
         // ...и ПАТ СНИМАЕТ ВЕТО КОНТАКТА (v189): бой, в котором за целое окно ни одна сторона не потеряла заметной
         // доли хитов, армии не угрожает, а дебафф флага в нём ничего не решает — решают очки (см. stalemateNow)
         val stalemate = USE_CAPTURE_IN_STALEMATE && stalemateTicks >= STALEMATE_HOLD
-        if (!losingRace && !stalemate && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) return "contact"
+        if (!losingRace && !stalemate && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }, ctx.army)) {
+            // разложение на бой у МАССЫ и стычку одиночки: массу считает та же мера, что в runArmy (см. massArmy),
+            // и она же станет единственной на этапе 1.1
+            val foes = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+            val mass = centroidOf(ctx.army)
+            val massArmy = if (mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
+            return capCount(f, if (inContact(foes, massArmy)) "contact.mass" else "contact.edge")
+        }
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
         val (ours, theirs) = powerAfter(ctx, f)
@@ -2994,7 +3023,16 @@ cpuMark("arrival")
         // ...и в ПАТУ паритетный пол тоже молчит: он сравнивает мощь, а в бою, где никто никого не убивает, мощь
         // обеих сторон ланчестером считается около нуля, и сравнивать нечего (v189)
         if (stalemate) return null
-        return if (ours >= theirs * floor) null else "parity(${ours.toInt()}/${(theirs * floor).toInt()})"
+        if (ours >= theirs * floor) return null
+        capCount(f, "parity")
+        return "parity(${ours.toInt()}/${(theirs * floor).toInt()})"
+    }
+
+    /** Считает отказ один раз на пару «тик × флаг» и возвращает причину как есть. */
+    private fun capCount(f: FlagInfo, why: String): String {
+        if (capTick != getTicks()) { capTick = getTicks(); capSeen.clear() }
+        if (capSeen.add(f.id)) { capBlocked[why] = (capBlocked[why] ?: 0) + 1 }
+        return why
     }
 
     /** Проигранная гонка (v63/v88): проигрыш по проекции на конец матча при PASSIVE_TICKS без удара по нам (v99: одна и та же
@@ -3269,6 +3307,9 @@ cpuMark("r.cands")
             val waitForMate = mate != null && getRange(s, mate) > PAIR_KEEP && s.getRangeTo(f.pos) <= mate.getRangeTo(f.pos)
             val step = if (!waitForMate && s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.x * 100 + f.pos.y else -1)) else null
             if (step != null) { TrafficManager.request(s, step, RUNNER_PRIORITY); planCapture(ctx, step) }
+            // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
+            poisedAll++
+            if (!allowed && step == null) poisedTicks++
             dbg(s, if (allowed) "TO_FLAG" else "POISED:$block", f, step)
         }
     }
@@ -3363,6 +3404,20 @@ cpuMark("r.cands")
      */
     /** Враг, с которым есть бой: с уроном, либо лекарь, у которого рядом (в дальности лечения плюс шаг) свой с оружием
      *  в теле, живым или мёртвым (см. armedEnemies). */
+    /**
+     * МЕСТНЫЙ ПЕРЕВЕС В МАСШТАБЕ УДАРА. Поля влияния уже меряют это сами и строятся раз в тик (см. buildFields):
+     * `ourBurstAt(его клетка)` — наш урон в тик ПО НЕМУ (мили штампуется радиусом 2, стрелок 3), `dangerAt(его
+     * клетка)` — его урон по нашему крипу, вставшему рядом. Отношение и есть операторское «трое наших против
+     * одного его»: 3×240 против его 240 читается как 3,0. Это два обращения к массиву, а не новая сущность.
+     * Существующие `localAllies`/`localEnemies` меряют радиусы 8 и 11 — то есть почти всю армию, и потому на
+     * вопрос «сильнее ли мы ЗДЕСЬ» ответить не могут.
+     */
+    private fun spotEdgeAt(e: Creep): Double {
+        val k = e.x * 100 + e.y
+        val d = InfluenceMap.dangerAt(k)
+        return if (d <= 0.0) Double.MAX_VALUE else InfluenceMap.ourBurstAt(k) / d
+    }
+
     private fun threatening(e: Creep, enemyCreeps: List<Creep>): Boolean {
         val q = InfluenceMap.profileOf(e)
         return q.melee + q.ranged > 0.0 || enemyCreeps.any { w -> w.id != e.id && getRange(w, e) <= HEAL_RANGE + 1 && w.body.any { it.type == ATTACK || it.type == RANGED_ATTACK } }
@@ -5171,6 +5226,17 @@ cpuMark("a.evade")
                     (fightCost(localEnemies, localAllies) <= (localAllies.maxOfOrNull { speedSlack(it) } ?: 0) || inContact(localEnemies, localAllies))
             }
             if (localAggressive) aggressiveIds.add(creep.id) else aggressiveIds.remove(creep.id)
+            // ОТПЕЧАТОК РАСХОЖДЕНИЯ МАСШТАБОВ (этап 0): знаменатель — мили с боевым врагом в ENGAGE_RANGE,
+            // числитель — из них те, где МЕСТНАЯ арифметика в клетке врага даёт перевес не ниже PUSH_RATIO, а
+            // армейская мера при этом говорит «не наступать». Ненулевой числитель и есть наблюдение оператора
+            // «трое наших мили боялись подойти к одному чужому», выраженное числом
+            if (isMelee(creep) && !hasRanged(creep)) {
+                val near = localEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE }
+                if (near.isNotEmpty()) {
+                    edgeAll++
+                    if (!localAggressive && near.any { spotEdgeAt(it) >= PUSH_RATIO }) edgeSpot++
+                }
+            }
             // бросок — только на врага «с боем» (см. threatening): одинокий лекарь врага в восьми клетках был целью бойца,
             // который ждал по сплочению группу, а группа ждала его как отставшего на пути к флагу — 1500 тиков (m1 rush)
             // бросок — только в строю: построение готово и не меньше двух вооружённых в FORM_RANGE; одиночный мили, ушедший
