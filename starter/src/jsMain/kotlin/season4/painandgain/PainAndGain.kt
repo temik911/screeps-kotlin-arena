@@ -2190,7 +2190,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v207"
+    private const val BOT_VERSION = "v208"
     private const val DEBUG_LOG = true
     /** Сверка полей влияния с ПРЯМЫМ пересчётом по крипам (этап 3). Стоит два десятка клеток за тик и
      *  обязана держаться нуля: ненулевой числитель chk значит, что штамп сдвинут, и это видно за 3,5
@@ -2238,6 +2238,9 @@ object PainAndGain {
     /** Крипов, вставших на каждом уровне ворот (индекс = порог выживания в тиках), и добор мимо ворот. */
     private val gateLevels = IntArray(8)
     private var gateFell = 0
+    /** Какой замысел выбрал перебор (этап 8). Перебор из пяти стоит пяти раздач за тик; если гистограмма
+     *  сосредоточена на одном-двух, платить за него незачем — и это решается числом, а не мнением. */
+    private val intentHist = HashMap<String, Int>()
 
     /** Спуск по полю цели в раздаче командира (v204, этап 5). */
     private const val USE_GOAL_FIELD = true
@@ -2722,7 +2725,8 @@ cpuMark("arrival")
                 // ВОРОТА (этап 6): на каком пороге выживания крип нашёл клетку. gate5..gate1 — уровни лестницы,
                 // fell — сколько раз клетки не нашлось даже при пороге в один тик и сработал общий добор. Это
                 // посчитанная версия прежнего МОЛЧАЛИВОГО провала требования
-                " gate=${gateLevels.drop(1).take(5).joinToString("/")} fell=$gateFell")
+                " gate=${gateLevels.drop(1).take(5).joinToString("/")} fell=$gateFell" +
+                " intent=" + intentHist.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" })
             concSum = 0; concTicks = 0
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
@@ -4845,6 +4849,7 @@ cpuMark("a.evade")
                         mobileArmy.filter { hasWeapon(it) && hasRanged(it) },
                         mobileArmy.filter { !hasWeapon(it) && hasHeal(it) })
                     val per = HashMap<String, Intent>()
+                    intentHist[bestIntent.name] = (intentHist[bestIntent.name] ?: 0) + 1
                     for (c in mobileArmy) per[c.id] = bestIntent
                     repeat(PGS_ROUNDS) {
                         for (g in groups) {
@@ -6585,7 +6590,17 @@ cpuMark("a.evade")
             val scr = screenAt(c, p)
             val fire = InfluenceMap.fireFieldAt(key)
             val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))   // урон, который снимут тела своих
-            return -W_ATT * att * InfluenceMap.attHealAt(key) + W_DAN * dan * fire -
+            // ПРИТЯЖЕНИЕ ЛЕКАРЯ НАСЫЩАЕТСЯ ТЕМ, ЧТО ОН МОЖЕТ ДОСТАВИТЬ (v208, замер серии v206: лекарей за линией
+            // 0.695 против 0.944 у v205 — они полезли в первую линию). Нужда складывается по всем подопечным в
+            // радиусе и не ограничена ничем, поэтому доходила до тысяч против сотен опасности, и лекарь нырял в
+            // рубку. Но доставить он может только своё лечение за тик: 72 у полного h6m6. Мягкое насыщение
+            // deliver·att/(att + deliver) сохраняет ФОРМУ поля (порядок клеток тот же) и ставит потолок в тех же
+            // единицах, что и урон. Тогда оценка лекаря честно читается как «доставленное лечение минус
+            // полученный урон», и клетка под огнём в 500 ради 72 лечения проигрывает сама, без запрета
+            val deliver = InfluenceMap.healOf(c)
+            val raw = InfluenceMap.attHealAt(key)
+            val pull = if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+            return -W_ATT * att * pull + W_DAN * dan * fire -
                 W_LINE * InfluenceMap.influenceOf(key) - W_SCREEN * shielded +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
         }
@@ -6651,7 +6666,14 @@ cpuMark("a.evade")
                 // рассредоточение (v138): веер бьёт всех в трёх, поэтому за клетку рядом со своим — штраф. MetalicaX#11
                 // даёт 63 веера за матч против 37 у #10 и наших 12, и именно он кайту не поддавался
             }
-            if (!ok) place(c, { true }, { p -> (armedEnemies.minOfOrNull { getRange(p, it) } ?: 99).toDouble() })
+            // ДОБОР МИЛИ ПОМЕНЯЛ СМЫСЛ ВМЕСТЕ С ВОРОТАМИ (v208). Прежде `ok = false` значило «нет клетки вплотную
+            // к его вооружённому, куда дотягивается лекарь», и шаг к врагу был верным ответом. С воротами
+            // выживания `ok = false` значит «нет клетки, где я переживу ход», и тот же шаг посылает крипа
+            // умирать: на стенде этот добор срабатывает в 3 % размещений. Ответ обратный — самая безопасная
+            if (!ok) {
+                if (USE_FIELD_SCORE) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
+                else place(c, { true }, { p -> (armedEnemies.minOfOrNull { getRange(p, it) } ?: 99).toDouble() })
+            }
         }
         passTag = "ranged"
         // стрелки: цель в дальности, меньше всего входящего на следующий тик; при равенстве — дальше от его мили

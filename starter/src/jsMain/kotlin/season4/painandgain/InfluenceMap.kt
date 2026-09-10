@@ -649,13 +649,31 @@ object InfluenceMap {
         // следующему очагу»). Ценность врага — его боевые части, УМНОЖЕННЫЕ на нашу способность их
         // выбить: хорошо прикрытый лечением враг — цель дешёвая, и армия сама сползает к неприкрытому
         // краю блока. Отдельного правила «бей того, кого не лечат» для этого не нужно.
+        // ЦЕНА УБИЙСТВА ОТНОСИТЕЛЬНАЯ, А НЕ АБСОЛЮТНАЯ (v208, замер серии v206). Первая редакция умножала ценность
+        // цели на pressure = наш залп / (залп + его лечение), и это оказалось САМОЗАПИРАЮЩИМ: пока никто из наших
+        // не в досягаемости врага, залп равен нулю, pressure падает на пол 0.25, притяжение вчетверо слабее — а
+        // опасность полная, и никто не сближается. Живой замер v206: стрелков в дальности 0.223 против 0.325 у
+        // v205, план `guns` 0.635 против 0.731. Это ровно тот класс отказа, что уже дважды записан в доках: модель
+        // читает нас слабее врага, и всякий гейт защёлкивается.
+        // Верная форма — сравнение ЦЕЛЕЙ МЕЖДУ СОБОЙ: pressure делится на лучшую в поле, поэтому самая доступная
+        // цель всегда стоит полной цены, а перелеченная — дешевле неё. Операторское «сосредоточиться на самых
+        // опасных частях и переходить к следующему очагу» — это выбор СРЕДИ целей, а не решение, драться ли вообще.
+        var bestPressure = 0.0
+        for (e in enemies) {
+            val key = e.x * 100 + e.y
+            val burst = ourBurstAt(key)
+            val q = burst / (burst + eHeal[key].toDouble() / FP + 1.0)
+            if (q > bestPressure) bestPressure = q
+        }
+        lastBestPressure = bestPressure
         for (e in enemies) {
             val p = profileOf(e)
             val value = p.melee + p.ranged + HEAL_VALUE * p.heal
             if (value <= 0.0) continue
             val key = e.x * 100 + e.y
             val burst = ourBurstAt(key)
-            val pressure = (burst / (burst + eHeal[key].toDouble() / FP + 1.0)).coerceIn(PRESSURE_MIN, 1.0)
+            val raw = burst / (burst + eHeal[key].toDouble() / FP + 1.0)
+            val pressure = if (bestPressure <= 0.0) 1.0 else (raw / bestPressure).coerceIn(PRESSURE_MIN, 1.0)
             val w = value * pressure
             // мили тянет только туда, КУДА ОН ДОЙДЁТ: притяжение сквозь стену увело бы его в стену.
             // Стрелковое притяжение стены не знает намеренно — выстрелы в игре стены не блокируют.
@@ -746,8 +764,16 @@ object InfluenceMap {
         if (value <= 0.0) return 0.0
         val key = e.x * 100 + e.y
         val burst = ourBurstAt(key)
-        return value * (burst / (burst + eHeal[key].toDouble() / FP + 1.0)).coerceIn(PRESSURE_MIN, 1.0)
+        val raw = burst / (burst + eHeal[key].toDouble() / FP + 1.0)
+        val pressure = if (lastBestPressure <= 0.0) 1.0 else (raw / lastBestPressure).coerceIn(PRESSURE_MIN, 1.0)
+        return value * pressure
     }
+
+    /** Лучшая доступность цели в поле — знаменатель относительной цены убийства (см. buildFields). */
+    private var lastBestPressure = 0.0
+
+    /** Лечение крипа за тик — потолок того, что он может доставить, стоя где угодно. */
+    fun healOf(c: Creep): Double = profileOf(c).heal
 
     /** Притяжение ОДНОЙ цели в клетку — для замысла концентрации, где поле по всем целям не годится. */
     fun attractionTo(e: Creep, x: Int, y: Int, melee: Boolean): Double {
