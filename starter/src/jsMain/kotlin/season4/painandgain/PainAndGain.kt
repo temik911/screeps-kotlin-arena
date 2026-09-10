@@ -502,6 +502,17 @@ object PainAndGain {
      *  Длительность НЕ НАЗНАЧЕНА, а вычислена: `evasive` мислейблит шагнувшего назад врага ровно CHASE_WINDOW
      *  тиков, поэтому срок равен этому окну — держать дольше нечего, короче бессмысленно. */
     private const val USE_PUSH_DWELL = true
+    /** ЛЕКАРЬ ОСТАЁТСЯ ЛЕКАРЕМ (v215, распоряжение оператора: «лекари всегда должны оставаться в основной армии»).
+     *  Правило соблюдалось везде, где его записали, — `commandRace`, `USE_DETACH` и `assignChase` отбирают по
+     *  `hasWeapon`, — и нарушалось в двух местах, где его не записали:
+     *   1) `updateKeepers` делает хранителем флага ЛЮБОГО члена армии, оказавшегося на нашем флаге, фильтра по
+     *      оружию там нет вовсе; а ветка `keeper` стоит ПЕРВОЙ в цепочке целей, то есть лекарь выключается из боя
+     *      целиком и держится на клетке до KEEP_RELEASE;
+     *   2) `grabberOf` берёт ближайшего из `mobileArmy` в трёх клетках от свободного флага — лекаря в том числе.
+     *  Что при этом стоит рядом и уже знает ответ: `objectiveCapturer` строкой выше отбирает ВООРУЖЁННЫХ, и
+     *  комментарий при нём называет цену ошибки — «назначенный захватчиком лекарь тысячу тиков стоял рядом с
+     *  флагом» (стенд greedy). Тот же довод, то же лечение. */
+    private const val USE_HEALER_NEVER_PINNED = true
     private val PUSH_DWELL = CHASE_WINDOW
     private const val LETHAL_PENALTY = 1e6      // не запрет, а вес: если смертельны все клетки, порядок между ними цел
     /** Пара: сколько оставлено в ядре против сколько было свободных. */
@@ -4860,7 +4871,9 @@ cpuMark("a.evade")
             if (f.ours || f.occupant != null || f.id == objectiveFlagId) continue
             if (combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
             if (!captureAllowed(ctx, f)) continue
-            val near = mobileArmy.filter { getRange(it, f.pos) <= 3 }.minByOrNull { getRange(it, f.pos) } ?: continue
+            // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
+            val near = mobileArmy.filter { getRange(it, f.pos) <= 3 && (!USE_HEALER_NEVER_PINNED || hasWeapon(it)) }
+                .minByOrNull { getRange(it, f.pos) } ?: continue
             grabberOf[near.id] = f.id
         }
 
@@ -6341,6 +6354,9 @@ cpuMark("a.evade")
             if (!f.ours) continue
             val occ = f.occupant ?: continue
             if (occ.my != true || army.none { it.id == occ.id } || occ.id in keeperIds) continue
+            // ...и хранителем не становится лекарь (v215, см. USE_HEALER_NEVER_PINNED): ветка `keeper` первая в
+            // цепочке целей, и пришпиленный к флагу лекарь выключается из боя целиком
+            if (USE_HEALER_NEVER_PINNED && army.any { it.id == occ.id && !hasWeapon(it) && hasHeal(it) }) continue
             if (runnerFlag.values.contains(f.id)) continue
             if (enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
             if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
