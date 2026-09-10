@@ -119,6 +119,10 @@ object PainAndGain {
      *  стоят гонки стенда. Измеряемая доля этого не делает: на стенде, где враг идёт в контакт, она сама поднимается
      *  к единице, до заполнения окна равна единице, и старое поведение остаётся ровно там, где мили действительно бьёт. */
     private const val USE_MEASURED_MELEE_SHARE = true
+    /** Мили, не достающий врага, отряжается за флагами (v194, см. meleeIdle). Порогов своих не заводит: выпуск идёт
+     *  ПРЕЖНЕЙ проверенной цепочкой с её паритетными полами, а те после v193 считают вклад мили по измеренной доле —
+     *  то есть модель сама разрешает отпустить того, кто ничего не даёт, и сама запретит, когда он начнёт бить. */
+    private const val USE_IDLE_MELEE_RUNS = true
 
     /** Перевес, при котором армия идёт добивать, и порог продолжения. Порог продолжения выше единицы: прежний
      *  0.9 вместе со входом «по контакту» открывал лазейку — контакт с ОДНИМ стрелком включал ДОБИТЬ, а дальше
@@ -2193,7 +2197,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v193"
+    private const val BOT_VERSION = "v194"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -3899,7 +3903,17 @@ cpuMark("a.retreat")
             fun rangedMass(cs: List<Creep>) = cs.sumOf { InfluenceMap.profileOf(it).ranged }
             val theirRangedMass = rangedMass(combatEnemies)
             val quietChain = quiet && (chaseDry || detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
-            val farmer = armedEnemies.isNotEmpty() && ((firstNearTick >= 0 && (quietChain || dryHunt)) || raceNow)
+            // МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, — НЕ АРМИЯ, А ОТРЯД (v194, USE_IDLE_MELEE_RUNS). Отряд набирается только против
+            // соперника, помеченного `farmer`, а этот ярлык требует, чтобы он НЕ ДРАЛСЯ: `raceNow` хочет его россыпи,
+            // `dryHunt` — тишины по огню и урону. Coldkimchi#2 дерётся и фармит флаги ОДНОВРЕМЕННО — держит плотный
+            // блок в контакте (massed=true каждый тик) и отряжает 2–4 крипа за флагами, — и категории для такого у нас
+            // нет. Замер по двенадцати играм v191: отряжённых бойцов ноль во ВСЕХ матчах, флаговый забег мы ведём
+            // двумя разведчиками по сто хитов, и медиана скорости очков выходит 3 против его 15 к шестисотому тику;
+            // пять поражений из двенадцати — это забег, проигранный в первой трети, при целой армии. Основание отряда
+            // здесь не ярлык соперника, а НАША измеренная бесполезность: мили, за окно контакта ни разу не
+            // дотянувшийся, в бою не участвует, и все пороги выпуска ниже считают его вклад по той же доле (v193)
+            val meleeIdle = USE_IDLE_MELEE_RUNS && armedEnemies.isNotEmpty() && touchShare < TOUCH_MIN
+            val farmer = armedEnemies.isNotEmpty() && ((firstNearTick >= 0 && (quietChain || dryHunt)) || raceNow || meleeIdle)
             val viaDryHunt = dryHunt && !quietChain   // отряд держится только сухой охотой (v82b)
             val viaRace = raceNow && !quietChain && !dryHunt   // отряд держится только дебют-гонкой (v91)
             val detachedBefore = detachedIds.size
@@ -3954,13 +3968,13 @@ cpuMark("a.retreat")
             // включает её его режим, а не собственные условия. Полная замена командирской раздачей отвергнута замером:
             // 133 из 135 (roost 7 615:24 325, camp 22 304:23 966) — прежняя логика знает и сухую охоту, и гонку, и
             // охрану стрелков, чего своя раздача не покрывает
-            else if ((!USE_COMMAND_OWNS_DETACH || cmdMode != CmdMode.FIGHT) &&
-                (!contact || (USE_COLD_CONTACT && !exchangeRecent)) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
+            else if (((!USE_COMMAND_OWNS_DETACH || cmdMode != CmdMode.FIGHT) || meleeIdle) &&
+                ((!contact || (USE_COLD_CONTACT && !exchangeRecent)) || meleeIdle) && (!USE_DETACH_IDLE_RECALL || now - detachRecallTick >= DETACH_WINDOW)) {
                 val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in keeperIds && it.id !in rotatingIds }
                 // столько, сколько требуют охраны целей (v94): флаг с его вооружённым в ENGAGE_RANGE — двоих, без — одного
                 val unmanned = if (USE_RUNNER_PAIRS) ctx.flags.sumOf { f -> if (f.occupant?.my == true) 0 else if (armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }) 2 else 1 }
                     else ctx.flags.count { f -> f.occupant?.my != true }
-                val pool = if (USE_DRY_HUNT_MELEE_FIRST && (viaDryHunt || viaRace)) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
+                val pool = if (USE_DRY_HUNT_MELEE_FIRST && (viaDryHunt || viaRace || meleeIdle)) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
                     else armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
                 var remaining = army.filter { it.id !in detachedIds }
                 for (c in pool) {
@@ -4464,10 +4478,12 @@ cpuMark("a.evade")
         if (contact) {
             val meleeN = combatArmy.count { isMelee(it) && !hasRanged(it) }
             val touched = combatArmy.count { isMelee(it) && !hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= 1 } }
-            touchHist.addLast(if (meleeN > 0) 100 * touched / meleeN else 100)
+            // ...и при НУЛЕ мили в ядре окно не трогается вовсе: иначе отряд, уведённый по этому же признаку, обнуляет
+            // мили в строю, доля прыгает к единице, признак гаснет и отряд отзывается — качели через тик
+            if (meleeN > 0) touchHist.addLast(100 * touched / meleeN)
             val hisMelee = combatEnemies.count { isMelee(it) && !hasRanged(it) }
             val hisTouched = combatEnemies.count { isMelee(it) && !hasRanged(it) && combatArmy.any { a -> getRange(it, a) <= 1 } }
-            hisTouchHist.addLast(if (hisMelee > 0) 100 * hisTouched / hisMelee else 100)
+            if (hisMelee > 0) hisTouchHist.addLast(100 * hisTouched / hisMelee)
         } else { touchHist.clear(); hisTouchHist.clear() }
         while (touchHist.size > TOUCH_WINDOW) touchHist.removeFirst()
         while (hisTouchHist.size > TOUCH_WINDOW) hisTouchHist.removeFirst()
