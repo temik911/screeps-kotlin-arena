@@ -675,6 +675,67 @@ object InfluenceMap {
         }
     }
 
+    /** Занятость клеток уже розданными приказами: раздача идёт пять раз за тик, по разу на замысел, и
+     *  притязания одного замысла не должны просачиваться в следующий (Hagelbäck: временное отталкивание
+     *  в выбранной клетке — то, что не даёт крипам слипаться в одну точку). */
+    fun clearClaim() {
+        claim.fill(0)
+    }
+
+    /** Ставит притязание на клетку и её соседей: следующий крип видит её как занятую. */
+    fun addClaim(x: Int, y: Int) {
+        for (dx in -1..1) for (dy in -1..1) {
+            val nx = x + dx
+            val ny = y + dy
+            if (nx < 0 || ny < 0 || nx > FIELD_MAX || ny > FIELD_MAX) continue
+            claim[nx * 100 + ny]++
+        }
+    }
+
+    /** Цена цели — боевые части, умноженные на нашу способность их выбить (см. buildFields). */
+    fun targetValue(e: Creep): Double {
+        val p = profileOf(e)
+        val value = p.melee + p.ranged + HEAL_VALUE * p.heal
+        if (value <= 0.0) return 0.0
+        val key = e.x * 100 + e.y
+        val burst = ourBurstAt(key)
+        return value * (burst / (burst + eHeal[key].toDouble() / FP + 1.0)).coerceIn(PRESSURE_MIN, 1.0)
+    }
+
+    /** Притяжение ОДНОЙ цели в клетку — для замысла концентрации, где поле по всем целям не годится. */
+    fun attractionTo(e: Creep, x: Int, y: Int, melee: Boolean): Double {
+        val k = if (melee) K_ATT_MELEE else K_ATT_RANGED
+        val d = maxOf(abs(e.x - x), abs(e.y - y))
+        if (d >= k.size) return 0.0
+        if (melee && wallBetween(e.x, e.y, x, y)) return 0.0
+        return targetValue(e) * k[d]
+    }
+
+    /** Лечение, которое ЭТОТ крип доставляет в клетку со своего нынешнего места: вычитается из поля лечения,
+     *  когда считается, переживёт ли он сам эту клетку — на себя, уходя, он рассчитывать не вправе. */
+    fun healFromSelf(c: Creep, x: Int, y: Int): Double {
+        val h = profileOf(c).heal
+        if (h <= 0.0) return 0.0
+        val d = maxOf(abs(c.x - x), abs(c.y - y))
+        return if (d < K_HEAL.size) h * K_HEAL[d] else 0.0
+    }
+
+    /** Наше лечение, доходящее в клетку (поле aHeal). */
+    fun healReachAt(key: Int): Double = aHeal[key].toDouble() / FP
+
+    /** Его огонь по клетке ЭТИМ тиком, без шага сближения (поле eFire). */
+    fun fireFieldAt(key: Int): Double = eFire[key].toDouble() / FP
+
+    /** Притяжение по роли: мили — к тому, что он достанет ногами; стрелок — с пиком на дальности 3. */
+    fun attMeleeAt(key: Int): Double = attMelee[key].toDouble() / FP
+
+    fun attRangedAt(key: Int): Double = attRanged[key].toDouble() / FP
+
+    /** Нужда своих в лечении, покрываемая из клетки. */
+    fun attHealAt(key: Int): Double = attHeal[key].toDouble() / FP
+
+    fun claimAt(key: Int): Double = claim[key].toDouble()
+
     // ---------------- сверка полей (этап 3) ----------------
     // Прибор, умеющий напечатать только «поле построено», прибором не является. Здесь поле сверяется с
     // ПРЯМЫМ пересчётом по крипам в выборке клеток: расхождение печатается числом клеток, а не флагом.

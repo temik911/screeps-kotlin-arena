@@ -2190,7 +2190,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v205"
+    private const val BOT_VERSION = "v206"
     private const val DEBUG_LOG = true
     /** Сверка полей влияния с ПРЯМЫМ пересчётом по крипам (этап 3). Стоит два десятка клеток за тик и
      *  обязана держаться нуля: ненулевой числитель chk значит, что штамп сдвинут, и это видно за 3,5
@@ -2206,6 +2206,39 @@ object PainAndGain {
      * одна из восьми соседних клеток не удовлетворяла требованию роли, требование молча отбрасывалось, и крип
      * оставался на месте с оценкой «везде одинаково безопасно».
      */
+    // ---------- оценка клетки полем (v206, этап 6) ----------
+    /**
+     * Оценка клетки ПОЛЕМ вместо россыпи ранговых формул и жёстких отборов. Тумблер живёт до этапа 8 — он
+     * единственный способ сыграть контроль тем же вечером против того же соперника; дата смерти назначена,
+     * иначе он станет двадцать первым мёртвым тумблером в этом файле.
+     */
+    private const val USE_FIELD_SCORE = true
+
+    // ДИСЦИПЛИНА ЕДИНИЦ — главная защита от повторения `PAIR_W_INFLUENCE = 0.1` рядом с 30 и 50, и от
+    // `RANGED_BEHIND_COST = 40` рядом с incNext × 100. Каждое слагаемое оценки — в единицах УРОНА ЗА ТИК
+    // (то, что возвращает profileOf), каждый вес безразмерный в диапазоне [0.1, 2.0]. Слагаемое больше не
+    // может случайно оказаться в тысячу раз крупнее соседнего. То, что обязано быть ЗАПРЕТОМ (клетка, где
+    // крип умрёт за тик), — не предпочтение, а ограничение, и уезжает в ворота, где ему и место.
+    private const val W_ATT = 1.0        // притяжение к цели
+    private const val W_DAN = 1.0        // опасность клетки
+    private const val W_FRONT = 0.5      // гребень контакта (уязвимость = 2·min(наши, его)) — мили идёт по фронту
+    private const val W_SAG = 0.5        // ...и туда, где фронт проседает
+    private const val W_HEALCOVER = 1.0  // мили держится там, куда доходит наше лечение
+    private const val W_LINE = 0.5       // влияние (наши − его): стрелок и лекарь стоят там, где сильнее мы
+    private const val W_SCREEN = 1.0     // тела своих вокруг лекаря — те, кто примет выстрел
+    /** Клетка рядом с уже назначенной стоит одного шага задержки — те же единицы, что у GOAL_STEP_COST. */
+    private const val CLAIM_COST = 1.0
+    /** Остаться на месте стоит на шаг дешевле: против дёрганья на одну клетку и лишней усталости. */
+    private const val STAY_BONUS = 1.0
+    /** Гребень фронта — там, где уязвимость не ниже этой доли своего максимума (доля, не абсолют). */
+    private const val FRONT_RIDGE = 0.15
+    /** Экран своих входит ДЕЛИТЕЛЕМ входящего, а не слагаемым в тысячу: ровно та ошибка, что записана в
+     *  коде про HEALER_SCREEN = 1000. Каждое тело рядом снимает четверть доли входящего. */
+    private const val SCREEN_SHARE = 0.25
+    /** Крипов, вставших на каждом уровне ворот (индекс = порог выживания в тиках), и добор мимо ворот. */
+    private val gateLevels = IntArray(8)
+    private var gateFell = 0
+
     /** Спуск по полю цели в раздаче командира (v204, этап 5). */
     private const val USE_GOAL_FIELD = true
     private const val GOAL_STEP_COST = 1.0
@@ -2678,7 +2711,11 @@ cpuMark("arrival")
                 // ЦЕЛЬ (этап 5): затравок в очаге, перестроек против удержаний очага, и — главное — доля решений
                 // раздачи, которые слагаемое цели ИЗМЕНИЛО. flips=0 за сто тиков есть операционное определение
                 // мёртвого кода
-                " seeds=${goalSeeds.size} goal=(${goalCx},${goalCy}) rebuild=$goalRebuilds/$goalHolds flips=$goalFlips/$goalDecisions")
+                " seeds=${goalSeeds.size} goal=(${goalCx},${goalCy}) rebuild=$goalRebuilds/$goalHolds flips=$goalFlips/$goalDecisions" +
+                // ВОРОТА (этап 6): на каком пороге выживания крип нашёл клетку. gate5..gate1 — уровни лестницы,
+                // fell — сколько раз клетки не нашлось даже при пороге в один тик и сработал общий добор. Это
+                // посчитанная версия прежнего МОЛЧАЛИВОГО провала требования
+                " gate=${gateLevels.drop(1).take(5).joinToString("/")} fell=$gateFell")
             concSum = 0; concTicks = 0
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
@@ -6388,6 +6425,10 @@ cpuMark("a.evade")
                 }
             }
             taken.add(b.x * 100 + b.y); out[c.id] = b
+            // временное отталкивание в занятой клетке (Hagelbäck & Johansson): следующий крип видит её как
+            // тесную. Без этого двое выбирают одну клетку, третий загораживает четвёртого — записанная причина
+            // провала USE_FORWARD_SEARCH: «каждый крип считает за себя»
+            if (USE_FIELD_SCORE) InfluenceMap.addClaim(b.x, b.y)
             if (b.x != c.x || b.y != c.y) allyOf.remove(c.x * 100 + c.y)
             if (depth == 0) passCount[passTag] = (passCount[passTag] ?: 0) + 1
             return true
@@ -6471,11 +6512,119 @@ cpuMark("a.evade")
         val healerCells = healers.map { InfluenceMap.cell(it.x, it.y) }
         fun inHealReach(p: Position) = !USE_MELEE_IN_HEAL_REACH || healerCells.isEmpty() ||
             healerCells.any { maxOf(abs(p.x - it.x), abs(p.y - it.y)) <= HEAL_RANGE }
+        // ==================== ОЦЕНКА КЛЕТКИ ПОЛЕМ (v206, этап 6) ====================
+        // Заменяет собой отборы `safeForRanged`, `behindMelee`, `behindLine`, `inHealReach` и россыпь ранговых
+        // формул. Все они говорили ЗАПРЕТАМИ то, что является предпочтением, и потому запирали друг друга:
+        // v200 нашёл круг, где «стрелок не впереди мили» и «мили стоит позади» вместе выталкивали стрелка за
+        // дальность выстрела, отбор пустел, и крип падал в общий добор, который про дальность не знает вовсе.
+        // Запрет здесь ровно один и он о жизни: клетка, где крип не переживёт хода.
+        InfluenceMap.clearClaim()
+        var maxV = 0.0
+        if (USE_FIELD_SCORE) for ((k, _) in cells) {
+            val v = InfluenceMap.vulnerabilityOf(k)
+            if (v > maxV) maxV = v
+        }
+        // ГДЕ ФРОНТ ПРОСЕДАЕТ: уязвимость (2·min(наши, его)) выделяет линию контакта, влияние (наши − его)
+        // говорит, чья она. Проседание — участок линии, где влияние отрицательно, то есть где нас продавливают
+        fun sagAt(key: Int): Double {
+            if (maxV <= 0.0) return 0.0
+            if (InfluenceMap.vulnerabilityOf(key) < FRONT_RIDGE * maxV) return 0.0
+            return maxOf(0.0, -InfluenceMap.influenceOf(key))
+        }
+        // тела своих вокруг клетки — по УЖЕ НАЗНАЧЕННЫМ клеткам, а не по нынешним позициям: план сравнивается
+        // с планом, иначе «согласованность» сравнивает будущее с прошлым
+        fun screenAt(c: Creep, p: Position): Int = fighters.count { f ->
+            f.id != c.id && cellOf(f).let { maxOf(abs(it.x - p.x), abs(it.y - p.y)) <= 1 } }
+        /**
+         * ВОРОТА — ВЫЖИВАЕМОСТЬ КРИПА, А НЕ СРАВНЕНИЕ СИЛ. Прежнее `netDamageAt·2 > hits` истинно для КАЖДОЙ
+         * клетки фронта (наш мили 1600 хитов против его полного блока даёт 2520), и это ровно записанный в
+         * доках провал «трое мили развернулись спиной в первый тик контакта». Здесь считается, сколько тиков
+         * крип проживёт в клетке: экран своих тел входит ДЕЛИТЕЛЕМ входящего, лечение — вычитаемым, и на
+         * собственное лечение уходящий крип не рассчитывает.
+         */
+        fun ttlAt(c: Creep, key: Int, p: Position): Double {
+            val e = InfluenceMap.dangerAt(key)
+            if (e <= 0.0) return 99.0
+            val heal = maxOf(0.0, InfluenceMap.healReachAt(key) - InfluenceMap.healFromSelf(c, p.x, p.y))
+            val net = maxOf(0.0, e - heal) / (1.0 + SCREEN_SHARE * screenAt(c, p))
+            return if (net <= 1.0) 99.0 else c.hits / net
+        }
+        val weakestFoe = armedEnemies.minByOrNull { it.hits }
+        fun stayBonus(c: Creep, p: Position) = if (p.x == c.x && p.y == c.y) STAY_BONUS else 0.0
+        // МИЛИ: к тому, что достанет ногами; по гребню фронта и туда, где он проседает; не выходя из-под лечения.
+        // «Не выходя из-под лечения» было ЗАПРЕТОМ (inHealReach) и потому либо не давало клеток вовсе, либо
+        // отбрасывалось молча; здесь это слагаемое, и оно конкурирует с притяжением честно
+        fun scoreMelee(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
+            val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, true) else InfluenceMap.attMeleeAt(key)
+            return -W_ATT * att * pull + W_DAN * dan * InfluenceMap.dangerAt(key) -
+                W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
+                W_HEALCOVER * InfluenceMap.healReachAt(key) +
+                CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+        }
+        // СТРЕЛОК: притяжение с пиком на дальности 3 (он останавливается сам, вместо запрета «не ближе мили»),
+        // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
+        fun scoreRanged(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
+            val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, false) else InfluenceMap.attRangedAt(key)
+            return -W_ATT * att * pull + W_DAN * dan * InfluenceMap.dangerAt(key) -
+                W_LINE * InfluenceMap.influenceOf(key) +
+                CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+        }
+        // ЛЕКАРЬ: тянется туда, где помощь ВЕРОЯТНЕЕ ВСЕГО ПОНАДОБИТСЯ (нужда = опасность в клетке подопечного,
+        // а не его нынешняя рана — прежнее правило брало раненых, то есть по определению тех, кто уже на фронте,
+        // и тянуло лекаря вперёд). Смотрит на огонь ЭТИМ тиком, а не на E: иначе клетка рядом с подопечным,
+        // которого уже рубят, читается как 720 опасности и выталкивает лекаря на три клетки
+        fun scoreHeal(c: Creep, key: Int, p: Position, att: Double, dan: Double): Double {
+            val scr = screenAt(c, p)
+            val fire = InfluenceMap.fireFieldAt(key)
+            val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))   // урон, который снимут тела своих
+            return -W_ATT * att * InfluenceMap.attHealAt(key) + W_DAN * dan * fire -
+                W_LINE * InfluenceMap.influenceOf(key) - W_SCREEN * shielded +
+                CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+        }
+        /**
+         * ЗАМЫСЕЛ = ВЕКТОР ВЕСОВ над одной оценкой: множитель притяжения, множитель опасности, порог выживания.
+         * Пять веток `when` на роль превращаются в пять троек чисел — этап 8 проверит, окупается ли перебор.
+         */
+        fun weightsOf(i: Intent): Triple<Double, Double, Int> = when (i) {
+            Intent.PRESS -> Triple(1.5, 0.7, 2)
+            Intent.HOLD -> Triple(1.0, 1.0, 3)
+            Intent.YIELD -> Triple(0.3, 2.0, 5)
+            Intent.FOCUS -> Triple(1.5, 0.7, 2)
+            Intent.KITE -> Triple(1.0, 1.3, 3)
+        }
+        /**
+         * Раздача по оценке с МЯГКИМИ воротами: порог выживания снижается по лестнице, пока клетка не найдётся,
+         * и уровень записывается счётчиком. Сегодняшний молчаливый провал требования в общий добор становится
+         * печатаемым числом — `gate=...`. Ниже единицы порог не опускается: клетка, где крип умирает за ход,
+         * не предлагается никогда.
+         */
+        fun placeScored(c: Creep, role: Int, i: Intent): Boolean {
+            val (att, dan, ttlMin) = weightsOf(i)
+            val focus = if (i == Intent.FOCUS) (if (role == 0) weakestMelee else weakestFoe) else null
+            val kite = i == Intent.KITE
+            val rank = { p: Position ->
+                val key = p.x * 100 + p.y
+                when (role) {
+                    0 -> scoreMelee(c, key, p, att, dan, focus)
+                    1 -> scoreRanged(c, key, p, att, dan, focus)
+                    else -> scoreHeal(c, key, p, att, dan)
+                }
+            }
+            for (lvl in ttlMin downTo 1) {
+                val ok = place(c, { p ->
+                    (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                        ttlAt(c, p.x * 100 + p.y, p) >= lvl
+                }, rank)
+                if (ok) { gateLevels[minOf(lvl, gateLevels.size - 1)]++; return true }
+            }
+            gateFell++
+            return false
+        }
         passTag = "melee"
         // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
         // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
         for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
-            val ok = when (intentOf(c)) {
+            val ok = if (USE_FIELD_SCORE) placeScored(c, 0, intentOf(c)) else when (intentOf(c)) {
                 Intent.PRESS -> if (meleeCommit)
                     place(c, { p -> inHealReach(p) && armedEnemies.any { getRange(p, it) <= 1 } }, { p -> inc(p.x * 100 + p.y) })
                 else place(c, { p -> inHealReach(p) && armedEnemies.any { getRange(p, it) <= MELEE_HOLD_RANGE } }, { p -> inc(p.x * 100 + p.y) })
@@ -6548,7 +6697,7 @@ cpuMark("a.evade")
         val gunReach = if (leadNow) RANGED_RANGE - 1 else RANGED_RANGE
         if (leadNow) leadTicks++
         for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
-            val ok = when (intentOf(c)) {
+            val ok = if (USE_FIELD_SCORE) placeScored(c, 1, intentOf(c)) else when (intentOf(c)) {
                 // напор: цель в дальности, меньше входящего; удержание: то же, но безопасность решает сильнее
                 Intent.PRESS -> place(c, { p -> safeForRanged(p) && behindMelee(p) && armedEnemies.any { getRange(p, it) <= gunReach } },
                     { p -> inc(p.x * 100 + p.y) * 100 - (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0) + aheadOfMelee(p) })
@@ -6613,7 +6762,8 @@ cpuMark("a.evade")
                 val dp = foeDist(p.x, p.y)
                 return fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp }
             }
-            val ok = if (USE_HEALERS_SCREENED)
+            val ok = if (USE_FIELD_SCORE) placeScored(c, 2, intentOf(c))
+            else if (USE_HEALERS_SCREENED)
                 place(c, { p -> behindLine(p) && mates.any { getRange(p, it) <= HEAL_RANGE - 1 } },
                     { p -> -(fighters.count { it.id != c.id && getRange(p, it) <= 1 }).toDouble() * HEALER_SCREEN +
                         inc(p.x * 100 + p.y) })
