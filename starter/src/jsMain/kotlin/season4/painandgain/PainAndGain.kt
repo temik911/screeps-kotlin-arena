@@ -109,6 +109,16 @@ object PainAndGain {
      *  открытая находка с числом: доля 0,25 требует перенастройки PARITY_FLOOR/CAPTURE_FLOOR по всем семьям. */
     private const val USE_MELEE_ADJACENCY_SHARE = false
     private const val MELEE_ADJACENCY_SHARE = 0.25
+    /** ...И ТА ЖЕ ДОЛЯ, НО ИЗМЕРЕННАЯ, А НЕ НАЗНАЧЕННАЯ (v193). Находка выше открыта с матча 47 и закрыта не была:
+     *  модель считает удар мили ПОЛНЫМ весом, поэтому назначает R3 (−20 % стрельбы) ценой в 1 % мощи, а A3 (−20 %
+     *  удара) — в 7,5 %, и бот отдаёт пятую часть огня, которым бой решается, чтобы сберечь удар, которого нет.
+     *  Замер по реплеям против Coldkimchi#2: мили стоит вплотную к врагу 1,1 % крипо-тиков контакта у нас и 2,3 % у
+     *  него (в патовом матче 4,9 % и 0,5 %) — то есть дебафф A3 почти бесплатен ОБЕИМ сторонам, а R3 дорог обеим.
+     *  Прежняя попытка (v103) была отвергнута стендом не по существу: она ставила КОНСТАНТУ 0,25, цены переворачивались
+     *  во всех сценариях сразу, и пороги паритета, настроенные под старые цены, начинали запрещать захваты, на которых
+     *  стоят гонки стенда. Измеряемая доля этого не делает: на стенде, где враг идёт в контакт, она сама поднимается
+     *  к единице, до заполнения окна равна единице, и старое поведение остаётся ровно там, где мили действительно бьёт. */
+    private const val USE_MEASURED_MELEE_SHARE = true
 
     /** Перевес, при котором армия идёт добивать, и порог продолжения. Порог продолжения выше единицы: прежний
      *  0.9 вместе со входом «по контакту» открывал лазейку — контакт с ОДНИМ стрелком включал ДОБИТЬ, а дальше
@@ -2183,7 +2193,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v192"
+    private const val BOT_VERSION = "v193"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2603,7 +2613,7 @@ cpuMark("arrival")
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()} out=$outOfFireTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             concSum = 0; concTicks = 0
@@ -2874,6 +2884,8 @@ cpuMark("arrival")
     private val approachHist = ArrayDeque<Int>()          // то же расстояние, но пишется и БЕЗ контакта (см. enemyApproaching)
     private val stalemateOurHist = ArrayDeque<Int>()      // сумма наших хитов за окно (см. stalemateNow)
     private val stalemateHisHist = ArrayDeque<Int>()      // и его — чтобы отличить пат от проигранного размена
+    private val hisTouchHist = ArrayDeque<Int>()           // то же по ЕГО мили: цена флага A3 держится на обеих долях
+    private var hisTouchShare = 1.0
     private val touchHist = ArrayDeque<Int>()              // доля наших мили, стоявших вплотную к врагу, по тикам контакта
     private var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
     private var touchMin = 1.0                            // минимум за матч — прибор
@@ -4453,9 +4465,14 @@ cpuMark("a.evade")
             val meleeN = combatArmy.count { isMelee(it) && !hasRanged(it) }
             val touched = combatArmy.count { isMelee(it) && !hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= 1 } }
             touchHist.addLast(if (meleeN > 0) 100 * touched / meleeN else 100)
-        } else touchHist.clear()
+            val hisMelee = combatEnemies.count { isMelee(it) && !hasRanged(it) }
+            val hisTouched = combatEnemies.count { isMelee(it) && !hasRanged(it) && combatArmy.any { a -> getRange(it, a) <= 1 } }
+            hisTouchHist.addLast(if (hisMelee > 0) 100 * hisTouched / hisMelee else 100)
+        } else { touchHist.clear(); hisTouchHist.clear() }
         while (touchHist.size > TOUCH_WINDOW) touchHist.removeFirst()
+        while (hisTouchHist.size > TOUCH_WINDOW) hisTouchHist.removeFirst()
         touchShare = if (touchHist.size >= TOUCH_WINDOW) touchHist.sum() / (100.0 * touchHist.size) else 1.0
+        hisTouchShare = if (hisTouchHist.size >= TOUCH_WINDOW) hisTouchHist.sum() / (100.0 * hisTouchHist.size) else 1.0
         if (touchShare < touchMin) touchMin = touchShare
         val stalemateOurNow = combatArmy.sumOf { it.hits }
         val stalemateHisNow = combatEnemies.sumOf { it.hits }
@@ -7393,7 +7410,9 @@ cpuMark("a.evade")
      *  гипотетические множители, oppMods — множитель лечения противника. */
     private fun powerOf(side: List<Creep>, opp: List<Creep>, mods: HypoMods, oppMods: HypoMods): Double {
         // удар мили — с долей смежности (v103, USE_MELEE_ADJACENCY_SHARE); хиты (weightedHits) без неё
-        val meleeK = mods.melee * (if (USE_MELEE_ADJACENCY_SHARE) MELEE_ADJACENCY_SHARE else 1.0)
+        val share = if (USE_MEASURED_MELEE_SHARE) (if (side.firstOrNull()?.my == false) hisTouchShare else touchShare)
+            else if (USE_MELEE_ADJACENCY_SHARE) MELEE_ADJACENCY_SHARE else 1.0
+        val meleeK = mods.melee * share
         val dps = side.sumOf { effectiveDps(it, opp, mods.ranged, meleeK) }
         val heal = opp.sumOf { InfluenceMap.profileOf(it).heal } * oppMods.heal
         return lanchester(dps, heal, side.sumOf { weightedHits(it, opp, mods.hits) })
