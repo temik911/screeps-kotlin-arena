@@ -501,12 +501,6 @@ object PainAndGain {
     /** Ротация как тумблер (v126): БЕЗ ротации таблица входов 18 хуже / 6 лучше по +50, dart m29 не уничтожен (14/3), m31 живых
      *  13 → 10 — ротация стенду нужна; предмет был не в ней, а в её ДЛИТЕЛЬНОСТИ (см. USE_ROTATE_IN_ONE_PART). */
     private const val USE_ROTATION = true
-    /** РОТИРУЮЩИЙ ИДЁТ К ЛЕКАРЮ ПОВЕРХ СЛОТА (v126, серия 347–366): planBlock/planFight исключают его из фронта, и он получает слот
-     *  ЗАДНЕГО ряда, а в порядке движения слот стоит раньше ротации — боец шёл в тыловой слот, где лекаря может не быть (матч 506,
-     *  Coldkimchi: melee_1 в ротации с 92-го по 119-й, 27 тиков при дефиците 400; трое из четырёх мили в ротации на 101–114-м).
-     *  НА СТЕНДЕ НЕОТЛИЧИМО: 26 сценариев и 8 dart до цифры те же (slotHold стоит раньше обоих, а ротирующий на стенде — вплотную
-     *  к врагу); живьём ближайший лекарь стоит у фронта, и «к лекарю» есть «к фронту». Выключено как незамеренное. */
-    private const val USE_ROTATE_OVER_SLOT = false
     private const val ROTATE_OUT = 0.5
     private const val ROTATE_IN = 0.9
     /** ВОЗВРАТ ИЗ РОТАЦИИ НА ОДНУ ЧАСТЬ ВЫШЕ ПОРОГА ВЫХОДА (v126, серия 347–366, пять стираний блобом): см. backIn в rotating. Стенд:
@@ -541,12 +535,6 @@ object PainAndGain {
      *  при этом улучшилась там, где лекарь позади вообще был (176 из 803 крипо-тиков под огнём против 88 из 88), — то есть
      *  предмет верен, а цена берётся не с той группы. Сузить до `wounded` — открытая гипотеза, её проверит только серия. */
     private const val USE_HEAL_BEHIND = false
-    /** ПРИКРЫТИЕ ТЫЛА (v135): мили, которому некого бить, идёт не в слот строя, а к тому нашему стрелку, лекарю или
-     *  раненому, к которому ближе всего его вооружённый мили, и встаёт рядом. Замер по двенадцати поражениям от блобов
-     *  (тестовые игры 08.09.2026): его мили смежны 84–143 крипо-тика против наших 14–20, наш ближайший мили дальше пяти
-     *  клеток в 61 из 114 смежных пар, а верхние блокировки решения — `!covered` (1183) и `!inLine` (1035), которые poker
-     *  и так обходит. То есть мили не мешают бить: они стоят в строю, пока его мили идут мимо них в наш тыл. */
-    private const val USE_MELEE_GUARD = false
     /** ПРОТИВ СОМКНУТОГО БЛОБА МИЛИ НЕ БРОСАЕТСЯ (v135): три пробы о том, КАК наши мили выбирают цель, провалились
      *  (прикрытие подопечного 1-5/2-4, прикрытие с целью-врагом 1-5/1-5, фокус на его бьющем мили 0-6/0-6), потому что
      *  посылка была неверна. Наши мили не промахиваются — они ГИБНУТ: за матч в 200 тиков наши живут 50 крипо-тиков против
@@ -636,22 +624,6 @@ object PainAndGain {
      *  вместо двух») — 2-4 и 2-4 против 5-7 и 2-10, то есть #11 выровнялся, а #10 просел, суммарно то же, и гейт 130/131
      *  (match31:camp). Наблюдение остаётся верным: на входе reach=2/5 против его двенадцати. */
     private const val USE_KITE_UNTIL_READY = false
-    /** СБОР ПЕРЕД БЛОБОМ (v135): пятнадцать отвергнутых проб меняли, ЧТО делают крипы, когда блоб уже на них, а вход
-     *  проигран раньше — на первом контакте телеметрия читает `reach=2/5`: цель достают два наших стрелка из пяти, он бьёт
-     *  двенадцатью, и за двадцать тиков мы теряем 9 500–10 600 хитов против его 5 800–6 500. Пока его сомкнутая армия ещё
-     *  НЕ в контакте (никого ближе RANGED_RANGE + 1) и достающих меньше двух третей, крип идёт к массе своих.
-     *  ОТВЕРГНУТО в двух формах. Без условия близости — 29 упавших строк гейта: шесть его вооружённых кучей это обычное
-     *  дело, и армия собиралась вместо игры за флаги (army, camp, screen, farm+weak, scouts, grab — все по очкам).
-     *  С условием «его центроид ближе ENGAGE_RANGE + RANGED_RANGE» гейт 131/131, но 1-5 и 0-6 против 5-7 и 2-10 у v135:
-     *  тик, потраченный на сбор, отдаёт блобу дистанцию, а собраться всё равно не успеваем — он входит быстрее. */
-    private const val USE_RALLY_BEFORE_BLOB = false
-    /** СТРЕЛОК ЗА СПИНУ МИЛИ (v135): его мили первым доходит до нашего стрелка или лекаря в 60 % тиков входа, у него так
-     *  в 0–10 % (замер по 6aa0008a и 6aa0037a: наш мили ближе в 2–3 тиках из 28, его — в 15–19). Расстановкой это не
-     *  лечится — мера не дрогнула, — потому что слот в бою почти не используется: крип идёт к цели. Поэтому цель и
-     *  правится: стрелок, к которому его мили не дальше, чем к нашему ближайшему мили, идёт за спину этого мили.
-     *  ОТВЕРГНУТО: 1-5 и 1-5 против 5-7 и 2-10 у v135, гейт 130/131 (match31:camp). Стрелок, уходящий за спину, теряет
-     *  цель — его дальность три, и клетка за мили обычно вне её, — так что закрытым он оказывается ценой молчания. */
-    private const val USE_RANGED_KEEPS_BEHIND = false
     /** СТРЕЛОК ВЫХОДИТ ИЗ-ПОД УДАРА, НЕ ЗАМОЛКАЯ (v135): мера входа говорит, что его мили первым доходит до нашего мягкого
      *  в 60 % тиков против его 0–10 %, но прикрыться нам нечем — и за спиной мили (USE_RANGED_KEEPS_BEHIND), и просто
      *  отойдя (USE_KITE_BREAKS_CONTACT) стрелок теряет цель, потому что его дальность три. Разница здесь одна: шаг назад
@@ -661,19 +633,6 @@ object PainAndGain {
      *  но шаг назад отдаёт клетку строю: следом за стрелком отходит прикрывавший его мили, и линия пятится вся. Выхода
      *  из-под удара без потери позиции в этом боте нет — ни через цель, ни через план, ни через дистанцию. */
     private const val USE_KITE_KEEPS_FIRE = false
-    /** ПРОГНОЗ РАЗМЕНА НА ТИК ВПЕРЁД (v136): двадцать проб провалились потому, что каждая приближает потиковый ВЫБОР
-     *  одним постоянным правилом, а числа, которых они не сдвинули, — следствия выбора: его ожидаемый урон 20 000 против
-     *  наших 7 400, смежность его мили 79–85 крипо-тиков против наших 14–22, его мили первым доходит до наших мягких в
-     *  60 % тиков против наших 0–10 %. Здесь крип ВЫБИРАЕТ: своя клетка и восемь соседних, для каждой — что мы с неё
-     *  нанесём и что получим в следующий тик (его мили в MELEE_KEEP_RANGE шагнёт и ударит). Порядок ЛЕКСИКОГРАФИЧЕСКИЙ,
-     *  не взвешенная сумма: сперва больше своего урона, потом меньше входящего — сумма дала бы купить безопасность ценой
-     *  огня, чем и провалились все пробы об отходе. Работает только при сомкнутой армии врага и не для лекарей.
-     *  ЗАМЕРЕНО И ОТЛОЖЕНО: 4-8 и 2-10 против 5-7 и 2-10 у v135 (гейт 131/131), с ярусом выживания (USE_SEARCH_SURVIVAL)
-     *  3-3 и 0-6 — вровень или хуже. Причина названа оператором и подтверждается замерами: КАЖДЫЙ КРИП СЧИТАЕТ ЗА СЕБЯ.
-     *  Двое выбирают одну клетку, третий загораживает четвёртого, и лучший ход каждого не складывается в лучший ход
-     *  армии; его же строй ходит линией шаг в шаг, то есть решение у него ОДНО на всех. Оценка клетки здесь верна и
-     *  остаётся ядром для командира (см. USE_COMMANDER), а покриповое применение выключено. */
-    private const val USE_FORWARD_SEARCH = false
     /** ВЫЖИТЬ РАНЬШЕ, ЧЕМ УДАРИТЬ (v136b): в первом срезе порядок был «огонь, потом безопасность», и крип не уходил даже
      *  из клетки, где его снимают за тик — 4-8 и 2-10 против 5-7 и 2-10 у v135, то есть вровень. Клетка считается
      *  смертельной, когда входящий урон за тик с учётом дебаффа не меньше хитов крипа плюс достающее его лечение; из
@@ -999,15 +958,6 @@ object PainAndGain {
      *  против #11. Причина в оценке: портфель хорош ровно настолько, насколько точен прогон, а наш прогон на четыре
      *  тика с упрощённой моделью врага завышает смешанные наборы. Портфель стоит вернуть, когда прогон станет точнее. */
     private const val USE_PORTFOLIO_SEARCH = false
-    /** ЧИСТЫЙ БОЙ (v139): пока командир ведёт бой с сомкнутым блобом, прежняя цепочка целей молчит целиком. Две ошибки
-     *  наследия уже найдены и исправлены — `slotHold` перебивал приказ (в блобе это ВСЕ четыре мили с первого тика), и
-     *  порядок интентов в симуляции был обратным движку (движение идёт последним, атака считается по позиции ДО него).
-     *  Этот тумблер проверяет, есть ли ещё такие: если чистый бой играет лучше, мешает именно накопленная логика.
-     *  ОТВЕТ: НЕ МЕШАЕТ. Чистый бой дал 2-6 и 2-6 — ровно то же, что с полной цепочкой правил (2-6 и 2-6). Значит узкое
-     *  место не в наследии, а в КАЧЕСТВЕ ПРОГНОЗА: план оценивается симуляцией на четыре тика с приближённой моделью
-     *  врага, и на этом горизонте хорошие планы от плохих не отличаются. Переписывание бота с нуля на том же прогнозе
-     *  дало бы то же самое. */
-    private const val USE_PURE_COMBAT = false
     private const val PGS_ROUNDS = 1
     /** Цена уцелевшего тела в оценке симуляции (v138): аннигиляция — поражение при любом счёте, значит крип дороже
      *  своего оружия. Величина в тех же единицах, что профиль: 240 — удар мили, то есть тело весит примерно один удар. */
@@ -5089,11 +5039,6 @@ cpuMark("a.evade")
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
             val holdMelee = massHold || (isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
-            // ...и та же линия без единого касания за окно — не линия (v192): уходим за своих стрелков. Условие на
-            // ПРИЖИМ не смотрит: pressTarget уже снял holdMelee, значит цель ловится и уходить незачем
-            val meleeOutOfFire = USE_MELEE_OUT_OF_FIRE && holdMelee && isMelee(creep) && !hasRanged(creep) &&
-                touchShare < TOUCH_MIN && combatEnemies.none { getRange(creep, it) <= 1 } &&
-                combatEnemies.any { getRange(creep, it) <= RANGED_RANGE }
             // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
             // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
             // били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7, наши мили держали линию в 2–3 от его линии и не
@@ -5181,24 +5126,6 @@ cpuMark("a.evade")
                     ?: fighters.minByOrNull { getRange(creep, it) }
                     ?: patients.minByOrNull { getRange(creep, it) }
             } else null
-            // раненый идёт к ближайшему лекарю (вплотную — лечение 12 за часть против 4 на дистанции), а при USE_HEAL_BEHIND —
-            // к ближайшему из тех, кто стоит ДАЛЬШЕ него от вооружённого врага: иначе дорога к лечению ведёт на фронт
-            // ПРИКРЫТИЕ ТЫЛА (v135, см. USE_MELEE_GUARD): мили без цели идёт не в слот, а к тому нашему не-мили, к которому
-            // ближе всего его вооружённый мили, — и встаёт рядом. Замер: в двенадцати поражениях базы наши мили смежны 14–20
-            // крипо-тиков против его 84–143, а наш ближайший мили — в пяти и дальше в 61 из 114 смежных пар; мили не мешают
-            // бить, они стоят не там. Берётся только тот подопечный, до которого его мили ближе, чем любой наш чистый мили
-            val guardMate: Creep? = if (USE_MELEE_GUARD && isMelee(creep) && !hasRanged(creep) && !support && !rotating && !stalled &&
-                    engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
-                // ...первый срез вёл мили К ПОДОПЕЧНОМУ и смежности не поднял (80:14 против 84:20 базы): встать рядом с
-                // лекарем не значит достать того, кто его рубит. Цель — САМ ЕГО МИЛИ, идущий в наш тыл: ближайший к нашему
-                // не-мили из тех, кого мы достаём в ENGAGE_RANGE, и притом ближе к нему, чем любой другой наш мили
-                val backs = army.filter { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) }
-                val ourMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) }
-                combatEnemies.filter { e -> InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE }
-                    .mapNotNull { e -> (backs.minOfOrNull { a -> getRange(e, a) } ?: 99).let { d -> if (d <= MELEE_HOLD_RANGE + 1) e to d else null } }
-                    .filter { (e, _) -> ourMelee.none { m -> m.id != creep.id && getRange(m, e) < getRange(creep, e) } }
-                    .minByOrNull { (e, d) -> d * 100 + getRange(creep, e) }?.first
-            } else null
             // КАЙТ ПРОТИВ СОМКНУТОГО БЛОБА (v135, см. USE_MASS_KITE): его мили достаёт на клетку, стрелок — на три, значит
             // в ДВУХ его четыре мили (960 в тик вплотную) не дают ничего, а размен стрелками идёт ровно. Держим два от
             // ближайшего его мили, пока его армия сомкнута и мы сами ещё не в контакте
@@ -5227,87 +5154,6 @@ cpuMark("a.evade")
                 // его мили уже в KITE_TRIGGER, и отходим на KITE_STANDOFF (на клетку дальше, чем его шаг)
                 combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE }
                     .minByOrNull { getRange(creep, it) }
-            } else null
-            // ...и только когда блоб УЖЕ БЛИЗКО: первый срез («всякая сомкнутая армия») уронил 29 строк гейта — армия
-            // собиралась вместо игры за флаги, потому что шесть его вооружённых кучей это обычное дело. Нужен вход:
-            // его вооружённый центроид ближе ENGAGE_RANGE + RANGED_RANGE от нашей массы
-            val blobClose = combatEnemies.isNotEmpty() && centroidOf(armedEnemies.ifEmpty { combatEnemies })
-                ?.let { c -> getRange(c, armedCentroid) <= ENGAGE_RANGE + RANGED_RANGE } == true
-            val rallyBlob = USE_RALLY_BEFORE_BLOB && !support && enemyMassedNow && blobClose && !contact &&
-                combatEnemies.none { getRange(creep, it) <= RANGED_RANGE + 1 } && run {
-                    val live = combatArmy.count { hasRanged(it) }
-                    val reaching = combatArmy.count { c -> hasRanged(c) && combatEnemies.any { getRange(c, it) <= RANGED_RANGE + 2 } }
-                    live > 0 && reaching * 3 < live * 2
-                }
-            // ЗА СПИНУ МИЛИ (v135, см. USE_RANGED_KEEPS_BEHIND): мера по двум записям — его мили первым доходит до нашего
-            // стрелка или лекаря в 60 % тиков, у него так в 0–10 %; его строй закрывает мягких, наш нет. Расстановка этого
-            // не чинит (см. USE_RANGED_ROW_VS_BLOB: мера не дрогнула), потому что в бою крип идёт к ЦЕЛИ, а не в слот.
-            // Здесь цель и правится: стрелок, к которому его мили ближе, чем к любому нашему мили, идёт за спину ближнего
-            // своего мили — на клетку дальше от врага, чем тот
-            val shieldMate: Creep? = if (USE_RANGED_KEEPS_BEHIND && hasRanged(creep) && !hasMelee(creep) && enemyMassedNow) {
-                val hisMelee = combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
-                val ourMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) }
-                val mine = hisMelee.minOfOrNull { getRange(creep, it) } ?: 99
-                val best = ourMelee.minOfOrNull { m -> hisMelee.minOfOrNull { getRange(m, it) } ?: 99 } ?: 99
-                if (mine <= best && mine <= ENGAGE_RANGE) ourMelee.minByOrNull { getRange(creep, it) } else null
-            } else null
-            // ПРОГНОЗ РАЗМЕНА НА ТИК ВПЕРЁД (v136, см. USE_FORWARD_SEARCH): вместо правила о том, куда встать, — счёт по
-            // клеткам. Для своей клетки и восьми соседних считаем, что мы с неё нанесём и что получим В СЛЕДУЮЩИЙ тик
-            // (его мили в двух шагнёт и ударит), и берём лучшую ЛЕКСИКОГРАФИЧЕСКИ: сперва больше своего урона, потом
-            // меньше входящего. Сумма с весами позволила бы купить безопасность ценой огня — этим провалились все пробы
-            // об отходе; порядок «огонь первым» даёт только лучшую клетку для той же агрессии
-            // ...только В БОЮ и только если клетка СТРОГО лучше нынешней: первый срез стоял в цепочке раньше всего и при
-            // камперах давал 0:20 733 и 0:14 944 — армия перебирала клетки вместо игры за флаги
-            val searchCell: Position? = if (USE_FORWARD_SEARCH && !support && enemyMassedNow &&
-                    posture == Posture.ANNIHILATE && contact &&
-                    combatEnemies.any { getRange(creep, it) <= ENGAGE_RANGE }) {
-                val mineRanged = InfluenceMap.profileOf(creep).ranged
-                val mineMelee = InfluenceMap.profileOf(creep).melee
-                // текущая клетка — точка отсчёта: двигаемся, только если найдётся строго лучшая
-                var best: Position? = null
-                var bestOut = -1.0
-                var bestIn = Double.MAX_VALUE
-                var hereOut = -1.0
-                var hereIn = Double.MAX_VALUE
-                var bestFatal = true
-                var hereFatal = false
-                // лечение, которое достанет крипа на месте: лекари в HEAL_RANGE, вплотную — полное
-                val healOnMe = army.filter { it.id != creep.id && hasHeal(it) && !hasWeapon(it) }
-                    .sumOf { h -> val d = getRange(creep, h); if (d <= 1) InfluenceMap.profileOf(h).heal else if (d <= HEAL_RANGE) InfluenceMap.profileOf(h).heal / 3.0 else 0.0 }
-                for (dx in -1..1) for (dy in -1..1) {
-                    val nx = creep.x + dx; val ny = creep.y + dy
-                    if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
-                    if (DistanceMap.isTerrainWall(nx, ny)) continue
-                    if ((dx != 0 || dy != 0) && army.any { it.id != creep.id && it.x == nx && it.y == ny }) continue
-                    if (combatEnemies.any { it.x == nx && it.y == ny }) continue
-                    val cell = InfluenceMap.cell(nx, ny)
-                    var out = 0.0
-                    var inc = 0.0
-                    for (e in armedEnemies) {
-                        val d = getRange(cell, e)
-                        val pr = InfluenceMap.profileOf(e)
-                        if (d <= RANGED_RANGE) inc += pr.ranged
-                        if (d <= MELEE_KEEP_RANGE) inc += pr.melee
-                        if (mineRanged > 0.0 && d <= RANGED_RANGE) out = maxOf(out, mineRanged)
-                        if (mineMelee > 0.0 && d <= 1) out = maxOf(out, mineMelee)
-                    }
-                    if (dx == 0 && dy == 0) { hereOut = out; hereIn = inc }
-                    // ВЫЖИТЬ РАНЬШЕ, ЧЕМ УДАРИТЬ (v136b, см. USE_SEARCH_SURVIVAL): если входящее за тик снимает больше,
-                    // чем у крипа осталось хитов с учётом лечения, клетка смертельна — и тогда первым критерием идёт
-                    // не огонь, а входящий урон. Иначе порядок прежний: огонь, потом безопасность
-                    val fatal = USE_SEARCH_SURVIVAL && inc * InfluenceMap.takenOf(creep) >= creep.hits + healOnMe
-                    val better = when {
-                        fatal && !bestFatal -> false
-                        !fatal && bestFatal -> true
-                        else -> out > bestOut || (out == bestOut && inc < bestIn)
-                    }
-                    if (dx == 0 && dy == 0) hereFatal = fatal
-                    if (better || best == null) { bestOut = out; bestIn = inc; bestFatal = fatal; best = cell }
-                }
-                best?.takeIf {
-                    (it.x != creep.x || it.y != creep.y) &&
-                        ((hereFatal && !bestFatal) || (hereFatal == bestFatal && (bestOut > hereOut || (bestOut == hereOut && bestIn < hereIn))))
-                }
             } else null
             val healerNear: Creep? = if (wounded || rotating) {
                 val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
@@ -5376,27 +5222,9 @@ cpuMark("a.evade")
             when {
                 keeper -> { whyTag = "keeper"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 slotHold -> { whyTag = "slotHold"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
-                // ротация раньше слота (v126, USE_ROTATE_OVER_SLOT): слот ротирующего — тыловой ряд, а лекарь ходит за своим подопечным
-                USE_ROTATE_OVER_SLOT && rotating && healerNear != null -> { whyTag = "rotSlot"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
-                // прикрытие тыла раньше слота (v135): слот ставит мили в строй, а рубят в это время наш тыл
-                guardMate != null -> { whyTag = "guard"; target = guardMate; standoff = 1; nearFlow = true }   // цель — его мили у нашего тыла
-                // СБОР ПЕРЕД БЛОБОМ (v135, см. USE_RALLY_BEFORE_BLOB): вход проигран не тем, что крипы делают в бою, а тем, что
-                // в бой вступает часть — на первом контакте reach=2/5, два наших ствола из пяти против его двенадцати. Пока
-                // его сомкнутая армия ещё не в контакте, а наши стволы не готовы, крип идёт К МАССЕ СВОИХ, а не к врагу и не
-                // в слот: собраться на клетку ближе стоит дешевле, чем встретить блоб половиной армии
-                rallyBlob -> { whyTag = "rallyBlob"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
-                // за спину мили — раньше кайта: кайт держит два от его мили, но не говорит, КТО стоит между (v135)
-                shieldMate != null -> { whyTag = "shield"; target = shieldMate; standoff = 1; avoid = true; nearFlow = true }
                 // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
                 commandOf[creep.id] != null && (commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) ->
                     { whyTag = "order"; target = commandOf[creep.id]!!; standoff = 0 }
-                // ЧИСТЫЙ БОЙ (v139, см. USE_PURE_COMBAT): пока командир ведёт бой, ВСЁ остальное наследие молчит — крип,
-                // которому приказано стоять, стоит, а не подхватывает одно из двух десятков прежних правил. Это прямая
-                // проверка того, мешает ли накопленная неявная логика алгоритму, который в литературе работает
-                USE_PURE_COMBAT && commandOf.containsKey(creep.id) ->
-                    { whyTag = "pure"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
-                // прогноз размена — раньше кайта и слота: он и есть выбор клетки (v136)
-                searchCell != null -> { whyTag = "search"; target = searchCell; standoff = 0 }
                 // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
                 // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
                 // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
@@ -5430,13 +5258,7 @@ cpuMark("a.evade")
                 USE_REGROUP && aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) * REGROUP_TICKS >= creep.hits -> { whyTag = "regroup"; target = meleeMate; standoff = 1; avoid = true; nearFlow = true }
                 aloneInFire -> { whyTag = "alone"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 leashed -> { whyTag = "leash"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
-                // прижим стрелка (см. USE_PRESS): кольцо ровно в RANGED_RANGE от цели фокуса, не ряд
-                pressRanged && focusTarget != null && getRange(creep, focusTarget) <= ENGAGE_RANGE -> { whyTag = "pressRing"; target = focusTarget; standoff = RANGED_RANGE; nearFlow = true }
                 engage != null -> { whyTag = "engage"; target = engage; standoff = if (melee) 1 else closeIn; nearFlow = true }
-                // МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, УХОДИТ ИЗ ЕГО КОЛЬЦА (v192, см. USE_MELEE_OUT_OF_FIRE): держать линию имеет
-                // смысл, пока за неё кто-то цепляется; против блока, меняющего клетку три тика из четырёх, «линия» —
-                // это стоянка в трёх клетках, где его пятеро стрелков достают, а наш ATTACK нет
-                meleeOutOfFire -> { whyTag = "outOfFire"; outOfFireTicks++; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // мили держит линию (см. MELEE_HOLD_RANGE): что подошло на две клетки — рубит, за экраном не гонится
                 holdMelee -> { whyTag = "holdMelee"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 grab != null -> { whyTag = "grab"; target = grab.pos; standoff = 0; avoid = true }
