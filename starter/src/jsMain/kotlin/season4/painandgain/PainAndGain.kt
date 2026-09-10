@@ -445,7 +445,6 @@ object PainAndGain {
      *  см. captureAllowed. ОТВЕРГНУТО таблицей входов: 17 хуже / 5 лучше по +20, brawl m33 из уничтожения его в уничтожение НАШЕЙ
      *  армии (2628:11684 → 8051:6038 по +50), m32 brawl живых 11 → 7, m30 brawl +50 3028:12818 → 5940:5767 — дебафф бегуна перед
      *  настоящим боем (урок v47) дороже тура; blitz без изменений (пол паритета держал бегунов и так), tour лучше на пяти картах. */
-    private const val USE_RUNNER_HALF_UNDER_RUSH = false
     /** ЕГО ФЛАГИ В ПОЛЁТЕ СЧИТАЮТСЯ ЕГО В МОЩИ «ПОСЛЕ» (та же проба): см. powerAfterFor. НЕЙТРАЛЬНО: blitz и таблица входов до
      *  цифры те же, tour m30 лучше, m34/m35 хуже — окно «вплотную к флагу» меняет гейт редко. Выключено как незамеренное. */
     private const val USE_HIS_FLAGS_IN_FLIGHT = false
@@ -495,7 +494,6 @@ object PainAndGain {
     /** Темп сближения (см. approachRate, доля скорости к нам за APPROACH_WINDOW), с которого безфлаговая армия — это
      *  бросок на нас, а не блуждание: россыпь, идущая по флагам, к нам не идёт. */
     private const val APPROACH_RUSH = 0.5
-    private const val USE_RUSH_VETO_SUSTAINED = false  // v114a/b: вето «бой близко» после RUSH_VETO_TICKS — отвергнуто (см. captureAllowed)
     private const val USE_STALL_LIFTS_RUSH_VETO = true // v114: простой «держит дистанцию» снимает вето «бой близко» для захватов
     private const val RUSH_VETO_TICKS = 10             // половина окна подхода: бросок на полной скорости держит темп всё окно
 
@@ -750,7 +748,6 @@ object PainAndGain {
      *  вооружённому всегда, а симуляция выбирала напор по мощи, которую сама же и считала. Теперь выброс разрешён
      *  ровно в двух названных случаях: залп армии по слабейшему за тик перекрывает его хиты вместе с лечением, которое
      *  до него дотягивается, — или наша мощь не ниже его. Иначе напор исполняется как удержание. */
-    private const val USE_MELEE_COMMIT = true
     /** КОМАНДИР ПРАВИТ ВЕСЬ БОЙ (v144): счётчик cmd= показал, чем командир был на самом деле — 27 тиков из пятисот, и
      *  в большинстве из них приказ получал ОДИН крип из двенадцати. Остальное время армия шла по старым правилам, и
      *  оператор увидел ровно это: «крипы разбегаются, нет какого-то единого кулака». Условие теперь одно — контакт с
@@ -939,7 +936,6 @@ object PainAndGain {
      *  HEAL_RANGE не лечит вовсе, поэтому в бою подопечный обязан стоять выше слота: расстановка о лечении не знает и
      *  уводила лекаря в строй за пределы дальности. Вне контакта порядок прежний. */
     private const val USE_HEALER_OVER_SLOT = true
-    private const val MELEE_COMMIT_EDGE = 1.0
     private const val POWER_REACH_TICKS = 2
     /** ОТКАЗ ОТ ПЕРЕБОЯ (v140): приём из литературы по микроменеджменту RTS — «focus fire, while avoiding overkill by
      *  spreading damage over several units if the focus firing is enough to kill one». В боте его не было вовсе: все
@@ -1675,7 +1671,6 @@ object PainAndGain {
      *  m32 23975:21586 → 4980:23981, шесть карт без изменений, 4-4 → 4-4. Взятый флаг его пятёрка отбирает через 10–20 тиков
      *  (хранитель назначен на 388-м, снят на 397-м, его крип на флаге на 406-м), пока армия у следующего; зачистка не быстрее
      *  его отбора. Выключено как замер. */
-    private const val USE_SWEEP_OVER_CHASE = false
     /** ЦЕЛЬ ГОНКИ — ФЛАГ ПОД СТАЕЙ ПО СИЛАМ ПАРЕ (v125, серия 327–346, стенд blitz): см. racePaired / pairBeats.
      *  ОТВЕРГНУТО СТЕНДОМ: blitz 4-4 → 1-7 (m28 2046:24129, m35 1112:23910), шторм отряда 115–567 строк: восемь выпущены на 173-м,
      *  отозваны на 174-м — пара для гейта считалась по ядру БЕЗ бегунов (самоссылка, как в гонке до v120: без восьмерых в ядре
@@ -2099,7 +2094,6 @@ object PainAndGain {
      *  АРМИИ»): флаг вешает дебафф на ВЛАДЕЛЬЦА, и армия, взявшая его при неравной мощи, перестаёт быть целой —
      *  условие само себя отменяет через десяток тиков. Пол паритета считает эту цену для ОДНОГО флага, а не для
      *  режима «берём, пока целы». Что осталось верным: счёт против него мы не набираем, и предмет открыт. */
-    private const val USE_CAPTURE_WHEN_WHOLE = false
     /** ПАТ СНИМАЕТ ВЕТО ЗАХВАТА (v189): бой, где за целое окно ни одна сторона не потеряла заметной доли хитов, армии
      *  не угрожает, и дебафф флага в нём ничего не решает — решают очки. Отличие от отвергнутого v187 в том, что пат
      *  меряется ВРЕМЕНЕМ: «армия цела» истинно и на входе в размен, а пат — только после сотни тиков без потерь. */
@@ -2112,7 +2106,6 @@ object PainAndGain {
      *  того же его лечения, и «убить нельзя» становится «нельзя даже давить», после чего размен доигрывается не в
      *  нашу пользу. Захват против этого соперника закрыт с обеих сторон: и по мощи, и по времени. Открытый предмет
      *  остаётся прежним и лежит НЕ здесь: сломать его лечение. */
-    private const val USE_CAPTURE_IN_STALEMATE = false
     /** ПАТ ЛОМАЕТСЯ ЧЕРЕЗ ЛЕЧЕНИЕ (v190): тело лекаря `h6m6` — лечащие части первыми, поэтому раздеть лекаря стоит
      *  600 хитов против 1 200 за убийство, и весь огонь сводится на ОДНОГО, ближайшего к раздеванию. Только в пату:
      *  прежнее «лекарь выше стрелков» отвергнуто стендом за потерю входа в бой, а в пату входа нет. */
@@ -2268,7 +2261,6 @@ object PainAndGain {
      *  ПРИЧИНА названа замером, который стоило сделать первым (см. потолок ниже): когда остов у нас в дальности,
      *  мы по нему УЖЕ СТРЕЛЯЕМ — из 209 стрелко-тиков с остовом в дальности 65 % это выстрел, 25 % правильный
      *  выстрел в живую цель и лишь 9 % пустые. Порядком огня этот предмет не чинится вовсе. */
-    private const val USE_FINISH_HULKS = false
     /** Прибор: сколько раз остов попадал в пул огня как добиваемый за тик. Ноль при живом revived значит,
      *  что правило до дела не дошло; ненулевой числитель при неподвижном revived значит, что дошло и не помогло. */
     private var finishableHulks = 0
@@ -3004,12 +2996,10 @@ cpuMark("arrival")
         // 521» — и в этом окне цель мигала): простой снимает вето «бой близко», как снимает вето «в контакте» ниже
         // (USE_STALL_LIFTS_RUSH_VETO); настоящий бросок дистанцию сокращает и простоя не даёт
         val current = f.id == objectiveFlagId
-        val vetoOn = !USE_RUSH_VETO_SUSTAINED || !current || fightImminentTicks >= RUSH_VETO_TICKS
         // бегун берёт флаг НАШЕЙ половины и под броском (v128, USE_RUNNER_HALF_UNDER_RUSH): вето «бой близко» держало и скаутов —
         // матчи 5, 8, 19 серий 367–406: rush=true с 10-го по 39-й, бегуны 0 detached, наш первый флаг на 42–98-м при его шести к
         // 80–91-му; пол паритета ниже по-прежнему считает цену дебаффа
-        val runnerHalf = USE_RUNNER_HALF_UNDER_RUSH && runner && DistanceMap.inOurHalf(f.pos.x, f.pos.y)
-        if (fightImminentNow && !intercept && vetoOn && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow) && !runnerHalf)
+        if (fightImminentNow && !intercept && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow))
             return capCount(f, if (unflaggedRushNow) "rush.unflagged" else "rush.approach")
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
@@ -3030,14 +3020,11 @@ cpuMark("arrival")
         // порог CAPTURE_EDGE не берётся НИКОГДА, и матч кончается «обе армии целы, флаги 1:4, счёт 3 210:18 145».
         // Условие здесь не про мощь, а про потери: пока армия почти не тронута и мы отстаём по скорости очков, флаг
         // берётся. Дебафф флага ложится на владельца — эту цену считает паритетный пол ниже, он остаётся на месте
-        val whole = USE_CAPTURE_WHEN_WHOLE && ctx.army.count { hasWeapon(it) || hasHeal(it) } >= CAPTURE_WHOLE_CREEPS &&
-            ctx.army.sumOf { it.hits } >= ctx.army.sumOf { it.hitsMax } * CAPTURE_WHOLE_HITS
         val losingRace = USE_CAPTURE_WHEN_LOSING && behindOnScore && enemyRate > ourRate &&
-            (whole || !USE_CAPTURE_NEEDS_EDGE ||
+            (!USE_CAPTURE_NEEDS_EDGE ||
                 ourPowerOf(ctx.army, ctx.combatEnemies) >= enemyPowerOf(ctx.combatEnemies, ctx.army) * CAPTURE_EDGE)
         // ...и ПАТ СНИМАЕТ ВЕТО КОНТАКТА (v189): бой, в котором за целое окно ни одна сторона не потеряла заметной
         // доли хитов, армии не угрожает, а дебафф флага в нём ничего не решает — решают очки (см. stalemateNow)
-        val stalemate = USE_CAPTURE_IN_STALEMATE && stalemateTicks >= STALEMATE_HOLD
         // ВЕТО КОНТАКТА — ПО МАССЕ АРМИИ, А НЕ ПО ЛЮБОМУ КРИПУ (v214, решение оператора: вето становится местным).
         // Контакт определялся в файле дважды: в runArmy по МАССЕ (см. massArmy), а здесь — по любому нашему
         // вооружённому на полной скорости. Одного отбившегося крипа, задетого его пикетом на другом конце карты,
@@ -3049,10 +3036,10 @@ cpuMark("arrival")
         val foes = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
         val mass = centroidOf(ctx.army)
         val contactArmy = if (!USE_CONTACT_BY_MASS || mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
-        if (!losingRace && !stalemate && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy))
+        if (!losingRace && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy))
             return capCount(f, "contact.mass")
         // ...и отдельно считаем то, что этой правкой снято: стычка одиночки вне массы
-        if (!losingRace && !stalemate && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army))
+        if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army))
             capCount(f, "contact.edge.lifted")
         // паритет (см. PARITY_FLOOR): не впереди или отрыв не растёт — флаг, оставляющий не меньше PARITY_FLOOR их
         // мощи; впереди с растущим отрывом — только не слабее
@@ -3087,7 +3074,6 @@ cpuMark("arrival")
         val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else PARITY_FLOOR
         // ...и в ПАТУ паритетный пол тоже молчит: он сравнивает мощь, а в бою, где никто никого не убивает, мощь
         // обеих сторон ланчестером считается около нуля, и сравнивать нечего (v189)
-        if (stalemate) return null
         if (ours >= theirs * floor) return null
         capCount(f, "parity")
         return "parity(${ours.toInt()}/${(theirs * floor).toInt()})"
@@ -4308,8 +4294,7 @@ cpuMark("a.retreat")
         val cpuGuardArmy = USE_CPU_GUARD && now > 1 && cpuMs() > CPU_GUARD_MS
         if (cpuGuardArmy && DEBUG_LOG) println("cpu t=$now guard: posture keeps the objective (${(cpuMs() * 10).toInt() / 10.0}ms)")
         val dryNow = (lastFireTick < 0 || now - lastFireTick >= PASSIVE_TICKS) && now - lastHurtTick >= PASSIVE_TICKS
-        val sweepObjective = if (USE_SWEEP_OVER_CHASE && behindOnScore && dryNow && armedEnemies.isNotEmpty() && !interceptDenies)
-            chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, false, if (cpuGuardArmy) objectiveFlagId else null) else null
+        val sweepObjective: FlagInfo? = null   // USE_SWEEP_OVER_CHASE снят (v214): см. docs
 cpuMark("a.sweep")
         val chaseVeto = (enemyNotFightingNow && (interceptDenies || !behindOnScore)) || sweepObjective != null
         // ОТКРЫТАЯ НАХОДКА (матч 70): второй источник мигания — «ловимых нет»: блоб, шагнувший назад на две клетки, делает
@@ -4519,12 +4504,6 @@ cpuMark("a.evade")
         // где живой угрозе он не мешает: та в этом ярусе стоит по своей же угрозе выше.
         // ⚠️ И это НЕ притяжение: правка v209 (цена цели по потенциалу тела) свой прибор не сдвинула ни на стенде
         // (137 -> 130 восстановлений на 135 сценариях), ни живьём (2,6 -> 3,0 на матч) и снята.
-        val killableHulk = if (!USE_FINISH_HULKS) emptyList() else inFireRange.filter { e ->
-            combatEnemies.none { it.id == e.id } &&                       // оружия и лечения уже нет
-            InfluenceMap.potentialOf(e).let { it.melee + it.ranged > 0.0 } &&   // но тело их помнит
-            enemyCreeps.any { h -> h.id != e.id && InfluenceMap.profileOf(h).heal > 0.0 } &&  // и есть кому вернуть
-            e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)          // и он умирает от уже доступного залпа
-        }
         // СКАУТ У ФЛАГА — ЦЕЛЬ ЦЕНОЙ ОДНОГО ЗАЛПА (v214). Форма взята у killableHulk и она уже проверена живьём:
         // срабатывала 739 раз в 102 логах из 135, то есть в очередь встаёт и стреляет. Остова она не спасала лишь
         // потому, что его лечили обратно, — у скаута этой причины нет, он умирает насовсем и перестаёт брать флаги.
@@ -4535,9 +4514,8 @@ cpuMark("a.evade")
                 e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)
         }
         scoutShots += scoutTargets.size
-        val focusPool = (inFireRange.filter { e -> combatEnemies.any { it.id == e.id } } + killableHulk + scoutTargets)
+        val focusPool = (inFireRange.filter { e -> combatEnemies.any { it.id == e.id } } + scoutTargets)
             .ifEmpty { inFireRange }
-        finishableHulks += killableHulk.size
         fun fireAvailableAt(e: Creep) = fireAvailable(e)
         // лечение, которое враг получит на этой цели: вплотную — полное, на дистанции — треть (rangedHeal 4 против 12)
         fun healOn(e: Creep) = enemyCreeps.filter { h -> h.id != e.id && getRange(h, e) <= HEAL_RANGE }.sumOf { h -> val q = InfluenceMap.profileOf(h); if (getRange(h, e) <= 1) q.heal else q.heal / 3.0 }
@@ -6820,30 +6798,12 @@ cpuMark("a.evade")
             }
         }
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
-        // МИЛИ НЕ БРОСАЕТСЯ ПОД ВЕРНУЮ СМЕРТЬ (v143, оператор): вплотную к его строю — только когда это окупается.
-        // Два случая, и оба названы оператором: цель ДОБИВАЕТСЯ этим тиком (фокус-файр по одному крипу) или у нас
-        // ПЕРЕВЕС по силе в бою. Иначе замысел напора у мили исполняется как удержание — он остаётся в строю на
-        // MELEE_HOLD_RANGE, а не идёт в толпу умирать
-        val meleeCommit = if (!USE_MELEE_COMMIT) true else {
-            val adv = ourPowerOf(fighters, armedEnemies) >= enemyPowerOf(armedEnemies, fighters) * MELEE_COMMIT_EDGE
-            val kill = weakestMelee != null && run {
-                // залп армии по цели за тик: стрелки в дальности и мили, доходящие до неё шагом
-                val burst = fighters.sumOf { f ->
-                    val pr = InfluenceMap.profileOf(f)
-                    val d = getRange(f, weakestMelee)
-                    (if (pr.ranged > 0.0 && d <= RANGED_RANGE + 1) pr.ranged else 0.0) +
-                        (if (pr.melee > 0.0 && d <= 2) pr.melee else 0.0)
-                }
-                // ...минус его лечение цели: под лекарями «добивается» превращается в размен, которого мы не хотим
-                val cover = combatEnemies.sumOf { e ->
-                    val pr = InfluenceMap.profileOf(e)
-                    val d = getRange(e, weakestMelee)
-                    if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
-                }
-                burst >= weakestMelee.hits + cover
-            }
-            adv || kill
-        }
+        // МЁРТВЫЙ meleeCommit УДАЛЁН (v214). Правило v143 обещало: мили идёт вплотную, только когда цель
+        // добивается этим тиком или у нас перевес по силе, — но переменная была ОБЪЯВЛЕНА И НИКЕМ НЕ ЧИТАЛАСЬ,
+        // то есть обещанного не было вовсе, и тумблер USE_MELEE_COMMIT не гейтил ничего. Оба её слагаемых теперь
+        // есть в лучшем виде: перевес — местный (см. spotEdgeAt, поле удара в клетке врага, а не мощь армии),
+        // добиваемость — killTicks/killableNow, которыми уже пользуется фокус. Замеры из прежнего комментария
+        // перенесены в docs/pain-and-gain.md.
         val hisMelee = armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
         // СОГЛАСОВАННОСТЬ СТРОЯ (v200, оператор: «все ходы должны быть согласованными... не должно быть такого, что
         // наш крип пошёл в наступление без прикрытия; командир не должен отправлять крипов в строй врага, если он там
