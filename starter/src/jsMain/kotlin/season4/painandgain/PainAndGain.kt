@@ -1811,6 +1811,7 @@ object PainAndGain {
     private const val USE_MELEE_OUT_OF_FIRE = false   // ОТВЕРГНУТО: прибор `out` дал 0 за два живых матча, см. ниже
     private const val TOUCH_WINDOW = 50       // окно замера «достаём ли»: тиков контакта
     private const val TOUCH_MIN = 0.05        // ниже этой доли мили считается недостающим (замер дал 0,01)
+    private const val USE_LEASH_HOLDS_HEALERS = true   // поводок держит и лекарей (v202, см. leashed)
     private const val USE_LEASH_IN_CONTACT = true
     private const val LEASH_RANGE = 8
 
@@ -2038,7 +2039,14 @@ object PainAndGain {
     /** РАНА ВАЖНЕЕ СОСЕДСТВА (v183, оператор): ближняя ветка бралась раньше дальней всегда, поэтому полный сосед —
      *  включая самого лекаря — обходил раненого в двух клетках. 8 лечений из 55 в разгроме 3d9532 ушли в цель на
      *  полных хитах, не получившую в этот тик урона; у соперника таких 0 из 172. */
-    private const val USE_HEAL_DEFICIT_FIRST = false
+    /** ВКЛЮЧЕНО ПО ЗАМЕЧАНИЮ ОПЕРАТОРА (v202): «хилеры хилят ближайшего фулового крипа, вместо того чтобы лечить
+     *  битого крипа в нескольких клетках от себя». Механизм ровно такой: `need` = дефицит + ОЖИДАЕМЫЙ входящий урон,
+     *  поэтому крип на полных хитах, просто стоящий под огнём, попадает в кандидаты, — а ближняя ветка берётся раньше
+     *  дальней ВСЕГДА, и полный сосед обходит раненого в двух-трёх клетках. Замер лежал рядом с правилом с v183 и
+     *  никуда не делся: 8 лечений из 55 (14 %) ушли в цель на полных хитах, у соперника таких 0 из 172, и в трёх
+     *  случаях рядом стоял крип с потерей 900–1 060. Выключено правило было не своим замером, а оптом при откате
+     *  пачки v183. Полный сосед лечится теперь только тогда, когда раненых в дальности нет вовсе. */
+    private const val USE_HEAL_DEFICIT_FIRST = true
     /** ...и ценность пациента для КОНКРЕТНОГО лекаря: вплотную он лечит вчетверо сильнее, чем издали, поэтому приказ
      *  ранжирует цели по дошедшему лечению, а не по чужой нужде. */
     private const val USE_HEAL_ORDER_DELIVERED = false
@@ -2232,7 +2240,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v201"
+    private const val BOT_VERSION = "v202"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2649,6 +2657,8 @@ cpuMark("arrival")
                 // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
                 // центра. Реплеи говорят, что стирание приходит на диаметре 21, а пат — на диаметре 3
                 "spread=${army.filter { hasWeapon(it) && hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${army.count { hasWeapon(it) && getRange(it, armedCentroid) > LEASH_RANGE }} " +
+                // ...и отдельно ЛЕКАРИ за поводком (v202): именно они разъезжались, а прибор их не считал вовсе
+                "hfar=${army.count { !hasWeapon(it) && hasHeal(it) && getRange(it, armedCentroid) > LEASH_RANGE }}/${army.count { !hasWeapon(it) && hasHeal(it) }} " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -5125,7 +5135,12 @@ cpuMark("a.evade")
             // стрелков, растянутые на двадцать клеток, не могут бить одну цель: conc даёт 1,3 из 5, а трое его
             // лекарей возвращают 216 хитов в тик — цель начинает терять хиты только под залпом ЧЕТЫРЁХ разом.
             // Поэтому поводок теперь действует, пока в контакте АРМИЯ, а не пока враг стоит рядом с самим крипом
-            val leashed = !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE &&
+            // ...И ПОВОДОК ДЕРЖИТ ЛЕКАРЕЙ (v202, оператор: «крипы разъезжаются в разные стороны и не держатся единым
+            // кулаком»). Поводок исключал ВСЮ поддержку, то есть и лекарей, — и замер реплея 3d9a7c показывает, что
+            // разъезжаются именно они: дальше восьми от центра армии наши мили 11 крипо-тиков из 3 428 (0,3 %),
+            // стрелки 136 из 5 756 (2,4 %), а ЛЕКАРИ 1 402 из 5 379 — 26 %, с медианой отрыва 23 клетки. Это не
+            // «идёт за подопечным»: подопечный по определению в строю, а двадцать три клетки — это уход с поля боя
+            val leashed = !wounded && (!healer || USE_LEASH_HOLDS_HEALERS) && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE &&
                 (localEnemies.isNotEmpty() || (USE_LEASH_IN_CONTACT && contact)) && getRange(creep, armedCentroid) > LEASH_RANGE
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
             val melee = isMelee(creep) && !hasRanged(creep)
