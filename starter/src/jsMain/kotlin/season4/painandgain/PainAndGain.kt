@@ -1752,6 +1752,17 @@ object PainAndGain {
      *  `melee_1@(x,y)d2>ranged_3[hold:d2>2,!covered]holdMelee/stay` — и сводка `why-sum t=N:` раз в сто тиков по причинам;
      *  читает tools/autopsy.py (строка «melee idle» и диагноз). Объём — не больше строки на контактный тик. */
     private const val TRACE_WHY = true
+    /** МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, СТОИТ В ЕГО КОЛЬЦЕ ЗАДАРОМ (v192). holdMelee замораживает мили на месте, а место это
+     *  по замеру — три клетки до ближайшего врага: его стрелки достают (RANGED_RANGE = 3), наш ATTACK не достаёт
+     *  (1). Замер по двенадцати играм против Coldkimchi#2: наш мили стоял вплотную к врагу в 1 % замеров, его блок
+     *  менял клетку в 71–76 % тиков контакта — при равной скорости догнать его нельзя, и четыре тела с 32 частями
+     *  ATTACK весь бой не наносили ничего, зато принимали огонь: урона мы получаем в 1,5–3,9 раза больше, чем наносим,
+     *  и на двухсотом тике у наших мили от 0 до 16 атакующих частей из 32 против его 24–32. Роль щита тут не спасает:
+     *  его пятеро стрелков дают 300 в тик, наши трое лекарей возвращают 216, — щит проигрывает размен по построению.
+     *  Поэтому мили, который за окно контакта ни разу не дотянулся, уходит за спину своих стрелков, а не стоит в кольце. */
+    private const val USE_MELEE_OUT_OF_FIRE = true
+    private const val TOUCH_WINDOW = 50       // окно замера «достаём ли»: тиков контакта
+    private const val TOUCH_MIN = 0.05        // ниже этой доли мили считается недостающим (замер дал 0,01)
     private const val USE_LEASH_IN_CONTACT = true
     private const val LEASH_RANGE = 8
 
@@ -2172,7 +2183,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v191"
+    private const val BOT_VERSION = "v192"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2592,7 +2603,7 @@ cpuMark("arrival")
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
+                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()} out=$outOfFireTicks our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
             concSum = 0; concTicks = 0
@@ -2863,6 +2874,10 @@ cpuMark("arrival")
     private val approachHist = ArrayDeque<Int>()          // то же расстояние, но пишется и БЕЗ контакта (см. enemyApproaching)
     private val stalemateOurHist = ArrayDeque<Int>()      // сумма наших хитов за окно (см. stalemateNow)
     private val stalemateHisHist = ArrayDeque<Int>()      // и его — чтобы отличить пат от проигранного размена
+    private val touchHist = ArrayDeque<Int>()              // доля наших мили, стоявших вплотную к врагу, по тикам контакта
+    private var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
+    private var touchMin = 1.0                            // минимум за матч — прибор
+    private var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
     private var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     private var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
     private var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
@@ -4431,6 +4446,17 @@ cpuMark("a.evade")
         // ни одна сторона не потеряла больше STALEMATE_LOSS своих хитов. Именно временем, и в этом отличие от
         // отвергнутого USE_CAPTURE_WHEN_WHOLE (v187, 0:12): «армия цела» истинно и на входе в размен, до всякого пата,
         // поэтому та правка брала флаг ровно тогда, когда дебафф решал бой, — и армия гибла девять раз из двенадцати
+        // ДОСТАЁТ ЛИ НАШ МИЛИ ВООБЩЕ (v192, см. USE_MELEE_OUT_OF_FIRE): доля мили, стоявших вплотную к врагу, за окно
+        // контакта. Величина измеряется, а не назначается: против кайтера она падает до нуля сама, против того, кто
+        // идёт в размен, держится высокой, и правило снимается без порога, подогнанного под сегодняшнего соперника
+        if (contact) {
+            val meleeN = combatArmy.count { isMelee(it) && !hasRanged(it) }
+            val touched = combatArmy.count { isMelee(it) && !hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= 1 } }
+            touchHist.addLast(if (meleeN > 0) 100 * touched / meleeN else 100)
+        } else touchHist.clear()
+        while (touchHist.size > TOUCH_WINDOW) touchHist.removeFirst()
+        touchShare = if (touchHist.size >= TOUCH_WINDOW) touchHist.sum() / (100.0 * touchHist.size) else 1.0
+        if (touchShare < touchMin) touchMin = touchShare
         val stalemateOurNow = combatArmy.sumOf { it.hits }
         val stalemateHisNow = combatEnemies.sumOf { it.hits }
         if (contact) { stalemateOurHist.addLast(stalemateOurNow); stalemateHisHist.addLast(stalemateHisNow) }
@@ -4962,6 +4988,11 @@ cpuMark("a.evade")
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 }
             val holdMelee = massHold || (isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
                 localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
+            // ...и та же линия без единого касания за окно — не линия (v192): уходим за своих стрелков. Условие на
+            // ПРИЖИМ не смотрит: pressTarget уже снял holdMelee, значит цель ловится и уходить незачем
+            val meleeOutOfFire = USE_MELEE_OUT_OF_FIRE && holdMelee && isMelee(creep) && !hasRanged(creep) &&
+                touchShare < TOUCH_MIN && combatEnemies.none { getRange(creep, it) <= 1 } &&
+                combatEnemies.any { getRange(creep, it) <= RANGED_RANGE }
             // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
             // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
             // били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7, наши мили держали линию в 2–3 от его линии и не
@@ -5291,6 +5322,10 @@ cpuMark("a.evade")
                 // прижим стрелка (см. USE_PRESS): кольцо ровно в RANGED_RANGE от цели фокуса, не ряд
                 pressRanged && focusTarget != null && getRange(creep, focusTarget) <= ENGAGE_RANGE -> { target = focusTarget; standoff = RANGED_RANGE; nearFlow = true }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn; nearFlow = true }
+                // МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, УХОДИТ ИЗ ЕГО КОЛЬЦА (v192, см. USE_MELEE_OUT_OF_FIRE): держать линию имеет
+                // смысл, пока за неё кто-то цепляется; против блока, меняющего клетку три тика из четырёх, «линия» —
+                // это стоянка в трёх клетках, где его пятеро стрелков достают, а наш ATTACK нет
+                meleeOutOfFire -> { outOfFireTicks++; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
                 // мили держит линию (см. MELEE_HOLD_RANGE): что подошло на две клетки — рубит, за экраном не гонится
                 holdMelee -> { target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
                 grab != null -> { target = grab.pos; standoff = 0; avoid = true }
