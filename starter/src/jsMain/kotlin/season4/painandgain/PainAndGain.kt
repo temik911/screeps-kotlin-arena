@@ -2082,6 +2082,11 @@ object PainAndGain {
     private const val BRACE_WIDTH = 3
     private const val USE_NO_LETHAL_CELLS = true
     private const val LETHAL_CELL_COST = 10000.0
+    /** БОЛОТО — ЧЕТЫРЕ ТИКА НЕПОДВИЖНОСТИ (v183, оператор: «часть армии вязнет в болоте и дальше не может
+     *  двигаться»). Знала о нём только старая ветка движения; командир, забравший все приказы, — нет. */
+    private const val USE_ORDER_AVOIDS_SWAMP = true
+    private const val SWAMP_CELL_COST = 400.0
+    private const val MARCH_SWAMP_COST = 8      // в колонне: крюк в четыре клетки дешевле четырёх тиков неподвижности
     private const val STRAGGLER_SLACK = 2
     private const val ORDER_PRIORITY_MELEE = 7
     private const val ORDER_PRIORITY_RANGED = 6
@@ -5678,7 +5683,10 @@ cpuMark("a.evade")
                 val px = ax + dx * row - dy * side
                 val py = ay + dy * row + dx * side
                 val key = px * 100 + py
+                // ...и место в строю не ставится в болото: изготовка нужна затем, чтобы к первому выстрелу армия могла
+                // двигаться, а крип, шагнувший в трясину, стоит там четыре тика (v183)
                 if (px in 0..99 && py in 0..99 && !DistanceMap.isTerrainWall(px, py) && key !in taken &&
+                    !(USE_ORDER_AVOIDS_SWAMP && DistanceMap.isSwamp(px, py)) &&
                     enemies.none { it.x == px && it.y == py }) {
                     taken.add(key); slots.add(InfluenceMap.cell(px, py))
                 }
@@ -5739,7 +5747,10 @@ cpuMark("a.evade")
                 // под своим — не запрет, а цена: запрет останавливал колонну целиком (гейт 133 из 135,
                 // army и camp), ровно как в бою, где полный запрет тоже пришлось заменить штрафом
                 if (maxOf(abs(nx - ax), abs(ny - ay)) > FIST_RADIUS + 1) continue
-                val d = maxOf(abs(nx - tx), abs(ny - ty)) * 2 + (if (nx * 100 + ny in occupied) 3 else 0)
+                // ...и болото в колонне стоит дороже крюка: крип, шагнувший в трясину, встаёт на четыре тика, а
+                // колонна уходит без него — это и есть «армия вязнет и растягивается» (v183)
+                val d = maxOf(abs(nx - tx), abs(ny - ty)) * 2 + (if (nx * 100 + ny in occupied) 3 else 0) +
+                    (if (USE_ORDER_AVOIDS_SWAMP && DistanceMap.isSwamp(nx, ny)) MARCH_SWAMP_COST else 0)
                 if (d < bestD) { bestD = d; best = InfluenceMap.cell(nx, ny) }
             }
             val b = best ?: continue
@@ -6017,8 +6028,16 @@ cpuMark("a.evade")
                 // Опасность клетки входила слагаемым и её перевешивали другие члены; теперь клетка, где входящий за
                 // тик снимает крипу всю жизнь, стоит запретительно дорого и берётся, только если других нет вовсе
                 val lethal = USE_NO_LETHAL_CELLS && (incNext[key] ?: 0.0) >= c.hits
+                // БОЛОТО ДЕРЖИТ КРИПА НЕСКОЛЬКО ТИКОВ (v183, оператор: «часть нашей армии часто вязнет в болоте и
+                // дальше не может двигаться»). Про болото знала только СТАРАЯ ветка движения — штраф в выборе слота и
+                // расчёт периода шага; командир, забравший себе все приказы, о нём не знал вовсе и посылал крипов в
+                // трясину. Замер по четырём разгромам: наши крипы несут усталость 489 крипо-тиков против его 36 (в
+                // тринадцать раз), стоят на месте 22 % против его 7 %, самый долгий непрерывный простой у нас 47 тиков
+                // против семи у него. Шаг В болото стоит четырёх тиков неподвижности; стоять НА болоте бесплатно,
+                // поэтому дорожает только переход
+                val bog = USE_ORDER_AVOIDS_SWAMP && !self && DistanceMap.isSwamp(p.x, p.y)
                 val sc = rank(p) + (if (tenant != null) ALLY_CELL_COST else 0.0) + pathDanger(c, p) +
-                    (if (lethal) LETHAL_CELL_COST else 0.0)
+                    (if (lethal) LETHAL_CELL_COST else 0.0) + (if (bog) SWAMP_CELL_COST else 0.0)
                 // ...и при РАВНЫХ оценках выбор не должен зависеть от порядка перебора: раньше порядок задавала общая
                 // раздача, теперь — обход соседей, и одна строка гейта поменяла исход именно из-за этого (v181)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
