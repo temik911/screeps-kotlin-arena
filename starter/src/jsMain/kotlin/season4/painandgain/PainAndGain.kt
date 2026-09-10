@@ -2147,7 +2147,8 @@ object PainAndGain {
     private const val USE_FIRE_STRIPS_HEALERS = true
     private const val STALEMATE_WINDOW = 100     // окно наблюдения за хитами обеих сторон
     private const val STALEMATE_LOSS = 0.05      // «заметная доля»: за окно упало меньше пяти процентов
-    private const val STALEMATE_HOLD = 5         // и признак держится подряд, чтобы не мигал
+    private const val STALEMATE_HOLD = 5
+    private const val STALEMATE_GAP = 20         // разрыв контакта короче этого окно пата не роняет (v198)         // и признак держится подряд, чтобы не мигал
     private const val CAPTURE_WHOLE_CREEPS = 10      // бойцов и лекарей в строю
     private const val CAPTURE_WHOLE_HITS = 0.75      // и хитов не меньше трёх четвертей
     private const val USE_COMMAND_BRACE = true
@@ -2220,7 +2221,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v197"
+    private const val BOT_VERSION = "v198"
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
@@ -2920,6 +2921,7 @@ cpuMark("arrival")
     private var leadTicks = 0                             // прибор: тиков, в которые ряд целился на клетку ближе (v196)
     private var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
     private var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
+    private var stalemateGap = 0                          // тиков подряд без контакта (см. STALEMATE_GAP)
     private var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
     private var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
     /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
@@ -4517,8 +4519,16 @@ cpuMark("a.evade")
         if (touchShare < touchMin) touchMin = touchShare
         val stalemateOurNow = combatArmy.sumOf { it.hits }
         val stalemateHisNow = combatEnemies.sumOf { it.hits }
-        if (contact) { stalemateOurHist.addLast(stalemateOurNow); stalemateHisHist.addLast(stalemateHisNow) }
-        else { stalemateOurHist.clear(); stalemateHisHist.clear() }
+        // ОКНО ПАТА ПЕРЕЖИВАЕТ МИГАНИЕ КОНТАКТА (v198). Окно очищалось на КАЖДОМ тике без контакта, а `contact` в
+        // стоянке мигает — и в матче 3d9894, где 1700 тиков не погиб ни один крип ни у нас, ни у него, прибор дошёл
+        // лишь до 48 из ста нужных (`pat=0/48`). Признак, который в чистейшем пату не может стать истинным, ничего не
+        // измеряет: он и был причиной, по которой v189 не с чем было сравнивать. Разрыв короче STALEMATE_GAP окно
+        // держит — сто тиков «ни одна сторона не потеряла и пяти процентов хитов» остаются теми же ста тиками
+        if (contact) { stalemateOurHist.addLast(stalemateOurNow); stalemateHisHist.addLast(stalemateHisNow); stalemateGap = 0 }
+        else {
+            stalemateGap++
+            if (stalemateGap > STALEMATE_GAP) { stalemateOurHist.clear(); stalemateHisHist.clear() }
+        }
         while (stalemateOurHist.size > STALEMATE_WINDOW) stalemateOurHist.removeFirst()
         while (stalemateHisHist.size > STALEMATE_WINDOW) stalemateHisHist.removeFirst()
         // ПРИБОР, а не правило: счётчик пата считается всегда, независимо от того, кто им пользуется. Он был
