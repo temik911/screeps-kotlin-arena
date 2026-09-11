@@ -369,8 +369,30 @@ object PainAndGain {
     private const val USE_LOST_RACE_PROJECTED = true
     /** Клапан проигранной гонки открывается по РАЗМЕНУ, а не по тишине (v218, решение оператора; см. lostRaceNow). */
     private const val USE_LOST_RACE_BY_LEDGER = true
-    /** Стрелок держит RANGED_RANGE, пока у врага жив вооружённый мили (v220, см. closeIn). */
-    private const val USE_RANGED_KEEPS_THREE = true
+    /** Мили идёт на его мили, уже дотянувшегося до нашего стрелка или лекаря (v220, см. inLine/covered). */
+    private const val USE_MELEE_GUARDS_LINE = true
+    /** Стрелок держит RANGED_RANGE, пока у врага жив вооружённый мили (v220, см. closeIn).
+     *  ⚠️ ОТВЕРГНУТО ЖИВЫМ КОНТРОЛЕМ, и отвергнуто по ФОРМЕ, а не по счёту. Восемь бесплатных игр против
+     *  MetalicaX#9 каждой сборкой:
+     *
+     *  | | правка ВЫКЛ | правка ВКЛ |
+     *  |---|---|---|
+     *  | счёт | 5-3 | 3-5 |
+     *  | армия в ноль | 3 | 4 |
+     *  | матчей не длиннее 400 тиков | 3 | 5 |
+     *  | минимум армии за матч | 4,9 | 2,5 |
+     *  | леджер размена | +996 | −3245 |
+     *  | средняя разница очков | +12 029 | +7 604 |
+     *
+     *  Хуже по КАЖДОМУ измерению, и прибор говорит, что правило работало ровно там, где задумано: в пяти
+     *  поражениях `massed=true` и удержаний 23–38 % агрессивных крипо-тиков, во всех трёх победах блоба не было
+     *  и удержаний 1–3 %. То есть посылка («стрелок на двух — это стрелок, до которого шагает его мили») верна,
+     *  а ЛЕЧЕНИЕ неверно: отойти на третью клетку значит отдать позицию, а файл уже записал, почему это не
+     *  работает — «выхода из-под удара без потери позиции в этом боте нет» и «отход от мили — это выстрел в
+     *  спину каждый тик». Скорости равны, поэтому шаг назад не разрывает дистанцию, а только снимает наш залп.
+     *  Вывод для следующей попытки: чинить надо не то, КУДА встаёт стрелок, а то, что его мили доходит до
+     *  стрелка беспрепятственно (см. USE_MELEE_GUARDS_LINE). */
+    private const val USE_RANGED_KEEPS_THREE = false
     /** Цель, которую дотягивающиеся стволы реально пробивают, — выше стрелков и выше `gunsAt` (v218, см. focusCmp).
      *  ⚠️ ОТВЕРГНУТО ЖИВОЙ СЕРИЕЙ, и отвергнуто НА СОБСТВЕННЫХ УСЛОВИЯХ. Стенд дал +6 строк из «недостижимого
      *  отрыва» в уничтожение армии врага (t=1170 -> 133..403) — и это оказался тот же обман, что уже случался с
@@ -3157,7 +3179,7 @@ cpuMark("arrival")
                 "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
-                "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold close3=$closeHeld/$closeTicks " +
+                "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold close3=$closeHeld/$closeTicks guard=$guardFired/$guardTicks " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6046,7 +6068,22 @@ cpuMark("a.evade")
             val spotNow = USE_SPOT_MELEE && isMelee(creep) && !hasRanged(creep) && !support && !rotating &&
                 localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && spotEdgeAt(e) >= PUSH_RATIO && !killTicks(e).isInfinite() }
             if (spotNow) spotMeleeTicks++
-            val inLine = !USE_INLINE || inFight || spotNow || (formationReady && combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
+            // МИЛИ ЗАЩИЩАЕТ СВОЕГО (v220, см. USE_MELEE_GUARDS_LINE). Ворота `inLine` требуют двух ВООРУЖЁННЫХ
+            // своих в FORM_RANGE = 2 — и это спираль: его мили раздевает наших стрелков, раздетый перестаёт быть
+            // `hasWeapon`, ворота закрываются, наши мили перестают драться, и он раздевает следующего. Разбор
+            // реплеев v219 показывает её прямо: в трёх разгромах трассировка простоя мили даёт `!inLine` 20/22/3
+            // и `!covered` 20/15/6 крипо-тиков, а его мили стояли вплотную 53–73 крипо-тика против наших 14–18 —
+            // «его мили нашли цели, наши держали линию, которую никто не атаковал».
+            // Оговорка узкая и НЕ повторяет отвергнутое «враг в трёх снимает ворота» (blitz 7-1 -> 5-3, пикет
+            // фермера снимал их и мили танцевали с пикетом): здесь ворота открывает не близость врага к НАМ, а
+            // то, что его вооружённый мили УЖЕ дотянулся до нашего небоевого — стрелка, лекаря или раздетого.
+            // Пикет одиночки такого не делает, а блоб делает первым же тиком
+            fun guards(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
+                combatArmy.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= MELEE_KEEP_RANGE }
+            val guardNow = USE_MELEE_GUARDS_LINE && isMelee(creep) && !hasRanged(creep) && !support && !rotating &&
+                localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && guards(e) }
+            if (isMelee(creep) && !hasRanged(creep) && localEnemies.isNotEmpty()) { guardTicks++; if (guardNow) guardFired++ }
+            val inLine = !USE_INLINE || inFight || spotNow || guardNow || (formationReady && combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
             // при бесплодной охоте (см. STALL_TICKS) броска нет: висящие крипы россыпи «ловимы» (не уходят стабильно), и
             // каждый наш крип танцевал со своим соседом вместо марша к флагу-цели (стенд m19 spread, travel=23 четыреста тиков)
             // «держит линию» — про мили В ЛИНИИ, а не про любого мили в бою: без этого условия мили, до которого враг
@@ -6111,6 +6148,7 @@ cpuMark("a.evade")
             // ...и ПЕРЕВЕС НАД ЭТОЙ ЦЕЛЬЮ снимает требование прикрытия (v214, решение оператора). Порог берётся по
             // КОНКРЕТНОЙ цели, а не по spotNow: перевес над одним не должен открывать бросок на другого
             fun covered(e: Creep) = !USE_MELEE_COVER || holdMelee || (USE_SPOT_MELEE && spotEdgeAt(e) >= PUSH_RATIO) ||
+                (USE_MELEE_GUARDS_LINE && guards(e)) ||
                 combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
                 army.any { a -> a.id != creep.id && getRange(e, a) <= 1 }
             // ОДНА ДОБЫЧА НА ВСЕХ в толчке (v71): бросок — только на цель в ENGAGE_RANGE от добычи армии (prey — ближайший к центру по
@@ -8285,6 +8323,10 @@ cpuMark("a.evade")
      *  стрелка в местной агрессии» (v220, см. closeIn). Числитель — сколько раз оговорка вообще сработала. */
     private var closeHeld = 0
     private var closeTicks = 0
+    /** Пара «крипо-тиков, где ворота броска открыла защита своего / всех крипо-тиков мили при враге рядом»
+     *  (v220, см. USE_MELEE_GUARDS_LINE). */
+    private var guardFired = 0
+    private var guardTicks = 0
     /** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
      *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
     private var retrTicks = 0
