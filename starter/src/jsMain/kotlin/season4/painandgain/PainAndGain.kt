@@ -3222,6 +3222,7 @@ cpuMark("arrival")
                 // консоль не показывала (имя `guns=` занято прибором v200)
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
+                "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
                 "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
@@ -5749,6 +5750,24 @@ cpuMark("a.evade")
         if (outmatchedTicks >= BREAK_OFF_TICKS) {
             outmTicks++
             if (posture == Posture.RETREAT) outmRetreat++
+        }
+        // РАЗЛОЖЕНИЕ ПУСТОЙ БОЕВОЙ ПОСТУРЫ (v221, прибор). Живой A/B против MetalicaX#2: с USE_FIGHT_BY_LEDGER доля
+        // тиков ANNIHILATE без размена НЕ упала (20 % против 16 % в контроле), хотя тёплый контакт в контакте упал с
+        // 0,45 до 0,27. Значит, пустую постуру держит другой источник, и его надо назвать числом, а не гадать. Порядок
+        // проверки — порядок власти над постурой: командир перезаписывает её последним
+        if (posture == Posture.ANNIHILATE && !exchangeLive) {
+            annEmptyAll++
+            val src = when {
+                cmdMode == CmdMode.FIGHT -> "cmd"
+                pushing -> "push"
+                holdingSpot -> "spot"
+                meleeAdjacent -> "melee"
+                cornered -> "corner"
+                contact && hisStill -> "still"
+                contact -> "warm"
+                else -> "held"
+            }
+            annEmpty[src] = (annEmpty[src] ?: 0) + 1
         }
         // ПАРА К СБОРУ (v218, см. gatherSpread). Сбор (rallyTo) и сплочение (cohesionHold) намеренно молчат в
         // HOLD, и основание записано рядом с ними: «в HOLD цель — точка, к ней сходятся и так». Прибор проверяет
@@ -8508,6 +8527,12 @@ cpuMark("a.evade")
     /** Пара «тиков ANNIHILATE со строем стрелков шире RALLY_RANGE / тиков ANNIHILATE» (v221, см. gatherSpread). */
     private var gatherAnn = 0
     private var gatherAnnAll = 0
+    /** Разложение тиков ANNIHILATE без размена по источнику (v221, см. annEmptyAll): cmd — режим боя командира,
+     *  push — толчок, spot — очаг, melee — его мили вплотную, corner — загнанная группа, still — контакт со стоящим
+     *  (USE_WARM_NEEDS_HIS_MOVE), warm — тёплый контакт (с правкой обязан быть нулём), held — постура удержана
+     *  гистерезисом без контакта. */
+    private val annEmpty = HashMap<String, Int>()
+    private var annEmptyAll = 0
 
     /** Расстановка боя (см. USE_PLAN): клетки с признаками, роли по порядку признаков, жадное назначение. Выход — slotOf,
      *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
