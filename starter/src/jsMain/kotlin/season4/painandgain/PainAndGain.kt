@@ -371,6 +371,25 @@ object PainAndGain {
     private const val USE_LOST_RACE_BY_LEDGER = true
     /** Мили идёт на его мили, уже дотянувшегося до нашего стрелка или лекаря (v220, см. inLine/covered). */
     private const val USE_MELEE_GUARDS_LINE = true
+    /** ОБЩАЯ ЦЕЛЬ ЧЕТЫРЁХ МИЛИ (v221, рычаг B пачки; разбор двух рейтинговых серий по реплеям обеих сторон).
+     *  1. Замер. Во ВСЕХ шести блоб-поражениях v219–v220 через 40 тиков после контакта он не потерял ни одного
+     *     стрелка и ни одного мили, мы — стрелков (первая смерть на 8–34-м тике) и мили; в четырёх из шести блоб-побед
+     *     к этому сроку он потерял от двух до пяти стрелков. Хиты за первые 20 тиков при этом бывают ровными
+     *     (8500 : 7493): его урон складывается в убийства — четыре мили по 240 на одном нашем стрелке в 1200, — наш
+     *     размазан и залечен его тремя лекарями (216 в тик).
+     *  2. Код. Удар мили (`strike`) сфокусирован — приказ командира, цель фокуса вплотную, — а НОГИ нет: вне командира
+     *     каждый мили идёт к БЛИЖАЙШЕМУ допустимому врагу (`engage`, `minByOrNull { getRange }`), под командиром клетка
+     *     мили считается по СУММЕ притяжения всех врагов (`attMeleeAt`), общая цель — только в замысле FOCUS. Прибор
+     *     `conc` считает одних стрелков: сложены ли четыре удара в одну цель, не мерил никто (см. mconcAll).
+     *  3. Правка ничего не ЗАПРЕЩАЕТ мили (этим она отличается от дважды отвергнутых ворот «мили входит парой»,
+     *     USE_MELEE_PAIR_GATE) и не трогает ноги СТРЕЛКОВ (отвергнутые USE_PRESS_RING и USE_CELL_KNOWS_FOCUS): среди
+     *     целей, которые мили и так разрешено брать, выбирается одна на всех — его стрелок или лекарь, ловимый и в
+     *     ENGAGE_RANGE не меньше чем от двух наших мили; прежде всего липкая прежняя, затем цель фокуса. */
+    private const val USE_MELEE_PACK = true
+    /** ...и та же цель — клетке мили под командиром (v221): притяжение `attractionTo(цель пачки)` во всех замыслах, а не
+     *  только в FOCUS. Экспозиция на стенде мала (командир в бою 0,4–0,9 % тиков), живьём в блоб-разгромах режим
+     *  FIGHT держится десятки тиков подряд — именно там ноги мили решает командир. */
+    private const val USE_MELEE_PACK_CELLS = true
     /** Стрелок держит RANGED_RANGE, пока у врага жив вооружённый мили (v220, см. closeIn).
      *  ⚠️ ОТВЕРГНУТО ЖИВЫМ КОНТРОЛЕМ, и отвергнуто по ФОРМЕ, а не по счёту. Восемь бесплатных игр против
      *  MetalicaX#9 каждой сборкой:
@@ -3245,7 +3264,7 @@ cpuMark("arrival")
                 // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
                 // консоль не показывала (имя `guns=` занято прибором v200)
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
-                "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
+                "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
                 "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
@@ -5349,6 +5368,31 @@ cpuMark("a.evade")
         val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && !rangedNow && !moreGuns && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
             combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
         focusId = focusTarget?.id
+        // ЦЕЛЬ ПАЧКИ МИЛИ (v221, см. USE_MELEE_PACK): его стрелок или лекарь, ловимый и в ENGAGE_RANGE не меньше чем от
+        // двух наших чистых мили. Липкость якорится на МИЛИ (липкость фокуса якорится на стрелках и цель, которую держат
+        // одни мили, сбрасывает); прежде прежняя, затем цель фокуса, иначе цели нет и мили выбирают как прежде
+        // ...и ПЕРВЫЙ В ОЧЕРЕДИ — его мили, уже дотянувшийся до нашего стрелка, лекаря или раздетого (тот же набор, что у
+        // защиты своего v220, см. USE_MELEE_GUARDS_LINE). Первая редакция брала только его стрелков и лекарей, и стенд
+        // показал почему этого мало: ноги мили шли к цели пачки в 71–78 % тиков, а вплотную к ней не выходили — его
+        // стрелки стоят за линией его мили, — и ударов в одну цель (`mconc`) стало даже меньше базы. Реплеи разгромов
+        // говорят то же: убивают его мили на наших стрелках, четверо на одном
+        val packMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) && hasMelee(it) }
+        fun onOurShooter(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
+            combatArmy.any { a -> !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 }
+        fun packable(e: Creep) = e.hits > 0 && (armedRanged(e) || armedHealer(e) || onOurShooter(e)) && catchable(e, chasers) &&
+            packMelee.count { getRange(it, e) <= ENGAGE_RANGE } >= 2
+        val packPrev = packId?.let { id -> combatEnemies.firstOrNull { it.id == id } }?.takeIf { packable(it) }
+        val packTarget: Creep? = if (!USE_MELEE_PACK && !USE_MELEE_PACK_CELLS) null else
+            // его мили на нашем стрелке — выше всего, и среди них тот, до кого дотянется больше наших мили; липкость
+            // держит прежнюю цель, пока она сама такой же мили на стрелке или пока новых на стрелках нет
+            (if (packPrev != null && onOurShooter(packPrev)) packPrev else null)
+                ?: combatEnemies.filter { onOurShooter(it) && packable(it) }
+                    .maxWithOrNull(compareBy<Creep> { e -> packMelee.count { getRange(it, e) <= ENGAGE_RANGE } }.thenByDescending { it.hits })
+                ?: packPrev
+                ?: focusTarget?.takeIf { packable(it) }
+        packId = packTarget?.id
+        packTargetNow = packTarget
+        if (packMelee.isNotEmpty() && combatEnemies.isNotEmpty()) { packTicks++; if (packTarget != null) packHeld++ }
         // ВЕЕР НЕ РАСФОКУСИРУЕТ СОШЕДШИЕСЯ СТВОЛЫ (v218, см. USE_FAN_KEEPS_FOCUS). Признак снимается ЗДЕСЬ,
         // потому что `killTicks` живёт только в этой области видимости, а нужен он в `shoot` — на 1500 строк ниже
         focusBreakableNow = focusTarget != null && !killTicks(focusTarget).isInfinite()
@@ -6288,7 +6332,10 @@ cpuMark("a.evade")
             val poker: Creep? = if (isMelee(creep) && !hasRanged(creep) && !support && (!rotating || pokerRot) && !stalled) combatEnemies.filter { e ->
                 InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && !givenUp(e) &&
                     army.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 }
-            }.minByOrNull { getRange(creep, it) } else null
+            }.let { c ->
+                // защита своего — тоже одной целью на всех (v221, см. USE_MELEE_PACK): цель пачки, если она среди них
+                if (USE_MELEE_PACK && packTarget != null && c.any { it.id == packTarget.id }) packTarget
+                else c.minByOrNull { getRange(creep, it) } } else null
             // прикрытие (v55): мили бросается на цель в ENGAGE_RANGE, только если её достают наши стрелки — не меньше MELEE_COVER
             // стрелков в RANGED_RANGE + 1 от неё — или она вплотную к кому-то из наших. Матч 115 (stachu3478, битый до того
             // девятнадцать раз): его одиночный стрелок подошёл на 2–6 клеток к нашим мили и отступал по клетке в тик; трое мили
@@ -6319,10 +6366,15 @@ cpuMark("a.evade")
             fun paired(e: Creep) = !USE_MELEE_PAIR_GATE || !meleeOnly || army.any { a -> a.id != creep.id && getRange(e, a) <= 1 } || mateNear(e, MELEE_HOLD_RANGE + 1)
             // ...и присоединяется к напарнику, уже стоящему в MELEE_HOLD_RANGE от цели: досягаемость на клетку больше
             fun holdReach(e: Creep) = if (USE_MELEE_PAIR_ENGAGE && meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
-            val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
+            val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.let { c ->
+                // ОДНА ЦЕЛЬ НА ВСЕХ МИЛИ (v221, см. USE_MELEE_PACK): цель пачки, если она среди допустимых этому мили,
+                // иначе прежний ближайший — пачка ничего не запрещает, она только выбирает
+                if (USE_MELEE_PACK && meleeOnly && packTarget != null && c.any { it.id == packTarget.id }) packTarget
+                else c.minByOrNull { getRange(creep, it) } } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
             // пара к общей цели мили (v221, см. mpackHit): как часто ноги мили и так идут к цели фокуса
             if (meleeOnly && engage != null) { mpackAll++; if (engage.id == focusTarget?.id) mpackHit++ }
+            if (meleeOnly && engage != null && packTarget != null) { mpackOn++; if (engage.id == packTarget.id) mpackOnHit++ }
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру.
             // ПОВОДОК НЕ ТЯНУЛ ИМЕННО ТОГО, КТО УБЕЖАЛ (v191, USE_LEASH_IN_CONTACT): условие требовало врага РЯДОМ С
             // КРИПОМ, а у крипа, отставшего от боя, врагов рядом уже нет — и он оставался стоять там, где остановился.
@@ -6860,6 +6912,10 @@ cpuMark("a.evade")
             ordered != null -> ordered
             armedMelee != null -> armedMelee
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
+            // ...и УДАР ИДЁТ ТУДА ЖЕ, КУДА НОГИ (v221, см. USE_MELEE_PACK): мили, дошедший до цели пачки, бил первого по
+            // ранжиру соседа — часто его мили, мимо которого шёл, — и прибор это показал: ноги к цели пачки в 71–78 %
+            // тиков, а ударов в одну цель (`mconc`) даже меньше базы (1,12 против 1,32 на m35)
+            USE_MELEE_PACK && isMelee(creep) && !hasRanged(creep) && packTargetNow?.let { p -> adjacent.any { it.id == p.id } } == true -> packTargetNow
             adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
             else -> null
         }
@@ -7915,7 +7971,10 @@ cpuMark("a.evade")
             // ПРЕСЛЕДОВАТЕЛЬ СМОТРИТ НА СВОЙ ОСТОВ (v211) — тем же полем притяжения, что и фокус: у мили пик
             // вплотную, у стрелка на дальности три. Отдельной формулы у погони нет и не нужно
             val chased = chaseTarget[c.id]
-            val focus = chased ?: if (i == Intent.FOCUS) (if (role == 0) weakestMelee else weakestFoe) else null
+            // ...и ЦЕЛЬ ПАЧКИ МИЛИ во всех замыслах (v221, см. USE_MELEE_PACK_CELLS): притяжение к одной его цели
+            // вместо суммы по всем — четыре мили в одну клетку-соседа, а не каждый к своей
+            val focus = chased ?: (if (USE_MELEE_PACK_CELLS && role == 0) packTargetNow else null)
+                ?: if (i == Intent.FOCUS) (if (role == 0) weakestMelee else weakestFoe) else null
             val kite = i == Intent.KITE
             val rank = { p: Position ->
                 val key = p.x * 100 + p.y
@@ -8551,6 +8610,15 @@ cpuMark("a.evade")
     /** Пара «тиков ANNIHILATE со строем стрелков шире RALLY_RANGE / тиков ANNIHILATE» (v221, см. gatherSpread). */
     private var gatherAnn = 0
     private var gatherAnnAll = 0
+    /** Цель пачки мили (v221, см. USE_MELEE_PACK): липкий id и значение этого тика — для командира. */
+    private var packId: String? = null
+    private var packTargetNow: Creep? = null
+    /** Пары пачки (v221): «тиков с целью пачки / тиков, где у нас есть мили и у него боевые»; «крипо-тиков мили, чьи
+     *  ноги идут к цели пачки / крипо-тиков мили с целью ног, пока цель пачки есть». */
+    private var packHeld = 0
+    private var packTicks = 0
+    private var mpackOnHit = 0
+    private var mpackOn = 0
     /** Разложение тиков ANNIHILATE без размена по источнику (v221, см. annEmptyAll): cmd — режим боя командира,
      *  push — толчок, spot — очаг, melee — его мили вплотную, corner — загнанная группа, still — контакт со стоящим
      *  (USE_WARM_NEEDS_HIS_MOVE), warm — тёплый контакт (с правкой обязан быть нулём), held — постура удержана
