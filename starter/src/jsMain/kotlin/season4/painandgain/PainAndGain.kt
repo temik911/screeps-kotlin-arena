@@ -2380,6 +2380,26 @@ object PainAndGain {
      *  Здесь тот же вопрос задан величиной, которая не умеет врать про лечение: сколько хитов сняли С НАС против
      *  того, сколько мы сняли С НЕГО за окно. Порог берётся существующий, `BREAK_OFF_RATIO`; новых чисел нет. */
     private const val USE_BREAK_OFF_BY_LEDGER = true
+    /** ОТХОД ЗНАЧИТ «НЕ НАСТУПАТЬ», А НЕ «БЕЖАТЬ» (v217, решение оператора: «держать линию, не бежать»).
+     *  Правило v185 верно, признак починен в v216 — и всё равно проигрывает, потому что негодно ДЕЙСТВИЕ.
+     *  Замер по 20 рейтинговым матчам v216: доля тиков в постуре RETREAT — **0 % в победах и 63 % в
+     *  поражениях**; пять поражений из шести это разгромы, где нас стирают за 120–280 тиков, а соперник
+     *  заканчивает при 16 000/16 000, не потеряв ни одного крипа. Причинное сравнение по версиям против
+     *  Coldkimchi: v213 и v214 (правило ВЫКЛЮЧЕНО) — **6:6, лучший счёт сезона**, при доле отхода 2 % и 1 %;
+     *  v215 и v216 (включено) — 0-1 и **0-4**.
+     *  Почему отход убивает, измерено: в отходе крипов, у которых враг в ИХ ДАЛЬНОСТИ, — 35 крипо-тиков из
+     *  58 162, то есть ноль; и постура отхода выключает разом шестнадцать механизмов (строй, слоты,
+     *  построение, плотность, поводок лекарей, сплочение, командира боя целиком, локальную агрессию, `engage`,
+     *  `holdMelee`, добычу, сбор к центру, охоту, детектор простоя, захват флагов и учёт собственного огня при
+     *  выборе клетки). В файле это записано словами: «отход от мили — это выстрел в спину каждый тик» и
+     *  «выхода из-под удара без потери позиции в этом боте нет — ни через цель, ни через план, ни через
+     *  дистанцию».
+     *  Здесь признак гасит НАСТУПЛЕНИЕ, а не разворачивает армию: `pushing` становится ложным, `contactFight`
+     *  остаётся истинным, постура остаётся ANNIHILATE — и все шестнадцать механизмов живут. Армия перестаёт
+     *  разменивать на его условиях, но не подставляет спину.
+     *  ⚠️ Это НЕ «деремся до конца контакта» (замерено 2:11) и не «слабее — только отход» (2:6). Кайт
+     *  тик-за-тиком (`USE_MASS_KITE`, 10:0 на sleeper) остаётся как есть — снимается только толчок вперёд. */
+    private const val USE_BREAK_OFF_HOLDS_LINE = true
     /** СТРОЙ НЕ ПРИНИМАЕТ БОЙ У КРАЯ. НЕ ВКЛЮЧЕНО — правило выведено из СОВПАДЕНИЯ и не пережило широкой выборки
      *  (v184). Повод: в двенадцати тестовых играх против MetalicaX#10 проигранные сшибки шли при нашем центре в
      *  десяти клетках от края карты, выигранные — в сорока двух, при разнице во всём остальном (сомкнутость 2,4/5
@@ -4345,6 +4365,13 @@ cpuMark("a.hunt")
         // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
         // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
         fightOnNow = contact || exchangeRecent
+        // ПРИЗНАК ОТХОДА СЧИТАЕТСЯ ЗДЕСЬ (v217, см. USE_BREAK_OFF_HOLDS_LINE): он должен успеть погасить
+        // наступление, а `pushing` решается на триста строк ниже. Величины готовы: контакт уже есть, а
+        // `ourDamageTaken`/`enemyDamageTaken` копятся с начала матча
+        val outmatchedNow = USE_COMMAND_BREAKS_OFF && contact && armedEnemies.isNotEmpty() &&
+            ourDamageTaken > 0 && enemyDamageTaken < ourDamageTaken * BREAK_OFF_RATIO
+        outmatchedTicks = if (outmatchedNow) outmatchedTicks + 1 else 0
+        val breakOffNow = outmatchedTicks >= BREAK_OFF_TICKS
         // ОТЗЫВ (v215, см. USE_NO_SPLIT_IN_FIGHT): едва бой начался, отпущенные возвращаются в кулак. Очистка стоит
         // ЗДЕСЬ, а не внутри `commandRace`: выйдя из режима гонки, командир эту функцию не зовёт вовсе, и `cmdDetach`
         // оставался с прошлого тика — отпущенные не возвращались никогда
@@ -4691,6 +4718,9 @@ cpuMark("a.sweep")
         // Живое основание сильнее стендового: из 1 189 быстрых смен постуры в рейтинговой серии 852 несут смену
         // `pushing`, а стенд в режим боя почти не входит (cmdwhy fight:8 из 570 тиков). Судит живая серия
         pushHeld = false
+        // ...и РАЗМЕН НИЖЕ ПАРИТЕТА ГАСИТ НАСТУПЛЕНИЕ (v217, см. USE_BREAK_OFF_HOLDS_LINE), а не разворачивает
+        // армию: толчка вперёд нет, строй и лекари остаются
+        if (USE_BREAK_OFF_HOLDS_LINE && breakOffNow) { pushing = false; pushTicks++ } else
         pushing = if (!USE_PUSH_DWELL) pushRaw else when {
             pushRaw -> { if (!pushing) pushSince = now; true }
             pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease -> {
@@ -5361,12 +5391,11 @@ cpuMark("a.evade")
         // прекращать размен» — про размен целиком, а не про последние двадцать тиков; окно осталось прибором
         val outmatchedByLedger = USE_COMMAND_BREAKS_OFF && contact && armedEnemies.isNotEmpty() &&
             ourDamageTaken > 0 && enemyDamageTaken < ourDamageTaken * BREAK_OFF_RATIO
-        val outmatched = if (USE_BREAK_OFF_BY_LEDGER) outmatchedByLedger else outmatchedByPower
+        // ...а САМ признак посчитан выше (v217, см. outmatchedNow): здесь остаётся только прибор расхождения
         if (contact && armedEnemies.isNotEmpty()) {
             breakOffN++
             if (outmatchedByPower != outmatchedByLedger) breakOffSplit++
         }
-        outmatchedTicks = if (outmatched) outmatchedTicks + 1 else 0
         cmdMode = when {
             // ПОХОД — это когда врага рядом НЕТ, а не «нет контакта»: кайтер держится в двух шагах за границей
             // контакта, и командир, раздавая задания на захват, разбирал против него армию по одному — сценарий
@@ -5384,7 +5413,9 @@ cpuMark("a.evade")
             // сценарий camp уходил в 17 508:22 337. Затор (stalledNow) остаётся как был
             // ...и РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185): срок в BREAK_OFF_TICKS тиков нужен, чтобы одиночный
             // просадочный тик не выдёргивал армию из выигрышного боя
-            outmatchedTicks >= BREAK_OFF_TICKS -> CmdMode.RACE
+            // ...и при «держим линию» размен ниже паритета НЕ отправляет командира в гонку: уйдя из режима боя,
+            // он перестаёт раздавать клетки, а именно они и держат строй (v217)
+            !USE_BREAK_OFF_HOLDS_LINE && outmatchedTicks >= BREAK_OFF_TICKS -> CmdMode.RACE
             (stalledNow || (enemyRetreating && !(USE_FIGHT_OVER_CHASE && underTheirFire && theirMeleeIn))) -> CmdMode.RACE
             // ...и НЕ ДОБИВАНИЕ: это условие несло старое ограничение blockOn, и без него командир строил кулак в
             // погоне за кайтером — match29:kite шёл 0 : 22 644, а без командира кончается уничтожением его армии на
@@ -5428,11 +5459,13 @@ cpuMark("a.evade")
         // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
         // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
         // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
-        if (USE_COMMAND_BREAKS_OFF && outmatchedTicks >= BREAK_OFF_TICKS && posture != Posture.RETREAT) {
+        if (!USE_BREAK_OFF_HOLDS_LINE && USE_COMMAND_BREAKS_OFF && outmatchedTicks >= BREAK_OFF_TICKS && posture != Posture.RETREAT) {
             posture = Posture.RETREAT
             if (USE_ONE_POSTURE_CLOCK) postureSince = getTicks()
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("cmd t=${getTicks()}: outmatched for $outmatchedTicks ticks — break off")
         }
+        if (USE_BREAK_OFF_HOLDS_LINE && breakOffNow && DEBUG_LOG && getTicks() % LOG_EVERY == 0)
+            println("cmd t=${getTicks()}: outmatched for $outmatchedTicks ticks — the advance stops, the line holds")
         // ПРИБОРЫ ОТХОДА (v217). Считаются ЗДЕСЬ, после того как постура окончательна: командир перезаписывает
         // её на 600 строк позже, чем она решается, и прибор, снятый раньше, рассказал бы про другую постуру
         if (outmatchedTicks >= BREAK_OFF_TICKS) {
