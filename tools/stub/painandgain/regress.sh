@@ -21,7 +21,23 @@ if [[ ! -x "$NODE" ]]; then echo "regress: node not found under ~/.gradle/nodejs
 if [[ "$1" == --one ]]; then
   local_n=$2; map=$3; start=$4; sc=$5; TAG=$6; dir=$7
   label="${map#map-}"; label="${label%.txt}:$sc"
-  if [[ "$map" == - ]]; then
+  # GHOST-СТРОКА: `replay:<файл>` вместо карты — врагом правит запись живого матча (см. run.mjs, сценарий ghost).
+  # Зачем это в воротах: без них у гейта НЕТ НИ ОДНОЙ проигрышной строки — 135 из 135 PASS, — а значит он не может
+  # ответить на вопрос «от какой правки мы начнём проигрывать», только на «насколько быстро мы выигрываем».
+  # Записи лежат ВНЕ репозитория ($REPLAY_DIR, по умолчанию ~/ScreepsArena/replays), поэтому на чужой машине файла
+  # может не быть. Пропуск делается ГРОМКИМ — предупреждением в stderr и счётом в сводке exposure, — а не тихим:
+  # молчащая строка гейта это ровно тот лгущий прибор, которого здесь быть не должно.
+  if [[ "$map" == replay:* ]]; then
+    rp="${map#replay:}"; label="ghost:${rp%%.*}:$sc"
+    rpdir=${REPLAY_DIR:-$HOME/ScreepsArena/replays}
+    if [[ ! -f "$rpdir/$rp" ]]; then
+      print -r -- "ghost: ПРОПУЩЕНА строка $label — нет записи $rpdir/$rp" >&2
+      # маркер, а не пустой файл: пустой главный цикл читает как «воркер ничего не выдал» и печатает FAIL
+      print -r -- "#SKIP $label нет записи" > "$dir/$local_n"
+      return 0 2>/dev/null || exit 0
+    fi
+    line=$(LOGTAG="${TAG}-$label-" REPLAY="$rpdir/$rp" "$NODE" --import ./register.mjs run.mjs 2000 ghost 2>&1 | grep '^done:' | tail -1)
+  elif [[ "$map" == - ]]; then
     line=$(LOGTAG="${TAG}-" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1 | grep '^done:' | tail -1)
   elif [[ "$start" == - ]]; then
     line=$(LOGTAG="${TAG}-$label-" MAP="$map" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1 | grep '^done:' | tail -1)
@@ -406,10 +422,35 @@ run map-match20.txt -      brawl+heals
 run map-match28.txt -      brawl+heals
 run map-match35.txt -      screen+focus+blob+heals
 
+# ПРОИГРЫШНЫЕ СТРОКИ (11.09.2026). До этого дня у гейта не было НИ ОДНОЙ: 135 из 135 PASS, и ответить на вопрос
+# «от какой правки мы начнём проигрывать» он не мог — только на «насколько быстро мы выигрываем». За одну сессию
+# это стоило дважды: `USE_COMMAND_BREAKS_OFF` получил +3 699 и дал живьём четыре аннигиляции из четырёх
+# срабатываний; `USE_COMMAND_FIGHT_WHILE_PUSHING` получил +7 строк в уничтожение и уронил живой контроль с 4-0 до
+# 2-4 и 1-5. Жёсткий критерий (FAIL) за ту же сессию не ошибся ни разу.
+# Здесь врагом правит ЗАПИСЬ живого матча, который мы проиграли (сценарий ghost). Такая строка обязана сперва
+# ПАДАТЬ — иначе она ничего не проверяет, — и зеленеть по мере починки. Записи лежат вне репозитория; отсутствие
+# файла даёт громкий пропуск в stderr и счёт в сводке exposure, а не тихое молчание.
+# ⚠️ Пока список пуст: записи наших разгромов от Coldkimchi ещё не скачаны (клиент играл рейтинговую серию).
+# Формат строки: run replay:<id>.replay.json.gz - ghost
 
+
+SKIPPED=0
 xargs -P "$JOBS" -n 6 zsh "$SELF" --one < "$PLANDIR/plan"
 for ((i = 1; i <= N; i++)); do
-  if [[ -s "$PLANDIR/$i" ]]; then cat "$PLANDIR/$i"
+  if [[ -s "$PLANDIR/$i" ]]; then
+    # пропущенная ghost-строка в stdout не попадает: tools/land.sh требует PASS в КАЖДОЙ строке. Громкость
+    # обеспечена предупреждением в stderr и счётом в сводке exposure
+    if [[ "$(head -c 5 "$PLANDIR/$i")" == "#SKIP" ]]; then SKIPPED=$((SKIPPED + 1)); else cat "$PLANDIR/$i"; fi
   else printf '%-4s %-22s %-40s score %s:%s | errors: %s \n' FAIL "scenario-$i" "worker produced nothing" 0 0 '?'; fi
 done
+
+# ЭКСПОНИРОВАННОСТЬ ПРОГОНА (11.09.2026). Пустой дифф отчёта значит одно из двух — «правка мертва» или «стенд не
+# экспонирован к тому, что она трогает», — и по самому отчёту их не различить. Цена этого различия измерена: командир
+# правит боем 0,4 % тиков на стенде против 2,3 % живьём, постура отхода — 1 % против 17 %, и обе правки, которые
+# стенд за ту сессию одобрил ошибочно, меняли ровно эти подсистемы.
+# Печатается в STDERR намеренно: tools/land.sh требует, чтобы КАЖДАЯ строка stdout несла PASS и errors: 0, поэтому
+# сводка в stdout сломала бы посадку всем аренам.
+(( SKIPPED > 0 )) && print -r -- "exposure: ПРОПУЩЕНО ghost-строк: $SKIPPED (нет записей матчей — см. предупреждения выше)" >&2
+[[ -x "$(command -v python3)" ]] && python3 ./exposure.py "$TAG" >&2
+
 rm -rf "$PLANDIR"
