@@ -369,6 +369,8 @@ object PainAndGain {
     private const val USE_LOST_RACE_PROJECTED = true
     /** Клапан проигранной гонки открывается по РАЗМЕНУ, а не по тишине (v218, решение оператора; см. lostRaceNow). */
     private const val USE_LOST_RACE_BY_LEDGER = true
+    /** Стрелок держит RANGED_RANGE, пока у врага жив вооружённый мили (v220, см. closeIn). */
+    private const val USE_RANGED_KEEPS_THREE = true
     /** Цель, которую дотягивающиеся стволы реально пробивают, — выше стрелков и выше `gunsAt` (v218, см. focusCmp).
      *  ⚠️ ОТВЕРГНУТО ЖИВОЙ СЕРИЕЙ, и отвергнуто НА СОБСТВЕННЫХ УСЛОВИЯХ. Стенд дал +6 строк из «недостижимого
      *  отрыва» в уничтожение армии врага (t=1170 -> 133..403) — и это оказался тот же обман, что уже случался с
@@ -2500,7 +2502,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v219"
+    private const val BOT_VERSION = "v220"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3155,7 +3157,7 @@ cpuMark("arrival")
                 "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
-                "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold " +
+                "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold close3=$closeHeld/$closeTicks " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6150,7 +6152,30 @@ cpuMark("a.evade")
             val leashHolds = (USE_LEASH_HEALERS_IN_RETREAT && healer) || (posture != Posture.RETREAT && posture != Posture.EVADE)
             val leashed = !wounded && (!healer || USE_LEASH_HOLDS_HEALERS) && canMove(creep) && leashHolds &&
                 (localEnemies.isNotEmpty() || (USE_LEASH_IN_CONTACT && contact)) && getRange(creep, armedCentroid) > LEASH_RANGE
-            val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
+            // СТРЕЛОК НЕ ВСТАЁТ НА ДВЕ, ПОКА У ВРАГА ЖИВ МИЛИ (v220, решение оператора: «мы принимаем бой,
+            // когда у нас впереди рэнжи, в которых его мили сразу врезаются на первом тике»).
+            // `CLOSE_STANDOFF` = 2 — это ровно та клетка, с которой ЕГО мили делает ОДИН шаг и бьёт на 240;
+            // с трёх ему нужно два шага, а наш выстрел достаёт и оттуда (RANGED_RANGE = 3). То есть сближение
+            // до двух не покупает нам ни одного очка урона и дарит ему темп.
+            // Замер серии v219 по реплеям (двадцать матчей, только контактные тики): доля крипо-тиков, которые
+            // наши стрелки проводят в досягаемости его мили (d <= 2), против его стрелков под нашими мили —
+            // в победах 11 % против 20 % (под давлением ОН), в поражениях 13 % против 10 % (под давлением МЫ).
+            // В двух разгромах от MetalicaX#13 это 57 % против 12 % и 45 % против 14 % — вчетверо, и оба раза
+            // армия сложилась с 12 до 0 за шестьдесят тиков при его нулевых потерях.
+            // Тот же случай уже записан в файле с другой стороны (v43, «прилипший»): «его мили подходили к нашим
+            // стрелкам и лекарям, били по 240 и отходили — 46 ударов (11 тыс. урона) против наших 7».
+            // Оговорка снимается, когда бить некому: если у врага не осталось живого вооружённого мили,
+            // сближение до двух снова бесплатно и напор сохраняется
+            // ...и ТОЛЬКО ПРОТИВ БЛОБА (v220, замер гейта). Первая редакция спрашивала про любого живого мили
+            // рядом и уронила `match28:scatter`: 24 310:13 503 -> 21 781:24 307, единственный FAIL. Причина
+            // прямая — против РАССЫПАННОГО соперника «держать три» значит не догнать никого, а догонять там и
+            // надо. Разгромы же, ради которых правка делается, все три были против БЛОБА (форма BLOB в разборе
+            // реплеев: #4, #15, #19), и против блобов серия v219 дала 1-4. Признак блоба в файле уже есть —
+            // `enemyMassedNow` (не меньше шести его вооружённых, две трети из них в MASS_RANGE от их центроида),
+            // новых сущностей не заводится
+            val foeMeleeLive = enemyMassedNow && localEnemies.any { hasMelee(it) && InfluenceMap.profileOf(it).melee > 0.0 }
+            val closeIn = if (localAggressive && !(USE_RANGED_KEEPS_THREE && foeMeleeLive)) CLOSE_STANDOFF else RANGED_RANGE
+            if (hasRanged(creep) && localAggressive) { closeTicks++; if (foeMeleeLive) closeHeld++ }
             val melee = isMelee(creep) && !hasRanged(creep)
             val meleeMate: Creep? = if (melee) combatArmy.filter { it.id != creep.id && isMelee(it) && !hasRanged(it) && hasMelee(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
             // мили со слотом стены (см. planBlock) оставляет его ради цели: прижим или враг в досягаемости удара
@@ -8256,6 +8281,10 @@ cpuMark("a.evade")
      *  порогом, каким сбор и включается (RALLY_RANGE). */
     private var gatherSpread = 0
     private var gatherHold = 0
+    /** Пара «крипо-тиков, где стрелку не дали сблизиться до двух из-за живого мили врага / всех крипо-тиков
+     *  стрелка в местной агрессии» (v220, см. closeIn). Числитель — сколько раз оговорка вообще сработала. */
+    private var closeHeld = 0
+    private var closeTicks = 0
     /** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
      *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
     private var retrTicks = 0
