@@ -2304,6 +2304,8 @@ object PainAndGain {
     private const val USE_COMMAND_BREAKS_OFF = true
     private const val BREAK_OFF_RATIO = 0.6
     private const val BREAK_OFF_TICKS = 3       // срок, чтобы одиночный просадочный тик не выдёргивал из выигрышного боя
+    /** Окно размена для признака отхода — существующий срок «размен был недавно», а не новое число (v216). */
+    private val LEDGER_WINDOW = STALL_TICKS
     /** СТРОЙ НЕ ПРИНИМАЕТ БОЙ У КРАЯ. НЕ ВКЛЮЧЕНО — правило выведено из СОВПАДЕНИЯ и не пережило широкой выборки
      *  (v184). Повод: в двенадцати тестовых играх против MetalicaX#10 проигранные сшибки шли при нашем центре в
      *  десяти клетках от края карты, выигранные — в сорока двух, при разнице во всём остальном (сомкнутость 2,4/5
@@ -2574,6 +2576,23 @@ object PainAndGain {
     private var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
     private var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
     private var ourDamageTaken = 0                        // снято с нас за матч (см. USE_PUSH_LEDGER)
+    /** РАЗМЕН ЗА ОКНО (v216): снимок `enemyDamageTaken - ourDamageTaken` за последние LEDGER_WINDOW тиков.
+     *  Матчевая сумма (`exchangeLedger`) на вопрос «проигрываем ли мы размен ПРЯМО СЕЙЧАС» не отвечает: в ней
+     *  господствует история. Окно не назначено, а взято существующее: `STALL_TICKS` — тот самый срок, которым
+     *  файл уже определяет «размен был недавно» (`exchangeRecent`), то есть длительность одного обмена линией. */
+    private val ledgerHist = ArrayDeque<Int>()
+    private var ledgerWindow = 0
+    /** Чем заняты бегуны: пары по режимам (`dbg` — единственная точка, через которую проходят все ветки). */
+    private val runnerMode = HashMap<String, Int>()
+    private var runnerModeN = 0
+    /** Цена простоя бегуна В ОЧКАХ: тик у флага, который нельзя взять, стоит `f.score` очков. */
+    private var poisedCost = 0
+    /** Бюджет командирской гонки: сколько отпущено, каким ядром и из скольких свободных. */
+    private var budgetSum = 0
+    private var budgetTicks = 0
+    /** Темп очков на сотом и двухсотом тике — снимок дебюта, которого не снимал ни один прибор. */
+    private var race100 = ""
+    private var race200 = ""
     private var enemyDamageTaken = 0                      // снято с него за матч
     private var lastEnemyHitsTotal = -1
     /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
@@ -2952,7 +2971,9 @@ cpuMark("arrival")
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
                 " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
-                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells " +
+                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow " +
+                "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost budget=$budgetSum/$budgetTicks " +
+                "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
@@ -3122,6 +3143,10 @@ cpuMark("arrival")
         val remaining = maxOf(0, arenaInfo.ticksLimit - getTicks())
         behindOnScore = ourScore + ourRate * remaining < enemyScore + enemyRate * remaining
         behindTicks = if (behindOnScore) behindTicks + 1 else 0
+        // СНИМОК ДЕБЮТА (v216): по собственному замеру файла забег решается в первые двести тиков, а все приборы
+        // в доках сняты «по последнему тику матча». Две строки, которые называют забег там, где он решается
+        if (getTicks() == 100) race100 = "$ourRate:$enemyRate"
+        if (getTicks() == 200) race200 = "$ourRate:$enemyRate"
         if (DEBUG_LOG && getTicks() % 100 == 0) println("score t=${getTicks()}: our=${ourScore.toInt()} (+$ourRate/t) enemy=${enemyScore.toInt()} (+$enemyRate/t) behind=$behindOnScore lead=${(ourScore - enemyScore).toInt()} maxSwing=${(cap * remaining).toInt()}")
     }
 
@@ -3388,6 +3413,15 @@ cpuMark("arrival")
         runnerFlag.keys.retainAll { id -> runners.any { it.id == id } }
         val flagById = ctx.flags.associateBy { it.id }
         fun dbg(s: Creep, mode: String, f: FlagInfo?, step: Position? = null) {
+            // ПРИБОР ЗАБЕГА (v216): все ветки поведения бегуна проходят ровно здесь, поэтому счёт стоит тут, а не
+            // в каждой из них. Считается ВСЕГДА, независимо от DEBUG_LOG: прибор, который виден только в логе с
+            // подробностями, нельзя сложить по серии
+            val tag = mode.substringBefore(':')
+            runnerMode[tag] = (runnerMode[tag] ?: 0) + 1
+            runnerModeN++
+            // ...и цена простоя В ОЧКАХ, а не в тиках: тик у флага, который нельзя взять, стоит его score.
+            // Разбор v214 считал эту величину вручную («166 тиков x 3 очка ~ 500, матч проигран с разрывом 292»)
+            if (tag == "POISED" && f != null) poisedCost += f.score
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
                 println("  r${s.id} (${s.x},${s.y}) ${bodySummary(s)} hits=${s.hits} $mode flag=${f?.let { "(${it.pos.x},${it.pos.y})${typeChar(it.type)}${it.score}my=${it.mine}" } ?: "-"} fatigue=${s.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(s.id)) " STUCK" else ""}")
             }
@@ -4267,6 +4301,11 @@ cpuMark("a.retreat")
         val holdingFlag = USE_PUSH_KEEPS_FLAG && USE_HOLD_OWN_FLAG && !fightOn &&
             ctx.flags.any { it.ours && getRange(it.pos, ctx.ourCentroid) <= POST_STANDOFF }
         val exchangeLedger = enemyDamageTaken - ourDamageTaken
+        // ...и тот же размен ЗА ОКНО (v216, см. ledgerHist): срез берётся здесь, в одной точке тика, потому что
+        // слагаемые обновляются в разных местах — наши потери в прологе, его в runArmy
+        ledgerHist.addLast(exchangeLedger)
+        while (ledgerHist.size > LEDGER_WINDOW + 1) ledgerHist.removeFirst()
+        ledgerWindow = if (ledgerHist.size >= 2) ledgerHist.last() - ledgerHist.first() else 0
         // нулевой ледж (обмена ещё не было) допуск не закрывает — иначе толчок в стоящий лагерь стенда не начинался
         // (v87b: spread m33 24314 → 7298, 14 хуже); закрывает только проигранный размен
         val ledgerOk = !USE_PUSH_LEDGER || exchangeLedger >= 0
@@ -6809,6 +6848,8 @@ cpuMark("a.evade")
         symCore += core
         symFree += free.size
         var budget = free.size - core
+        budgetSum += maxOf(0, budget)
+        budgetTicks++
         if (budget <= 0) return
         // флаги — от ближайшего к армии; занятые нами пропускаем
         // ...и только те, которые БРАТЬ МОЖНО: флаг вешает дебафф на ВЛАДЕЛЬЦА (−20 % удару, −25 % лечению, +10 %
