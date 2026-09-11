@@ -462,6 +462,22 @@ object PainAndGain {
      *  бегуна условно (сравнение мощи), а не безусловно, как у скаута, — и `USE_RUNNER_PAIRS`, посылающий двоих
      *  на охраняемый флаг; вооружённых бегунов до сих пор просто не существовало. */
     private const val USE_SYMMETRY_BY_NEAR = true
+    /** ЦЕНА ФЛАГА СЧИТАЕТСЯ ПО ОДНОМУ СОСТАВУ С ОБЕИХ СТОРОН ДРОБИ (v216).
+     *  `captureCost` — доля нашей мощи, которая останется после захвата, — брала числитель у `powerAfter`, где
+     *  сторона это `ctx.army + вооружённые и лечащие бегуны`, а знаменатель у `ourPowerOf(ctx.army, ...)`, где
+     *  бегунов нет. Как только появляется хоть один вооружённый бегун, числитель считается по БОЛЬШЕМУ множеству,
+     *  отношение выходит больше единицы, и `coerceIn(0.0, 1.0)` молча возвращает ровно 1,0 — для ВСЕХ флагов
+     *  сразу. Тогда ценность флага вырождается в `swing/(travel+10)` и перестаёт отличать дорогой флаг от
+     *  дешёвого, то есть весь смысл функции пропадает молча, без единой ошибки.
+     *  ⚠️ Этап симметрии по ближним делает вооружённых бегунов обычным делом — без этой починки редкий дефект
+     *  стал бы постоянным. */
+    private const val USE_CAPTURE_COST_ONE_SIDE = true
+    /** ПУСТОЕ МНОЖЕСТВО ПРОТИВНИКОВ ЗНАЧИТ ПУСТО, А НЕ «ВСЯ ЕГО АРМИЯ» (v216).
+     *  Локализация паритета v214 считает `opp` как «идущий бой плюс охрана этого флага», но заканчивалась
+     *  `.ifEmpty { ctx.combatEnemies }` — то есть откатывалась на ВСЮ его армию ровно в том случае, когда боя нет
+     *  и флаг никем не охраняется. Это самый выгодный для захвата случай из возможных, и локализация в нём
+     *  выключалась. Если за флаг не дерётся никто, платить паритетом некому. */
+    private const val USE_EMPTY_OPP_MEANS_FREE = true
     /** В БОЮ ОТРЯД НЕ ДЕЛИТСЯ (v215, решение оператора: «в контактном матче, где идёт бой, отделять бойцов из
      *  отряда — плохая идея; нам нужна максимальная плотность и максимальный напор во время боя; без хиллеров ни
      *  один бой выиграть невозможно»).
@@ -3299,9 +3315,11 @@ cpuMark("arrival")
         // по-прежнему берёт нашу мощь С дебаффом флага против его без дебаффа и требует пол.
         // Взято дешёвое множество (guards вместо packAt): оно не стоит ни одного BFS. Если прибор capopp покажет,
         // что локализация мало что меняет, следующим шагом сюда войдёт packAt с полем пути к флагу.
-        val opp = if (!USE_LOCAL_PARITY) ctx.combatEnemies else
-            ctx.combatEnemies.filter { it.id in fightPackIds || f.guards.any { g -> g.id == it.id } }
-                .ifEmpty { ctx.combatEnemies }
+        // ...и ПУСТО ЗНАЧИТ ПУСТО (v216, см. USE_EMPTY_OPP_MEANS_FREE): откат `.ifEmpty { ctx.combatEnemies }`
+        // выключал локализацию ровно там, где она нужнее всего, — боя нет и флаг не охраняется
+        val oppLocal = ctx.combatEnemies.filter { it.id in fightPackIds || f.guards.any { g -> g.id == it.id } }
+        val opp = if (!USE_LOCAL_PARITY) ctx.combatEnemies
+            else if (USE_EMPTY_OPP_MEANS_FREE) oppLocal else oppLocal.ifEmpty { ctx.combatEnemies }
         capOppSum += opp.size
         capAllSum += ctx.combatEnemies.size
         val (ours, theirs) = powerAfterFor(ctx,
@@ -3434,7 +3452,11 @@ cpuMark("arrival")
      *  для армии почти без лекарей дёшев, флаг уязвимости стоит всем; дорогие берутся последними. */
     private fun captureCost(ctx: Ctx, f: FlagInfo): Double {
         if (f.ours || ctx.combatEnemies.isEmpty()) return 1.0
-        val now = ourPowerOf(ctx.army, ctx.combatEnemies)
+        // ОДИН СОСТАВ ПО ОБЕ СТОРОНЫ ДРОБИ (v216, см. USE_CAPTURE_COST_ONE_SIDE): знаменатель обязан считаться по
+        // той же стороне, что и числитель в powerAfter, иначе отношение выходит больше единицы и обрезается в 1,0
+        val side = if (USE_CAPTURE_COST_ONE_SIDE && !USE_CAPTURE_MEASURES_CORE)
+            ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) } else ctx.army
+        val now = ourPowerOf(side, ctx.combatEnemies)
         if (now <= 0.0) return 1.0
         return (powerAfter(ctx, f).first / now).coerceIn(0.0, 1.0)
     }
