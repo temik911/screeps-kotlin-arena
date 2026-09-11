@@ -3071,7 +3071,8 @@ cpuMark("arrival")
                 "objdrop=${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN budget=$budgetSum/$budgetTicks " +
                 "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
-                "conc=$concSum/$concTicks " +
+                "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax " +
+                "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks lead=$leadTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
@@ -5432,6 +5433,25 @@ cpuMark("a.evade")
             if (USE_ONE_POSTURE_CLOCK) postureSince = getTicks()
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("cmd t=${getTicks()}: outmatched for $outmatchedTicks ticks — break off")
         }
+        // ПРИБОРЫ ОТХОДА (v217). Считаются ЗДЕСЬ, после того как постура окончательна: командир перезаписывает
+        // её на 600 строк позже, чем она решается, и прибор, снятый раньше, рассказал бы про другую постуру
+        if (outmatchedTicks >= BREAK_OFF_TICKS) {
+            outmTicks++
+            if (posture == Posture.RETREAT) outmRetreat++
+        }
+        if (posture == Posture.RETREAT || posture == Posture.EVADE) {
+            retrTicks++
+            // ...и точка спрашивается ПО СВОЕЙ постуре: у отхода — `retreatTo`, у уклонения — `evadeTo`.
+            // Смешивать их нельзя ровно потому, что дефект живёт в отходе: `evadeTo` почти всегда есть, и
+            // общий счётчик показал бы 98 % там, где у отхода ноль
+            if (if (posture == Posture.RETREAT) retreatTo != null else evadeTo != null) retrWithPoint++
+            if (underTheirFire) retrUnderFire++
+            for (c in combatArmy) {
+                if (!hasWeapon(c)) continue
+                standTicks++
+                if (combatEnemies.any { getRange(c, it) <= (if (hasRanged(c)) RANGED_RANGE else 1) }) standFire++
+            }
+        }
         if (blockOn) {
             // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
             // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
@@ -6514,7 +6534,11 @@ cpuMark("a.evade")
         }
         damageBooked.clear()
         val most = shotsAt.values.maxOrNull() ?: 0
-        if (most > 0) { concSum += most; concTicks++ }
+        if (most > 0) {
+            concSum += most; concTicks++
+            concAll += most; concAllTicks++
+            if (most > concMax) concMax = most
+        }
     }
 
     /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
@@ -7998,6 +8022,24 @@ cpuMark("a.evade")
     private val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
     private var concSum = 0                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
     private var concTicks = 0                        // тиков с выстрелами с прошлой строки t=
+    /** ...и то же НАКОПЛЕННОЕ за матч (v217). Прежняя пара чистится после каждой строки `t=` (см. LOG_EVERY),
+     *  поэтому в разгроме, где последнее окно прошло без единого выстрела, прибор показывал ноль замеров —
+     *  и по серии его было не сложить. Порог, ради которого он существует, записан в файле пятикратно:
+     *  при 216 лечения в тик цель пробивают четыре-пять стволов. */
+    private var concAll = 0
+    private var concAllTicks = 0
+    private var concMax = 0
+    /** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
+     *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
+    private var retrTicks = 0
+    private var retrWithPoint = 0
+    private var retrUnderFire = 0
+    /** Пара «крипо-тиков в отходе, где крип стрелял или бил / всех крипо-тиков в отходе» (v217). */
+    private var standFire = 0
+    private var standTicks = 0
+    /** Пара «тиков признака outmatched / из них с постурой отхода» (v217, решение оператора). */
+    private var outmTicks = 0
+    private var outmRetreat = 0
 
     /** Расстановка боя (см. USE_PLAN): клетки с признаками, роли по порядку признаков, жадное назначение. Выход — slotOf,
      *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
