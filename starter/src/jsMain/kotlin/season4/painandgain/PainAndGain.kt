@@ -2444,7 +2444,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v216"
+    private const val BOT_VERSION = "v217"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -4849,8 +4849,10 @@ cpuMark("a.obj")
         val rushFar = USE_OPENING_AT_POST && unflaggedRushNow && theirsFight < oursFight * RETREAT_RATIO && rushCentroidFar
         // уклонение от БЛИЗКОГО сомкнутого броска не ждёт `hunted` и не мигает (v135, см. USE_EVADE_STICKY_RUSH): в первой
         // пробе EVADE появлялась на 57-м и отпускалась на 62-м, армия дёргалась и всё равно попадала в контакт
-        val rushEvade = USE_EVADE_STICKY_RUSH && unflaggedRushNow && !rushCentroidFar && theirsFight >= oursFight * EVADE_EQUAL_RATIO
-        val evadeTo = evadeFirst ?: (if ((hunted || rushEvade) && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
+        // ⚠️ Здесь стоял `rushEvade`, тождественно ложный: `USE_EVADE_STICKY_RUSH` выключен своим замером
+        // (1-5 и 1-5, ровно база), а операнд `hunted || rushEvade` из-за этого сводится к `hunted`. Снято в
+        // v217; дифф отчёта пуст побайтово, как и обязан быть у мёртвого
+        val evadeTo = evadeFirst ?: (if (hunted && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
 cpuMark("a.evade")
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
