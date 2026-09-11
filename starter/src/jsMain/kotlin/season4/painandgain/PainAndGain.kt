@@ -367,6 +367,31 @@ object PainAndGain {
      *  оставшиеся тики не в нашу пользу; «он не бьёт» — его удар не позже PASSIVE_TICKS назад. Риск (его атака при 0,8)
      *  против MetalicaX за десять матчей не наблюдался ни разу: он бьёт, только когда мы приходим к нему. */
     private const val USE_LOST_RACE_PROJECTED = true
+    /** Клапан проигранной гонки открывается по РАЗМЕНУ, а не по тишине (v218, решение оператора; см. lostRaceNow). */
+    private const val USE_LOST_RACE_BY_LEDGER = true
+    /** Цель, которую дотягивающиеся стволы реально пробивают, — выше стрелков и выше `gunsAt` (v218, см. focusCmp). */
+    private const val USE_FOCUS_BREAKABLE_FIRST = true
+    /** Клетка стрелка знает про фокус: надбавка «ещё один ствол по цели, которая решает» (v218, см. scoreCell).
+     *  ⚠️ ОТВЕРГНУТО ДВУМЯ ЗАМЕРАМИ. Посылка была верна — `outgoingValue` целеагностичен, и ни одна ветка шага не
+     *  знала слова `focusTarget`, — но лечение оказалось хуже болезни: сдвиг НОГ к фокусу ломает строй, который и
+     *  приносит убийства.
+     *  1. Чистое ядро (0,90–1,00 единицы `outgoing` ≈ 30 очков ≈ ТРИ шага по потоку): уничтожений −3 (в него 4,
+     *     из него 7), стволов на цель 1,74 против 1,63. Потеряны ровно те строки, которые выиграл ярус
+     *     пробиваемой цели: match30:fourteen t=114 -> t=1157, match33:fourteen t=122 -> t=1152.
+     *  2. Сведено к ОДНОМУ шагу (PAIR_W_DIST / PAIR_W_OUTGOING): стало ХУЖЕ — уничтожений −6 (в него 1, из него
+     *     7), суммарный отрыв −5155, стволов на цель 1,66. То есть дело не в силе надбавки, а в самом сдвиге ног.
+     *  Вывод, ради которого это оставлено тумблером: концентрация, которая работает, приходит от ВЫБОРА ЦЕЛИ
+     *  (см. USE_FOCUS_BREAKABLE_FIRST: +6 строк в уничтожение), а не от того, куда идут стрелки. Это третья
+     *  форма одного и того же отказа, после USE_PRESS_RING и USE_FOCUS_ROW. */
+    private const val USE_CELL_KNOWS_FOCUS = false
+    /** Веер уступает фокусу, когда дотягивающиеся стволы его уже пробивают (v218, см. shoot).
+     *  ⚠️ ОТВЕРГНУТО ГЕЙТОМ — единственный FAIL за пачку: `match28:brawl+heals` из «армия врага уничтожена на
+     *  t=382, 3029:2341» перешла в поражение по счёту на t=1737, 11702:18282. Имя строки и объясняет: свалка С
+     *  ЛЕКАРЯМИ — это ровно то место, где веер и нужен, потому что вплотную стоит полдюжины его крипов, и
+     *  «один пробиваемый фокус» меняет пять попаданий на одно. По серии: уничтожений −3 (в него 2, из него 5).
+     *  Побочная польза правки (веерные тики не входят в `conc` даже знаменателем) остаётся достигнутой прибором
+     *  `concfan`, а не этой веткой: на стенде веером идут 3 % крипо-тиков огня, то есть искажение мало. */
+    private const val USE_FAN_KEEPS_FOCUS = false
     /** ПРОИГРАННАЯ ГОНКА — И СТАЯ У СВОБОДНОГО ФЛАГА ПО ПАРИТЕТУ (v99, матч 242 — MetalicaX пятнадцатый раз из шестнадцати,
      *  4611:12360 при обеих армиях целых): он взял D5 и A3 (31,67) и запарковал все двенадцать вооружённых между ними на (41,57)
      *  на 1500 тиков; мы взяли R3 (13,49) и простояли на нём 1500 тиков при 3967:3520 (1,13 — меньше 1,3 при своём флаге,
@@ -2459,7 +2484,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v217"
+    private const val BOT_VERSION = "v218"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3113,7 +3138,8 @@ cpuMark("arrival")
                 "objdrop=${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN budget=$budgetSum/$budgetTicks " +
                 "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
-                "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax " +
+                "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
+                "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -3421,6 +3447,13 @@ cpuMark("arrival")
         // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
         val lostRace = lostRaceNow()
         val floor = if (lostRace) PARITY_FLOOR_LOST else if (stalledNow) PARITY_FLOOR_STALLED else PARITY_FLOOR
+        // ПАРА К КЛАПАНУ (v218, см. lostRaceOpened): «послабление решило исход» — флаг прошёл по PARITY_FLOOR_LOST
+        // и НЕ прошёл бы по PARITY_FLOOR. Считается ЗДЕСЬ, а не у признака, потому что вопрос прибора не «был ли
+        // признак истинен», а «изменил ли он хоть один отказ»
+        if (lostRace) {
+            lostRaceOffers++
+            if (ours >= theirs * floor && ours < theirs * PARITY_FLOOR) lostRaceOpened++
+        }
         // ...и в ПАТУ паритетный пол тоже молчит: он сравнивает мощь, а в бою, где никто никого не убивает, мощь
         // обеих сторон ланчестером считается около нуля, и сравнивать нечего (v189)
         if (ours >= theirs * floor) return null
@@ -3442,7 +3475,27 @@ cpuMark("arrival")
         val ticksLeft = arenaInfo.ticksLimit - getTicks()
         val losingAtTheEnd = if (USE_LAST_CALL_PROJECTED) (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft <= 0 else ourScore <= enemyScore
         val quiet = lastHurtTick == 0 || getTicks() - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
-        val quietShort = lastHurtTick == 0 || getTicks() - lastHurtTick >= PASSIVE_TICKS
+        // КЛАПАН ПО РАЗМЕНУ, А НЕ ПО ТИШИНЕ (v218, решение оператора). Здесь стояло `quietShort` — «сто тиков
+        // ПОДРЯД без единого полученного удара». Против бота, чей пикет нас постоянно задевает, такой тишины не
+        // наступает никогда, и послабленный пол PARITY_FLOOR_LOST не открывался ни разу: разбор двадцати матчей
+        // v217 дал 1531 отказ по паритету в поражениях против 40 в победах, а в проигранных забегах 582, 1753 и
+        // 2407 — при том, что в けろびー#12 (#20) за все 1900 тиков не разменяно НИ ОДНОГО хита с обеих сторон.
+        // Признак заменён на СОБСТВЕННОЕ определение боя в этом файле — `netDamage` (см. STALL_DAMAGE): «за
+        // STALL_TICKS любая сторона потеряла STALL_DAMAGE хитов». Нового числа не заводится, и оно вычисляется
+        // из живых хитов обеих сторон, а не названо под текущего соперника. По замеру делит правильно: в #20
+        // окно показало ledgerw=0/0/0 (0 < 300 — клапан открыт), в аннигиляции #1 потери шли ~3000 за окно
+        // (много больше 300 — клапан закрыт, доктрина паритета цела).
+        // ⚠️ Доктрина НЕ меняется: пол по-прежнему сравнивает нашу мощь С дебаффом флага против его без дебаффа,
+        // меняется только признак «бой идёт». Меру мощи оператор трогать запретил — она остаётся зажатой в ноль
+        // его лечением, и это открытый предмет
+        // ...и признак сужен до НАШИХ потерь (v218, замер гейта). Первая редакция брала `netDamage` целиком —
+        // «за окно потеряла ЛЮБАЯ сторона», — и уронила две строки лагеря: match31:camp отрыв 5189 -> 2185,
+        // match34:camp уничтожение с t=951 на t=1212. Причина в асимметрии: пока мы безнаказанно бьём лагерь,
+        // потери есть У НЕГО, признак говорит «бой идёт», и строгий пол возвращается там, где мы ВЫИГРЫВАЕМ
+        // бой. Пол существует ради одного — не потерять НАШУ армию за флаги; значит и спрашивать надо про наши
+        // потери. Окно и порог те же (LEDGER_WINDOW = STALL_TICKS, STALL_DAMAGE), новых чисел по-прежнему нет
+        val quietShort = if (USE_LOST_RACE_BY_LEDGER) ourLostWindow < STALL_DAMAGE
+            else lastHurtTick == 0 || getTicks() - lastHurtTick >= PASSIVE_TICKS
         return if (USE_LOST_RACE_PROJECTED) losingAtTheEnd && quietShort
             else stalemateNow && quiet && ourScore <= enemyScore && ourRate <= enemyRate
     }
@@ -4750,7 +4803,10 @@ cpuMark("a.sweep")
         pushHeld = false
         // ...и РАЗМЕН НИЖЕ ПАРИТЕТА ГАСИТ НАСТУПЛЕНИЕ (v217, см. USE_BREAK_OFF_HOLDS_LINE), а не разворачивает
         // армию: толчка вперёд нет, строй и лекари остаются
-        if (USE_BREAK_OFF_HOLDS_LINE && breakOffNow) { pushing = false; pushTicks++ } else
+        // ...и БЕЗ СВОЕГО pushTicks++ (v218, дефект прибора): счётчик увеличивается безусловно десятью строками
+        // ниже, поэтому на тиках размена он рос ДВАЖДЫ — и `pushheld` занижался ровно на тех тиках, ради которых
+        // прибор и ставился
+        if (USE_BREAK_OFF_HOLDS_LINE && breakOffNow) { pushing = false } else
         pushing = if (!USE_PUSH_DWELL) pushRaw else when {
             pushRaw -> { if (!pushing) pushSince = now; true }
             pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease -> {
@@ -5076,6 +5132,15 @@ cpuMark("a.evade")
         // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
         fun gunsAt(e: Creep?) = if (e == null) 0 else combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
         val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+            // ДОТЯГИВАЮЩИЕСЯ СТВОЛЫ НЕ РАСХОДЯТСЯ ПО ТРЁМ ЦЕЛЯМ (v218, см. USE_FOCUS_BREAKABLE_FIRST). Порог
+            // записан в файле пятикратно — «при 216 лечения в тик цель пробивают четыре-пять стволов», — но
+            // числом его писать не нужно: «стволов хватает» тождественно «сумма того, что уже дотягивается,
+            // превышает лечение цели», а это у бота посчитано ровно один раз — конечным `killTicks` (см. там же:
+            // net <= 0 даёт бесконечность). Поэтому ярус читает готовую величину и НЕ вводит ни одной константы.
+            // Почему ярус нужен ЗДЕСЬ, а не ниже: `killTicks` уже участвует в сравнении, но на пятом ярусе, под
+            // «стрелки первыми» (v60) и под `gunsAt` (v70), — и неубиваемый стрелок обгонял цель, которую мы
+            // реально пробиваем. Живой замер v217: `conc` 1,67–1,94 ствола на цель при нужных четырёх-пяти
+            .thenBy { if (USE_FOCUS_BREAKABLE_FIRST && !killTicks(it).isInfinite()) 1 else 0 }
             // ...первый срез «всякий снимаемый лекарь выше стрелков» ОТВЕРГНУТ стендом: гейт 131, но входы +20 хуже 11 / лучше 9,
             // +50 хуже 15 / лучше 7, m34 split 21 210:24 100 → 15 365:24 095. Второй срез: не «лекарь вообще», а ТОТ, ИЗ-ЗА КОГО
             // цель не умирает — лекарь в HEAL_RANGE от неубиваемого кандидата (живьём его лекарь у нашей цели 62–83 % тиков)
@@ -5118,6 +5183,9 @@ cpuMark("a.evade")
         val focusTarget = if (USE_FOCUS_STICKY && focusPrev != null && !killableNow && !prevDead && !rangedNow && !moreGuns && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
             combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
         focusId = focusTarget?.id
+        // ВЕЕР НЕ РАСФОКУСИРУЕТ СОШЕДШИЕСЯ СТВОЛЫ (v218, см. USE_FAN_KEEPS_FOCUS). Признак снимается ЗДЕСЬ,
+        // потому что `killTicks` живёт только в этой области видимости, а нужен он в `shoot` — на 1500 строк ниже
+        focusBreakableNow = focusTarget != null && !killTicks(focusTarget).isInfinite()
         // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
         // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
         val focusOrder = focusPool.sortedWith(focusCmp.reversed())
@@ -5537,6 +5605,15 @@ cpuMark("a.evade")
         if (outmatchedTicks >= BREAK_OFF_TICKS) {
             outmTicks++
             if (posture == Posture.RETREAT) outmRetreat++
+        }
+        // ПАРА К СБОРУ (v218, см. gatherSpread). Сбор (rallyTo) и сплочение (cohesionHold) намеренно молчат в
+        // HOLD, и основание записано рядом с ними: «в HOLD цель — точка, к ней сходятся и так». Прибор проверяет
+        // именно это основание — растянут ли строй стрелков в HOLD шире того порога, каким сбор и включается.
+        // Мал числитель — основание верно, трогать сбор незачем
+        if (posture == Posture.HOLD) {
+            gatherHold++
+            val shooters = combatArmy.filter { hasWeapon(it) && hasRanged(it) }
+            if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread++
         }
         if (posture == Posture.RETREAT || posture == Posture.EVADE) {
             retrTicks++
@@ -6356,7 +6433,7 @@ cpuMark("a.evade")
                     else if (USE_ORDER_IS_LAW) cell
                     else {
                         orderPull = if (USE_ORDER_PULL) ORDER_PULL else 1.0
-                        val st = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt, healerFireW)
+                        val st = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt, healerFireW, focusTarget)
                         orderPull = 1.0
                         st
                     }
@@ -6442,7 +6519,7 @@ cpuMark("a.evade")
                         if (ok) cell else null
                     }
                     orderPull = if (USE_ORDER_PULL && commandOf.containsKey(creep.id)) ORDER_PULL else 1.0
-                    val chosen = ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW)
+                    val chosen = ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW, focusTarget)
                     orderPull = 1.0
                     chosen
                 }
@@ -6663,8 +6740,16 @@ cpuMark("a.evade")
         // вылечивают его целиком, пока враг сосредоточенно снимает 540 в тик с одного нашего (стенд sleeper: наш чистый
         // урон 200 в тик против 540). Веер — когда врагу нечем лечить или он даёт не меньше двух с половиной выстрелов
         val enemyHeals = enemyCreeps.any { InfluenceMap.profileOf(it).heal > 0.0 }
-        if (massValue > (if (enemyHeals) 2.5 else 1.0)) {
-            creep.rangedMassAttack(); lastFireTick = getTicks()
+        // ...и ВЕЕР ОТСТУПАЕТ ПЕРЕД СОШЕДШИМИСЯ СТВОЛАМИ (v218, см. focusBreakableNow). Три его крипа вплотную
+        // дают massValue = 3.0, то есть порог 2.5 берётся сам собой — и ветка веера игнорирует `focusTarget`
+        // ЦЕЛИКОМ. Пока стволы размазаны, это верно: веер бьёт по всем. Но ровно в тот момент, когда фокус стал
+        // пробиваемым тем, что до него дотягивается (это и есть «четыре-пять стволов» из записанного порога),
+        // веер развёл бы их обратно и отдал бы цель его лекарям. Побочно ветка чинит и ПРИБОР: веерный выстрел
+        // не кладёт ничего в `shotsAt`, поэтому такие тики не входили в `conc` даже знаменателем (см. concfan)
+        val keepFocus = USE_FAN_KEEPS_FOCUS && focusBreakableNow && focusTarget != null &&
+            creep.getRangeTo(focusTarget) <= RANGED_RANGE
+        if (!keepFocus && massValue > (if (enemyHeals) 2.5 else 1.0)) {
+            creep.rangedMassAttack(); lastFireTick = getTicks(); fanShots++; fireShots++
         } else {
             // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
             // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
@@ -6685,7 +6770,7 @@ cpuMark("a.evade")
                     ?: massPool.minByOrNull { it.hits }
             }
             target?.let {
-                creep.rangedAttack(it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks()
+                creep.rangedAttack(it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots++
                 damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
             }
         }
@@ -8127,6 +8212,7 @@ cpuMark("a.evade")
     private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
     private val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
     private var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
+    private var focusBreakableNow = false            // дотягивающиеся стволы пробивают лечение фокуса (v218, см. USE_FAN_KEEPS_FOCUS)
     private val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
     private var concSum = 0                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
     private var concTicks = 0                        // тиков с выстрелами с прошлой строки t=
@@ -8137,6 +8223,23 @@ cpuMark("a.evade")
     private var concAll = 0
     private var concAllTicks = 0
     private var concMax = 0
+    /** Пара «крипо-тиков веером / всех крипо-тиков огня» (v218). Веер (`rangedMassAttack`) не кладёт ничего в
+     *  `shotsAt`, поэтому тик, где все стрелки ушли в веер, НЕ ПОПАДАЕТ ДАЖЕ В ЗНАМЕНАТЕЛЬ `conc` — измеренные
+     *  1,67–1,94 ствола на цель сняты по подмножеству тиков, и без этой пары их нельзя читать. */
+    private var fanShots = 0
+    private var fireShots = 0
+    /** Пара «предъявлений, где послабление проигранной гонки решило исход / всех предъявлений с этим признаком»
+     *  (v218, см. lostRaceNow). Числитель — флаг, прошедший по PARITY_FLOOR_LOST и НЕ прошедший бы по
+     *  PARITY_FLOOR. До починки клапана он обязан быть около нуля в забегах: разбор v217 дал 582/1753/2407
+     *  отказа по паритету в трёх проигранных забегах при 40 в среднем по победам. */
+    private var lostRaceOpened = 0
+    private var lostRaceOffers = 0
+    /** Пара «тиков в HOLD с растянутым строем стрелков / всех тиков в HOLD» (v218). Проверяет записанное в коде
+     *  основание, по которому сбор (см. rallyTo) работает ТОЛЬКО в постуре FLAG: «в HOLD цель — точка, к ней
+     *  сходятся и так». Если числитель мал — основание верно и трогать сбор незачем. Растяжка считается тем же
+     *  порогом, каким сбор и включается (RALLY_RANGE). */
+    private var gatherSpread = 0
+    private var gatherHold = 0
     /** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
      *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
     private var retrTicks = 0
@@ -8341,12 +8444,13 @@ cpuMark("a.evade")
         enemyPositions: Set<Int>,
         occupantAt: Map<Int, Creep>,
         healerFireW: Double = HEALER_W_DAMAGE,
+        focus: Creep? = null,
     ): Position? {
         val hereDist = flow[creep.x * 100 + creep.y]
         // своя клетка с форой — только ПРИБЫВ (в зазоре standoff): вне боя не дёргаемся ради мелочи (см.
         // STAY_BIAS); на марше форы нет — вместе со штрафом за соседей она съедала выигрыш шага (матч 2)
         val settled = !inCombat && hereDist in 0..(standoff + ARRIVED_SLACK)
-        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies, healerFireW) + (if (settled) STAY_BIAS else 0.0)
+        var bestScore = scoreCell(creep, creep.x, creep.y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies, healerFireW, focus) + (if (settled) STAY_BIAS else 0.0)
         var bx = creep.x; var by = creep.y
         var pushDist = if (hereDist >= 0) hereDist else Int.MAX_VALUE
         var pushX = -1; var pushY = -1
@@ -8369,7 +8473,7 @@ cpuMark("a.evade")
                 else if (!inCombat && fd in 0 until pushDist) { pushDist = fd; pushX = x; pushY = y }
                 continue
             }
-            val s = scoreCell(creep, x, y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies, healerFireW)
+            val s = scoreCell(creep, x, y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies, healerFireW, focus)
             if (s > bestScore) { bestScore = s; bx = x; by = y }
         }
         if (bx != creep.x || by != creep.y) return InfluenceMap.cell(bx, by)
@@ -8396,7 +8500,7 @@ cpuMark("a.evade")
 
     /** Оценка клетки: приблизиться на standoff к цели по реальному пути; в бою — исходящий урон, чистый
      *  входящий (с хилом), влияние, штраф за зону мили, за болото (без перевеса) и цена прижатия. */
-    private fun scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: IntArray, standoff: Int, aggressive: Boolean, inCombat: Boolean, enemyCreeps: List<Creep>, allies: List<Creep>, meleeEnemies: List<Creep>, healerFireW: Double = HEALER_W_DAMAGE): Double {
+    private fun scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: IntArray, standoff: Int, aggressive: Boolean, inCombat: Boolean, enemyCreeps: List<Creep>, allies: List<Creep>, meleeEnemies: List<Creep>, healerFireW: Double = HEALER_W_DAMAGE, focus: Creep? = null): Double {
         val flowDist = flow[x * 100 + y]
         val cheb = getRange(InfluenceMap.cell(x, y), target)
         val firePenalty = when {
@@ -8441,6 +8545,32 @@ cpuMark("a.evade")
         val swampPenalty = if (!aggressive && DistanceMap.isSwamp(x, y)) PAIR_W_SWAMP else 0.0
         val influence = if (meleeSelf && aggressive) 0.0 else InfluenceMap.influenceAt(x, y, allies, enemyCreeps)
         val outgoing = if (!aggressive && damage > 0.0) 0.0 else if (meleeSelf) (if (enemyCreeps.any { getRange(InfluenceMap.cell(x, y), it) <= 1 }) 1.0 else 0.0) else if (hasRanged(creep)) outgoingValue(x, y, enemyCreeps) else 0.0
+        // КЛЕТКА СТРЕЛКА ЗНАЕТ ПРО ФОКУС (v218, см. USE_CELL_KNOWS_FOCUS). Выбор цели сведён на одну по всей
+        // армии и работает каждый тик (commandFire не гейтится cmdMode) — не сведены НОГИ: ни одна ветка шага
+        // не знала слова `focusTarget`, а `outgoingValue` ЦЕЛЕАГНОСТИЧЕН (суммирует rangedRate по ВСЕМ врагам
+        // в трёх). Стоять в трёх от фокуса и в трёх от случайного лекаря было одинаково хорошо — отсюда живые
+        // 1,67–1,94 ствола на цель при нужных четырёх-пяти.
+        // Единицы надбавки — те же, в каких `outgoing` и меряется: «ещё один ствол по цели, которая решает»,
+        // поэтому веса не заводится. Форма — существующее ядро K_ATT_RANGED (InfluenceMap.attractionTo), у него
+        // ПИК РОВНО НА ТРОЙКЕ, то есть стрелок останавливается на своей дальности, а не влезает в радиус мили.
+        // Нормируется на targetValue, чтобы осталась чистая форма ядра, а не ценность конкретной цели.
+        // ⚠️ Это НЕ отвергнутый USE_PRESS_RING: там менялась сама ЦЕЛЬ движения (target/standoff на кольцо), и
+        // стрелки расползались по девяти клеткам радиуса — шесть разоружённых к 80-му тику (m18 rush). Здесь
+        // target/standoff/поток прежние, сдвигается только выбор среди девяти соседних клеток, и слагаемое
+        // честно конкурирует с separation (4 за соседа) и meleeThreat (50).
+        // ⚠️ Оговорка про опасность сохранена дословно: там, где `outgoing` обнуляется как плата за стояние под
+        // огнём без агрессии, надбавка тоже равна нулю — иначе фокус начал бы оплачивать опасную клетку
+        val focusPull = if (!USE_CELL_KNOWS_FOCUS || focus == null || meleeSelf || !hasRanged(creep) ||
+            (!aggressive && damage > 0.0)) 0.0
+        else InfluenceMap.targetValue(focus).let { v -> if (v <= 0.0) 0.0 else InfluenceMap.attractionTo(focus, x, y, false) / v } *
+            // ...РОВНО В ОДИН ШАГ ПО ПОТОКУ, и множитель здесь вычислен, а не назван (v218, замер гейта). Первая
+            // редакция клала чистое ядро (0,90–1,00 единицы `outgoing`), то есть около 30 очков против 10 за шаг —
+            // три шага. Стрелки съезжали с назначенных клеток, и правка ОТМЕНИЛА выигрыш яруса пробиваемой цели:
+            // семь строк потеряли уничтожение армии врага (match30:fourteen t=114 -> t=1157, match33:fourteen
+            // t=122 -> t=1152), хотя стволов на цель стало 1,74 против 1,63. Это и есть провал USE_PRESS_RING в
+            // другой одежде. Шаг по потоку стоит PAIR_W_DIST, единица `outgoing` стоит PAIR_W_OUTGOING, поэтому
+            // «фокус весит один шаг» — это в точности их отношение
+            (PAIR_W_DIST / PAIR_W_OUTGOING)
         // АГРЕССИЯ МАСШТАБИРУЕТ ОПАСНОСТЬ, А НЕ ОБНУЛЯЕТ (v215, решение оператора). Множитель берётся
         // существующий — тот же AGGRO_MELEE_FACTOR, которым агрессия уже режет штраф за зону мили; новой
         // константы здесь заводить нечего. Разница не косметическая: при уроне 600 член оценки был 0, стал 54,
@@ -8459,7 +8589,7 @@ cpuMark("a.evade")
         // ...и притяжение к ПРИКАЗУ сильнее (v168, см. orderPull): назначенная клетка была одним слагаемым наравне с
         // влиянием, угрозой мили и разделением, и они её перевешивали — до своей клетки доходили 7 % крипов
         return -firePenalty * PAIR_W_DIST * orderPull - damageTerm + influence * PAIR_W_INFLUENCE +
-            outgoing * PAIR_W_OUTGOING - meleeThreat - separation - swampPenalty - pinned - lethalTerm
+            (outgoing + focusPull) * PAIR_W_OUTGOING - meleeThreat - separation - swampPenalty - pinned - lethalTerm
     }
 
     private fun outgoingValue(x: Int, y: Int, enemyCreeps: List<Creep>): Double {
