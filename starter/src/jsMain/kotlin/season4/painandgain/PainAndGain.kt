@@ -2403,6 +2403,8 @@ object PainAndGain {
     private const val USE_BREAK_OFF_HOLDS_LINE = true
     /** Детектор простоя работает и в отходе (v217, см. разбор замка в `contactFight`). */
     private const val USE_STALL_IN_RETREAT = true
+    /** Поводок держит ЛЕКАРЯ и в отходе (v217, см. leashHolds). */
+    private const val USE_LEASH_HEALERS_IN_RETREAT = true
     /** СТРОЙ НЕ ПРИНИМАЕТ БОЙ У КРАЯ. НЕ ВКЛЮЧЕНО — правило выведено из СОВПАДЕНИЯ и не пережило широкой выборки
      *  (v184). Повод: в двенадцати тестовых играх против MetalicaX#10 проигранные сшибки шли при нашем центре в
      *  десяти клетках от края карты, выигранные — в сорока двух, при разнице во всём остальном (сомкнутость 2,4/5
@@ -6009,7 +6011,16 @@ cpuMark("a.evade")
             // разъезжаются именно они: дальше восьми от центра армии наши мили 11 крипо-тиков из 3 428 (0,3 %),
             // стрелки 136 из 5 756 (2,4 %), а ЛЕКАРИ 1 402 из 5 379 — 26 %, с медианой отрыва 23 клетки. Это не
             // «идёт за подопечным»: подопечный по определению в строю, а двадцать три клетки — это уход с поля боя
-            val leashed = !wounded && (!healer || USE_LEASH_HOLDS_HEALERS) && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE &&
+            // ...И ЛЕКАРЯ ПОВОДОК ДЕРЖИТ ТАКЖЕ В ОТХОДЕ (v217). Оговорка про постуру снимается ТОЛЬКО для
+            // лекаря: боец, отходящий сам, — это кайт, у него своя механика; а лекарь, отпущенный поводком,
+            // просто перестаёт быть лекарем. Живой замер v216 по двадцати рейтинговым матчам: боевых крип-тиков,
+            // где своего лекаря нет и в MASS_RANGE, — **32,1 % в поражениях против 2,5 % в победах**, а доля
+            // тиков в постуре отхода — 63 % против 0 %. Замер v202, записанный рядом, называет и виновника:
+            // разъезжаются именно лекари (26 % их крипо-тиков дальше восьми клеток, медиана отрыва 23 клетки).
+            // ⚠️ Это НЕ повторение v202 целиком (0:3): там поводок включался ВЕЗДЕ и для всех, здесь снимается
+            // ровно одна оговорка и ровно для лекаря
+            val leashHolds = (USE_LEASH_HEALERS_IN_RETREAT && healer) || (posture != Posture.RETREAT && posture != Posture.EVADE)
+            val leashed = !wounded && (!healer || USE_LEASH_HOLDS_HEALERS) && canMove(creep) && leashHolds &&
                 (localEnemies.isNotEmpty() || (USE_LEASH_IN_CONTACT && contact)) && getRange(creep, armedCentroid) > LEASH_RANGE
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
             val melee = isMelee(creep) && !hasRanged(creep)
