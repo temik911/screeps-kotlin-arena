@@ -4852,8 +4852,15 @@ cpuMark("a.evade")
         // погоня, потом разворот». Новое значение берётся всегда; ОБНУЛЕНИЕ — только вместе с постурой
         val newFlagId = objective?.flag?.id
         if (newFlagId != null || postureTakes || !USE_ONE_POSTURE_CLOCK) objectiveFlagId = newFlagId
-        if (newPosture != Posture.RETREAT) retreatTarget = null
-        val retreatTo = if (newPosture == Posture.RETREAT) retreatPoint(ctx) else null
+        // ТОЧКА ОТХОДА БЕРЁТСЯ ИЗ ПОСТУРЫ, КОТОРАЯ БУДЕТ ПРИНЯТА (v217). Обе строки ниже спрашивали
+        // `newPosture` — намерение, — а действует `posture`, и они расходятся всякий раз, когда гистерезис
+        // удерживает прежнюю. Удержанный RETREAT при другом намерении обнулял `retreatTarget` и оставлял
+        // `retreatTo` пустым, после чего ветка отхода в цепочке целей не срабатывала ни одного тика, и крипы
+        // проваливались до последней ветки — `post`, в геометрическую точку своих флагов, спиной к врагу.
+        // «Отступающая» армия при этом не отступала: у неё просто не было куда.
+        val postureNow = if (postureTakes) newPosture else posture
+        if (postureNow != Posture.RETREAT) retreatTarget = null
+        val retreatTo = if (postureNow == Posture.RETREAT) retreatPoint(ctx) else null
         // ДЕРЖИ, ЧТО ДЕРЖИШЬ (v66): армия, стоящая на своём флаге при враге рядом, постом считает этот флаг, а не дальний пост.
         // Матч 159 (けろびー, пятнадцатый проигрыш фермеру 12009:24099): он кайтит вокруг D5 при 4075 против 3084, при huntable 0
         // армия уходила в HOLD к посту (11,68) за сорок клеток, он возвращался на D5; на 800-м и 1000-м мы стояли на D5 (хранитель
