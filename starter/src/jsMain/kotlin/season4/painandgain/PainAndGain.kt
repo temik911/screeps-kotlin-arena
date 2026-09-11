@@ -2524,7 +2524,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v220"
+    private const val BOT_VERSION = "v221"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3180,6 +3180,12 @@ cpuMark("arrival")
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
                 "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold close3=$closeHeld/$closeTicks guard=$guardFired/$guardTicks " +
+                // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
+                // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
+                // консоль не показывала (имя `guns=` занято прибором v200)
+                "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
+                "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -3411,8 +3417,12 @@ cpuMark("arrival")
         // ...и у вето подхода есть СРОК (v215, см. USE_RUSH_VETO_EXPIRES). Доктрина безфлагового дебюта
         // (`unflaggedRushNow`) сроку не подлежит и остаётся глобальной
         val rushStale = USE_RUSH_VETO_EXPIRES && !unflaggedRushNow && fightImminentTicks > rushStartDist
-        if (fightImminentNow && !rushStale && !intercept && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow))
+        if (fightImminentNow && !rushStale && !intercept && !(USE_STALL_LIFTS_RUSH_VETO && stalledNow)) {
+            // пара к погоне за кайтером (v221, см. kiteChaseSeen): сколько отказов доктрины безфлагового броска
+            // выдано, пока мы гонимся за отходящим, который бьёт нас сильнее, чем мы его
+            if (unflaggedRushNow) { kvetoAll++; if (kiteChaseSeen) kvetoHit++ }
             return capCount(f, if (unflaggedRushNow) "rush.unflagged" else "rush.approach")
+        }
         if (fightImminentNow && rushStale) capCount(f, "rush.approach.expired")
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
@@ -3449,8 +3459,12 @@ cpuMark("arrival")
         val foes = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
         val mass = centroidOf(ctx.army)
         val contactArmy = if (!USE_CONTACT_BY_MASS || mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
-        if (!losingRace && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy))
+        if (!losingRace && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy)) {
+            // пара к вето контакта по размену (v221, только прибор): сколько отказов выдано контактом, в котором за
+            // окно ни одна сторона не потеряла STALL_DAMAGE. Окно — прошлого тика: runRunners идёт раньше runArmy
+            warmCapAll++; if (!exchangeLiveNow) warmCap++
             return capCount(f, "contact.mass")
+        }
         // ...и отдельно считаем то, что этой правкой снято: стычка одиночки вне массы
         if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army))
             capCount(f, "contact.edge.lifted")
@@ -4335,6 +4349,29 @@ cpuMark("r.cands")
         enemyHitsHist.addLast(enemyHitsNow); ourHitsHist.addLast(ourHitsNow)
         while (enemyHitsHist.size > STALL_TICKS) enemyHitsHist.removeFirst()
         while (ourHitsHist.size > STALL_TICKS) ourHitsHist.removeFirst()
+        // РАЗМЕН ЗА ОКНО ПОДНЯТ СЮДА (v221) из блока толчка: его слагаемые готовы уже здесь — наши потери копятся в
+        // прологе, его строкой выше, — а читать окно нужно раньше, чем решаются бой по контакту и простой. Между
+        // старым и новым местом окна не читал никто (`lostRaceNow()` зовётся из `runRunners`, до `runArmy`, и ниже
+        // блока толчка; ранних выходов в этом отрезке нет), поэтому перенос без тумблера: дифф отчёта пуст побайтово
+        val exchangeLedger = enemyDamageTaken - ourDamageTaken
+        // ...и тот же размен ЗА ОКНО (v216, см. ledgerHist): срез берётся в одной точке тика, потому что
+        // слагаемые обновляются в разных местах — наши потери в прологе, его в runArmy
+        ledgerHist.addLast(exchangeLedger)
+        ourLostHist.addLast(ourDamageTaken)
+        hisLostHist.addLast(enemyDamageTaken)
+        while (ledgerHist.size > LEDGER_WINDOW + 1) ledgerHist.removeFirst()
+        while (ourLostHist.size > LEDGER_WINDOW + 1) ourLostHist.removeFirst()
+        while (hisLostHist.size > LEDGER_WINDOW + 1) hisLostHist.removeFirst()
+        ledgerWindow = if (ledgerHist.size >= 2) ledgerHist.last() - ledgerHist.first() else 0
+        ourLostWindow = if (ourLostHist.size >= 2) ourLostHist.last() - ourLostHist.first() else 0
+        hisLostWindow = if (hisLostHist.size >= 2) hisLostHist.last() - hisLostHist.first() else 0
+        // РАЗМЕН ИДЁТ (v221, см. USE_FIGHT_BY_LEDGER): за LEDGER_WINDOW тиков хоть одна сторона потеряла
+        // STALL_DAMAGE хитов. Та же мера, что у клапана проигранной гонки (см. lostRaceNow) и у простоя
+        // (netDamage), только по обеим половинам окна: новых чисел нет. Разбор двух рейтинговых серий по реплеям
+        // обеих сторон делит ею забеги начисто: в проигранных армия 38 % тиков в постуре ANNIHILATE, и в 92 %
+        // этих тиков размена нет вовсе, — это 35 % матча против 4 % в выигранных (v219: 24 % против 5 %)
+        val exchangeLive = ourLostWindow >= STALL_DAMAGE || hisLostWindow >= STALL_DAMAGE
+        exchangeLiveNow = exchangeLive
         // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
         val exchangePaying = ourHitsHist.size < STALL_TICKS ||
             (enemyHitsHist.first() - enemyHitsNow) >= (ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
@@ -4347,6 +4384,19 @@ cpuMark("r.cands")
         // пикет простоя — поэтому охота посчитана здесь, до простоя
         val huntable = armedEnemies.filter { catchable(it, chasers) }
 cpuMark("a.hunt")
+        // его мили вплотную к нашим — поднято сюда из блока постуры (v221, перенос без тумблера): читать его нужно и
+        // прибору погони ниже, а между старым и новым местом он не менялся и не читался
+        val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
+        // ПАРА К ПОГОНЕ ЗА КАЙТЕРОМ (v221, только прибор; см. kchaseTicks). Разбор v220, матч с ●ω<♥♪#1: он не взял ни
+        // одного флага за 700 тиков, мы 300 тиков гнались за его отходящей линией в постуре ANNIHILATE и легли 12 → 0,
+        // а вето безфлагового броска отказало захвату 3329 раз. Простой «держит дистанцию» против него не наступает:
+        // любой его выстрел даёт netDamage, и простой гаснет. Прибор считает тики, где погоня идёт в ОДНУ сторону —
+        // за окно мы потеряли STALL_DAMAGE, он меньше нас, его центр от нас уходит, его мили не вплотную. Считается ДО
+        // простоя и по тем величинам, какими простой читал бы её: постура и история дистанции — прошлого тика
+        val kiteChaseNow = posture == Posture.ANNIHILATE && ourLostWindow >= STALL_DAMAGE && ledgerWindow < 0 && !meleeAdjacent &&
+            enemyDistHist.size >= 2 && enemyDistHist.last() > enemyDistHist.first()
+        kiteChaseSeen = kiteChaseNow
+        if (posture == Posture.ANNIHILATE) { kchaseAnn++; if (kiteChaseNow) kchaseTicks++ }
         // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
         val netDamage = enemyHitsHist.size == STALL_TICKS &&
             (enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
@@ -4486,6 +4536,9 @@ cpuMark("a.hunt")
         // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
         // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
         fightOnNow = contact || exchangeRecent
+        // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
+        // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
+        if (fightOnNow) { warmFightAll++; if (!exchangeLive) warmFight++ }
         // ПРИЗНАК ОТХОДА СЧИТАЕТСЯ ЗДЕСЬ (v217, см. USE_BREAK_OFF_HOLDS_LINE): он должен успеть погасить
         // наступление, а `pushing` решается на триста строк ниже. Величины готовы: контакт уже есть, а
         // `ourDamageTaken`/`enemyDamageTaken` копятся с начала матча
@@ -4502,7 +4555,6 @@ cpuMark("a.hunt")
             cmdDetach.clear()
             detachedIds.clear()
         }
-        val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
         val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
         val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4
         // при РАВНОЙ скорости отход из контакта без мили вплотную — размен выстрелами в обе стороны, не бегство; из
@@ -4571,18 +4623,7 @@ cpuMark("a.retreat")
         stalemateNow = stalemate
         val holdingFlag = USE_PUSH_KEEPS_FLAG && USE_HOLD_OWN_FLAG && !fightOn &&
             ctx.flags.any { it.ours && getRange(it.pos, ctx.ourCentroid) <= POST_STANDOFF }
-        val exchangeLedger = enemyDamageTaken - ourDamageTaken
-        // ...и тот же размен ЗА ОКНО (v216, см. ledgerHist): срез берётся здесь, в одной точке тика, потому что
-        // слагаемые обновляются в разных местах — наши потери в прологе, его в runArmy
-        ledgerHist.addLast(exchangeLedger)
-        ourLostHist.addLast(ourDamageTaken)
-        hisLostHist.addLast(enemyDamageTaken)
-        while (ledgerHist.size > LEDGER_WINDOW + 1) ledgerHist.removeFirst()
-        while (ourLostHist.size > LEDGER_WINDOW + 1) ourLostHist.removeFirst()
-        while (hisLostHist.size > LEDGER_WINDOW + 1) hisLostHist.removeFirst()
-        ledgerWindow = if (ledgerHist.size >= 2) ledgerHist.last() - ledgerHist.first() else 0
-        ourLostWindow = if (ourLostHist.size >= 2) ourLostHist.last() - ourLostHist.first() else 0
-        hisLostWindow = if (hisLostHist.size >= 2) hisLostHist.last() - hisLostHist.first() else 0
+        // (размен матча и размен за окно считаются выше, у историй хитов — перенесены в v221, см. exchangeLive)
         // нулевой ледж (обмена ещё не было) допуск не закрывает — иначе толчок в стоящий лагерь стенда не начинался
         // (v87b: spread m33 24314 → 7298, 14 хуже); закрывает только проигранный размен
         val ledgerOk = !USE_PUSH_LEDGER || exchangeLedger >= 0
@@ -4893,6 +4934,17 @@ cpuMark("a.sweep")
             if (!(pushing || contactFight)) spotHoldNew++     // пара: сколько раз вето ИЗМЕНИЛО постуру
         }
         val annihilate = pushing || contactFight || holdingSpot
+        // ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER). `warmNow` — контакт по массе, в котором за окно
+        // ни одна сторона не потеряла STALL_DAMAGE, его мили не вплотную и загнанной группы нет (см. cornered): ровно
+        // то, что правка перестанет называть боем. Три пары до правки говорят, сколько тиков она тронет и куда уйдёт
+        // цель армии: `warm` — доля такого контакта во всём контакте; `warmann` — тики, где боевую постуру держал
+        // только он (не толчок и не очаг); `warmhold` — из них тики, где флаг-цель подхватила бы «держим линию»
+        val warmNow = contact && !exchangeLive && !meleeAdjacent && !cornered
+        if (contact) { warmContact++; if (warmNow) warmTicks++ }
+        if (annihilate) {
+            warmAnnAll++
+            if (warmNow && !pushing && !holdingSpot) { warmAnn++; if (enemyNear && !stalled) warmHold++ }
+        }
         // непобедимая армия (см. EVADE_SAFE): с ней не деремся — флаг-цель только с выходом, иначе уклонение на любой
         // дистанции: держимся там, откуда есть выход, и уходим, когда она подходит
         // уклонение — только от ЯВНО сильнейшей армии (см. RETREAT_RATIO): при паритете флагов (v14) бой равный, и бежать
@@ -5626,6 +5678,9 @@ cpuMark("a.evade")
         // на следующем же тике постуру можно было сменить обратно. То есть единственный гистерезис в файле ломался
         // именно там, где он нужнее всего — в бою. Замер по двадцати рейтинговым матчам: в худших матчах 352 смены
         // постуры за 1700 тиков, медиана удержания ОДИН тик, 71–81 % смен живут не дольше трёх тиков
+        // ПАРА К КОМАНДИРУ (v221, см. warmNow): сколько тиков режима боя командир держит при тёплом контакте — на
+        // этих тиках он вернёт ANNIHILATE сам, что бы ни решила постура
+        if (cmdMode == CmdMode.FIGHT) { warmCmdAll++; if (warmNow) warmCmd++ }
         if (USE_COMMAND_POSTURE && cmdMode == CmdMode.FIGHT && posture != Posture.ANNIHILATE) {
             posture = Posture.ANNIHILATE
             if (USE_ONE_POSTURE_CLOCK) postureSince = getTicks()
@@ -5654,6 +5709,15 @@ cpuMark("a.evade")
             gatherHold++
             val shooters = combatArmy.filter { hasWeapon(it) && hasRanged(it) }
             if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread++
+        }
+        // ...И ТА ЖЕ ПАРА В ПОСТУРЕ БОЯ (v221, только прибор). Разбор v220, матч #11: ведём +1077, на 1400-м армия
+        // растянута по флагам, его шестеро бьют ближайшую часть, и десять целых крипов ложатся за 80 тиков. Сбор
+        // (rallyTo) в ANNIHILATE не работает по построению, а сплочение (cohesionHold) — ожидание, которое гасит
+        // огонь по своим. Прибор отдельный, чтобы прежний `gather=` по HOLD остался сравним с логами v218–v220
+        if (posture == Posture.ANNIHILATE) {
+            gatherAnnAll++
+            val sh = combatArmy.filter { hasWeapon(it) && hasRanged(it) }
+            if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn++
         }
         if (posture == Posture.RETREAT || posture == Posture.EVADE) {
             retrTicks++
@@ -6165,6 +6229,8 @@ cpuMark("a.evade")
             fun holdReach(e: Creep) = if (USE_MELEE_PAIR_ENGAGE && meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
             val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it)) && withPrey(it) && paired(it) }.minByOrNull { getRange(creep, it) } else null
             if (engage != null) engagingIds.add(creep.id) else engagingIds.remove(creep.id)
+            // пара к общей цели мили (v221, см. mpackHit): как часто ноги мили и так идут к цели фокуса
+            if (meleeOnly && engage != null) { mpackAll++; if (engage.id == focusTarget?.id) mpackHit++ }
             // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру.
             // ПОВОДОК НЕ ТЯНУЛ ИМЕННО ТОГО, КТО УБЕЖАЛ (v191, USE_LEASH_IN_CONTACT): условие требовало врага РЯДОМ С
             // КРИПОМ, а у крипа, отставшего от боя, врагов рядом уже нет — и он оставался стоять там, где остановился.
@@ -6704,7 +6770,7 @@ cpuMark("a.evade")
             adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
             else -> null
         }
-        target?.let { creep.attack(it); lastFireTick = getTicks() }
+        target?.let { creep.attack(it); lastFireTick = getTicks(); strikesAt[it.id] = (strikesAt[it.id] ?: 0) + 1 }
     }
 
     /** Через сколько тиков боевые враги дойдут до нашего дома — по темпу сближения за APPROACH_WINDOW;
@@ -6733,6 +6799,7 @@ cpuMark("a.evade")
 
     private fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         shotsAt.clear()
+        strikesAt.clear()
         val healDone = HashMap<String, Int>()
         val incoming = HashMap<String, Int>()
         fun need(target: Creep): Int {
@@ -6802,6 +6869,13 @@ cpuMark("a.evade")
             concSum += most; concTicks++
             concAll += most; concAllTicks++
             if (most > concMax) concMax = most
+        }
+        // ...и то же ДЛЯ МИЛИ (v221, см. mconcAll): удар не кладёт ничего в `shotsAt`, поэтому `conc` про мили
+        // слеп — сложены ли четыре удара в одну цель, не измерял ни один прибор
+        val mostStrikes = strikesAt.values.maxOrNull() ?: 0
+        if (mostStrikes > 0) {
+            mconcAll += mostStrikes; mconcTicks++
+            if (mostStrikes > mconcMax) mconcMax = mostStrikes
         }
     }
 
@@ -8252,7 +8326,12 @@ cpuMark("a.evade")
     private var simErrWrongSign = 0                // сколько раз прогноз обещал прибыль, а вышел убыток
     private val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
     private var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
-    private var cmdBlocked = "-"                   // почему не правил в последний раз при контакте с блобом
+    /** Почему командир не правил — в ПОСЛЕДНИЙ тик, когда не правил. ⚠️ В строке `t=` (поле `cmd=…:причина`)
+     *  это значение УСТАРЕВШЕЕ: оно пишется только на тиках без командира, поэтому `cmd=0/200:outmatched
+     *  mode=FIGHT` значит «сейчас бой, а в последний тик без командира причиной был outmatched». Разбор серии
+     *  v220 прочёл его как причину текущего тика и приписал разгромам «отход»; честная картина по тикам —
+     *  гистограмма `cmdwhy` (v221). */
+    private var cmdBlocked = "-"
     /** РАЗЛОЖЕНИЕ НЕВХОДА В РЕЖИМ БОЯ (v215). Прежний `cmdBlocked` НАЗЫВАЛ причину, не проверив её: он писал
      *  «posture», если постура не ANNIHILATE, — а условие боя постуры ANNIHILATE не требует вовсе, оно требует
      *  `!pushing && underTheirFire && (сомкнут || шесть рядом) && постура не отход`. По логам рейтинговой серии
@@ -8338,6 +8417,47 @@ cpuMark("a.evade")
     /** Пара «тиков признака outmatched / из них с постурой отхода» (v217, решение оператора). */
     private var outmTicks = 0
     private var outmRetreat = 0
+    /** Размен идёт прямо сейчас (v221, см. exchangeLive) — для гейта захвата, который зовётся из `runRunners`
+     *  раньше `runArmy` и потому читает окно прошлого тика. */
+    private var exchangeLiveNow = false
+    /** ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, см. warmNow):
+     *  `warm` — тиков контакта без размена / тиков контакта; `warmann` — тиков ANNIHILATE, державшихся только таким
+     *  контактом / тиков ANNIHILATE; `warmhold` — из них тиков, где флаг-цель подхватила бы «держим линию»;
+     *  `warmcmd` — тиков режима боя при тёплом контакте / тиков режима боя (там постуру вернёт командир);
+     *  `warmfight` — тиков «бой идёт» без размена / тиков «бой идёт» (отзыв бегунов, USE_NO_SPLIT_IN_FIGHT);
+     *  `warmcap` — отказов захвата `contact.mass` без размена / отказов `contact.mass`. */
+    private var warmTicks = 0
+    private var warmContact = 0
+    private var warmAnn = 0
+    private var warmAnnAll = 0
+    private var warmHold = 0
+    private var warmCmd = 0
+    private var warmCmdAll = 0
+    private var warmFight = 0
+    private var warmFightAll = 0
+    private var warmCap = 0
+    private var warmCapAll = 0
+    /** Удары мили по цели за тик (v221) — как `shotsAt`, но из `strike`; чистится там же. */
+    private val strikesAt = HashMap<String, Int>()
+    /** Пара «сумма наибольшего числа ударов мили в одну цель за тик / тиков с ударами» и максимум (v221).
+     *  Разбор блоб-поражений двух серий: во всех через 40 тиков после контакта он не потерял ни одного стрелка
+     *  и ни одного мили, мы — стрелков и мили; его четыре мили кладут 960 в одну нашу цель в 1200 хитов. */
+    private var mconcAll = 0
+    private var mconcTicks = 0
+    private var mconcMax = 0
+    /** Пара «крипо-тиков мили, чья цель ног — цель фокуса / крипо-тиков мили с целью ног» (v221). */
+    private var mpackHit = 0
+    private var mpackAll = 0
+    /** Погоня за кайтером (v221, только прибор, см. kiteChaseNow): тиков односторонней погони в ANNIHILATE /
+     *  тиков ANNIHILATE; отказов безфлагового броска в такой погоне / всех отказов безфлагового броска. */
+    private var kiteChaseSeen = false
+    private var kchaseTicks = 0
+    private var kchaseAnn = 0
+    private var kvetoHit = 0
+    private var kvetoAll = 0
+    /** Пара «тиков ANNIHILATE со строем стрелков шире RALLY_RANGE / тиков ANNIHILATE» (v221, см. gatherSpread). */
+    private var gatherAnn = 0
+    private var gatherAnnAll = 0
 
     /** Расстановка боя (см. USE_PLAN): клетки с признаками, роли по порядку признаков, жадное назначение. Выход — slotOf,
      *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
