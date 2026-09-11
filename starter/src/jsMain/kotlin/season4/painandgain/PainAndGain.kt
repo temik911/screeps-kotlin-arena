@@ -2306,6 +2306,20 @@ object PainAndGain {
     private const val BREAK_OFF_TICKS = 3       // срок, чтобы одиночный просадочный тик не выдёргивал из выигрышного боя
     /** Окно размена для признака отхода — существующий срок «размен был недавно», а не новое число (v216). */
     private val LEDGER_WINDOW = STALL_TICKS
+    /** ОТХОД ОБЪЯВЛЯЕТСЯ ПО ФАКТУ РАЗМЕНА, А НЕ ПО ЛАНЧЕСТЕРОВОЙ МОЩИ (v216, решение оператора).
+     *  Правило v185 верно по существу — не менять, когда мы слабее, — но признак у него негоден против лечащего
+     *  блока. `powerOf` считает `sqrt((наш урон − его лечение) × хиты)`: когда его лечение перекрывает наш урон,
+     *  скобка уходит в минус и НАША мощь читается нулём, как бы ни шёл бой. Это записано в доках дословно про
+     *  Coldkimchi, и в логах けろびー#1 видно построчно: `our=0 enemy=1457` в тик, когда мы убили четверых его и
+     *  не потеряли ни одного.
+     *  Живой замер по 20 рейтинговым матчам v215: признак сработал ровно в ЧЕТЫРЁХ матчах и ноль в остальных
+     *  шестнадцати, и все четыре кончились гибелью армии — #12 объявил отход на 250-м тике при наших ПОЛНЫХ
+     *  16 000/16 000 против его 8 253/8 800, и к 350-му осталось двое; #11 — 12 крипов в ноль за 70 тиков после
+     *  отхода на 130-м; #19 — при нашем счёте 9 048:4 797. На v214 (тумблер выключен) отход случался на 590–1590-м
+     *  тике и армия после него не таяла (12→12, 5→5, 10→10). Отход от мили — это выстрел в спину каждый тик.
+     *  Здесь тот же вопрос задан величиной, которая не умеет врать про лечение: сколько хитов сняли С НАС против
+     *  того, сколько мы сняли С НЕГО за окно. Порог берётся существующий, `BREAK_OFF_RATIO`; новых чисел нет. */
+    private const val USE_BREAK_OFF_BY_LEDGER = true
     /** СТРОЙ НЕ ПРИНИМАЕТ БОЙ У КРАЯ. НЕ ВКЛЮЧЕНО — правило выведено из СОВПАДЕНИЯ и не пережило широкой выборки
      *  (v184). Повод: в двенадцати тестовых играх против MetalicaX#10 проигранные сшибки шли при нашем центре в
      *  десяти клетках от края карты, выигранные — в сорока двух, при разнице во всём остальном (сомкнутость 2,4/5
@@ -2582,6 +2596,14 @@ object PainAndGain {
      *  файл уже определяет «размен был недавно» (`exchangeRecent`), то есть длительность одного обмена линией. */
     private val ledgerHist = ArrayDeque<Int>()
     private var ledgerWindow = 0
+    /** ...и обе половины отдельно: признак отхода спрашивает ОТНОШЕНИЕ потерь, а не разность. */
+    private val ourLostHist = ArrayDeque<Int>()
+    private val hisLostHist = ArrayDeque<Int>()
+    private var ourLostWindow = 0
+    private var hisLostWindow = 0
+    /** Пара «тиков, где ланчестерова мощь и фактический размен расходятся / тиков с признаком» (v216). */
+    private var breakOffSplit = 0
+    private var breakOffN = 0
     /** Чем заняты бегуны: пары по режимам (`dbg` — единственная точка, через которую проходят все ветки). */
     private val runnerMode = HashMap<String, Int>()
     private var runnerModeN = 0
@@ -2971,7 +2993,7 @@ cpuMark("arrival")
                 "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
                 " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
-                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow " +
+                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
                 "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost budget=$budgetSum/$budgetTicks " +
                 "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
@@ -4304,8 +4326,14 @@ cpuMark("a.retreat")
         // ...и тот же размен ЗА ОКНО (v216, см. ledgerHist): срез берётся здесь, в одной точке тика, потому что
         // слагаемые обновляются в разных местах — наши потери в прологе, его в runArmy
         ledgerHist.addLast(exchangeLedger)
+        ourLostHist.addLast(ourDamageTaken)
+        hisLostHist.addLast(enemyDamageTaken)
         while (ledgerHist.size > LEDGER_WINDOW + 1) ledgerHist.removeFirst()
+        while (ourLostHist.size > LEDGER_WINDOW + 1) ourLostHist.removeFirst()
+        while (hisLostHist.size > LEDGER_WINDOW + 1) hisLostHist.removeFirst()
         ledgerWindow = if (ledgerHist.size >= 2) ledgerHist.last() - ledgerHist.first() else 0
+        ourLostWindow = if (ourLostHist.size >= 2) ourLostHist.last() - ourLostHist.first() else 0
+        hisLostWindow = if (hisLostHist.size >= 2) hisLostHist.last() - hisLostHist.first() else 0
         // нулевой ледж (обмена ещё не было) допуск не закрывает — иначе толчок в стоящий лагерь стенда не начинался
         // (v87b: spread m33 24314 → 7298, 14 хуже); закрывает только проигранный размен
         val ledgerOk = !USE_PUSH_LEDGER || exchangeLedger >= 0
@@ -5203,10 +5231,26 @@ cpuMark("a.evade")
         // крипах — он вылечивает своих обратно, мы нет, а армия продолжает стоять и таять. Доктрина паритета говорит
         // ровно это: не менять, когда мы слабее. Признак — ИЗМЕРЕННАЯ мощь обеих сторон, а не прогноз командира: тот
         // в минус не уходит никогда (см. USE_COMMAND_RETREAT), и потому основанием служить не может
-        val outmatched = USE_COMMAND_BREAKS_OFF && contact && armedEnemies.isNotEmpty() && run {
+        // ...И ПРИЗНАК СЧИТАЕТСЯ ПО ФАКТУ РАЗМЕНА (v216, см. USE_BREAK_OFF_BY_LEDGER). Обе величины считаются на
+        // контактных тиках, чтобы прибор назвал числом, как часто они расходятся: старый признак стоил ровно
+        // столько же — два вызова powerOf, — поэтому цена замера нулевая
+        val outmatchedByPower = USE_COMMAND_BREAKS_OFF && contact && armedEnemies.isNotEmpty() && run {
             val oursNow = ourPowerOf(combatArmy, combatEnemies)
             val theirsNow = enemyPowerOf(combatEnemies, combatArmy)
             theirsNow > 0.0 && oursNow < theirsNow * BREAK_OFF_RATIO
+        }
+        // «мы теряем хиты, а он почти нет» — то же отношение BREAK_OFF_RATIO, только по фактическим потерям
+        // ...и размен берётся НАКОПЛЕННЫЙ, а не за окно. Окно в STALL_TICKS тиков ловит местный размах и врёт в
+        // другую сторону: на 200-м тике match35 за последние двадцать тиков мы потеряли 998 хитов против его 327 —
+        // и признак объявил отход, — тогда как ЗА МАТЧ мы к этому моменту убили троих его крипов и не потеряли ни
+        // одного (16 000/16 000 у нас против его 10 798/11 600). Строка перестала проходить гейт. Вопрос «стоит ли
+        // прекращать размен» — про размен целиком, а не про последние двадцать тиков; окно осталось прибором
+        val outmatchedByLedger = USE_COMMAND_BREAKS_OFF && contact && armedEnemies.isNotEmpty() &&
+            ourDamageTaken > 0 && enemyDamageTaken < ourDamageTaken * BREAK_OFF_RATIO
+        val outmatched = if (USE_BREAK_OFF_BY_LEDGER) outmatchedByLedger else outmatchedByPower
+        if (contact && armedEnemies.isNotEmpty()) {
+            breakOffN++
+            if (outmatchedByPower != outmatchedByLedger) breakOffSplit++
         }
         outmatchedTicks = if (outmatched) outmatchedTicks + 1 else 0
         cmdMode = when {
