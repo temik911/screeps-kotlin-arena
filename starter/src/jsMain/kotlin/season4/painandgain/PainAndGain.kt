@@ -398,7 +398,8 @@ object PainAndGain {
      *  выстрела, пока мили врага резали авангард, а дальше ДОБИТЬ/ОТХОД мигали через тик — размен 1:10 при
      *  равной силе (матч 6, t=64–100). Из контакта при равной скорости всё равно не уйти; уходим, только когда
      *  бой проигран явно. */
-    private const val RETREAT_CONTACT_RATIO = 1.5
+    /** ⚠️ Снята в v217 вместе с `weakerContact`: порог «выйти из идущего боя» существовал только для него, а
+     *  сам он не читался в контакте ни разу — см. разбор вакуумной охраны в `contactFight`. */
 
     /** Захват флага допустим, пока армия с его дебаффом НЕ СЛАБЕЕ армии врага — считая ОБЕ стороны: чужой
      *  флаг снимает дебафф с врага. При равных армиях первый флаг берёт тот, кто согласен стать слабее;
@@ -4442,7 +4443,9 @@ cpuMark("a.retreat")
         val theirsPush = if (pushAll) theirs else enemyPowerOf(pushPack, army)
         val weaker = theirsFight >= oursFight * (if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
         // из идущего боя (см. RETREAT_CONTACT_RATIO) — только при явном проигрыше
-        val weakerContact = theirsFight >= oursFight * (if (posture == Posture.ANNIHILATE) RETREAT_CONTACT_RATIO else if (posture == Posture.RETREAT) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
+        // ⚠️ Здесь жил `weakerContact` — и после снятия вакуумной охраны в `contactFight` он остался
+        // объявленным и никем не читаемым. Снят вместе с ней (v217); вместе с ним осиротела и константа
+        // RETREAT_CONTACT_RATIO, которая существовала только ради него
         // ДОБИТЬ по перевесу — с гистерезисом; по контакту — пока контакт есть (без гистерезиса: см. PUSH_RELEASE_RATIO)
         val stalemate = behindTicks >= BEHIND_PATIENCE
         stalemateNow = stalemate
@@ -4734,7 +4737,18 @@ cpuMark("a.sweep")
         // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
         // sleeper при 0.83 это 10:0; «поймали — деремся до конца контакта» дало 2:11, «слабее — только отход» 2:6
         val hotContact = contact && (!USE_COLD_CONTACT_POSTURE || fightOn || meleeAdjacent)
-        val contactFight = !stalled && armedEnemies.isNotEmpty() && strikers.isNotEmpty() && hotContact && !(retreatFeasible && weakerContact)
+        // ⚠️ Здесь стояла охрана `&& !(retreatFeasible && weakerContact)`, и она ВАКУУМНО ИСТИННА всегда, когда
+        // остальная конъюнкция может быть истинной. Доказательство в две строки: `hotContact` требует `contact`,
+        // сама конъюнкция требует `strikers.isNotEmpty()`, а `retreatFeasible = (!contact || strikers.isEmpty())
+        // && !atRetreatPoint` — при обоих этих условиях он ЛОЖЕН по построению. Значит `weakerContact` —
+        // тщательно настроенное тройное отношение (1.5 в ANNIHILATE, 1.05 в RETREAT, иначе 1.15) — не читался в
+        // контакте НИ РАЗУ, то есть ровно там, где задумывался. Снято в v217; дифф отчёта пуст побайтово.
+        // ⚠️ И оживлять его НЕ НАДО, это отдельное решение с двумя основаниями. Первое: живая редакция сделала бы
+        // `contactFight` ложным при слабости в контакте, а с ним погасли бы `annihilate` и постура ANNIHILATE —
+        // то есть отменилось бы решение оператора «держать линию» (см. USE_BREAK_OFF_HOLDS_LINE), принятое
+        // строкой выше по той же причине. Второе: это и есть «слабее — только отход», замеренное 2:6 против 10:0.
+        // Намерение охраны теперь исполняет гашение наступления, и исполняет его, не разворачивая армию
+        val contactFight = !stalled && armedEnemies.isNotEmpty() && strikers.isNotEmpty() && hotContact
         // СПЕРВА ТУШИМ МЕСТНЫЙ ОЧАГ (v214, оператор по записи: «загнали в угол 2-3 крипа, мы там значительно
         // сильнее, но армия разворачивается и убегает в другой конец карты; нужен механизм, который сперва тушит
         // местный очаг, если мы сильнее, и лишь затем бежит на помощь»).
