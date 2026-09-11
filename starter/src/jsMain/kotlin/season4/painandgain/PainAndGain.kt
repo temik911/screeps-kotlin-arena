@@ -2401,6 +2401,8 @@ object PainAndGain {
      *  ⚠️ Это НЕ «деремся до конца контакта» (замерено 2:11) и не «слабее — только отход» (2:6). Кайт
      *  тик-за-тиком (`USE_MASS_KITE`, 10:0 на sleeper) остаётся как есть — снимается только толчок вперёд. */
     private const val USE_BREAK_OFF_HOLDS_LINE = true
+    /** Детектор простоя работает и в отходе (v217, см. разбор замка в `contactFight`). */
+    private const val USE_STALL_IN_RETREAT = true
     /** СТРОЙ НЕ ПРИНИМАЕТ БОЙ У КРАЯ. НЕ ВКЛЮЧЕНО — правило выведено из СОВПАДЕНИЯ и не пережило широкой выборки
      *  (v184). Повод: в двенадцати тестовых играх против MetalicaX#10 проигранные сшибки шли при нашем центре в
      *  десяти клетках от края карты, выигранные — в сорока двух, при разнице во всём остальном (сомкнутость 2,4/5
@@ -4330,7 +4332,13 @@ cpuMark("a.hunt")
         // конца матча (стенд m19 spread, t=600–1600)
         // боевые враги нужны ПИКЕТУ (он из них и состоит), а простою марша — нет: зачистка идёт ровно тогда, когда
         // боевых не осталось, и там сетка не сработала ни разу (стенд m18 roost: 1500 тиков погони за двумя скаутами)
-        if (posture != Posture.RETREAT && posture != Posture.EVADE && !netDamage && now >= stallUntil &&
+        // ...И В ОТХОДЕ ТОЖЕ (v217). Оговорка «в любой постуре, кроме отхода и уклонения» стояла без своего
+        // замера, а следствие у неё было тяжёлое: `!stalled` — единственный оставшийся выключатель
+        // `contactFight`, поэтому после объявления отхода выйти из него было нельзя по построению, и счёт
+        // оставался нулём при живых двенадцати крипах (живой замер v216: `objnone` даёт annihilate:179-207 при
+        // постуре RETREAT). Условие `!netDamage` остаётся и само по себе узко: под огнём простой не объявляется,
+        // так что правка касается ровно тихого отхода — того, из которого и надо уметь выйти
+        if ((USE_STALL_IN_RETREAT || (posture != Posture.RETREAT && posture != Posture.EVADE)) && !netDamage && now >= stallUntil &&
             ((combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS) || marchStalled || keepsDistance || dryPush)) {
             stallUntil = now + STALL_COOLDOWN
             if (DEBUG_LOG) println("stall t=$now: ${if (dryPush && !marchStalled) "the push has fired nothing for $PASSIVE_TICKS ticks" else if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else if (keepsDistance) "the enemy keeps its distance (${armyDistHist.first()} -> ${armyDistHist.last()} over $CHASE_WINDOW ticks)" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
