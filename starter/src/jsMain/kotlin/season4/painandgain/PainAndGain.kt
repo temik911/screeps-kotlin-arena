@@ -3257,12 +3257,15 @@ cpuMark("arrival")
      * (матч 3: «отстаём» на 2 очка при 6:10 разрешило всё подряд). Исключение — последние LAST_CALL_TICKS:
      * бой уже не успеет, и очки решают.
      */
-    private fun captureAllowed(ctx: Ctx, f: FlagInfo, runner: Boolean = false): Boolean = captureBlock(ctx, f, runner) == null
+    /** ⚠️ Параметр `runner` снят в v216: он был объявлен у обеих функций и НИ РАЗУ не читался в теле
+     *  `captureBlock`. `runRunners` передавал `runner = true`, и это не меняло ничего — у бегуна те же ворота, что
+     *  у армии. Дифф отчёта по 135 сценариям пуст побайтово, как и обязан быть у мёртвого. */
+    private fun captureAllowed(ctx: Ctx, f: FlagInfo): Boolean = captureBlock(ctx, f) == null
 
     /** Какие ворота держат захват — null, если разрешено (v135, прибор к разрезу `tools/flagcut.py`): пять ворот отказывали
      *  молча, и в логе стояло только POISED, поэтому нельзя было сказать, ЧТО именно держит бегуна в клетке от свободного
      *  флага. Условия и их порядок те же, что были в captureAllowed. */
-    private fun captureBlock(ctx: Ctx, f: FlagInfo, runner: Boolean = false): String? {
+    private fun captureBlock(ctx: Ctx, f: FlagInfo): String? {
         if (f.ours) return null
         if (capTick != getTicks()) { capTick = getTicks(); capSeen.clear() }
         if (f.id !in capSeen) capOffered++
@@ -3660,7 +3663,7 @@ cpuMark("r.cands")
                 continue
             }
             // брать ли флаг сейчас (дебафф): нельзя — ждём рядом, шаг на клетку сделаем, когда станет можно
-            val block = captureBlock(ctx, f, runner = true)
+            val block = captureBlock(ctx, f)
             val allowed = block == null
             val range = if (allowed) 0 else 1
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)
