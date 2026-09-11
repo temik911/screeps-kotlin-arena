@@ -2673,6 +2673,12 @@ object PainAndGain {
     private var budgetSum = 0
     private var budgetTicks = 0
     /** Темп очков на сотом и двухсотом тике — снимок дебюта, которого не снимал ни один прибор. */
+    /** Почему у армии нет флаг-цели: пара по причинам против всех тиков (v216). */
+    private val objNone = HashMap<String, Int>()
+    private var objAll = 0
+    /** ...и разложение САМОГО выбора: какой фильтр снял флаг-кандидата (v216). */
+    private val objDrop = HashMap<String, Int>()
+    private var objDropN = 0
     private var race100 = ""
     private var race200 = ""
     private var enemyDamageTaken = 0                      // снято с него за матч
@@ -3061,7 +3067,8 @@ cpuMark("arrival")
                 " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
                 " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
                 "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
-                "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost budget=$budgetSum/$budgetTicks " +
+                "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost objnone=${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll " +
+                "objdrop=${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN budget=$budgetSum/$budgetTicks " +
                 "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
                 "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
                 "conc=$concSum/$concTicks " +
@@ -3799,9 +3806,10 @@ cpuMark("r.cands")
         if (group.isEmpty()) return null
         var best: Objective? = null
         for (f in ctx.flags) {
-            if (f.ours) continue
-            if (onlyFlagId != null && f.id != onlyFlagId) continue   // страховка CPU (v131c): сверх бюджета — только текущая цель
-            if (!captureAllowed(ctx, f)) continue
+            objDropN++
+            if (f.ours) { objDrop["ours"] = (objDrop["ours"] ?: 0) + 1; continue }
+            if (onlyFlagId != null && f.id != onlyFlagId) { objDrop["cpu"] = (objDrop["cpu"] ?: 0) + 1; continue }   // страховка CPU (v131c)
+            if (!captureAllowed(ctx, f)) { objDrop["gate"] = (objDrop["gate"] ?: 0) + 1; continue }
             // ЦЕЛЬ АРМИИ НЕ ДУБЛИРУЕТ ФЛАГ БЕГУНА (v216). Обе соседние раздачи это уже проверяют — `commandRace`
             // («флаг, взятый бегуном, не дублируем») и `grabberOf` (исключает флаг-цель), — а самая дорогая, цель
             // ВСЕЙ армии, не проверяла. При потолке в один-два работающих крипа на семи флагах дубль означает, что
@@ -3812,19 +3820,21 @@ cpuMark("r.cands")
             // без изменений. Причина: назначение `runnerFlag` держится и за убегающим, и за тем, кто стоит у флага
             // без права встать, — армия теряла цель, до которой бегун не дойдёт никогда
             if (USE_OBJECTIVE_NOT_RUNNERS && ctx.runners.any { r ->
-                    runnerFlag[r.id] == f.id && getRange(r, f.pos) < group.minOf { getRange(it, f.pos) } }) continue
+                    runnerFlag[r.id] == f.id && getRange(r, f.pos) < group.minOf { getRange(it, f.pos) } }) {
+                objDrop["dup"] = (objDrop["dup"] ?: 0) + 1; continue
+            }
             val flow = flowTo(ctx, f.pos)
             val travel = group.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
-            if (travel >= Int.MAX_VALUE / 4) continue
+            if (travel >= Int.MAX_VALUE / 4) { objDrop["nopath"] = (objDrop["nopath"] ?: 0) + 1; continue }
             if (escapeNeeded) {
                 // покинутую точку уклонения армия не идёт «захватывать»: у R3 (13,49) счёт места упал, точка покинута — и
                 // тут же выбрана целью в шести тиках, навстречу врагу (матч 12, t=188)
                 val left = evadeLeft
-                if (left != null && left.x == f.pos.x && left.y == f.pos.y) continue
+                if (left != null && left.x == f.pos.x && left.y == f.pos.y) { objDrop["evadeLeft"] = (objDrop["evadeLeft"] ?: 0) + 1; continue }
                 // только флаг с выходом (см. ESCAPE_MARGIN, REACTION_LAG): за H4 в угол (8,90) армия шла 52 тика, пока
                 // враг шёл на неё с 80 клеток (матч 11); за R3 (13,49) — 41 тик вдоль западного края при спящем враге,
                 // и тот пошёл на полпути (матч 12)
-                if (exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) continue
+                if (exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) { objDrop["exit"] = (objDrop["exit"] ?: 0) + 1; continue }
             }
             // ⚠️ ПРОБОВАНО И ОТВЕРГНУТО (матч 23): запрет марша длиннее, чем врагу дойти до нашей армии, когда мы впереди
             // с растущим отрывом. Ни одного проигрыша стенда он не предотвращает, а бот становится пассивен всякий раз,
@@ -3842,7 +3852,8 @@ cpuMark("r.cands")
             val ok = pack.isEmpty() || (USE_FARMER_PACK_FREE && farmerQuietNow) ||
                 (lostRacePack && ourPowerOf(group, pack) >= enemyPowerOf(pack, group) * PARITY_FLOOR) ||
                 (ourPowerOf(group, pack) >= enemyPowerOf(pack, group) * ratio && fightCost(pack, group) <= group.maxOf { speedSlack(it) })
-            if (!ok) continue
+            if (!ok) { objDrop["pack"] = (objDrop["pack"] ?: 0) + 1; continue }
+            objDrop["taken"] = (objDrop["taken"] ?: 0) + 1
             // гистерезис: текущая цель ценнее на четверть, чтобы не прыгать между равными; дорогой по силе — позже
             val value = f.swing * captureCost(ctx, f) / (travel + 10) * (if (current) 1.25 else 1.0)
             if (best == null || value > best.value) best = Objective(f, pack, value, travel)
@@ -4753,6 +4764,21 @@ cpuMark("a.escape")
             Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0)
         }
         val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted, if (cpuGuardArmy) objectiveFlagId else null)
+        // ПОЧЕМУ У АРМИИ НЕТ ФЛАГ-ЦЕЛИ (v216). Постура HOLD занимает 43–58 % матча, и в ней армия стоит в точке,
+        // которая не даёт очков, при 2,3–2,6 ничьих флагах на доске. Причин ровно четыре, и прежде чем менять
+        // поведение, надо знать, которая из них держит: «пост на флаге» уже мерили дважды (v214: любой не его флаг
+        // −23 570, суженный до разрешённых гейтом −6 905) и оба раза отвергли, поэтому третий заход вслепую
+        // недопустим
+        if (objective == null) {
+            val why = when {
+                annihilate -> "annihilate"
+                evadeFirst != null -> "evade"
+                holdLine -> "holdLine"
+                else -> "gate"
+            }
+            objNone[why] = (objNone[why] ?: 0) + 1
+        }
+        objAll++
 cpuMark("a.obj")
         // дебют без угла (v100, USE_OPENING_AT_POST): бросок далеко — не уклонение, а пост. И «далеко» значит ДАЛЕКО
         // (v135, см. USE_RUSH_FAR_NEEDS_RANGE): условие правила было только про силу, поэтому при паритете оно гасило
