@@ -2939,6 +2939,8 @@ object PainAndGain {
     private var survTicks = 0
     private var survLead = 0
     private var survContact = 0
+    /** ...и тиков режима, где уходить некуда и он в контакте — бой строем (вторая редакция). */
+    private var survFights = 0
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     private var flagBoundWas = false                      // трасса «его блоб идёт к флагу» (см. USE_RUSH_NOT_FLAG_BOUND)
@@ -3439,7 +3441,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -5239,9 +5241,17 @@ cpuMark("a.sweep")
             spotHoldAll++
             if (!(pushing || contactFight)) spotHoldNew++     // пара: сколько раз вето ИЗМЕНИЛО постуру
         }
-        // ...и в режиме выживания бой не объявляется вовсе (v223, см. USE_SURVIVAL)
-        val annihilate = (pushing || contactFight || holdingSpot) && !surviving
+        // ...и в режиме выживания бой не объявляется, пока есть куда уходить (v223, см. USE_SURVIVAL). Точка уклонения
+        // считается здесь, до постуры: вторая редакция — нет точки и он в контакте, значит бой строем, а не стояние в
+        // отходе (первая редакция парковала армию у точки отхода, и он добивал её там, стоящую: 0-8 против Coldkimchi#1)
+        // поля выхода — этим тиком, а не прошлым: на первом тике режима их ещё нет, и уходить было бы «некуда»
+        val survFresh = surviving && !(cpuGuardArmy && escapeFlows.isNotEmpty())
+        if (survFresh) refreshEscape(ctx, armedEnemies)
+        val survEvade = if (surviving && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }) evadePoint(ctx, armedEnemies, strikers) else null
+        val survFight = surviving && contact && survEvade == null
+        val annihilate = (pushing || contactFight || holdingSpot) && (!surviving || survFight)
         if (surviving && contact) survContact++
+        if (survFight) survFights++
         // ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, `warmNow` — см. hotContact): ровно то, что правка
         // называет «не боем». `warm` — доля такого контакта во всём контакте; `warmann` — тики, где боевую постуру
         // держал только он (не толчок и не очаг; с правкой — ноль по построению); `warmhold` — из них тики, где
@@ -5280,11 +5290,11 @@ cpuMark("a.sweep")
             if (ac != null) { ourCentHist.addLast(ctx.ourCentroid.x * 100 + ctx.ourCentroid.y); while (ourCentHist.size > APPROACH_WINDOW) ourCentHist.removeFirst() } else ourCentHist.clear()
             approachRate = if (enemyDistHist.size >= 2) ((enemyDistHist.first() - enemyDistHist.last()).toDouble() / (enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
         }
-        if (escapeNeeded && !(cpuGuardArmy && escapeFlows.isNotEmpty())) refreshEscape(ctx, armedEnemies) else if (!escapeNeeded) { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
+        if (escapeNeeded && !survFresh && !(cpuGuardArmy && escapeFlows.isNotEmpty())) refreshEscape(ctx, armedEnemies) else if (!escapeNeeded) { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
 cpuMark("a.escape")
         // враг близко (см. EVADE_RANGE) — уклонение раньше целей; далеко — цели с выходом, иначе безопасная точка
         val enemyClose = (hunted || surviving) && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
-        val evadeFirst = if (enemyClose && !annihilate && (!contact || surviving)) evadePoint(ctx, armedEnemies, strikers) else null
+        val evadeFirst = if (surviving) survEvade?.takeIf { !annihilate } else if (enemyClose && !annihilate && !contact) evadePoint(ctx, armedEnemies, strikers) else null
         // враг рядом (см. NEAR_RANGE) без нашего перевеса — не цель, а строй: армия, пошедшая за угловым флагом при
         // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
         // ...и тёплый контакт линии не стоит (v221, см. USE_FIGHT_BY_LEDGER): иначе, погасив боевую постуру, правка
@@ -5329,7 +5339,8 @@ cpuMark("a.obj")
 cpuMark("a.evade")
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
-        val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && (weaker || surviving) && (retreatFeasible || surviving)
+        // ...и в выживании отход к ТОЧКЕ не берётся: стоящую у точки армию он добивает (v223, вторая редакция)
+        val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible && !surviving
         // ОТВЕРГНУТО стендом (v58-опыт): снимать простой, когда паритет не пускает ни к одному флагу (матч 133: «марш не сдвинулся —
         // флаги до 479» при 1,32 к лагерю на D5, obj=- все 300 тиков, 18 против 7 в тик). На стенде m31 camp снятый на 536-м простой
         // дал 700 тиков ANNIHILATE pushing при 3679 против 1209 без единого убитого (центры армий в одной клетке, reach 0/5) —
@@ -5998,7 +6009,7 @@ cpuMark("a.evade")
             // и негодна была только область. Кулак нужен там, где ЛЕЧЕНИЕ не даёт добить, а не там, где мы и так
             // катимся вперёд. Признак берётся готовый и уже посчитанный: мы позади по размену хитов
             (!pushing || (USE_COMMAND_FIGHT_WHILE_PUSHING && healingWins)) && underTheirFire && (enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES) &&
-                posture != Posture.RETREAT && posture != Posture.EVADE && !surviving -> CmdMode.FIGHT
+                posture != Posture.RETREAT && posture != Posture.EVADE && (!surviving || posture == Posture.ANNIHILATE) -> CmdMode.FIGHT
             else -> CmdMode.RACE
         }
         // ...И ПРИЧИНА БЕРЁТСЯ ИЗ ТОЙ ЖЕ ЦЕПОЧКИ (v215, см. cmdWhy). Порядок веток здесь ровно тот же, что
@@ -6704,7 +6715,7 @@ cpuMark("a.evade")
                 val reaching = combatArmy.count { c -> hasRanged(c) && combatEnemies.any { getRange(c, it) <= RANGED_RANGE } }
                 live == 0 || reaching * 3 >= live * 2
             }
-            val massKite: Creep? = if (USE_MASS_KITE && !surviving && (!support || USE_KITE_HEALERS || helpless) && enemyMassedNow &&
+            val massKite: Creep? = if (USE_MASS_KITE && !(surviving && posture == Posture.EVADE) && (!support || USE_KITE_HEALERS || helpless) && enemyMassedNow &&
                     (!USE_KITE_NEEDS_FIGHT || posture == Posture.ANNIHILATE || fightImminentNow) &&
                     (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)) || helpless ||
                      // ...или стрелок выходит из-под удара, НЕ ЗАМОЛКАЯ (v135, см. USE_KITE_KEEPS_FIRE): прежний срез
