@@ -217,6 +217,24 @@ object PainAndGain {
      *  (POST_STANDOFF вокруг): его блобу, идущему на флаг, армия встречается на нём, а не бегун; центроид флагов остаётся
      *  постом без D5. */
     private const val USE_POST_ON_CENTRE = true
+    /** ДЕБЮТ СИММЕТРИЧЕН: ПОКА У НАС НЕТ НИ ОДНОГО ФЛАГА, ПОСТ — ЦЕНТРАЛЬНЫЙ ФЛАГ С ОБЕИХ СТОРОН (v230, разбор серии v229:
+     *  8-12, 1343 → 1294, девять уничтожений от блобов MetalicaX к 100–300-му тику).
+     *  1. Замер (edgecheck.py по сериям v227–v229 и A/B v227 против MetalicaX#9, 43 игры против MetalicaX). Карта одна, стороны
+     *     меняются. Со старта справа-снизу (спавн в 30 клетках от центра) армия идёт к центру, встречает его блоб у D5 на
+     *     50–60-м тике обеими свежими армиями — 11-5. Со старта слева-сверху (спавн в 42 клетках от центра) армия идёт вдоль
+     *     левого края к R3 (13,49), он берёт D5 на 45–50-м, идёт 36 клеток и бьёт нас у R3 на 80–100-м, уже с +5 в тик, — 6-21.
+     *     Строй на входе в обеих формах сжат (глубина 3–6, ширина 3–7), стрелков в трёх по 4–5 у обеих сторон: различает исход
+     *     место боя, а не строй.
+     *  2. Причина в коде: под безфлаговым броском ворота отказывают всем флагам (obj=-), и армия идёт на `postPoint` — ближайший
+     *     к нашему центру флаг НАШЕЙ ПОЛОВИНЫ (USE_POST_OUR_FLAG). Половина считается по путевой дистанции от спавнов, и D5
+     *     попадает в неё только с правого старта; с левого ближайший флаг нашей половины — R3 у края. Один и тот же бот играет
+     *     два разных дебюта в зависимости от стороны.
+     *  3. Правило: пока ни один флаг не наш и цели нет, пост армии — центральный флаг (D5) независимо от половины и владельца;
+     *     первый же наш флаг возвращает прежний пост (центроид своих флагов, D5 наш — на нём, см. USE_POST_ON_CENTRE). Новых
+     *     чисел нет. Отличие от отвергнутого USE_POST_TOWARD_CENTRE («флаг нашей половины, ближний к центру» — A3 в 18 от D5,
+     *     то есть ожидание в стороне): здесь армия идёт НА центральный флаг, где живьём и выигрываются бои с блобом.
+     *  Прибор: `postc=<тиков поста на центре без своих флагов>/<тиков поста>`. */
+    private const val USE_POST_CONTEST_CENTRE = true
     private var USE_FLEE_DIRECTION = true
     /** В УГОЛ НЕ БЕЖАТЬ (v116, матч 295 — близнец 273: Coldkimchi, стёрты к 599-му у западной стены, 1182 → 1178). При паритете от
      *  безфлагового броска точек уклонения с выходом нет (best=-), и бегство направлением (v46/v53) ведёт от поста R3 (11,47) по
@@ -707,6 +725,7 @@ object PainAndGain {
     /** Пара: тиков, когда пост стал флагом, и тиков с постом вообще. */
     private var postOnFlag = 0
     private var postAll = 0
+    private var postContest = 0
     private var spotHoldNew = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
@@ -2893,7 +2912,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v229"
+    private const val BOT_VERSION = "v230"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3676,7 +3695,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4789,7 +4808,15 @@ cpuMark("r.cands")
             .minByOrNull { if (USE_POST_TOWARD_CENTRE && unflaggedRushNow) getRange(it.pos, centreCell) else getRange(it.pos, ctx.ourCentroid) }?.pos else null
         // центральный флаг наш — пост на нём (v102, USE_POST_ON_CENTRE)
         val centre = if (USE_POST_ON_CENTRE) ctx.flags.firstOrNull { it.ours && it.type == EFF_DAMAGE_TAKEN_MODIFIER }?.pos else null
-        val c = centre ?: centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ourHalfFlag ?: ctx.home
+        // ...И ПОКА У НАС НЕТ НИ ОДНОГО ФЛАГА — ПОСТ НА ЦЕНТРАЛЬНОМ ФЛАГЕ С ОБЕИХ СТОРОН (v230, см. USE_POST_CONTEST_CENTRE)
+        // ...кроме центра, на котором сидит его ОДИНОЧКА при армии вдали (стенд m1 grab: его скаут на D5, армия на его R3; колонна
+        // марша к занятой клетке цели пляшет в 4–10 клетках от неё 1500 тиков и не убивает скаута — затор марша у занятой
+        // цели, открытая находка): такой центр не оспаривается, пост прежний
+        val contest = if (USE_POST_CONTEST_CENTRE && ctx.flags.none { it.ours })
+            ctx.flags.firstOrNull { f -> f.type == EFF_DAMAGE_TAKEN_MODIFIER && !f.ours &&
+                !(f.occupant?.my == false && ctx.combatEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE }) }?.pos else null
+        if (contest != null) postContest++
+        val c = centre ?: contest ?: centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: ourHalfFlag ?: ctx.home
         return if (!USE_POST_INSIDE) passableNear(c) else passableNear(InfluenceMap.cell(c.x.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE), c.y.coerceIn(EVADE_RANGE, 99 - EVADE_RANGE)))
     }
 
