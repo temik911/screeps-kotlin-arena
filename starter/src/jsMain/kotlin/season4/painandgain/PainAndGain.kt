@@ -2316,6 +2316,28 @@ object PainAndGain {
      *  25/17 и 22/25. Тумблеры выключены, счётчики стенда (`entry:`, «его фокус-цель вылечена») остаются инструментами. */
     private const val USE_HEAL_UNDER_FIRE = false
     private const val USE_WARD_UNDER_FIRE = false   // v109b: подопечный лекаря — терявший хиты; отвергнуто (см. healMate)
+    /** СТЕНА ЛЕЧЕНИЯ: УДЕРЖИМУЮ ЖЕРТВУ ЛЕЧАТ ВПЛОТНУЮ (v228, разбор серии v227 — четыре боя с Coldkimchi#1, два проиграны
+     *  и два выиграны при погибшей армии).
+     *  1. Замер (healwall.py, firepower.py по реплеям обеих сторон). Бой — дуэль стрелков: его мили вплотную 0,1 из 4,
+     *     наши 0,03 из 2; стрелков в трёх у обеих сторон 1,8–2,0. Его лечение падает на того, кого бьют СЕЙЧАС: лекарь
+     *     вплотную к жертве 38–40 % тиков, 33–36 % лечения на неё, и оружие держится на 62 частях весь бой (+0…+320 от
+     *     контакта: 62/62/62/61/62). Наше лечение 105–115 в тик уходит раненым в тылу: на жертву 9 %, лекарь вплотную к
+     *     ней 15–16 %, и передний теряет часть на каждые 100 урона — оружие 62 → 45 → 39 → 18. Итог: его чистый прогресс
+     *     на главной цели 118–165 в тик, наш 45–58; урон в тик его 129–185, наш 104–116 при тех же телах — и при том, что
+     *     дебаффы флагов носил он (#13: у него 3,6 флага, у нас 0,3).
+     *  2. Почему прежние редакции не сработали. «Лечить того, кого бьют» (v109, USE_HEAL_UNDER_FIRE/USE_WARD_UNDER_FIRE)
+     *     было безусловным и упало на стенде там, где фокус блоба 300–540 в тик на одну цель: такую жертву не удержать,
+     *     и лечение в неё — впустую, а лекари шли в его огонь. Редакции положения (v224: доставляемое притяжение, без
+     *     влияния) не меняли ЦЕЛЬ лечения — по дефициту, то есть самый раненый в дальности, а это отведённый в тыл.
+     *  3. Правило, вычисленное из состояния: жертва — наш крип с наибольшей потерей за прошлый тик; она УДЕРЖИМА, если
+     *     эта потеря не больше лечения, которое наши лекари доставят в неё следующим тиком (вплотную и в двух — полное,
+     *     в трёх — треть; лекарь лечит и себя). Пока жертва удержима: (а) каждый лекарь в дальности лечит её (вплотную —
+     *     полностью), (б) подопечный лекаря в цепочке хода — она, (в) в клетках командира цена клетки лекаря —
+     *     доставленное в неё лечение (72 вплотную против 24 в трёх) без слагаемого влияния. Когда его огонь на жертве
+     *     больше доставимого лечения (блоб с веером), правило молчит, и всё остаётся как было. Новых чисел нет.
+     *  Приборы: `hwall=<тиков удержимой жертвы>/<тиков с жертвой>`, `hwallh=<лечений в жертву>/<лекаро-тиков при
+     *  удержимой жертве>`. */
+    private const val USE_HEAL_WALL = true
     /** ПРИКАЗ КОМАНДИРА НА ЛЕЧЕНИЕ ДЕЙСТВУЕТ И ИЗДАЛИ (v183): назначенный пациент брался, только если он вплотную,
      *  иначе выбор перехватывал местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит.
      *  ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v215). Тумблер был погашен не своим замером, а оптом контрольной сборкой f58abff, и
@@ -2837,7 +2859,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v227"
+    private const val BOT_VERSION = "v228"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3086,6 +3108,14 @@ object PainAndGain {
     private var breaking = false
     private var zlbTicks = 0
     private var zlbZero = 0
+    private var victimNow: Creep? = null          // стена лечения (v228): терявший больше всех за прошлый тик
+    private var victimSaveable = false            // ...и его потеря не больше доставимого в него лечения
+    private var hwallTicks = 0
+    private var hwallVictimTicks = 0
+    private var hwallHeals = 0
+    private var hwallHealsAll = 0
+    private var wallCells: List<Position> = emptyList()   // клетки стены: соседние с жертвой, его вооружённые мили дальше двух
+    private val wallCellOf = HashMap<String, Position>()  // клетка стены, назначенная лекарю на этот тик
     private var surviving = false
     private var survTicks = 0
     private var survLead = 0
@@ -3604,7 +3634,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6594,6 +6624,53 @@ cpuMark("a.evade")
         // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
         lostTick.clear()
         for (c in army) lostTick[c.id] = ((lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
+        // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): жертва — терявший больше всех за прошлый тик; удержима, если её потеря не
+        // больше лечения, которое наши лекари доставят в неё следующим тиком (вплотную или в шаге от вплотную — полное, в трёх
+        // — треть; лекарь считается и для себя)
+        // ...и стена стоит только на БЕЗОПАСНЫХ клетках (стенд m28 brawl+heals при первой редакции: лекари вплотную к жертве
+        // попадали под удары его мили — 240 за удар по лечащим частям, которые у h6m6 спереди, — лечение обнулялось и
+        // раздевалась вся армия; уничтожение на 298-м стало проигрышем на 1751-м). Клетка стены — свободная соседняя с жертвой,
+        // от которой его вооружённые мили дальше двух (за один ход не встанут вплотную); живьём против Coldkimchi#1 такая клетка
+        // у жертвы есть в 83–89 % тиков, в блобе MetalicaX#9 — в 29 %. Лекарь получает ближайшую свою клетку как слот; без
+        // клеток жертва не удержима, и правило молчит
+        victimNow = null; victimSaveable = false; wallCells = emptyList(); wallCellOf.clear()
+        if (USE_HEAL_WALL) {
+            val v = army.filter { (hasWeapon(it) || hasHeal(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
+            if (v != null) {
+                val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
+                val occupied = HashSet<Int>()
+                for (c in army) if (!hasHeal(c) || hasWeapon(c)) occupied.add(c.x * 100 + c.y)
+                for (e in ctx.enemyCreeps) occupied.add(e.x * 100 + e.y)
+                val cells = ArrayList<Position>()
+                for (dx in -1..1) for (dy in -1..1) {
+                    if (dx == 0 && dy == 0) continue
+                    val x = v.x + dx; val y = v.y + dy
+                    if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in occupied) continue
+                    val cell = InfluenceMap.cell(x, y)
+                    if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
+                }
+                wallCells = cells
+                val healers = army.filter { hasHeal(it) && it.id != v.id }
+                val free = ArrayList(cells)
+                for (h in healers.sortedBy { getRange(it, v) }) {
+                    if (free.isEmpty() || getRange(h, v) > HEAL_RANGE + 1) break
+                    val best = free.minByOrNull { getRange(h, it) } ?: break
+                    free.remove(best)
+                    wallCellOf[h.id] = best
+                }
+                val potential = army.filter { hasHeal(it) }.sumOf { h ->
+                    val heal = InfluenceMap.profileOf(h).heal
+                    val cell = wallCellOf[h.id]
+                    val d = getRange(h, v)
+                    if (h.id == v.id || (cell != null && getRange(h, cell) <= 1)) heal else if (d <= HEAL_RANGE) heal / 3.0 else 0.0
+                }
+                victimNow = v
+                victimSaveable = cells.isNotEmpty() && (lostTick[v.id] ?: 0) <= potential
+                if (!victimSaveable) wallCellOf.clear()
+                hwallVictimTicks++
+                if (victimSaveable) hwallTicks++
+            }
+        }
         cpuMark("plan")
         for (creep in army) {
             val mobile = strikers.any { it.id == creep.id }
@@ -6883,7 +6960,10 @@ cpuMark("a.evade")
                 // ВПЕРЁД, в досягаемость его стрелков — за первые 20 тиков контакта потери выше v108 в 13 сценариях из 26 (nine,
                 // hunter, fourteen, screen+focus: скрипты «лекари первыми»), ниже в 5; m28 nine 1714 → 3010, m34 nine 3504 → 4400.
                 // Остаётся выбор ЦЕЛИ лечения под огнём (см. rank в healAndShoot); подопечный — самый раненый вооружённый, как прежде
-                (if (USE_WARD_UNDER_FIRE && engagedNear) near.filter { (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 } else null)
+                // ...а при УДЕРЖИМОЙ жертве (v228, см. USE_HEAL_WALL) подопечный — она: лечение вплотную 72 против 24 издали,
+                // и именно её он бьёт сейчас, а самый раненый в дальности — уже отведённый в тыл
+                (if (USE_HEAL_WALL && victimSaveable) victimNow?.takeIf { v -> v.id != creep.id && getRange(creep, v) <= HEAL_RANGE + 1 } else null)
+                    ?: (if (USE_WARD_UNDER_FIRE && engagedNear) near.filter { (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 } else null)
                     ?: near.maxByOrNull { it.hitsMax - it.hits }
                     ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
                     ?: fighters.minByOrNull { getRange(creep, it) }
@@ -7017,6 +7097,9 @@ cpuMark("a.evade")
                 // дальности лечения стоят ВСЕ ТРИ каждый тик, у нас 1,8 из трёх, и лечение выходит 1584 против 9624.
                 // Причина в порядке цепочки: слот стоял выше подопечного, а расстановка не знает, кого лечить, и уводила
                 // лекаря в строй за пределы дальности. Лекарь вне HEAL_RANGE не лечит вовсе — в бою подопечный главнее
+                // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): назначенная клетка стены — как слот, вплотную к удержимой жертве
+                USE_HEAL_WALL && healer && victimSaveable && wallCellOf[creep.id] != null ->
+                    { whyTag = "wall"; target = wallCellOf[creep.id]!!; standoff = 0 }
                 USE_HEALER_OVER_SLOT && healer && healMate != null && contact ->
                     { whyTag = "healMate"; target = healMate; standoff = 1; nearFlow = true }
                 slot != null -> { whyTag = "slot"; target = slot; standoff = 0 }
@@ -7414,6 +7497,21 @@ cpuMark("a.evade")
                 // ...И ПРИКАЗ ДЕЙСТВУЕТ НА ВСЕЙ ЛЕЧЕБНОЙ ДАЛЬНОСТИ (v183, оператор: «не должно быть ничего, что идёт
                 // мимо командира»). Прежде назначенный пациент брался, только если он ВПЛОТНУЮ; иначе выбор перехватывал
                 // местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит
+                // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): удержимую жертву лечит каждый лекарь в дальности, вплотную — полностью
+                if (USE_HEAL_WALL && victimSaveable) hwallHealsAll++
+                val wallTarget = if (USE_HEAL_WALL && victimSaveable) victimNow?.takeIf { v -> !v.spawning && creep.getRangeTo(v) <= HEAL_RANGE } else null
+                if (wallTarget != null) {
+                    hwallHeals++
+                    if (creep.getRangeTo(wallTarget) <= 1) {
+                        creep.heal(wallTarget)
+                        healDone[wallTarget.id] = (healDone[wallTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
+                        shoot(creep, enemyCreeps, focusTarget, focusOrder)
+                    } else {
+                        creep.rangedHeal(wallTarget)
+                        healDone[wallTarget.id] = (healDone[wallTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt()
+                    }
+                    continue
+                }
                 if (USE_HEAL_ORDER_WINS && ordered != null) {
                     val parts = healParts
                     if (creep.getRangeTo(ordered) <= 1) {
@@ -8462,6 +8560,15 @@ cpuMark("a.evade")
                 else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
             // ...И БЕЗ СЛАГАЕМОГО ВЛИЯНИЯ (v224, третья редакция, см. USE_HEALER_NO_LINE): у лекаря оно тянет туда, где
             // наш залп гуще, — в глубину строя, от бойца первой линии; зонд назвал его единственным решающим
+            // ...И ПРИ УДЕРЖИМОЙ ЖЕРТВЕ ЦЕНА КЛЕТКИ — ДОСТАВЛЕННОЕ В НЕЁ ЛЕЧЕНИЕ (v228, см. USE_HEAL_WALL): вплотную полное, в трёх
+            // треть, без насыщенной суммы и без слагаемого влияния — клетка вплотную к жертве получает положительную цену, которой
+            // обе редакции v224 ей дать не смогли (72 против 24)
+            val victim = victimNow
+            if (USE_HEAL_WALL && victimSaveable && victim != null) {
+                val d = getRange(p, victim)
+                val wall = if (d <= 1 && wallCells.any { it.x == p.x && it.y == p.y }) deliver else if (d <= HEAL_RANGE) deliver / 3.0 else 0.0
+                return -W_ATT * att * wall + W_DAN * dan * fire - W_SCREEN * shielded + CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+            }
             return -W_ATT * att * pull + W_DAN * dan * fire -
                 (if (USE_HEALER_NO_LINE) 0.0 else W_LINE * InfluenceMap.influenceOf(key)) - W_SCREEN * shielded +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
