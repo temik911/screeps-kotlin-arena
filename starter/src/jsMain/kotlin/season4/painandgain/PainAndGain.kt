@@ -3491,7 +3491,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -3913,6 +3913,12 @@ cpuMark("arrival")
     private var planGunsIn = 0; private var planGunsAll = 0        // прибор согласованности строя (v200)
     private var planMeleeHealed = 0; private var planMeleeAll = 0
     private var planHealBehind = 0; private var planHealAll = 0
+    /** ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224): раздач / выбрана клетка вплотную к бойцу вне его огня / такая свободная клетка была
+     *  рядом, а выбрана другая / из них кандидат не прошёл ворота выживания; и средняя разница слагаемых оценки
+     *  «выбранная минус кандидат» (положительная — слагаемое тянуло ОТ кандидата): притяжение, огонь, линия, экран,
+     *  занятость, стоять, жилец, очаг. */
+    private var hpN = 0; private var hpAdj = 0; private var hpAvail = 0; private var hpGate = 0
+    private val hpDelta = DoubleArray(8)
     private var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
     private var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     private var stalemateGap = 0                          // тиков подряд без контакта (см. STALEMATE_GAP)
@@ -8431,6 +8437,47 @@ cpuMark("a.evade")
                 if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
             }
             if (!ok) place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) })
+            // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
+            // огнём 37 % лекаре-тиков, наши — 10 %, и в FIGHT свободная клетка вплотную к бойцу не опаснее своей есть в
+            // 30–51 % лекаре-тиков. Зонд отвечает, какое слагаемое оценки увело лекаря от такой клетки: считает те же
+            // слагаемые, что scoreHeal и place, для выбранной клетки и для лучшего свободного кандидата вплотную к бойцу
+            // вне его стрелкового огня, и копит разницу «выбранная минус кандидат» по слагаемым
+            run {
+                val b = out[c.id] ?: return@run
+                val (att, dan, ttlMin) = weightsOf(intentOf(c))
+                fun adjSafe(p: Position): Boolean = foeDist(p.x, p.y) > RANGED_RANGE &&
+                    fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { maxOf(abs(it.x - p.x), abs(it.y - p.y)) <= 1 } }
+                fun terms(p: Position): DoubleArray {
+                    val key = p.x * 100 + p.y
+                    val scr = screenAt(c, p)
+                    val fire = InfluenceMap.fireFieldAt(key)
+                    val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
+                    val deliver = InfluenceMap.healOf(c)
+                    val raw = InfluenceMap.attHealAt(key)
+                    val pull = if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+                    val self = p.x == c.x && p.y == c.y
+                    val tenant = if (self) null else allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
+                    return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, -W_LINE * InfluenceMap.influenceOf(key),
+                        -W_SCREEN * shielded, CLAIM_COST * InfluenceMap.claimAt(key), -stayBonus(c, p),
+                        if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
+                }
+                hpN++
+                if (adjSafe(b)) { hpAdj++; return@run }
+                var best: Position? = null; var bestSc = Double.MAX_VALUE; var gated = 0
+                for ((key, p) in nearCells(c)) {
+                    if (p.x == b.x && p.y == b.y) continue
+                    if (key in taken || !adjSafe(p)) continue
+                    if (allyOf[key] != null && !(p.x == c.x && p.y == c.y)) continue
+                    if (ttlAt(c, key, p) < ttlMin) { gated++; continue }
+                    val sc = terms(p).sum()
+                    if (sc < bestSc) { bestSc = sc; best = p }
+                }
+                val a = best
+                if (a == null) { if (gated > 0) hpGate++; return@run }
+                hpAvail++
+                val tb = terms(b); val ta = terms(a)
+                for (i in tb.indices) hpDelta[i] += tb[i] - ta[i]
+            }
         }
         // ХРАНИТЕЛЬ ФЛАГА — ПО ПРИКАЗУ (v174): крип на НАШЕМ флаге стоит по приказу командира, а не по отдельной ветке
         // удержания; снять его может только командир — решив собрать отряд — или опасность, которая приходит приказом
