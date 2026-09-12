@@ -2348,6 +2348,22 @@ object PainAndGain {
      *     87–90 % лекаро-тиков; по реплеям лекарь вплотную к крипу под главным огнём 17–31 % против 12–18 %, наш урон в
      *     тик 104–124 против 96–97, стрелков в трёх 2,0–2,3 против 1,9–2,0. ВКЛ. */
     private const val USE_HEAL_WALL = true
+    /** ЖЕРТВА СТЕНЫ — ПО АДРЕСНОМУ ОГНЮ ЭТОГО ТИКА (v229, разбор серии v228: 12-8, 1329 → 1343; против Coldkimchi#2 2-2).
+     *  1. Замер (victimlag.py по восьми играм A/B v228 против Coldkimchi#1): его главный огонь держится на одном нашем крипе
+     *     один тик в 68 % случаев, два — в 21 %; крип с наибольшей потерей ПРОШЛОГО тика (жертва v228) совпадает с целью
+     *     ЭТОГО тика в 36 %; наше лечение в крипа под огнём того же тика 23 % (было 12–17 %, у него 33–39 %), в жертву
+     *     прошлого тика 37 %. Против Coldkimchi#2 (healwall.py, четыре боя серии v228): лечение на его жертву 13–18 в тик
+     *     против его 44–46 на нашу, лекарь вплотную 11–22 % против 47–54 %.
+     *  2. Правило: жертва — тот из наших, кому его стволы адресуют больше всего урона ЭТИМ тиком по его измеренному правилу
+     *     (см. addrPrepare: лекарь в досягаемости первым, иначе ближайший, при равенстве — с меньшими хитами; стрелок
+     *     достаёт на 3, мили — на 2, то есть шагом до вплотную), по текущим клеткам; удержимость сверяется с этим адресным
+     *     уроном. Когда его стволов в досягаемости нет — как в v228, по потере прошлого тика. Новых чисел нет.
+     *  3. Адрес берётся, только пока попадает (вторая редакция): оба предсказателя — адресный и «по потере прошлого тика» —
+     *     сверяются с фактом следующего тика (кто потерял больше всех) за окно TOUCH_WINDOW, и адресный используется, пока
+     *     попадает чаще. Против того, чьё правило цели другое (стенд m28 brawl+heals: «в вооружённого стрелка первым»),
+     *     стена сама возвращается к v228. Новых чисел нет.
+     *  Приборы: `hwalla=<тиков жертвы по адресу>/<тиков с жертвой>`, `hwallp=<попаданий адреса>/<попаданий по потере>/<замеров>`. */
+    private const val USE_HEAL_WALL_ADDRESSED = true
     /** ПРИКАЗ КОМАНДИРА НА ЛЕЧЕНИЕ ДЕЙСТВУЕТ И ИЗДАЛИ (v183): назначенный пациент брался, только если он вплотную,
      *  иначе выбор перехватывал местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит.
      *  ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v215). Тумблер был погашен не своим замером, а оптом контрольной сборкой f58abff, и
@@ -2869,7 +2885,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v228"
+    private const val BOT_VERSION = "v229"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3124,6 +3140,14 @@ object PainAndGain {
     private var hwallVictimTicks = 0
     private var hwallHeals = 0
     private var hwallHealsAll = 0
+    private var hwallAddr = 0
+    private var wallAddrPrev: String? = null      // кого адресный предсказатель назвал жертвой прошлым тиком
+    private var wallLostPrev: String? = null      // ...и кого назвал предсказатель по потере
+    private val wallAddrHits = ArrayDeque<Boolean>()
+    private val wallLostHits = ArrayDeque<Boolean>()
+    private var hwallPredA = 0
+    private var hwallPredL = 0
+    private var hwallPredN = 0
     private var wallCells: List<Position> = emptyList()   // клетки стены: соседние с жертвой, его вооружённые мили дальше двух
     private val wallCellOf = HashMap<String, Position>()  // клетка стены, назначенная лекарю на этот тик
     private var surviving = false
@@ -3644,7 +3668,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6645,8 +6669,37 @@ cpuMark("a.evade")
         // клеток жертва не удержима, и правило молчит
         victimNow = null; victimSaveable = false; wallCells = emptyList(); wallCellOf.clear()
         if (USE_HEAL_WALL) {
-            val v = army.filter { (hasWeapon(it) || hasHeal(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
+            // ...И ЖЕРТВА — ПО АДРЕСНОМУ ОГНЮ ЭТОГО ТИКА (v229, см. USE_HEAL_WALL_ADDRESSED): его правило выбора цели по
+            // текущим клеткам — лекарь в досягаемости первым, иначе ближайший, при равенстве с меньшими хитами
+            val addressed = HashMap<String, Double>()
+            if (USE_HEAL_WALL_ADDRESSED) {
+                val live = army.filter { it.hits > 0 && (hasWeapon(it) || hasHeal(it)) }
+                for (e in ctx.combatEnemies) {
+                    val q = InfluenceMap.profileOf(e)
+                    if (q.ranged > 0.0) wallTargetOf(e, live, RANGED_RANGE)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.ranged }
+                    if (q.melee > 0.0) wallTargetOf(e, live, 2)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.melee }
+                }
+            }
+            val byAddress = addressed.entries.maxByOrNull { it.value }
+            val lostV = army.filter { (hasWeapon(it) || hasHeal(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
+            // ...И АДРЕС БЕРЁТСЯ, ПОКА ОН ПОПАДАЕТ (v229, вторая редакция по стенду m28 brawl+heals: его сценарий стреляет «в
+            // вооружённого стрелка первым», а не в лекаря, и адресная жертва промахивалась — уничтожение на 442-м стало
+            // проигрышем на 1570-м). Оба предсказателя сверяются с фактом следующего тика (кто потерял больше всех) за окно
+            // TOUCH_WINDOW; адресный используется, только пока попадает чаще, чем «по потере», — против того, чьё правило
+            // цели другое, стена сама возвращается к v228
+            if (lostV != null && (wallAddrPrev != null || wallLostPrev != null)) {
+                wallAddrHits.addLast(wallAddrPrev == lostV.id); wallLostHits.addLast(wallLostPrev == lostV.id)
+                while (wallAddrHits.size > TOUCH_WINDOW) wallAddrHits.removeFirst()
+                while (wallLostHits.size > TOUCH_WINDOW) wallLostHits.removeFirst()
+                hwallPredN++; if (wallAddrPrev == lostV.id) hwallPredA++; if (wallLostPrev == lostV.id) hwallPredL++
+            }
+            wallAddrPrev = byAddress?.key; wallLostPrev = lostV?.id
+            val addrWins = wallAddrHits.size >= STALL_TICKS && wallAddrHits.count { it } > wallLostHits.count { it }
+            val v = if (byAddress != null && addrWins) army.firstOrNull { it.id == byAddress.key } ?: lostV else lostV
             if (v != null) {
+                val useAddr = byAddress != null && addrWins && v.id == byAddress.key
+                if (useAddr) hwallAddr++
+                val loss = if (useAddr) byAddress!!.value else (lostTick[v.id] ?: 0).toDouble()
                 val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
                 val occupied = HashSet<Int>()
                 for (c in army) if (!hasHeal(c) || hasWeapon(c)) occupied.add(c.x * 100 + c.y)
@@ -6675,7 +6728,7 @@ cpuMark("a.evade")
                     if (h.id == v.id || (cell != null && getRange(h, cell) <= 1)) heal else if (d <= HEAL_RANGE) heal / 3.0 else 0.0
                 }
                 victimNow = v
-                victimSaveable = cells.isNotEmpty() && (lostTick[v.id] ?: 0) <= potential
+                victimSaveable = cells.isNotEmpty() && loss <= potential
                 if (!victimSaveable) wallCellOf.clear()
                 hwallVictimTicks++
                 if (victimSaveable) hwallTicks++
@@ -9691,6 +9744,21 @@ cpuMark("a.evade")
     private fun isMelee(creep: Creep) = creep.body.any { it.type == ATTACK }
     private fun hasRanged(creep: Creep) = creep.body.any { it.type == RANGED_ATTACK && it.hits > 0 }
     private fun hasHeal(creep: Creep) = creep.body.any { it.type == HEAL && it.hits > 0 }
+
+    /** Кого возьмёт его ствол по измеренному правилу (v229, см. USE_HEAL_WALL_ADDRESSED): среди наших в досягаемости reach —
+     *  чистый лекарь первым, иначе ближайший, при равной дальности — с меньшими хитами. */
+    private fun wallTargetOf(shooter: Creep, live: List<Creep>, reach: Int): Creep? {
+        var best: Creep? = null; var bestKey = Double.MAX_VALUE; var bestHealer = false
+        for (f in live) {
+            val d = getRange(shooter, f)
+            if (d > reach) continue
+            val healer = !hasWeapon(f) && hasHeal(f)
+            if (bestHealer && !healer) continue
+            val key = d * 100000.0 + f.hits
+            if ((healer && !bestHealer) || key < bestKey) { best = f; bestKey = key; bestHealer = healer }
+        }
+        return best
+    }
     private fun hasWeapon(creep: Creep) = hasRanged(creep) || hasMelee(creep)
 
     /** Сводка тела: T10M4R3H1 (только живые части). */
