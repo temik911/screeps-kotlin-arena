@@ -744,6 +744,29 @@ object InfluenceMap {
      * лекарей встанут на одного раненого, а второй очаг останется без помощи вовсе. Снимается ровно покрытое:
      * подопечный, чья нужда больше одного лекаря, продолжает тянуть второго.
      */
+    /**
+     * ДОСТАВЛЯЕМОЕ ЛЕЧЕНИЕ ИЗ КЛЕТКИ (v224, см. USE_HEAL_PULL_DELIVERED): лекарь лечит ОДНОГО за тик, поэтому из клетки
+     * он доставит не сумму нужды в радиусе, а лучшего подопечного — min(непокрытая нужда, лечение · ядро дальности).
+     * Насыщение v208 (deliver·raw/(raw+deliver)) ставило верный потолок, но при нужде в тысячи (пятеро бойцов под
+     * его огнём) поле становилось ПЛОСКИМ: зонд `hpick=` показал разницу притяжения между клеткой вплотную к бойцу
+     * первой линии и клеткой в двух от него в 0–2 хита, и лекаря уводило слагаемое влияния (13–41).
+     */
+    fun deliverableAt(healer: Creep, x: Int, y: Int, allies: List<Creep>): Double {
+        val h = profileOf(healer).heal
+        if (h <= 0.0) return 0.0
+        var best = 0.0
+        for (a in allies) {
+            if (a.id == healer.id) continue
+            val d = maxOf(abs(a.x - x), abs(a.y - y))
+            if (d >= K_ATT_HEAL.size) continue
+            val left = needLeft[a.id] ?: continue
+            if (left <= 0.0) continue
+            val v = minOf(left, h * K_ATT_HEAL[d])
+            if (v > best) best = v
+        }
+        return best
+    }
+
     fun saturateHeal(healer: Creep, x: Int, y: Int, allies: List<Creep>) {
         val h = profileOf(healer).heal
         if (h <= 0.0) return

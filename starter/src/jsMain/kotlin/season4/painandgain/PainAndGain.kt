@@ -2640,7 +2640,17 @@ object PainAndGain {
      *  целиком: она лечит друг друга, но ствол, который бьёт лекаря, не бьёт того, кого она держит. Ярус стоит ниже
      *  «добиваем этим тиком» и выше всех прочих. Прибор `fhl=` — тиков, где фокус лёг на его лекаря / тиков, где его
      *  лекарь был в досягаемости наших стволов. */
-    private const val USE_FOCUS_ANY_HEALER = true
+    private const val USE_FOCUS_ANY_HEALER = false
+    /** ПРИТЯЖЕНИЕ ЛЕКАРЯ — ДОСТАВЛЯЕМОЕ ЛЕЧЕНИЕ (v224, вторая редакция по зонду `hpick=`). Адресная опасность
+     *  показания командира поменяла (E 59 -> T 30 в выбранных клетках), а строй — нет: по реплеям лекари так же в 5–7
+     *  клетках от его стрелков, лечение на крипа под главным огнём те же 12 %. Зонд по восьми играм против Coldkimchi#1
+     *  назвал слагаемое: свободная клетка вплотную к бойцу первой линии вне его огня была в шаге в 18–28 % раздач
+     *  лекаря, разница притяжения между ней и выбранной 0–2 хита (насыщенная сумма нужды при пятерых под огнём плоская:
+     *  deliver·raw/(raw+deliver) -> deliver), огня 0–2, а слагаемое влияния 13–41 в пользу выбранной — глубины строя,
+     *  где наш залп гуще. Правило: притяжение — лучший подопечный из клетки, min(непокрытая нужда, лечение · ядро
+     *  дальности): вплотную к бойцу под огнём 72, в двух от него 24. Насыщение v208 остаётся по смыслу (потолок —
+     *  своё лечение за тик), но поле снова имеет градиент. Новых чисел нет. */
+    private const val USE_HEAL_PULL_DELIVERED = true
     /** РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185, разбор серии из двадцати). Прибор разделил её начисто: в восьми
      *  поражениях армия дралась при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 из 512), в одиннадцати
      *  победах из двенадцати — ноль таких тиков (3 из 236 по всей пачке). Признак — измеренная мощь обеих сторон,
@@ -8326,7 +8336,10 @@ cpuMark("a.evade")
             // полученный урон», и клетка под огнём в 500 ради 72 лечения проигрывает сама, без запрета
             val deliver = InfluenceMap.healOf(c)
             val raw = InfluenceMap.attHealAt(key)
-            val pull = if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+            // ...И ПРИТЯЖЕНИЕ — ЭТО ТО, ЧТО ОН ДОСТАВИТ ИЗ ЭТОЙ КЛЕТКИ (v224, см. USE_HEAL_PULL_DELIVERED): лучший
+            // подопечный, а не насыщенная сумма — у суммы при нужде в тысячи нет разницы между «вплотную» и «в двух»
+            val pull = if (USE_HEAL_PULL_DELIVERED) InfluenceMap.deliverableAt(c, p.x, p.y, addrLive)
+                else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
             return -W_ATT * att * pull + W_DAN * dan * fire -
                 W_LINE * InfluenceMap.influenceOf(key) - W_SCREEN * shielded +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
@@ -8457,7 +8470,8 @@ cpuMark("a.evade")
                     val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
                     val deliver = InfluenceMap.healOf(c)
                     val raw = InfluenceMap.attHealAt(key)
-                    val pull = if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+                    val pull = if (USE_HEAL_PULL_DELIVERED) InfluenceMap.deliverableAt(c, p.x, p.y, addrLive)
+                        else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
                     val self = p.x == c.x && p.y == c.y
                     val tenant = if (self) null else allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
                     return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, -W_LINE * InfluenceMap.influenceOf(key),
