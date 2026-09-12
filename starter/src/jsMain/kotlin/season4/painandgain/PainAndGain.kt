@@ -2512,6 +2512,53 @@ object PainAndGain {
      *  очков. Ровно это правило v184 и описывало: пока его мили рубят наших под огнём, его отход — повод добивать,
      *  а не повод расходиться за флагами. */
     private const val USE_FIGHT_OVER_CHASE = true
+    /** «ОН ОТХОДИТ» — ПО ЕГО ШАГУ, А НЕ ПО РАССТОЯНИЮ (v222, разбор рейтинговой серии v221 по реплеям обеих сторон).
+     *  1. Признак был «расстояние между центрами армий за APPROACH_WINDOW выросло», и оно растёт, когда отходим МЫ. В
+     *     строках, где командир ушёл из FIGHT с причиной `retreat`, по реплею за те же 20 тиков отходили мы в 26 % (v221,
+     *     333 строки) и 30 % (v220, 257), не двигался никто ещё в 12–15 %. В разгроме от ●ω<♥♪#5 — во всех: наш центр
+     *     пятился на 0,6–6,1 клетки за 10 тиков, он шёл следом в 2–6 клетках и стрелял, трое его лекарей лечили, а
+     *     командир, решив «он отступает», уходил в гонку и снимал поля опасности; армия 12 → 1 к 300-му. В изматывании
+     *     от Coldkimchi#1 — 80 %.
+     *  2. У одиночного крипа это уже исправлено (см. evasive): «уходит» — это прочь от ТОГДАШНЕГО нашего центра. Здесь
+     *     то же для центров армий: его центр сейчас дальше от нашего центра в начале окна, чем был его центр в начале
+     *     окна. Окно прежнее, ни одного нового числа.
+     *  3. Читают признак пять мест, и все пять имеют в виду одно — его линия шагает назад: режим командира и его
+     *     причина, упор прижима, «линия стоит» и ряды planBlock. Правка общая. */
+    private const val USE_RETREAT_BY_HIS_STEP = false
+    /** МИЛИ БЬЁТ ИЗ ТИХОЙ КЛЕТКИ (v222, вопрос оператора «крипы действуют не по опасности»; разбор серий v220–v221 по
+     *  реплеям обеих сторон).
+     *  1. Замер «лишней опасности» — урон, приходящий в клетку, куда встал крип, минус минимум по своей и соседним
+     *     свободным клеткам, где он делал бы то же самое (мили — бил бы ту же цель вплотную). В поражениях наши мили
+     *     стоят под 95 урона в тик (v220 — 114), лишняя опасность 62–63, в 29–31 % шагов лишнее не меньше 60; его мили —
+     *     41 (96), 21 (37), 16–21 %. Стрелки и лекари ступают не хуже его (лишняя 12–16, 8–10 % шагов) — выброс только мили.
+     *  2. Это решает бой: вооружённых мили на +40 тиков от главного боя во всех десяти проигранных боях двух серий у нас
+     *     0–2 из 4 (в среднем 0,6), у него 2–4 (3,5); в выигранных — у нас 3,75, у него 1,5.
+     *  3. Код: у мили `meleeThreat` ноль всегда, при агрессии ещё `influence = 0` и `damageTerm` на нашей стороне фронта —
+     *     ноль, то есть между клетками вплотную к цели мили выбирает по соседям и болоту, а опасность не видит вовсе.
+     *  Правка — выбор, а не запрет: если выбранная клетка оставляет мили вплотную к его цели, из клеток, где он так же бьёт
+     *  ту же цель, берётся та, куда приходит меньше чистого урона (та же величина, что у вето смертельной клетки). Подход
+     *  к врагу не меняется, удар не теряется, цель удара та же. */
+    private const val USE_MELEE_QUIET_CELL = false
+    /** СТРАЖА ЕГО ФЛАГА ЛОВИМА (v222, разбор забегов серии v221). Хвост матча #5 против Coldkimchi#2: на 1740-м D5 ушёл к
+     *  нему, на нём встала вся его восьмёрка (`D5-g8`), наша мощь 3125–3550 против его 1978–2195, а наступление мигало
+     *  (`huntable` 8/8 ↔ 0/8 через 2–9 тиков) — армия 160 тиков стояла, +927 стало −203. По обеим сериям в моменты, когда
+     *  мы сильнее в 1,3+ раза, «неловим при его стоянке на флагах» — 15–24 %. Это открытая находка у evasive(): блоб,
+     *  шагнувший назад на две клетки, неловим весь CHASE_WINDOW. Две прежние починки меняли порог окна и гистерезис
+     *  наступления; эта меняет другое — ПРИВЯЗКУ: крип, стоящий в дальности стражи СВОЕГО флага и не отошедший от него за
+     *  окно больше чем на клетку (тот же допуск, что у evasive), стоит, а не уходит. Кайтер от флага уходит; тот, кто
+     *  идёт к своему флагу, идёт его держать. Новых чисел нет: FLAG_GUARD_RANGE, CHASE_WINDOW и допуск — готовые. */
+    private const val USE_GUARD_IS_CATCHABLE = false
+    /** ФЛАГОВ БОЛЬШЕ — ЦЕНОЙ НЕБОЛЬШОГО МИНУСА ПРИ РАВНЫХ АРМИЯХ (v222, решение оператора 12.09.2026: «можем уходить в
+     *  небольшой минус при равных армиях, лишь бы у нас было больше флагов»).
+     *  1. Замер. Шесть забегов серии v221 проиграны при живой армии, пять — вплотную (−203, −876, −2364, −3684, −4158);
+     *     армии до тысячного тика почти равны, флагов у нас 2,64 против его 3,67, отказов ворот по паритету 500–5433 за
+     *     проигранный забег против 0–258 в выигранных; в логе отказы идут при отношении 0,86–0,92 к полу — при равных
+     *     армиях пол 0,97 пропускает только флаг, чей дебафф стоит меньше 3 % мощи.
+     *  2. Правило: если армии сейчас на паритете (наша мощь не ниже его местной, умноженной на тот же пол) и флагов у нас
+     *     не больше, чем у него, а этот флаг даёт нам перевес по флагам, — захват разрешён, хотя дебафф этого флага
+     *     опускает нас ниже пола. Минус ограничен построением: он ровно дебафф одного флага от паритета; когда перевес по
+     *     флагам есть, действует прежний пол. Прочие вето (контакт массы, бросок, проигранная гонка) не тронуты. */
+    private const val USE_FLAG_MAJORITY = false
     /** РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185, разбор серии из двадцати). Прибор разделил её начисто: в восьми
      *  поражениях армия дралась при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 из 512), в одиннадцати
      *  победах из двенадцати — ноль таких тиков (3 из 236 по всей пачке). Признак — измеренная мощь обеих сторон,
@@ -2826,6 +2873,23 @@ object PainAndGain {
     /** Дистанция центра боевых врагов до нашего за последние тики — темп сближения для запаса выхода. */
     private val enemyDistHist = ArrayDeque<Int>()
     private val hisCentHist = ArrayDeque<Int>()   // клетка центра его вооружённых за APPROACH_WINDOW (v113: ПОДХОДИТ ОН, не мы)
+    private val ourCentHist = ArrayDeque<Int>()   // ...и клетка нашего центра за то же окно, в те же тики (v222, см. USE_RETREAT_BY_HIS_STEP)
+    /** Прибор к USE_RETREAT_BY_HIS_STEP: тиков, где старый признак говорил «отходит», из них тех, где его шаг — нет, и
+     *  тиков, где новый говорит «отходит», а старый — нет (мы наступали быстрее, чем он пятился). */
+    private var rtrOld = 0
+    private var rtrRemoved = 0
+    private var rtrAdded = 0
+    /** Пары к USE_MELEE_QUIET_CELL: шагов мили, где выбранная клетка оставляла удар, и из них тех, где правка увела в клетку
+     *  тише; сумма снятой опасности (урон/тик). */
+    private var mquietAll = 0
+    private var mquietMoved = 0
+    private var mquietGain = 0.0
+    /** Пара к USE_GUARD_IS_CATCHABLE: крипо-проверок, где враг «уходит», и из них тех, где он страж своего флага. */
+    private var anchorEvasive = 0
+    private var anchorHeld = 0
+    /** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
+    private var majOffers = 0
+    private var majOpened = 0
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     private var flagBoundWas = false                      // трасса «его блоб идёт к флагу» (см. USE_RUSH_NOT_FLAG_BOUND)
@@ -3326,7 +3390,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -3652,6 +3716,24 @@ cpuMark("arrival")
         // ...и в ПАТУ паритетный пол тоже молчит: он сравнивает мощь, а в бою, где никто никого не убивает, мощь
         // обеих сторон ланчестером считается около нуля, и сравнивать нечего (v189)
         if (ours >= theirs * floor) return null
+        // ФЛАГОВ БОЛЬШЕ ЦЕНОЙ НЕБОЛЬШОГО МИНУСА (v222, решение оператора, см. USE_FLAG_MAJORITY): армии СЕЙЧАС на паритете,
+        // перевеса по флагам у нас нет, а этот флаг его даёт — минус ровно дебафф этого флага
+        run {
+            val side = if (USE_CAPTURE_MEASURES_CORE) ctx.army else ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }
+            val oursNow = ourPowerOf(side, opp)
+            val theirsNow = enemyPowerOf(opp, side)
+            if (oursNow >= theirsNow * floor) {
+                majOffers++
+                val ourFlags = ctx.flags.count { it.ours }
+                val hisFlags = ctx.flags.count { it.theirs }
+                val ourAfter = ourFlags + 1
+                val hisAfter = hisFlags - (if (f.theirs) 1 else 0)
+                if (ourFlags <= hisFlags && ourAfter > hisAfter) {
+                    majOpened++
+                    if (USE_FLAG_MAJORITY) return null
+                }
+            }
+        }
         capCount(f, "parity")
         return "parity(${ours.toInt()}/${(theirs * floor).toInt()})"
     }
@@ -4164,6 +4246,19 @@ cpuMark("r.cands")
      *  (уходил дольше, чем стоял) — 66 строк хуже / 44 лучше: кайтеры добиваются медленнее на десятке карт (за ними гонятся
      *  дольше), россыпи m12/m19/m24/m29/m30 spread и m29/m30 farm из победы в проигрыш; гистерезис в самом наступлении —
      *  тоже (см. pushing). Открытая находка. */
+    /** Страж своего флага (v222, см. USE_GUARD_IS_CATCHABLE): в дальности стражи его флага и за CHASE_WINDOW не отошёл от
+     *  него больше чем на клетку. Считает пару прибора: из «уходящих» — стражи. */
+    private fun guardsHisFlag(e: Creep): Boolean {
+        val h = enemyCellHist[e.id] ?: return false
+        if (h.size < CHASE_WINDOW) return false
+        val old = h.first()
+        val oldPos = InfluenceMap.cell(old / 100, old % 100)
+        anchorEvasive++
+        val held = flagsNow.any { f -> f.theirs && getRange(e, f.pos) <= FLAG_GUARD_RANGE && getRange(e, f.pos) <= getRange(oldPos, f.pos) + 1 }
+        if (held) anchorHeld++
+        return held
+    }
+
     private fun evasive(e: Creep): Boolean {
         val h = enemyCellHist[e.id] ?: return false
         if (h.size < CHASE_WINDOW || ourCentroidHist.size < CHASE_WINDOW) return false
@@ -4176,12 +4271,15 @@ cpuMark("r.cands")
 
     /** Ловим ли враг: вплотную к нашему вооружённому (MELEE_KEEP_RANGE), медленнее нашего самого быстрого или не
      *  уходит (см. evasive). Только за ловимым идут стая, охота, добивание и местный бросок (см. CHASE_WINDOW). */
-    private fun catchable(e: Creep, armed: List<Creep>): Boolean =
-        armed.any { getRange(e, it) <= MELEE_KEEP_RANGE } ||
-            // медленнее нас ТАМ, ГДЕ СТОИТ (v48): период на его клетке — в болоте тело с половиной MOVE ходит клетку в пять
-            // тиков, и застрявший в болоте ловим, хотя на равнине он равен нам (матч 90, см. InfluenceMap.enemyOrigins)
-            periodAt(e, e.x, e.y) > (armed.minOfOrNull { plainPeriod(it) } ?: 1) ||
-            !evasive(e)
+    private fun catchable(e: Creep, armed: List<Creep>): Boolean {
+        if (armed.any { getRange(e, it) <= MELEE_KEEP_RANGE }) return true
+        // медленнее нас ТАМ, ГДЕ СТОИТ (v48): период на его клетке — в болоте тело с половиной MOVE ходит клетку в пять
+        // тиков, и застрявший в болоте ловим, хотя на равнине он равен нам (матч 90, см. InfluenceMap.enemyOrigins)
+        if (periodAt(e, e.x, e.y) > (armed.minOfOrNull { plainPeriod(it) } ?: 1)) return true
+        if (!evasive(e)) return true
+        // ...и страж своего флага (v222, см. USE_GUARD_IS_CATCHABLE) — стоит, а не уходит. Прибор считает в обеих сборках
+        return guardsHisFlag(e) && USE_GUARD_IS_CATCHABLE
+    }
 
     private fun retreatPoint(ctx: Ctx): Position {
         val enemy = ctx.enemyCentroid ?: return ctx.home
@@ -5121,6 +5219,7 @@ cpuMark("a.sweep")
             if (ec != null) { enemyDistHist.addLast(getRange(ec, ctx.ourCentroid)); while (enemyDistHist.size > APPROACH_WINDOW) enemyDistHist.removeFirst() } else enemyDistHist.clear()
             val ac = centroidOf(armedEnemies)
             if (ac != null) { hisCentHist.addLast(ac.x * 100 + ac.y); while (hisCentHist.size > APPROACH_WINDOW) hisCentHist.removeFirst() } else hisCentHist.clear()
+            if (ac != null) { ourCentHist.addLast(ctx.ourCentroid.x * 100 + ctx.ourCentroid.y); while (ourCentHist.size > APPROACH_WINDOW) ourCentHist.removeFirst() } else ourCentHist.clear()
             approachRate = if (enemyDistHist.size >= 2) ((enemyDistHist.first() - enemyDistHist.last()).toDouble() / (enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
         }
         if (escapeNeeded && !(cpuGuardArmy && escapeFlows.isNotEmpty())) refreshEscape(ctx, armedEnemies) else if (!escapeNeeded) { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
@@ -5744,7 +5843,16 @@ cpuMark("a.evade")
         // врага за APPROACH_WINDOW не выросла. Уходящий (кайтер стенда, остаток) — прежний строй с мили впереди: стрелки во
         // главе погони не догоняют никого, а мили за их спиной и подавно (m11 kite: уничтожение на 395-м → лидерство, m28
         // farm+weak красный)
-        val enemyRetreating = enemyDistHist.size >= 2 && enemyDistHist.last() > enemyDistHist.first()
+        val retreatByDistance = enemyDistHist.size >= 2 && enemyDistHist.last() > enemyDistHist.first()
+        // ...и по ЕГО шагу (v222, см. USE_RETREAT_BY_HIS_STEP): его центр сейчас против его центра в начале окна, оба — от
+        // нашего центра в начале окна
+        val retreatByHisStep = hisCentHist.size >= 2 && ourCentHist.size >= 2 && run {
+            val o = ourCentHist.first(); val a = hisCentHist.first(); val b = hisCentHist.last()
+            val op = InfluenceMap.cell(o / 100, o % 100)
+            getRange(InfluenceMap.cell(b / 100, b % 100), op) > getRange(InfluenceMap.cell(a / 100, a % 100), op)
+        }
+        if (retreatByDistance) { rtrOld++; if (!retreatByHisStep) rtrRemoved++ } else if (retreatByHisStep) rtrAdded++
+        val enemyRetreating = if (USE_RETREAT_BY_HIS_STEP) retreatByHisStep else retreatByDistance
         // КОМАНДИР ВНЕ БЛОКА СТРОЯ (v160): весь его расчёт стоял внутри `if (blockOn)`, а blockOn требует постуры
         // ANNIHILATE, врагов в поле и отсутствия добивания — то есть командир молчал везде, кроме рубки, что бы ни
         // говорил его собственный режим: замер показал mode=FIGHT в 150 строках лога при cmdTicks=26. Теперь он
@@ -8914,6 +9022,26 @@ cpuMark("a.evade")
             }
             val s = scoreCell(creep, x, y, target, flow, standoff, aggressive, inCombat, enemyCreeps, allies, meleeEnemies, healerFireW, focus)
             if (s > bestScore) { bestScore = s; bx = x; by = y }
+        }
+        // МИЛИ БЬЁТ ИЗ ТИХОЙ КЛЕТКИ (v222, см. USE_MELEE_QUIET_CELL): выбранная клетка оставляет мили вплотную к его цели —
+        // из клеток, где он так же бьёт ту же цель (своя и свободные соседние), берётся та, куда приходит меньше чистого
+        // урона. Прибор считает и при выключенном тумблере: сколько раз правка увела бы и сколько опасности сняла бы
+        if (inCombat && aggressive && isMelee(creep) && !hasRanged(creep) && hasMelee(creep) &&
+            (target.x * 100 + target.y) in enemyPositions && maxOf(abs(bx - target.x), abs(by - target.y)) <= 1) {
+            mquietAll++
+            val chosen = InfluenceMap.netDamageAt(bx, by, enemyCreeps, allies)
+            var qx = bx; var qy = by; var qd = chosen
+            for ((dx, dy) in DIRECTIONS) {
+                val x = creep.x + dx; val y = creep.y + dy
+                if ((x == bx && y == by) || maxOf(abs(x - target.x), abs(y - target.y)) > 1) continue
+                if ((dx != 0 || dy != 0) && (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(x * 100 + y))) continue
+                val d = InfluenceMap.netDamageAt(x, y, enemyCreeps, allies)
+                if (d < qd) { qd = d; qx = x; qy = y }
+            }
+            if (qx != bx || qy != by) {
+                mquietMoved++; mquietGain += chosen - qd
+                if (USE_MELEE_QUIET_CELL) { bx = qx; by = qy }
+            }
         }
         if (bx != creep.x || by != creep.y) return InfluenceMap.cell(bx, by)
         if (pushX >= 0) return InfluenceMap.cell(pushX, pushY)
