@@ -2537,8 +2537,11 @@ object PainAndGain {
      *     ноль, то есть между клетками вплотную к цели мили выбирает по соседям и болоту, а опасность не видит вовсе.
      *  Правка — выбор, а не запрет: если выбранная клетка оставляет мили вплотную к его цели, из клеток, где он так же бьёт
      *  ту же цель, берётся та, куда приходит меньше чистого урона (та же величина, что у вето смертельной клетки). Подход
-     *  к врагу не меняется, удар не теряется, цель удара та же. */
-    private const val USE_MELEE_QUIET_CELL = false
+     *  к врагу не меняется, удар не теряется, цель удара та же.
+     *  4. Вторая редакция: то же правило в раздаче командира (см. place). Первая стояла только на свободном шаге и против
+     *     Coldkimchi#1 до мили почти не доходила — командир там правит 63–68 % тиков размена; `mquiet` 32 из 222, а
+     *     лишняя опасность мили по реплеям 150 -> 181. */
+    private const val USE_MELEE_QUIET_CELL = true
     /** СТРАЖА ЕГО ФЛАГА ЛОВИМА (v222, разбор забегов серии v221). Хвост матча #5 против Coldkimchi#2: на 1740-м D5 ушёл к
      *  нему, на нём встала вся его восьмёрка (`D5-g8`), наша мощь 3125–3550 против его 1978–2195, а наступление мигало
      *  (`huntable` 8/8 ↔ 0/8 через 2–9 тиков) — армия 160 тиков стояла, +927 стало −203. По обеим сериям в моменты, когда
@@ -2558,7 +2561,7 @@ object PainAndGain {
      *     не больше, чем у него, а этот флаг даёт нам перевес по флагам, — захват разрешён, хотя дебафф этого флага
      *     опускает нас ниже пола. Минус ограничен построением: он ровно дебафф одного флага от паритета; когда перевес по
      *     флагам есть, действует прежний пол. Прочие вето (контакт массы, бросок, проигранная гонка) не тронуты. */
-    private const val USE_FLAG_MAJORITY = true
+    private const val USE_FLAG_MAJORITY = false
     /** РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185, разбор серии из двадцати). Прибор разделил её начисто: в восьми
      *  поражениях армия дралась при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 из 512), в одиннадцати
      *  победах из двенадцати — ноль таких тиков (3 из 236 по всей пачке). Признак — измеренная мощь обеих сторон,
@@ -2884,6 +2887,9 @@ object PainAndGain {
     private var mquietAll = 0
     private var mquietMoved = 0
     private var mquietGain = 0.0
+    /** ...и то же в раздаче командира (вторая редакция): приказов мили, где выбранная клетка — удар, и из них уведённых. */
+    private var cmdQuietAll = 0
+    private var cmdQuietMoved = 0
     /** Пара к USE_GUARD_IS_CATCHABLE: крипо-проверок, где враг «уходит», и из них тех, где он страж своего флага. */
     private var anchorEvasive = 0
     private var anchorHeld = 0
@@ -3390,7 +3396,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -7907,6 +7913,8 @@ cpuMark("a.evade")
             // ПРИБОР СЛАГАЕМОГО — «сколько решений ИЗМЕНИЛОСЬ», а не «сколько раз код исполнился». Ровно этого не
             // хватало v196: счётчик доказывал, что код работает, и не доказывал, что он поменял хоть одну клетку
             var bare: Position? = null; var bareScore = Double.MAX_VALUE
+            // свободные, прошедшие ворота клетки (v222, см. USE_MELEE_QUIET_CELL): из них мили выбирает тихую клетку удара
+            val quietCands = if (USE_MELEE_QUIET_CELL && passTag == "melee") ArrayList<Position>() else null
             // ПРИКАЗ ОБЯЗАН БЫТЬ ИСПОЛНИМ (v172, оператор): «командир должен быть уверен, что каждый крип на следующем
             // шагу сможет выполнить приказ». Уставший крип в этот тик не двинется вовсе — ему можно приказать только
             // стоять, и приказ «шагни» от него был бы ложью, которую потом считает прогноз
@@ -7948,12 +7956,26 @@ cpuMark("a.evade")
                 // затравки на нуле и оно плоское, решает тактика; вдали оно единственное, что отличает клетки друг
                 // от друга. Переход непрерывный, режима, который можно перепутать, нет
                 val sc = sc0 + GOAL_STEP_COST * goalCost(key)
+                if (quietCands != null && tenant == null && !bog && !lethal) quietCands.add(p)
                 // ...и при РАВНЫХ оценках выбор не должен зависеть от порядка перебора: раньше порядок задавала общая
                 // раздача, теперь — обход соседей, и одна строка гейта поменяла исход именно из-за этого (v181)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
                 if (sc0 < bareScore) { bareScore = sc0; bare = p }
             }
-            val b = best ?: return false
+            var b = best ?: return false
+            // МИЛИ БЬЁТ ИЗ ТИХОЙ КЛЕТКИ И ПО ПРИКАЗУ (v222, вторая редакция USE_MELEE_QUIET_CELL). Первая стояла только на
+            // свободном шаге, а против блоба со стеной лечения командир правит 63–68 % тиков размена — и лишняя опасность
+            // мили по реплеям не упала (150 -> 181 в поражениях). Здесь то же правило в раздаче: выбранная клетка — удар по
+            // его вооружённому вплотную; из свободных кандидатов этого же прохода (ворота выживания пройдены, не болото, не
+            // смертельная) вплотную к нему же берётся та, где входящий на следующий тик меньше. Цель удара та же
+            if (quietCands != null && bestTenant == null) {
+                val e = armedEnemies.filter { getRange(b, it) <= 1 }.minByOrNull { it.hits }
+                if (e != null) {
+                    cmdQuietAll++
+                    val q = quietCands.filter { getRange(it, e) <= 1 }.minByOrNull { inc(it.x * 100 + it.y) }
+                    if (q != null && inc(q.x * 100 + q.y) < inc(b.x * 100 + b.y)) { cmdQuietMoved++; b = q }
+                }
+            }
             if (USE_GOAL_FIELD) {
                 goalDecisions++
                 val bs = bare
