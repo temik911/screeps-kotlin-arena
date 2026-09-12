@@ -737,6 +737,12 @@ object PainAndGain {
     private var postAll = 0
     private var postContest = 0
     private var rotOut = 0
+    /** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
+    private var marchFlow = 0
+    private var marchAll = 0
+    private var marchFlip = 0
+    private var marchPrevSx = 0
+    private var marchPrevSy = 0
     private var spotHoldNew = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
@@ -1133,6 +1139,21 @@ object PainAndGain {
      *  разрешённый гейтом захвата флаг, со штрафом за его вооружённых у флага. */
     private const val USE_COMMAND_GOAL = true
     private const val USE_COMMAND_GOAL_OWN = false
+    /** НАПРАВЛЕНИЕ КОЛОННЫ — ПО ПОЛЮ ПОТОКА ОТ ЯКОРЯ (v232, затор марша у занятой клетки цели — стенд m1 grab первой редакции
+     *  v230: его скаут на D5, его армия у R3, наша колонна 1500 тиков в 4–10 клетках от D5, счёт 3 189 : 6 075).
+     *  1. Замер (трасса 300–330): период колебания — ДВА тика, вся колонна шагает на северо-восток на чётном и на юго-запад на
+     *     нечётном при цели на юго-востоке; рельеф между (42,44) и (49,49) открыт. Причина не в занятой клетке, а в том, как
+     *     считается направление: ведущий — крип, ближайший к медиане, то есть ВНУТРИ толпы своих, а его шаг ищется по
+     *     матрице толпы (crowdMatrixOf, +CROWD_COST на клетках своих) — путь обходит соседей по строю, а не идёт к цели, и
+     *     два обхода симметричны относительно диагонали на цель. Занятая клетка лишь не даёт маршу кончиться: цель не
+     *     берётся, и колебание не размыкается. Комментарий v163 говорит «его шаг по полю потока и есть направление» —
+     *     реализовано было путём по матрице толпы.
+     *  2. Здесь: направление — спуск по полю потока к цели (flowTo, то же поле, что у бегунов, кэш) от КЛЕТКИ ЯКОРЯ: сосед
+     *     якоря с наименьшим расстоянием до цели; якорь на стене — от клетки ведущего; поле не достаёт — прежний путь
+     *     ведущего. Якорь на цели — спуска нет, приказов нет, ведут ступени (objective/post). Одиночка на клетке цели гибнет
+     *     под огнём подошедших (USE_SHOOT_SCOUTS), отдельной добычи не нужно — проверено стендом. Приборы: `mdir=<по полю>/
+     *     <тиков с целью марша>/<разворотов направления на обратное>` — третье число и есть затор. */
+    private const val USE_MARCH_FLOW_DIRECTION = true
     /** ОТРЯД ПОД КОМАНДИРОМ (v164, оператор): выпуск захватчиков был вторым распорядителем — он решал сам, когда
      *  отпускать. Механика остаётся (она знает сухую охоту, гонку и охрану стрелков, чего командирская раздача не
      *  покрывает: полная замена дала 133 из 135), но включает её РЕЖИМ командира. */
@@ -2943,7 +2964,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v231"
+    private const val BOT_VERSION = "v232"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3726,7 +3747,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -7941,9 +7962,17 @@ cpuMark("a.evade")
         // сценарий screen шёл в режиме марша все 185 строк лога и проигрывал счёт 10 782:14 471. Ведущий — тот, кто
         // ближе всех к якорю; его шаг по полю потока и есть направление колонны (v163)
         val lead = core.minByOrNull { maxOf(abs(it.x - ax), abs(it.y - ay)) }!!
-        val step = pathStep(lead, goal, 1, crowdMatrixOf(ctx, goal.x * 100 + goal.y))
-        val sx = if (step != null) (step.x - lead.x).coerceIn(-1, 1) else (goal.x - ax).coerceIn(-1, 1)
-        val sy = if (step != null) (step.y - lead.y).coerceIn(-1, 1) else (goal.y - ay).coerceIn(-1, 1)
+        marchAll++
+        val sx: Int; val sy: Int
+        val descent = if (USE_MARCH_FLOW_DIRECTION) flowDescent(ctx, goal, ax, ay, lead) else null
+        if (descent != null) { marchFlow++; sx = descent.first; sy = descent.second }
+        else {
+            val step = pathStep(lead, goal, 1, crowdMatrixOf(ctx, goal.x * 100 + goal.y))
+            sx = if (step != null) (step.x - lead.x).coerceIn(-1, 1) else (goal.x - ax).coerceIn(-1, 1)
+            sy = if (step != null) (step.y - lead.y).coerceIn(-1, 1) else (goal.y - ay).coerceIn(-1, 1)
+        }
+        if ((sx != 0 || sy != 0) && sx == -marchPrevSx && sy == -marchPrevSy) marchFlip++
+        marchPrevSx = sx; marchPrevSy = sy
         if (sx == 0 && sy == 0) return
         val taken = HashSet<Int>()
         // ...и марш даёт те же гарантии, что бой (v173): клетка не занята своим, крип способен шагнуть, одна клетка —
@@ -7979,6 +8008,25 @@ cpuMark("a.evade")
             taken.add(b.x * 100 + b.y); out[c.id] = b
             occupied.remove(c.x * 100 + c.y)               // покинутая клетка освобождается для следующего в колонне
         }
+    }
+
+    /** Шаг колонны по полю потока к цели (v232, см. USE_MARCH_FLOW_DIRECTION): сосед клетки якоря с наименьшим расстоянием
+     *  до цели; якорь на стене — от клетки ведущего; null — цель по полю недостижима; (0,0) — якорь на цели. */
+    private fun flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int, lead: Creep): Pair<Int, Int>? {
+        val field = flowTo(ctx, goal)
+        val fx: Int; val fy: Int
+        if (field[ax * 100 + ay] >= 0) { fx = ax; fy = ay }
+        else if (field[lead.x * 100 + lead.y] >= 0) { fx = lead.x; fy = lead.y }
+        else return null
+        var bestD = field[fx * 100 + fy]; var bx = 0; var by = 0
+        for (dx in -1..1) for (dy in -1..1) {
+            if (dx == 0 && dy == 0) continue
+            val nx = fx + dx; val ny = fy + dy
+            if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+            val d = field[nx * 100 + ny]
+            if (d >= 0 && d < bestD) { bestD = d; bx = dx; by = dy }
+        }
+        return Pair(bx, by)
     }
 
     private fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?, order: List<Creep>,
