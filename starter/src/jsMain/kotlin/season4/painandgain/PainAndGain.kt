@@ -2650,7 +2650,14 @@ object PainAndGain {
      *  где наш залп гуще. Правило: притяжение — лучший подопечный из клетки, min(непокрытая нужда, лечение · ядро
      *  дальности): вплотную к бойцу под огнём 72, в двух от него 24. Насыщение v208 остаётся по смыслу (потолок —
      *  своё лечение за тик), но поле снова имеет градиент. Новых чисел нет. */
-    private const val USE_HEAL_PULL_DELIVERED = true
+    private const val USE_HEAL_PULL_DELIVERED = false
+    /** ЛЕКАРЬ БЕЗ СЛАГАЕМОГО ВЛИЯНИЯ (v224, третья редакция по тому же зонду). Вторая редакция (доставляемое лечение)
+     *  градиента не вернула: потолок 72 достигается у любого бойца с нуждой от 72, а нужда бойца первой линии уже снята
+     *  насыщением прежде поставленных лекарей, — `hpick` 20 % вплотную к первой линии против 14–25 %, dpull −5…−13 в
+     *  пользу выбранной, 0-4 с четырьмя уничтожениями. Здесь снимается само решающее слагаемое: при плоском притяжении
+     *  между клеткой вплотную к бойцу под огнём и клеткой в глубине выбор остаётся за огнём (+1…+13 в пользу первой),
+     *  экраном и «стоять». Новых чисел нет. */
+    private const val USE_HEALER_NO_LINE = true
     /** РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185, разбор серии из двадцати). Прибор разделил её начисто: в восьми
      *  поражениях армия дралась при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 из 512), в одиннадцати
      *  победах из двенадцати — ноль таких тиков (3 из 236 по всей пачке). Признак — измеренная мощь обеих сторон,
@@ -8340,8 +8347,10 @@ cpuMark("a.evade")
             // подопечный, а не насыщенная сумма — у суммы при нужде в тысячи нет разницы между «вплотную» и «в двух»
             val pull = if (USE_HEAL_PULL_DELIVERED) InfluenceMap.deliverableAt(c, p.x, p.y, addrLive)
                 else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+            // ...И БЕЗ СЛАГАЕМОГО ВЛИЯНИЯ (v224, третья редакция, см. USE_HEALER_NO_LINE): у лекаря оно тянет туда, где
+            // наш залп гуще, — в глубину строя, от бойца первой линии; зонд назвал его единственным решающим
             return -W_ATT * att * pull + W_DAN * dan * fire -
-                W_LINE * InfluenceMap.influenceOf(key) - W_SCREEN * shielded +
+                (if (USE_HEALER_NO_LINE) 0.0 else W_LINE * InfluenceMap.influenceOf(key)) - W_SCREEN * shielded +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
         }
         /**
@@ -8474,7 +8483,7 @@ cpuMark("a.evade")
                         else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
                     val self = p.x == c.x && p.y == c.y
                     val tenant = if (self) null else allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
-                    return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, -W_LINE * InfluenceMap.influenceOf(key),
+                    return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEALER_NO_LINE) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
                         -W_SCREEN * shielded, CLAIM_COST * InfluenceMap.claimAt(key), -stayBonus(c, p),
                         if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
                 }
