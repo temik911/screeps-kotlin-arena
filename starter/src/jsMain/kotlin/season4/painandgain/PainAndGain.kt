@@ -2618,7 +2618,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v221"
+    private const val BOT_VERSION = "v222"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -2941,6 +2941,24 @@ object PainAndGain {
     private const val USE_FLAG_FLOW_TTL = false
     private const val FLOW_TTL_FLAG = 30
     private const val USE_CPU_GUARD = true
+    /** ОБОРВАННЫЙ ТИК НЕ ОТРАВЛЯЕТ СЛЕДУЮЩИЙ (v222, рейтинговая серия v221): см. AbortRepair.
+     *  1. Замер. Второй тик матча стоит 96 мс при лимите 100 (первый — около 195 из 1000, третий — 61–64). Таймаут второго
+     *     тика — в 9 из 20 рейтинговых матчей v221, в 17 из 50 бесплатных игр v221 и в 2 из 20 матчей v220. Комментарий
+     *     v184 у `flowTo` звал это «тик пропадает даром» — и почти всегда так и было.
+     *  2. Матч 14: таймаут пришёлся на перестройку хеш-таблицы кеша полей, и 1590 следующих тиков упали в бесконечном
+     *     пробинге `InternalHashMap.addKey` под `flowTo` — ни одной строки `t=`, армия весь матч без приказов. Таймаут
+     *     обрывает скрипт в произвольной точке без `finally`, поэтому посреди перестройки может остаться ЛЮБАЯ
+     *     долгоживущая таблица, а не только эта: предмет структурный, и починка — по всем полям обходом, а не списком.
+     *  Отметка «тик открыт» ставится на входе в тик и снимается после его тела; стоящая на входе отметка значит, что
+     *  прошлый тик не дошёл до конца (таймаут или исключение, пойманное в `loop`). */
+    private const val USE_ABORT_REPAIR = true
+    /** ВЕС И ХОД ТЕЛА — ОДИН РАЗ ЗА ТИК НА КРИПА (v222, тот же разбор). Стеки таймаутов второго тика указывают на
+     *  `bodyWeight < periodAt < pathTicks < chooseFlagObjective`: на тиках 1–2 ворота захвата ещё пропускают все семь
+     *  флагов, и оценка цели (дважды — цель командира и цель армии) проходит путь каждого из двенадцати крипов к каждому
+     *  флагу, спрашивая на КАЖДОМ шаге вес тела и живые MOVE — обход `creep.body` и чтение `creep.store`, в движке это
+     *  геттеры (стенд их не видит: там тик 2 стоит 11 мс, на сервере 96). Тело внутри тика не меняется — значение
+     *  то же самое по построению, поведение побайтово прежнее. */
+    private const val USE_BODY_MEMO = true
     private const val USE_FLAG_FLOW_PREFETCH = true   // потоки ко всем флагам считаются на первом тике (лимит 1000 мс), см. tick()
     private const val CPU_GUARD_MS = 50.0
     /** ...и сторож действует на BFS полей потока (v184): счётчик BFS_BUDGET считает ПОЛЯ, а не миллисекунды, и на
@@ -3030,7 +3048,35 @@ object PainAndGain {
         }
     }
 
+    /** Отметка «тик открыт» (см. USE_ABORT_REPAIR) и пара прибора: оборванных тиков / записей, положенных обратно. */
+    private var tickOpen = false
+    private var abortTicks = 0
+    private var abortEntries = 0
+    /** Вес тела и живые MOVE на этот тик (см. USE_BODY_MEMO); чистятся в начале тика. */
+    private val bodyWeightNow = HashMap<String, Int>()
+    private val liveMovesNow = HashMap<String, Int>()
+
     fun tick() {
+        if (tickOpen && USE_ABORT_REPAIR) repairAfterAbort()
+        tickOpen = true
+        tickBody()
+        tickOpen = false
+    }
+
+    private fun repairAfterAbort() {
+        abortTicks++
+        var maps = 0; var sets = 0; var entries = 0
+        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager)) {
+            val r = AbortRepair.repairFields(owner)
+            maps += r.maps; sets += r.sets; entries += r.entries
+        }
+        abortEntries += entries
+        println("abort t=${getTicks()}: the previous tick did not finish — $maps maps and $sets sets rebuilt in place ($entries entries)")
+    }
+
+    private fun tickBody() {
+        bodyWeightNow.clear()
+        liveMovesNow.clear()
         bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick)
         bfsMaxCost = maxOf(bfsMaxCost, bfsCost)
         bfsThisTick = 0
@@ -3280,7 +3326,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6072,6 +6118,9 @@ cpuMark("a.evade")
         } else if (raceCommandNow) {
             cmdTicks++
             commandRace(ctx, commandArmy, armedEnemies, ctx.flags, commandOf)
+            // прибор второго тика (v222): фаза plan стоит 20–28 мс на тиках 1–2 и 0,7 мс на третьем — метки внутри неё
+            // называют, что именно (строка cpu печатается на первых трёх тиках и на медленных)
+            cpuMark("p.race")
             // ...и ядро, оставшееся после раздачи заданий, идёт СТРОЕМ к цели (v163): прежде командир раздавал только
             // задания на захват, а ядро шло врозь по прежним веткам и приходило к бою растянутым
             // ...и только пока враг ДАЛЕКО: рядом с ним решают тактические ветки — экран, добыча, перехват, — а строй,
@@ -6080,9 +6129,11 @@ cpuMark("a.evade")
                 // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
                 val goal = if (USE_COMMAND_GOAL) commandGoal(ctx, mobileArmy, armedEnemies)
                     else objectiveFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id }?.pos }
+                cpuMark("p.goal")
                 val steps = HashMap<String, Position>()
                 commandMarch(ctx, mobileArmy.filter { it.id !in cmdDetach }, goal, steps)
                 commandOf.putAll(steps)
+                cpuMark("p.march")
             }
         }
             // ...и задания на захват снимаются вместе с режимом: без этого крип, отпущенный командиром за флагом,
@@ -9021,12 +9072,20 @@ cpuMark("a.evade")
     /** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)
      *  плюс гружёные CARRY. */
     private fun bodyWeight(creep: Creep): Int {
+        if (USE_BODY_MEMO) bodyWeightNow[creep.id]?.let { return it }
         val parts = creep.body.count { it.type != MOVE && it.type != CARRY }
         val carried = creep.store[RESOURCE_ENERGY] ?: 0
-        return parts + (carried + CARRY_CAPACITY - 1) / CARRY_CAPACITY
+        val w = parts + (carried + CARRY_CAPACITY - 1) / CARRY_CAPACITY
+        if (USE_BODY_MEMO) bodyWeightNow[creep.id] = w
+        return w
     }
 
-    private fun liveMoves(creep: Creep) = creep.body.count { it.type == MOVE && it.hits > 0 }
+    private fun liveMoves(creep: Creep): Int {
+        if (USE_BODY_MEMO) liveMovesNow[creep.id]?.let { return it }
+        val m = creep.body.count { it.type == MOVE && it.hits > 0 }
+        if (USE_BODY_MEMO) liveMovesNow[creep.id] = m
+        return m
+    }
 
     /** Период хода (тиков на клетку): после шага fatigue = вес × цена местности − 2 × живые MOVE, дальше
      *  −2×MOVE в тик, следующий ход при нуле (tick.js:105, movement.js:237). */
