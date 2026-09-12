@@ -2662,6 +2662,21 @@ object PainAndGain {
      *  в пятой части тиков с лекарем в досягаемости как непробиваемому. Против けろびー#4 (забеги) 4-4 = 4-4 без разгромов,
      *  строк «мощь ноль» 0 против 13. */
     private const val USE_FOCUS_HEALER_BREAKABLE = true
+    /** СОМКНУТ ТОТ, КТО ПРИХОДИТ ВМЕСТЕ (v226, рейтинговая серия v224 — два разгрома при отрыве 6 844 : 752 и 4 099 : 0 от
+     *  ●ω<♥♪#3 и #4).
+     *  1. Замер по консоли: сигнал «безфлаговый бросок» горел на 60–80-м (rush=true, massed=true), ГАС на марше (t=80–120:
+     *     massed=false, rush=false, hunt=false при его 4 087 против наших 3 783 и его подходе 68 %) и зажигался снова на
+     *     110–130-м — уже в контакте у нашего флага D5, где уклонение запрещено; дальше 600 тиков боя при паритете, одно
+     *     убийство, армия в ноль. По реплею: с 80-го по 100-й его девять вооружённых шли двумя эшелонами — пять впереди,
+     *     четыре в 15–20 клетках позади, — центр масс лежал в зазоре, «в MASS_RANGE от центра» давал 0 из 9 при разбросе
+     *     29–33; при этом расстояния до нашей массы ближайшего и дальнего 29/33, 23/28, 13/19 — вся колонна приходит за
+     *     четыре-шесть тиков. Мера формы не видит колонну; мера прихода видит.
+     *  2. Правило: сомкнут, если две трети его вооружённых не дальше MASS_RANGE от ближайшего к нашей массе по расстоянию
+     *     до неё, — в дополнение к прежней мере по форме. Всё остальное у сигнала (подход, нет флагов, не пассивен) как
+     *     было; уклонение при паритете от безфлагового броска — доктрина v14/v29 (EVADE_EQUAL_RATIO). Новых чисел нет.
+     *  Прибор `mrush=` — тиков сигнала броска по мере прихода без меры формы / всех тиков сигнала / тиков, где мера
+     *  прихода добавила «сомкнут». */
+    private const val USE_MASS_BY_ARRIVAL = true
     /** ПРИТЯЖЕНИЕ ЛЕКАРЯ — ДОСТАВЛЯЕМОЕ ЛЕЧЕНИЕ (v224, вторая редакция по зонду `hpick=`). Адресная опасность
      *  показания командира поменяла (E 59 -> T 30 в выбранных клетках), а строй — нет: по реплеям лекари так же в 5–7
      *  клетках от его стрелков, лечение на крипа под главным огнём те же 12 %. Зонд по восьми играм против Coldkimchi#1
@@ -2790,7 +2805,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v225"
+    private const val BOT_VERSION = "v226"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3026,6 +3041,11 @@ object PainAndGain {
     /** Пара к USE_FOCUS_ANY_HEALER (v224): тиков с его лекарем в досягаемости наших стволов и из них тех, где фокус — лекарь. */
     private var fhlAvail = 0
     private var fhlChosen = 0
+    /** Пара к USE_MASS_BY_ARRIVAL (v226): тиков сигнала броска только по мере прихода / всех тиков сигнала / тиков, где мера
+     *  прихода добавила «сомкнут» к мере формы. */
+    private var rushByArrival = 0
+    private var rushSignalAll = 0
+    private var massArrivalAdded = 0
     /** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
      *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
     private var surviving = false
@@ -3397,7 +3417,18 @@ cpuMark("arrival")
         // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
         // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
         val armedNow = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
-        val enemyMassed = armedNow.size >= 6 && centroidOf(armedNow)?.let { c -> armedNow.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedNow.size * 2 } == true
+        val massedByShape = armedNow.size >= 6 && centroidOf(armedNow)?.let { c -> armedNow.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedNow.size * 2 } == true
+        // СОМКНУТ ТОТ, КТО ПРИХОДИТ ВМЕСТЕ (v226, см. USE_MASS_BY_ARRIVAL): колонна на марше двумя эшелонами (пять впереди,
+        // четверо в пятнадцати клетках позади) по форме не сомкнута — центр масс лежит в зазоре, и «в MASS_RANGE от центра»
+        // даёт ноль, — а к нам она приходит целиком за шесть тиков. Мера прихода: две трети его вооружённых не дальше
+        // MASS_RANGE от ближайшего к нашей массе по расстоянию до неё
+        val massedByArrival = USE_MASS_BY_ARRIVAL && armedNow.size >= 6 && run {
+            val d = armedNow.map { getRange(it, ctx.ourCentroid) }
+            val near = d.minOrNull() ?: return@run false
+            d.count { it - near <= MASS_RANGE } * 3 >= armedNow.size * 2
+        }
+        if (massedByArrival && !massedByShape) massArrivalAdded++
+        val enemyMassed = massedByShape || massedByArrival
         // с гистерезисом: темп сближения ходит вокруг порога (колонна на марше то растягивается шире MASS_RANGE, то
         // замедляется), и без него уклонение сменялось стоянием каждые десять-тридцать тиков, пока враг шёл — матч 32:
         // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.
@@ -3419,6 +3450,7 @@ cpuMark("arrival")
         flagBoundWas = flagBound
         val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed && !flagBound &&
             (!USE_RUSH_SIGNAL_IN_REACH || armedNow.any { getRange(it, ctx.ourCentroid) <= RUSH_SIGNAL_RANGE })
+        if (rushSignal) { rushSignalAll++; if (!massedByShape) rushByArrival++ }
         val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
             (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
         unflaggedRushNow = rushSignal || rushHold
@@ -3534,7 +3566,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
