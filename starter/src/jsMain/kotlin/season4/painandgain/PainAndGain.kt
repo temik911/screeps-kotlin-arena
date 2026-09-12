@@ -2682,6 +2682,20 @@ object PainAndGain {
      *  девятой части его тиков, «сомкнут» добавлен в 146 и 134 тиках. Все 19 разгромов обеих рук — при отрыве по
      *  очкам: против этого бота открытым остаётся бой при нулевой мощи с отрывом, а не сигнал. */
     private const val USE_MASS_BY_ARRIVAL = true
+    /** РАЗРЫВ КОНТАКТА СТРОЕМ ПРИ МОЩИ НОЛЬ И ОТРЫВЕ (v227, третья постановка доктрины оператора «ведём по очкам, а по силе
+     *  проигрываем — не деремся»).
+     *  1. Замер. В 32 играх A/B v226 против ●ω<♥♪#3 и #4 — 19 разгромов, и все 19 при отрыве по очкам; строк «наша мощь
+     *     ноль» при живой армии 47–130 на 8 игр; в серии v225 разгром от MetalicaX#15 после выигранного входа (пятеро
+     *     его убиты к +24) — стволы выбиты, мощь ноль на 80-м при 12 живых против 9, линия держится до нуля на 180-м.
+     *     Две измеренные крайности хуже линии: «слабее — только отход» (2:6, отход поодиночке гасил шестнадцать
+     *     механизмов) и режим выживания (0-8 к точке отхода, 1-7 непрерывным уклонением к выходу — отдал флаги).
+     *  2. Правило: мощь ноль (его лечение перекрывает наш огонь) при отрыве по очкам в контакте STALL_TICKS подряд —
+     *     армия разрывает контакт СТРОЕМ, а не бежит: командир раздаёт клетки замыслом KITE, где допустимая клетка —
+     *     вне его стрелкового огня (RANGED_RANGE), свободный шаг отскакивает от ближайшего вооружённого на
+     *     RANGED_RANGE + 1; постура остаётся боевой, лекари, слоты, фокус и всё прочее живут. Как только контакт
+     *     разорван или наша мощь снова больше нуля (стволы отлечены), режим гаснет сам. Новых чисел нет.
+     *  Прибор `zlb=` — тиков разрыва / тиков с мощью ноль при отрыве. */
+    private const val USE_ZERO_LEAD_BREAK = true
     /** ПРИТЯЖЕНИЕ ЛЕКАРЯ — ДОСТАВЛЯЕМОЕ ЛЕЧЕНИЕ (v224, вторая редакция по зонду `hpick=`). Адресная опасность
      *  показания командира поменяла (E 59 -> T 30 в выбранных клетках), а строй — нет: по реплеям лекари так же в 5–7
      *  клетках от его стрелков, лечение на крипа под главным огнём те же 12 %. Зонд по восьми играм против Coldkimchi#1
@@ -2810,7 +2824,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v226"
+    private const val BOT_VERSION = "v227"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3053,6 +3067,12 @@ object PainAndGain {
     private var massArrivalAdded = 0
     /** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
      *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
+    /** Третья постановка (v227, см. USE_ZERO_LEAD_BREAK): тиков подряд с мощью ноль при отрыве; режим разрыва контакта;
+     *  приборы — тиков разрыва / тиков с мощью ноль при отрыве. */
+    private var zeroLeadTicks = 0
+    private var breaking = false
+    private var zlbTicks = 0
+    private var zlbZero = 0
     private var surviving = false
     private var survTicks = 0
     private var survLead = 0
@@ -3571,7 +3591,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4965,6 +4985,15 @@ cpuMark("a.hunt")
         val massCentroid = clusterCentroid(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
         val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
         val contact = inContact(armedEnemies, massArmy)
+        // ТРЕТЬЯ ПОСТАНОВКА (v227, см. USE_ZERO_LEAD_BREAK): мощь ноль при отрыве по очкам STALL_TICKS подряд — армия
+        // разрывает контакт СТРОЕМ: командир раздаёт клетки замыслом KITE с дальностью «вне его стрелкового огня», свободный
+        // шаг отскакивает от ближайшего вооружённого на RANGED_RANGE + 1; постура не меняется, все механизмы боя живут.
+        // Не бегство к точке (первая редакция выживания) и не непрерывное уклонение к выходу (вторая), а шаг назад строем
+        val zeroLead = leadingNow && contact && armedEnemies.isNotEmpty() && ours <= 0.0 && theirs > 0.0
+        zeroLeadTicks = if (zeroLead) zeroLeadTicks + 1 else 0
+        breaking = USE_ZERO_LEAD_BREAK && zeroLeadTicks >= STALL_TICKS
+        if (zeroLead) zlbZero++
+        if (breaking) zlbTicks++
         // ИДЁТ ЛИ БОЙ (v215): контакт по МАССЕ армии либо размен за последние STALL_TICKS тиков. Считается
         // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
         // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
@@ -6338,7 +6367,8 @@ cpuMark("a.evade")
             // не сходила. При нехватке времени командир раздаёт клетки одним замыслом, без перебора и прогонов
             val cpuTight = USE_CPU_GUARD && getTicks() > 1 && cpuMs() > CPU_GUARD_MS
             if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
-            if (!USE_SIMULATION || cpuTight) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf, ourFlagCells = ourFlagCells)
+            // ...и при разрыве контакта (v227, см. USE_ZERO_LEAD_BREAK) замысел не выбирается прогоном — он задан: KITE
+            if (!USE_SIMULATION || cpuTight || breaking) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf, if (breaking) Intent.KITE else Intent.PRESS, ourFlagCells = ourFlagCells)
             else {
                 // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через SIM_TICKS (v138)
                 var bestScore = -Double.MAX_VALUE
@@ -6861,9 +6891,9 @@ cpuMark("a.evade")
                 val reaching = combatArmy.count { c -> hasRanged(c) && combatEnemies.any { getRange(c, it) <= RANGED_RANGE } }
                 live == 0 || reaching * 3 >= live * 2
             }
-            val massKite: Creep? = if (USE_MASS_KITE && !(surviving && posture == Posture.EVADE) && (!support || USE_KITE_HEALERS || helpless) && enemyMassedNow &&
+            val massKite: Creep? = if (USE_MASS_KITE && !(surviving && posture == Posture.EVADE) && (!support || USE_KITE_HEALERS || helpless || breaking) && (enemyMassedNow || breaking) &&
                     (!USE_KITE_NEEDS_FIGHT || posture == Posture.ANNIHILATE || fightImminentNow) &&
-                    (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)) || helpless ||
+                    (breaking || combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)) || helpless ||
                      // ...или стрелок выходит из-под удара, НЕ ЗАМОЛКАЯ (v135, см. USE_KITE_KEEPS_FIRE): прежний срез
                      // (USE_KITE_BREAKS_CONTACT) отвергнут за 0-6/0-6, потому что уходящий стрелок терял цель — его
                      // дальность три. Здесь шаг назад разрешён, только когда в дальности стоят двое и больше его
@@ -6873,7 +6903,9 @@ cpuMark("a.evade")
                 // ОТСКОК, А НЕ СТОЯНИЕ: standoff тянет и НАВСТРЕЧУ, поэтому кайт брался только у тех, кто уже далеко, и вёл их
                 // ПОД удар — диагностика показала kite=0 в шести замерах из десяти при massed=true. Берём цель, только когда
                 // его мили уже в KITE_TRIGGER, и отходим на KITE_STANDOFF (на клетку дальше, чем его шаг)
-                combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE }
+                // при разрыве контакта (v227) отскок — от ближайшего ВООРУЖЁННОГО, стрелка тоже, на дальность вне его огня
+                (if (breaking) combatEnemies.filter { InfluenceMap.profileOf(it).let { q -> q.melee > 0.0 || q.ranged > 0.0 } && getRange(creep, it) <= RANGED_RANGE + 1 }
+                 else combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE })
                     .minByOrNull { getRange(creep, it) }
             } else null
             val healerNear: Creep? = if (wounded || rotating) {
@@ -6965,7 +6997,7 @@ cpuMark("a.evade")
                     val clumped = USE_KITE_MASS_AWARE && combatArmy.count { it.id != creep.id && getRange(creep, it) <= RANGED_RANGE } >= 2
                     // пока стволы не подтянулись — держим на клетку дальше и в бой не входим (v135, USE_KITE_UNTIL_READY)
                     target = massKite
-                    standoff = if (clumped || !gunsReady) RANGED_RANGE else KITE_STANDOFF
+                    standoff = if (breaking) RANGED_RANGE + 1 else if (clumped || !gunsReady) RANGED_RANGE else KITE_STANDOFF
                     avoid = true; nearFlow = true
                 }
                 // ЛЕКАРЬ ВЫШЕ СТРОЯ В БОЮ (v147): замер по записи (6aa078c0, обе стороны по три лекаря) — у него в
@@ -8458,7 +8490,8 @@ cpuMark("a.evade")
             }
             for (lvl in ttlMin downTo 1) {
                 val ok = place(c, { p ->
-                    (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                    (!kite || (if (breaking) armedEnemies.none { getRange(p, it) <= RANGED_RANGE }
+                               else (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE))) &&
                         ttlAt(c, p.x * 100 + p.y, p) >= lvl
                 }, rank)
                 if (ok) { gateLevels[minOf(lvl, gateLevels.size - 1)]++; return true }
