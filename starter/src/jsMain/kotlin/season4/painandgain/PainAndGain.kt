@@ -2612,6 +2612,35 @@ object PainAndGain {
      *     поражениях, кончившихся до 2000-го тика, к гибели последнего крипа он держит все флаги, и доживи тот крип — при
      *     нынешних темпах выиграли бы 6, при его 25 очках в тик — ни одного. Решает гибель армии, а не бегство от неё. */
     private const val USE_SURVIVAL = false
+    /** АДРЕСНАЯ ОПАСНОСТЬ КЛЕТКИ (v224, вопрос оператора «крипы действуют не по опасности» и вывод v222: «прежде чем
+     *  учить ноги опасности, меру опасности нужно сверить с реплеем»).
+     *  1. Сверка по реплеям обеих сторон (серии v221 и v223, контроль v222 против Coldkimchi#1; модель урона сходится с
+     *     записью до единицы: невязка 0,0–0,4 хита на крипо-тик). Мера бота E = eMelee + eRanged — сумма всех, кто
+     *     достаёт клетку, — ошибается на 23–89 хитов за крипо-тик; для мили она читает 94–167 при факте 22–42, для
+     *     стрелков 47–106 при 13–27. Причина не в множителях, а в адресе: его ствол бьёт ОДНОГО — ближайшего в
+     *     досягаемости (89–94 % выстрелов), а лекаря — первым, если тот в досягаемости (82–97 %); при равенстве —
+     *     у кого меньше хитов (73–83 %). Адресная мера T (ствол записан только тому, кого он по этому правилу выберет,
+     *     при остальных наших на их клетках) ошибается на 5–13, «самый опасный по мере» совпадает с «кого били сильнее»
+     *     в 59–71 % тиков против 47–57 %, ложных тревог (мера больше нуля, урона нет) 13–24 % против 33–60 %.
+     *  2. Что это меняет в строю: по E второй ряд за бойцом читается как первый (все достают), поэтому лекари стоят в
+     *     5–6 клетках от его стрелков (его — в 3–4) и лечат крипа под главным огнём в 12 % лечений против его 38 %,
+     *     а стрелок стоит опаснее своей цели 24–30 % выстрелов против его 7–8 %. По T клетка за бойцом стоит ноль.
+     *  3. Правило: в раздаче командира опасность клетки p для крипа c — T(c, p): по каждому его вооружённому
+     *     (стрелок — досягаемость 3, мили — 2, как у ядер E) c в p получает его урон, если среди наших в досягаемости
+     *     (остальные — на назначенных клетках, как у согласованности строя) он был бы выбран по его правилу: лекарь в
+     *     досягаемости — лучший лекарь, иначе ближайший, при равенстве меньше хитов; равенство — в пользу опасности.
+     *     Читается везде, где раздача читала E: оценки мили и стрелка (W_DAN), ворота выживания, смертельная клетка,
+     *     опасность пути, доборы и отход. Лекарь в оценке смотрит на огонь этого тика, как и прежде. Новых чисел нет.
+     *  Прибор `adr=` — раздач / средняя E выбранных клеток / средняя T / раздач, где T не ниже E (крип и так первый). */
+    private const val USE_ADDRESSED_DANGER = true
+    /** ЛЕКАРЬ В ДОСЯГАЕМОСТИ — ЦЕЛЬ ПЕРВЫМ (v224, правило соперника по реплеям обеих сторон: при его лекаре в
+     *  досягаемости ствола выстрел идёт в лекаря в 97 % у Coldkimchi#1 и в 82 % по всем ботам серии v221; у нас — 62 %,
+     *  потому что ярус v134 берёт только лекаря, из-за которого неубиваема цель). Тело лекаря h6m6 — лечение спереди,
+     *  каждые сто урона снимают 12 лечения в тик, и это единственная цель, чей урон не возвращает стена лечения
+     *  целиком: она лечит друг друга, но ствол, который бьёт лекаря, не бьёт того, кого она держит. Ярус стоит ниже
+     *  «добиваем этим тиком» и выше всех прочих. Прибор `fhl=` — тиков, где фокус лёг на его лекаря / тиков, где его
+     *  лекарь был в досягаемости наших стволов. */
+    private const val USE_FOCUS_ANY_HEALER = false
     /** РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185, разбор серии из двадцати). Прибор разделил её начисто: в восьми
      *  поражениях армия дралась при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 из 512), в одиннадцати
      *  победах из двенадцати — ноль таких тиков (3 из 236 по всей пачке). Признак — измеренная мощь обеих сторон,
@@ -2718,7 +2747,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v223"
+    private const val BOT_VERSION = "v224"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -2946,6 +2975,14 @@ object PainAndGain {
     /** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
     private var majOffers = 0
     private var majOpened = 0
+    /** Пара к USE_ADDRESSED_DANGER (v224): раздач командира, сумма E и сумма T в выбранных клетках, раздач с T >= E. */
+    private var adrN = 0
+    private var adrE = 0.0
+    private var adrT = 0.0
+    private var adrSame = 0
+    /** Пара к USE_FOCUS_ANY_HEALER (v224): тиков с его лекарем в досягаемости наших стволов и из них тех, где фокус — лекарь. */
+    private var fhlAvail = 0
+    private var fhlChosen = 0
     /** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
      *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
     private var surviving = false
@@ -3454,7 +3491,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -5558,6 +5595,9 @@ cpuMark("a.evade")
         // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
         fun gunsAt(e: Creep?) = if (e == null) 0 else combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
         val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+            // ЛЕКАРЬ В ДОСЯГАЕМОСТИ — ЦЕЛЬ ПЕРВЫМ (v224, см. USE_FOCUS_ANY_HEALER): правило соперника, снятое с реплеев
+            // обеих сторон, — его ствол при нашем лекаре в досягаемости бьёт лекаря в 82–97 % выстрелов
+            .thenBy { if (USE_FOCUS_ANY_HEALER && armedHealer(it) && gunsAt(it) > 0) 1 else 0 }
             // ДОТЯГИВАЮЩИЕСЯ СТВОЛЫ НЕ РАСХОДЯТСЯ ПО ТРЁМ ЦЕЛЯМ (v218, см. USE_FOCUS_BREAKABLE_FIRST). Порог
             // записан в файле пятикратно — «при 216 лечения в тик цель пробивают четыре-пять стволов», — но
             // числом его писать не нужно: «стволов хватает» тождественно «сумма того, что уже дотягивается,
@@ -5587,6 +5627,8 @@ cpuMark("a.evade")
             .thenByDescending { it.hits }
             .thenByDescending { getRange(it, centroid) }
         val focusBest = focusPool.maxWithOrNull(focusCmp)
+        // прибор яруса «лекарь первым» (v224): его лекарь в досягаемости наших стволов был / фокус лёг на лекаря
+        if (focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail++; if (focusBest != null && armedHealer(focusBest)) fhlChosen++ }
         // ЛИПКИЙ фокус (v45): цель держится, пока жива с оружием или лечением и в шаге от досягаемости хоть одного нашего стрелка;
         // сменяется на ту, что добивается за тик. Замер по реплеям (матчи 78, 73, 67): наибольшее число наших выстрелов в ОДНУ
         // цель за тик — 1 в 57 тиках из 111, 2 в 42, 3 в 10, четыре и больше в 2 (1 %); у Coldkimchi 4+ в 11 % тиков, у けろびー
@@ -7933,6 +7975,57 @@ cpuMark("a.evade")
         // Мёртвыми оказались incNow и hits: обе карты считались в том же цикле и не читались НИКЕМ — их удалила
         // перепись, а не чтение кода
         fun inc(key: Int): Double = InfluenceMap.dangerAt(key)
+        // АДРЕСНАЯ ОПАСНОСТЬ (v224, см. USE_ADDRESSED_DANGER): E складывает всех, кто достаёт клетку, а его ствол бьёт
+        // ОДНОГО — лекаря в досягаемости, иначе ближайшего, при равенстве того, у кого меньше хитов (реплеи обеих сторон:
+        // 89–94 % выстрелов в ближайшего, 82–97 % в лекаря при лекаре в досягаемости). T(c, p) записывает крипу c в
+        // клетке p урон только тех стволов, для которых он был бы этой целью при остальных наших на назначенных клетках
+        // (план сравнивается с планом, как у согласованности строя). Досягаемости те же, что у ядер E: стрелок 3, мили 2.
+        // Лучший «другой» кандидат считается один раз на крипа и пересчитывается, когда раздача перешла к другому крипу
+        class AddrShooter(val x: Int, val y: Int, val ranged: Double, val melee: Double)
+        val addrShooters = ArrayList<AddrShooter>()
+        for (e in armedEnemies) {
+            val q = InfluenceMap.profileOf(e)
+            if (q.ranged > 0.0 || q.melee > 0.0) addrShooters.add(AddrShooter(e.x, e.y, q.ranged, q.melee))
+        }
+        val addrLive = army.filter { it.hits > 0 }
+        fun healerOnly(f: Creep) = !hasWeapon(f) && hasHeal(f)
+        var addrFor: String? = null
+        val addrRH = DoubleArray(addrShooters.size); val addrRA = DoubleArray(addrShooters.size)
+        val addrMH = DoubleArray(addrShooters.size); val addrMA = DoubleArray(addrShooters.size)
+        fun addrPrepare(c: Creep) {
+            addrFor = c.id
+            for (i in addrShooters.indices) { addrRH[i] = Double.MAX_VALUE; addrRA[i] = Double.MAX_VALUE; addrMH[i] = Double.MAX_VALUE; addrMA[i] = Double.MAX_VALUE }
+            for (f in addrLive) {
+                if (f.id == c.id) continue
+                val p = out[f.id] ?: InfluenceMap.cell(f.x, f.y)
+                val h = healerOnly(f)
+                for (i in addrShooters.indices) {
+                    val s = addrShooters[i]
+                    val d = maxOf(abs(p.x - s.x), abs(p.y - s.y))
+                    if (d > RANGED_RANGE) continue
+                    val r = d * 100000.0 + f.hits
+                    if (s.ranged > 0.0) { if (r < addrRA[i]) addrRA[i] = r; if (h && r < addrRH[i]) addrRH[i] = r }
+                    if (d <= 2 && s.melee > 0.0) { if (r < addrMA[i]) addrMA[i] = r; if (h && r < addrMH[i]) addrMH[i] = r }
+                }
+            }
+        }
+        fun addressedAt(c: Creep, x: Int, y: Int): Double {
+            if (addrFor != c.id) addrPrepare(c)
+            val h = healerOnly(c)
+            var sum = 0.0
+            for (i in addrShooters.indices) {
+                val s = addrShooters[i]
+                val d = maxOf(abs(x - s.x), abs(y - s.y))
+                if (d > RANGED_RANGE) continue
+                val r = d * 100000.0 + c.hits
+                if (s.ranged > 0.0 && (if (h) r <= addrRH[i] else (addrRH[i] == Double.MAX_VALUE && r <= addrRA[i]))) sum += s.ranged
+                if (d <= 2 && s.melee > 0.0 && (if (h) r <= addrMH[i] else (addrMH[i] == Double.MAX_VALUE && r <= addrMA[i]))) sum += s.melee
+            }
+            return sum
+        }
+        /** Опасность клетки ДЛЯ ЭТОГО крипа: адресная при тумблере, иначе поле E — байт в байт прежняя раздача. */
+        fun danOf(c: Creep, key: Int): Double =
+            if (USE_ADDRESSED_DANGER) addressedAt(c, key / 100, key % 100) else InfluenceMap.dangerAt(key)
         val goal = ensureGoalField(fighters, combatEnemies)
         /** Цена клетки по направлению: сколько тиков пути от неё до ближайшего очага. */
         fun goalCost(key: Int): Double {
@@ -7964,7 +8057,7 @@ cpuMark("a.evade")
                 val x = c.x + dx; val y = c.y + dy
                 if (maxOf(abs(x - p.x), abs(y - p.y)) > 1) continue          // должна быть смежной с целью
                 if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
-                val d = inc(x * 100 + y)
+                val d = danOf(c, x * 100 + y)
                 if (d < best) best = d
             }
             return if (best == Double.MAX_VALUE) PATH_BLOCKED_COST else best * PATH_DANGER_W
@@ -8018,7 +8111,7 @@ cpuMark("a.evade")
                 // соперника — для него это должно было быть смертельно, и эта точка никак не могла ему выдаваться»).
                 // Опасность клетки входила слагаемым и её перевешивали другие члены; теперь клетка, где входящий за
                 // тик снимает крипу всю жизнь, стоит запретительно дорого и берётся, только если других нет вовсе
-                val lethal = USE_NO_LETHAL_CELLS && inc(key) >= c.hits
+                val lethal = USE_NO_LETHAL_CELLS && danOf(c, key) >= c.hits
                 // БОЛОТО ДЕРЖИТ КРИПА НЕСКОЛЬКО ТИКОВ (v183, оператор: «часть нашей армии часто вязнет в болоте и
                 // дальше не может двигаться»). Про болото знала только СТАРАЯ ветка движения — штраф в выборе слота и
                 // расчёт периода шага; командир, забравший себе все приказы, о нём не знал вовсе и посылал крипов в
@@ -8070,7 +8163,7 @@ cpuMark("a.evade")
                 // своп: жилец встаёт на клетку просителя — так делается ротация состава
                 val swapCell = cells[c.x * 100 + c.y]
                 val moved = (swapCell != null && place(tenant, { p -> p.x == c.x && p.y == c.y }, { 0.0 }, depth + 1)) ||
-                    place(tenant, { p -> p.x != b.x || p.y != b.y }, { p -> inc(p.x * 100 + p.y) }, depth + 1)
+                    place(tenant, { p -> p.x != b.x || p.y != b.y }, { p -> danOf(tenant, p.x * 100 + p.y) }, depth + 1)
                 // ...и при неудаче цепочки снятый приказ ВОЗВРАЩАЕТСЯ: без отката жилец оставался без приказа, его
                 // клетка свободной, и позже она доставалась двоим — прибор ловил это как clash=1 (v176)
                 if (!moved) {
@@ -8082,6 +8175,13 @@ cpuMark("a.evade")
                 }
             }
             taken.add(b.x * 100 + b.y); out[c.id] = b
+            // прибор адресной опасности (v224): E и T выбранной клетки, в обеих сборках
+            if (depth == 0) {
+                val e = InfluenceMap.dangerAt(b.x * 100 + b.y)
+                val t = addressedAt(c, b.x, b.y)
+                adrN++; adrE += e; adrT += t
+                if (t >= e) adrSame++
+            }
             // временное отталкивание в занятой клетке (Hagelbäck & Johansson): следующий крип видит её как
             // тесную. Без этого двое выбирают одну клетку, третий загораживает четвёртого — записанная причина
             // провала USE_FORWARD_SEARCH: «каждый крип считает за себя»
@@ -8100,7 +8200,7 @@ cpuMark("a.evade")
             val alone = InfluenceMap.damageAt(c.x, c.y, combatEnemies) > 0.0 &&
                 army.none { it.id != c.id && hasHeal(it) && getRange(c, it) <= HEAL_RANGE }
             if (!hurtBadly && !alone) continue
-            place(c, { true }, rescue = true, rank = { p -> inc(p.x * 100 + p.y) * 100 -
+            place(c, { true }, rescue = true, rank = { p -> danOf(c, p.x * 100 + p.y) * 100 -
                 (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
         }
         // ОТСТАВШИЙ И ВЫРВАВШИЙСЯ ПОДТЯГИВАЮТСЯ (v177, оператор: «в момент начала боя у нас всегда был 1 крип где-то
@@ -8117,7 +8217,7 @@ cpuMark("a.evade")
                 // ...но НЕ того, кто уже бьёт: увести мили из контакта — отдать разменную клетку даром (гейт 134/135)
                 if (armedEnemies.any { getRange(c, it) <= 1 }) continue
                 place(c, { p -> maxOf(abs(p.x - ax), abs(p.y - ay)) < maxOf(abs(c.x - ax), abs(c.y - ay)) },
-                    { p -> inc(p.x * 100 + p.y) + maxOf(abs(p.x - ax), abs(p.y - ay)) })
+                    { p -> danOf(c, p.x * 100 + p.y) + maxOf(abs(p.x - ax), abs(p.y - ay)) })
             }
         }
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
@@ -8177,7 +8277,7 @@ cpuMark("a.evade")
          * собственное лечение уходящий крип не рассчитывает.
          */
         fun ttlAt(c: Creep, key: Int, p: Position): Double {
-            val e = InfluenceMap.dangerAt(key)
+            val e = danOf(c, key)
             if (e <= 0.0) return 99.0
             val heal = maxOf(0.0, InfluenceMap.healReachAt(key) - InfluenceMap.healFromSelf(c, p.x, p.y))
             val net = maxOf(0.0, e - heal) / (1.0 + SCREEN_SHARE * screenAt(c, p))
@@ -8190,7 +8290,7 @@ cpuMark("a.evade")
         // отбрасывалось молча; здесь это слагаемое, и оно конкурирует с притяжением честно
         fun scoreMelee(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
             val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, true) else InfluenceMap.attMeleeAt(key)
-            return -W_ATT * att * pull + W_DAN * dan * InfluenceMap.dangerAt(key) -
+            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
                 W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
                 W_HEALCOVER * InfluenceMap.healReachAt(key) +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
@@ -8199,7 +8299,7 @@ cpuMark("a.evade")
         // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
         fun scoreRanged(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
             val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, false) else InfluenceMap.attRangedAt(key)
-            return -W_ATT * att * pull + W_DAN * dan * InfluenceMap.dangerAt(key) -
+            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
                 W_LINE * InfluenceMap.influenceOf(key) +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
         }
@@ -8279,7 +8379,7 @@ cpuMark("a.evade")
             // к его вооружённому, куда дотягивается лекарь», и шаг к врагу был верным ответом. С воротами
             // выживания `ok = false` значит «нет клетки, где я переживу ход», и тот же шаг посылает крипа
             // умирать: на стенде этот добор срабатывает в 3 % размещений. Ответ обратный — самая безопасная
-            if (!ok) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
+            if (!ok) place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) })
         }
         passTag = "ranged"
         // стрелки: цель в дальности, меньше всего входящего на следующий тик; при равенстве — дальше от его мили
@@ -8291,7 +8391,7 @@ cpuMark("a.evade")
             // клетка, где меньше входящего» оставлял стрелка под ударом: замер тестовой игры 3d95be — наши стрелки в
             // одной клетке от его вооружённого 28 крипо-тиков и в двух ещё 31 из 117. Между «выстрелить» и «уцелеть»
             // выбирается уцелеть: выстрел стоит 60, стрелок — 1 200
-            if (c.id !in out) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
+            if (c.id !in out) place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) })
         }
         // лекари: в лечебной дальности от раненого бойца, вне огня следующего тика
         passTag = "healer"
@@ -8330,7 +8430,7 @@ cpuMark("a.evade")
             val ok = placeScored(c, 2, intentOf(c)).also { placed ->
                 if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
             }
-            if (!ok) place(c, { true }, { p -> inc(p.x * 100 + p.y) })
+            if (!ok) place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) })
         }
         // ХРАНИТЕЛЬ ФЛАГА — ПО ПРИКАЗУ (v174): крип на НАШЕМ флаге стоит по приказу командира, а не по отдельной ветке
         // удержания; снять его может только командир — решив собрать отряд — или опасность, которая приходит приказом
@@ -8344,7 +8444,7 @@ cpuMark("a.evade")
         // раздетые: прочь из огня — в бою от них пользы нет, а его выстрелы они на себя собирают исправно
         passTag = "stripped"
         if (USE_COMMAND_STRIPPED_OUT) for (c in stripped)
-            place(c, { true }, { p -> inc(p.x * 100 + p.y) * 100 -
+            place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) * 100 -
                 (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
         // ...и ВООРУЖЁННЫЙ не остаётся без места (v165): расстановка при командире молчит, и тот, кому клетки не
         // хватило, уходил по общим веткам — гейт ловил это как уничтоженную армию (match32:army). Лекарей и раздетых
@@ -8352,7 +8452,7 @@ cpuMark("a.evade")
         passTag = "catchall"
         for (c in melees + rangeds) {
             if (c.id in out) continue
-            place(c, { true }, { p -> inc(p.x * 100 + p.y) * 10 +
+            place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) * 10 +
                 maxOf(abs(p.x - c.x), abs(p.y - c.y)).toDouble() })
         }
         // ПРИБОР СОГЛАСОВАННОСТИ (v200): меряется РЕЗУЛЬТАТ раздачи, а не факт вызова правила — сколько стрелков
