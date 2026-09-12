@@ -8445,8 +8445,11 @@ cpuMark("a.evade")
             run {
                 val b = out[c.id] ?: return@run
                 val (att, dan, ttlMin) = weightsOf(intentOf(c))
+                // кандидат — вплотную к бойцу ПЕРВОЙ ЛИНИИ (его клетка в его стрелковом огне) и сам вне огня: первое
+                // чтение зонда (4 игры) показало, что «вплотную к любому бойцу вне огня» выбирается в 63 % раздач — строй
+                // глубокий, боец рядом есть всегда, — а к тому, кого бьют, лекарь по реплеям стоит в 10 %
                 fun adjSafe(p: Position): Boolean = foeDist(p.x, p.y) > RANGED_RANGE &&
-                    fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { maxOf(abs(it.x - p.x), abs(it.y - p.y)) <= 1 } }
+                    fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) <= RANGED_RANGE && maxOf(abs(it.x - p.x), abs(it.y - p.y)) <= 1 } }
                 fun terms(p: Position): DoubleArray {
                     val key = p.x * 100 + p.y
                     val scr = screenAt(c, p)
