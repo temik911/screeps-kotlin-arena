@@ -2584,6 +2584,21 @@ object PainAndGain {
      *     стоил; правило открыло 3402 захвата из 18 642 паритетных отказов при равных армиях. Против Coldkimchi#1 оно
      *     не срабатывает (0 из 27 — он флагов не держит). Гейт: одна строка из уничтожения в отрыв (match34:camp). */
     private const val USE_FLAG_MAJORITY = true
+    /** РЕЖИМ ВЫЖИВАНИЯ (v223, доктрина оператора 12.09.2026: «игра заканчивается либо на 2000 тике, либо после
+     *  уничтожения всей армии. Если мы ведём по очкам, но по силе армии проигрываем — переходим в режим выживания,
+     *  убегаем от противника по максимуму, захватывая флаги, и выигрываем по очкам»).
+     *  1. Замер, из которого это выросло. Строк `t=` с нашей мощью, посчитанной нулём, при живой армии: во всех победах
+     *     трёх серий 0 из 3450; в поражениях v220 — 62 (50 в ANNIHILATE, 54 при ведении по счёту), v221 — 70 (59 / 53),
+     *     контроль v222 против Coldkimchi#1 — 121 (120 / 119). Он охотник со стеной лечения и флагов не берёт (14 022 : 0
+     *     к 1200-му в одной игре), а мы 700 тиков деремся при нулевой мощи: в контакте `retreatFeasible` ложен по
+     *     построению, `contactFight` держит ANNIHILATE («держать линию», v217), уклонение и отход в контакте запрещены.
+     *  2. Правило: ведём по очкам, у него вооружённые есть, и его мощь ВСЕЙ армии не ниже нашей с тем же порогом и
+     *     гистерезисом, что у «слабее» (вход RETREAT_RATIO, выход RETREAT_RELEASE_RATIO), — бой не объявляется ни по
+     *     контакту, ни по толчку, ни по очагу; уклонение и отход разрешены и в контакте, уклонение принимается сразу;
+     *     кайт у его мили снят (он держит армию в досягаемости его стрелков); командир не входит в FIGHT; цель-флаг —
+     *     только с выходом (та же ветка, что у «преследуемых»). «Держать линию» остаётся для всех прочих случаев.
+     *  Новых чисел нет. */
+    private const val USE_SURVIVAL = true
     /** РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185, разбор серии из двадцати). Прибор разделил её начисто: в восьми
      *  поражениях армия дралась при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 из 512), в одиннадцати
      *  победах из двенадцати — ноль таких тиков (3 из 236 по всей пачке). Признак — измеренная мощь обеих сторон,
@@ -2690,7 +2705,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v222"
+    private const val BOT_VERSION = "v223"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -2918,6 +2933,12 @@ object PainAndGain {
     /** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
     private var majOffers = 0
     private var majOpened = 0
+    /** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
+     *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
+    private var surviving = false
+    private var survTicks = 0
+    private var survLead = 0
+    private var survContact = 0
     private var approachRate = 0.0
     private var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     private var flagBoundWas = false                      // трасса «его блоб идёт к флагу» (см. USE_RUSH_NOT_FLAG_BOUND)
@@ -3418,7 +3439,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -4778,6 +4799,13 @@ cpuMark("a.hunt")
         // ---- постура ----
         val ours = ourPowerOf(army, combatEnemies)
         val theirs = enemyPowerOf(combatEnemies, army)
+        // РЕЖИМ ВЫЖИВАНИЯ (v223, доктрина оператора, см. USE_SURVIVAL): ведём по очкам, а его армия сильнее — не деремся,
+        // а уходим, беря флаги с выходом. Порог и гистерезис — как у «слабее», по мощи всей армии
+        val leadingNow = ourScore > enemyScore
+        if (leadingNow && armedEnemies.isNotEmpty()) survLead++
+        surviving = USE_SURVIVAL && leadingNow && armedEnemies.isNotEmpty() && theirs > 0.0 &&
+            theirs >= ours * (if (surviving) RETREAT_RELEASE_RATIO else RETREAT_RATIO)
+        if (surviving) survTicks++
         theirsHist.addLast(theirs)
         while (theirsHist.size > MEASURE_WINDOW) theirsHist.removeFirst()
         // множители окна (v114): его мощь сейчас → его сильнейшая и слабейшая за окно; при нулевой мере — 1
@@ -5211,7 +5239,9 @@ cpuMark("a.sweep")
             spotHoldAll++
             if (!(pushing || contactFight)) spotHoldNew++     // пара: сколько раз вето ИЗМЕНИЛО постуру
         }
-        val annihilate = pushing || contactFight || holdingSpot
+        // ...и в режиме выживания бой не объявляется вовсе (v223, см. USE_SURVIVAL)
+        val annihilate = (pushing || contactFight || holdingSpot) && !surviving
+        if (surviving && contact) survContact++
         // ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, `warmNow` — см. hotContact): ровно то, что правка
         // называет «не боем». `warm` — доля такого контакта во всём контакте; `warmann` — тики, где боевую постуру
         // держал только он (не толчок и не очаг; с правкой — ноль по построению); `warmhold` — из них тики, где
@@ -5239,7 +5269,7 @@ cpuMark("a.sweep")
         val hisFarIdle = USE_HUNTED_NEEDS_REACH && lostRaceNow() && armedEnemies.isNotEmpty() && armedEnemies.all { getRange(it, ctx.ourCentroid) > HUNTED_FAR } && approachRate < APPROACH_RUSH
         val hunted = armedEnemies.isNotEmpty() && strikers.isNotEmpty() && !hisFarIdle &&
             (theirsFight >= oursFight * RETREAT_RATIO || (unflaggedRushNow && theirsFight >= oursFight * EVADE_EQUAL_RATIO))
-        val escapeNeeded = hunted || (armedEnemies.isNotEmpty() && strikers.isEmpty())
+        val escapeNeeded = hunted || surviving || (armedEnemies.isNotEmpty() && strikers.isEmpty())
         // темп сближения врага (0 — стоит, 1 — идёт на нас): запас выхода даёт ему фору только в этом темпе — фора «идёт
         // к выходу мгновенно» отвергала всякую цель при враге, стоящем дома, и армия весь матч сидела дома (стенд m1 scouts)
         run {
@@ -5253,20 +5283,20 @@ cpuMark("a.sweep")
         if (escapeNeeded && !(cpuGuardArmy && escapeFlows.isNotEmpty())) refreshEscape(ctx, armedEnemies) else if (!escapeNeeded) { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
 cpuMark("a.escape")
         // враг близко (см. EVADE_RANGE) — уклонение раньше целей; далеко — цели с выходом, иначе безопасная точка
-        val enemyClose = hunted && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
-        val evadeFirst = if (enemyClose && !annihilate && !contact) evadePoint(ctx, armedEnemies, strikers) else null
+        val enemyClose = (hunted || surviving) && armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
+        val evadeFirst = if (enemyClose && !annihilate && (!contact || surviving)) evadePoint(ctx, armedEnemies, strikers) else null
         // враг рядом (см. NEAR_RANGE) без нашего перевеса — не цель, а строй: армия, пошедшая за угловым флагом при
         // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
         // ...и тёплый контакт линии не стоит (v221, см. USE_FIGHT_BY_LEDGER): иначе, погасив боевую постуру, правка
         // отдала бы флаг-цель этой же строке — и армия осталась бы у поста, как в v90
         val holdLine = enemyNear && !pushing && !annihilate && !stalled && !(USE_FARMER_LINE_FREE && farmerQuietNow) &&   // тихий фермер линии не стоит (v105)
-            !(USE_FIGHT_BY_LEDGER && warmNow)
+            !(USE_FIGHT_BY_LEDGER && warmNow) && !surviving
         val interceptObjective: Objective? = interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it) }?.let { f ->
             val group = strikers.ifEmpty { mobileArmy }
             val flow = flowTo(ctx, f.pos)
             Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0)
         }
-        val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted, if (cpuGuardArmy) objectiveFlagId else null)
+        val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted || surviving, if (cpuGuardArmy) objectiveFlagId else null)
         // ПОЧЕМУ У АРМИИ НЕТ ФЛАГ-ЦЕЛИ (v216). Постура HOLD занимает 43–58 % матча, и в ней армия стоит в точке,
         // которая не даёт очков, при 2,3–2,6 ничьих флагах на доске. Причин ровно четыре, и прежде чем менять
         // поведение, надо знать, которая из них держит: «пост на флаге» уже мерили дважды (v214: любой не его флаг
@@ -5295,11 +5325,11 @@ cpuMark("a.obj")
         // ⚠️ Здесь стоял `rushEvade`, тождественно ложный: `USE_EVADE_STICKY_RUSH` выключен своим замером
         // (1-5 и 1-5, ровно база), а операнд `hunted || rushEvade` из-за этого сводится к `hunted`. Снято в
         // v217; дифф отчёта пуст побайтово, как и обязан быть у мёртвого
-        val evadeTo = evadeFirst ?: (if (hunted && !rushFar && !annihilate && !contact && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
+        val evadeTo = evadeFirst ?: (if ((hunted || surviving) && !rushFar && !annihilate && (!contact || surviving) && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
 cpuMark("a.evade")
         val evade = evadeTo != null
         if (!evade) evadeTarget = null
-        val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible
+        val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && (weaker || surviving) && (retreatFeasible || surviving)
         // ОТВЕРГНУТО стендом (v58-опыт): снимать простой, когда паритет не пускает ни к одному флагу (матч 133: «марш не сдвинулся —
         // флаги до 479» при 1,32 к лагерю на D5, obj=- все 300 тиков, 18 против 7 в тик). На стенде m31 camp снятый на 536-м простой
         // дал 700 тиков ANNIHILATE pushing при 3679 против 1209 без единого убитого (центры армий в одной клетке, reach 0/5) —
@@ -5314,7 +5344,7 @@ cpuMark("a.evade")
         }
         // ПРИНЯЛА ЛИ ПОСТУРА НОВОЕ ЗНАЧЕНИЕ — считается ЗДЕСЬ, до всех, кто от этого зависит (v215). Прежде
         // решение принималось на сорок строк ниже, а `objectiveFlagId` присваивался выше и безусловно
-        val escape = newPosture == Posture.RETREAT || (!USE_POSTURE_HOLDS_EVADE && newPosture == Posture.EVADE)
+        val escape = newPosture == Posture.RETREAT || (!USE_POSTURE_HOLDS_EVADE && newPosture == Posture.EVADE) || (surviving && newPosture == Posture.EVADE)
         val postureTakes = !USE_POSTURE_HYSTERESIS || newPosture == posture || escape || getTicks() - postureSince >= POSTURE_HOLD
         // ЦЕЛЬ-ФЛАГ НЕ ОБНУЛЯЕТСЯ, ПОКА ПОСТУРА УДЕРЖАНА (v215). Дефект был в паре: гистерезис держит ANNIHILATE,
         // а `objective` при аннигиляции равен null — и `objectiveFlagId` обнулялся, хотя постура осталась прежней.
@@ -5968,7 +5998,7 @@ cpuMark("a.evade")
             // и негодна была только область. Кулак нужен там, где ЛЕЧЕНИЕ не даёт добить, а не там, где мы и так
             // катимся вперёд. Признак берётся готовый и уже посчитанный: мы позади по размену хитов
             (!pushing || (USE_COMMAND_FIGHT_WHILE_PUSHING && healingWins)) && underTheirFire && (enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES) &&
-                posture != Posture.RETREAT && posture != Posture.EVADE -> CmdMode.FIGHT
+                posture != Posture.RETREAT && posture != Posture.EVADE && !surviving -> CmdMode.FIGHT
             else -> CmdMode.RACE
         }
         // ...И ПРИЧИНА БЕРЁТСЯ ИЗ ТОЙ ЖЕ ЦЕПОЧКИ (v215, см. cmdWhy). Порядок веток здесь ровно тот же, что
@@ -5978,6 +6008,7 @@ cpuMark("a.evade")
         val cmdWhyNow = when {
             cmdMode == CmdMode.FIGHT -> "fight"
             cmdMode == CmdMode.MARCH -> "march"
+            surviving -> "survive"
             outmatchedTicks >= BREAK_OFF_TICKS -> "outmatched"
             stalledNow -> "stall"
             enemyRetreating && !(USE_FIGHT_OVER_CHASE && underTheirFire && theirMeleeIn) -> "retreat"
@@ -6673,7 +6704,7 @@ cpuMark("a.evade")
                 val reaching = combatArmy.count { c -> hasRanged(c) && combatEnemies.any { getRange(c, it) <= RANGED_RANGE } }
                 live == 0 || reaching * 3 >= live * 2
             }
-            val massKite: Creep? = if (USE_MASS_KITE && (!support || USE_KITE_HEALERS || helpless) && enemyMassedNow &&
+            val massKite: Creep? = if (USE_MASS_KITE && !surviving && (!support || USE_KITE_HEALERS || helpless) && enemyMassedNow &&
                     (!USE_KITE_NEEDS_FIGHT || posture == Posture.ANNIHILATE || fightImminentNow) &&
                     (combatEnemies.none { getRange(creep, it) <= 1 } || (USE_KITE_BREAKS_CONTACT && hasRanged(creep)) || helpless ||
                      // ...или стрелок выходит из-под удара, НЕ ЗАМОЛКАЯ (v135, см. USE_KITE_KEEPS_FIRE): прежний срез
