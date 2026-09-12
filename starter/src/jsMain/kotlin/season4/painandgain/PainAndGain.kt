@@ -736,6 +736,7 @@ object PainAndGain {
     private var postOnFlag = 0
     private var postAll = 0
     private var postContest = 0
+    private var rotOut = 0
     private var spotHoldNew = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
@@ -831,6 +832,19 @@ object PainAndGain {
      *  20 938:23 289 (лидерство сжалось до его счёта), m34 22 447:5 287 → 21 097:5 216; blitz и split тождественны. Удержанный
      *  у фронта боец с четвертью оружия ловит фокус и умирает, а не бьёт — стенд говорит это ровно там, где меряет обмен. */
     private const val USE_ROTATE_KEEP_FRONT = false
+    /** РОТАЦИЯ ТОЛЬКО ПРИ ПОЛНОМ РАЗОРУЖЕНИИ (v231, разбор серии v229 — девять уничтожений от блобов MetalicaX к 100–300-му).
+     *  1. Замер (rout.py, entryfold.py по разгромам серий v228–v229 и A/B v227): в первые десять тиков контакта его мили
+     *     вплотную к нашим 60–70 % крипо-тиков, наши к его 35–48 %; наши удары мили за десять тиков 19 → 2 → 0 при 9–11
+     *     живых, его 17–24 → 12 → 13. Три из четырёх наших мили уходят в ротацию на +2…+5 тике (rot out при 3–5 живых ATTACK из
+     *     восьми, 835–1096 хитов), его мили не отходят и бьют до M8A1. Ротация одинакова в победах и поражениях (около трёх за
+     *     десять тиков), но в поражениях его урон за десять тиков 7 800–9 500 против наших 4 000–5 700: ушедший мили отдаёт
+     *     фронту дыру, и удар 90–150 в тик уходит вместе с ним.
+     *  2. Отличие от отвергнутого: USE_ROTATE_KEEP_FRONT (v134) держал бойца по СЧЁТУ вооружённых у контакта и был отвергнут
+     *     таблицей входов стенда (описание, не FAIL); «без ротации» (v126) тоже судил только стенд (18 хуже / 6 лучше). Живого
+     *     замера у ротации не было ни разу, а стенд её блоб не фокусирует как живой. Здесь: боец с живыми частями оружия не
+     *     выходит из строя вовсе — уходит только разоружённый (тот и так «раненый», см. wounded); порог ROTATE_OUT остаётся
+     *     для возврата. Вердикт — живым A/B против MetalicaX. Прибор: `rot=<выходов в ротацию>`. */
+    private const val USE_ROTATE_DISARMED_ONLY = true
     /** РАЗДЕТЫЙ ИДЁТ К ЛЕКАРЮ, СТОЯЩЕМУ ДАЛЬШЕ ОТ ВРАГА, ЧЕМ ОН (v134): раздетый (без оружия и лечения) и ротирующий идут к
      *  БЛИЖАЙШЕМУ лекарю, а в бою лекарь стоит у фронта — и раненый идёт ВПЕРЁД, под фокус. Замер: в разгроме от MetalicaX#10
      *  (матч 6a9fa63e, 14:0 к 173-му) наши раздетые стояли в трёх клетках от его вооружённых 178 из 196 крипо-тиков, его — 40 из
@@ -2922,7 +2936,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v230"
+    private const val BOT_VERSION = "v231"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3705,7 +3719,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6788,7 +6802,7 @@ cpuMark("a.evade")
             // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
             val wounded = !healer && !hasWeapon(creep)
             // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
-            val rotating = USE_ROTATION && !healer && hasWeapon(creep) && healersAlive && run {
+            val rotating = USE_ROTATION && !USE_ROTATE_DISARMED_ONLY && !healer && hasWeapon(creep) && healersAlive && run {
                 val weapons = creep.body.count { it.type == ATTACK || it.type == RANGED_ATTACK }
                 val live = creep.body.count { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
                 val frac = if (weapons == 0) 1.0 else live.toDouble() / weapons
@@ -6807,7 +6821,7 @@ cpuMark("a.evade")
                         ours < his
                     }
                     if (keep) false
-                    else { rotatingIds.add(creep.id); rotateSince[creep.id] = now; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}"); true }
+                    else { rotatingIds.add(creep.id); rotateSince[creep.id] = now; rotOut++; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}"); true }
                 } else false
             }
             val support = healer || wounded
