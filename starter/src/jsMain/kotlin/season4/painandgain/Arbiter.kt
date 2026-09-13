@@ -10,5 +10,5 @@ package season4.painandgain
 internal object Arbiter {
     var confReach = 0
 
-    fun audit() { confReach += Executor.unreachable(PainAndGain.RANGED_RANGE) }
+    fun audit() { confReach += Executor.unreachable(RANGED_RANGE) }
 }
