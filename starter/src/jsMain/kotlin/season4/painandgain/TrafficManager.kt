@@ -2,7 +2,6 @@ package season4.painandgain
 
 import screeps.api.Creep
 import screeps.api.Position
-import screeps.api.getDirection
 
 /**
  * Двухфазное движение крипов. Сначала каждый боец регистрирует желаемую клетку (request),
@@ -63,7 +62,7 @@ object TrafficManager {
      *  Уставший крип (fatigue > 0) в этот тик не сдвинется — его желание игнорируем, иначе цепочки
      *  resolve посчитают, что он «освободит клетку», и соседи пойдут в занятое место. */
     fun request(creep: Creep, target: Position, priority: Int = 0) {
-        if (creep.fatigue > 0) return
+        if (creep.fatigue > 0) { Arbiter.confFatigue++; return }     // R2: явно, со счётом (v240)
         desired[creep.id] = pack(target.x, target.y)
         priorityOf[creep.id] = priority
     }
@@ -87,12 +86,15 @@ object TrafficManager {
         return s
     }
 
+    /** Один разрешённый ход: крип и клетка. API зовёт Executor, не решатель (v240, R7). */
+    class Move(val creep: Creep, val x: Int, val y: Int)
+
     /**
-     * Разрешить все намерения и выдать команды move.
+     * Разрешить все намерения и вернуть ходы (без вызовов API — их делает Executor.run).
      * @param movers крипы, которые могут двигаться (их намерения разруливаем и толкаем друг друга)
      * @param obstacles все крипы на поле (как препятствия по текущим позициям; не-movers неподвижны)
      */
-    fun resolve(movers: List<Creep>, obstacles: List<Creep>) {
+    fun resolve(movers: List<Creep>, obstacles: List<Creep>): List<Move> {
         // аудит прошлого тика: дошёл ли крип туда, куда ему выдали move
         if (issued.isNotEmpty()) {
             val byId = HashMap<String, Creep>()
@@ -128,11 +130,12 @@ object TrafficManager {
             dfs(mover, null, occupant, moverIds, movement, assignedCoord, kindOf, HashSet())
         }
 
+        val moves = ArrayList<Move>()
         for ((coord, creep) in movement) {
             val tx = coord / 100
             val ty = coord % 100
             if (tx != creep.x || ty != creep.y) {
-                creep.move(getDirection(tx - creep.x, ty - creep.y))
+                moves.add(Move(creep, tx, ty))
                 issued[creep.id] = Issued(coord, kindOf[creep.id] ?: KIND_FREE)
             }
         }
@@ -142,6 +145,7 @@ object TrafficManager {
         lastDesired.putAll(desired)
         desired.clear()
         priorityOf.clear()
+        return moves
     }
 
     /**

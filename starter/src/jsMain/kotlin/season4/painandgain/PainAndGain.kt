@@ -691,9 +691,6 @@ object PainAndGain {
     private const val SEPARATION_RADIUS = 1
     private const val CROWD_COST = 3
 
-    private const val FIGHTER_PRIORITY = 3
-    private const val RUNNER_PRIORITY = 2
-    private const val ORDER_PRIORITY = 4   // приказ командира выше прочих: он считает всю армию сразу (v167)
     /** СТРЕЛОК ДЕРЖИТСЯ ОТ ЕГО МИЛИ (v177, оператор): замер по записи разгрома — наши стрелки стояли вплотную к его
      *  вооружённому мили 33 крипо-тика и в двух клетках ещё 41 из 242 стрелковых. Клетка ближе MELEE_KEEP_RANGE к его
      *  мили стрелку не назначается. */
@@ -758,15 +755,11 @@ object PainAndGain {
     private const val SWAMP_CELL_COST = 400.0
     private const val MARCH_SWAMP_COST = 8      // в колонне: крюк в четыре клетки дешевле четырёх тиков неподвижности
     private const val STRAGGLER_SLACK = 2
-    private const val ORDER_PRIORITY_MELEE = 7
-    private const val ORDER_PRIORITY_RANGED = 6
-    private const val ORDER_PRIORITY_HEAL = 5
     /** Раненый уступает дорогу всем: его место — за лекарями, а не между ними и строем. */
-    private const val WOUNDED_PRIORITY = 1
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v239"
+    private const val BOT_VERSION = "v240"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -1347,10 +1340,10 @@ object PainAndGain {
 
         // боевые интенты уходят в API до разрешения движения: стенд разрешает конфликты за клетку в порядке первого
         // интента крипа, и порядок «удар, затем ход» — часть тождества с эталоном v235 (движку порядок безразличен)
-        Arbiter.audit()
-        Executor.run()
         TrafficManager.markOrdered(commandOf.keys)
-        TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
+        val moves = TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
+        Arbiter.audit()
+        Executor.run(moves)
         cpuMark("resolve")
         cpuSummary()
         InfluenceMap.pruneStances(myCreeps.mapTo(HashSet()) { it.id })
@@ -1415,7 +1408,7 @@ object PainAndGain {
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -2016,14 +2009,14 @@ object PainAndGain {
                 val foes = threats.ifEmpty { ctx.combatEnemies }
                 val danger = underFire || nearby.isNotEmpty()
                 val step = fleeStep(s, foes, ctx.dangerMatrix, SCOUT_FLEE_RANGE) ?: greedyFlee(ctx, s, foes, force = danger)
-                if (step != null) TrafficManager.request(s, step, RUNNER_PRIORITY)
+                if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
                 dbg(s, "FLEE", f, step)
                 continue
             }
             if (f == null) {
                 // все флаги при деле: к армии, за её спиной
                 val step = if (s.getRangeTo(ctx.ourCentroid) > POST_STANDOFF + 2) pathStep(s, ctx.ourCentroid, POST_STANDOFF + 2, crowdMatrixOf(ctx, -1)) else null
-                if (step != null) TrafficManager.request(s, step, RUNNER_PRIORITY)
+                if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
                 Memory.idleRunnerIds.add(s.id)
                 dbg(s, "RESERVE", null, step)
                 continue
@@ -2033,7 +2026,7 @@ object PainAndGain {
                 val to = runnerEscape(ctx, s)
                 if (to != null) {
                     val step = pathStep(s, to, 1, ctx.dangerMatrix)
-                    if (step != null) TrafficManager.request(s, step, RUNNER_PRIORITY)
+                    if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
                     dbg(s, "EXIT", f, step)
                     continue
                 }
@@ -2053,7 +2046,7 @@ object PainAndGain {
             // справится, — но шли они каждый своим путём и приходили порознь, то есть по одному против той же стаи.
             // Идущий впереди ждёт отставшего: тот же кулак, только на двоих
             val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.x * 100 + f.pos.y else -1)) else null
-            if (step != null) { TrafficManager.request(s, step, RUNNER_PRIORITY); planCapture(ctx, step) }
+            if (step != null) { TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY); planCapture(ctx, step) }
             // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
             poisedAll++
             if (!allowed && step == null) poisedTicks++
@@ -4845,6 +4838,15 @@ object PainAndGain {
             var stepTag = "?"
             val step: Position? = when {
                 !canMove(creep) -> { stepTag = "immobile"; null }
+                // ВЫЖИВАНИЕ ВЫШЕ ЗАДАНИЯ (v240, этап 5 переработки, решение оператора 13.09.2026): крип под смертельным
+                // огнём бежит, даже если у него приказ командира или пост хранителя. До v240 приказ стоял выше бегства
+                // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
+                // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
+                mustFlee -> {
+                    stepTag = "flee"
+                    if (commandOf.containsKey(creep.id)) orderFled++
+                    fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                }
                 // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
                 // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
                 // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
@@ -4864,13 +4866,6 @@ object PainAndGain {
                     val cell = commandOf[creep.id]!!
                     if (cell.x == creep.x && cell.y == creep.y) null
                     else cell
-                }
-                mustFlee -> {
-                    // сколько приказов ломает бегство: оно стоит выше приказа намеренно (это спасение), но цену надо
-                    // знать — прибор исполнения записывает такой случай как «ушёл в другую клетку» (v173)
-                    stepTag = "flee"
-                    if (commandOf.containsKey(creep.id)) orderFled++
-                    fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
                 }
                 slot != null -> { stepTag = if (slotHold) "slotHold" else "slotStep"; if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet()) }
                 // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
@@ -4992,16 +4987,8 @@ object PainAndGain {
             // боец, захватчик, — и замысел в нём не участвовал. Теперь очередь назначает командир: крип, исполняющий
             // приказ, идёт первым, а среди приказов вперёд пропускается тот, чья клетка важнее для боя — мили,
             // выходящий в контакт, затем стрелок с целью, затем лекарь к подопечному, и лишь потом все прочие
-            val prio = when {
-                commandOf.containsKey(creep.id) -> when {
-                    hasWeapon(creep) && hasMelee(creep) && !hasRanged(creep) -> ORDER_PRIORITY_MELEE
-                    hasWeapon(creep) -> ORDER_PRIORITY_RANGED
-                    hasHeal(creep) -> ORDER_PRIORITY_HEAL
-                    else -> ORDER_PRIORITY
-                }
-                wounded -> WOUNDED_PRIORITY
-                else -> FIGHTER_PRIORITY
-            }
+            val prio = Arbiter.pushRank(ordered = commandOf.containsKey(creep.id), melee = hasWeapon(creep) && hasMelee(creep) && !hasRanged(creep),
+                armed = hasWeapon(creep), healer = hasHeal(creep), wounded = wounded)
             rungCount[whyTag] = (rungCount[whyTag] ?: 0) + 1
             stepCount[stepTag] = (stepCount[stepTag] ?: 0) + 1
             if (step != null) { TrafficManager.request(creep, step, prio); planCapture(ctx, step) }
@@ -5021,7 +5008,8 @@ object PainAndGain {
         // огонь тоже по приказу командира (v161): назначения считаются на всю силу, включая захватчиков с оружием
         commandFire(army + ctx.runners.filter { hasWeapon(it) }, enemyCreeps, focusTarget, focusOrder, fireOf)
         commandHeal(army, enemyCreeps, healOf)
-        healAndShoot(army + ctx.runners.filter { hasWeapon(it) }, allies, enemyCreeps, focusTarget, focusOrder)
+        // ...и отряжённый лекарь без оружия лечит (v240): до этого healAndShoot получал бегунов только с оружием
+        healAndShoot(army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }, allies, enemyCreeps, focusTarget, focusOrder)
         cpuMark("shoot")
     }
 

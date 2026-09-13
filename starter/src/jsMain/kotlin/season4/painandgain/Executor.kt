@@ -1,6 +1,7 @@
 package season4.painandgain
 
 import screeps.api.Creep
+import screeps.api.getDirection
 import screeps.api.getRange
 
 /**
@@ -46,8 +47,9 @@ internal object Executor {
         return n
     }
 
-    /** Единственное место, где боевой API вызывается: по крипам в порядке первого интента, контактный слот, затем дальний. */
-    fun run() {
+    /** Единственное место, где игровой API вызывается: боевые интенты по крипам в порядке первого интента (контактный
+     *  слот, затем дальний), после них — ходы, разрешённые TrafficManager (v240, R7: решатель больше не зовёт API). */
+    fun run(moves: List<TrafficManager.Move>) {
         for (c in order) {
             contact[c.id]?.let { if (it.heal) c.heal(it.target) else c.attack(it.target) }
             ranged[c.id]?.let {
@@ -58,5 +60,6 @@ internal object Executor {
                 }
             }
         }
+        for (m in moves) m.creep.move(getDirection(m.x - m.creep.x, m.y - m.creep.y))
     }
 }
