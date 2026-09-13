@@ -759,7 +759,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v244"
+    private const val BOT_VERSION = "v245"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -4974,13 +4974,16 @@ object PainAndGain {
         cpuMark("shoot")
     }
 
-    /** Удар мили: приказ командира (v244 — первым, добивание уже учтено в назначении), иначе фокус вплотную, иначе
-     *  первый по ранжиру сосед. */
+    /** Удар мили: фокус-цель вплотную, иначе самый раненый сосед. */
     private fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         if (!hasMelee(creep)) return
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
+        val focusDying = focusTarget != null && creep.getRangeTo(focusTarget) <= 1 && focusTarget.hits <= InfluenceMap.profileOf(creep).melee
         val ordered = fireOf[creep.id]?.let { id -> adjacent.firstOrNull { it.id == id } }
         val target: Creep? = when {
+            // приказ командира и для удара (v161): цель назначена по всей армии, а не по тому, кто оказался рядом.
+            // Исключение одно — крип, которого мы ДОБИВАЕМ этим ударом: добить дороже, чем исполнить приказ
+            focusDying -> focusTarget
             ordered != null -> ordered
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
             adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
@@ -5052,31 +5055,43 @@ object PainAndGain {
             val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
             if (healParts > 0) {
                 val candidates = allies.filter { !it.spawning && need(it) > 0 && creep.getRangeTo(it) <= HEAL_RANGE }
-                // ПРИКАЗ КОМАНДИРА ПЕРВЫМ И НА ВСЕЙ ДАЛЬНОСТИ (v162, v183; с v244 — без исключений: стена лечения и добивание
-                // учтены в самом назначении, см. commandHeal). Вплотную — полное лечение и выстрел, издали — дальнее
-                val ordered = healOf[creep.id]?.let { id -> allies.firstOrNull { it.id == id && !it.spawning && creep.getRangeTo(it) <= HEAL_RANGE } }
-                if (ordered != null) {
-                    if (creep.getRangeTo(ordered) <= 1) {
-                        Executor.heal(creep, ordered)
-                        book(ordered, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
+                // приказ командира первым (v162): он назначил пациента, зная, кого враг добивает и кого лечение спасёт
+                val ordered = healOf[creep.id]?.let { id -> candidates.firstOrNull { it.id == id } }
+                // ...И ПРИКАЗ ДЕЙСТВУЕТ НА ВСЕЙ ЛЕЧЕБНОЙ ДАЛЬНОСТИ (v183, оператор: «не должно быть ничего, что идёт
+                // мимо командира»). Прежде назначенный пациент брался, только если он ВПЛОТНУЮ; иначе выбор перехватывал
+                // местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит
+                // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): удержимую жертву лечит каждый лекарь в дальности, вплотную — полностью
+                if (victimSaveable) hwallHealsAll++
+                val wallTarget = if (victimSaveable) victimNow?.takeIf { v -> !v.spawning && creep.getRangeTo(v) <= HEAL_RANGE } else null
+                if (wallTarget != null) {
+                    hwallHeals++
+                    if (creep.getRangeTo(wallTarget) <= 1) {
+                        Executor.heal(creep, wallTarget)
+                        book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                         shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     } else {
-                        Executor.rangedHeal(creep, ordered)
-                        book(ordered, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
+                        Executor.rangedHeal(creep, wallTarget)
+                        book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
                     }
                     continue
                 }
-                // без приказа — прежний выбор: соседство не важнее раны (v183), полный сосед лечится, только если раненых нет
+                // ...и СОСЕДСТВО НЕ ВАЖНЕЕ РАНЫ (v183, оператор: «лекари лечат себя фулловыми, хотя могли бы лечить
+                // того, кто под огнём»). Ближняя ветка бралась раньше дальней всегда, поэтому полный сосед — включая
+                // самого лекаря — обходил раненого в двух клетках. Замер разгрома 3d9532: 8 лечений из 55 (14 %) ушли
+                // в цель на полных хитах, не получившую в этот тик урона, — у него таких 0 из 172; в трёх из этих
+                // случаев рядом стоял крип с потерей 900–1 060. Полный сосед лечится, только если раненых нет вовсе
                 val anyWounded =  candidates.any { it.hitsMax - it.hits > 0 }
-                val closeTarget = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
+                val closeTarget0 = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
                     .maxByOrNull { rank(it) }
+                val closeTarget = closeTarget0
                 if (closeTarget != null) {
                     Executor.heal(creep, closeTarget)
                     book(closeTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
                 }
-                val farTarget = candidates.filter { it.hitsMax - it.hits > 0  }.maxByOrNull { rank(it) }
+                val farTarget = ordered?.takeIf { creep.getRangeTo(it) <= HEAL_RANGE }
+                    ?: candidates.filter { it.hitsMax - it.hits > 0  }.maxByOrNull { rank(it) }
                 if (farTarget != null) {
                     Executor.rangedHeal(creep, farTarget)
                     book(farTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
@@ -5085,6 +5100,7 @@ object PainAndGain {
             }
             shoot(creep, enemyCreeps, focusTarget, focusOrder)
         }
+        damageBooked.clear()
         val most = shotsAt.values.maxOrNull() ?: 0
         if (most > 0) {
             concSum += most; concTicks++
@@ -5100,29 +5116,46 @@ object PainAndGain {
         }
     }
 
+    /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
+    private val damageBooked = HashMap<String, Double>()
+
     private fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         if (!hasRanged(creep)) return
         val creepsInRange = enemyCreeps.filter { creep.getRangeTo(it) <= RANGED_RANGE }
         if (creepsInRange.isEmpty()) return
-        // ВЕЕР И ЦЕЛЬ — ПО ПРИКАЗУ (v244): порог веера и насыщение цели посчитаны в commandFire; здесь только исполнение.
-        // Без приказа (стрелок вне состава назначения) — прежний выбор: фокус в дальности, иначе первый по ранжиру,
-        // иначе раненейший
-        val order = fireOf[creep.id]
-        if (order == FIRE_MASS) {
-            Executor.rangedMassAttack(creep); lastFireTick = getTicks(); fanShots++; fireShots++
-            return
-        }
         val combatInRange = creepsInRange.filter { c -> val p = InfluenceMap.profileOf(c); p.melee + p.ranged + p.heal > 0.0 }
         val massPool = if (combatInRange.isNotEmpty()) combatInRange else creepsInRange
-        val ordered = order?.let { id -> creepsInRange.firstOrNull { it.id == id } }
-        val target = when {
-            ordered != null -> ordered
-            focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE  -> focusTarget
-            else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE  }
-                ?: massPool.minByOrNull { it.hits }
-        }
-        target?.let {
-            Executor.rangedAttack(creep, it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots++
+        val massValue = massPool.sumOf { InfluenceMap.rangedRate(creep.getRangeTo(it)) }
+        // против армии с лекарями — только фокус: веер размазывает урон по трём-пяти целям, и три лекаря (216 в тик)
+        // вылечивают его целиком, пока враг сосредоточенно снимает 540 в тик с одного нашего (стенд sleeper: наш чистый
+        // урон 200 в тик против 540). Веер — когда врагу нечем лечить или он даёт не меньше двух с половиной выстрелов
+        val enemyHeals = enemyCreeps.any { InfluenceMap.profileOf(it).heal > 0.0 }
+        // ...и ВЕЕР ОТСТУПАЕТ ПЕРЕД СОШЕДШИМИСЯ СТВОЛАМИ (v218, см. focusBreakableNow). Три его крипа вплотную
+        // дают massValue = 3.0, то есть порог 2.5 берётся сам собой — и ветка веера игнорирует `focusTarget`
+        // ЦЕЛИКОМ. Пока стволы размазаны, это верно: веер бьёт по всем. Но ровно в тот момент, когда фокус стал
+        // пробиваемым тем, что до него дотягивается (это и есть «четыре-пять стволов» из записанного порога),
+        // веер развёл бы их обратно и отдал бы цель его лекарям. Побочно ветка чинит и ПРИБОР: веерный выстрел
+        // не кладёт ничего в `shotsAt`, поэтому такие тики не входили в `conc` даже знаменателем (см. concfan)
+        if (massValue > (if (enemyHeals) 2.5 else 1.0)) {
+            Executor.rangedMassAttack(creep); lastFireTick = getTicks(); fanShots++; fireShots++
+        } else {
+            // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
+            // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
+            // нашими за тик; если этого хватает с учётом её лечения, стрелок переходит к следующей цели по ранжиру
+            fun booked(t: Creep) = damageBooked[t.id] ?: 0.0
+            // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
+            val ordered = fireOf[creep.id]?.let { id -> enemyCreeps.firstOrNull { it.id == id } }
+            val target = when {
+                // приказ командира — первым: он назначал цель, зная всю армию и всё, что до цели дотягивается (v161)
+                ordered != null && creep.getRangeTo(ordered) <= RANGED_RANGE  -> ordered
+                focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE  -> focusTarget
+                else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE  }
+                    ?: massPool.minByOrNull { it.hits }
+            }
+            target?.let {
+                Executor.rangedAttack(creep, it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots++
+                damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
+            }
         }
     }
 
@@ -5369,14 +5402,6 @@ object PainAndGain {
         return Pair(bx, by)
     }
 
-    /** Метка приказа «веер» в fireOf (v244): стрелок бьёт rangedMassAttack, а не одиночную цель. */
-    private const val FIRE_MASS = "MASS"
-
-    /** НАЗНАЧЕНИЕ ОГНЯ ОТРЯДОМ (v244, этап 7: many→one с насыщением, исполнитель не переопределяет). Порядок цели для стрелка
-     *  тот же, что был (погоня → добиваемый залпом → фокус → первый по ранжиру в досягаемости → раненейший), но расписанный по
-     *  цели урон учитывается: цель, которую уже добивают назначенные до этого стволы (с учётом его лечения), следующему не
-     *  назначается — прежде это делал `damageBooked` в самом выстреле, где приказ уже был роздан. Веер тоже решается здесь
-     *  (тем же порогом, что раньше в shoot): приказ FIRE_MASS. */
     private fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?, order: List<Creep>,
                             out: MutableMap<String, String>) {
         out.clear()
@@ -5396,22 +5421,18 @@ object PainAndGain {
             scoutFoe(e) && flagsNow.any { !it.ours && getRange(e, it.pos) <= 1 } }
         val dangerous = live.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } } + scoutsHere
         val pool = if (dangerous.isNotEmpty()) dangerous else live
-        fun coverOf(e: Creep) = enemies.sumOf { h ->
-            val pr = InfluenceMap.profileOf(h)
-            val d = h.getRangeTo(e)
-            if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
-        }
-        fun shotOf(c: Creep, e: Creep): Double {
-            val pr = InfluenceMap.profileOf(c)
-            return (if (hasRanged(c)) pr.ranged else pr.melee) * InfluenceMap.takenOf(e)
-        }
-        val killable = pool.filter { e -> shooters.filter { reach(it, e) }.sumOf { shotOf(it, e) } >= e.hits + coverOf(e) }.minByOrNull { it.hits }
-        // против армии с лекарями — только фокус: веер размазывает урон по трём-пяти целям, и три лекаря (216 в тик)
-        // вылечивают его целиком, пока враг сосредоточенно снимает 540 в тик с одного нашего (стенд sleeper: наш чистый
-        // урон 200 в тик против 540). Веер — когда врагу нечем лечить или он даёт не меньше двух с половиной выстрелов
-        val enemyHeals = enemies.any { InfluenceMap.profileOf(it).heal > 0.0 }
-        val booked = HashMap<String, Double>()
-        fun dead(e: Creep) = (booked[e.id] ?: 0.0) >= e.hits + coverOf(e)
+        val killable = pool.filter { e ->
+            val burst = shooters.filter { reach(it, e) }.sumOf { c ->
+                val pr = InfluenceMap.profileOf(c)
+                (if (hasRanged(c)) pr.ranged else pr.melee) * InfluenceMap.takenOf(e)
+            }
+            val cover = enemies.sumOf { h ->
+                val pr = InfluenceMap.profileOf(h)
+                val d = h.getRangeTo(e)
+                if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
+            }
+            burst >= e.hits + cover
+        }.minByOrNull { it.hits }
         for (c in shooters) {
             // ПРЕСЛЕДОВАТЕЛЬ СТРЕЛЯЕТ В СВОЙ ОСТОВ (v211). Общее правило «разоружённый — не цель» поставил оператор
             // в v178 и оно остаётся в силе для ВСЕЙ армии: пока идёт бой, огонь идёт по тем, кто бьёт сейчас.
@@ -5419,22 +5440,15 @@ object PainAndGain {
             // ЗДЕСЬ, потому что commandFire начинается с out.clear() и всякий приказ, поставленный раньше, стирает.
             // Первая редакция ставила приказ в assignChase, и он не доживал до выстрела: крип догонял и молчал
             val chased = Memory.chaseTarget[c.id]
-            if (chased != null && chased.hits > 0 && reach(c, chased)) { out[c.id] = chased.id; booked[chased.id] = (booked[chased.id] ?: 0.0) + shotOf(c, chased); continue }
-            if (hasRanged(c)) {
-                val inRange = live.filter { c.getRangeTo(it) <= RANGED_RANGE }
-                val combatInRange = inRange.filter { e -> val p = InfluenceMap.profileOf(e); p.melee + p.ranged + p.heal > 0.0 }
-                val massPool = if (combatInRange.isNotEmpty()) combatInRange else inRange
-                val massValue = massPool.sumOf { InfluenceMap.rangedRate(c.getRangeTo(it)) }
-                if (massValue > (if (enemyHeals) 2.5 else 1.0)) { out[c.id] = FIRE_MASS; continue }
-            }
+            if (chased != null && chased.hits > 0 && reach(c, chased)) { out[c.id] = chased.id; continue }
             val t = when {
-                killable != null && reach(c, killable) && !dead(killable) -> killable
-                focus != null && focus.hits > 0 && reach(c, focus) && !dead(focus) -> focus
-                else -> order.firstOrNull { reach(c, it) && it.hits > 0 && (it in dangerous) && !dead(it) }
-                    ?: pool.filter { reach(c, it) && !dead(it) }.minByOrNull { it.hits }
+                killable != null && reach(c, killable) -> killable
+                focus != null && focus.hits > 0 && reach(c, focus) -> focus
+                else -> order.firstOrNull { reach(c, it) && it.hits > 0 && (it in dangerous) }
+                    ?: pool.filter { reach(c, it) }.minByOrNull { it.hits }
                     ?: live.filter { reach(c, it) }.minByOrNull { it.hits }
             }
-            if (t != null) { out[c.id] = t.id; booked[t.id] = (booked[t.id] ?: 0.0) + shotOf(c, t) }
+            if (t != null) out[c.id] = t.id
         }
     }
 
@@ -5457,14 +5471,7 @@ object PainAndGain {
             if (d <= 1) pr.heal else if (d <= HEAL_RANGE) pr.heal / 3.0 else 0.0
         }
         val free = healers.toMutableList()
-        // СТЕНА ЛЕЧЕНИЯ ПЕРВЫМ ПРОХОДОМ (v244; правило v228, см. victimSaveable): удержимую жертву лечит каждый лекарь в
-        // дальности — прежде это решал исполнитель поверх приказа, теперь приказ и есть стена
-        val victim = victimNow?.takeIf { victimSaveable && !it.spawning && it.hits > 0 }
-        if (victim != null) {
-            hwallHealsAll += free.size
-            for (h in free.toList()) if (h.getRangeTo(victim) <= HEAL_RANGE) { out[h.id] = victim.id; free.remove(h); hwallHeals++ }
-        }
-        // ...затем те, кого убивают ЭТИМ тиком и кого лечение ещё спасает
+        // ...сперва те, кого убивают ЭТИМ тиком и кого лечение ещё спасает
         val dying = mates.filter { (incoming[it.id] ?: 0.0) >= it.hits }
             .sortedByDescending { it.hits }
         for (t in dying) {
@@ -5776,11 +5783,6 @@ object PainAndGain {
         /** Опасность клетки ДЛЯ ЭТОГО крипа: адресная при тумблере, иначе поле E — байт в байт прежняя раздача. */
         fun danOf(c: Creep, key: Int): Double =
             InfluenceMap.dangerAt(key)
-        // АДРЕСНАЯ ОПАСНОСТЬ t+1 (v244, план: Forecast.threatAt): в оценке клетки бойца — не сумма всех, кто достаёт клетку,
-        // а урон тех, кто, шагнув по модели, выберет именно этого крипа. Смертельность клетки и запасные ранги — по-прежнему
-        // по полю dangerAt (страховка не адресная)
-        val predCells = Forecast.predictCells(armedEnemies, fighters)
-        fun threatCell(c: Creep, p: Position): Double = Forecast.threatAt(predCells, c, p, fighters, armedEnemies)
         val goal = ensureGoalField(fighters, combatEnemies)
         /** Цена клетки по направлению: сколько тиков пути от неё до ближайшего очага. */
         fun goalCost(key: Int): Double {
@@ -6028,7 +6030,7 @@ object PainAndGain {
         // отбрасывалось молча; здесь это слагаемое, и оно конкурирует с притяжением честно
         fun scoreMelee(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
             val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, true) else InfluenceMap.attMeleeAt(key)
-            return -W_ATT * att * pull + W_DAN * dan * threatCell(c, p) -
+            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
                 W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
                 W_HEALCOVER * InfluenceMap.healReachAt(key) +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
@@ -6037,7 +6039,7 @@ object PainAndGain {
         // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
         fun scoreRanged(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
             val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, false) else InfluenceMap.attRangedAt(key)
-            return -W_ATT * att * pull + W_DAN * dan * threatCell(c, p) -
+            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
                 W_LINE * InfluenceMap.influenceOf(key) +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
         }
