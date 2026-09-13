@@ -270,4 +270,72 @@ internal object Forecast {
         }
         return best
     }
+
+    /** ПОЗИЦИИ ВРАГА НА t+1 (v244, план: Forecast.predict): та же модель шага, что в прокате [simulate] — мили к ближайшему
+     *  мягкому нашему, стрелок держит RANGED_RANGE, лекарь к самому раненому своему; занятая клетка и стена — стоит. */
+    fun predictCells(his: List<Creep>, ours: List<Creep>): HashMap<String, Position> {
+        val out = HashMap<String, Position>()
+        val occupied = HashSet<Int>()
+        for (c in ours) occupied.add(c.x * 100 + c.y)
+        for (e in his) occupied.add(e.x * 100 + e.y)
+        val liveUs = ours.filter { it.hits > 0 }
+        for (e in his) {
+            if (e.hits <= 0) continue
+            val q = InfluenceMap.profileOf(e)
+            var tx = e.x; var ty = e.y
+            if (liveUs.isNotEmpty()) {
+                if (q.melee > 0.0) {
+                    val soft = liveUs.filter { InfluenceMap.profileOf(it).melee <= 0.0 }.minByOrNull { getRange(e, it) } ?: liveUs.minByOrNull { getRange(e, it) }!!
+                    if (getRange(e, soft) > 1) { tx = e.x + (soft.x - e.x).coerceIn(-1, 1); ty = e.y + (soft.y - e.y).coerceIn(-1, 1) }
+                } else if (q.ranged > 0.0) {
+                    val near = liveUs.minByOrNull { getRange(e, it) }!!
+                    val dist = getRange(e, near)
+                    if (dist < RANGED_RANGE) { tx = e.x - (near.x - e.x).coerceIn(-1, 1); ty = e.y - (near.y - e.y).coerceIn(-1, 1) }
+                    else if (dist > RANGED_RANGE) { tx = e.x + (near.x - e.x).coerceIn(-1, 1); ty = e.y + (near.y - e.y).coerceIn(-1, 1) }
+                } else {
+                    val hurt = his.filter { it.hits > 0 && it.id != e.id }.minByOrNull { it.hits }
+                    if (hurt != null && getRange(e, hurt) > 1) { tx = e.x + (hurt.x - e.x).coerceIn(-1, 1); ty = e.y + (hurt.y - e.y).coerceIn(-1, 1) }
+                }
+            }
+            tx = tx.coerceIn(0, 99); ty = ty.coerceIn(0, 99)
+            val key = tx * 100 + ty
+            if (tx != e.x || ty != e.y) {
+                if (key in occupied || DistanceMap.isTerrainWall(tx, ty)) { tx = e.x; ty = e.y }
+                else { occupied.remove(e.x * 100 + e.y); occupied.add(key) }
+            }
+            out[e.id] = InfluenceMap.cell(tx, ty)
+        }
+        return out
+    }
+
+    /** АДРЕСНАЯ ОПАСНОСТЬ t+1 (v244, план: Forecast.threatAt): урон тех его стволов, которые, шагнув по модели ([predictCells]),
+     *  выберут именно крипа c, стоящего в клетке p, — по проверенной модели его выбора цели (лекарь в досягаемости первым,
+     *  иначе ближайший, при равенстве меньшие хиты — та же, что [wallTargetOf]). Остальные наши — на своих клетках.
+     *  Дешёвая замена «симуляции по клетке»: 14 крипов × 9 клеток × его стволы. */
+    fun threatAt(pred: Map<String, Position>, c: Creep, p: Position, ours: List<Creep>, his: List<Creep>): Double {
+        var sum = 0.0
+        for (e in his) {
+            if (e.hits <= 0) continue
+            val q = InfluenceMap.profileOf(e)
+            if (q.melee <= 0.0 && q.ranged <= 0.0) continue
+            val pe = pred[e.id] ?: continue
+            val reach = if (q.ranged > 0.0) RANGED_RANGE else 1
+            if (maxOf(abs(p.x - pe.x), abs(p.y - pe.y)) > reach) continue
+            var bestKey = Double.MAX_VALUE; var chosenMe = false; var healerSeen = false
+            for (f in ours) {
+                if (f.hits <= 0) continue
+                val fx = if (f.id == c.id) p.x else f.x
+                val fy = if (f.id == c.id) p.y else f.y
+                val d = maxOf(abs(fx - pe.x), abs(fy - pe.y))
+                if (d > reach) continue
+                val healer = PainAndGain.hasHeal(f) && !PainAndGain.hasWeapon(f)
+                if (healer && !healerSeen) { healerSeen = true; bestKey = Double.MAX_VALUE; chosenMe = false }
+                if (healerSeen && !healer) continue
+                val key = d * 100000.0 + f.hits
+                if (key < bestKey) { bestKey = key; chosenMe = f.id == c.id }
+            }
+            if (chosenMe) sum += (if (q.ranged > 0.0) q.ranged else q.melee) * InfluenceMap.takenOf(c)
+        }
+        return sum
+    }
 }
