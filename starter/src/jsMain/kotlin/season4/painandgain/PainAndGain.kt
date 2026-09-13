@@ -743,6 +743,14 @@ object PainAndGain {
     private var marchFlip = 0
     private var marchPrevSx = 0
     private var marchPrevSy = 0
+    /** Лечение по дефициту (v233): лечений в полного / всех, лечения сверх подтверждённой нужды / доставлено, переназначений. */
+    private var hfullN = 0
+    private var hfullAll = 0
+    private var hoverSum = 0
+    private var hdelivSum = 0
+    private var hswapN = 0
+    /** Адресный урон этого тика по нашим (v229/v233): кто из его стрелков и мили в кого целится по модели его выбора. */
+    private val addressedDmg = HashMap<String, Double>()
     private var spotHoldNew = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
@@ -2472,6 +2480,19 @@ object PainAndGain {
      *  случаях рядом стоял крип с потерей 900–1 060. Выключено правило было не своим замером, а оптом при откате
      *  пачки v183. Полный сосед лечится теперь только тогда, когда раненых в дальности нет вовсе. */
     private const val USE_HEAL_DEFICIT_FIRST = true
+    /** ЛЕЧЕНИЕ ТОЛЬКО ПО ДЕФИЦИТУ (v233, разбор серии v232 по реплеям, первые 40 тиков контакта, 52 игры).
+     *  1. Замер (healcut.py): его лечение полезно на 90–99 % и НИ РАЗУ не уходит в полного крипа (0 впустую); наше полезно на
+     *     65–86 %: на полных крипах 200–550 и сверх дефицита 500–1 000 за 40 тиков при доставленных 3 300–5 900. Причина в
+     *     `need` = дефицит + ОЖИДАЕМЫЙ урон, где ожидаемый — `damageAt` клетки, то есть всё, что до неё дотягивается, а не то,
+     *     что в неё целится: полный крип в трёх клетках от его стрелков «нуждается» в сотнях, и лекарь лечит его, пока
+     *     раненый ждёт. USE_HEAL_DEFICIT_FIRST (v202) закрыл только ближнюю ветку при живом раненом.
+     *  2. Здесь: ожидаемый урон засчитывается только ПОДТВЕРЖДЁННЫЙ — адресный огонь этого тика (модель его выбора цели,
+     *     см. USE_HEAL_WALL_ADDRESSED) или потеря прошлого тика; полный крип без подтверждения — не пациент (упреждение в
+     *     того, кого бьют в этот же тик, остаётся полезным: урон и лечение одного тика складываются). И когда лучший
+     *     пациент вплотную почти полон и не под огнём, лечение уходит соседу, который примет его целиком.
+     *     Приборы: `hfull=<лечений в полного>/<лечений>`, `hover=<лечения сверх подтверждённой нужды>/<доставлено>`,
+     *     `hswap=<переназначений соседу>`. Вердикт — гейт и живой A/B против MetalicaX#10. */
+    private const val USE_HEAL_BY_DEFICIT = true
     /** ...и ценность пациента для КОНКРЕТНОГО лекаря: вплотную он лечит вчетверо сильнее, чем издали, поэтому приказ
      *  ранжирует цели по дошедшему лечению, а не по чужой нужде.
      *  ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v215), как и USE_HEAL_ORDER_WINS, и по той же причине: погашен оптом контрольной
@@ -2972,7 +2993,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v232"
+    private const val BOT_VERSION = "v233"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3755,7 +3776,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6763,10 +6784,12 @@ cpuMark("a.evade")
         // у жертвы есть в 83–89 % тиков, в блобе MetalicaX#9 — в 29 %. Лекарь получает ближайшую свою клетку как слот; без
         // клеток жертва не удержима, и правило молчит
         victimNow = null; victimSaveable = false; wallCells = emptyList(); wallCellOf.clear()
+        addressedDmg.clear()
         if (USE_HEAL_WALL) {
             // ...И ЖЕРТВА — ПО АДРЕСНОМУ ОГНЮ ЭТОГО ТИКА (v229, см. USE_HEAL_WALL_ADDRESSED): его правило выбора цели по
             // текущим клеткам — лекарь в досягаемости первым, иначе ближайший, при равенстве с меньшими хитами
-            val addressed = HashMap<String, Double>()
+            // ...и карта адресного урона живёт тик (v233, см. USE_HEAL_BY_DEFICIT): её читает выбор пациента
+            val addressed = addressedDmg
             if (USE_HEAL_WALL_ADDRESSED) {
                 val live = army.filter { it.hits > 0 && (hasWeapon(it) || hasHeal(it)) }
                 for (e in ctx.combatEnemies) {
@@ -7630,10 +7653,24 @@ cpuMark("a.evade")
         strikesAt.clear()
         val healDone = HashMap<String, Int>()
         val incoming = HashMap<String, Int>()
+        // подтверждённый входящий (v233, см. USE_HEAL_BY_DEFICIT): адресный огонь этого тика или потеря прошлого
+        fun confirmed(target: Creep) = (addressedDmg[target.id] ?: 0.0) > 0.0 || (lostTick[target.id] ?: 0) > 0
         fun need(target: Creep): Int {
             val deficit = target.hitsMax - target.hits
-            val expected = incoming.getOrPut(target.id) { InfluenceMap.damageAt(target.x, target.y, enemyCreeps).toInt() }
+            val expected = incoming.getOrPut(target.id) {
+                if (USE_HEAL_BY_DEFICIT && !confirmed(target)) 0 else InfluenceMap.damageAt(target.x, target.y, enemyCreeps).toInt() }
             return deficit + expected - (healDone[target.id] ?: 0)
+        }
+        // нужда по подтверждённому — для прибора и для переназначения соседу (не зависит от тумблера)
+        fun needConfirmed(target: Creep): Int {
+            val deficit = target.hitsMax - target.hits
+            val expected = if (confirmed(target)) maxOf((addressedDmg[target.id] ?: 0.0).toInt(), lostTick[target.id] ?: 0) else 0
+            return deficit + expected - (healDone[target.id] ?: 0)
+        }
+        fun book(target: Creep, amount: Int) {
+            hfullAll++; if (target.hits >= target.hitsMax) hfullN++
+            hoverSum += maxOf(0, amount - maxOf(0, needConfirmed(target))); hdelivSum += amount
+            healDone[target.id] = (healDone[target.id] ?: 0) + amount
         }
         // под огнём (v109): терявший хиты в прошлый тик — впереди любого дефицита (см. USE_HEAL_UNDER_FIRE), но только пока не покрыт
         // его запас «дефицит + HEAL_FIRE_ROOM × потеря»: первый срез слал всех троих на потерявшего 60 (216 лечения в дефицит 60),
@@ -7662,11 +7699,11 @@ cpuMark("a.evade")
                     hwallHeals++
                     if (creep.getRangeTo(wallTarget) <= 1) {
                         creep.heal(wallTarget)
-                        healDone[wallTarget.id] = (healDone[wallTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
+                        book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                         shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     } else {
                         creep.rangedHeal(wallTarget)
-                        healDone[wallTarget.id] = (healDone[wallTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt()
+                        book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
                     }
                     continue
                 }
@@ -7674,11 +7711,11 @@ cpuMark("a.evade")
                     val parts = healParts
                     if (creep.getRangeTo(ordered) <= 1) {
                         creep.heal(ordered)
-                        healDone[ordered.id] = (healDone[ordered.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, parts * HEAL_POWER.toDouble()).toInt()
+                        book(ordered, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, parts * HEAL_POWER.toDouble()).toInt())
                         shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     } else {
                         creep.rangedHeal(ordered)
-                        healDone[ordered.id] = (healDone[ordered.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, parts * RANGED_HEAL_POWER.toDouble()).toInt()
+                        book(ordered, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, parts * RANGED_HEAL_POWER.toDouble()).toInt())
                     }
                     continue
                 }
@@ -7688,11 +7725,17 @@ cpuMark("a.evade")
                 // в цель на полных хитах, не получившую в этот тик урона, — у него таких 0 из 172; в трёх из этих
                 // случаев рядом стоял крип с потерей 900–1 060. Полный сосед лечится, только если раненых нет вовсе
                 val anyWounded = USE_HEAL_DEFICIT_FIRST && candidates.any { it.hitsMax - it.hits > 0 }
-                val closeTarget = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
+                val closeTarget0 = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
                     .maxByOrNull { rank(it) }
+                // ...и почти полный сосед не под огнём уступает соседу, который примет лечение целиком (v233)
+                val amountAdj = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
+                val closeTarget = if (USE_HEAL_BY_DEFICIT && closeTarget0 != null && !confirmed(closeTarget0) && needConfirmed(closeTarget0) < amountAdj)
+                    candidates.filter { creep.getRangeTo(it) <= 1 && it.id != closeTarget0.id && needConfirmed(it) >= amountAdj }
+                        .maxByOrNull { rank(it) }?.also { hswapN++ } ?: closeTarget0
+                else closeTarget0
                 if (closeTarget != null) {
                     creep.heal(closeTarget)
-                    healDone[closeTarget.id] = (healDone[closeTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt()
+                    book(closeTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
                 }
@@ -7700,7 +7743,7 @@ cpuMark("a.evade")
                     ?: candidates.filter { it.hitsMax - it.hits > 0 || (USE_HEAL_UNDER_FIRE && (lostTick[it.id] ?: 0) > 0) }.maxByOrNull { rank(it) }
                 if (farTarget != null) {
                     creep.rangedHeal(farTarget)
-                    healDone[farTarget.id] = (healDone[farTarget.id] ?: 0) + InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt()
+                    book(farTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
                     continue
                 }
             }
