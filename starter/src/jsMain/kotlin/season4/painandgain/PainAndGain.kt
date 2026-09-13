@@ -749,6 +749,10 @@ object PainAndGain {
     private var hoverSum = 0
     private var hdelivSum = 0
     private var hswapN = 0
+    /** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
+    private var hexpN = 0
+    private var hexpAll = 0
+    private var hlostSum = 0
     /** Адресный урон этого тика по нашим (v229/v233): кто из его стрелков и мили в кого целится по модели его выбора. */
     private val addressedDmg = HashMap<String, Double>()
     private var spotHoldNew = 0
@@ -2500,6 +2504,23 @@ object PainAndGain {
      *     ударом в тот же тик не выросла (38 % против 41 %): сэкономленное ушло раненым в тылу, а не тому, кого бьют, — и
      *     этого бой не замечает. Гейт 135/135 (описание +6 802). ВЫКЛ; приборы остаются. */
     private const val USE_HEAL_BY_DEFICIT = false
+    /** ЛЕКАРЬ ВНЕ ДОСЯГАЕМОСТИ ЕГО СТРЕЛКОВ И МИЛИ (v234, разбор серии v232 по реплеям, первые 40 тиков контакта).
+     *  1. Замер (healcut.py, healdmg.py; 52 игры, из них 16 против MetalicaX#10): чьи лекари под ударом, тот проигрывает. В
+     *     поражениях от #10 наши лекари принимают 3 274–3 612 урона из 15 900–16 400 (мили 1 369–1 566, стрелки 1 905–2 046),
+     *     его — 289–745; в победах наоборот: его 3 660–3 800, наши 533–1 214. Лечащие части стоят впереди тела, 1 800 урона
+     *     снимают всё лечение трёх лекарей — и покрытие принятого урона лечением у нас ~30 % против его ~70 %. Его лекари
+     *     стоят за своими мили (v186: рядом с мили 86 % крипо-тиков) — в 4–5 клетках от наших стрелков, вне досягаемости.
+     *  2. Наши правила держали лекаря лишь вне клеток ВПЛОТНУЮ к его мили (reachNow в контакте = meleeReachCells), а в
+     *     досягаемость стрелков он входил намеренно — «ради лечения вплотную» (healingNow). Прежняя редакция «вне
+     *     досягаемости стрелков» (матч 21) уводила лекарей на 4–6 клеток за фронт, потому что ранг брал САМУЮ безопасную
+     *     клетку. Здесь клетка лекаря ни при каких ступенях не лежит в досягаемости его вооружённых (стрелок 3, мили 2 —
+     *     шаг плюс удар): под командиром — фильтр кандидатов (ранг по доставленному лечению остаётся, зонд hpick говорит,
+     *     что клетка вплотную к бойцу первой линии вне его огня есть в 30–51 % лекаре-тиков), в свободном шаге — reachCells
+     *     для лекаря всегда, без исключения healingNow; клетки стены (v228) — тоже вне досягаемости стрелков. Вплотную
+     *     лечит с дальней от врага стороны бойца, иначе издали (24 против 72) — цена видна в покрытии урона.
+     *     Приборы: `hexp=<лекаре-тиков в досягаемости>/<лекаре-тиков в бою>`, `hlost=<урон по лекарям за матч>`.
+     *     Вердикт — гейт и живой A/B против MetalicaX#10. */
+    private const val USE_HEALER_OUT_OF_REACH = true
     /** ...и ценность пациента для КОНКРЕТНОГО лекаря: вплотную он лечит вчетверо сильнее, чем издали, поэтому приказ
      *  ранжирует цели по дошедшему лечению, а не по чужой нужде.
      *  ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v215), как и USE_HEAL_ORDER_WINS, и по той же причине: погашен оптом контрольной
@@ -3000,7 +3021,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v233"
+    private const val BOT_VERSION = "v234"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3783,7 +3804,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -6826,6 +6847,7 @@ cpuMark("a.evade")
                 if (useAddr) hwallAddr++
                 val loss = if (useAddr) byAddress!!.value else (lostTick[v.id] ?: 0).toDouble()
                 val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
+                val hisRanged = ctx.combatEnemies.filter { hasRanged(it) }
                 val occupied = HashSet<Int>()
                 for (c in army) if (!hasHeal(c) || hasWeapon(c)) occupied.add(c.x * 100 + c.y)
                 for (e in ctx.enemyCreeps) occupied.add(e.x * 100 + e.y)
@@ -6835,7 +6857,7 @@ cpuMark("a.evade")
                     val x = v.x + dx; val y = v.y + dy
                     if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in occupied) continue
                     val cell = InfluenceMap.cell(x, y)
-                    if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
+                    if (hisMelee.none { getRange(cell, it) <= 2 } && (!USE_HEALER_OUT_OF_REACH || hisRanged.none { getRange(cell, it) <= RANGED_RANGE })) cells.add(cell)
                 }
                 wallCells = cells
                 val healers = army.filter { hasHeal(it) && it.id != v.id }
@@ -7357,8 +7379,10 @@ cpuMark("a.evade")
             // огне делать нечего, а живым он вернётся с лечением. Серия 307–326: наши обезоруженные стояли в трёх от его
             // вооружённых половину своего времени (131 из 258, 264 из 552 крип-тиков), его — десятую (26 из 79, 7 из 11);
             // правило «обезоруженные в досягаемости» — 3 из 6 поражений и 0 из 18 побед
-            val reachMine = if (USE_STRIPPED_LEAVES_REACH && wounded) reachCells else reachNow
+            val reachMine = if ((USE_STRIPPED_LEAVES_REACH && wounded) || (USE_HEALER_OUT_OF_REACH && healer)) reachCells else reachNow
             val inReach = (creep.x * 100 + creep.y) in reachMine
+            // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
+            if (healer && inCombat) { hexpAll++; if ((creep.x * 100 + creep.y) in reachCells) hexpN++; hlostSum += (lostTick[creep.id] ?: 0) }
             val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
                 (support && inReach) ||
                 (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
@@ -7492,7 +7516,7 @@ cpuMark("a.evade")
                     // наш лекарь стоял вплотную к самому раненому в 13% замеров и дальше трёх клеток — в 32%. Закрытыми
                     // остаются клетки вплотную к вражескому МИЛИ: там лекарь не лечит, а умирает
                     val healingNow = healer && healMate != null && healMate.hits < healMate.hitsMax && getRange(creep, healMate) <= HEAL_RANGE + 1
-                    if (support && !inReach && reachMine.isNotEmpty() && !healingNow) myBlocked = myBlocked + reachMine
+                    if (support && !inReach && reachMine.isNotEmpty() && !(healingNow && !(USE_HEALER_OUT_OF_REACH && healer))) myBlocked = myBlocked + reachMine
                     if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
                         val front = HashSet<Int>()
                         for ((dx, dy) in DIRECTIONS) {
@@ -8703,6 +8727,10 @@ cpuMark("a.evade")
         // назначенных клеток остальных, а не их нынешних позиций: иначе «согласованность» сравнивает план с прошлым
         fun cellOf(f: Creep): Position = out[f.id] ?: InfluenceMap.cell(f.x, f.y)
         fun foeDist(x: Int, y: Int) = armedEnemies.minOfOrNull { maxOf(abs(x - it.x), abs(y - it.y)) } ?: 99
+        // клетка в досягаемости его вооружённых (v234, см. USE_HEALER_OUT_OF_REACH): стрелок бьёт на 3, мили шагнёт и ударит на 2
+        fun exposedCell(p: Position): Boolean = armedEnemies.any { e ->
+            val d = maxOf(abs(p.x - e.x), abs(p.y - e.y)); val q = InfluenceMap.profileOf(e)
+            (q.ranged > 0.0 && d <= RANGED_RANGE) || (q.melee > 0.0 && d <= 2) }
         val melees = fighters.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) }
         val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
         val healers = fighters.filter { !hasWeapon(it) && hasHeal(it) }
@@ -8847,6 +8875,7 @@ cpuMark("a.evade")
                 val ok = place(c, { p ->
                     (!kite || (if (breaking) armedEnemies.none { getRange(p, it) <= RANGED_RANGE }
                                else (hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE))) &&
+                        (role != 2 || !USE_HEALER_OUT_OF_REACH || !exposedCell(p)) &&
                         ttlAt(c, p.x * 100 + p.y, p) >= lvl
                 }, rank)
                 if (ok) { gateLevels[minOf(lvl, gateLevels.size - 1)]++; return true }
@@ -8914,7 +8943,9 @@ cpuMark("a.evade")
             val ok = placeScored(c, 2, intentOf(c)).also { placed ->
                 if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
             }
-            if (!ok) place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) })
+            // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
+            if (!ok && USE_HEALER_OUT_OF_REACH) place(c, { p -> !exposedCell(p) }, { p -> danOf(c, p.x * 100 + p.y) })
+            if (c.id !in out) place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) })
             // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
             // огнём 37 % лекаре-тиков, наши — 10 %, и в FIGHT свободная клетка вплотную к бойцу не опаснее своей есть в
             // 30–51 % лекаре-тиков. Зонд отвечает, какое слагаемое оценки увело лекаря от такой клетки: считает те же
