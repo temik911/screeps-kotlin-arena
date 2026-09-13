@@ -91,7 +91,7 @@ fun loop() {
 object PainAndGain {
 
     // ---------- боевые константы ----------
-    private const val RANGED_RANGE = 3
+    internal const val RANGED_RANGE = 3
     private const val HEAL_RANGE = 3
     private const val MELEE_KEEP_RANGE = 2
     private const val MELEE_KITE_DISCOUNT = 0.1
@@ -803,7 +803,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v237"
+    private const val BOT_VERSION = "v238"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -1191,40 +1191,6 @@ object PainAndGain {
 
     // ---------- модель ----------
 
-    /** Флаг очков в этом тике: владелец, тип дебаффа, очки, кто стоит на клетке и чья охрана рядом. */
-    private class FlagInfo(val flag: ScoreFlag, val mine: Boolean?, val type: String, val score: Int, val occupant: Creep?, val guards: List<Creep>) {
-        val id: String get() = flag.id
-        val pos: Position get() = flag
-        val ours: Boolean get() = mine == true
-        val theirs: Boolean get() = mine == false
-        /** Очки в тик, которые даёт захват: чужой флаг — двойной размен (нам плюс, врагу минус). */
-        val swing: Double get() = if (theirs) 2.0 * score else score.toDouble()
-    }
-
-    private class Ctx(
-        val home: Position,
-        val enemyHome: Position,
-        val myCreeps: List<Creep>,
-        val active: List<Creep>,
-        val army: List<Creep>,      // с оружием или лечением
-        val runners: List<Creep>,   // безоружные и без лечения: захватчики
-        val enemyCreeps: List<Creep>,
-        val combatEnemies: List<Creep>,
-        val blocked: List<Position>,
-        /** Опасность (без флагов) — основа для матриц пути. */
-        val rawDanger: CostMatrix,
-        /** Опасность + НЕ НАШИ флаги как стены: путь без назначения на флаг не ступает. */
-        val dangerMatrix: CostMatrix,
-        val flags: List<FlagInfo>,
-        /** Клетки не наших флагов (x*100+y): захват — только назначенным, см. flagBlocked. */
-        val flagCells: Set<Int>,
-        val flagBlocked: List<Position>,
-        /** Вся боевая армия врага не сделала ни шага PASSIVE_TICKS тиков (порог захвата один, см. captureAllowed). */
-        val passiveEnemy: Boolean,
-        val ourCentroid: Position,
-        val enemyCentroid: Position?,
-    )
-
     /** ЗАМЕР CPU (07.09.2026): в живых логах «Script execution timed out» на ПЕРВОМ тике в 12 матчах из 20 каждой серии — первый
      *  тик убивается лимитом (cpuTimeLimitFirstTick), и до этого дня у бота не было ни одной своей меры CPU (строка «cpu t=» —
      *  стендовая). На первых трёх тиках после каждой фазы печатается `cpu t=N <фаза>=мс` отдельной строкой — последняя строка перед
@@ -1271,7 +1237,7 @@ object PainAndGain {
     private fun repairAfterAbort() {
         abortTicks++
         var maps = 0; var sets = 0; var entries = 0
-        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager)) {
+        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor)) {
             val r = AbortRepair.repairFields(owner)
             maps += r.maps; sets += r.sets; entries += r.entries
         }
@@ -1282,6 +1248,7 @@ object PainAndGain {
     private fun tickBody() {
         bodyWeightNow.clear()
         liveMovesNow.clear()
+        Executor.clear()
         bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick)
         bfsMaxCost = maxOf(bfsMaxCost, bfsCost)
         bfsThisTick = 0
@@ -1466,6 +1433,10 @@ object PainAndGain {
         cpuMark("runners")
         runArmy(ctx)
 
+        // боевые интенты уходят в API до разрешения движения: стенд разрешает конфликты за клетку в порядке первого
+        // интента крипа, и порядок «удар, затем ход» — часть тождества с эталоном v235 (движку порядок безразличен)
+        Arbiter.audit()
+        Executor.run()
         TrafficManager.markOrdered(commandOf.keys)
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
         cpuMark("resolve")
@@ -1532,7 +1503,7 @@ object PainAndGain {
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -2137,7 +2108,7 @@ object PainAndGain {
             val nearby = ctx.combatEnemies.filter { getRange(s, it) <= RANGED_RANGE + 2 }
             val underFire = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies) > 0.0
             // мили-бегун (отряд) рубит вплотную (v57): healAndShoot за бегунов только стреляет, удар мили выдаёт цикл армии
-            if (hasMelee(s)) ctx.enemyCreeps.filter { getRange(s, it) <= 1 }.minByOrNull { it.hits }?.let { s.attack(it) }
+            if (hasMelee(s)) ctx.enemyCreeps.filter { getRange(s, it) <= 1 }.minByOrNull { it.hits }?.let { Executor.attack(s, it) }
             // захватчик без замены: от врага «с боем» ближе SCOUT_FLEE_TRIGGER — прочь (пустой MOVE ходит клетку за тик и
             // по болоту, где стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
             val threats = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER && threatening(it, ctx.enemyCreeps) }
@@ -5177,7 +5148,7 @@ object PainAndGain {
             adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
             else -> null
         }
-        target?.let { creep.attack(it); lastFireTick = getTicks(); strikesAt[it.id] = (strikesAt[it.id] ?: 0) + 1 }
+        target?.let { Executor.attack(creep, it); lastFireTick = getTicks(); strikesAt[it.id] = (strikesAt[it.id] ?: 0) + 1 }
     }
 
     /** Через сколько тиков боевые враги дойдут до нашего дома — по темпу сближения за APPROACH_WINDOW;
@@ -5254,11 +5225,11 @@ object PainAndGain {
                 if (wallTarget != null) {
                     hwallHeals++
                     if (creep.getRangeTo(wallTarget) <= 1) {
-                        creep.heal(wallTarget)
+                        Executor.heal(creep, wallTarget)
                         book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                         shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     } else {
-                        creep.rangedHeal(wallTarget)
+                        Executor.rangedHeal(creep, wallTarget)
                         book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
                     }
                     continue
@@ -5273,7 +5244,7 @@ object PainAndGain {
                     .maxByOrNull { rank(it) }
                 val closeTarget = closeTarget0
                 if (closeTarget != null) {
-                    creep.heal(closeTarget)
+                    Executor.heal(creep, closeTarget)
                     book(closeTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
@@ -5281,7 +5252,7 @@ object PainAndGain {
                 val farTarget = ordered?.takeIf { creep.getRangeTo(it) <= HEAL_RANGE }
                     ?: candidates.filter { it.hitsMax - it.hits > 0  }.maxByOrNull { rank(it) }
                 if (farTarget != null) {
-                    creep.rangedHeal(farTarget)
+                    Executor.rangedHeal(creep, farTarget)
                     book(farTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
                     continue
                 }
@@ -5325,7 +5296,7 @@ object PainAndGain {
         // веер развёл бы их обратно и отдал бы цель его лекарям. Побочно ветка чинит и ПРИБОР: веерный выстрел
         // не кладёт ничего в `shotsAt`, поэтому такие тики не входили в `conc` даже знаменателем (см. concfan)
         if (massValue > (if (enemyHeals) 2.5 else 1.0)) {
-            creep.rangedMassAttack(); lastFireTick = getTicks(); fanShots++; fireShots++
+            Executor.rangedMassAttack(creep); lastFireTick = getTicks(); fanShots++; fireShots++
         } else {
             // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
             // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
@@ -5345,7 +5316,7 @@ object PainAndGain {
                     ?: massPool.minByOrNull { it.hits }
             }
             target?.let {
-                creep.rangedAttack(it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots++
+                Executor.rangedAttack(creep, it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots++
                 damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
             }
         }
