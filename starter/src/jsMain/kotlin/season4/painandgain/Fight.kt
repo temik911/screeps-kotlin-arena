@@ -1059,3 +1059,5 @@ internal const val SEED_BOX = FIST_RADIUS + 8
 
 /** Очаг сменился, только если его центр уехал дальше этого — иначе держим прежний. */
 internal const val SEED_MOVE = 6
+
+internal var goalTick = -1

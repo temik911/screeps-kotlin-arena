@@ -405,7 +405,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v258"
+internal const val BOT_VERSION = "v259"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -418,3 +418,391 @@ internal const val FIELD_LOG = true
 internal const val DEBUG_VISUALS = false
 
 internal const val CPU_SLOW_MS = 60.0   // a tick over this prints its phases (the limit is 100 ms; the first tick 1 000)
+
+/** Пара: сколько оставлено в ядре против сколько было свободных. */
+internal var symCore = 0
+
+internal var symFree = 0
+
+/** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
+internal var spotMeleeTicks = 0
+
+/** Вето «сперва туши очаг»: тиков с очагом и из них тех, где вето ИЗМЕНИЛО решение о постуре. */
+internal var spotHoldAll = 0
+
+internal var postAll = 0
+
+internal var postContest = 0
+
+internal var rotOut = 0
+
+/** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
+internal var marchFlow = 0
+
+internal var marchAll = 0
+
+internal var marchFlip = 0
+
+/** Лечение по дефициту (v233): лечений в полного / всех, лечения сверх подтверждённой нужды / доставлено, переназначений. */
+internal var hfullN = 0
+
+internal var hfullAll = 0
+
+internal var hoverSum = 0
+
+internal var hdelivSum = 0
+
+internal var hswapN = 0
+
+/** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
+internal var hexpN = 0
+
+internal var hexpAll = 0
+
+internal var hlostSum = 0
+
+internal var spotHoldNew = 0
+
+internal var scoutShots = 0
+
+internal var scoutReach = 0
+
+internal var scoutTicks = 0
+
+internal var chaseTicks = 0
+
+internal var chaseKills = 0
+
+/** Прибор локализации: |opp| против |combatEnemies| — если держится единицей, локализация ничего не меняет. */
+internal var capOppSum = 0
+
+internal var capAllSum = 0
+
+internal var capOffered = 0
+
+/** Тиков, когда бегун стоял вплотную к назначенному флагу и не брал его, и тиков с назначенным флагом. */
+internal var poisedTicks = 0
+
+internal var poisedAll = 0
+
+/** Очаг: тиков-мили с врагом в ENGAGE_RANGE (знаменатель) и из них тех, где МЕСТНАЯ арифметика даёт перевес,
+ *  а армейская мера при этом говорит «не наступать». Ненулевой числитель — отпечаток расхождения масштабов. */
+internal var edgeSpot = 0
+
+internal var edgeAll = 0
+
+internal var hulkTicks = 0
+
+internal var hulkInReach = 0
+
+internal var hulkRevived = 0
+
+internal var gateFell = 0
+
+internal var goalRebuilds = 0
+
+internal var goalHolds = 0
+
+/** Решений раздачи, где слагаемое цели изменило выбранную клетку, и решений всего. */
+internal var goalFlips = 0
+
+internal var goalDecisions = 0
+
+/** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
+internal var pushHeldTicks = 0
+
+internal var pushTicks = 0
+
+internal var kiteNow = 0                               // сколько крипов кайтят в этом тике (v135, диагностика)
+
+internal var kiteMassed = false                        // была ли его армия сомкнута в этом тике (v135, диагностика)
+
+internal var planStrict = 0                            // стрелков, вставших в клетку без его мили в двух (v135)
+
+internal var planLoose = 0                             // ...и вставших куда придётся
+
+/** Прибор к USE_RETREAT_BY_HIS_STEP: тиков, где старый признак говорил «отходит», из них тех, где его шаг — нет, и
+ *  тиков, где новый говорит «отходит», а старый — нет (мы наступали быстрее, чем он пятился). */
+internal var rtrOld = 0
+
+internal var rtrRemoved = 0
+
+internal var rtrAdded = 0
+
+/** Пары к USE_MELEE_QUIET_CELL: шагов мили, где выбранная клетка оставляла удар, и из них тех, где правка увела в клетку
+ *  тише; сумма снятой опасности (урон/тик). */
+internal var mquietAll = 0
+
+internal var mquietMoved = 0
+
+internal var mquietGain = 0.0
+
+/** ...и то же в раздаче командира (вторая редакция): приказов мили, где выбранная клетка — удар, и из них уведённых. */
+internal var cmdQuietAll = 0
+
+internal var cmdQuietMoved = 0
+
+/** Пара к USE_GUARD_IS_CATCHABLE: крипо-проверок, где враг «уходит», и из них тех, где он страж своего флага. */
+/** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
+internal var majOffers = 0
+
+internal var majOpened = 0
+
+/** Пара к USE_ADDRESSED_DANGER (v224): раздач командира, сумма E и сумма T в выбранных клетках, раздач с T >= E. */
+internal var adrN = 0
+
+internal var adrE = 0.0
+
+internal var adrT = 0.0
+
+internal var adrSame = 0
+
+/** Пара к USE_FOCUS_ANY_HEALER (v224): тиков с его лекарем в досягаемости наших стволов и из них тех, где фокус — лекарь. */
+internal var fhlAvail = 0
+
+internal var fhlChosen = 0
+
+/** Пара к USE_MASS_BY_ARRIVAL (v226): тиков сигнала броска только по мере прихода / всех тиков сигнала / тиков, где мера
+ *  прихода добавила «сомкнут» к мере формы. */
+internal var rushByArrival = 0
+
+internal var rushSignalAll = 0
+
+internal var massArrivalAdded = 0
+
+internal var zlbTicks = 0
+
+internal var zlbZero = 0
+
+internal var hatmN = 0
+
+internal var hatmAll = 0
+
+internal var hatmCmd = 0
+
+internal var hatmCmdAll = 0
+
+internal var hwallTicks = 0
+
+internal var hwallVictimTicks = 0
+
+internal var hwallHeals = 0
+
+internal var hwallHealsAll = 0
+
+internal var hwallAddr = 0
+
+internal var hwallPredA = 0
+
+internal var hwallPredL = 0
+
+internal var hwallPredN = 0
+
+internal var survTicks = 0
+
+internal var survLead = 0
+
+internal var survContact = 0
+
+/** ...и тиков режима, где уходить некуда и он в контакте — бой строем (вторая редакция). */
+internal var survFights = 0
+
+/** Пара «тиков, где ланчестерова мощь и фактический размен расходятся / тиков с признаком» (v216). */
+internal var breakOffSplit = 0
+
+internal var breakOffN = 0
+
+internal var runnerModeN = 0
+
+/** Цена простоя бегуна В ОЧКАХ: тик у флага, который нельзя взять, стоит `f.score` очков. */
+internal var poisedCost = 0
+
+/** Бюджет командирской гонки: сколько отпущено, каким ядром и из скольких свободных. */
+internal var budgetSum = 0
+
+internal var budgetTicks = 0
+
+internal var objAll = 0
+
+internal var objDropN = 0
+
+internal var race100 = ""
+
+internal var race200 = ""
+
+internal var lastBodiesKey = ""
+
+// ---------- модель ----------
+
+/** ЗАМЕР CPU (07.09.2026): в живых логах «Script execution timed out» на ПЕРВОМ тике в 12 матчах из 20 каждой серии — первый
+ *  тик убивается лимитом (cpuTimeLimitFirstTick), и до этого дня у бота не было ни одной своей меры CPU (строка «cpu t=» —
+ *  стендовая). На первых трёх тиках после каждой фазы печатается `cpu t=N <фаза>=мс` отдельной строкой — последняя строка перед
+ *  таймаутом называет фазу, съевшую бюджет; раз в сто тиков — самый долгий тик с прошлой строки. getCpuTime() — наносекунды
+ *  с начала тика (на стенде — по hrtime). */
+internal var cpuMaxMs = 0.0
+
+internal var cpuMaxTick = 0
+
+internal var cpuSlowTicks = 0
+
+internal var abortTicks = 0
+
+internal var abortEntries = 0
+
+internal var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
+
+internal var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
+
+internal var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
+
+internal var stateEventTicks = 0
+
+/** Постановка этого тика, как её задают старые решатели (v241, см. Strategist.snapshot): прибор `disp=`. */
+internal var dispNow = "-"
+
+internal var lostEnemy = 0      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
+
+internal var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
+
+internal var cmdWhyN = 0
+
+/** Пара «отпущено во время боя / отпущено всего» (v215, наблюдение оператора «отряд распадается»). */
+internal var splitFight = 0
+
+internal var splitAll = 0
+
+/** Пара «крипо-тиков боя без своего лекаря в дальности лечения / крипо-тиков боя» (v215). */
+internal var healGap = 0
+
+/** ...и крипо-тики боя, где своего лекаря нет и в MASS_RANGE — «в бою ни одного хиллера» (v215). */
+internal var noMedic = 0
+
+internal var healGapN = 0
+
+/** Пара «смен направления армии / тиков» (v215, наблюдение «разворачиваемся много раз»). */
+internal var aimFlips = 0
+
+internal var aimTicks = 0
+
+/** Пара «шагов в клетку под уроном при выключенном слагаемом опасности / всех шагов» (v215). */
+internal var dangerBlind = 0
+
+/** ...и отдельно — та же слепота ВНЕ боя. Ноль здесь не дефект прибора, а арифметика: поле урона достаёт
+ *  на 4 клетки, а `inCombat` стоит на 5 (см. USE_DANGER_SCALED_BY_AGGRO). */
+internal var dangerBlindFar = 0
+
+/** Пара «клеток, отвергнутых как смертельные / оценённых клеток» (v215, см. USE_LETHAL_CELL_VETO). */
+internal var lethalHits = 0
+
+internal var lethalCells = 0
+
+internal var dangerMoves = 0
+
+internal var fightTicksNow = 0
+
+internal var concSum = 0                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
+
+internal var concTicks = 0                        // тиков с выстрелами с прошлой строки t=
+
+/** ...и то же НАКОПЛЕННОЕ за матч (v217). Прежняя пара чистится после каждой строки `t=` (см. LOG_EVERY),
+ *  поэтому в разгроме, где последнее окно прошло без единого выстрела, прибор показывал ноль замеров —
+ *  и по серии его было не сложить. Порог, ради которого он существует, записан в файле пятикратно:
+ *  при 216 лечения в тик цель пробивают четыре-пять стволов. */
+internal var concAll = 0
+
+internal var concAllTicks = 0
+
+/** Пара «крипо-тиков веером / всех крипо-тиков огня» (v218). Веер (`rangedMassAttack`) не кладёт ничего в
+ *  `shotsAt`, поэтому тик, где все стрелки ушли в веер, НЕ ПОПАДАЕТ ДАЖЕ В ЗНАМЕНАТЕЛЬ `conc` — измеренные
+ *  1,67–1,94 ствола на цель сняты по подмножеству тиков, и без этой пары их нельзя читать. */
+internal var fanShots = 0
+
+internal var fireShots = 0
+
+internal var lostRaceOffers = 0
+
+internal var gatherHold = 0
+
+/** Пара «крипо-тиков, где стрелку не дали сблизиться до двух из-за живого мили врага / всех крипо-тиков
+ *  стрелка в местной агрессии» (v220, см. closeIn). Числитель — сколько раз оговорка вообще сработала. */
+internal var closeHeld = 0
+
+internal var closeTicks = 0
+
+/** Пара «крипо-тиков, где ворота броска открыла защита своего / всех крипо-тиков мили при враге рядом»
+ *  (v220, см. USE_MELEE_GUARDS_LINE). */
+internal var guardFired = 0
+
+internal var guardTicks = 0
+
+/** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
+ *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
+internal var retrTicks = 0
+
+internal var retrWithPoint = 0
+
+internal var retrUnderFire = 0
+
+/** Пара «крипо-тиков в отходе, где крип стрелял или бил / всех крипо-тиков в отходе» (v217). */
+internal var standFire = 0
+
+internal var standTicks = 0
+
+/** Пара «тиков признака outmatched / из них с постурой отхода» (v217, решение оператора). */
+internal var outmTicks = 0
+
+internal var outmRetreat = 0
+
+/** ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, см. warmNow):
+ *  `warm` — тиков контакта без размена / тиков контакта; `warmann` — тиков ANNIHILATE, державшихся только таким
+ *  контактом / тиков ANNIHILATE; `warmhold` — из них тиков, где флаг-цель подхватила бы «держим линию»;
+ *  `warmcmd` — тиков режима боя при тёплом контакте / тиков режима боя (там постуру вернёт командир);
+ *  `warmfight` — тиков «бой идёт» без размена / тиков «бой идёт» (отзыв бегунов, USE_NO_SPLIT_IN_FIGHT);
+ *  `warmcap` — отказов захвата `contact.mass` без размена / отказов `contact.mass`. */
+internal var warmTicks = 0
+
+internal var warmContact = 0
+
+internal var warmAnn = 0
+
+internal var warmAnnAll = 0
+
+internal var warmHold = 0
+
+internal var warmCmd = 0
+
+internal var warmCmdAll = 0
+
+internal var warmFight = 0
+
+internal var warmFightAll = 0
+
+internal var warmCap = 0
+
+internal var warmCapAll = 0
+
+internal var mconcTicks = 0
+
+internal var mpackAll = 0
+
+internal var kchaseAnn = 0
+
+internal var kvetoHit = 0
+
+internal var kvetoAll = 0
+
+/** Пара «тиков ANNIHILATE со строем стрелков шире RALLY_RANGE / тиков ANNIHILATE» (v221, см. gatherSpread). */
+internal var gatherAnn = 0
+
+internal var gatherAnnAll = 0
+
+/** Цель пачки мили (v221, см. USE_MELEE_PACK): липкий id и значение этого тика — для командира. */
+/** Пары пачки (v221): «тиков с целью пачки / тиков, где у нас есть мили и у него боевые»; «крипо-тиков мили, чьи
+ *  ноги идут к цели пачки / крипо-тиков мили с целью ног, пока цель пачки есть». */
+internal var packHeld = 0
+
+internal var packTicks = 0
+
+internal var mpackOnHit = 0
+
+internal var mpackOn = 0

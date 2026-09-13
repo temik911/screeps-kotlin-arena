@@ -760,3 +760,15 @@ internal fun PainAndGain.armyBlock(ctx: Ctx, seg: ArmyBlockIn): ArmyBlockOut = w
 }
 
 internal const val RANGED_FRONT_GROUP = 6   // блоб: столько его вооружённых в ENGAGE_RANGE от ближайшего (россыпь — 1–3)
+
+internal var marchPrevSx = 0
+
+internal var marchPrevSy = 0
+
+internal var rangedLevelLatched = false     // ряд вровень защёлкнут контактом с подходящим блобом; снимается, когда никого в ENGAGE_RANGE
+
+internal var wallAddrPrev: String? = null      // кого адресный предсказатель назвал жертвой прошлым тиком
+
+internal var wallLostPrev: String? = null      // ...и кого назвал предсказатель по потере
+
+internal var yieldingTick = -1                        // последний тик, когда наша линия отступала (лог v96)

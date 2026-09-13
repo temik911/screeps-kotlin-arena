@@ -1168,3 +1168,43 @@ internal const val CROWD_COST = 3
 internal const val DEBUG_MAP = true
 
 internal const val FLOW_KEEP = 60   // тиков без обращения — запись кэша вычищается (иначе рост на клетках целей)
+
+internal var greeted = false
+
+/** Стартовые центры армий — «дома» сторон (спавнов нет): половины карты и точка поста. */
+internal var homePos: Position? = null
+
+internal var enemyHomePos: Position? = null
+
+internal var corneredWas = false
+
+internal var corneredUntil = 0   // залипание corneredInReach (v134, см. USE_CORNERED_STICKY)
+
+/** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
+ *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
+/** Третья постановка (v227, см. USE_ZERO_LEAD_BREAK): тиков подряд с мощью ноль при отрыве; режим разрыва контакта;
+ *  приборы — тиков разрыва / тиков с мощью ноль при отрыве. */
+internal var zeroLeadTicks = 0
+
+internal var firstReachTick = -1                       // первый такой тик (см. USE_DETACH, v68: тишина считается от него)
+
+internal var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
+
+internal var lastEnemyHitsTotal = -1
+
+internal var lastEffectsKey = ""
+
+internal var bfsCost = 0.0
+
+internal var bfsThisTick = 0
+
+internal var preyNearTicks = 0                         // тиков подряд с пикетом (см. STALL_PICKET) в досягаемости
+
+internal var stallUntil = 0
+
+/** Клетки в AVOID_RANGE от СТОЯЩИХ боевых врагов — поле «в обход» ведёт мимо лагеря, а не сквозь него.
+ *  Идущий враг не обходится: обход идущего навстречу разводил строй с поста в стороны за тик до
+ *  столкновения, и рывок врага, прежде отбитый к 212-му тику, стал разгромом (стенд rush). */
+internal var avoidCellsCache: List<Position>? = null
+
+internal var packTicksTick = -1

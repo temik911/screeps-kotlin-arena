@@ -2233,3 +2233,60 @@ internal const val CHASE_TTL = 4
 
 /** Меньше этого в армии — не до погони. */
 internal const val CHASE_MIN_ARMY = 6
+
+// ---------- ПРИБОРЫ ГЕЙТА ЗАХВАТА (v214, этап 0) ----------
+// Замер по 12 живым матчам сказал, что матч решают флаги, а не бой: три поражения из шести — при ЖИВОЙ армии
+// с разрывом 603/1628/292 очка из ~18 000, то есть 60–100 тиков ОДНОГО флага. Прибор POISED показывал причину
+// отказа построчно, но накопительного числа не было, и сравнивать версии было нечем.
+// Пара — «блокировано/рассмотрено», причины врозь: `rush` разложен на дебютный бросок и на сближение,
+// `contact` — на бой у МАССЫ армии и на стычку одиночки. Это решает, сколько отказов снимает какая правка.
+/** Состав ИДУЩЕГО боя — его крипы, успевающие прийти к нашей массе (см. fightPack). Считается в runArmy,
+ *  читается гейтом захвата на следующем тике: задержка в тик здесь законна, та же, что у stalledNow. */
+internal var fightPackIds: Set<String> = emptySet()
+
+internal var capTick = -1
+
+internal var postureLogged = ""
+
+internal var postureSince = 0                    // тик последней смены постуры (v181, гистерезис)
+
+internal var pushSince = 0                       // тик начала наступления (v215, см. USE_PUSH_DWELL)
+
+internal var pushHeld = false                    // наступление держится сроком, а не признаками
+
+internal var leadHoldsWas = false   // трасса «отрыв держит» (см. USE_LEAD_HOLDS)
+
+internal var evadeTarget: Position? = null
+
+internal var evadeEvaluatedAt = -100
+
+/** Точка, которую покинули (стояли, счёт места ниже EVADE_SAFE): не цель, пока не прибыли в другую — иначе маятник:
+ *  через два шага от неё она уже «не здесь», её счёт (6) выше счёта дома (4), армия возвращается, снова «здесь» —
+ *  три качания за 13 тиков съели восемь тиков запаса при погоне на равной скорости (стенд m11 sleeper). */
+internal var evadeLeft: Position? = null
+
+internal var escapeAt = -100
+
+internal var idleDetachTicks = 0                       // подряд тиков, когда весь отряд без цели
+
+internal var detachRecallTick = -1000                  // последний отзыв отряда без дела
+
+internal var lastNonHuntTick = 0                       // последний тик в FLAG/EVADE/RETREAT (см. USE_DRY_HUNT_RANGED_GUARD: охота длится)
+
+internal var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
+
+internal var coreShortTicks = 0                  // тиков подряд ядро без отряда ниже порога (см. USE_RECALL_PERSIST)
+
+internal var scatteredLatched = false            // «рассыпан» с гистерезисом (см. USE_SCATTER_HYSTERESIS)
+
+internal var scatteredAtRelease = false          // ярлык «рассыпан» на момент выпуска отряда (см. USE_RECALL_REF_LATCH)
+
+internal var farmerOffTicks = 0                  // тиков подряд без признака фермера (см. FARMER_OFF_TICKS)
+
+internal var standoffTicks = 0                         // тиков подряд стоящей линии врага (см. PRESS_PATIENCE)
+
+internal var pressing = false                          // прижим включён (см. USE_PRESS)
+
+internal var stalemateGap = 0                          // тиков подряд без контакта (см. STALEMATE_GAP)
+
+internal var lastAim = ""

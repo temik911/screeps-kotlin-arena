@@ -96,46 +96,15 @@ object PainAndGain {
 
 
     internal val PUSH_DWELL = CHASE_WINDOW
-    /** Пара: сколько оставлено в ядре против сколько было свободных. */
-    internal var symCore = 0
-    internal var symFree = 0
-    /** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
-    internal var spotMeleeTicks = 0
-    /** Вето «сперва туши очаг»: тиков с очагом и из них тех, где вето ИЗМЕНИЛО решение о постуре. */
-    internal var spotHoldAll = 0
     /** Пара: тиков, когда пост стал флагом, и тиков с постом вообще. */
     private var postOnFlag = 0
-    internal var postAll = 0
-    internal var postContest = 0
-    internal var rotOut = 0
-    /** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
-    internal var marchFlow = 0
-    internal var marchAll = 0
-    internal var marchFlip = 0
-    internal var marchPrevSx = 0
-    internal var marchPrevSy = 0
-    /** Лечение по дефициту (v233): лечений в полного / всех, лечения сверх подтверждённой нужды / доставлено, переназначений. */
-    internal var hfullN = 0
-    internal var hfullAll = 0
-    internal var hoverSum = 0
-    internal var hdelivSum = 0
-    internal var hswapN = 0
-    /** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
-    internal var hexpN = 0
-    internal var hexpAll = 0
-    internal var hlostSum = 0
     /** Адресный урон этого тика по нашим (v229/v233): кто из его стрелков и мили в кого целится по модели его выбора. */
     internal val addressedDmg = HashMap<String, Double>()
-    internal var spotHoldNew = 0
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
     internal var flagsNow: List<FlagInfo> = emptyList()
-    internal var scoutShots = 0
-    internal var scoutReach = 0
-    internal var scoutTicks = 0
 
 
-    internal var rangedLevelLatched = false     // ряд вровень защёлкнут контактом с подходящим блобом; снимается, когда никого в ENGAGE_RANGE
 
 
 
@@ -162,8 +131,6 @@ object PainAndGain {
     /** Окно размена для признака отхода — существующий срок «размен был недавно», а не новое число (v216). */
     internal val LEDGER_WINDOW = STALL_TICKS
 
-    internal var chaseTicks = 0
-    internal var chaseKills = 0
 
     /** ДОБИТЬ ОСТОВ, УМИРАЮЩИЙ ОТ ОДНОГО ЗАЛПА (v210) — ОТВЕРГНУТО ЗАМЕРОМ, третьим подряд по этому предмету.
      *  Замысел: остов входит в пул огня, только когда умирает от УЖЕ доступного залпа, то есть попадает ровно в
@@ -177,49 +144,18 @@ object PainAndGain {
     /** Прибор: сколько раз остов попадал в пул огня как добиваемый за тик. Ноль при живом revived значит,
      *  что правило до дела не дошло; ненулевой числитель при неподвижном revived значит, что дошло и не помогло. */
     private var finishableHulks = 0
-    // ---------- ПРИБОРЫ ГЕЙТА ЗАХВАТА (v214, этап 0) ----------
-    // Замер по 12 живым матчам сказал, что матч решают флаги, а не бой: три поражения из шести — при ЖИВОЙ армии
-    // с разрывом 603/1628/292 очка из ~18 000, то есть 60–100 тиков ОДНОГО флага. Прибор POISED показывал причину
-    // отказа построчно, но накопительного числа не было, и сравнивать версии было нечем.
-    // Пара — «блокировано/рассмотрено», причины врозь: `rush` разложен на дебютный бросок и на сближение,
-    // `contact` — на бой у МАССЫ армии и на стычку одиночки. Это решает, сколько отказов снимает какая правка.
-    /** Состав ИДУЩЕГО боя — его крипы, успевающие прийти к нашей массе (см. fightPack). Считается в runArmy,
-     *  читается гейтом захвата на следующем тике: задержка в тик здесь законна, та же, что у stalledNow. */
-    internal var fightPackIds: Set<String> = emptySet()
-    /** Прибор локализации: |opp| против |combatEnemies| — если держится единицей, локализация ничего не меняет. */
-    internal var capOppSum = 0
-    internal var capAllSum = 0
     internal val capBlocked = HashMap<String, Int>()
-    internal var capOffered = 0
     internal val capSeen = HashSet<String>()      // (тик, флаг) считается один раз, а не по разу на вызывающего
-    internal var capTick = -1
-    /** Тиков, когда бегун стоял вплотную к назначенному флагу и не брал его, и тиков с назначенным флагом. */
-    internal var poisedTicks = 0
-    internal var poisedAll = 0
-    /** Очаг: тиков-мили с врагом в ENGAGE_RANGE (знаменатель) и из них тех, где МЕСТНАЯ арифметика даёт перевес,
-     *  а армейская мера при этом говорит «не наступать». Ненулевой числитель — отпечаток расхождения масштабов. */
-    internal var edgeSpot = 0
-    internal var edgeAll = 0
     internal val disarmedFoe = HashSet<String>()
-    internal var hulkTicks = 0
-    internal var hulkInReach = 0
-    internal var hulkRevived = 0
 
     /** Крипов, вставших на каждом уровне ворот (индекс = порог выживания в тиках), и добор мимо ворот. */
     internal val gateLevels = IntArray(8)
-    internal var gateFell = 0
 
 
-    internal var goalTick = -1
     internal var goalField: IntArray? = null
     internal var goalSeeds: IntArray = IntArray(0)
     internal var goalCx = -1
     internal var goalCy = -1
-    internal var goalRebuilds = 0
-    internal var goalHolds = 0
-    /** Решений раздачи, где слагаемое цели изменило выбранную клетку, и решений всего. */
-    internal var goalFlips = 0
-    internal var goalDecisions = 0
 
     internal val DIRECTIONS = listOf(
         0 to 0, -1 to -1, 0 to -1, 1 to -1, -1 to 0, 1 to 0, -1 to 1, 0 to 1, 1 to 1,
@@ -227,112 +163,31 @@ object PainAndGain {
 
     internal enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
 
-    internal var greeted = false
     internal var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
     internal var posture = Posture.HOLD
     internal var objectiveFlagId: String? = null
-    internal var postureLogged = ""
-    internal var postureSince = 0                    // тик последней смены постуры (v181, гистерезис)
-    internal var pushSince = 0                       // тик начала наступления (v215, см. USE_PUSH_DWELL)
-    internal var pushHeld = false                    // наступление держится сроком, а не признаками
-    /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
-    internal var pushHeldTicks = 0
-    internal var pushTicks = 0
 
-    /** Стартовые центры армий — «дома» сторон (спавнов нет): половины карты и точка поста. */
-    internal var homePos: Position? = null
-    internal var enemyHomePos: Position? = null
 
     internal val arrivalById = HashMap<String, Int>()
-    internal var corneredWas = false
-    internal var kiteNow = 0                               // сколько крипов кайтят в этом тике (v135, диагностика)
-    internal var kiteMassed = false                        // была ли его армия сомкнута в этом тике (v135, диагностика)
-    internal var planStrict = 0                            // стрелков, вставших в клетку без его мили в двух (v135)
-    internal var planLoose = 0                             // ...и вставших куда придётся
-    internal var corneredUntil = 0   // залипание corneredInReach (v134, см. USE_CORNERED_STICKY)
     internal var huntingThreat = false
     /** ДОБИТЬ по перевесу (не по контакту) — только к нему применяется гистерезис PUSH_RELEASE_RATIO. */
     internal var pushing = false
-    internal var leadHoldsWas = false   // трасса «отрыв держит» (см. USE_LEAD_HOLDS)
     /** Точка отхода — одна на весь отход (см. retreatPoint). */
     internal var retreatTarget: Position? = null
     internal val whyLines = ArrayList<String>()             // трасса решений мили за тик (см. TRACE_WHY)
     internal val whySum = HashMap<String, Int>()             // причины за сто тиков
-    internal var evadeTarget: Position? = null
-    internal var evadeEvaluatedAt = -100
     internal val escapeFlows = HashMap<Int, IntArray>()
     internal val escapeTheirs = HashMap<Int, Int>()
     internal val escapeNearest = HashMap<Int, Int>()   // клетка врага, ближайшего к точке
-    /** Точка, которую покинули (стояли, счёт места ниже EVADE_SAFE): не цель, пока не прибыли в другую — иначе маятник:
-     *  через два шага от неё она уже «не здесь», её счёт (6) выше счёта дома (4), армия возвращается, снова «здесь» —
-     *  три качания за 13 тиков съели восемь тиков запаса при погоне на равной скорости (стенд m11 sleeper). */
-    internal var evadeLeft: Position? = null
-    internal var escapeAt = -100
-    /** Прибор к USE_RETREAT_BY_HIS_STEP: тиков, где старый признак говорил «отходит», из них тех, где его шаг — нет, и
-     *  тиков, где новый говорит «отходит», а старый — нет (мы наступали быстрее, чем он пятился). */
-    internal var rtrOld = 0
-    internal var rtrRemoved = 0
-    internal var rtrAdded = 0
-    /** Пары к USE_MELEE_QUIET_CELL: шагов мили, где выбранная клетка оставляла удар, и из них тех, где правка увела в клетку
-     *  тише; сумма снятой опасности (урон/тик). */
-    internal var mquietAll = 0
-    internal var mquietMoved = 0
-    internal var mquietGain = 0.0
-    /** ...и то же в раздаче командира (вторая редакция): приказов мили, где выбранная клетка — удар, и из них уведённых. */
-    internal var cmdQuietAll = 0
-    internal var cmdQuietMoved = 0
-    /** Пара к USE_GUARD_IS_CATCHABLE: крипо-проверок, где враг «уходит», и из них тех, где он страж своего флага. */
-    /** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
-    internal var majOffers = 0
-    internal var majOpened = 0
-    /** Пара к USE_ADDRESSED_DANGER (v224): раздач командира, сумма E и сумма T в выбранных клетках, раздач с T >= E. */
-    internal var adrN = 0
-    internal var adrE = 0.0
-    internal var adrT = 0.0
-    internal var adrSame = 0
-    /** Пара к USE_FOCUS_ANY_HEALER (v224): тиков с его лекарем в досягаемости наших стволов и из них тех, где фокус — лекарь. */
-    internal var fhlAvail = 0
-    internal var fhlChosen = 0
-    /** Пара к USE_MASS_BY_ARRIVAL (v226): тиков сигнала броска только по мере прихода / всех тиков сигнала / тиков, где мера
-     *  прихода добавила «сомкнут» к мере формы. */
-    internal var rushByArrival = 0
-    internal var rushSignalAll = 0
-    internal var massArrivalAdded = 0
-    /** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
-     *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
-    /** Третья постановка (v227, см. USE_ZERO_LEAD_BREAK): тиков подряд с мощью ноль при отрыве; режим разрыва контакта;
-     *  приборы — тиков разрыва / тиков с мощью ноль при отрыве. */
-    internal var zeroLeadTicks = 0
-    internal var zlbTicks = 0
-    internal var zlbZero = 0
     internal var victimNow: Creep? = null          // стена лечения (v228): терявший больше всех за прошлый тик
     internal var victimSaveable = false            // ...и его потеря не больше доставимого в него лечения
     /** Лекарь при мили (v235, см. USE_HEALER_AT_MELEE): лекарь → id его фронтового мили и клетка при нём с тыла. */
     internal val meleeWardOf = HashMap<String, String>()
     internal val meleeWardCell = HashMap<String, Position>()
-    internal var hatmN = 0
-    internal var hatmAll = 0
-    internal var hatmCmd = 0
-    internal var hatmCmdAll = 0
-    internal var hwallTicks = 0
-    internal var hwallVictimTicks = 0
-    internal var hwallHeals = 0
-    internal var hwallHealsAll = 0
-    internal var hwallAddr = 0
-    internal var wallAddrPrev: String? = null      // кого адресный предсказатель назвал жертвой прошлым тиком
-    internal var wallLostPrev: String? = null      // ...и кого назвал предсказатель по потере
     internal val wallAddrHits = ArrayDeque<Boolean>()
     internal val wallLostHits = ArrayDeque<Boolean>()
-    internal var hwallPredA = 0
-    internal var hwallPredL = 0
-    internal var hwallPredN = 0
     internal var wallCells: List<Position> = emptyList()   // клетки стены: соседние с жертвой, его вооружённые мили дальше двух
     internal val wallCellOf = HashMap<String, Position>()  // клетка стены, назначенная лекарю на этот тик
-    internal var survTicks = 0
-    internal var survLead = 0
-    internal var survContact = 0
-    /** ...и тиков режима, где уходить некуда и он в контакте — бой строем (вторая редакция). */
-    internal var survFights = 0
     internal var approachRate = 0.0
     internal var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
@@ -340,52 +195,26 @@ object PainAndGain {
     internal var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
     internal var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
-    internal var idleDetachTicks = 0                       // подряд тиков, когда весь отряд без цели
     internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
-    internal var detachRecallTick = -1000                  // последний отзыв отряда без дела
     internal var lastDistanceKeptTick = -1000              // последний тик, когда погоня не сближала (см. USE_DETACH, v57)
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
     internal var lastHurtTick = 0                          // последний тик, когда враг снял с нас хиты (см. farmer в runArmy)
     internal var lastFireTick = -1000                      // последний тик, когда кто-то из наших бил или стрелял (см. USE_COLD_CONTACT)
-    internal var lastNonHuntTick = 0                       // последний тик в FLAG/EVADE/RETREAT (см. USE_DRY_HUNT_RANGED_GUARD: охота длится)
     internal var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
-    internal var firstReachTick = -1                       // первый такой тик (см. USE_DETACH, v68: тишина считается от него)
     internal var firstNearTick = -1                        // первый тик с его вооружённым в ENGAGE_RANGE + RANGED_RANGE (v72: признаки фермера — от него)
-    internal var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
-    internal var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
     internal var ourDamageTaken = 0                        // снято с нас за матч (см. USE_PUSH_LEDGER)
     internal var ledgerWindow = 0
     internal var ourLostWindow = 0
     internal var hisLostWindow = 0
-    /** Пара «тиков, где ланчестерова мощь и фактический размен расходятся / тиков с признаком» (v216). */
-    internal var breakOffSplit = 0
-    internal var breakOffN = 0
     /** Чем заняты бегуны: пары по режимам (`dbg` — единственная точка, через которую проходят все ветки). */
     internal val runnerMode = HashMap<String, Int>()
-    internal var runnerModeN = 0
-    /** Цена простоя бегуна В ОЧКАХ: тик у флага, который нельзя взять, стоит `f.score` очков. */
-    internal var poisedCost = 0
-    /** Бюджет командирской гонки: сколько отпущено, каким ядром и из скольких свободных. */
-    internal var budgetSum = 0
-    internal var budgetTicks = 0
     /** Темп очков на сотом и двухсотом тике — снимок дебюта, которого не снимал ни один прибор. */
     /** Почему у армии нет флаг-цели: пара по причинам против всех тиков (v216). */
     internal val objNone = HashMap<String, Int>()
-    internal var objAll = 0
     /** ...и разложение САМОГО выбора: какой фильтр снял флаг-кандидата (v216). */
     internal val objDrop = HashMap<String, Int>()
-    internal var objDropN = 0
-    internal var race100 = ""
-    internal var race200 = ""
     internal var enemyDamageTaken = 0                      // снято с него за матч
-    internal var lastEnemyHitsTotal = -1
-    /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
-    internal var formWaitSince = -1
     internal val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
-    internal var coreShortTicks = 0                  // тиков подряд ядро без отряда ниже порога (см. USE_RECALL_PERSIST)
-    internal var scatteredLatched = false            // «рассыпан» с гистерезисом (см. USE_SCATTER_HYSTERESIS)
-    internal var scatteredAtRelease = false          // ярлык «рассыпан» на момент выпуска отряда (см. USE_RECALL_REF_LATCH)
-    internal var farmerOffTicks = 0                  // тиков подряд без признака фермера (см. FARMER_OFF_TICKS)
     internal val ghostLogged = HashMap<String, Int>()
     internal class Shooter(val cell: Int, val ranged: Double, val melee: Double)
     internal var prevShooters: List<Shooter> = emptyList()
@@ -399,32 +228,16 @@ object PainAndGain {
     internal var behindOnScore = false
     /** Сколько тиков подряд отстаём по прогнозу (см. BEHIND_PATIENCE). */
     internal var behindTicks = 0
-    internal var lastEffectsKey = ""
-    internal var lastBodiesKey = ""
 
     internal val flowFull = HashMap<Int, Boolean>()   // поле посчитано целиком (не ограничено NEAR_FLOW), см. flowTo/v131b
     internal var flowSig = 0                            // подпись препятствий, при которой считан кэш
-    internal var bfsCost = 0.0
     internal var bfsMaxCost = 0.0
-    internal var bfsThisTick = 0
     internal var bfsMaxTick = 0
 
-    // ---------- модель ----------
-
-    /** ЗАМЕР CPU (07.09.2026): в живых логах «Script execution timed out» на ПЕРВОМ тике в 12 матчах из 20 каждой серии — первый
-     *  тик убивается лимитом (cpuTimeLimitFirstTick), и до этого дня у бота не было ни одной своей меры CPU (строка «cpu t=» —
-     *  стендовая). На первых трёх тиках после каждой фазы печатается `cpu t=N <фаза>=мс` отдельной строкой — последняя строка перед
-     *  таймаутом называет фазу, съевшую бюджет; раз в сто тиков — самый долгий тик с прошлой строки. getCpuTime() — наносекунды
-     *  с начала тика (на стенде — по hrtime). */
-    internal var cpuMaxMs = 0.0
-    internal var cpuMaxTick = 0
-    internal var cpuSlowTicks = 0
     internal val cpuPhases = ArrayList<Pair<String, Double>>()
 
     /** Отметка «тик открыт» (см. USE_ABORT_REPAIR) и пара прибора: оборванных тиков / записей, положенных обратно. */
     private var tickOpen = false
-    internal var abortTicks = 0
-    internal var abortEntries = 0
     /** Вес тела и живые MOVE на этот тик (см. USE_BODY_MEMO); чистятся в начале тика. */
     internal val bodyWeightNow = HashMap<String, Int>()
     internal val liveMovesNow = HashMap<String, Int>()
@@ -512,16 +325,11 @@ object PainAndGain {
      *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
     internal val plannedCaptures = HashSet<String>()
     internal val NO_FLOW = IntArray(10000) { -1 }
-    internal var preyNearTicks = 0                         // тиков подряд с пикетом (см. STALL_PICKET) в досягаемости
-    internal var stallUntil = 0
     internal var stalledNow = false                        // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
     internal var stalemateNow = false                      // отставание с меньшим темпом дольше BEHIND_PATIENCE (см. PARITY_FLOOR_LOST)
-    internal var standoffTicks = 0                         // тиков подряд стоящей линии врага (см. PRESS_PATIENCE)
-    internal var pressing = false                          // прижим включён (см. USE_PRESS)
     internal var hisTouchShare = 1.0
     internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
     internal var touchMin = 1.0                            // минимум за матч — прибор
-    internal var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
     internal val rungCount = HashMap<String, Int>()        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
     internal val stepCount = HashMap<String, Int>()        // ...и какая ветка ШАГА
     internal val tacCount = HashMap<String, Int>()         // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
@@ -537,23 +345,14 @@ object PainAndGain {
      *  занятость, стоять, жилец, очаг. */
     internal var hpN = 0; internal var hpAdj = 0; internal var hpAvail = 0; internal var hpGate = 0
     internal val hpDelta = DoubleArray(8)
-    internal var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
     internal var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
-    internal var stalemateGap = 0                          // тиков подряд без контакта (см. STALEMATE_GAP)
     internal var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
-    internal var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
     /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
     internal class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
     internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
-    internal var yieldingTick = -1                        // последний тик, когда наша линия отступала (лог v96)
     internal val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
 
-    /** Клетки в AVOID_RANGE от СТОЯЩИХ боевых врагов — поле «в обход» ведёт мимо лагеря, а не сквозь него.
-     *  Идущий враг не обходится: обход идущего навстречу разводил строй с поста в стороны за тик до
-     *  столкновения, и рывок врага, прежде отбитый к 212-му тику, стал разгромом (стенд rush). */
-    internal var avoidCellsCache: List<Position>? = null
 
-    internal var packTicksTick = -1
 
     internal class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: Double, val travel: Int)
 
@@ -825,12 +624,8 @@ object PainAndGain {
     internal var cmdMode = CmdMode.MARCH
     /** Событие этого тика для стратега (v242): флаг сменил владельца — считается при сборе флагов, до решения. */
     internal var flagFlipNow = false
-    internal var stateEventTicks = 0
-    /** Постановка этого тика, как её задают старые решатели (v241, см. Strategist.snapshot): прибор `disp=`. */
-    internal var dispNow = "-"
     internal val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
     internal var orderAuditOk = 0
-    internal var orderPull = 1.0                    // множитель притяжения к назначенной клетке (v168)
     internal var orderAuditN = 0
     internal var orderAuditCloser = 0
     internal var orderAuditSame = 0
@@ -838,7 +633,6 @@ object PainAndGain {
     internal var orderClash = 0
     internal var orderFled = 0
     internal var orderBranch = 0
-    internal var lostEnemy = 0      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
     internal val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
     internal val orderFatigue = HashMap<String, Int>()
     internal var lostStay = 0        // приказ был «стой», а крип ушёл
@@ -847,7 +641,6 @@ object PainAndGain {
     internal var lostElsewhere = 0   // двинулся, но в другую клетку
     internal val orderDist = HashMap<String, Int>()
     internal val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
-    internal var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
     /** Почему командир не правил — в ПОСЛЕДНИЙ тик, когда не правил. ⚠️ В строке `t=` (поле `cmd=…:причина`)
      *  это значение УСТАРЕВШЕЕ: оно пишется только на тиках без командира, поэтому `cmd=0/200:outmatched
      *  mode=FIGHT` значит «сейчас бой, а в последний тик без командира причиной был outmatched». Разбор серии
@@ -860,132 +653,42 @@ object PainAndGain {
      *  из-за этого выходило, будто виновата постура. Прибор, называющий не тот множитель, отправляет чинить не
      *  то место, поэтому причина берётся из ТОЙ ЖЕ цепочки веток, что и сам режим. */
     internal val cmdWhy = HashMap<String, Int>()
-    internal var cmdWhyN = 0
-    /** Пара «отпущено во время боя / отпущено всего» (v215, наблюдение оператора «отряд распадается»). */
-    internal var splitFight = 0
-    internal var splitAll = 0
-    /** Пара «крипо-тиков боя без своего лекаря в дальности лечения / крипо-тиков боя» (v215). */
-    internal var healGap = 0
-    /** ...и крипо-тики боя, где своего лекаря нет и в MASS_RANGE — «в бою ни одного хиллера» (v215). */
-    internal var noMedic = 0
-    internal var healGapN = 0
-    /** Пара «смен направления армии / тиков» (v215, наблюдение «разворачиваемся много раз»). */
-    internal var aimFlips = 0
-    internal var aimTicks = 0
-    internal var lastAim = ""
-    /** Пара «шагов в клетку под уроном при выключенном слагаемом опасности / всех шагов» (v215). */
-    internal var dangerBlind = 0
-    /** ...и отдельно — та же слепота ВНЕ боя. Ноль здесь не дефект прибора, а арифметика: поле урона достаёт
-     *  на 4 клетки, а `inCombat` стоит на 5 (см. USE_DANGER_SCALED_BY_AGGRO). */
-    internal var dangerBlindFar = 0
-    /** Пара «клеток, отвергнутых как смертельные / оценённых клеток» (v215, см. USE_LETHAL_CELL_VETO). */
-    internal var lethalHits = 0
-    internal var lethalCells = 0
-    internal var dangerMoves = 0
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     internal var fightOnNow = false
     /** Пара «крипов отозвано в кулак / тиков боя» (v215). */
     internal var recalled = 0
-    internal var fightTicksNow = 0
     internal var outmatchedTicks = 0                // сколько тиков подряд наша мощь ниже BREAK_OFF_RATIO от его (v185)
     internal val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
-    internal var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
     internal var focusBreakableNow = false            // дотягивающиеся стволы пробивают лечение фокуса (v218, см. USE_FAN_KEEPS_FOCUS)
     internal val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
-    internal var concSum = 0                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
-    internal var concTicks = 0                        // тиков с выстрелами с прошлой строки t=
-    /** ...и то же НАКОПЛЕННОЕ за матч (v217). Прежняя пара чистится после каждой строки `t=` (см. LOG_EVERY),
-     *  поэтому в разгроме, где последнее окно прошло без единого выстрела, прибор показывал ноль замеров —
-     *  и по серии его было не сложить. Порог, ради которого он существует, записан в файле пятикратно:
-     *  при 216 лечения в тик цель пробивают четыре-пять стволов. */
-    internal var concAll = 0
-    internal var concAllTicks = 0
     internal var concMax = 0
-    /** Пара «крипо-тиков веером / всех крипо-тиков огня» (v218). Веер (`rangedMassAttack`) не кладёт ничего в
-     *  `shotsAt`, поэтому тик, где все стрелки ушли в веер, НЕ ПОПАДАЕТ ДАЖЕ В ЗНАМЕНАТЕЛЬ `conc` — измеренные
-     *  1,67–1,94 ствола на цель сняты по подмножеству тиков, и без этой пары их нельзя читать. */
-    internal var fanShots = 0
-    internal var fireShots = 0
     /** Пара «предъявлений, где послабление проигранной гонки решило исход / всех предъявлений с этим признаком»
      *  (v218, см. lostRaceNow). Числитель — флаг, прошедший по PARITY_FLOOR_LOST и НЕ прошедший бы по
      *  PARITY_FLOOR. До починки клапана он обязан быть около нуля в забегах: разбор v217 дал 582/1753/2407
      *  отказа по паритету в трёх проигранных забегах при 40 в среднем по победам. */
     internal var lostRaceOpened = 0
-    internal var lostRaceOffers = 0
     /** Пара «тиков в HOLD с растянутым строем стрелков / всех тиков в HOLD» (v218). Проверяет записанное в коде
      *  основание, по которому сбор (см. rallyTo) работает ТОЛЬКО в постуре FLAG: «в HOLD цель — точка, к ней
      *  сходятся и так». Если числитель мал — основание верно и трогать сбор незачем. Растяжка считается тем же
      *  порогом, каким сбор и включается (RALLY_RANGE). */
     internal var gatherSpread = 0
-    internal var gatherHold = 0
-    /** Пара «крипо-тиков, где стрелку не дали сблизиться до двух из-за живого мили врага / всех крипо-тиков
-     *  стрелка в местной агрессии» (v220, см. closeIn). Числитель — сколько раз оговорка вообще сработала. */
-    internal var closeHeld = 0
-    internal var closeTicks = 0
-    /** Пара «крипо-тиков, где ворота броска открыла защита своего / всех крипо-тиков мили при враге рядом»
-     *  (v220, см. USE_MELEE_GUARDS_LINE). */
-    internal var guardFired = 0
-    internal var guardTicks = 0
-    /** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
-     *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
-    internal var retrTicks = 0
-    internal var retrWithPoint = 0
-    internal var retrUnderFire = 0
-    /** Пара «крипо-тиков в отходе, где крип стрелял или бил / всех крипо-тиков в отходе» (v217). */
-    internal var standFire = 0
-    internal var standTicks = 0
-    /** Пара «тиков признака outmatched / из них с постурой отхода» (v217, решение оператора). */
-    internal var outmTicks = 0
-    internal var outmRetreat = 0
     /** Размен идёт прямо сейчас (v221, см. exchangeLive) — для гейта захвата, который зовётся из `runRunners`
      *  раньше `runArmy` и потому читает окно прошлого тика. */
     internal var exchangeLiveNow = false
-    /** ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, см. warmNow):
-     *  `warm` — тиков контакта без размена / тиков контакта; `warmann` — тиков ANNIHILATE, державшихся только таким
-     *  контактом / тиков ANNIHILATE; `warmhold` — из них тиков, где флаг-цель подхватила бы «держим линию»;
-     *  `warmcmd` — тиков режима боя при тёплом контакте / тиков режима боя (там постуру вернёт командир);
-     *  `warmfight` — тиков «бой идёт» без размена / тиков «бой идёт» (отзыв бегунов, USE_NO_SPLIT_IN_FIGHT);
-     *  `warmcap` — отказов захвата `contact.mass` без размена / отказов `contact.mass`. */
-    internal var warmTicks = 0
-    internal var warmContact = 0
-    internal var warmAnn = 0
-    internal var warmAnnAll = 0
-    internal var warmHold = 0
-    internal var warmCmd = 0
-    internal var warmCmdAll = 0
-    internal var warmFight = 0
-    internal var warmFightAll = 0
-    internal var warmCap = 0
-    internal var warmCapAll = 0
     /** Удары мили по цели за тик (v221) — как `shotsAt`, но из `strike`; чистится там же. */
     internal val strikesAt = HashMap<String, Int>()
     /** Пара «сумма наибольшего числа ударов мили в одну цель за тик / тиков с ударами» и максимум (v221).
      *  Разбор блоб-поражений двух серий: во всех через 40 тиков после контакта он не потерял ни одного стрелка
      *  и ни одного мили, мы — стрелков и мили; его четыре мили кладут 960 в одну нашу цель в 1200 хитов. */
     internal var mconcAll = 0
-    internal var mconcTicks = 0
     internal var mconcMax = 0
     /** Пара «крипо-тиков мили, чья цель ног — цель фокуса / крипо-тиков мили с целью ног» (v221). */
     internal var mpackHit = 0
-    internal var mpackAll = 0
     /** Погоня за кайтером (v221, только прибор, см. kiteChaseNow): тиков односторонней погони в ANNIHILATE /
      *  тиков ANNIHILATE; отказов безфлагового броска в такой погоне / всех отказов безфлагового броска. */
     internal var kiteChaseSeen = false
     internal var kchaseTicks = 0
-    internal var kchaseAnn = 0
-    internal var kvetoHit = 0
-    internal var kvetoAll = 0
-    /** Пара «тиков ANNIHILATE со строем стрелков шире RALLY_RANGE / тиков ANNIHILATE» (v221, см. gatherSpread). */
-    internal var gatherAnn = 0
-    internal var gatherAnnAll = 0
-    /** Цель пачки мили (v221, см. USE_MELEE_PACK): липкий id и значение этого тика — для командира. */
-    /** Пары пачки (v221): «тиков с целью пачки / тиков, где у нас есть мили и у него боевые»; «крипо-тиков мили, чьи
-     *  ноги идут к цели пачки / крипо-тиков мили с целью ног, пока цель пачки есть». */
-    internal var packHeld = 0
-    internal var packTicks = 0
-    internal var mpackOnHit = 0
-    internal var mpackOn = 0
     /** Разложение тиков ANNIHILATE без размена по источнику (v221, см. annEmptyAll): cmd — режим боя командира,
      *  push — толчок, spot — очаг, melee — его мили вплотную, corner — загнанная группа, still — контакт со стоящим
      *  (USE_WARM_NEEDS_HIS_MOVE), warm — тёплый контакт (с правкой обязан быть нулём), held — постура удержана

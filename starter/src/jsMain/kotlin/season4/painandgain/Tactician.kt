@@ -1510,3 +1510,10 @@ internal const val PAIR_W_SPREAD = 4.0
 internal const val PAIR_W_SWAMP = 40.0
 
 internal const val SEPARATION_RADIUS = 1
+
+/** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
+internal var formWaitSince = -1
+
+internal var orderPull = 1.0                    // множитель притяжения к назначенной клетке (v168)
+
+internal var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
