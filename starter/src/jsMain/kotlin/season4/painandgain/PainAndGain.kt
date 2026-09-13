@@ -2539,6 +2539,25 @@ object PainAndGain {
      *     4–5 клетках от наших стрелков. Значит, рычаг — линия (мили впереди стрелков, лекари за мили), а не запрет клеток.
      *     ВЫКЛ; приборы остаются. */
     private const val USE_HEALER_OUT_OF_REACH = false
+    /** ЛЕКАРЬ ПРИ МИЛИ (v235, замер линии по ролям на 80 играх против MetalicaX#10/#14/#15, linecut.py/reachcut.py).
+     *  1. Замер. На первом тике контакта строй одинаков у обеих сторон: мили впереди на +1,1…+1,4 по оси на врага, стрелки у
+     *     центра, лекари сзади (−1,3…−1,6), «мили впереди стрелков» в 100 % игр у обоих; охват первых десяти тиков
+     *     симметричен (стрелков с целью 3,8–4,4 против 3,3–4,3, ширина 4,0–4,7 у обоих). Единственная устойчивая асимметрия
+     *     первых десяти тиков, в победах и поражениях одинаково: наши мили теряют ATTACK быстрее — с живым оружием 2,6–3,3 из
+     *     четырёх против его 3,4–3,7, вплотную 1,3–1,8 против 1,6–2,5. К +20 у проигравшего мили уходят за центр, а лекари
+     *     выходят вперёд центра вслед за ранеными (глубина с −1,3 до +0,2…+0,5) и оказываются в трёх от его стрелков в 57–87 %
+     *     против 28–47 % у победителя. Его лечение: вплотную 81–91 % против 42–78 %, доставлено в 1,3–2 раза больше, лекари
+     *     за мили (v186: 86 % крипо-тиков рядом с мили). Тело одно, части впереди: его мили держат оружие, потому что лечение
+     *     возвращает им части каждый тик.
+     *  2. Здесь: пока его сомкнутая армия в контакте (enemyMassedNow && contact) и живых мили не меньше двух, каждому лекарю
+     *     назначается свой фронтовой мили (ближайшие к его центру, по одному на лекаря, ближайший к лекарю первым), а его
+     *     клетка — сосед этого мили не впереди него (не ближе к его центру), самый дальний от его центра; ступень стоит ниже
+     *     стены v228 и выше healMate; под командиром кандидаты лекаря — те же соседи, самый безопасный, иначе прежний путь.
+     *     Отличие от отвергнутого: v186 считал тела вокруг лекаря, v228 строил стену вокруг адресной жертвы (часто стрелка),
+     *     v234 запрещал клетки в досягаемости. Здесь лекарь привязан к бойцу, который держит оружие, и стоит там, где стоят
+     *     его лекари. Приборы: `hatm=<лекаре-тиков при своём мили>/<с назначением>`, `hatmc=<приказов в клетку при мили>/
+     *     <раздач лекарю с назначением>`. Вердикт — гейт и живой A/B против MetalicaX#15 и #14. */
+    private const val USE_HEALER_AT_MELEE = true
     /** ...и ценность пациента для КОНКРЕТНОГО лекаря: вплотную он лечит вчетверо сильнее, чем издали, поэтому приказ
      *  ранжирует цели по дошедшему лечению, а не по чужой нужде.
      *  ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v215), как и USE_HEAL_ORDER_WINS, и по той же причине: погашен оптом контрольной
@@ -3039,7 +3058,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v234"
+    private const val BOT_VERSION = "v235"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3290,6 +3309,13 @@ object PainAndGain {
     private var zlbZero = 0
     private var victimNow: Creep? = null          // стена лечения (v228): терявший больше всех за прошлый тик
     private var victimSaveable = false            // ...и его потеря не больше доставимого в него лечения
+    /** Лекарь при мили (v235, см. USE_HEALER_AT_MELEE): лекарь → id его фронтового мили и клетка при нём с тыла. */
+    private val meleeWardOf = HashMap<String, String>()
+    private val meleeWardCell = HashMap<String, Position>()
+    private var hatmN = 0
+    private var hatmAll = 0
+    private var hatmCmd = 0
+    private var hatmCmdAll = 0
     private var hwallTicks = 0
     private var hwallVictimTicks = 0
     private var hwallHeals = 0
@@ -3822,7 +3848,7 @@ cpuMark("arrival")
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll anchor=$anchorHeld/$anchorEvasive maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -5224,6 +5250,44 @@ cpuMark("a.hunt")
         val massCentroid = clusterCentroid(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
         val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
         val contact = inContact(armedEnemies, massArmy)
+        // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): назначение и тыльная клетка считаются здесь — до командира и ступеней
+        meleeWardOf.clear(); meleeWardCell.clear()
+        if (USE_HEALER_AT_MELEE && enemyMassedNow && contact) {
+            val hisC = centroidOf(armedEnemies)
+            val frontMelee = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && canMove(it) }
+            if (hisC != null && frontMelee.size >= 2) {
+                val byFront = frontMelee.sortedBy { getRange(it, hisC) }
+                val healersHere = army.filter { hasHeal(it) && !hasWeapon(it) && canMove(it) }.sortedBy { getRange(it, hisC) }
+                val free = ArrayList(byFront)
+                for (h in healersHere) {
+                    val m = free.minByOrNull { getRange(h, it) } ?: break
+                    free.remove(m); meleeWardOf[h.id] = m.id
+                }
+                val occupied = HashSet<Int>()
+                for (c in ctx.myCreeps) occupied.add(c.x * 100 + c.y)
+                for (e in ctx.enemyCreeps) occupied.add(e.x * 100 + e.y)
+                for ((hid, mid) in meleeWardOf) {
+                    val m = byFront.first { it.id == mid }
+                    val h = healersHere.first { it.id == hid }
+                    val md = getRange(m, hisC)
+                    hatmAll++
+                    if (getRange(h, m) <= 1 && getRange(h, hisC) >= md) hatmN++
+                    var best: Position? = null; var bestKey = Int.MIN_VALUE
+                    for (dx in -1..1) for (dy in -1..1) {
+                        if (dx == 0 && dy == 0) continue
+                        val x = m.x + dx; val y = m.y + dy
+                        if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
+                        if ((x * 100 + y) in occupied && !(x == h.x && y == h.y)) continue
+                        val cell = InfluenceMap.cell(x, y)
+                        val d = getRange(cell, hisC)
+                        if (d < md) continue                          // не впереди своего мили
+                        val key = d * 10 - getRange(h, cell)          // дальше от его центра, при равенстве ближе к лекарю
+                        if (key > bestKey) { bestKey = key; best = cell }
+                    }
+                    if (best != null) meleeWardCell[hid] = best
+                }
+            }
+        }
         // ТРЕТЬЯ ПОСТАНОВКА (v227, см. USE_ZERO_LEAD_BREAK): мощь ноль при отрыве по очкам STALL_TICKS подряд — армия
         // разрывает контакт СТРОЕМ: командир раздаёт клетки замыслом KITE с дальностью «вне его стрелкового огня», свободный
         // шаг отскакивает от ближайшего вооружённого на RANGED_RANGE + 1; постура не меняется, все механизмы боя живут.
@@ -7328,6 +7392,9 @@ cpuMark("a.evade")
                 // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): назначенная клетка стены — как слот, вплотную к удержимой жертве
                 USE_HEAL_WALL && healer && victimSaveable && wallCellOf[creep.id] != null ->
                     { whyTag = "wall"; target = wallCellOf[creep.id]!!; standoff = 0 }
+                // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): клетка при своём фронтовом мили с тыла — как слот
+                USE_HEALER_AT_MELEE && healer && meleeWardCell[creep.id] != null ->
+                    { whyTag = "atMelee"; target = meleeWardCell[creep.id]!!; standoff = 0 }
                 USE_HEALER_OVER_SLOT && healer && healMate != null && contact ->
                     { whyTag = "healMate"; target = healMate; standoff = 1; nearFlow = true }
                 slot != null -> { whyTag = "slot"; target = slot; standoff = 0 }
@@ -8960,7 +9027,16 @@ cpuMark("a.evade")
             // ЛЕКАРЕЙ +0,32 — они впереди мили, и в 155 тиках из 335 лекари в среднем ближе к врагу, чем мили; на
             // t=63, через три тика после контакта, один лекарь уже без лечащих частей. Условие простое и жёсткое:
             // хотя бы один свой боец стоит к врагу БЛИЖЕ, чем клетка лекаря, — считая по уже назначенным клеткам
-            val ok = placeScored(c, 2, intentOf(c)).also { placed ->
+            // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): сосед назначенного мили не впереди него, самый безопасный
+            val wardMelee = if (USE_HEALER_AT_MELEE) meleeWardOf[c.id]?.let { id -> melees.firstOrNull { it.id == id } } else null
+            val atMelee = wardMelee != null && run {
+                val mc = cellOf(wardMelee); val md = foeDist(mc.x, mc.y)
+                hatmCmdAll++
+                place(c, { p -> maxOf(abs(p.x - mc.x), abs(p.y - mc.y)) <= 1 && foeDist(p.x, p.y) >= md && ttlAt(c, p.x * 100 + p.y, p) >= 1 },
+                    { p -> danOf(c, p.x * 100 + p.y) })
+            }
+            if (atMelee) { hatmCmd++; out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) } }
+            val ok = atMelee || placeScored(c, 2, intentOf(c)).also { placed ->
                 if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
             }
             // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
