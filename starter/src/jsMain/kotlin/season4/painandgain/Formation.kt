@@ -9,11 +9,11 @@ import screeps.api.getRange
  * СТРОЙ (v248, этап 8 переработки, срез 1 — тождественный перенос). По плану (docs/pain-and-gain-rework.md, раздел
  * Tactician) это одна модель строя с якорем-параметром вместо трёх расчётов оси и фронта, живших в командире. Здесь
  * пока те же расчёты, что были, — изготовка [brace] (якорь — медиана, ось на его среднее, ряды по роли, места от
- * середины наружу, назначение ближайшими парами), колонна марша [marchColumn] (якорь — медиана, направление даёт
+ * середины наружу), колонна марша [marchColumn] (якорь — медиана, направление даёт
  * вызывающий по полю потока), кулак боя [fist] (медиана и клетки в FIST_RADIUS без стены между) и ряды блока [rows]
- * (якорь — передний боец у угрозы, ось на центроид его группы, ряды по SLOT_ORDER, жадное назначение) — с одной
+ * (якорь — передний боец у угрозы, ось на центроид его группы, ряды по SLOT_ORDER) — с одной
  * медианой [median] на всех. Арифметика, порядок обхода и тай-брейки байт в байт прежние: 135 сценариев стенда дают те
- * же логи. Второй срез сольёт два правила назначения крип→место в одно и отдаст `slotOf = null` мили вплотную к врагу.
+ * же логи (v248). Срез 2 (v249): одно правило назначения крип→место — [assignPlaces] — в изготовке и в рядах блока.
  */
 internal object Formation {
     /** СТРОЙ ДО БОЯ (v179, оператор): пока враг идёт, а контакта нет, командир строит фронт вокруг своего якоря —
@@ -28,6 +28,85 @@ internal object Formation {
     fun median(core: List<Creep>): Pair<Int, Int> {
         val xs = core.map { it.x }.sorted(); val ys = core.map { it.y }.sorted()
         return Pair(xs[xs.size / 2], ys[ys.size / 2])
+    }
+
+    /** ОДНО ПРАВИЛО НАЗНАЧЕНИЯ КРИП → МЕСТО (v249, этап 8). Строй собран, когда встал ПОСЛЕДНИЙ, поэтому назначение
+     *  минимизирует самый длинный путь до места, а при равенстве — сумму путей: порог по узкому месту (наименьшее T, при
+     *  котором все места разбираются рёбрами не длиннее T — паросочетание Куна), затем венгерский алгоритм на рёбрах не
+     *  длиннее T. Крипов и мест не больше четырнадцати, цена ничтожна. Прежние два правила были эвристиками и не считали,
+     *  когда строй встанет: ближайшие пары в изготовке (v183: «ближайшую к себе» растягивало четырёх мили на семь клеток —
+     *  строй 5,8×6,1 против его 4,5×3,9) и жадное по близости к ряду в блоке («так слоты не пересекаются»); пары как
+     *  единое правило гейт отверг (133/135: match1:grab и match34:scatter из победы по очкам в поражение по очкам).
+     *  Строки алгоритма — меньшая из сторон: мест бывает больше, чем крипов (стоячая линия выдаёт места по числу всех
+     *  мили, а мили вплотную к врагу из крипов отфильтрован), и первая редакция, где строками всегда шли места, на этом
+     *  зацикливалась — гейт стоял двадцать минут на восьми сценариях. Возвращает пары в порядке мест. */
+    private fun assignPlaces(creeps: List<Creep>, cells: List<Position>): List<Pair<Creep, Position>> {
+        val m = creeps.size; val k = cells.size
+        if (m == 0 || k == 0) return emptyList()
+        val byCell = k <= m
+        val rows = if (byCell) k else m; val cols = if (byCell) m else k
+        val d = Array(rows) { r -> IntArray(cols) { q ->
+            val cell = cells[if (byCell) r else q]; val c = creeps[if (byCell) q else r]
+            maxOf(abs(cell.x - c.x), abs(cell.y - c.y))
+        } }
+        val thresholds = d.flatMap { it.asList() }.distinct().sorted()
+        var lo = 0; var hi = thresholds.size - 1
+        while (lo < hi) {
+            val mid = (lo + hi) / 2
+            if (matchingSize(d, thresholds[mid]) >= rows) hi = mid else lo = mid + 1
+        }
+        val t = thresholds[lo]
+        val cost = Array(rows) { r -> IntArray(cols) { q -> if (d[r][q] <= t) d[r][q] else UNREACHABLE } }
+        val colOf = hungarian(cost)
+        val byIndex = ArrayList<Pair<Int, Creep>>(rows)
+        for (r in 0 until rows) byIndex.add(if (byCell) Pair(r, creeps[colOf[r]]) else Pair(colOf[r], creeps[r]))
+        byIndex.sortBy { it.first }
+        return byIndex.map { Pair(it.second, cells[it.first]) }
+    }
+    private const val UNREACHABLE = 10000
+
+    /** Размер паросочетания строк со столбцами по рёбрам не длиннее t (алгоритм Куна); строк не больше столбцов. */
+    private fun matchingSize(d: Array<IntArray>, t: Int): Int {
+        val k = d.size; val m = d[0].size
+        val matchCreep = IntArray(m) { -1 }
+        fun tryCell(j: Int, seen: BooleanArray): Boolean {
+            for (i in 0 until m) {
+                if (d[j][i] > t || seen[i]) continue
+                seen[i] = true
+                if (matchCreep[i] < 0 || tryCell(matchCreep[i], seen)) { matchCreep[i] = j; return true }
+            }
+            return false
+        }
+        var size = 0
+        for (j in 0 until k) if (tryCell(j, BooleanArray(m))) size++
+        return size
+    }
+
+    /** Венгерский алгоритм: строк не больше, чем столбцов (иначе он не завершается); возвращает столбец каждой строки. */
+    private fun hungarian(cost: Array<IntArray>): IntArray {
+        val n = cost.size; val m = cost[0].size
+        val u = IntArray(n + 1); val v = IntArray(m + 1); val p = IntArray(m + 1); val way = IntArray(m + 1)
+        for (i in 1..n) {
+            p[0] = i
+            var j0 = 0
+            val minv = IntArray(m + 1) { Int.MAX_VALUE }
+            val used = BooleanArray(m + 1)
+            do {
+                used[j0] = true
+                val i0 = p[j0]; var delta = Int.MAX_VALUE; var j1 = 0
+                for (j in 1..m) if (!used[j]) {
+                    val cur = cost[i0 - 1][j - 1] - u[i0] - v[j]
+                    if (cur < minv[j]) { minv[j] = cur; way[j] = j0 }
+                    if (minv[j] < delta) { delta = minv[j]; j1 = j }
+                }
+                for (j in 0..m) if (used[j]) { u[p[j]] += delta; v[j] -= delta } else minv[j] -= delta
+                j0 = j1
+            } while (p[j0] != 0)
+            do { val j1 = way[j0]; p[j0] = p[j1]; j0 = j1 } while (j0 != 0)
+        }
+        val ans = IntArray(n)
+        for (j in 1..m) if (p[j] != 0) ans[p[j] - 1] = j - 1
+        return ans
     }
 
     /** СТРОЙ ДО БОЯ (v179, оператор): «мы стояли на флаге 30-40 тиков, и всё равно, когда враг подошёл, мы были не
@@ -54,7 +133,7 @@ internal object Formation {
         // клеток, и крип занимал БЛИЖАЙШУЮ к себе, — четыре мили растягивались на семь клеток, потому что каждый шёл в
         // своё место. Замер по разгрому 3d9532: наш строй 5,8 в ширину и 6,1 в глубину (35 клеток на 12 крипов) против
         // его 4,5 и 3,9 (17 клеток) — вдвое рыхлее. Здесь ряд получает СТОЛЬКО мест, сколько в нём крипов, места
-        // берутся от середины наружу, а крипы разбираются по местам ближайшими парами: строй выходит плотным
+        // берутся от середины наружу, а крипы разбираются по местам одним правилом (assignPlaces): строй выходит плотным
         for (row in 1 downTo -1) {
             val mine = core.filter { rowOf(it) == row }
             if (mine.isEmpty()) continue
@@ -74,24 +153,12 @@ internal object Formation {
                 // 0, −1, +1, −2, +2, … — середина ряда заполняется первой
                 side = if (side <= 0) -side + 1 else -side
             }
-            // ближайшими парами: и место, и крип выбираются вместе, иначе дальний крип отбирает чужое место
-            val free = mine.toMutableList()
-            val open = slots.toMutableList()
-            while (free.isNotEmpty() && open.isNotEmpty()) {
-                var bc = free[0]; var bs = open[0]; var bd = Int.MAX_VALUE
-                for (c in free) for (s in open) {
-                    val d = maxOf(abs(s.x - c.x), abs(s.y - c.y))
-                    if (d < bd) { bd = d; bc = c; bs = s }
-                }
-                free.remove(bc); open.remove(bs)
-                if (bs.x == bc.x && bs.y == bc.y) continue
-                // ПРИКАЗ СТРОЯ — РОВНО ШАГ (v183). Исполнитель понимает приказ БУКВАЛЬНО (USE_ORDER_IS_LAW: назначенная
-                // клетка и есть шаг), а изготовка выдавала место в строю за пять клеток — приказ, который невозможно
-                // выполнить. Прибор поймал это сразу, едва строй начал работать: исполнение упало со 99 % до 62 %
-                // (obey=41/66, lost=stuck9/else16 на тиках изготовки в разгроме 3d95d8). Марш и бой давно дают ровно
-                // шаг и проверяют выполнимость; теперь их даёт и строй
-                out[bc.id] = bs
-            }
+            // ПРИКАЗ СТРОЯ — РОВНО ШАГ (v183). Исполнитель понимает приказ БУКВАЛЬНО (USE_ORDER_IS_LAW: назначенная
+            // клетка и есть шаг), а изготовка выдавала место в строю за пять клеток — приказ, который невозможно
+            // выполнить. Прибор поймал это сразу, едва строй начал работать: исполнение упало со 99 % до 62 %
+            // (obey=41/66, lost=stuck9/else16 на тиках изготовки в разгроме 3d95d8). Марш и бой давно дают ровно
+            // шаг и проверяют выполнимость; теперь их даёт и строй. Крип на своём месте приказа не получает
+            for ((bc, bs) in assignPlaces(mine, slots)) if (bs.x != bc.x || bs.y != bc.y) out[bc.id] = bs
         }
     }
 
@@ -213,14 +280,7 @@ internal object Formation {
             return out
         }
         fun assign(creeps: List<Creep>, cells: List<Position>) {
-            val free = ArrayList(cells)
-            // ближайшие к своему ряду первыми: так слоты не пересекаются
-            for (c in creeps.sortedBy { c -> cells.minOfOrNull { getRange(c, it) } ?: 0 }) {
-                val best = free.minByOrNull { getRange(c, it) } ?: break
-                free.remove(best)
-                slotOf[c.id] = best
-                taken.add(best.x * 100 + best.y)
-            }
+            for ((c, best) in assignPlaces(creeps, cells)) { slotOf[c.id] = best; taken.add(best.x * 100 + best.y) }
         }
         val d = pair.third
         if (standoffLine) {
