@@ -176,10 +176,10 @@ internal object Forecast {
                     val dist = d(c, near)
                     val want = when (intent) {
                         PainAndGain.Intent.PRESS, PainAndGain.Intent.FOCUS -> if (c.melee > 0.0) 1 else RANGED_RANGE
-                        PainAndGain.Intent.HOLD, PainAndGain.Intent.KITE -> if (c.melee > 0.0) PainAndGain.MELEE_HOLD_RANGE else RANGED_RANGE
+                        PainAndGain.Intent.HOLD, PainAndGain.Intent.KITE -> if (c.melee > 0.0) MELEE_HOLD_RANGE else RANGED_RANGE
                         PainAndGain.Intent.YIELD -> RANGED_RANGE + 1
                     }
-                    // КУЛАК ДЕЙСТВУЕТ И В ПРОГНОЗЕ (v159): в бою крипу нельзя выйти за PainAndGain.FIST_RADIUS от якоря, а в
+                    // КУЛАК ДЕЙСТВУЕТ И В ПРОГНОЗЕ (v159): в бою крипу нельзя выйти за FIST_RADIUS от якоря, а в
                     // раскатке было можно — прогноз считал бой, которого не будет, и хвалил замыслы, растаскивающие
                     // армию. Сближение прогноза с настоящим боем — единственный приём, который командира и двигал
                     val nx: Int; val ny: Int
@@ -433,3 +433,5 @@ internal fun PainAndGain.ourPowerOf(ours: List<Creep>, theirs: List<Creep>): Dou
 
 /** Мощь врага против нашей группы (текущие эффекты). */
 internal fun PainAndGain.enemyPowerOf(theirs: List<Creep>, ours: List<Creep>): Double = powerOf(theirs, ours, NO_MODS, NO_MODS)
+
+internal const val POWER_REACH_TICKS = 2

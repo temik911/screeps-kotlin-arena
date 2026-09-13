@@ -223,7 +223,7 @@ internal object Formation {
             // лекарь идёт за подопечным, а не в строю: его место задаёт лечение, и приказ марша только уводил его
             if (PainAndGain.hasHeal(c) && !PainAndGain.hasWeapon(c)) continue
             if (c.fatigue > 0) continue
-            val far = maxOf(abs(c.x - ax), abs(c.y - ay)) > PainAndGain.FIST_RADIUS
+            val far = maxOf(abs(c.x - ax), abs(c.y - ay)) > FIST_RADIUS
             val tx = if (far) ax else c.x + sx * 2
             val ty = if (far) ay else c.y + sy * 2
             // ...и шаг ВЫБИРАЕТСЯ из восьми, а не идёт напролом: прямой упирался в стену и в занятую клетку, и строй
@@ -237,7 +237,7 @@ internal object Formation {
                 if (nx * 100 + ny in taken) continue
                 // под своим — не запрет, а цена: запрет останавливал колонну целиком (гейт 133 из 135,
                 // army и camp), ровно как в бою, где полный запрет тоже пришлось заменить штрафом
-                if (maxOf(abs(nx - ax), abs(ny - ay)) > PainAndGain.FIST_RADIUS + 1) continue
+                if (maxOf(abs(nx - ax), abs(ny - ay)) > FIST_RADIUS + 1) continue
                 // ...и болото в колонне стоит дороже крюка: крип, шагнувший в трясину, встаёт на четыре тика, а
                 // колонна уходит без него — это и есть «армия вязнет и растягивается» (v183)
                 val d = maxOf(abs(nx - tx), abs(ny - ty)) * 2 + (if (nx * 100 + ny in occupied) 3 else 0) +
@@ -268,13 +268,13 @@ internal object Formation {
             }
             return true
         }
-        val keep = HashMap(cells.filterValues { maxOf(abs(it.x - ax), abs(it.y - ay)) <= PainAndGain.FIST_RADIUS && clear(it.x, it.y) })
+        val keep = HashMap(cells.filterValues { maxOf(abs(it.x - ax), abs(it.y - ay)) <= FIST_RADIUS && clear(it.x, it.y) })
         if (keep.isNotEmpty()) {
             // ...КРОМЕ ПРЕСЛЕДОВАТЕЛЯ (v211): кулак и есть то единственное, что мешает крипу пойти за остовом,
             // поэтому отряд освобождается от него — и ровно на девять своих клеток, а не на всё поле
             val chasers = fighters.filter { it.id in Memory.chaseOf }
             if (chasers.isNotEmpty()) for ((k, p) in cells) {
-                if (chasers.any { maxOf(abs(p.x - it.x), abs(p.y - it.y)) <= PainAndGain.COMMAND_REACH }) keep[k] = p
+                if (chasers.any { maxOf(abs(p.x - it.x), abs(p.y - it.y)) <= COMMAND_REACH }) keep[k] = p
             }
             cells.clear(); cells.putAll(keep)
         }
@@ -311,7 +311,7 @@ internal object Formation {
         val pair = front.flatMap { f -> threats.map { e -> Triple(f, e, getRange(f, e)) } }.minByOrNull { it.third } ?: return
         val anchor = InfluenceMap.cell(pair.first.x, pair.first.y)
         val nearest = pair.second
-        val group = threats.filter { getRange(nearest, it) <= PainAndGain.ENGAGE_RANGE }
+        val group = threats.filter { getRange(nearest, it) <= ENGAGE_RANGE }
         val ec = PainAndGain.centroidOf(group.map { InfluenceMap.cell(it.x, it.y) }) ?: return
         val dx0 = PainAndGain.sgn(ec.x - anchor.x); val dy = PainAndGain.sgn(ec.y - anchor.y)
         val dx = if (dx0 == 0 && dy == 0) 1 else dx0
@@ -758,3 +758,5 @@ internal fun PainAndGain.armyBlock(ctx: Ctx, seg: ArmyBlockIn): ArmyBlockOut = w
     ArmyBlockOut(
     )
 }
+
+internal const val RANGED_FRONT_GROUP = 6   // блоб: столько его вооружённых в ENGAGE_RANGE от ближайшего (россыпь — 1–3)

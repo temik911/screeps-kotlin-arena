@@ -237,3 +237,5 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         dbg(s, if (allowed) "TO_FLAG" else "POISED:$block", f, step)
     }
 }
+
+internal const val SCOUT_FLEE_RANGE = 12

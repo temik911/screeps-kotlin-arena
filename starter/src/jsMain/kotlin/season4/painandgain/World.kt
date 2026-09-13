@@ -1152,3 +1152,19 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
         ctx = ctx,
     )
 }
+
+internal const val CORNERED_STICK = 4
+
+internal const val NEAR_RELEASE = 6
+
+/** Столько тиков без сдвига — враг «стоит» и в стаи по «успеет дойти» не входит (см. packAt). */
+internal const val STILL_TICKS = 20
+
+/** Клетки в такой близости от боевого врага поле «в обход» считает стеной (см. flowAvoiding). */
+internal const val AVOID_RANGE = RANGED_RANGE + 1
+
+internal const val CROWD_COST = 3
+
+internal const val DEBUG_MAP = true
+
+internal const val FLOW_KEEP = 60   // тиков без обращения — запись кэша вычищается (иначе рост на клетках целей)
