@@ -4,6 +4,54 @@ import kotlin.math.abs
 import screeps.api.Creep
 import screeps.api.Position
 import screeps.api.getRange
+import screeps.api.ATTACK
+import screeps.api.ATTACK_POWER
+import screeps.api.BodyPartType
+import screeps.api.CARRY
+import screeps.api.CARRY_CAPACITY
+import screeps.api.CostMatrix
+import screeps.api.EFF_ATTACK_MODIFIER
+import screeps.api.EFF_DAMAGE_TAKEN_MODIFIER
+import screeps.api.EFF_HEAL_MODIFIER
+import screeps.api.EFF_RANGED_ATTACK_MODIFIER
+import screeps.api.HEAL
+import screeps.api.HEAL_POWER
+import screeps.api.MOVE
+import screeps.api.RANGED_ATTACK
+import screeps.api.RANGED_ATTACK_POWER
+import screeps.api.RANGED_HEAL_POWER
+import screeps.api.RESOURCE_ENERGY
+import screeps.api.SearchGoal
+import screeps.api.SearchPathOptions
+import screeps.api.TERRAIN_SWAMP
+import screeps.api.TERRAIN_WALL
+import screeps.api.TOUGH
+import screeps.api.WORK
+import screeps.api.arenaInfo
+import screeps.api.get
+import screeps.api.getObjectsByPrototype
+import screeps.api.getTerrainAt
+import screeps.api.getTicks
+import screeps.api.getCpuTime
+import screeps.api.searchPath
+import screeps.api.season4.FLAG_TYPES
+import screeps.api.season4.MAX_SCORE_PER_TICK
+import screeps.api.season4.ScoreFlag
+import screeps.api.season4.TICKS_LIMIT
+import screeps.api.structures.StructureRampart
+import screeps.api.structures.StructureSpawn
+import screeps.api.structures.StructureWall
+import sourcemaps.runWithSourceMapSupport
+import kotlin.math.ceil
+import kotlin.math.sqrt
+import season4.painandgain.PainAndGain.Posture
+import season4.painandgain.PainAndGain.Intent
+import season4.painandgain.PainAndGain.CmdMode
+import season4.painandgain.PainAndGain.Shooter
+import season4.painandgain.PainAndGain.Objective
+import season4.painandgain.PainAndGain.ChaseSample
+import season4.painandgain.PainAndGain.FightCell
+import season4.painandgain.PainAndGain.HypoMods
 
 /**
  * СТРОЙ (v248, этап 8 переработки, срез 1 — тождественный перенос). По плану (docs/pain-and-gain-rework.md, раздел
@@ -313,4 +361,229 @@ internal object Formation {
         // 12), но лекарь при этом жив, а его смерть — середина цепи, которой класс нас убивает
         assign(rear, rowCells(1, rear.size))
     }
+}
+
+internal fun PainAndGain.commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: MutableMap<String, Position>) {
+    out.clear()
+    if (goal == null) return
+    val core = army.filter { canMove(it) && !it.spawning }
+    if (core.size < 2) return
+    val (ax, ay) = Formation.median(core)
+    // ...и направление задаёт ПУТЬ, а не прямая на цель: жадный шаг упирался в стену и строй застревал целиком —
+    // сценарий screen шёл в режиме марша все 185 строк лога и проигрывал счёт 10 782:14 471. Ведущий — тот, кто
+    // ближе всех к якорю; его шаг по полю потока и есть направление колонны (v163)
+    val lead = core.minByOrNull { maxOf(abs(it.x - ax), abs(it.y - ay)) }!!
+    marchAll++
+    val sx: Int; val sy: Int
+    val descent = flowDescent(ctx, goal, ax, ay, lead)
+    if (descent != null) { marchFlow++; sx = descent.first; sy = descent.second }
+    else {
+        val step = pathStep(lead, goal, 1, crowdMatrixOf(ctx, goal.x * 100 + goal.y))
+        sx = if (step != null) (step.x - lead.x).coerceIn(-1, 1) else (goal.x - ax).coerceIn(-1, 1)
+        sy = if (step != null) (step.y - lead.y).coerceIn(-1, 1) else (goal.y - ay).coerceIn(-1, 1)
+    }
+    if ((sx != 0 || sy != 0) && sx == -marchPrevSx && sy == -marchPrevSy) marchFlip++
+    marchPrevSx = sx; marchPrevSy = sy
+    if (sx == 0 && sy == 0) return
+    Formation.marchColumn(core, ax, ay, sx, sy, out)
+}
+
+/** Шаг колонны по полю потока к цели (v232, см. USE_MARCH_FLOW_DIRECTION): сосед клетки якоря с наименьшим расстоянием
+ *  до цели; якорь на стене — от клетки ведущего; null — цель по полю недостижима; (0,0) — якорь на цели. */
+internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int, lead: Creep): Pair<Int, Int>? {
+    val field = flowTo(ctx, goal)
+    val fx: Int; val fy: Int
+    if (field[ax * 100 + ay] >= 0) { fx = ax; fy = ay }
+    else if (field[lead.x * 100 + lead.y] >= 0) { fx = lead.x; fy = lead.y }
+    else return null
+    var bestD = field[fx * 100 + fy]; var bx = 0; var by = 0
+    for (dx in -1..1) for (dy in -1..1) {
+        if (dx == 0 && dy == 0) continue
+        val nx = fx + dx; val ny = fy + dy
+        if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+        val d = field[nx * 100 + ny]
+        if (d >= 0 && d < bestD) { bestD = d; bx = dx; by = dy }
+    }
+    return Pair(bx, by)
+}
+
+/** Мини-состояние для симуляции (v138): позиция, хиты и профиль крипа. */
+
+internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
+    val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in Memory.rotatingIds }
+    val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in Memory.rotatingIds }
+    val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
+    val armed = melees + rangeds
+    if (armed.isEmpty()) return
+    val threats = armedEnemies.ifEmpty { combatEnemies }
+    // его первый ряд — стрелки (v113, USE_RANGED_FRONT_VS_RANGED): ближайший к нашему фронту его вооружённый — стрелок без мили,
+    // и это БЛОБ — не меньше RANGED_FRONT_GROUP его вооружённых в ENGAGE_RANGE от него (первый срез без этого условия включал
+    // ряд вровень против гарнизона-стрелка россыпи: гейт m30 scatter 21613:24313 красный)
+    // ...и блоб ПОДХОДИТ САМ — его темп к нам за окно подхода не ниже темпа броска (approachRate, см. APPROACH_RUSH) — либо ряд уже
+    // защёлкнут этим контактом: стоящий у флага лагерь (гейт m31 camp 15105:22908 красный при ряде вровень против любого блоба,
+    // и тот же счёт при «дистанция сократилась» — она сокращается и от нашего марша к лагерю) — не вход в рубку, там игра на очки
+    // approachRate — темп сокращения дистанции центров, он растёт и от НАШЕГО марша к стоящему лагерю (m31 camp красный при
+    // «сокращается» и при approachRate): нужен сдвиг ЕГО центра за окно — не меньше четверти окна (v57: «это он уходит»)
+    val hisMoved = Memory.hisCentHist.size >= 2 && run {
+        val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
+        maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= APPROACH_WINDOW / 4
+    }
+    val closing = approachRate >= APPROACH_RUSH && hisMoved
+    val inReach = threats.any { e -> armed.any { getRange(it, e) <= ENGAGE_RANGE } }
+    if (!inReach) rangedLevelLatched = false
+    // ...и это уже ВХОД: его ближайший в RANGED_RANGE + 1 от нашего фронта — проходящий мимо на 5–8 блоб-фермер (m31 camp,
+    // тот же счёт при любом признаке подхода) ряда не получает
+    val hisFrontRanged =  (closing || rangedLevelLatched) && threats.minByOrNull { e -> armed.minOf { getRange(it, e) } }
+        ?.let { n -> val pr = InfluenceMap.profileOf(n); pr.ranged > 0.0 && pr.melee <= 0.0 && armed.minOf { getRange(it, n) } <= RANGED_RANGE + 1 && threats.count { getRange(n, it) <= ENGAGE_RANGE } >= RANGED_FRONT_GROUP } == true
+    if (hisFrontRanged && inReach) rangedLevelLatched = true
+    Formation.rows(melees, rangeds, rear, threats, combatEnemies, standoffLine = rangeds.isNotEmpty() && hisFrontRanged, slotOf)
+}
+
+/** Расстановка боя (см. USE_PLAN): клетки с признаками, роли по порядку признаков, жадное назначение. Выход — slotOf,
+ *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
+ *  клетка занята. */
+internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, enemyCreeps: List<Creep>, slotOf: MutableMap<String, Position>, focusTarget: Creep?) {
+    val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in Memory.rotatingIds }
+    val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in Memory.rotatingIds }
+    val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
+    if (melees.isEmpty() && rangeds.isEmpty()) return
+    val threats = armedEnemies.ifEmpty { combatEnemies }
+    if (threats.isEmpty()) return
+    val theirMelee = threats.filter { InfluenceMap.profileOf(it).melee > 0.0 }
+    // ЦЕЛЬ КЛЕТКИ — ЕГО СТРЕЛОК (v67; как фокус v60): «есть цель в трёх» считало целью и мили-приманку в 2–3, клетка в трёх от
+    // неё держалась памятью расстановки, и стрелки стояли в 4 от его стрелков со свободной клеткой впереди 142 крип-тика,
+    // стреляя в мили «за неимением» (матч 160, девятое поражение Coldkimchi: 79 выстрелов в мили при его стрелках в 3–4,
+    // 3:198 и 4:213 крип-тиков; его 341 выстрел против наших 199, армия стёрта при его 16000/16000). Мили — цель клетки,
+    // только когда стрелков у него нет
+    val shootAt = threats.filter { InfluenceMap.profileOf(it).ranged > 0.0 }.ifEmpty { threats }
+    val enemyAt = enemyCreeps.mapTo(HashSet()) { it.x * 100 + it.y }
+    // клетки-кандидаты: в RANGED_RANGE от любого нашего (дальше — марш, не расстановка), проходимые, не под врагом, и НА
+    // НАШЕЙ СТОРОНЕ (v61): не дальше от центра наших вооружённых, чем от центра его угроз. Матч 145 (Coldkimchi, седьмое
+    // поражение, армия стёрта за сорок тиков при его 16000/16000): его линия стояла в (73–76, 9–13), наш центр в (79,8), и
+    // ярусы «цель в трёх → нет его мили вплотную → нет его мили в двух» выбрали стрелкам клетки (76–80, 15–16) — ЗА его
+    // линией, где его мили не стоят, — и одиннадцать крипов пошли к ним сквозь его строй по одному (so=0 flow=−1 у всех на
+    // 370–380-м): reach 1/3, наш огонь 1,2 в тик против его 4,2
+    val ourC = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })
+    val theirC = centroidOf(threats)
+    val cells = HashMap<Int, FightCell>()
+    for (c in army) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
+        val x = c.x + dx; val y = c.y + dy
+        val key = x * 100 + y
+        if (key in cells || x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || key in enemyAt) continue
+        val p = InfluenceMap.cell(x, y)
+        if (ourC != null && theirC != null && getRange(p, ourC) > getRange(p, theirC)) continue
+        cells[key] = FightCell(p, key, InfluenceMap.damageAt(x, y, combatEnemies), shootAt.count { getRange(p, it) <= RANGED_RANGE },
+            focusTarget != null && getRange(p, focusTarget) <= RANGED_RANGE,
+            theirMelee.count { getRange(p, it) <= 1 }, theirMelee.count { getRange(p, it) <= MELEE_KEEP_RANGE },
+            threats.minOf { getRange(p, it) })
+    }
+    if (cells.isEmpty()) return
+    val taken = HashSet<Int>()
+    val meleeFree = melees.filter { m -> combatEnemies.none { getRange(m, it) <= 1 } }
+    for (m in melees) if (meleeFree.none { it.id == m.id }) taken.add(m.x * 100 + m.y)
+    // клетка под своим — только его: без этого стрелкам назначались клетки друг друга (матч 73, t=120: ranged_1 → клетка
+    // ranged_3, ranged_3 → клетка ranged_1, ranged_2 → клетка ranged_3), и строй крутился на месте под огнём
+    val ownAt = HashMap<Int, String>()
+    for (c in army) ownAt[c.x * 100 + c.y] = c.id
+    // память расстановки: клетка прошлого тика остаётся, пока держит верхние ярусы своей роли (keep) — без памяти «лучшая»
+    // клетка менялась каждый тик (урон, фланги), стрелки блуждали вбок вместо шага за фронтом, и кайтер стенда бил идущих
+    // за ним мили при reach=0/5 (m28 kite, армия потеряна); ряд строя двигался вместе с передним мили и потому успевал
+    val plan = HashMap<String, Int>()
+    fun place(c: Creep, cmp: Comparator<FightCell>, keep: ((FightCell) -> Boolean)?, ok: (FightCell) -> Boolean): FightCell? {
+        fun free(cell: FightCell) = cell.key !in taken && (ownAt[cell.key] ?: c.id) == c.id
+        val prev = keep?.let { k -> Memory.lastPlan[c.id]?.let { cells[it] }?.takeIf { free(it) && k(it) } }
+        val best = prev ?: cells.values.filter { free(it) && ok(it) }.maxWithOrNull(cmp) ?: return null
+        slotOf[c.id] = best.pos
+        taken.add(best.key)
+        plan[c.id] = best.key
+        return best
+    }
+    // стрелки: цель в трёх → не вплотную к его мили → не в двух от его мили → цель фокуса в трёх → дистанция до ближайшей
+    // угрозы (с целью: 3 лучше 2 лучше 1 — линия стоит на выстреле; БЕЗ цели: ближе к врагу — иначе стрелок вне
+    // досягаемости стоял на месте, пока кайтер отходил на клетку в тик и бил идущих за ним мили: m28 kite, reach=0/5 сто
+    // тиков, армия потеряна) → меньше урона → ближе к себе
+    val rangedCells = HashMap<String, FightCell>()
+    fun rangedCmp(c: Creep) = compareBy<FightCell> { if (it.focusIn) 1 else 0 }   // цель фокуса в трёх — первое (v45)
+        .thenBy { if (it.targets > 0) 1 else 0 }
+        .thenBy { if (it.meleeAdj == 0) 1 else 0 }
+        .thenBy { if (it.meleeNear == 0) 1 else 0 }
+        .thenBy { if (it.targets > 0) minOf(it.dist, RANGED_RANGE) else -it.dist }
+        .thenBy { -it.dmg }
+        .thenBy { -getRange(c, it.pos) }
+    // СТРЕЛОК НЕ ВПЕРЕДИ МИЛИ (v69): клетка стрелка не ближе к угрозе, чем нынешний фронт мили минус шаг. Матч 169 (stachu3478,
+    // третье поражение при 24 победах): его линия отходила по клетке в тик, клетки «его стрелок в трёх» (v67) уходили за ней,
+    // стрелки шли вперёд, мили (клетки по памяти) отстали на 8–10 клеток, и его мили (в трёх 41 % тиков) съели стрелков по
+    // одному — 19 крип-тиков разоружённых, армия стёрта за сто тиков при его 15435/16000. «Стрелки впереди» отвергнуто ещё
+    // v37 — сюда оно вошло через план
+    val meleeFrontDist = meleeFree.minOfOrNull { m -> threats.minOf { getRange(m, it) } }
+    fun behindMelee(cell: FightCell) = meleeFrontDist == null || cell.dist >= meleeFrontDist - 1
+    val constrained = rangeds.sortedBy { c -> cells.values.count { it.targets > 0 && it.meleeAdj == 0 && getRange(c, it.pos) <= 1 } }
+    for (r in constrained) {
+        val strict = place(r, rangedCmp(r), { it.targets > 0 && it.meleeAdj == 0 && it.meleeNear == 0 && behindMelee(it) }) { behindMelee(it) }
+        if (strict != null) planStrict++ else planLoose++
+        val cell = strict ?: place(r, rangedCmp(r), null) { true } ?: continue
+        rangedCells[r.id] = cell
+    }
+    // мили без врага вплотную — заслон перед стрелком: клетка рядом с клеткой стрелка и ближе к угрозе, чем она; его мили в
+    // двух (есть кого встретить) лучше, чем нет; вплотную к двум и больше его мили — хуже; меньше урона; ближе к себе.
+    // Нет такой клетки — фланг: клетка на той же дистанции, что и стрелки
+    val front = rangedCells.values.toList()
+    fun meleeCmp(c: Creep) = compareBy<FightCell> { if (it.meleeAdj <= 1) 1 else 0 }
+        .thenBy { if (it.meleeNear > 0) 1 else 0 }
+        .thenBy { -it.dist }
+        .thenBy { -it.dmg }
+        .thenBy { -getRange(c, it.pos) }
+    val frontDist = front.minOfOrNull { it.dist } ?: RANGED_RANGE
+    // ЗАСЛОН ИМЕЕТ СМЫСЛ, ПОКА ЗАСЛОНЯЮЩИЙ БЬЁТ (v195, USE_MELEE_BEHIND_WHEN_IDLE). Клетка мили выбиралась смежной с
+    // клеткой стрелка и БЛИЖЕ к врагу, чем она, — то есть на клетку впереди строя; при стрелках в трёх это ровно
+    // двойка, где его пятеро стрелков достают, а наш ATTACK (дальность 1) не достаёт. Замер против Coldkimchi#2:
+    // мили стоит вплотную к врагу 1 % крипо-тиков, его блок меняет клетку 71–76 % тиков, урона мы получаем в
+    // 1,5–3,9 раза больше, чем наносим, и к двухсотому тику у наших мили 0–16 атакующих частей из 32 против его
+    // 24–32. Роль щита размен не спасает: его пятеро дают 300 в тик, наши трое лекарей возвращают 216. Пока доля
+    // касаний измеряется единицей (стенд, всякий соперник, идущий в контакт) — всё как было; упала — мили встаёт
+    // ПОЗАДИ стрелков. Это же место, а не ступень движения: в бою клетки раздаёт командир, и slot старше holdMelee
+    fun inFront(cell: FightCell) = front.any { rc -> getRange(cell.pos, rc.pos) <= 1 &&
+        (cell.dist < rc.dist) }
+    for (m in meleeFree.sortedBy { c -> front.minOfOrNull { getRange(c, it.pos) } ?: 0 }) {
+        place(m, meleeCmp(m), { it.meleeAdj <= 1 && inFront(it) }) { cell -> inFront(cell) }
+            ?: place(m, meleeCmp(m), null) { cell -> cell.dist == frontDist && front.any { rc -> getRange(cell.pos, rc.pos) <= 2 } }
+            ?: place(m, meleeCmp(m), null) { true }
+    }
+    // лекари: вплотную к бойцу с наибольшим входящим уроном на ЕГО клетке; сам не в двух от его мили; под меньшим огнём
+    val fighterCells = ArrayList(rangedCells.values)
+    for (m in meleeFree) slotOf[m.id]?.let { p -> cells[p.x * 100 + p.y]?.let { fighterCells.add(it) } }
+    for (m in melees) if (meleeFree.none { it.id == m.id }) cells[m.x * 100 + m.y]?.let { fighterCells.add(it) }
+    val healers = rear.filter { hasHeal(it) }
+    val wounded = rear.filter { !hasHeal(it) }
+    fun needAt(cell: FightCell): Double = fighterCells.filter { getRange(cell.pos, it.pos) <= 1 }.maxOfOrNull { it.dmg } ?: -1.0
+    // ПОКРЫТИЕ (v128, USE_HEALERS_COVER): клетка лекаря — где больше НАШИХ бойцов вплотную, и лишь потом наибольший входящий
+    // урон у соседа. Живьём (реплеи 506/411, первые 60 тиков контакта) его лекарь вплотную к нашей цели 62–83 % тиков, наш к
+    // его цели 14–16 %, при том что цель огня у обеих сторон меняется почти каждый тик (та же, что тиком раньше, в 31–44 %):
+    // лекарь, идущий к бойцу под огнём, приходит, когда огонь уже ушёл; лекарь, касающийся многих, уже стоит рядом
+    val healerCells = ArrayList<FightCell>()
+    // покрытие — по бойцам, у которых ЕЩЁ нет лекаря вплотную (жадное покрытие): по простому числу соседей трое лекарей
+    // сбегались к одной плотной группе и бросали остальных (v128a: brawl m31 из победы в уничтожение армии)
+    fun coverAt(cell: FightCell): Int = fighterCells.count { f -> getRange(cell.pos, f.pos) <= 1 && healerCells.none { h -> getRange(h.pos, f.pos) <= 1 } }
+    // против сомкнутого блоба «клетка без его мили» уступает покрытию (v135, см. USE_HEALERS_COVER_OVER_SAFETY):
+    // у блоба КАЖДАЯ клетка рядом с раненым соседствует с его мили, и лекари садились туда, где лечить некого —
+    // 60 крипо-тиков с раненым вплотную из шестисот против его 129, лечений 85+12r против 132+65r
+    fun healerCmp(c: Creep) = compareBy<FightCell> { if (it.meleeNear == 0) 1 else 0 }
+        .thenBy { needAt(it) }
+        .thenBy { -it.dmg }
+        .thenBy { -getRange(c, it.pos) }
+    fun byFighter(cell: FightCell) = fighterCells.any { getRange(cell.pos, it.pos) <= 1 }
+    for (h in healers.sortedBy { c -> fighterCells.minOfOrNull { getRange(c, it.pos) } ?: 0 }) {
+        val cell = place(h, healerCmp(h), { it.meleeNear == 0 && byFighter(it) }) { cell -> byFighter(cell) }
+            ?: place(h, healerCmp(h), null) { cell -> fighterCells.any { getRange(cell.pos, it.pos) <= HEAL_RANGE } }
+            ?: place(h, healerCmp(h), null) { true }
+        if (cell != null) healerCells.add(cell)
+    }
+    // раненые без оружия: дальше выстрела, рядом с лекарем, под меньшим огнём
+    fun woundedCmp(c: Creep) = compareBy<FightCell> { if (it.dist > RANGED_RANGE) 1 else 0 }
+        .thenBy { if (healerCells.any { h -> getRange(it.pos, h.pos) <= 1 }) 1 else 0 }
+        .thenBy { -it.dmg }
+        .thenBy { -getRange(c, it.pos) }
+    for (w in wounded) place(w, woundedCmp(w), { it.dist > RANGED_RANGE }) { true }
+    Memory.lastPlan.clear()
+    Memory.lastPlan.putAll(plan)
 }
