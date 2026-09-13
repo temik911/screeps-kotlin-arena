@@ -212,7 +212,11 @@ def check(code_path, base, docs_pattern=None, append_to=None):
         m = re.search(r'\s//\s?(.*)$', l)
         if m and l[:m.start()].count('"') % 2 == 0:
             removed_comments.append(m.group(1).strip())
-    known = docs_text(docs_pattern)
+    # известно и то, что ПЕРЕЕХАЛО в другой файл пакета (разбивка на файлы — не удаление)
+    pkg = os.path.dirname(code_path)
+    moved = ' '.join(norm(open(os.path.join(pkg, f), encoding='utf-8').read())
+                     for f in sorted(os.listdir(pkg)) if f.endswith('.kt') and os.path.join(pkg, f) != code_path)
+    known = docs_text(docs_pattern) + ' ' + moved
     vers = set()
     nums = set()
     texts = []
