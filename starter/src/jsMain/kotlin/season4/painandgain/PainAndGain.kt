@@ -2519,7 +2519,17 @@ object PainAndGain {
      *     для лекаря всегда, без исключения healingNow; клетки стены (v228) — тоже вне досягаемости стрелков. Вплотную
      *     лечит с дальней от врага стороны бойца, иначе издали (24 против 72) — цена видна в покрытии урона.
      *     Приборы: `hexp=<лекаре-тиков в досягаемости>/<лекаре-тиков в бою>`, `hlost=<урон по лекарям за матч>`.
-     *     Вердикт — гейт и живой A/B против MetalicaX#10. */
+     *  3. ПЕРВАЯ РЕДАКЦИЯ ОТВЕРГНУТА живым замером (рука fix 2-6 против MetalicaX#15 и 0-4 против #14, разгромы за 100
+     *     тиков): досягаемость стрелков попала в `inReach`, а это условие ветки бегства (`mustFlee` при `support &&
+     *     inReach`) — лекари убегали от армии (шагов бегства 23–229 за поражение против 3–7 в победах), не лечили и
+     *     ловили выстрелы вдогонку (`hlost` 990–2 661, `hexp` 25–68 %). Здесь досягаемость стрелков только закрывает
+     *     клетки для шага: снаружи лекарь в неё не входит, изнутри выходит к ближайшей открытой клетке по пути к
+     *     подопечному, а если все соседи закрыты — стоит и лечит; бегство считается по прежней досягаемости.
+     *  4. ВТОРАЯ РЕДАКЦИЯ — гейт 134/135, FAIL match34:scatter (гонка очков с его рассыпанной армией: 24 326 : 23 996 →
+     *     22 306 : 24 316 при `hexp` 13/938 и `hlost` 0): клетки в трёх от любого его ОДИНОЧКИ закрывались лекарю на пути к
+     *     флагу, и он отставал. Опасность лекарям измерена от массы его стрелков (пять R6 и «лекарь первым»), а не от
+     *     одиночки на 60 в тик — клетки закрываются только при сомкнутой его армии (enemyMassedNow); под командиром фильтр
+     *     остаётся (режим боя и есть сомкнутый бой). */
     private const val USE_HEALER_OUT_OF_REACH = true
     /** ...и ценность пациента для КОНКРЕТНОГО лекаря: вплотную он лечит вчетверо сильнее, чем издали, поэтому приказ
      *  ранжирует цели по дошедшему лечению, а не по чужой нужде.
@@ -7379,8 +7389,10 @@ cpuMark("a.evade")
             // огне делать нечего, а живым он вернётся с лечением. Серия 307–326: наши обезоруженные стояли в трёх от его
             // вооружённых половину своего времени (131 из 258, 264 из 552 крип-тиков), его — десятую (26 из 79, 7 из 11);
             // правило «обезоруженные в досягаемости» — 3 из 6 поражений и 0 из 18 побед
-            val reachMine = if ((USE_STRIPPED_LEAVES_REACH && wounded) || (USE_HEALER_OUT_OF_REACH && healer)) reachCells else reachNow
+            val reachMine = if (USE_STRIPPED_LEAVES_REACH && wounded) reachCells else reachNow
             val inReach = (creep.x * 100 + creep.y) in reachMine
+            // ...и для лекаря закрытые для шага клетки — полная досягаемость (v234, вторая редакция), бегство — по прежней
+            val avoidCells = if (USE_HEALER_OUT_OF_REACH && healer && enemyMassedNow) reachCells else reachMine
             // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
             if (healer && inCombat) { hexpAll++; if ((creep.x * 100 + creep.y) in reachCells) hexpN++; hlostSum += (lostTick[creep.id] ?: 0) }
             val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
@@ -7516,7 +7528,7 @@ cpuMark("a.evade")
                     // наш лекарь стоял вплотную к самому раненому в 13% замеров и дальше трёх клеток — в 32%. Закрытыми
                     // остаются клетки вплотную к вражескому МИЛИ: там лекарь не лечит, а умирает
                     val healingNow = healer && healMate != null && healMate.hits < healMate.hitsMax && getRange(creep, healMate) <= HEAL_RANGE + 1
-                    if (support && !inReach && reachMine.isNotEmpty() && !(healingNow && !(USE_HEALER_OUT_OF_REACH && healer))) myBlocked = myBlocked + reachMine
+                    if (support && !inReach && avoidCells.isNotEmpty() && !(healingNow && !(USE_HEALER_OUT_OF_REACH && healer && enemyMassedNow))) myBlocked = myBlocked + avoidCells
                     if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
                         val front = HashSet<Int>()
                         for ((dx, dy) in DIRECTIONS) {
