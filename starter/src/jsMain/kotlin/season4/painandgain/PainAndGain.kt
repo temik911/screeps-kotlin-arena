@@ -231,7 +231,7 @@ object PainAndGain {
     /** Пара: тиков, когда пост стал флагом, и тиков с постом вообще. */
     private var postOnFlag = 0
     internal var postAll = 0
-    private var postContest = 0
+    internal var postContest = 0
     internal var rotOut = 0
     /** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
     internal var marchFlow = 0
@@ -244,7 +244,7 @@ object PainAndGain {
     internal var hfullAll = 0
     internal var hoverSum = 0
     internal var hdelivSum = 0
-    private var hswapN = 0
+    internal var hswapN = 0
     /** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
     internal var hexpN = 0
     internal var hexpAll = 0
@@ -256,8 +256,8 @@ object PainAndGain {
     /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
     internal var flagsNow: List<FlagInfo> = emptyList()
     internal var scoutShots = 0
-    private var scoutReach = 0
-    private var scoutTicks = 0
+    internal var scoutReach = 0
+    internal var scoutTicks = 0
     /** БЕГУН БЕРЁТ ФЛАГ НАШЕЙ ПОЛОВИНЫ ПОД БРОСКОМ (проба после серии 387–406, дебют против гастролёра — MetalicaX#3/#4, けろびー#12):
      *  см. captureAllowed. ОТВЕРГНУТО таблицей входов: 17 хуже / 5 лучше по +20, brawl m33 из уничтожения его в уничтожение НАШЕЙ
      *  армии (2628:11684 → 8051:6038 по +50), m32 brawl живых 11 → 7, m30 brawl +50 3028:12818 → 5940:5767 — дебафф бегуна перед
@@ -752,13 +752,13 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    internal const val BOT_VERSION = "v256"
+    internal const val BOT_VERSION = "v257"
     internal const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
      *  0 из 22 355 494 сверок по 135 сценариям. Осталось то, что отвечает на живой вопрос, — пики полей:
      *  обнулившееся поле обязано быть ВИДНО, а не тихо давать нули. */
-    private const val FIELD_LOG = true
+    internal const val FIELD_LOG = true
 
     // ---------- поле цели (v204, этап 5) ----------
     /**
@@ -834,10 +834,10 @@ object PainAndGain {
      *  а армейская мера при этом говорит «не наступать». Ненулевой числитель — отпечаток расхождения масштабов. */
     internal var edgeSpot = 0
     internal var edgeAll = 0
-    private val disarmedFoe = HashSet<String>()
-    private var hulkTicks = 0
-    private var hulkInReach = 0
-    private var hulkRevived = 0
+    internal val disarmedFoe = HashSet<String>()
+    internal var hulkTicks = 0
+    internal var hulkInReach = 0
+    internal var hulkRevived = 0
 
     /** Крипов, вставших на каждом уровне ворот (индекс = порог выживания в тиках), и добор мимо ворот. */
     internal val gateLevels = IntArray(8)
@@ -866,10 +866,10 @@ object PainAndGain {
     /** Решений раздачи, где слагаемое цели изменило выбранную клетку, и решений всего. */
     internal var goalFlips = 0
     internal var goalDecisions = 0
-    private const val DEBUG_MAP = true
+    internal const val DEBUG_MAP = true
     /** Выключено: отрисовка влияния — ~57 000 вызовов contribution за тик (13×13 клеток × 12 стрелков × 28 крипов),
      *  первый тик матча 7 вылетел по таймауту именно в drawDebug; журнал даёт всё, что нужно для разбора. */
-    private const val DEBUG_VISUALS = false
+    internal const val DEBUG_VISUALS = false
     internal const val LOG_EVERY = 10
 
     internal val DIRECTIONS = listOf(
@@ -878,7 +878,7 @@ object PainAndGain {
 
     internal enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
 
-    private var greeted = false
+    internal var greeted = false
     internal var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
     internal var posture = Posture.HOLD
     internal var objectiveFlagId: String? = null
@@ -891,8 +891,8 @@ object PainAndGain {
     internal var pushTicks = 0
 
     /** Стартовые центры армий — «дома» сторон (спавнов нет): половины карты и точка поста. */
-    private var homePos: Position? = null
-    private var enemyHomePos: Position? = null
+    internal var homePos: Position? = null
+    internal var enemyHomePos: Position? = null
 
     internal val arrivalById = HashMap<String, Int>()
     internal var corneredWas = false
@@ -930,8 +930,8 @@ object PainAndGain {
     internal var mquietMoved = 0
     internal var mquietGain = 0.0
     /** ...и то же в раздаче командира (вторая редакция): приказов мили, где выбранная клетка — удар, и из них уведённых. */
-    private var cmdQuietAll = 0
-    private var cmdQuietMoved = 0
+    internal var cmdQuietAll = 0
+    internal var cmdQuietMoved = 0
     /** Пара к USE_GUARD_IS_CATCHABLE: крипо-проверок, где враг «уходит», и из них тех, где он страж своего флага. */
     /** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
     internal var majOffers = 0
@@ -946,25 +946,25 @@ object PainAndGain {
     internal var fhlChosen = 0
     /** Пара к USE_MASS_BY_ARRIVAL (v226): тиков сигнала броска только по мере прихода / всех тиков сигнала / тиков, где мера
      *  прихода добавила «сомкнут» к мере формы. */
-    private var rushByArrival = 0
-    private var rushSignalAll = 0
-    private var massArrivalAdded = 0
+    internal var rushByArrival = 0
+    internal var rushSignalAll = 0
+    internal var massArrivalAdded = 0
     /** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
      *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
     /** Третья постановка (v227, см. USE_ZERO_LEAD_BREAK): тиков подряд с мощью ноль при отрыве; режим разрыва контакта;
      *  приборы — тиков разрыва / тиков с мощью ноль при отрыве. */
     internal var zeroLeadTicks = 0
-    private var zlbTicks = 0
+    internal var zlbTicks = 0
     internal var zlbZero = 0
     internal var victimNow: Creep? = null          // стена лечения (v228): терявший больше всех за прошлый тик
     internal var victimSaveable = false            // ...и его потеря не больше доставимого в него лечения
     /** Лекарь при мили (v235, см. USE_HEALER_AT_MELEE): лекарь → id его фронтового мили и клетка при нём с тыла. */
     internal val meleeWardOf = HashMap<String, String>()
     internal val meleeWardCell = HashMap<String, Position>()
-    private var hatmN = 0
-    private var hatmAll = 0
-    private var hatmCmd = 0
-    private var hatmCmdAll = 0
+    internal var hatmN = 0
+    internal var hatmAll = 0
+    internal var hatmCmd = 0
+    internal var hatmCmdAll = 0
     internal var hwallTicks = 0
     internal var hwallVictimTicks = 0
     internal var hwallHeals = 0
@@ -979,17 +979,17 @@ object PainAndGain {
     internal var hwallPredN = 0
     internal var wallCells: List<Position> = emptyList()   // клетки стены: соседние с жертвой, его вооружённые мили дальше двух
     internal val wallCellOf = HashMap<String, Position>()  // клетка стены, назначенная лекарю на этот тик
-    private var survTicks = 0
+    internal var survTicks = 0
     internal var survLead = 0
-    private var survContact = 0
+    internal var survContact = 0
     /** ...и тиков режима, где уходить некуда и он в контакте — бой строем (вторая редакция). */
-    private var survFights = 0
+    internal var survFights = 0
     internal var approachRate = 0.0
     internal var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
     internal var rushStartDist = 0                         // расстояние между центрами на начало броска (v215)
     internal var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
-    private var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
+    internal var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     internal var idleDetachTicks = 0                       // подряд тиков, когда весь отряд без цели
     internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
@@ -1000,10 +1000,10 @@ object PainAndGain {
     internal var lastFireTick = -1000                      // последний тик, когда кто-то из наших бил или стрелял (см. USE_COLD_CONTACT)
     internal var lastNonHuntTick = 0                       // последний тик в FLAG/EVADE/RETREAT (см. USE_DRY_HUNT_RANGED_GUARD: охота длится)
     internal var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
-    private var firstReachTick = -1                       // первый такой тик (см. USE_DETACH, v68: тишина считается от него)
+    internal var firstReachTick = -1                       // первый такой тик (см. USE_DETACH, v68: тишина считается от него)
     internal var firstNearTick = -1                        // первый тик с его вооружённым в ENGAGE_RANGE + RANGED_RANGE (v72: признаки фермера — от него)
     internal var interceptFlagId: String? = null           // флаг, который фермер обязан взять следующим (см. USE_INTERCEPT)
-    private var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
+    internal var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
     internal var ourDamageTaken = 0                        // снято с нас за матч (см. USE_PUSH_LEDGER)
     internal var ledgerWindow = 0
     internal var ourLostWindow = 0
@@ -1054,7 +1054,7 @@ object PainAndGain {
     internal var lastBodiesKey = ""
 
     internal val flowFull = HashMap<Int, Boolean>()   // поле посчитано целиком (не ограничено NEAR_FLOW), см. flowTo/v131b
-    private var flowSig = 0                            // подпись препятствий, при которой считан кэш
+    internal var flowSig = 0                            // подпись препятствий, при которой считан кэш
     /** Срок жизни поля к неподвижной цели (флаг, дом, угол): препятствия поля — стены, чужие рампарты, спавны,
      *  неподвижные крипы и чужие флаги — меняются редко, а считались поля каждый тик: 21–24 BFS в тик в гуще боя
      *  (семь флагов для выбора цели, девять точек выхода, цели крипов) — и три живых таймаута (матчи 16–18). Поле к
@@ -1078,11 +1078,11 @@ object PainAndGain {
      *  пределах бюджета. Без этого начало боя (клетки врагов для броска и добычи, точки уклонения, флаги, вычищенные
      *  из кэша за время боя) давало 16–17 полных полей одним тиком (стенд, счётчик bfs). */
     internal const val BFS_BUDGET = 8.0
-    private const val FLOW_KEEP = 60   // тиков без обращения — запись кэша вычищается (иначе рост на клетках целей)
+    internal const val FLOW_KEEP = 60   // тиков без обращения — запись кэша вычищается (иначе рост на клетках целей)
     internal var bfsCost = 0.0
-    private var bfsMaxCost = 0.0
+    internal var bfsMaxCost = 0.0
     internal var bfsThisTick = 0
-    private var bfsMaxTick = 0
+    internal var bfsMaxTick = 0
     /** Предел стоимости пути для поля «вблизи» (см. DistanceMap.flowFieldTo): цели-крипы — лекарь, раненый, бросок,
      *  добыча — в нескольких клетках; крип за пределом получает полное поле. */
     internal const val NEAR_FLOW = 24
@@ -1102,8 +1102,8 @@ object PainAndGain {
 
     /** Отметка «тик открыт» (см. USE_ABORT_REPAIR) и пара прибора: оборванных тиков / записей, положенных обратно. */
     private var tickOpen = false
-    private var abortTicks = 0
-    private var abortEntries = 0
+    internal var abortTicks = 0
+    internal var abortEntries = 0
     /** Вес тела и живые MOVE на этот тик (см. USE_BODY_MEMO); чистятся в начале тика. */
     internal val bodyWeightNow = HashMap<String, Int>()
     internal val liveMovesNow = HashMap<String, Int>()
@@ -1127,190 +1127,31 @@ object PainAndGain {
     }
 
     private fun tickBody() {
-        bodyWeightNow.clear()
-        liveMovesNow.clear()
-        Executor.clear()
-        flagFlipNow = false
-        bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick)
-        bfsMaxCost = maxOf(bfsMaxCost, bfsCost)
-        bfsThisTick = 0
-        bfsCost = 0.0
-        val nowT = getTicks()
-        val dead = Memory.flowCacheTick.filterValues { nowT - it > FLOW_KEEP }.keys.toList()
-        for (k in dead) { Memory.flowCache.remove(k); Memory.flowCacheTick.remove(k) }
-        avoidCellsCache = null
-
-        val myCreeps = getObjectsByPrototype(Creep::class).filter { it.my && it.exists }
-        val enemyCreeps = getObjectsByPrototype(Creep::class).filter { !it.my && it.exists && !it.spawning }
-        val active = myCreeps.filter { !it.spawning }
-        val combatEnemies = enemyCreeps.filter { val p = InfluenceMap.profileOf(it); p.melee + p.ranged + p.heal > 0.0 }
-
-        // дома сторон — стартовые центры армий: спавнов на карте нет, половины и пост считаются от них
-        if (homePos == null && active.isNotEmpty()) homePos = centroidOf(active)
-        if (enemyHomePos == null && enemyCreeps.isNotEmpty()) enemyHomePos = centroidOf(enemyCreeps)
-        val home = homePos ?: centroidOf(active) ?: InfluenceMap.cell(50, 50)
-        val enemyHome = enemyHomePos ?: InfluenceMap.cell(99 - home.x, 99 - home.y)
-
-        val flags = collectFlags(myCreeps, enemyCreeps, combatEnemies)
-        flagsNow = flags
-        applyEffects(flags, myCreeps, enemyCreeps)
-        accountScore(flags)
-
-        if (!greeted) {
-            greeted = true
-            probe(flags, myCreeps, enemyCreeps, home, enemyHome)
-        }
-        // дамп карты — четырьмя частями по 25 строк на тиках 3–6 (см. logMap)
-        if (DEBUG_MAP && mapMarks == null) captureMapMarks(flags, myCreeps, enemyCreeps)
-        if (DEBUG_MAP && getTicks() in 3..6) logMap((getTicks() - 3) * 25)
-        logBodies(myCreeps, enemyCreeps)
-
-        // раненый (см. wounded): боец, потерявший всё оружие, остаётся в армии, пока жив хоть один ходячий лекарь —
-        // лечение возвращает части (движок: части живы по сумме хитов, лечение идёт с хвоста тела: в матче 8 melee_1
-        // из M5 с 416 хитами стал M8A8 к 199-му тику у одного лекаря); прежде он уходил «бегуном» за флагами и гиб
-        val healersAlive = active.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
-        fun wounded(c: Creep) =  healersAlive && !hasWeapon(c) && !hasHeal(c) && c.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
-        Memory.detachedIds.retainAll { id -> active.any { it.id == id && hasWeapon(it) && canMove(it) } }
-        // ...и зачисленные КОМАНДИРОМ (v160, см. commandRace): его задание на захват действует так же, как detach —
-        // иначе крип, посланный за флагом, остаётся бойцом строя и флага не берёт
-        val takers = { id: String -> id in Memory.detachedIds || (id in Memory.cmdDetach) }
-        val army = active.filter { (hasWeapon(it) || hasHeal(it) || wounded(it)) && !takers(it.id) }
-        val runners = active.filter { (!hasWeapon(it) && !hasHeal(it) && !wounded(it)) || takers(it.id) }
-        val immobile = active.filter { !canMove(it) }
-
-        val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }
-        val ramparts = getObjectsByPrototype(StructureRampart::class).filter { it.exists }
-        val spawns = getObjectsByPrototype(StructureSpawn::class).filter { it.exists }
-        val blocked: List<Position> = walls + ramparts.filter { it.my != true } + spawns + immobile
-        val blockedForEnemy: List<Position> = walls + ramparts.filter { it.my != false } + spawns
-
-        InfluenceMap.setProtectedCells(ramparts.filter { it.my == true }.mapTo(HashSet()) { it.x * 100 + it.y })
-        InfluenceMap.setEnemyBlocked(blockedForEnemy.mapTo(HashSet()) { it.x * 100 + it.y })
-        // ПОЛЯ ВЛИЯНИЯ (v204): строятся ОДИН раз за тик над одним множеством крипов — прежде commandFight
-        // пересобирал ту же опасность пять раз за тик, по разу на замысел, и звал profileOf внутри цикла
-        // по клеткам. Опасность клетки в раздаче читается отсюда (см. inc в commandFight).
-        InfluenceMap.buildFields(active, enemyCreeps)
-        // скауты врага: сколько их и сколько крипо-тиков они провели в дальности наших стволов. Знаменатель
-        // большой при нулевом числителе — это и есть «мы их пропускаем», сказанное числом
-        for (e in enemyCreeps) if (scoutFoe(e)) {
-            scoutTicks++
-            if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) scoutReach++
-        }
-        // остовы: считаются ПОСЛЕ построения полей, чтобы потенциал тела уже был известен
-        for (e in enemyCreeps) {
-            val live = InfluenceMap.profileOf(e)
-            val pot = InfluenceMap.potentialOf(e)
-            val armable = pot.melee + pot.ranged > 0.0
-            val disarmed = armable && live.melee + live.ranged <= 0.0
-            if (disarmed) {
-                disarmedFoe.add(e.id)
-                hulkTicks++
-                if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) hulkInReach++
-            } else if (e.id in disarmedFoe) {
-                disarmedFoe.remove(e.id)
-                if (live.melee + live.ranged > 0.0) hulkRevived++
-            }
-        }
-        cpuMark("fields")
-        val rawDanger = InfluenceMap.dangerCostMatrix(enemyCreeps, blocked)
-        // флаг берётся тем, кто на него ВСТАЛ, — и любой шаг армии через чужой флаг был захватом: в матче 3 армия
-        // на марше взяла D5 и второй A3 (occupant=none в журнале) и дралась при A×0.6 D×1.1 против врага, с
-        // которого сама же сняла дебаффы. Не наш флаг — стена для всех, кроме назначенного на него
-        val flagCells = flags.filter { !it.ours }.mapTo(HashSet()) { it.pos.x * 100 + it.pos.y }
-        val flagBlocked = flags.filter { !it.ours }.map { it.pos }
-        val blockSig = blocked.sumOf { it.x * 100 + it.y + 1 } * 31 + flagBlocked.sumOf { it.x * 100 + it.y + 1 }
-        // смена препятствий: поля не удаляются, а помечаются устаревшими — сверх бюджета (см. BFS_BUDGET) идут как есть
-        if (blockSig != flowSig) { for (k in Memory.flowCacheTick.keys.toList()) Memory.flowCacheTick[k] = -1000; flowSig = blockSig }
-        val dangerMatrix = rawDanger.clone()
-        for (c in flagCells) dangerMatrix.set(c / 100, c % 100, 255)
-        val passiveEnemy = combatEnemies.isNotEmpty() && combatEnemies.all { stationaryFor(it) >= PASSIVE_TICKS }
-
-        DistanceMap.syncWalls(walls.size)
-        DistanceMap.ensureBuilt(home, enemyHome)
-        cpuMark("built")
-
-        cpuMark("prep")
-        val ourCentroid = centroidOf(army.ifEmpty { active }) ?: home
-        val enemyCentroid = centroidOf(combatEnemies.ifEmpty { enemyCreeps })
-        val ctx = Ctx(home, enemyHome, myCreeps, active, army, runners, enemyCreeps, combatEnemies, blocked, rawDanger, dangerMatrix, flags, flagCells, flagBlocked, passiveEnemy, ourCentroid, enemyCentroid)
-
-        enemyArrivalTicks(ctx)
-        // предзагрузка (v131b): потоки ко всем флагам считаются на первом тике, чей лимит 1000 мс, — второй тик (лимит 100 мс,
-        // холодный JIT, 60–95 мс живьём) находит их в кэше вместо семи BFS
-        if (getTicks() == 1) { for (f in ctx.flags) flowTo(ctx, f.pos); cpuMark("prefetch") }
-        cpuMark("arrival")
-        plannedCaptures.clear()
-        // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
-        // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
-        val armedNow = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
-        val massedByShape = armedNow.size >= 6 && centroidOf(armedNow)?.let { c -> armedNow.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedNow.size * 2 } == true
-        // СОМКНУТ ТОТ, КТО ПРИХОДИТ ВМЕСТЕ (v226, см. USE_MASS_BY_ARRIVAL): колонна на марше двумя эшелонами (пять впереди,
-        // четверо в пятнадцати клетках позади) по форме не сомкнута — центр масс лежит в зазоре, и «в MASS_RANGE от центра»
-        // даёт ноль, — а к нам она приходит целиком за шесть тиков. Мера прихода: две трети его вооружённых не дальше
-        // MASS_RANGE от ближайшего к нашей массе по расстоянию до неё
-        val massedByArrival =  armedNow.size >= 6 && run {
-            val d = armedNow.map { getRange(it, ctx.ourCentroid) }
-            val near = d.minOrNull() ?: return@run false
-            d.count { it - near <= MASS_RANGE } * 3 >= armedNow.size * 2
-        }
-        if (massedByArrival && !massedByShape) massArrivalAdded++
-        val enemyMassed = massedByShape || massedByArrival
-        // с гистерезисом: темп сближения ходит вокруг порога (колонна на марше то растягивается шире MASS_RANGE, то
-        // замедляется), и без него уклонение сменялось стоянием каждые десять-тридцать тиков, пока враг шёл — матч 32:
-        // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.
-        // Начатый бросок кончается, когда враг взял флаг, замер, разошёлся или ушёл дальше EVADE_RANGE и не приближается
-        val noEnemyFlag = ctx.flags.none { it.theirs }
-        // блоб, идущий к СВОБОДНОМУ ФЛАГУ, а не на нас (v127, USE_RUSH_NOT_FLAG_BOUND): ближайший к его центру свободный флаг
-        // не дальше нашего центра, и его темп к этому флагу не ниже темпа к нам — он на туре. Матч 5 серии 367–386 (MetalicaX#3):
-        // с 10-го по 41-й rush=true, армия на посту, захваты под вето; он взял D5 на 41-м, R3 на 45-м, оба A3 на 60-м, наш
-        // первый флаг — на 54-м. Бросок сквозь центр без захвата снова читается броском, когда его темп к флагу падает
-        val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed  
-        if (rushSignal) { rushSignalAll++; if (!massedByShape) rushByArrival++ }
-        val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
-            (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
-        unflaggedRushNow = rushSignal || rushHold
-        // бой близко — для ЗАХВАТОВ флаг врага не в счёт: «безфлаговый» бросок кончился на 39-м тике, когда его армия по пути
-        // взяла D5, и скаут взял R3 на 42-м (матч 47, пятый бой с けろびー подряд с R×0.8); уклонение по-прежнему только от
-        // безфлагового (флагованный слабее — с ним дерёмся), а дебафф перед боем не берём ни от кого
-        // ...и «идёт ОН, а не мы» (v216, см. USE_RUSH_NEEDS_HIS_MOVE): тот же корректор, что уже стоит у строя
-        // стрелков, — центр его вооружённых обязан сдвинуться за окно не меньше чем на четверть окна
-        val hisCentreMoved =  (Memory.hisCentHist.size >= 2 && run {
-            val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
-            maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= APPROACH_WINDOW / 4
-        })
-        fightImminentNow = unflaggedRushNow ||
-            (!ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved)
-        // ...и ЗАПОМИНАЕМ РАССТОЯНИЕ НА НАЧАЛО ПОДХОДА (v215, см. USE_RUSH_VETO_EXPIRES). Первая редакция срока
-        // сравнивала с ТЕКУЩИМ расстоянием между центрами — а оно по мере подхода сокращается, то есть срок
-        // ужесточался ровно наоборот и вето снималось в тот момент, когда бой действительно начинался: строка
-        // match20:brawl+heals перестала проходить гейт (7 674:2 503 -> 12 310:18 500). Время, которое ему нужно,
-        // чтобы дойти, задаётся расстоянием НА СТАРТЕ броска, и оно не меняется, пока бросок идёт
-        if (fightImminentNow && fightImminentTicks == 0)
-            rushStartDist = ctx.enemyCentroid?.let { getRange(ctx.ourCentroid, it) } ?: 0
-        fightImminentTicks = if (fightImminentNow) fightImminentTicks + 1 else 0
-        // враг рядом, но не воюет: армия с боем в досягаемости броска, и наши хиты не падали STALL_TICKS тиков подряд — фермер
-        // (けろびー v5, матчи 51 и 57: шесть флагов к 82-му, 1400 тиков рядом без единого выстрела, 10804:22779 при 12 наших
-        // против его 4 к концу); гейты боя в captureAllowed («в контакте», «бой близко») к нему не применяются, паритет —
-        // применяется. Атакующий стреляет через несколько тиков после контакта, и счётчик не доходит до STALL_TICKS
-        // по ВСЕМ нашим (v56): сумма по армии падала на хиты только что отряжённых в бегуны, «нас ударили» — и отряд распускался
-        // на следующий же тик (стенд m28 farm+weak: 6 detached на 100-м, 0 на 101-м с hurt=0, трижды за матч)
-        val ourHitsSum = ctx.myCreeps.sumOf { it.hits }
-        val hurt = lastOurHits >= 0 && ourHitsSum < lastOurHits
-        if (hurt) ourDamageTaken += lastOurHits - ourHitsSum
-        lastOurHits = ourHitsSum
-        val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
-        noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
-        // фермер — не только «не стреляет», но и «держится дальше броска»: стоящий в 3–6 экран стенда тоже не стрелял, пока
-        // мы стояли на своём флаге, и перехват превратил бой, который v38 выигрывала на 439-м, в стояние до конца матча
-        // (m31 screen: 16000/16000 у обоих 800 тиков, проигрыш по очкам); враг в ENGAGE_RANGE — это бой, не перехват
-        val enemyWithinReach = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
-        enemyNotFightingNow =  noFireTicks >= STALL_TICKS && !enemyWithinReach
-        if (hurt) lastHurtTick = getTicks()
-        if (enemyWithinReach) { lastReachTick = getTicks(); if (firstReachTick < 0) firstReachTick = getTicks() }
-        // «он подходил» для фермера — по NEAR, не по броску (v72): застенчивый лагерь стенда (camp+shy) держит девять клеток и в
-        // восемь не входит никогда — вся цепочка фермера (отряды, порог гонки, стая не преграда) молчала 800 тиков при
-        // pushing=true в девяти клетках от него (m30, 9615:23822)
-        if (enemyNear && firstNearTick < 0) firstNearTick = getTicks()
+        val buildWorldSeg = buildWorld(BuildWorldIn(
+        ))
+        val myCreeps = buildWorldSeg.myCreeps
+        val enemyCreeps = buildWorldSeg.enemyCreeps
+        val active = buildWorldSeg.active
+        val combatEnemies = buildWorldSeg.combatEnemies
+        val flags = buildWorldSeg.flags
+        val wounded = buildWorldSeg.wounded
+        val army = buildWorldSeg.army
+        val runners = buildWorldSeg.runners
+        val passiveEnemy = buildWorldSeg.passiveEnemy
+        val ourCentroid = buildWorldSeg.ourCentroid
+        val enemyCentroid = buildWorldSeg.enemyCentroid
+        val ctx = buildWorldSeg.ctx
+        val readSignalsSeg = readSignals(ctx, ReadSignalsIn(
+            myCreeps = myCreeps,
+            enemyCreeps = enemyCreeps,
+            combatEnemies = combatEnemies,
+            flags = flags,
+            army = army,
+            passiveEnemy = passiveEnemy,
+            ourCentroid = ourCentroid,
+            enemyCentroid = enemyCentroid,
+            ctx = ctx,
+        ))
         runRunners(ctx)
         cpuMark("runners")
         runArmy(ctx)
@@ -1323,106 +1164,27 @@ object PainAndGain {
         Executor.run(moves)
         cpuMark("resolve")
         cpuSummary()
-        InfluenceMap.pruneStances(myCreeps.mapTo(HashSet()) { it.id })
-        // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
-        for (e in enemyCreeps) {
-            val cell = e.x * 100 + e.y
-            if (Memory.enemyPrevCell[e.id] != cell) Memory.enemyLastMove[e.id] = getTicks()
-        }
-        Memory.enemyLastMove.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
-        Memory.enemyPrevCell.clear()
-        for (e in enemyCreeps) Memory.enemyPrevCell[e.id] = e.x * 100 + e.y
-        // история движения — для ловимости (см. evasive)
-        val armedCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ourCentroid
-        Memory.ourCentroidHist.addLast(armedCentroid.x * 100 + armedCentroid.y)
-        while (Memory.ourCentroidHist.size > CHASE_WINDOW) Memory.ourCentroidHist.removeFirst()
-        for (e in enemyCreeps) {
-            val h = Memory.enemyCellHist.getOrPut(e.id) { ArrayDeque() }
-            h.addLast(e.x * 100 + e.y)
-            while (h.size > CHASE_WINDOW) h.removeFirst()
-        }
-        Memory.enemyCellHist.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
-        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-            println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
-            bfsMaxTick = 0
-            bfsMaxCost = 0.0
-        }
-        if (DEBUG_LOG) logStuck(active, enemyCreeps)
-        if (DEBUG_VISUALS) InfluenceMap.drawDebug(army, myCreeps, enemyCreeps)
-
-        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-            val ours = ourPowerOf(army, combatEnemies)
-            val theirs = enemyPowerOf(combatEnemies, army)
-            println(
-                "t=${getTicks()} army=${army.size} runners=${runners.size}(${Memory.detachedIds.size} detached) enemies=${enemyCreeps.size}/${combatEnemies.size} " +
-                "reach=${army.count { hasWeapon(it) && hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasWeapon(it) && hasRanged(it) }} " +
-                // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
-                // центра. Реплеи говорят, что стирание приходит на диаметре 21, а пат — на диаметре 3
-                "spread=${army.filter { hasWeapon(it) && hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${army.count { hasWeapon(it) && getRange(it, armedCentroid) > LEASH_RANGE }} " +
-                // ...и отдельно ЛЕКАРИ за поводком (v202): именно они разъезжались, а прибор их не считал вовсе
-                "hfar=${army.count { !hasWeapon(it) && hasHeal(it) && getRange(it, armedCentroid) > LEASH_RANGE }}/${army.count { !hasWeapon(it) && hasHeal(it) }} " +
-                // ЛЕКАРИ СУДЯТСЯ ВЫЖИВАНИЕМ, А НЕ ДОСТАВЛЕННЫМ ЛЕЧЕНИЕМ (этап 7): v202 поднял лечение и дал 0:3.
-                // Тело лекаря — h6m6, лечащие части СПЕРЕДИ, поэтому урон уничтожает именно их и первыми; замер
-                // разгрома 3d97c4 говорит, что его лекари сохраняют 100 % лечащих частей, наши 8 %. hcov — доля
-                // нужды, покрытая назначенными клетками: прибор раздачи, а не исхода
-                "hparts=${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
-                "ehparts=${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
-                "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
-                "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +
-                "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
-                " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
-                "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
-                "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost objnone=${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll " +
-                "objdrop=${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN budget=$budgetSum/$budgetTicks " +
-                "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
-                "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
-                "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
-                "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold close3=$closeHeld/$closeTicks guard=$guardFired/$guardTicks " +
-                // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
-                // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
-                // консоль не показывала (имя `guns=` занято прибором v200)
-                "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
-                "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
-                "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
-                "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
-                    "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                    "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
-                    "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
-            )
-            // ПЕРЕПИСЬ (v203): только ненулевые ветки, накопительно за матч. Сумма stepCount обязана равняться
-            // размеру армии, умноженному на число тиков, — если не равна, перепись врёт, и всё на ней построенное тоже
-            println("rung t=${getTicks()}: why=" + rungCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " step=" + stepCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " pass=" + passCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " sum=${stepCount.values.sum()}")
-            // ...и ТА ЖЕ ПЕРЕПИСЬ ПО ПРЕДЛОЖЕНИЯМ (v252, этап 9): «задание отряда . терм» и приоритет; сумма обязана совпасть с
-            // суммой rung — оба счёта растут один раз на крипа армии за тик
-            println("tac t=${getTicks()}: mt=" + tacCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " prio=" + prioCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-                " sum=${prioCount.values.sum()}")
-            // ПОЛЯ: пики печатаются, чтобы обнулившееся поле было ВИДНО — прибор, умеющий сказать только
-            // «поле построено», прибором не является
-            if (FIELD_LOG) println("fld t=${getTicks()}: hdbf=${InfluenceMap.healDebuffStats()}" +
-                " eM=${InfluenceMap.fieldPeak(InfluenceMap.eMelee).toInt()} eR=${InfluenceMap.fieldPeak(InfluenceMap.eRanged).toInt()}" +
-                " eH=${InfluenceMap.fieldPeak(InfluenceMap.eHeal).toInt()} aM=${InfluenceMap.fieldPeak(InfluenceMap.aMelee).toInt()}" +
-                " aR=${InfluenceMap.fieldPeak(InfluenceMap.aRanged).toInt()} aH=${InfluenceMap.fieldPeak(InfluenceMap.aHeal).toInt()}" +
-                " eF=${InfluenceMap.fieldPeak(InfluenceMap.eFire).toInt()} atM=${InfluenceMap.fieldPeak(InfluenceMap.attMelee).toInt()}" +
-                " atR=${InfluenceMap.fieldPeak(InfluenceMap.attRanged).toInt()} atH=${InfluenceMap.fieldPeak(InfluenceMap.attHeal).toInt()}" +
-                // ЦЕЛЬ (этап 5): затравок в очаге, перестроек против удержаний очага, и — главное — доля решений
-                // раздачи, которые слагаемое цели ИЗМЕНИЛО. flips=0 за сто тиков есть операционное определение
-                // мёртвого кода
-                " seeds=${goalSeeds.size} goal=(${goalCx},${goalCy}) rebuild=$goalRebuilds/$goalHolds flips=$goalFlips/$goalDecisions" +
-                // ВОРОТА (этап 6): на каком пороге выживания крип нашёл клетку. gate5..gate1 — уровни лестницы,
-                // fell — сколько раз клетки не нашлось даже при пороге в один тик и сработал общий добор. Это
-                // посчитанная версия прежнего МОЛЧАЛИВОГО провала требования
-                " gate=${gateLevels.drop(1).take(5).joinToString("/")} fell=$gateFell" +
-                " intent=" + Memory.intentHist.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" })
-            concSum = 0; concTicks = 0
-            if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
-        }
+        val rememberTickSeg = rememberTick(ctx, RememberTickIn(
+            myCreeps = myCreeps,
+            enemyCreeps = enemyCreeps,
+            army = army,
+            ourCentroid = ourCentroid,
+        ))
+        val armedCentroid = rememberTickSeg.armedCentroid
+        val printTickSeg = printTick(ctx, PrintTickIn(
+            myCreeps = myCreeps,
+            enemyCreeps = enemyCreeps,
+            active = active,
+            combatEnemies = combatEnemies,
+            flags = flags,
+            wounded = wounded,
+            army = army,
+            runners = runners,
+            passiveEnemy = passiveEnemy,
+            ourCentroid = ourCentroid,
+            enemyCentroid = enemyCentroid,
+            armedCentroid = armedCentroid,
+        ))
     }
 
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
@@ -1438,7 +1200,7 @@ object PainAndGain {
     internal var hisTouchShare = 1.0
     internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
     internal var touchMin = 1.0                            // минимум за матч — прибор
-    private var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
+    internal var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
     internal val rungCount = HashMap<String, Int>()        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
     internal val stepCount = HashMap<String, Int>()        // ...и какая ветка ШАГА
     internal val tacCount = HashMap<String, Int>()         // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
@@ -1454,11 +1216,11 @@ object PainAndGain {
      *  занятость, стоять, жилец, очаг. */
     internal var hpN = 0; internal var hpAdj = 0; internal var hpAvail = 0; internal var hpGate = 0
     internal val hpDelta = DoubleArray(8)
-    private var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
+    internal var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
     internal var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     internal var stalemateGap = 0                          // тиков подряд без контакта (см. STALEMATE_GAP)
     internal var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
-    private var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
+    internal var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
     /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
     internal class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
     internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
@@ -1899,10 +1661,10 @@ object PainAndGain {
     /** Цель пачки мили (v221, см. USE_MELEE_PACK): липкий id и значение этого тика — для командира. */
     /** Пары пачки (v221): «тиков с целью пачки / тиков, где у нас есть мили и у него боевые»; «крипо-тиков мили, чьи
      *  ноги идут к цели пачки / крипо-тиков мили с целью ног, пока цель пачки есть». */
-    private var packHeld = 0
+    internal var packHeld = 0
     internal var packTicks = 0
-    private var mpackOnHit = 0
-    private var mpackOn = 0
+    internal var mpackOnHit = 0
+    internal var mpackOn = 0
     /** Разложение тиков ANNIHILATE без размена по источнику (v221, см. annEmptyAll): cmd — режим боя командира,
      *  push — толчок, spot — очаг, melee — его мили вплотную, corner — загнанная группа, still — контакт со стоящим
      *  (USE_WARM_NEEDS_HIS_MOVE), warm — тёплый контакт (с правкой обязан быть нулём), held — постура удержана
