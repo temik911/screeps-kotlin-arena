@@ -74,7 +74,7 @@ internal enum class Priority { SURVIVE, MISSION, OPPORTUNITY }
  * ПРЕДЛОЖЕНИЕ ХОДА (v252, этап 9): что тактик предлагает арбитру за одного бойца армии. [step] — клетка шага или null
  * («стоять»), [priority] — SURVIVE у бегства (`flee`, единственный смертельный порог — `mustFlee`), OPPORTUNITY у
  * свободного шага за добычей (ступени engage, holdMelee, prey, threat, raider), MISSION у остального; [rank] — ранг
- * толкания `Arbiter.rankOf`, по которому арбитр разводит ходы (с v253 спасение — высший ранг);
+ * толкания `Arbiter.pushRank`, по которому арбитр разводит ходы (пока он приоритета не читает — срез тождественный);
  * [mission] — буква задания отряда крипа из постановки стратега (`Strategist.snapshot`: F бой, T захват, G поход, E
  * сопровождение), [term] — ветка шага, а у свободного шага — ступень лестницы, её и печатает прибор `tac t=` как
  * `задание.терм`. [rung] и [stepTag] — прежние теги для переписи `rung t=` и `why t=`. Удар, выстрел и лечение пока
@@ -815,13 +815,11 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // боец, захватчик, — и замысел в нём не участвовал. Теперь очередь назначает командир: крип, исполняющий
         // приказ, идёт первым, а среди приказов вперёд пропускается тот, чья клетка важнее для боя — мили,
         // выходящий в контакт, затем стрелок с целью, затем лекарь к подопечному, и лишь потом все прочие
-        // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
-        // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы);
-        // ранг толкания читает приоритет (v253): спасение разбирается первым и толкает стоящих, см. Arbiter.SURVIVE_PRIORITY
-        val priority = priorityOf(stepTag, whyTag)
-        val prio = Arbiter.rankOf(priority, ordered = commandOf.containsKey(creep.id), melee = hasWeapon(creep) && hasMelee(creep) && !hasRanged(creep),
+        val prio = Arbiter.pushRank(ordered = commandOf.containsKey(creep.id), melee = hasWeapon(creep) && hasMelee(creep) && !hasRanged(creep),
             armed = hasWeapon(creep), healer = hasHeal(creep), wounded = wounded)
-        submit(Proposal(creep, step, priority, prio, missionOf[creep.id] ?: '?',
+        // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
+        // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
+        submit(Proposal(creep, step, priorityOf(stepTag, whyTag), prio, missionOf[creep.id] ?: '?',
             if (stepTag == "free") whyTag else stepTag, whyTag, stepTag), ctx)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.x * 100 + creep.y
