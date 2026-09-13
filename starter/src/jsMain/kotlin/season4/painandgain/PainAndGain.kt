@@ -759,7 +759,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v246"
+    private const val BOT_VERSION = "v247"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -783,7 +783,6 @@ object PainAndGain {
     // крип умрёт за тик), — не предпочтение, а ограничение, и уезжает в ворота, где ему и место.
     private const val W_ATT = 1.0        // притяжение к цели
     private const val W_DAN = 1.0        // опасность клетки
-    private const val W_THREAT = 0.25     // ...и адресная опасность t+1 сверх неё (v246, Forecast.Threat): та же цена, что у поля
     private const val W_FRONT = 0.5      // гребень контакта (уязвимость = 2·min(наши, его)) — мили идёт по фронту
     private const val W_SAG = 0.5        // ...и туда, где фронт проседает
     private const val W_HEALCOVER = 1.0  // мили держится там, куда доходит наше лечение
@@ -949,10 +948,6 @@ object PainAndGain {
     private var adrE = 0.0
     private var adrT = 0.0
     private var adrSame = 0
-    /** Пара к терму threatAt (v246): раздач бойцов по оценке, из них с argmax, перевёрнутым термом, сумма терма в выбранных клетках. */
-    private var thrN = 0
-    private var thrFlips = 0
-    private var thrSum = 0.0
     /** Пара к USE_FOCUS_ANY_HEALER (v224): тиков с его лекарем в досягаемости наших стволов и из них тех, где фокус — лекарь. */
     private var fhlAvail = 0
     private var fhlChosen = 0
@@ -1414,7 +1409,7 @@ object PainAndGain {
                 "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
                 "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
                 "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame thr=$thrN/$thrFlips/${(thrSum / maxOf(thrN, 1)).toInt()} fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+                "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                     "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -5785,18 +5780,9 @@ object PainAndGain {
             }
             return sum
         }
-        /** Опасность клетки ДЛЯ ЭТОГО крипа: поле E; смертельность клетки, ворота выживания и запасные ранги читают его. */
+        /** Опасность клетки ДЛЯ ЭТОГО крипа: адресная при тумблере, иначе поле E — байт в байт прежняя раздача. */
         fun danOf(c: Creep, key: Int): Double =
             InfluenceMap.dangerAt(key)
-        // АДРЕСНАЯ ОПАСНОСТЬ t+1 (v246, план: Forecast.threatAt) — ДОБАВОЧНЫЙ терм в оценке клетки бойца: сверх поля E крип
-        // платит за урон тех его стволов, которые, шагнув, выберут именно его в этой клетке. Замена поля этим термом (v244)
-        // отвергнута A/B; здесь поле остаётся, и терм лишь разводит клетки с одинаковым E по тому, кто в них цель
-        val threat = Forecast.Threat(armedEnemies, Forecast.predictCells(armedEnemies, addrLive))
-        var thrFor: String? = null
-        fun threatCell(c: Creep, p: Position): Double {
-            if (thrFor != c.id) { thrFor = c.id; threat.prepare(c, addrLive) { f -> out[f.id] ?: InfluenceMap.cell(f.x, f.y) } }
-            return threat.at(c, p)
-        }
         val goal = ensureGoalField(fighters, combatEnemies)
         /** Цена клетки по направлению: сколько тиков пути от неё до ближайшего очага. */
         fun goalCost(key: Int): Double {
@@ -5848,11 +5834,9 @@ object PainAndGain {
         // ноль в числителе при живом знаменателе значит «проход отказался», оба нуля значат «до прохода не дошли»
         var passTag = "-"
         fun place(c: Creep, wants: (Position) -> Boolean, rank: (Position) -> Double, depth: Int = 0,
-                  rescue: Boolean = false, probe: ((Position) -> Double)? = null): Boolean {
+                  rescue: Boolean = false): Boolean {
             var best: Position? = null; var bestScore = Double.MAX_VALUE
             var bestTenant: Creep? = null
-            // прибор слагаемого probe (v246, терм threatAt): лучшая клетка БЕЗ него — переворот считается, когда она другая
-            var probeBest: Position? = null; var probeScore = Double.MAX_VALUE
             // ПРИБОР СЛАГАЕМОГО — «сколько решений ИЗМЕНИЛОСЬ», а не «сколько раз код исполнился». Ровно этого не
             // хватало v196: счётчик доказывал, что код работает, и не доказывал, что он поменял хоть одну клетку
             var bare: Position? = null; var bareScore = Double.MAX_VALUE
@@ -5902,17 +5886,11 @@ object PainAndGain {
                 // раздача, теперь — обход соседей, и одна строка гейта поменяла исход именно из-за этого (v181)
                 if (sc < bestScore) { bestScore = sc; best = p; bestTenant = tenant }
                 if (sc0 < bareScore) { bareScore = sc0; bare = p }
-                if (probe != null) { val sp = sc - probe(p); if (sp < probeScore) { probeScore = sp; probeBest = p } }
             }
             val b = best ?: return false
             goalDecisions++
             val bs = bare
             if (bs == null || bs.x != b.x || bs.y != b.y) goalFlips++
-            if (probe != null) {
-                thrN++; thrSum += probe(b)
-                val pb = probeBest
-                if (pb == null || pb.x != b.x || pb.y != b.y) thrFlips++
-            }
             val tenant = bestTenant
             if (tenant != null) {
                 if (depth >= CHAIN_DEPTH) return false
@@ -6052,7 +6030,7 @@ object PainAndGain {
         // отбрасывалось молча; здесь это слагаемое, и оно конкурирует с притяжением честно
         fun scoreMelee(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
             val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, true) else InfluenceMap.attMeleeAt(key)
-            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) + W_THREAT * dan * threatCell(c, p) -
+            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
                 W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
                 W_HEALCOVER * InfluenceMap.healReachAt(key) +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
@@ -6061,7 +6039,7 @@ object PainAndGain {
         // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
         fun scoreRanged(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
             val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, false) else InfluenceMap.attRangedAt(key)
-            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) + W_THREAT * dan * threatCell(c, p) -
+            return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
                 W_LINE * InfluenceMap.influenceOf(key) +
                 CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
         }
@@ -6135,12 +6113,11 @@ object PainAndGain {
                     else -> scoreHeal(c, key, p, att, dan)
                 }
             }
-            val probe: ((Position) -> Double)? = if (role == 2) null else { p -> W_THREAT * dan * threatCell(c, p) }
             for (lvl in ttlMin downTo 1) {
                 val ok = place(c, { p ->
                     (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
                         ttlAt(c, p.x * 100 + p.y, p) >= lvl
-                }, rank, probe = probe)
+                }, rank)
                 if (ok) { gateLevels[minOf(lvl, gateLevels.size - 1)]++; return true }
             }
             gateFell++
