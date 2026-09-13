@@ -21,6 +21,7 @@ MASK = [
     (re.compile(r'hello season4 pain-and-gain v\d+'), 'hello season4 pain-and-gain vX'),
     (re.compile(r' anchor=\S+'), ''),
     (re.compile(r' ovw=\S+ conf=\S+'), ''),
+    (re.compile(r' disp=\S+'), ''),
 ]
 
 
@@ -37,7 +38,7 @@ def lines(p):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--old', default='runs/gate_235')
+    ap.add_argument('--old', default='runs/gate_240', help='эталон логов: посадка, с которой сверяется тождество (после поведенческой правки эталон переснимается с её тега в отдельном ворктри)')
     ap.add_argument('--new', default='tools/stub/painandgain/out')
     ap.add_argument('--show', type=int, default=6, help='сколько расхождений печатать подробно')
     ap.add_argument('only', nargs='*')

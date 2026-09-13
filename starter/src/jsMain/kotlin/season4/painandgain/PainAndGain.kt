@@ -702,7 +702,7 @@ object PainAndGain {
      *  серии стало пять вместо двух. Флаг под его ударом берётся, когда мы сильнее, а не когда просто равны. */
     /** ...и EVADE ТОЖЕ ЖДЁТ СРОКА (v183): изъятие для него делало пилу с периодом ровно POSTURE_HOLD и отодвигало
      *  армию к стене перед каждым боем. Без срока остаётся только RETREAT — настоящее спасение. */
-    private const val POSTURE_HOLD = 5
+    internal const val POSTURE_HOLD = 5
     private const val CAPTURE_EDGE = 1.1
     /** ЦЕЛАЯ АРМИЯ — ЭТО И ЕСТЬ ЗАПАС. НЕ ВКЛЮЧЕНО (v187): рассуждение выглядело безупречно — против соперника, чьё
      *  лечение перекрывает наш урон, порог по МОЩИ не берётся никогда, и матч кончается «обе армии целы, флаги 1:4,
@@ -759,7 +759,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v240"
+    private const val BOT_VERSION = "v241"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -883,7 +883,7 @@ object PainAndGain {
         0 to 0, -1 to -1, 0 to -1, 1 to -1, -1 to 0, 1 to 0, -1 to 1, 0 to 1, 1 to 1,
     )
 
-    private enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
+    internal enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
 
     private var greeted = false
     private var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
@@ -1411,7 +1411,7 @@ object PainAndGain {
                 "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks lead=$leadTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -3250,22 +3250,49 @@ object PainAndGain {
         if (!evade) evadeTarget = null
         // ...и в выживании отход к ТОЧКЕ не берётся: стоящую у точки армию он добивает (v223, вторая редакция)
         val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible 
+        // ---- меры, которые читает решение о режиме командира (подняты сюда в v241: одно решение — одни входы) ----
+        // боеспособные: вооружённые и лекари — фокус, контакт и местные группы считаются по ним, раненые не в счёт
+        val combatArmy = army.filter { hasWeapon(it) || hasHeal(it) }
+        // «их мили в бою» — только ВПЛОТНУЮ к нашему вооружённому: в 2–3 клетках это экран, не атака. Матч 43 (けろびー v2):
+        // его мили сорок тиков стояли в двух-трёх от наших и не били (вплотную 7 % крип-тиков, 8 ударов за бой), его стрелки в
+        // трёх снимали наших мили по одному (r→melee 132 из 180), а прижим считал «мили в трёх» атакой и молчал до 104-го
+        val theirMeleeIn = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && combatArmy.any { hasWeapon(it) && getRange(e, it) <= 1 } }
+        val underTheirFire = combatArmy.any { InfluenceMap.damageAt(it.x, it.y, combatEnemies) > 0.0 }
+        val retreatByDistance = Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
+        // ...и по ЕГО шагу (v222, см. USE_RETREAT_BY_HIS_STEP): его центр сейчас против его центра в начале окна, оба — от
+        // нашего центра в начале окна
+        val retreatByHisStep = Memory.hisCentHist.size >= 2 && Memory.ourCentHist.size >= 2 && run {
+            val o = Memory.ourCentHist.first(); val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
+            val op = InfluenceMap.cell(o / 100, o % 100)
+            getRange(InfluenceMap.cell(b / 100, b % 100), op) > getRange(InfluenceMap.cell(a / 100, a % 100), op)
+        }
+        if (retreatByDistance) { rtrOld++; if (!retreatByHisStep) rtrRemoved++ } else if (retreatByHisStep) rtrAdded++
+        // ...и снимается только ЛОЖНЫЙ ярлык (v222, вторая редакция): «отходит», если расстояние выросло И сдвинулся он.
+        // Первая редакция (одно «его шаг») ещё и ДОБАВЛЯЛА ярлык там, где мы теснили его быстрее, чем он пятился, — и
+        // командир уходил из FIGHT посреди выигрываемой погони: доля FIGHT в тиках размена 18 % -> 11 % против
+        // MetalicaX#4 и 68 % -> 45 % против Coldkimchi#1, разница очков +1208 -> +232 и +3290 -> −3538
+        val enemyRetreating = retreatByDistance && (retreatByHisStep)
+        // сколько его вооружённых стоит у нашей армии: группа — дело командира, одиночка — нет
+        val foesAtHand = armedEnemies.count { e -> massArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
+
         // ОТВЕРГНУТО стендом (v58-опыт): снимать простой, когда паритет не пускает ни к одному флагу (матч 133: «марш не сдвинулся —
         // флаги до 479» при 1,32 к лагерю на D5, obj=- все 300 тиков, 18 против 7 в тик). На стенде m31 camp снятый на 536-м простой
         // дал 700 тиков ANNIHILATE pushing при 3679 против 1209 без единого убитого (центры армий в одной клетке, reach 0/5) —
         // 17133:23618 вместо «стёрт на 776-м», где к нему армию довела ЦЕЛЬ-ФЛАГ D5 (412–536). Толчок к стоящему блобу не
         // сближается — открытая находка матчей 70 и 133
-        val newPosture = when {
-            annihilate -> Posture.ANNIHILATE
-            objective != null -> Posture.FLAG
-            evade -> Posture.EVADE
-            retreat -> Posture.RETREAT
-            else -> Posture.HOLD
-        }
+        // РЕШЕНИЕ О СОСТОЯНИИ АРМИИ — ОДНО (v241, этап 6): постура, её гистерезис, режим командира и перезапись постуры
+        // режимом боя считаются вместе в Strategist.decide; здесь применяется то, что относится к постуре, ниже — режим
+        val decision = Strategist.decide(Strategist.Inputs(
+            annihilate = annihilate, hasObjective = objective != null, evade = evade, retreat = retreat,
+            marchNow = !contact && armedEnemies.none { e -> massArmy.any { getRange(e, it) <= MARCH_SAFE } },
+            stalled = stalledNow, hisRetreat = enemyRetreating && !(underTheirFire && theirMeleeIn),
+            outmatched = outmatchedTicks >= BREAK_OFF_TICKS, pushing = pushing, underFire = underTheirFire,
+            fewFoes = !(enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES),
+            posture = posture, postureSince = postureSince, now = getTicks()))
         // ПРИНЯЛА ЛИ ПОСТУРА НОВОЕ ЗНАЧЕНИЕ — считается ЗДЕСЬ, до всех, кто от этого зависит (v215). Прежде
         // решение принималось на сорок строк ниже, а `objectiveFlagId` присваивался выше и безусловно
-        val escape = newPosture == Posture.RETREAT  
-        val postureTakes =  newPosture == posture || escape || getTicks() - postureSince >= POSTURE_HOLD
+        val newPosture = decision.newPosture
+        val postureTakes = decision.postureTakes
         // ЦЕЛЬ-ФЛАГ НЕ ОБНУЛЯЕТСЯ, ПОКА ПОСТУРА УДЕРЖАНА (v215). Дефект был в паре: гистерезис держит ANNIHILATE,
         // а `objective` при аннигиляции равен null — и `objectiveFlagId` обнулялся, хотя постура осталась прежней.
         // Следствие через тик: `chooseFlagObjective` теряет бонус ×1,25 за текущую цель (3545) и послабление
@@ -3311,10 +3338,8 @@ object PainAndGain {
         // (срок вышел), EVADE на 62-м, HOLD на 67-м, EVADE на 74-м — семь переходов за сто тиков перед контактом в
         // тестовой игре 3d95b5, и каждый EVADE отодвигал армию назад, пока он шёл вперёд: к первому выстрелу наш центр
         // стоял в восьми клетках от края, и все 37 тиков боя прошли спиной к стене. Срока не ждёт только RETREAT
-        if (postureTakes) {
-            if (newPosture != posture) postureSince = getTicks()
-            posture = newPosture
-        }
+        posture = decision.posturePre
+        postureSince = decision.postureSincePre
 
         // ---- общие цели ----
         val centroid = ctx.ourCentroid
@@ -3355,8 +3380,6 @@ object PainAndGain {
         val enemyPositions = enemyCreeps.mapTo(HashSet()) { it.x * 100 + it.y }
         val blockedSet: Set<Int> = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y } + ctx.flagCells
         val meleeEnemies = enemyCreeps.filter { InfluenceMap.profileOf(it).melee > 0.0 }
-        // боеспособные: вооружённые и лекари — фокус, контакт и местные группы считаются по ним, раненые не в счёт
-        val combatArmy = army.filter { hasWeapon(it) || hasHeal(it) }
 
         // фокус-файр: добиваемые за тик -> наибольшая угроза на хит (урон, который враг СЕЙЧАС наносит нам, плюс
         // его лечение, делённые на его хиты: мили вплотную за 1000 хитов снимает 90, стрелок за 800 — 40, лекарь
@@ -3646,11 +3669,6 @@ object PainAndGain {
         val blockOn =  posture == Posture.ANNIHILATE && !pushing && combatEnemies.isNotEmpty() && strikers.isNotEmpty()
         // прижим (см. USE_PRESS, PRESS_PATIENCE): линия врага стоит — контакт, его огонь достаёт наших, и ни один его мили не
         // в MELEE_HOLD_RANGE + 1 от наших вооружённых; включившись, держится, пока есть контакт и строй
-        // «их мили в бою» — только ВПЛОТНУЮ к нашему вооружённому: в 2–3 клетках это экран, не атака. Матч 43 (けろびー v2):
-        // его мили сорок тиков стояли в двух-трёх от наших и не били (вплотную 7 % крип-тиков, 8 ударов за бой), его стрелки в
-        // трёх снимали наших мили по одному (r→melee 132 из 180), а прижим считал «мили в трёх» атакой и молчал до 104-го
-        val theirMeleeIn = combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && combatArmy.any { hasWeapon(it) && getRange(e, it) <= 1 } }
-        val underTheirFire = combatArmy.any { InfluenceMap.damageAt(it.x, it.y, combatEnemies) > 0.0 }
         // ЕСТЬ ЛИ ЛЕКАРЬ У ТОГО, КТО ДЕРЁТСЯ (v215, оператор: «без хиллеров ни один бой выиграть невозможно»).
         // Прежний `hfar` мерил другое — расстояние лекаря до центроида ВООРУЖЁННЫХ; у армии, растянутой на
         // тридцать клеток, этот центроид стоит посреди пустоты, и «лекарь при армии» там ничего не значит.
@@ -3794,20 +3812,6 @@ object PainAndGain {
         // врага за APPROACH_WINDOW не выросла. Уходящий (кайтер стенда, остаток) — прежний строй с мили впереди: стрелки во
         // главе погони не догоняют никого, а мили за их спиной и подавно (m11 kite: уничтожение на 395-м → лидерство, m28
         // farm+weak красный)
-        val retreatByDistance = Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
-        // ...и по ЕГО шагу (v222, см. USE_RETREAT_BY_HIS_STEP): его центр сейчас против его центра в начале окна, оба — от
-        // нашего центра в начале окна
-        val retreatByHisStep = Memory.hisCentHist.size >= 2 && Memory.ourCentHist.size >= 2 && run {
-            val o = Memory.ourCentHist.first(); val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
-            val op = InfluenceMap.cell(o / 100, o % 100)
-            getRange(InfluenceMap.cell(b / 100, b % 100), op) > getRange(InfluenceMap.cell(a / 100, a % 100), op)
-        }
-        if (retreatByDistance) { rtrOld++; if (!retreatByHisStep) rtrRemoved++ } else if (retreatByHisStep) rtrAdded++
-        // ...и снимается только ЛОЖНЫЙ ярлык (v222, вторая редакция): «отходит», если расстояние выросло И сдвинулся он.
-        // Первая редакция (одно «его шаг») ещё и ДОБАВЛЯЛА ярлык там, где мы теснили его быстрее, чем он пятился, — и
-        // командир уходил из FIGHT посреди выигрываемой погони: доля FIGHT в тиках размена 18 % -> 11 % против
-        // MetalicaX#4 и 68 % -> 45 % против Coldkimchi#1, разница очков +1208 -> +232 и +3290 -> −3538
-        val enemyRetreating = retreatByDistance && (retreatByHisStep)
         // КОМАНДИР ВНЕ БЛОКА СТРОЯ (v160): весь его расчёт стоял внутри `if (blockOn)`, а blockOn требует постуры
         // ANNIHILATE, врагов в поле и отсутствия добивания — то есть командир молчал везде, кроме рубки, что бы ни
         // говорил его собственный режим: замер показал mode=FIGHT в 150 строках лога при cmdTicks=26. Теперь он
@@ -3817,8 +3821,6 @@ object PainAndGain {
         // просят другого: там враг строем не дерётся, а сидит на флагах, разбегается или держит дистанцию, и
         // выигрывает не кулак, а счёт. Поэтому командир сперва называет РЕЖИМ, а уже режим решает, что делать
         // ...и режим НАЗНАЧАЕТ постуру: командир решил драться — значит армия уничтожает, а не держит и не бежит
-        // сколько его вооружённых стоит у нашей армии: группа — дело командира, одиночка — нет
-        val foesAtHand = armedEnemies.count { e -> massArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
         // РАЗМЕН, КОТОРЫЙ УЖЕ ПРОИГРАН, НАДО ПРЕКРАЩАТЬ (v185, разбор серии). Прибор разделил двадцать матчей начисто:
         // в ВОСЬМИ поражениях армия стояла в бою при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 тиков из
         // 512), в ОДИННАДЦАТИ победах из двенадцати — НОЛЬ таких тиков (3 из 236 по всей пачке). Против Coldkimchi это
@@ -3850,64 +3852,8 @@ object PainAndGain {
         // признак для режима боя при наступлении (см. ниже): мы позади по размену хитов, то есть его лечение
         // перекрывает наш урон — ровно тот случай, ради которого концентрация и нужна
         val healingWins = enemyDamageTaken < ourDamageTaken
-        cmdMode = when {
-            // ПОХОД — это когда врага рядом НЕТ, а не «нет контакта»: кайтер держится в двух шагах за границей
-            // контакта, и командир, раздавая задания на захват, разбирал против него армию по одному — сценарий
-            // match29:kite давал 0 очков против 22 644, а с выключенным походом кончается уничтожением его армии.
-            // Порог MARCH_SAFE и отделяет поход от боя, который просто не начался (v160)
-            !contact && armedEnemies.none { e -> massArmy.any { getRange(e, it) <= MARCH_SAFE } } -> CmdMode.MARCH
-            // ...и «он отступает» НЕ ОТМЕНЯЕТ БОЙ, В КОТОРОМ МЫ СТОИМ (v184). Признак считается по расстоянию до его
-            // центра, а центр блоба гуляет от одного шага в сторону — и в разгар рубки командир уходил в гонку за
-            // флагами. Две тестовые игры против MetalicaX#10 идут неотличимо до 50-го тика (марш от (79,80) к центру,
-            // контакт, mode=FIGHT, двенадцать живых), и расходятся ровно здесь: в проигранной на 70-м тике
-            // `cmd=0/70:retreat mode=RACE` — командир замолчал, армия разошлась за флагами и за десять тиков упала с
-            // десяти крипов до одного. В выигранной то же самое случается на 80-м, когда бой уже решён. Пока его мили
-            // РУБЯТ наших под огнём, его отход — повод добивать, а не повод расходиться. Условие именно «мили в
-            // контакте», а не «по нам стреляют»: перестрелка у флага — это как раз гонка очков, и без этой оговорки
-            // сценарий camp уходил в 17 508:22 337. Затор (stalledNow) остаётся как был
-            // ...и РАЗМЕН НИЖЕ ПАРИТЕТА ПРЕКРАЩАЕТСЯ (v185): срок в BREAK_OFF_TICKS тиков нужен, чтобы одиночный
-            // просадочный тик не выдёргивал армию из выигрышного боя
-            // ...и при «держим линию» размен ниже паритета НЕ отправляет командира в гонку: уйдя из режима боя,
-            // он перестаёт раздавать клетки, а именно они и держат строй (v217)
-            (stalledNow || (enemyRetreating && !(underTheirFire && theirMeleeIn))) -> CmdMode.RACE
-            // ...и НЕ ДОБИВАНИЕ: это условие несло старое ограничение blockOn, и без него командир строил кулак в
-            // погоне за кайтером — match29:kite шёл 0 : 22 644, а без командира кончается уничтожением его армии на
-            // 299-м тике. Добивание ведёт охота, а не строй (v160)
-            // ...и рубка определяется ПО СУЩЕСТВУ, а не по постуре: постура считается ДО командира, и пока режим
-            // зависел от неё, распорядителем был не командир, а она. Здесь наоборот — режим решает сам (контакт, огонь,
-            // его группа, не добивание, мы не бежим), а постуру ставит по себе (v162)
-            // ...и НАСТУПЛЕНИЕ БОЛЬШЕ НЕ ИСКЛЮЧАЕТ РЕЖИМ БОЯ (v217). Свести стволы на одну цель умеет только
-            // командир: `scoreRanged` тянет стрелка к фокусу (`attractionTo` с пиком на тройке), и больше этого
-            // не делает никто. А правит он **0,4 % тиков** — замер по 135 сценариям: march 82,3 %, stall 6,5 %,
-            // nofire 4,0 %, **push 3,9 %**, retreat 2,4 %, fight 0,4 %. Порог, ради которого концентрация и
-            // нужна, записан в файле пятикратно: при 216 лечения в тик цель пробивают четыре-пять стволов, а у
-            // нас `conc` 1,94. Пока армия идёт вперёд, строй ей нужен не меньше, чем когда она стоит
-            // ...и ТОЛЬКО КОГДА КОНЦЕНТРАЦИЯ И ЕСТЬ ТО, ЧЕГО НЕ ХВАТАЕТ. Широкая редакция («командир правит при
-            // любом наступлении») дала на стенде +7 строк в уничтожение, а живой контроль её завернул: против
-            // MetalicaX#9 было 4-0, стало 2-4, и разница видна прибором — в четырёх поражениях командир правит
-            // 26,7–32,1 % тиков против 1,5–2,8 % в победах и в тех же матчах на v216, а армия гибнет к 200–300-му
-            // тику. Концентрация при этом росла как задумано (conc 0,00 -> 1,04–2,68), то есть механизм работает,
-            // и негодна была только область. Кулак нужен там, где ЛЕЧЕНИЕ не даёт добить, а не там, где мы и так
-            // катимся вперёд. Признак берётся готовый и уже посчитанный: мы позади по размену хитов
-            (!pushing) && underTheirFire && (enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES) &&
-                posture != Posture.RETREAT && posture != Posture.EVADE  -> CmdMode.FIGHT
-            else -> CmdMode.RACE
-        }
-        // ...И ПРИЧИНА БЕРЁТСЯ ИЗ ТОЙ ЖЕ ЦЕПОЧКИ (v215, см. cmdWhy). Порядок веток здесь ровно тот же, что
-        // выше: прибор, повторяющий решение своим порядком, рассказывает о боте неправду ровно тогда, когда
-        // бот меняется. Знаменатель — все тики, а не только контактные: «командир молчал, потому что боя не
-        // было» и «командир молчал в бою» — разные вещи, и их надо уметь отличить числом
-        val cmdWhyNow = when {
-            cmdMode == CmdMode.FIGHT -> "fight"
-            cmdMode == CmdMode.MARCH -> "march"
-            outmatchedTicks >= BREAK_OFF_TICKS -> "outmatched"
-            stalledNow -> "stall"
-            enemyRetreating && !(underTheirFire && theirMeleeIn) -> "retreat"
-            pushing -> "push"
-            !underTheirFire -> "nofire"
-            !(enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES) -> "few"
-            else -> "posture"
-        }
+        cmdMode = decision.cmdMode
+        val cmdWhyNow = decision.cmdWhy
         cmdWhy[cmdWhyNow] = (cmdWhy[cmdWhyNow] ?: 0) + 1
         cmdWhyN++
         // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
@@ -3921,10 +3867,8 @@ object PainAndGain {
         // ПАРА К КОМАНДИРУ (v221, см. warmNow): сколько тиков режима боя командир держит при тёплом контакте — на
         // этих тиках он вернёт ANNIHILATE сам, что бы ни решила постура
         if (cmdMode == CmdMode.FIGHT) { warmCmdAll++; if (warmNow) warmCmd++ }
-        if (cmdMode == CmdMode.FIGHT && posture != Posture.ANNIHILATE) {
-            posture = Posture.ANNIHILATE
-            postureSince = getTicks()
-        }
+        posture = decision.postureFinal
+        postureSince = decision.postureSinceFinal
         // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
         // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
         // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
@@ -4058,6 +4002,8 @@ object PainAndGain {
         // третей, поэтому назначение стоит выше него: приказ один, а исполняют его оба пути движения — командирская
         // раздача, когда он правит, и обычная цепочка целей (ветка `chase`), когда молчит
         assignChase(mobileArmy, enemyCreeps, armedEnemies)
+        dispNow = Strategist.summary(Strategist.snapshot(army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
+            Memory.keeperIds, Memory.chaseOf, posture, cmdMode, objectiveFlagId, armedEnemies))
         if (commanderNow) {
             // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
             // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
@@ -6455,8 +6401,10 @@ object PainAndGain {
     private class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
                             val meleeAdj: Int, val meleeNear: Int, val dist: Int)
     /** Режим командира (v160): рубка со строем, гонка очков или поход. Раздача клеток — только режим FIGHT. */
-    private enum class CmdMode { FIGHT, RACE, MARCH }
+    internal enum class CmdMode { FIGHT, RACE, MARCH }
     private var cmdMode = CmdMode.MARCH
+    /** Постановка этого тика, как её задают старые решатели (v241, см. Strategist.snapshot): прибор `disp=`. */
+    private var dispNow = "-"
     private val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
     private var orderAuditOk = 0
     private var orderPull = 1.0                    // множитель притяжения к назначенной клетке (v168)

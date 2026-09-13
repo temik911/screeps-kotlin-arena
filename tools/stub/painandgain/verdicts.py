@@ -214,8 +214,9 @@ def check(code_path, base, docs_pattern=None, append_to=None):
             removed_comments.append(m.group(1).strip())
     # известно и то, что ПЕРЕЕХАЛО в другой файл пакета (разбивка на файлы — не удаление)
     pkg = os.path.dirname(code_path)
+    # (и внутри самого файла: строка, переехавшая в другое место того же файла, тоже не удалена)
     moved = ' '.join(norm(open(os.path.join(pkg, f), encoding='utf-8').read())
-                     for f in sorted(os.listdir(pkg)) if f.endswith('.kt') and os.path.join(pkg, f) != code_path)
+                     for f in sorted(os.listdir(pkg)) if f.endswith('.kt'))
     known = docs_text(docs_pattern) + ' ' + moved
     vers = set()
     nums = set()
