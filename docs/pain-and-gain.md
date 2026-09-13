@@ -5,6 +5,63 @@ Owner: the Pain and Gain session. Code: `starter/src/jsMain/kotlin/season4/paina
 `arenas/season4-pain_and_gain/`, stub harness `tools/stub/painandgain/`. Only this bot's session edits this file (see
 the parallel-sessions rules in `CLAUDE.md`).
 
+## Архитектура (итог переработки 13–14.09.2026, v263)
+
+Тик — конвейер стадий, каждая в своём файле пакета; решение, которое до переработки жило в пяти местах, лежит в одном
+файле своей стадии. `PainAndGain.kt` держит `loop()`, общее состояние армии (постура и её часы, режим командира,
+коллекции, которые чинит `AbortRepair`) и оркестровку: `tickBody` зовёт стадии тика по порядку, `runArmy` — стадии
+армии, передавая между ними значения. План и история переработки — `docs/pain-and-gain-rework.md`, абзацы v236–v263
+ниже.
+
+```
+tickBody: buildWorld → readSignals → runRunners → runArmy → TrafficManager.resolve → Arbiter.audit → Executor.run
+          → cpuSummary → rememberTick → printTick
+runArmy:  armyMeasures → armyStrategy (Strategist.decide) → armyTargets → armyStance → armyBlock → armyCommand
+          → orderAudit → healerWall → creepTurn для каждого бойца (Proposal → submit) → armyFireAndHeal
+```
+
+| файл | стадия | что в нём решается |
+|---|---|---|
+| `World.kt` | мир и меры | `Ctx`, флаги с эффектами и счётом, поля потоков, признаки врага (ловим ли, стоит ли, грозит ли), тела и скорости, путь и шаг бегства; сегменты `buildWorld`, `readSignals`, `armyMeasures`, `rememberTick` |
+| `Forecast.kt` | прогноз | прокат `simulate` на `SIM_TICKS`, модель мощи и размена (`ourPowerOf`, `fightTicks`, Ланчестер), модель его выбора цели `wallTargetOf`, ошибка прогноза |
+| `Strategist.kt` | стратег | одно решение о постуре и режиме `Strategist.decide` (смена — когда кандидат устоялся), гейт захвата и паритет, цель-флаг, точки отхода, поста и уклонения, отряд за флагами и его отзыв, погоня, гонка, раздача командира с перебором замыслов под бюджетом тика, постановка `Disposition` для прибора `disp=` и букв заданий |
+| `Missions.kt` | задания бегунов | паросочетание «бегун ↔ флаг» по ценности на горизонте, режимы FLEE / RESERVE / EXIT / HOLD / TO_FLAG / POISED |
+| `Tactician.kt` | тактик | цели тика (фокус, добыча, захватчик, досягаемость его стволов), покрипная лестница из 27 ступеней и цепочка шага, `Proposal` с приоритетом SURVIVE / MISSION / OPPORTUNITY и причиной «задание.терм», `submit` арбитру |
+| `Fight.kt` | бой | раздача клеток в бою `commandFight` (оценки `scoreMelee` / `scoreRanged` / `scoreHeal`, кулак, проходы), назначение огня и лечения, исполнители удара, выстрела и лечения |
+| `Formation.kt` | строй | медиана, изготовка, колонна марша, кулак боя, ряды блока, `planFight`, стена лекарей; одно правило назначения крип → место (узкое место, затем сумма) |
+| `Arbiter.kt`, `TrafficManager.kt` | арбитр | ранги толкания, развод ходов без вызовов API, счёт конфликтов `conf=` |
+| `Executor.kt` | исполнитель | единственный писатель API: слоты интентов по крипу, затем ходы |
+| `Memory.kt` | память | межтиковые истории и назначения, кандидат постуры |
+| `Instruments.kt` | приборы | фазы CPU, строки `t=` / `rung` / `tac` / `fld`, аудит приказов, счётчики, которые только печатаются |
+| `Tuning.kt`, `Rules.kt` | настройки | константы, общие для нескольких стадий (константа одной стадии — в её файле); дальности движка |
+| `InfluenceMap.kt`, `DistanceMap.kt`, `AbortRepair.kt` | службы | поля влияния и опасности; расстояния и потоки; починка таблиц после оборванного тика |
+
+**Как менять.**
+- Код стадии — функции-расширения `PainAndGain` в файле стадии. Имя разрешается так: локальная → вход сегмента → член
+  объекта → верхний уровень пакета; поэтому константа или поле, перенесённые на верхний уровень, находятся без
+  переписывания ссылок.
+- Величина, которую одна стадия армии отдаёт другой, — поле класса `<Сегмент>Out` и `<Сегмент>In` следующей; оркестровка
+  распаковывает выход в локальные с прежними именами.
+- Состояние: таблицы и множества — полями объектов из списка владельцев `repairAfterAbort` (иначе оборванный тик их не
+  починит); простое состояние — на верхнем уровне файла-владельца; счётчик, который только печатается, — в
+  `Instruments.kt`.
+- Прибор — `k=v` в строке `t=`; новое поле или строка — маска в `tools/stub/painandgain/logdiff.py`.
+- Механическая правка проверяется тождеством: `regress.sh land` → `compare.py` «без изменений 135» → `logdiff.py` 0 →
+  `verdicts.py check` 0 пропаж. Поведенческая — гейтом FAIL-only и живым A/B 8+8 против последней посадки, «не хуже на
+  обоих ботах».
+
+**Что из плана не сделано и что должно быть верно, чтобы сделать.**
+- Постановка как решатель (`Disposition` вместо `Posture` / `CmdMode` / `Intent`): постановка печатается и даёт букву
+  задания, решает `Strategist.decide`. Нужна оценка постановок, которая бьёт правду: прокат с одним числом мощи в минус
+  не уходит и доктрину «аннигиляция = проигрыш» не проверяет (v242 отвергнут живым A/B).
+- Адресная опасность `threatAt` в оценке клетки: отвергнута дважды — заменой (v244) и добавочным термом (v246). Против
+  кайтера она уводит того, кого его ствол выберет целью; опасность клетки в этих матчах не решает (разбор серии v245).
+- Спасение первым у арбитра (v253): отвергнуто — бегущий с высшим рангом ломает строй против стоячего блоба.
+- Огонь и лечение в `Proposal`: назначаются после покрипного цикла; назначение отрядом с насыщением отвергалось только
+  вместе с тремя другими правками (v244), по одной не пробовалось.
+- Одна модель строя с якорем-параметром: общие медиана и правило назначения есть, три расчёта якоря — три функции.
+- Клетка как argmax списка термов: оценки `score*` остаются функциями внутри одной раздачи `commandFight`.
+
 ## Measured rules and design
 
 **`season4/painandgain/`** — Season 4 "Pain and Gain" (basic) bot (first version 04.09.2026). **Rules** (the arena description in the client lobby; the website docs do not describe this mode, only the effect table in the client bundle `screeps_arena.app/Contents/Resources/app/arena-docs/index.html` does): each player has a **pre-set army of 14 creeps — no spawning, construction, energy or replacements**; seven neutral `ScoreFlag`s, captured by **standing on the cell**; a captured flag scores per tick for its owner and applies a global debuff to the owner's whole army, same-type flags stack: Vulnerability ×1 (5/tick, incoming combat damage ×1.1), Heal reduction ×2 (4/tick each, healing ×0.75/×0.5), Attack reduction ×2 (3/tick, ATTACK ×0.8/×0.6), Ranged reduction ×2 (3/tick, RANGED_ATTACK ×0.8/×0.6) — 25/tick in total (`MAX_SCORE_PER_TICK`); 2000 ticks; **win = higher score, or destroy all enemy creeps**; the match ends early when an army is destroyed or the lead is mathematically unreachable — measured 07.09.2026 on the v132 series: the tick the lead exceeds 25 × the remaining ticks (every flag's rate together), wins at 1859 and 1931 exactly there, losses at 1718–1983 with both armies whole; the bot's `maxSwing` is this rule, and a match at 1700–2000 with both armies alive is a points end, not an annihilation. API: `ScoreFlag` (`effectType`, `scorePerTick`; binding `types/.../season4/ScoreFlag.kt`, module `arena/season_4/pain_and_gain/basic/prototypes`), constants `TICKS_LIMIT`/`MAX_SCORE_PER_TICK`/`FLAG_TYPES` (`PainAndGainConstants.kt`), the debuffs arrive as `GameObject.effects` (`EFF_*_MODIFIER` with `data.multiplier`; the bot also derives them from flag ownership and logs both — they must agree in the log). **Design:** homes = the initial centroids of both armies (no spawns); weaponless/heal-less creeps are *runners* that capture flags by swing per tick of their own walking time, weighted by the flag's cost in power; a flag is captured only while the army *with* that debuff keeps ≥ `CAPTURE_FLOOR` (0.9) of the enemy's power — the marginal Lanchester price with both sides' effects (`powerAfter`: a ranged flag cheapens only ranged dps, a heal flag raises the enemy's net dps, vulnerability shrinks hits) — or whenever the score projection says we lose (`behindOnScore`, self-limiting: it flips back once our rate leads); the army moves as one group with a posture: ANNIHILATE (≥ `PUSH_RATIO` by effects-aware power, or *in contact* unless retreat is feasible — no enemy melee adjacent and our slowest mobile creep faster than their fastest), RETREAT (enemy ≥ `RETREAT_RATIO` and near, to home or an own-half corner, never across the map), FLAG (the best flag objective by swing×cost/travel, guarded ones by Lanchester + fight cost within the group's speed slack), HOLD (post at the centroid of our flags); inside: local aggression with hysteresis, cohesion among mobile weapon holders only (healers follow their charge and never hold; nobody holds within `ARRIVED_SLACK` of the target), focus fire by *threat per hit* (killable first, then (live melee + live ranged + heal)/hits — "healers first" lost a mirror fight 11:6, threat-per-hit won it 12:9), `InfluenceMap` multiplies dps/heal by the creeps' effects and incoming damage by our vulnerability. **Offline stub** (job tmp dir, same loader-hook harness as spawn-and-swamp, no spawns): a point-symmetric 100×100 map with seven flags and a mirrored 14-creep army (bodies guessed: 2×M4 runners, 4×T2M5A3, 4×M4R4, 2×M3H3, 2×M5R2), enemy scripts `none|grab|rush|greedy`, early end on annihilation or unreachable lead. v1 results: none 10864:0 (two side flags, the rest blocked by the floor), grab 24672:16542 with no losses, rush — enemy army destroyed at t=426 (12 killed for 9), greedy — destroyed at t=303; errors 0.
@@ -3419,6 +3476,44 @@ v245) поймали по одному `Script execution timed out` на тик�
 пяти замыслов командира с прогнозом), кандидаты бегунов 20,1 мс, покрипный цикл 13,9 мс — ровно 100. Вынос цикла в
 `Tactician.kt` цены не добавил: стенд +0,4 % по сумме `cpu t=`, p95 живьём 88 против 86 мс. Тик первого контакта —
 предмет среза CPU на этапе 10.
+
+### v255–v263 — переработка, этап 10: оркестровка, стадии по файлам, мёртвое снято, перебор под бюджетом
+
+**Тождественные срезы (v255–v261).** 104 функции объекта уехали расширениями в файлы стадий (v255: `Instruments`,
+`World`, `Forecast`, `Strategist`, `Missions`, `Fight`, `Formation`). `runArmy` из 1 808 строк разрезан на восемь
+сегментов по стадиям (v256), `tickBody` из 298 строк — на четыре (v257): каждый сегмент читает свои входы через класс
+`In` внутри `with()`, отдаёт выходы классом `Out`, а оркестровка распаковывает их в локальные с прежними именами; типы
+полей назвал компилятор (поле объявлялось `Nothing`, ошибка «actual type is X» давала тип; первая редакция принимала и
+мусорные типы от каскада ошибок — принимать стал только тип, чей источник уже типизирован). 174 константы — на верхний
+уровень файлов, где их читают (v258; 67 общих — в новый `Tuning.kt`), 209 простых полей состояния — к владельцам (v259;
+160 счётчиков печати — в `Instruments.kt`; таблицы и множества остались в объекте ради `AbortRepair`), восемь вложенных
+типов — к стадиям (v260). Мёртвое (v261), каждое проверено поиском: множитель притяжения к приказу в свободном шаге
+(крип с приказом до свободного шага не доходит — всегда единица), ранг лечения под огнём (недостижим после первой
+строки), параметр `per` у `commandFight`, всегда пустые цели пар гонки, всегда `null` цель зачистки, непрочитанные и
+только записываемые поля. `lastReachTick`, названный картой «только записывается», читается строкой отряда и остался.
+Каждый срез: 135 сценариев дают те же логи, что эталон v250, перенесённые комментарии найдены в пакете (889 + 875 + 87 +
+531 + 123 + 21 строк). `PainAndGain.kt`: 7 044 → 663 строки, пакет 11 395 строк (рост — классы входов и выходов
+сегментов и заголовки файлов). Цена CPU на стенде — в пределах шума (+1,3 %, −0,9 %).
+
+**v262–v263 — перебор замыслов командира под бюджетом тика.** Три руки подряд (серия v245, A/B v250 и v253) теряли тик
+на `Script execution timed out` в тике первого контакта: страховка `cpuTight` смотрела только на начало перебора, а пять
+замыслов с прокатом стоили 46 мс от примерно 35. Теперь первый замысел оценивается всегда, следующий — если время тика
+плюс цена прошлой пробы плюс запас на хвост тика укладываются в лимит движка: лимит — `arenaInfo.cpuTimeLimit`, цена —
+замер прошлой пробы, запас — наибольший замеренный хвост после командира. Прибор `srch=обрезано/переборов/запас`; метки
+CPU `block` и `command` — после своих сегментов. Первый гейт разошёлся в 83 логах: стенд отдавал `cpuTimeLimit = 50` при
+наносекундах движка (100 000 000), и лимит выходил 0,00005 мс — перебор резался всегда. Стенд переведён в единицы
+движка, `logdiff` маскирует `cpu=` приветствия, и гейт тождествен эталону без единой обрезки. Стенды Spawn and Swamp и
+Escort Run несут те же 50/1000 — находка для их сессий. Живая рука v262 (8+8 против MetalicaX#15 и Coldkimchi#1): 0-8
+при контроле v250 2-6 и 3-5 при 3-5, но тайм-аут остался — на ПЕРВОМ тике боя (t=47): запас на хвост мерился только на
+тиках боя и на первом был нулём, перебор стоил 51,9 мс без обрезки при хвосте около 16 мс против 5–9 на марше. v263
+режет перебор по существующему порогу `CPU_GUARD_MS` (50 мс — тот же, на котором стоят страховки бегунов и командира):
+следующий замысел не начинается, если тик с ценой прошлой пробы выйдет за порог; хвост остался прибором. Потеря целого
+тика на входе в бой хуже, чем два оценённых замысла вместо пяти. Живая рука v263 (8+8, контроль — руки v250):
+MetalicaX#15 2-6 при 2-6, армия в ноль 5/8 против 6/8, ledger −13 569 против −25 333; Coldkimchi#1 5-3 при 3-5, армия в
+ноль 3/8 против 5/8, очки 91172:13429 против 48021:62382, ledger −84 107 против −65 359. Тайм-аутов 0 из 16 игр (у
+контроля и у v262 — по одному), перебор обрезался 10–18 раз за длинную игру (из 82–1229 переборов), p95 CPU 80,2 мс,
+максимум 93,8. Принято: не хуже контроля на обоих ботах; батч v251–v263 посажен тегом pain-and-gain-v263. Попутно: одна
+рука оборвалась по нехватке памяти системы — демоны Gradle на время живых игр теперь останавливаются.
 
 ### v137–v180 — эпоха командира (перенесено из комментариев кода, 13.09.2026)
 
