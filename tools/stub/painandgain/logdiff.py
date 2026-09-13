@@ -22,6 +22,7 @@ MASK = [
     (re.compile(r' anchor=\S+'), ''),
     (re.compile(r' ovw=\S+ conf=\S+'), ''),
     (re.compile(r' disp=\S+'), ''),
+    (re.compile(r' evt=\S+'), ''),
 ]
 
 

@@ -759,7 +759,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v241"
+    private const val BOT_VERSION = "v242"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -1154,6 +1154,7 @@ object PainAndGain {
         bodyWeightNow.clear()
         liveMovesNow.clear()
         Executor.clear()
+        flagFlipNow = false
         bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick)
         bfsMaxCost = maxOf(bfsMaxCost, bfsCost)
         bfsThisTick = 0
@@ -1411,7 +1412,7 @@ object PainAndGain {
                 "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hatm=$hatmN/$hatmAll hatmc=$hatmCmd/$hatmCmdAll hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
                 "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                     "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                    "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                     "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks lead=$leadTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { !hasWeapon(it) && !hasHeal(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
                     "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
             )
@@ -1517,6 +1518,7 @@ object PainAndGain {
         for (fi in result) {
             val owner = if (fi.ours) 1 else if (fi.theirs) -1 else 0
             val prev = Memory.lastFlagOwner[fi.id]
+            if (prev != null && prev != owner) flagFlipNow = true       // событие для стратега (v242)
             if (prev != null && prev != owner && DEBUG_LOG) {
                 println("flag t=${getTicks()}: (${fi.pos.x},${fi.pos.y})${typeChar(fi.type)}${fi.score} owner ${ownerName(prev)} -> ${ownerName(owner)} occupant=${fi.occupant?.let { "${if (it.my) "my" else "enemy"} ${bodySummary(it)}" } ?: "none"}")
             }
@@ -3288,7 +3290,15 @@ object PainAndGain {
             stalled = stalledNow, hisRetreat = enemyRetreating && !(underTheirFire && theirMeleeIn),
             outmatched = outmatchedTicks >= BREAK_OFF_TICKS, pushing = pushing, underFire = underTheirFire,
             fewFoes = !(enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES),
-            posture = posture, postureSince = postureSince, now = getTicks()))
+            posture = posture, postureSince = postureSince, now = getTicks(),
+            // событие — прибор evt= (в гистерезис пока не входит, см. Strategist.decide): гибель своего (по числу живых,
+            // не по составу армии — отряжённый в бегуны не потеря) и смена владельца флага. Замер v242 на стенде: события
+            // в гистерезисе — любое изменение контакта 635 за матч, появившийся контакт 126, гибель + флаг 71 — и каждое
+            // роняло scatter m34 (24 326:23 996 → 24 305:24 317 → 19 010:24 312) при 34/34/19 сценариях с иным счётом
+            event = ctx.myCreeps.size < Memory.armyPrev || flagFlipNow))
+        Memory.contactPrev = contact
+        Memory.armyPrev = ctx.myCreeps.size
+        if (decision.event) stateEventTicks++
         // ПРИНЯЛА ЛИ ПОСТУРА НОВОЕ ЗНАЧЕНИЕ — считается ЗДЕСЬ, до всех, кто от этого зависит (v215). Прежде
         // решение принималось на сорок строк ниже, а `objectiveFlagId` присваивался выше и безусловно
         val newPosture = decision.newPosture
@@ -3338,8 +3348,13 @@ object PainAndGain {
         // (срок вышел), EVADE на 62-м, HOLD на 67-м, EVADE на 74-м — семь переходов за сто тиков перед контактом в
         // тестовой игре 3d95b5, и каждый EVADE отодвигал армию назад, пока он шёл вперёд: к первому выстрелу наш центр
         // стоял в восьми клетках от края, и все 37 тиков боя прошли спиной к стене. Срока не ждёт только RETREAT
-        posture = decision.posturePre
-        postureSince = decision.postureSincePre
+        // ПОСТАНОВКА ПРИМЕНЯЕТСЯ ОДИН РАЗ (v242): постура после перезаписи режимом боя действует с этого места — её видят
+        // фокус, строй и командир; до v242 перезапись применялась на шестьсот строк ниже, и блоки между ними видели
+        // постуру до неё
+        posture = decision.postureFinal
+        postureSince = decision.postureSinceFinal
+        cmdMode = decision.cmdMode
+        val cmdWhyNow = decision.cmdWhy
 
         // ---- общие цели ----
         val centroid = ctx.ourCentroid
@@ -3852,8 +3867,6 @@ object PainAndGain {
         // признак для режима боя при наступлении (см. ниже): мы позади по размену хитов, то есть его лечение
         // перекрывает наш урон — ровно тот случай, ради которого концентрация и нужна
         val healingWins = enemyDamageTaken < ourDamageTaken
-        cmdMode = decision.cmdMode
-        val cmdWhyNow = decision.cmdWhy
         cmdWhy[cmdWhyNow] = (cmdWhy[cmdWhyNow] ?: 0) + 1
         cmdWhyN++
         // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
@@ -3867,8 +3880,6 @@ object PainAndGain {
         // ПАРА К КОМАНДИРУ (v221, см. warmNow): сколько тиков режима боя командир держит при тёплом контакте — на
         // этих тиках он вернёт ANNIHILATE сам, что бы ни решила постура
         if (cmdMode == CmdMode.FIGHT) { warmCmdAll++; if (warmNow) warmCmd++ }
-        posture = decision.postureFinal
-        postureSince = decision.postureSinceFinal
         // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
         // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
         // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
@@ -4029,7 +4040,7 @@ object PainAndGain {
                     commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
                     // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                     // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
-                    val sc = Forecast.simulate(mobileArmy, armedEnemies, trial, Forecast.SIM_TICKS, focusTarget, intent)
+                    val sc = Forecast.simulate(commandArmy, armedEnemies, trial, Forecast.SIM_TICKS, focusTarget, intent)   // тот же состав, что у плана (v242)
                     if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
                 }
                 // ГИСТОГРАММА ЗАМЫСЛА (этап 8): перебор из пяти стоит пяти раздач за тик, и окупается ли он —
@@ -4052,7 +4063,7 @@ object PainAndGain {
                 // выбирает замысел числом, которому нельзя верить
                 // ...и факт меряется ТОЙ ЖЕ формулой, что прогноз: сравнивать оценку симуляции с ланчестеровской
                 // мощью — сравнивать разные величины, и первая редакция прибора именно этим и занималась
-                val nowDiff = Forecast.simulate(mobileArmy, armedEnemies, emptyMap(), 0, focusTarget, null)
+                val nowDiff = Forecast.simulate(commandArmy, armedEnemies, emptyMap(), 0, focusTarget, null)
                 Forecast.simPending[getTicks() + Forecast.SIM_TICKS] = bestScore to nowDiff
                 Forecast.simPending.remove(getTicks())?.let { (predicted, was) ->
                     val actual = nowDiff - was          // как разность изменилась НА САМОМ ДЕЛЕ за Forecast.SIM_TICKS
@@ -6403,6 +6414,9 @@ object PainAndGain {
     /** Режим командира (v160): рубка со строем, гонка очков или поход. Раздача клеток — только режим FIGHT. */
     internal enum class CmdMode { FIGHT, RACE, MARCH }
     private var cmdMode = CmdMode.MARCH
+    /** Событие этого тика для стратега (v242): флаг сменил владельца — считается при сборе флагов, до решения. */
+    private var flagFlipNow = false
+    private var stateEventTicks = 0
     /** Постановка этого тика, как её задают старые решатели (v241, см. Strategist.snapshot): прибор `disp=`. */
     private var dispNow = "-"
     private val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)

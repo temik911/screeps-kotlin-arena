@@ -81,4 +81,7 @@ internal object Memory {
     val cmdDetach = HashSet<String>()      // кого командир отправил за флагами (v160, режимы RACE и MARCH)
     val orderPrev = HashMap<String, Position>()   // приказы прошлого тика — для проверки исполнения (v167)
     val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
+    /** Контакт и численность армии на прошлом тике — события для стратега (v242). */
+    var contactPrev = false
+    var armyPrev = 0
 }

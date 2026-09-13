@@ -3,16 +3,16 @@ package season4.painandgain
 import screeps.api.Creep
 
 /**
- * СТРАТЕГ (v241, этап 6 переработки, первый срез — тождественный; план — docs/pain-and-gain-rework.md, разделы 2 и 8).
+ * СТРАТЕГ (этап 6 переработки; план — docs/pain-and-gain-rework.md, разделы 2 и 8).
  *
  * Одно место, где армия решает, в каком она состоянии. До v241 это были три решения через шестьсот строк друг от друга:
  * постура (`when` из annihilate / objective / evade / retreat) с гистерезисом POSTURE_HOLD и спасением без срока, режим
  * командира (MARCH / RACE / FIGHT) и перезапись постуры режимом боя. Здесь они сведены в [decide]: входы — меры,
- * посчитанные до решения, выход — одно [Decision]. Значения и порядок их применения пока те же, что были (постура до
- * перезаписи читается блоками фокуса и строя, перезапись применяется там, где стояла), поэтому поведение тождественно
- * v240 на всех 135 сценариях. Следующий срез заменяет тройку Posture / CmdMode / Intent одной постановкой [Disposition]
- * и применяет решение один раз; типы постановки уже объявлены и печатаются прибором `disp=` по нынешним составам,
- * без влияния на поведение.
+ * посчитанные до решения, выход — одно [Decision]. v241 (тождество) сохранил прежние значения и точки применения;
+ * v242 применяет решение один раз — постура после перезаписи действует с точки решения — и оценивает прогнозом тот же
+ * состав, что планирует
+ * командир. Типы постановки [Disposition] / [Squad] / [Mission] объявлены и печатаются прибором `disp=` по нынешним
+ * составам; постановка как решатель вместо тройки Posture / CmdMode / Intent — следующие срезы.
  */
 internal object Strategist {
     /** Что видно армии к моменту решения; имена — как у мер в runArmy. */
@@ -27,15 +27,18 @@ internal object Strategist {
         /** ни сомкнутой армии, ни COMMAND_MIN_FOES у руки */
         val fewFoes: Boolean,
         val posture: PainAndGain.Posture, val postureSince: Int, val now: Int,
+        /** событие тика (прибор evt=, в гистерезис пока не входит — см. decide): наш крип погиб или флаг сменил владельца */
+        val event: Boolean,
     )
 
     class Decision(
         val newPosture: PainAndGain.Posture, val postureTakes: Boolean,
-        /** постура после гистерезиса — её читают блоки фокуса и строя, как и до v241 */
+        /** постура после гистерезиса, до перезаписи режимом боя (с v242 не применяется — прибор и история) */
         val posturePre: PainAndGain.Posture, val postureSincePre: Int,
         val cmdMode: PainAndGain.CmdMode, val cmdWhy: String,
-        /** постура после перезаписи режимом боя — применяется там, где стояла перезапись */
+        /** постура после перезаписи режимом боя — применяется один раз, в точке решения (v242) */
         val postureFinal: PainAndGain.Posture, val postureSinceFinal: Int,
+        val event: Boolean,
     )
 
     fun decide(i: Inputs): Decision {
@@ -49,6 +52,12 @@ internal object Strategist {
         // ГИСТЕРЕЗИС ПОСТУРЫ (v181): держится не меньше POSTURE_HOLD тиков; раньше срока меняется только на RETREAT —
         // спасение не ждёт; EVADE срока ждёт (v183: изъятие для EVADE само рождало пилу с периодом POSTURE_HOLD)
         val escape = newPosture == PainAndGain.Posture.RETREAT
+        // ПЕРЕСМОТР ПО СОБЫТИЯМ (решение оператора 13.09) ПОКА НЕ ВКЛЮЧЁН — три определения события отвергнуты гейтом
+        // (v242, замер в runArmy у поля event): любое изменение контакта, только появившийся контакт, гибель своего + смена
+        // владельца флага — каждое роняло scatter m34 и меняло счёт 19–34 сценариев, потому что на стенде эти события
+        // случаются десятки раз за матч и срок POSTURE_HOLD перестаёт что-либо держать. Что должно быть верно, чтобы
+        // правило заработало: событие — не одиночный тик, а перемена, устоявшаяся дольше мерцания (например, новое
+        // решение стабильно ≥ 3 тиков) — отдельный замеряемый срез. Событие считается прибором evt=
         val takes = newPosture == i.posture || escape || i.now - i.postureSince >= PainAndGain.POSTURE_HOLD
         val pre = if (takes) newPosture else i.posture
         val sincePre = if (takes && newPosture != i.posture) i.now else i.postureSince
@@ -80,7 +89,7 @@ internal object Strategist {
         val overrideFight = mode == PainAndGain.CmdMode.FIGHT && pre != PainAndGain.Posture.ANNIHILATE
         val final = if (overrideFight) PainAndGain.Posture.ANNIHILATE else pre
         val sinceFinal = if (overrideFight) i.now else sincePre
-        return Decision(newPosture, takes, pre, sincePre, mode, why, final, sinceFinal)
+        return Decision(newPosture, takes, pre, sincePre, mode, why, final, sinceFinal, i.event)
     }
 
     // ---- постановка: типы плана (раздел 3) — пока только снимок для прибора ----
