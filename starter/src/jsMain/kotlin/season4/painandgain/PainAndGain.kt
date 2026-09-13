@@ -752,7 +752,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v251"
+    private const val BOT_VERSION = "v252"
     internal const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -1415,6 +1415,11 @@ object PainAndGain {
                 " step=" + stepCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " pass=" + passCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
                 " sum=${stepCount.values.sum()}")
+            // ...и ТА ЖЕ ПЕРЕПИСЬ ПО ПРЕДЛОЖЕНИЯМ (v252, этап 9): «задание отряда . терм» и приоритет; сумма обязана совпасть с
+            // суммой rung — оба счёта растут один раз на крипа армии за тик
+            println("tac t=${getTicks()}: mt=" + tacCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+                " prio=" + prioCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+                " sum=${prioCount.values.sum()}")
             // ПОЛЯ: пики печатаются, чтобы обнулившееся поле было ВИДНО — прибор, умеющий сказать только
             // «поле построено», прибором не является
             if (FIELD_LOG) println("fld t=${getTicks()}: hdbf=${InfluenceMap.healDebuffStats()}" +
@@ -1802,6 +1807,9 @@ object PainAndGain {
     private var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
     internal val rungCount = HashMap<String, Int>()        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
     internal val stepCount = HashMap<String, Int>()        // ...и какая ветка ШАГА
+    internal val tacCount = HashMap<String, Int>()         // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
+    internal val prioCount = HashMap<String, Int>()        // ...и с каким приоритетом (SURVIVE / MISSION / OPPORTUNITY)
+    internal val missionOf = HashMap<String, Char>()      // крип → буква задания его отряда этим тиком (v252, из Strategist.snapshot)
     private val passCount = HashMap<String, Int>()        // ...и какой проход раздачи командира сколько клеток назначил
     private var planGunsIn = 0; private var planGunsAll = 0        // прибор согласованности строя (v200)
     private var planMeleeHealed = 0; private var planMeleeAll = 0
@@ -4011,8 +4019,11 @@ object PainAndGain {
         // третей, поэтому назначение стоит выше него: приказ один, а исполняют его оба пути движения — командирская
         // раздача, когда он правит, и обычная цепочка целей (ветка `chase`), когда молчит
         assignChase(mobileArmy, enemyCreeps, armedEnemies)
-        dispNow = Strategist.summary(Strategist.snapshot(army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
-            Memory.keeperIds, Memory.chaseOf, posture, cmdMode, objectiveFlagId, armedEnemies))
+        val disposition = Strategist.snapshot(army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
+            Memory.keeperIds, Memory.chaseOf, posture, cmdMode, objectiveFlagId, armedEnemies)
+        dispNow = Strategist.summary(disposition)
+        missionOf.clear()
+        for (sq in disposition.squads) for (id in sq.members) missionOf[id] = sq.mission.tag
         if (commanderNow) {
             // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
             // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это

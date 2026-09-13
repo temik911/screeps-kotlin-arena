@@ -64,8 +64,45 @@ import season4.painandgain.PainAndGain.HypoMods
  * тела → поле [ArmyTick] (приёмник `with`) → член `PainAndGain` (приёмник расширения) — ровно прежнее «локальная тела →
  * локальная runArmy → член объекта». Цикл однопроходный и идёт в порядке `army`: напарники читают `Memory.engagingIds`,
  * записанный соседом раньше в этом же тике. Следующие срезы — дробление тела на признаки / цель / шаг / запись и
- * `Proposal` с приоритетом как выход шага.
+ * `Proposal` с приоритетом как выход шага (v252).
  */
+
+/** Приоритет предложенного хода (план, раздел 2): спасение выше задания, задание выше случая. */
+internal enum class Priority { SURVIVE, MISSION, OPPORTUNITY }
+
+/**
+ * ПРЕДЛОЖЕНИЕ ХОДА (v252, этап 9): что тактик предлагает арбитру за одного бойца армии. [step] — клетка шага или null
+ * («стоять»), [priority] — SURVIVE у бегства (`flee`, единственный смертельный порог — `mustFlee`), OPPORTUNITY у
+ * свободного шага за добычей (ступени engage, holdMelee, prey, threat, raider), MISSION у остального; [rank] — ранг
+ * толкания `Arbiter.pushRank`, по которому арбитр разводит ходы (пока он приоритета не читает — срез тождественный);
+ * [mission] — буква задания отряда крипа из постановки стратега (`Strategist.snapshot`: F бой, T захват, G поход, E
+ * сопровождение), [term] — ветка шага, а у свободного шага — ступень лестницы, её и печатает прибор `tac t=` как
+ * `задание.терм`. [rung] и [stepTag] — прежние теги для переписи `rung t=` и `why t=`. Удар, выстрел и лечение пока
+ * назначаются после цикла (commandFire / healAndShoot) — в предложение они войдут отдельным срезом.
+ */
+internal class Proposal(
+    val creep: Creep, val step: Position?, val priority: Priority, val rank: Int,
+    val mission: Char, val term: String, val rung: String, val stepTag: String,
+) {
+    val why: String get() = "$mission.$term"
+}
+
+/** Приоритет по ветке шага и ступени лестницы — таблица из заголовка [Proposal]. */
+internal fun priorityOf(stepTag: String, rung: String): Priority = when {
+    stepTag == "flee" -> Priority.SURVIVE
+    stepTag != "free" -> Priority.MISSION
+    rung == "engage" || rung == "holdMelee" || rung == "prey" || rung == "threat" || rung == "raider" -> Priority.OPPORTUNITY
+    else -> Priority.MISSION
+}
+
+/** Отдать предложение арбитру: перепись (прежняя и новая) и запрос хода — в прежнем порядке побочных действий. */
+internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
+    rungCount[p.rung] = (rungCount[p.rung] ?: 0) + 1
+    stepCount[p.stepTag] = (stepCount[p.stepTag] ?: 0) + 1
+    tacCount[p.why] = (tacCount[p.why] ?: 0) + 1
+    prioCount[p.priority.name] = (prioCount[p.priority.name] ?: 0) + 1
+    if (p.step != null) { TrafficManager.request(p.creep, p.step, p.rank); planCapture(ctx, p.step) }
+}
 
 /** Величины тика, которые покрипный цикл читает из runArmy; все посчитаны до цикла и в нём не меняются. */
 internal class ArmyTick(
@@ -780,9 +817,10 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // выходящий в контакт, затем стрелок с целью, затем лекарь к подопечному, и лишь потом все прочие
         val prio = Arbiter.pushRank(ordered = commandOf.containsKey(creep.id), melee = hasWeapon(creep) && hasMelee(creep) && !hasRanged(creep),
             armed = hasWeapon(creep), healer = hasHeal(creep), wounded = wounded)
-        rungCount[whyTag] = (rungCount[whyTag] ?: 0) + 1
-        stepCount[stepTag] = (stepCount[stepTag] ?: 0) + 1
-        if (step != null) { TrafficManager.request(creep, step, prio); planCapture(ctx, step) }
+        // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
+        // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
+        submit(Proposal(creep, step, priorityOf(stepTag, whyTag), prio, missionOf[creep.id] ?: '?',
+            if (stepTag == "free") whyTag else stepTag, whyTag, stepTag), ctx)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.x * 100 + creep.y
     }
