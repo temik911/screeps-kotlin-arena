@@ -4978,8 +4978,6 @@ object PainAndGain {
     private fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
         if (!hasMelee(creep)) return
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
-        // вооружённый мили врага вплотную (см. USE_STRIKE_MELEE_FIRST): ближайший к разоружению, если цель фокуса не добивается за тик
-        val armedMelee = null
         val focusDying = focusTarget != null && creep.getRangeTo(focusTarget) <= 1 && focusTarget.hits <= InfluenceMap.profileOf(creep).melee
         val ordered = fireOf[creep.id]?.let { id -> adjacent.firstOrNull { it.id == id } }
         val target: Creep? = when {
@@ -4987,7 +4985,6 @@ object PainAndGain {
             // Исключение одно — крип, которого мы ДОБИВАЕМ этим ударом: добить дороже, чем исполнить приказ
             focusDying -> focusTarget
             ordered != null -> ordered
-            armedMelee != null -> armedMelee
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
             adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
             else -> null
@@ -5146,9 +5143,6 @@ object PainAndGain {
             // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
             // нашими за тик; если этого хватает с учётом её лечения, стрелок переходит к следующей цели по ранжиру
             fun booked(t: Creep) = damageBooked[t.id] ?: 0.0
-            // лечение цели считается по его лекарям рядом с ней: вплотную полное, дальше — треть
-            fun healNear(t: Creep) = enemyCreeps.filter { it.id != t.id && InfluenceMap.profileOf(it).heal > 0.0 }
-                .sumOf { h -> val d = h.getRangeTo(t); if (d <= 1) InfluenceMap.profileOf(h).heal else if (d <= HEAL_RANGE) InfluenceMap.profileOf(h).heal / 3.0 else 0.0 }
             // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
             val ordered = fireOf[creep.id]?.let { id -> enemyCreeps.firstOrNull { it.id == id } }
             val target = when {
@@ -5156,7 +5150,6 @@ object PainAndGain {
                 ordered != null && creep.getRangeTo(ordered) <= RANGED_RANGE  -> ordered
                 focusTarget != null && creep.getRangeTo(focusTarget) <= RANGED_RANGE  -> focusTarget
                 else -> focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE  }
-                    ?: focusOrder.firstOrNull { creep.getRangeTo(it) <= RANGED_RANGE }
                     ?: massPool.minByOrNull { it.hits }
             }
             target?.let {
@@ -5739,7 +5732,6 @@ object PainAndGain {
         // этап 3 доказал равенство: fldcmp = 0 на 304 950 клетках 135 сценариев.
         // Мёртвыми оказались incNow и hits: обе карты считались в том же цикле и не читались НИКЕМ — их удалила
         // перепись, а не чтение кода
-        fun inc(key: Int): Double = InfluenceMap.dangerAt(key)
         // АДРЕСНАЯ ОПАСНОСТЬ (v224, см. USE_ADDRESSED_DANGER): E складывает всех, кто достаёт клетку, а его ствол бьёт
         // ОДНОГО — лекаря в досягаемости, иначе ближайшего, при равенстве того, у кого меньше хитов (реплеи обеих сторон:
         // 89–94 % выстрелов в ближайшего, 82–97 % в лекаря при лекаре в досягаемости). T(c, p) записывает крипу c в
@@ -5982,10 +5974,6 @@ object PainAndGain {
         // назначенных клеток остальных, а не их нынешних позиций: иначе «согласованность» сравнивает план с прошлым
         fun cellOf(f: Creep): Position = out[f.id] ?: InfluenceMap.cell(f.x, f.y)
         fun foeDist(x: Int, y: Int) = armedEnemies.minOfOrNull { maxOf(abs(x - it.x), abs(y - it.y)) } ?: 99
-        // клетка в досягаемости его вооружённых (v234, см. USE_HEALER_OUT_OF_REACH): стрелок бьёт на 3, мили шагнёт и ударит на 2
-        fun exposedCell(p: Position): Boolean = armedEnemies.any { e ->
-            val d = maxOf(abs(p.x - e.x), abs(p.y - e.y)); val q = InfluenceMap.profileOf(e)
-            (q.ranged > 0.0 && d <= RANGED_RANGE) || (q.melee > 0.0 && d <= 2) }
         val melees = fighters.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) }
         val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
         val healers = fighters.filter { !hasWeapon(it) && hasHeal(it) }
@@ -6192,16 +6180,7 @@ object PainAndGain {
             // ЛЕКАРЕЙ +0,32 — они впереди мили, и в 155 тиках из 335 лекари в среднем ближе к врагу, чем мили; на
             // t=63, через три тика после контакта, один лекарь уже без лечащих частей. Условие простое и жёсткое:
             // хотя бы один свой боец стоит к врагу БЛИЖЕ, чем клетка лекаря, — считая по уже назначенным клеткам
-            // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): сосед назначенного мили не впереди него, самый безопасный
-            val wardMelee = null
-            val atMelee = wardMelee != null && run {
-                val mc = cellOf(wardMelee); val md = foeDist(mc.x, mc.y)
-                hatmCmdAll++
-                place(c, { p -> maxOf(abs(p.x - mc.x), abs(p.y - mc.y)) <= 1 && foeDist(p.x, p.y) >= md && ttlAt(c, p.x * 100 + p.y, p) >= 1 },
-                    { p -> danOf(c, p.x * 100 + p.y) })
-            }
-            if (atMelee) { hatmCmd++; out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) } }
-            val ok = atMelee || placeScored(c, 2, intentOf(c)).also { placed ->
+            val ok = placeScored(c, 2, intentOf(c)).also { placed ->
                 if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
             }
             // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
