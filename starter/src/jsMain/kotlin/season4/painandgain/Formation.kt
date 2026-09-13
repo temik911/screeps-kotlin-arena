@@ -52,6 +52,7 @@ import season4.painandgain.PainAndGain.Objective
 import season4.painandgain.PainAndGain.ChaseSample
 import season4.painandgain.PainAndGain.FightCell
 import season4.painandgain.PainAndGain.HypoMods
+import kotlin.reflect.*
 
 /**
  * СТРОЙ (v248, этап 8 переработки, срез 1 — тождественный перенос). По плану (docs/pain-and-gain-rework.md, раздел
@@ -586,4 +587,174 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     for (w in wounded) place(w, woundedCmp(w), { it.dist > RANGED_RANGE }) { true }
     Memory.lastPlan.clear()
     Memory.lastPlan.putAll(plan)
+}
+
+/** ПОТЕРИ ТИКА И СТЕНА ЛЕКАРЕЙ (v256, этап 10; сегмент runArmy перед покрипным циклом): потеря каждого бойца за тик (lostTick), жертва по адресному огню его стволов или по потере, клетки стены вокруг неё и лекари к ним (victimNow, victimSaveable, wallCells, wallCellOf). Перенесено дословно. */
+internal class HealerWallIn(
+    val army: List<Creep>,
+    val enemyCreeps: List<Creep>,
+    val combatEnemies: List<Creep>,
+)
+
+internal class HealerWallOut(
+)
+
+internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut = with(seg) {
+    lostTick.clear()
+    for (c in army) lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
+    // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): жертва — терявший больше всех за прошлый тик; удержима, если её потеря не
+    // больше лечения, которое наши лекари доставят в неё следующим тиком (вплотную или в шаге от вплотную — полное, в трёх
+    // — треть; лекарь считается и для себя)
+    // ...и стена стоит только на БЕЗОПАСНЫХ клетках (стенд m28 brawl+heals при первой редакции: лекари вплотную к жертве
+    // попадали под удары его мили — 240 за удар по лечащим частям, которые у h6m6 спереди, — лечение обнулялось и
+    // раздевалась вся армия; уничтожение на 298-м стало проигрышем на 1751-м). Клетка стены — свободная соседняя с жертвой,
+    // от которой его вооружённые мили дальше двух (за один ход не встанут вплотную); живьём против Coldkimchi#1 такая клетка
+    // у жертвы есть в 83–89 % тиков, в блобе MetalicaX#9 — в 29 %. Лекарь получает ближайшую свою клетку как слот; без
+    // клеток жертва не удержима, и правило молчит
+    victimNow = null; victimSaveable = false; wallCells = emptyList(); wallCellOf.clear()
+    addressedDmg.clear()
+    // ...И ЖЕРТВА — ПО АДРЕСНОМУ ОГНЮ ЭТОГО ТИКА (v229, см. USE_HEAL_WALL_ADDRESSED): его правило выбора цели по
+    // текущим клеткам — лекарь в досягаемости первым, иначе ближайший, при равенстве с меньшими хитами
+    // ...и карта адресного урона живёт тик (v233, см. USE_HEAL_BY_DEFICIT): её читает выбор пациента
+    val addressed = addressedDmg
+    val live = army.filter { it.hits > 0 && (hasWeapon(it) || hasHeal(it)) }
+    for (e in ctx.combatEnemies) {
+        val q = InfluenceMap.profileOf(e)
+        if (q.ranged > 0.0) Forecast.wallTargetOf(e, live, RANGED_RANGE)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.ranged }
+        if (q.melee > 0.0) Forecast.wallTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.melee }
+    }
+    val byAddress = addressed.entries.maxByOrNull { it.value }
+    val lostV = army.filter { (hasWeapon(it) || hasHeal(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
+    // ...И АДРЕС БЕРЁТСЯ, ПОКА ОН ПОПАДАЕТ (v229, вторая редакция по стенду m28 brawl+heals: его сценарий стреляет «в
+    // вооружённого стрелка первым», а не в лекаря, и адресная жертва промахивалась — уничтожение на 442-м стало
+    // проигрышем на 1570-м). Оба предсказателя сверяются с фактом следующего тика (кто потерял больше всех) за окно
+    // TOUCH_WINDOW; адресный используется, только пока попадает чаще, чем «по потере», — против того, чьё правило
+    // цели другое, стена сама возвращается к v228
+    if (lostV != null && (wallAddrPrev != null || wallLostPrev != null)) {
+        wallAddrHits.addLast(wallAddrPrev == lostV.id); wallLostHits.addLast(wallLostPrev == lostV.id)
+        while (wallAddrHits.size > TOUCH_WINDOW) wallAddrHits.removeFirst()
+        while (wallLostHits.size > TOUCH_WINDOW) wallLostHits.removeFirst()
+        hwallPredN++; if (wallAddrPrev == lostV.id) hwallPredA++; if (wallLostPrev == lostV.id) hwallPredL++
+    }
+    wallAddrPrev = byAddress?.key; wallLostPrev = lostV?.id
+    val addrWins = wallAddrHits.size >= STALL_TICKS && wallAddrHits.count { it } > wallLostHits.count { it }
+    val v = if (byAddress != null && addrWins) army.firstOrNull { it.id == byAddress.key } ?: lostV else lostV
+    if (v != null) {
+        val useAddr = byAddress != null && addrWins && v.id == byAddress.key
+        if (useAddr) hwallAddr++
+        val loss = if (useAddr) byAddress!!.value else (lostTick[v.id] ?: 0).toDouble()
+        val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
+        val hisRanged = ctx.combatEnemies.filter { hasRanged(it) }
+        val occupied = HashSet<Int>()
+        for (c in army) if (!hasHeal(c) || hasWeapon(c)) occupied.add(c.x * 100 + c.y)
+        for (e in ctx.enemyCreeps) occupied.add(e.x * 100 + e.y)
+        val cells = ArrayList<Position>()
+        for (dx in -1..1) for (dy in -1..1) {
+            if (dx == 0 && dy == 0) continue
+            val x = v.x + dx; val y = v.y + dy
+            if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in occupied) continue
+            val cell = InfluenceMap.cell(x, y)
+            if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
+        }
+        wallCells = cells
+        val healers = army.filter { hasHeal(it) && it.id != v.id }
+        val free = ArrayList(cells)
+        for (h in healers.sortedBy { getRange(it, v) }) {
+            if (free.isEmpty() || getRange(h, v) > HEAL_RANGE + 1) break
+            val best = free.minByOrNull { getRange(h, it) } ?: break
+            free.remove(best)
+            wallCellOf[h.id] = best
+        }
+        val potential = army.filter { hasHeal(it) }.sumOf { h ->
+            val heal = InfluenceMap.profileOf(h).heal
+            val cell = wallCellOf[h.id]
+            val d = getRange(h, v)
+            if (h.id == v.id || (cell != null && getRange(h, cell) <= 1)) heal else if (d <= HEAL_RANGE) heal / 3.0 else 0.0
+        }
+        victimNow = v
+        victimSaveable = cells.isNotEmpty() && loss <= potential
+        if (!victimSaveable) wallCellOf.clear()
+        hwallVictimTicks++
+        if (victimSaveable) hwallTicks++
+    }
+    HealerWallOut(
+    )
+}
+
+/** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
+internal class ArmyBlockIn(
+    val enemyCreeps: List<Creep>,
+    val combatEnemies: List<Creep>,
+    val armedEnemies: List<Creep>,
+    val mobileArmy: List<Creep>,
+    val contact: Boolean,
+    val theirMeleeIn: Boolean,
+    val enemyRetreating: Boolean,
+    val focusTarget: Creep?,
+    val slotOf: HashMap<String, Position>,
+    val blockOn: Boolean,
+    val armiesClosing: Boolean,
+    val ourYielding: Boolean,
+    val pressOn: Boolean,
+)
+
+internal class ArmyBlockOut(
+)
+
+internal fun PainAndGain.armyBlock(ctx: Ctx, seg: ArmyBlockIn): ArmyBlockOut = with(seg) {
+    if (blockOn) {
+        // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
+        // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
+        // атакующего уходил, а кайтер добивался позже (гейт v43c: block/nine/rush «уничтожение → лидерство» ×10, кайтеры
+        // медленнее ×7 при wing ×4, block+flagless ×2 и farm+weak m33 +7561 лучше)
+        val standoffNow = pressOn && !enemyRetreating
+        // ОТВЕРГНУТО: расстановка и в контакте, пока его мили не идут на нас (!theirMeleeClosing) — ради матча 73 (Coldkimchi:
+        // его мили подходили к нашим стрелкам и лекарям вплотную, били по 240 и отходили — 46 ударов против наших 7, а
+        // прижим требует «его мили не вплотную», и расстановка была выключена ровно в этом бою): едва атака врага встаёт,
+        // бой берёт расстановка, и остаток уходит — 123/125, m28 wing и m31 camp проиграны, против прижима-только 21 хуже /
+        // 16 лучше. Прилипший к стрелку мили — дело нашего мили (см. poker в engage), не строя
+        // стоячий бой по центрам армий (v47): контакт держится дольше окна терпения, центры вооружённых армий не сближаются,
+        // враг не отходит — расстановка; атака (центры сближаются) и погоня (враг отходит) — ряды
+        // ...и это ЛИНИЯ, а не рубка (v62): его вооружённый мили не ближе MELEE_HOLD_RANGE + 1 к нашим вооружённым. Матч 150
+        // (боевой けろびー, армия стёрта к 180-му, форма матча 140): контакт на 70-м, центры не сближались (его мили среди наших),
+        // «стоячий бой» → расстановка ставила стрелков колонной x=81 в 1–3 клетках от его стрелков, к 80-му двое наших стрелков
+        // стояли уже за его линией на клетках, равноудалённых от обоих центров (v61 их не режет); ярусы «подальше от его мили» в
+        // рубке ведут сквозь его строй. Прижим (standoffNow) это условие и так несёт; стоячий бой по центрам (v47) — нет
+        // РУБКА — его мили ВПЛОТНУЮ, не «в трёх» (v64): линия Coldkimchi держит мили в 2–3 от наших и не рубит (матч 153, восьмое
+        // поражение: 2:699 и 3:1431 крип-тиков его мили, 61 удар за 700 тиков боя) — по «в трёх» v62 расстановка была выключена
+        // весь бой, ряды planBlock ставили стрелков за передним мили, и наш огонь (1611 выстрелов против его 1428) шёл по
+        // разным целям: 4+ в одну цель 9 тиков против его 44 при 216 лечения в тик на цели с обеих сторон
+        val meleeBrawl = theirMeleeIn
+        val standingNow = contact && Memory.centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating && !meleeBrawl && !ourYielding
+        if (DEBUG_LOG && ourYielding && contact && !armiesClosing && !enemyRetreating && !meleeBrawl && yieldingTick != getTicks() - 1) println("plan t=${getTicks()}: our line has yielded ${PRESS_CLOSING}+ cells over $PRESS_PATIENCE ticks — rows behind the front melee, not the plan")
+        if (ourYielding) yieldingTick = getTicks()
+        val planNow =  (standoffNow || standingNow)
+        // командир (v137): в бою с сомкнутым блобом решение одно на армию, и оно вытесняет оба планировщика
+        // ...и НЕ против того, кто уходит (v139): в сценарии kite враг держит дистанцию, боя нет, и командир держал
+        // армию в размене вместо игры за флаги — 0:21 899 и 0:21 082 при исправном CPU
+        // ...и только когда рубка ИДЁТ: против лагеря у флага (camp) командир тоже держал армию в размене вместо
+        // очков — 13 311:23 559. Мера уже есть: его мили внутри нашего строя (meleeBrawl)
+        // КОМАНДИР ПРАВИТ ВЕСЬ БОЙ (v144): замер сказал, что он правил 27 тиков из пятисот и в большинстве из них
+        // приказ получал ОДИН крип из двенадцати (cmd=1/27:noMelee) — остальное время армия шла по старым
+        // правилам, и они тянули в другую сторону. Единого кулака из этого выйти не могло: командир успевал лишь
+        // выдернуть крипа из строя. Теперь условие одно — контакт с сомкнутым врагом
+        // ...и на ПОДХОДЕ тоже (v151): иначе армия сходится к бою врассыпную по старым правилам и собирается в кулак
+        // уже под огнём — переход между двумя управлениями и есть то смешение, которое оператор назвал
+        val nearFight = contact 
+        // ...но «любой контакт» оказалось слишком широко: гейт уронил roost и scatter — формы, где враг сидит на
+        // флагах или разбегается, и командир строил кулак против того, кто строем не дерётся. Условие по существу
+        // не «сомкнут ли он», а «сколько его вооружённых стоит у нашей армии»: группа — дело командира, одиночка —
+        // нет (v155)
+        // цена командира отдельной строкой в разбивке (v158): она была спрятана в фазе «plan» вместе с обеими
+        // расстановками, и когда живьём дважды сработал `Script execution timed out`, сказать по логу, чей это
+        // расход, было нечем. На стенде вопрос не решается — там весь тик стоит 2,4 мс на пике
+    cpuMark("commander")
+        // РАССТАНОВКА МОЛЧИТ ПРИ КОМАНДИРЕ (v165, оператор: продолжать переносить логику в командира). Слоты и
+        // командирские клетки — два ответа на один вопрос «кто где стоит»; пока командир ведёт бой, спрашивать
+        // второй раз незачем, и крип, которому клетки не досталось, шёл в слот прежней расстановки
+        if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
+        else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf)
+    }
+    ArmyBlockOut(
+    )
 }

@@ -52,6 +52,7 @@ import season4.painandgain.PainAndGain.Objective
 import season4.painandgain.PainAndGain.ChaseSample
 import season4.painandgain.PainAndGain.FightCell
 import season4.painandgain.PainAndGain.HypoMods
+import kotlin.reflect.*
 
 /**
  * БОЙ (v255, этап 10 переработки; план — раздел 1, Tactician: «клетка = argmax по соседям суммы термов», «цели огня и
@@ -925,4 +926,37 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         val dp = foeDist(p.x, p.y)
         fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp }
     }
+}
+
+/** ОГОНЬ И ЛЕЧЕНИЕ АРМИИ ЗА ТИК (v256, этап 10): хвост runArmy после покрипного цикла — перепись «почему» (why t=, why-sum), стрелки врага на прошлом тике для прогноза (prevShooters), назначение огня и лечения и исполнение. Перенесено дословно. */
+internal class ArmyFireAndHealIn(
+    val army: List<Creep>,
+    val allies: List<Creep>,
+    val enemyCreeps: List<Creep>,
+    val combatEnemies: List<Creep>,
+    val focusTarget: Creep?,
+    val focusOrder: List<Creep>,
+)
+
+internal class ArmyFireAndHealOut(
+)
+
+internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, seg: ArmyFireAndHealIn): ArmyFireAndHealOut = with(seg) {
+    cpuMark("moves")
+    if (TRACE_WHY && DEBUG_LOG && whyLines.isNotEmpty()) { println("why t=${getTicks()}: " + whyLines.joinToString(" ")); whyLines.clear() }
+    if (TRACE_WHY && DEBUG_LOG && getTicks() % (LOG_EVERY * 10) == 0 && whySum.isNotEmpty()) {
+        println("why-sum t=${getTicks()}: " + whySum.entries.sortedByDescending { it.value }.joinToString(" ") { "${it.key}=${it.value}" })
+        whySum.clear()
+    }
+    prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
+    // ...командирская цель НЕ подменяет цель стрельбы (v138): проведённая сюда, она уронила гейт до 129/131 и
+    // дала m33:kite 0:21 135 — армия бросала всё ради назначенной цели. Она влияет мягко, через порядок focusOrder
+    // огонь тоже по приказу командира (v161): назначения считаются на всю силу, включая захватчиков с оружием
+    commandFire(army + ctx.runners.filter { hasWeapon(it) }, enemyCreeps, focusTarget, focusOrder, fireOf)
+    commandHeal(army, enemyCreeps, healOf)
+    // ...и отряжённый лекарь без оружия лечит (v240): до этого healAndShoot получал бегунов только с оружием
+    healAndShoot(army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }, allies, enemyCreeps, focusTarget, focusOrder)
+    cpuMark("shoot")
+    ArmyFireAndHealOut(
+    )
 }

@@ -52,6 +52,7 @@ import season4.painandgain.PainAndGain.Objective
 import season4.painandgain.PainAndGain.ChaseSample
 import season4.painandgain.PainAndGain.FightCell
 import season4.painandgain.PainAndGain.HypoMods
+import kotlin.reflect.*
 
 /**
  * МИР ТИКА (v238, этап 3 переработки): снимок того, что видно, — и ничего больше. Пока здесь только типы, `FlagInfo` и
@@ -543,4 +544,333 @@ internal fun PainAndGain.clusterCentroid(cs: List<Creep>): Position? {
 internal fun PainAndGain.centroidOf(points: List<Position>): Position? {
     if (points.isEmpty()) return null
     return InfluenceMap.cell(points.sumOf { it.x } / points.size, points.sumOf { it.y } / points.size)
+}
+
+/** МЕРЫ АРМИИ ЗА ТИК (v256, этап 10; сегмент runArmy): бойцы и его вооружённые, сомкнутость, охота (huntable), масса и контакт, истории дистанций и центров, простой и бесплодная охота, отход по размену, признак «слабее», выполнимость отхода. Перенесено дословно. */
+internal class ArmyMeasuresIn(
+    val army: List<Creep>,
+)
+
+internal class ArmyMeasuresOut(
+    val allies: List<Creep>,
+    val enemyCreeps: List<Creep>,
+    val combatEnemies: List<Creep>,
+    val strikers: List<Creep>,
+    val armedEnemies: List<Creep>,
+    val enemyMassedNow: Boolean,
+    val now: Int,
+    val exchangeLedger: Int,
+    val exchangeLive: Boolean,
+    val exchangePaying: Boolean,
+    val mobileArmy: List<Creep>,
+    val commandArmy: List<Creep>,
+    val chasers: List<Creep>,
+    val huntable: List<Creep>,
+    val meleeAdjacent: Boolean,
+    val exchangeRecent: Boolean,
+    val fightOn: Boolean,
+    val cornered: Boolean,
+    val stalled: Boolean,
+    val ours: Double,
+    val theirs: Double,
+    val theirsUp: Double,
+    val theirsDown: Double,
+    val enemyNear: Boolean,
+    val massCentroid: Position,
+    val massArmy: List<Creep>,
+    val contact: Boolean,
+    val breakOffNow: Boolean,
+    val retreatFeasible: Boolean,
+)
+
+internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasuresOut = with(seg) {
+    val allies = ctx.myCreeps
+    val enemyCreeps = ctx.enemyCreeps
+    val combatEnemies = ctx.combatEnemies
+    updateKeepers(ctx, army)
+
+    val strikers = army.filter { fullSpeed(it) && hasWeapon(it) && it.id !in Memory.keeperIds }
+    // враги, с которыми есть бой: с уроном — и лекари, у которых рядом (в дальности лечения плюс шаг) есть свой с
+    // оружием в теле, живым или мёртвым: такого лекарь вернёт в строй за шесть тиков (стенд m2 rush: армия ушла за
+    // флагами от лекарей с обломками, и через сто тиков те вернулись в полном теле). Стая из одних лекарей при
+    // скаутах (сила 0) не повод для боя: два уцелевших лекаря врага кайтили в четырёх клетках 1700 тиков, армия
+    // в ДОБИТЬ то гналась, то сбивалась в кучу и не шла за флагами, пока скауты врага брали пять (m7 rush)
+    val armedEnemies = combatEnemies.filter { threatening(it, enemyCreeps) }
+    // сомкнутая масса врага — та же мера, что в postureOf (см. enemyMassed): шесть и больше вооружённых, две трети
+    // которых в MASS_RANGE от их центроида. Считается раз на тик, а не на крипа (v135)
+    val enemyMassedNow = armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
+        armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
+    kiteNow = 0
+    kiteMassed = enemyMassedNow
+    planStrict = 0; planLoose = 0
+    // чистый урон врагу за окно: сумма его хитов ниже, чем STALL_TICKS тиков назад (попадание с полным лечением в тот же
+    // тик — не прогресс: стрелок россыпи с трёх клеток попадал, лечился, и «обмен уронами» сбрасывал простой);
+    // простой — только когда добыча в досягаемости броска, а прогресса нет (на марше к врагу за 20+ клеток простоя
+    // нет — стенд m3 army: пауза на подходе выключала давление, и обе армии простояли до конца)
+    val now = getTicks()
+    val enemyHitsNow = enemyCreeps.sumOf { it.hits }
+    if (lastEnemyHitsTotal >= 0 && enemyHitsNow < lastEnemyHitsTotal) enemyDamageTaken += lastEnemyHitsTotal - enemyHitsNow
+    lastEnemyHitsTotal = enemyHitsNow
+    val ourHitsNow = army.sumOf { it.hits }
+    Memory.enemyHitsHist.addLast(enemyHitsNow); Memory.ourHitsHist.addLast(ourHitsNow)
+    while (Memory.enemyHitsHist.size > STALL_TICKS) Memory.enemyHitsHist.removeFirst()
+    while (Memory.ourHitsHist.size > STALL_TICKS) Memory.ourHitsHist.removeFirst()
+    // РАЗМЕН ЗА ОКНО ПОДНЯТ СЮДА (v221) из блока толчка: его слагаемые готовы уже здесь — наши потери копятся в
+    // прологе, его строкой выше, — а читать окно нужно раньше, чем решаются бой по контакту и простой. Между
+    // старым и новым местом окна не читал никто (`lostRaceNow()` зовётся из `runRunners`, до `runArmy`, и ниже
+    // блока толчка; ранних выходов в этом отрезке нет), поэтому перенос без тумблера: дифф отчёта пуст побайтово
+    val exchangeLedger = enemyDamageTaken - ourDamageTaken
+    // ...и тот же размен ЗА ОКНО (v216, см. ledgerHist): срез берётся в одной точке тика, потому что
+    // слагаемые обновляются в разных местах — наши потери в прологе, его в runArmy
+    Memory.ledgerHist.addLast(exchangeLedger)
+    Memory.ourLostHist.addLast(ourDamageTaken)
+    Memory.hisLostHist.addLast(enemyDamageTaken)
+    while (Memory.ledgerHist.size > LEDGER_WINDOW + 1) Memory.ledgerHist.removeFirst()
+    while (Memory.ourLostHist.size > LEDGER_WINDOW + 1) Memory.ourLostHist.removeFirst()
+    while (Memory.hisLostHist.size > LEDGER_WINDOW + 1) Memory.hisLostHist.removeFirst()
+    ledgerWindow = if (Memory.ledgerHist.size >= 2) Memory.ledgerHist.last() - Memory.ledgerHist.first() else 0
+    ourLostWindow = if (Memory.ourLostHist.size >= 2) Memory.ourLostHist.last() - Memory.ourLostHist.first() else 0
+    hisLostWindow = if (Memory.hisLostHist.size >= 2) Memory.hisLostHist.last() - Memory.hisLostHist.first() else 0
+    // РАЗМЕН ИДЁТ (v221, см. USE_FIGHT_BY_LEDGER): за LEDGER_WINDOW тиков хоть одна сторона потеряла
+    // STALL_DAMAGE хитов. Та же мера, что у клапана проигранной гонки (см. lostRaceNow) и у простоя
+    // (netDamage), только по обеим половинам окна: новых чисел нет. Разбор двух рейтинговых серий по реплеям
+    // обеих сторон делит ею забеги начисто: в проигранных армия 38 % тиков в постуре ANNIHILATE, и в 92 %
+    // этих тиков размена нет вовсе, — это 35 % матча против 4 % в выигранных (v219: 24 % против 5 %)
+    val exchangeLive = ourLostWindow >= STALL_DAMAGE || hisLostWindow >= STALL_DAMAGE
+    exchangeLiveNow = exchangeLive
+    // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
+    val exchangePaying = Memory.ourHitsHist.size < STALL_TICKS ||
+        (Memory.enemyHitsHist.first() - enemyHitsNow) >= (Memory.ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
+    val mobileArmy = army.filter { canMove(it) && it.id !in Memory.keeperIds }
+    // ...а командир видит ВСЁ поле, включая хранителей флагов: решение снять хранителя — его, а не следствие того,
+    // что он невидим (v173, оператор). Держат флаг они по-прежнему сами, пока приказа нет
+    val commandArmy = army.filter { canMove(it) }
+    val chasers = strikers.ifEmpty { mobileArmy }
+    // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
+    // пикет простоя — поэтому охота посчитана здесь, до простоя
+    val huntable = armedEnemies.filter { catchable(it, chasers) }
+    cpuMark("a.hunt")
+    // его мили вплотную к нашим — поднято сюда из блока постуры (v221, перенос без тумблера): читать его нужно и
+    // прибору погони ниже, а между старым и новым местом он не менялся и не читался
+    val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
+    // ПАРА К ПОГОНЕ ЗА КАЙТЕРОМ (v221, только прибор; см. kchaseTicks). Разбор v220, матч с ●ω<♥♪#1: он не взял ни
+    // одного флага за 700 тиков, мы 300 тиков гнались за его отходящей линией в постуре ANNIHILATE и легли 12 → 0,
+    // а вето безфлагового броска отказало захвату 3329 раз. Простой «держит дистанцию» против него не наступает:
+    // любой его выстрел даёт netDamage, и простой гаснет. Прибор считает тики, где погоня идёт в ОДНУ сторону —
+    // за окно мы потеряли STALL_DAMAGE, он меньше нас, его центр от нас уходит, его мили не вплотную. Считается ДО
+    // простоя и по тем величинам, какими простой читал бы её: постура и история дистанции — прошлого тика
+    val kiteChaseNow = posture == Posture.ANNIHILATE && ourLostWindow >= STALL_DAMAGE && ledgerWindow < 0 && !meleeAdjacent &&
+        Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
+    kiteChaseSeen = kiteChaseNow
+    if (posture == Posture.ANNIHILATE) { kchaseAnn++; if (kiteChaseNow) kchaseTicks++ }
+    // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
+    val netDamage = Memory.enemyHitsHist.size == STALL_TICKS &&
+        (Memory.enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || Memory.ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
+    if (netDamage) stallUntil = 0
+    // пикет в досягаемости броска все STALL_TICKS подряд (см. STALL_PICKET): армия, только что вошедшая в
+    // досягаемость, простоя не даёт (матч 20, t=64). Считается пикет по ДОГОНЯЕМЫМ (см. catchable): прежде
+    // «не больше STALL_PICKET вооружённых» отделяло пикет от армии по ЧИСЛУ, и блоб, который от нас уклоняется и
+    // не дерётся, одним своим числом отменял простой — армия гналась за ним весь матч. Живой матч 26: huntable=0/8,
+    // 902 хита урона за 1500 тиков с обеих сторон, ни одной смерти, проигрыш 12721:23408; стенд farm на карте 21:
+    // три флага на одиннадцать очков в тик простояли ничьими 1500 тиков. Кого можем догнать — драка; кто
+    // уклоняется — не повод стоять
+    val nearArmed = armedEnemies.count { e -> strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
+    val nearCatchable = huntable.count { e -> strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
+    // пикет — МЕНЬШИНСТВО его вооружённых (v50, оператор по матчу 101: «загоняем врага в угол, а потом разворачиваемся и
+    // уходим в центр, не добив»): загнанный в угол остаток из трёх-четырёх вооружённых с лекарями четыре раза за матч
+    // считался пикетом («picket of 3 armed in reach for 20 ticks — flags until +300», t=161, 547, 895, 1256), и армия на
+    // триста тиков уходила за флагами. Когда в досягаемости не меньше половины его вооружённых, это его армия, а не пикет
+    val picket = nearArmed >= 1 && nearCatchable <= STALL_PICKET && nearArmed * 2 < armedEnemies.size
+    preyNearTicks = if (picket) preyNearTicks + 1 else 0
+    // ВТОРОЙ вид простоя — марш, который не идёт. Пикет ловит бесплодную погоню, только пока добыча ближе
+    // ENGAGE_RANGE; за этой чертой армия «гналась» и стояла, а простой не считался ни разу. Идущая погоня обязана
+    // двигать центр вооружённой массы: за MARCH_STALL_TICKS тиков он не сдвинулся НИ НА КЛЕТКУ — это не марш.
+    // Матч 25: добыча стояла в 11 клетках, ближе никого, армия 990 тиков дёргалась на месте у (46,34); за весь
+    // матч ни одного урона ни с одной стороны, и проигрыш по очкам 19927:24205 при 12 против 13 в тик
+    val marchCell = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })?.let { it.x * 100 + it.y } ?: -1
+    Memory.marchHist.addLast(marchCell)
+    // ТРЕТИЙ вид простоя — враг, который держит дистанцию: в добивании без контакта дистанция между центрами армий за
+    // CHASE_WINDOW тиков не сократилась, и враг дальше броска. Матч 48 (けろびー v5, фермер): он взял шесть флагов к 80-му
+    // (сам на 0,75 мощи), парил в 10–28 клетках от нас и не дрался — за 1600 тиков ни одного выстрела с нашей стороны;
+    // пикет не срабатывал (враг дальше ENGAGE_RANGE), марш не «стоял» (армия за ним ходила), и ANNIHILATE держал армию
+    // лицом к нему на двух-трёх флагах против его пяти: 8 в тик против 17, проигрыш 15652:22950 при 16000/16000 у обоих
+    // застой по ближайшей группе (v132, USE_STALL_NEAREST_GROUP): центр его группы, ближайшей к нашему вооружённому центру
+    val ourArmedCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })
+    val stallCentroid: Position? = ctx.enemyCentroid
+    val armyDist = stallCentroid?.let { getRange(ourArmedCentroid ?: it, it) } ?: -1
+    // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
+    val exchangeRecent = now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && now - lastHurtTick <= STALL_TICKS)
+    val fightOn = inContact(armedEnemies, army) && (exchangeRecent)
+    val pauseReach = 2 * ENGAGE_RANGE   // v106: окно сквозь мигание
+    val pausedChase =  posture == Posture.HOLD &&
+        armedEnemies.any { e -> army.any { getRange(e, it) <= pauseReach } }
+    if ((posture == Posture.ANNIHILATE || pausedChase) && !fightOn && armyDist >= 0) {
+        Memory.armyDistHist.addLast(armyDist)
+        // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
+        // отряд на 566-м при his_moved=0 по реплею (матч 133, одиннадцатый проигрыш фермеру-лагерю 8346:22771)
+        Memory.enemyCentHist.addLast((centroidOf(armedEnemies))?.let { it.x * 100 + it.y } ?: -1)
+    } else { Memory.armyDistHist.clear(); Memory.enemyCentHist.clear() }
+    while (Memory.armyDistHist.size > DETACH_WINDOW + 1) Memory.armyDistHist.removeFirst()
+    while (Memory.enemyCentHist.size > DETACH_WINDOW + 1) Memory.enemyCentHist.removeFirst()
+    // ...и это ОН уходит (v57): центр его вооружённых за окно сместился не меньше чем на четверть окна — стоячий лагерь, у
+    // которого замираем мы, дистанцию не «держит». Окно отряда — DETACH_WINDOW (v59): по восьми тикам (CHASE_WINDOW) отряд
+    // собрался на 207-м тике матча 139, когда дистанция за сто тиков сократилась с 40 до 12 — армия почти догнала, а
+    // восьмитиковое окно поймало паузу; ядро без пяти встало, он ушёл и запарковался (3174:22931)
+    fun kept(window: Int, needMoved: Boolean = true): Boolean {
+        if (Memory.armyDistHist.size <= window || Memory.enemyCentHist.size <= window) return false
+        val d0 = Memory.armyDistHist.elementAt(Memory.armyDistHist.size - 1 - window)
+        val a = Memory.enemyCentHist.elementAt(Memory.enemyCentHist.size - 1 - window); val b = Memory.enemyCentHist.last()
+        if (a < 0 || b < 0) return false
+        val moved = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
+        return Memory.armyDistHist.last() >= d0 && Memory.armyDistHist.last() > ENGAGE_RANGE && (!needMoved || moved >= window / 4)
+    }
+    val distanceKept = combatEnemies.isNotEmpty() && kept(DETACH_WINDOW)
+    if (distanceKept) lastDistanceKeptTick = now
+    // для простоя — и без его сдвига (v98, USE_KEEPS_DISTANCE_ANY_MOVE): застенчивый блоб держит дистанцию шагами на 2–3
+    // загнанная группа в досягаемости (см. USE_STALL_CORNERED_GROUP): неподвижная группа его вооружённых не меньше SPLIT_MIN,
+    // хотя бы один в досягаемости ударников, слабее их в PUSH_RATIO — застой «держит дистанцию» не наступает
+    val corneredInReach =  armedEnemies.size >= SPLIT_MIN && run {
+        val still = armedEnemies.filter { e ->
+            val h = Memory.enemyCellHist[e.id]
+            h != null && h.size >= CHASE_WINDOW && maxOf(abs(h.first() / 100 - h.last() / 100), abs(h.first() % 100 - h.last() % 100)) <= 1
+        }
+        val group = still.filter { e -> still.count { getRange(e, it) <= ENGAGE_RANGE } >= SPLIT_MIN }
+        group.isNotEmpty() && group.any { e -> chasers.any { getRange(it, e) <= ENGAGE_RANGE + RANGED_RANGE } } &&
+            ourPowerOf(chasers, group) >= enemyPowerOf(group, chasers) * PUSH_RATIO
+    }
+    // залипание (v134, см. USE_CORNERED_STICKY): условие сидит на границе и в матче 6a9fa6ad переключалось 154 раза,
+    // а вместе с ним и keepsDistance — армии на чётных тиках говорили «стой», на нечётных «иди»
+    if (corneredInReach) corneredUntil = now + CORNERED_STICK
+    val cornered = corneredInReach 
+    if (DEBUG_LOG && cornered != corneredWas) println("cornered t=$now: ${if (cornered) "a still weak group of his in reach — no distance stall" else "gone"}")
+    corneredWas = cornered
+    val keepsDistance = !cornered && (
+        ((distanceKept || (combatEnemies.isNotEmpty() && kept(DETACH_WINDOW, needMoved = false)))))
+    while (Memory.marchHist.size > MARCH_STALL_TICKS) Memory.marchHist.removeFirst()
+    // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
+    val marchStalled = pushing && marchCell >= 0 && Memory.marchHist.size == MARCH_STALL_TICKS &&
+        Memory.marchHist.all { it == marchCell } && !fightOn
+    // сухой толчок (v86): толчок PASSIVE_TICKS без нашего выстрела и без удара по нам — не толчок
+    // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
+    // конца матча (стенд m19 spread, t=600–1600)
+    // боевые враги нужны ПИКЕТУ (он из них и состоит), а простою марша — нет: зачистка идёт ровно тогда, когда
+    // боевых не осталось, и там сетка не сработала ни разу (стенд m18 roost: 1500 тиков погони за двумя скаутами)
+    // ...И В ОТХОДЕ ТОЖЕ (v217). Оговорка «в любой постуре, кроме отхода и уклонения» стояла без своего
+    // замера, а следствие у неё было тяжёлое: `!stalled` — единственный оставшийся выключатель
+    // `contactFight`, поэтому после объявления отхода выйти из него было нельзя по построению, и счёт
+    // оставался нулём при живых двенадцати крипах (живой замер v216: `objnone` даёт annihilate:179-207 при
+    // постуре RETREAT). Условие `!netDamage` остаётся и само по себе узко: под огнём простой не объявляется,
+    // так что правка касается ровно тихого отхода — того, из которого и надо уметь выйти
+    if (!netDamage && now >= stallUntil &&
+        ((combatEnemies.isNotEmpty() && preyNearTicks >= STALL_TICKS) || marchStalled || keepsDistance)) {
+        stallUntil = now + STALL_COOLDOWN
+        if (DEBUG_LOG) println("stall t=$now: ${if (marchStalled) "the march has not moved a cell for $MARCH_STALL_TICKS ticks" else if (keepsDistance) "the enemy keeps its distance (${Memory.armyDistHist.first()} -> ${Memory.armyDistHist.last()} over $CHASE_WINDOW ticks)" else "picket of $nearArmed armed in reach for $preyNearTicks ticks"} without damage either way — flags until $stallUntil")
+    }
+    val stalled = now < stallUntil
+    stalledNow = stalled
+
+    // ---- постура ----
+    val ours = ourPowerOf(army, combatEnemies)
+    val theirs = enemyPowerOf(combatEnemies, army)
+    // РЕЖИМ ВЫЖИВАНИЯ (v223, доктрина оператора, см. USE_SURVIVAL): ведём по очкам, а его армия сильнее — не деремся,
+    // а уходим, беря флаги с выходом. Порог и гистерезис — как у «слабее», по мощи всей армии
+    val leadingNow = ourScore > enemyScore
+    if (leadingNow && armedEnemies.isNotEmpty()) survLead++
+    Memory.theirsHist.addLast(theirs)
+    while (Memory.theirsHist.size > MEASURE_WINDOW) Memory.theirsHist.removeFirst()
+    // множители окна (v114): его мощь сейчас → его сильнейшая и слабейшая за окно; при нулевой мере — 1
+    val theirsUp = if (theirs > 0.0) (Memory.theirsHist.maxOrNull() ?: theirs) / theirs else 1.0
+    val theirsDown = if (theirs > 0.0) (Memory.theirsHist.minOrNull() ?: theirs) / theirs else 1.0
+    val nearRange = if (posture == Posture.RETREAT) NEAR_RANGE + NEAR_RELEASE else NEAR_RANGE
+    // ОТВЕРГНУТО стендом: «враг рядом — рядом с МАССОЙ армии, а не с любым нашим крипом» (хранители стоят по
+    // одному на разных концах карты, и висящий у хранителя враг россыпи отменяет цель-флаг у всей армии).
+    // Целевой сценарий m22 spread не сдвинулся вовсе (16622:24323), а m20 spread перешёл из победы в проигрыш
+    // (24337:21666 -> 19400:24328) и m19 block из уничтожения армии врага на 389-м в победу по очкам на 1142-м;
+    // выиграли только россыпи на 12, 19 и 21. Мигание постуры на россыпи — открытая находка
+    val enemyNear = armedEnemies.any { e -> army.any { getRange(e, it) <= nearRange } }
+    // контакт решает сам: пассивного поста в контакте нет — он отдаёт армию по одному (стенд rush: десять
+    // за двоих). Отход из контакта возможен, только если он не бегство: никто из врагов-мили не вплотную
+    // и наш строй не медленнее их самого быстрого — при равной скорости преследователь стреляет в спину
+    // каждый тик, а обездвиженные остаются врагу (стенд rush: отход при 1250 против 1619 отдал ещё
+    // шестерых). Иначе в контакте — бой всем составом, даже слабее: рубка с фокусом лучше разгрома
+    // контакт армии — контакт её МАССЫ (см. MASS_RANGE): один оторвавшийся не переводит армию в бой
+    val massCentroid = clusterCentroid(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
+    val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
+    val contact = inContact(armedEnemies, massArmy)
+    // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): назначение и тыльная клетка считаются здесь — до командира и ступеней
+    meleeWardOf.clear(); meleeWardCell.clear()
+    // ТРЕТЬЯ ПОСТАНОВКА (v227, см. USE_ZERO_LEAD_BREAK): мощь ноль при отрыве по очкам STALL_TICKS подряд — армия
+    // разрывает контакт СТРОЕМ: командир раздаёт клетки замыслом KITE с дальностью «вне его стрелкового огня», свободный
+    // шаг отскакивает от ближайшего вооружённого на RANGED_RANGE + 1; постура не меняется, все механизмы боя живут.
+    // Не бегство к точке (первая редакция выживания) и не непрерывное уклонение к выходу (вторая), а шаг назад строем
+    val zeroLead = leadingNow && contact && armedEnemies.isNotEmpty() && ours <= 0.0 && theirs > 0.0
+    zeroLeadTicks = if (zeroLead) zeroLeadTicks + 1 else 0
+    if (zeroLead) zlbZero++
+    // ИДЁТ ЛИ БОЙ (v215): контакт по МАССЕ армии либо размен за последние STALL_TICKS тиков. Считается
+    // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
+    // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
+    fightOnNow = contact || exchangeRecent
+    // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
+    // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
+    if (fightOnNow) { warmFightAll++; if (!exchangeLive) warmFight++ }
+    // ПРИЗНАК ОТХОДА СЧИТАЕТСЯ ЗДЕСЬ (v217, см. USE_BREAK_OFF_HOLDS_LINE): он должен успеть погасить
+    // наступление, а `pushing` решается на триста строк ниже. Величины готовы: контакт уже есть, а
+    // `ourDamageTaken`/`enemyDamageTaken` копятся с начала матча
+    val outmatchedNow =  contact && armedEnemies.isNotEmpty() &&
+        ourDamageTaken > 0 && enemyDamageTaken < ourDamageTaken * BREAK_OFF_RATIO
+    outmatchedTicks = if (outmatchedNow) outmatchedTicks + 1 else 0
+    val breakOffNow = outmatchedTicks >= BREAK_OFF_TICKS
+    // ОТЗЫВ (v215, см. USE_NO_SPLIT_IN_FIGHT): едва бой начался, отпущенные возвращаются в кулак. Очистка стоит
+    // ЗДЕСЬ, а не внутри `commandRace`: выйдя из режима гонки, командир эту функцию не зовёт вовсе, и `cmdDetach`
+    // оставался с прошлого тика — отпущенные не возвращались никогда
+    if (fightOnNow) {
+        fightTicksNow++
+        recalled += Memory.cmdDetach.size + Memory.detachedIds.size
+        Memory.cmdDetach.clear()
+        Memory.detachedIds.clear()
+    }
+    val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
+    val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4
+    // при РАВНОЙ скорости отход из контакта без мили вплотную — размен выстрелами в обе стороны, не бегство; из
+    // точки отхода, куда уже пришли, отходить некуда — бой (матч 5: семеро в углу (3,96) при «отходе» не
+    // шевелились и не били, пока их расстреливали с трёх клеток)
+    val atRetreatPoint = retreatTarget?.let { getRange(ctx.ourCentroid, it) <= POST_STANDOFF + ARRIVED_SLACK } ?: false
+    // из контакта отхода нет: «отход, пока мили не вплотную» мигал ДОБИТЬ/ОТХОД через тик и отдавал армию по одному
+    // в матчах 4, 6 и 7 (в седьмом — при 1.53, без единой потери у врага); при равной скорости из контакта не
+    // уйти, и единственный способ его кончить — бой строем
+    // без стрелков строя нет — лекарей и раненых травят, и «в контакте держим строй» держало их у поста, где
+    // стоял враг (стенд m7 sleeper: три лекаря с flee=true разбежались по карте и были добиты поодиночке)
+    val retreatFeasible = (!contact || strikers.isEmpty()) && !atRetreatPoint
+    cpuMark("a.retreat")
+    ArmyMeasuresOut(
+        allies = allies,
+        enemyCreeps = enemyCreeps,
+        combatEnemies = combatEnemies,
+        strikers = strikers,
+        armedEnemies = armedEnemies,
+        enemyMassedNow = enemyMassedNow,
+        now = now,
+        exchangeLedger = exchangeLedger,
+        exchangeLive = exchangeLive,
+        exchangePaying = exchangePaying,
+        mobileArmy = mobileArmy,
+        commandArmy = commandArmy,
+        chasers = chasers,
+        huntable = huntable,
+        meleeAdjacent = meleeAdjacent,
+        exchangeRecent = exchangeRecent,
+        fightOn = fightOn,
+        cornered = cornered,
+        stalled = stalled,
+        ours = ours,
+        theirs = theirs,
+        theirsUp = theirsUp,
+        theirsDown = theirsDown,
+        enemyNear = enemyNear,
+        massCentroid = massCentroid,
+        massArmy = massArmy,
+        contact = contact,
+        breakOffNow = breakOffNow,
+        retreatFeasible = retreatFeasible,
+    )
 }

@@ -52,6 +52,7 @@ import season4.painandgain.PainAndGain.Objective
 import season4.painandgain.PainAndGain.ChaseSample
 import season4.painandgain.PainAndGain.FightCell
 import season4.painandgain.PainAndGain.HypoMods
+import kotlin.reflect.*
 
 /**
  * ПРИБОРЫ (v255, этап 10 переработки; план — docs/pain-and-gain-rework.md, раздел 1, «Instruments»). Замеры CPU по фазам
@@ -208,4 +209,89 @@ internal fun PainAndGain.logMap(fromRow: Int) {
         for (y in 0..99) for (x in 0..99) { if (DistanceMap.isTerrainWall(x, y)) wall++ else if (DistanceMap.isSwamp(x, y)) swamp++ }
         println("=== END MAP swamp=$swamp wall=$wall plain=${10000 - swamp - wall} ===")
     }
+}
+
+/** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
+internal class OrderAuditIn(
+    val enemyCreeps: List<Creep>,
+    val commandArmy: List<Creep>,
+)
+
+internal class OrderAuditOut(
+)
+
+internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut = with(seg) {
+    val seen = HashMap<Int, Int>()
+    commandOf.values.forEach { p -> seen[p.x * 100 + p.y] = (seen[p.x * 100 + p.y] ?: 0) + 1 }
+    val dup = seen.values.count { it > 1 }
+    orderClash += dup
+    // ГАРАНТИЯ, А НЕ НАБЛЮДЕНИЕ (v176, оператор: «не должно быть такого, что по приказам командира в одну
+    // клетку собрались двое»). Раздача держит своё множество занятых, но источников приказа несколько — бой,
+    // гонка, марш, хранители, отход, — и на стыке коллизия всё же случалась (одна на 431 приказ, режим боя).
+    // Здесь она снимается: клетка остаётся за первым, второй теряет приказ и идёт по общим правилам
+    if (dup > 0) {
+        val used = HashSet<Int>()
+        val drop = ArrayList<String>()
+        for ((id, p) in commandOf) { val k = p.x * 100 + p.y; if (!used.add(k)) drop.add(id) }
+        drop.forEach { commandOf.remove(it) }
+    }
+    if (dup > 0 && DEBUG_LOG) {
+        val where = seen.entries.firstOrNull { it.value > 1 }?.key ?: 0
+        val who = commandOf.filterValues { it.x * 100 + it.y == where }.keys.joinToString(",")
+        println("clash t=${getTicks()}: mode=$cmdMode cell=(${where / 100},${where % 100}) who=$who")
+    }
+    Memory.orderPrev.forEach { (id, cell) ->
+        // ...и захватчик из аудита исключается: его приказ — ФЛАГ, а не клетка, и ведёт его свой цикл;
+        // считать его ослушником было бы неверно (v173)
+        if (id in Memory.cmdDetach) return@forEach
+        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
+        orderAuditN++
+        // ...и ПРИКАЗ В ДВУХ ШАГАХ ИСПОЛНЕН, ЕСЛИ КРИП СТАЛ БЛИЖЕ (v184). Прибор сверял клетку крипа с
+        // НАЗНАЧЕННОЙ и только с ней, а строй (`commandBrace`) назначает место в строю за несколько клеток —
+        // такой приказ не мог быть засчитан НИКОГДА, и едва строй заработал, исполнение упало со 99 % до 62 %
+        // при том, что крипы шли туда, куда велено. Из-за этого я успел записать в дефекты то, чего не было,
+        // и починить не тот код (см. USE_BRACE_STEPS). По всей серии v183 «ушёл в другую клетку» набрал
+        // 2 022 случая из 39 245 — почти все они этой природы
+        val far = 
+            (orderDist[id] ?: 0) > 1 && maxOf(abs(c.x - cell.x), abs(c.y - cell.y)) < (orderDist[id] ?: 0)
+        if ((c.x == cell.x && c.y == cell.y) || far) orderAuditOk++
+        else {
+            // ...и КУДА делись остальные (v170): приказ был «стой», а крип ушёл; крип не двинулся
+            // вовсе; двинулся, но в другую клетку; или не мог двигаться от усталости
+            val here = orderWas[id]
+            when {
+                cell.x == here?.first && cell.y == here.second -> lostStay++
+                // ...клетку мог занять ВРАГ: он ходит одновременно с нами, и его шаг делает приказ
+                // неисполнимым задним числом — это неустранимо в принципе, и считать надо отдельно (v175)
+                ctx.enemyCreeps.any { e -> e.x == cell.x && e.y == cell.y } -> lostEnemy++
+                c.x == here?.first && c.y == here.second -> lostStuck++
+                (orderFatigue[id] ?: 0) > 0 -> lostFatigue++
+                else -> lostElsewhere++
+            }
+        }
+        // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
+        val wasD = orderDist[id] ?: 99
+        val nowD = maxOf(abs(c.x - cell.x), abs(c.y - cell.y))
+        if (nowD < wasD) orderAuditCloser++
+        // ...и ДЕРЖИТСЯ ЛИ приказ: та же клетка, что была назначена в прошлый тик
+        if (commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
+    }
+    // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
+    // и доля исполнения ограничена этим по построению (v170)
+    commandOf.forEach { (id, p) ->
+        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
+        if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
+    }
+    orderWas.clear(); orderFatigue.clear()
+    commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
+    orderDist.clear()
+    commandOf.forEach { (id, p) ->
+        val c = commandArmy.firstOrNull { it.id == id }
+        if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
+    }
+    Memory.orderPrev.clear()
+    commandOf.forEach { (id, p) -> Memory.orderPrev[id] = p }
+    // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
+    OrderAuditOut(
+    )
 }
