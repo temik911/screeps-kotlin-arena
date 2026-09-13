@@ -19,11 +19,13 @@ from collections import Counter
 
 MASK = [
     (re.compile(r'hello season4 pain-and-gain v\d+'), 'hello season4 pain-and-gain vX'),
+    (re.compile(r' cpu=\d+/\d+$'), ' cpu=X'),
     (re.compile(r' anchor=\S+'), ''),
     (re.compile(r' ovw=\S+ conf=\S+'), ''),
     (re.compile(r' disp=\S+'), ''),
     (re.compile(r' evt=\S+'), ''),
     (re.compile(r' lead=\S+'), ''),
+    (re.compile(r' srch=\S+'), ''),
 ]
 
 

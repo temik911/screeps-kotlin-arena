@@ -282,6 +282,8 @@ object PainAndGain {
         Executor.run(moves)
         cpuMark("resolve")
         cpuSummary()
+        // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
+        if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
         val rememberTickSeg = rememberTick(ctx, RememberTickIn(
             myCreeps = myCreeps,
             enemyCreeps = enemyCreeps,
@@ -498,6 +500,7 @@ object PainAndGain {
             ourYielding = ourYielding,
             pressOn = pressOn,
         ))
+        cpuMark("block")
         val armyCommandSeg = armyCommand(ctx, ArmyCommandIn(
             army = army,
             enemyCreeps = enemyCreeps,
@@ -513,6 +516,7 @@ object PainAndGain {
             armiesClosing = armiesClosing,
             enemyApproaching = enemyApproaching,
         ))
+        cpuMark("command")
         val orderAuditSeg = orderAudit(ctx, OrderAuditIn(
             enemyCreeps = enemyCreeps,
             commandArmy = commandArmy,
