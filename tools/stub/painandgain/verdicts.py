@@ -197,7 +197,7 @@ def emit(code_path, out_path):
              'дописано' if existing else 'создано'))
 
 
-def check(code_path, base, docs_pattern=None):
+def check(code_path, base, docs_pattern=None, append_to=None):
     r = subprocess.run(['git', 'diff', base, '--', code_path], capture_output=True, text=True)
     if r.returncode != 0:
         print('git diff не удался:', r.stderr.strip())
@@ -205,6 +205,13 @@ def check(code_path, base, docs_pattern=None):
     diff = r.stdout
     removed = [l[1:] for l in diff.split('\n') if l.startswith('-') and not l.startswith('---')]
     removed_comments = [strip_comment(l) for l in removed if is_comment_line(l)]
+    # ...и хвостовые комментарии удалённых строк кода: `val x = …   // замер …` — знание там же
+    for l in removed:
+        if is_comment_line(l):
+            continue
+        m = re.search(r'\s//\s?(.*)$', l)
+        if m and l[:m.start()].count('"') % 2 == 0:
+            removed_comments.append(m.group(1).strip())
     known = docs_text(docs_pattern)
     vers = set()
     nums = set()
@@ -225,6 +232,18 @@ def check(code_path, base, docs_pattern=None):
         print('  число не найдено:', x)
     for t in miss_t[:40]:
         print('  строка не найдена:', t[:110])
+    if append_to and (miss_v or miss_n or miss_t):
+        # дословно дописать пропавшее в приложение — под заголовком с базой сравнения, чтобы было видно, откуда
+        with open(append_to, 'a', encoding='utf-8') as f:
+            f.write('\n## Строки, снятые при удалении кода (база %s)\n\n' % base)
+            f.write('Хвостовые и одиночные комментарии удалённых строк, которых не было в приложении; перенесены дословно\n')
+            f.write('режимом `verdicts.py check --append`.\n\n```\n')
+            for t in removed_comments:
+                tn = norm(t)
+                if tn and (tn in miss_t or any(x in tn for x in miss_n) or any(re.search(r'\b%s\b' % v, tn) for v in miss_v)):
+                    f.write(t.strip() + '\n')
+            f.write('```\n')
+        print('дописано в', append_to, '— повторите check')
     return 1 if (miss_v or miss_n or miss_t) else 0
 
 
@@ -235,13 +254,14 @@ def main():
     ap.add_argument('--out', default=OUT)
     ap.add_argument('--base')
     ap.add_argument('--docs', help='glob файлов docs для check (по умолчанию %s)' % DOCS_GLOB)
+    ap.add_argument('--append', action='store_true', help='check: дописать пропавшие строки в --out дословно')
     a = ap.parse_args()
     if a.mode == 'emit':
         emit(a.code, a.out)
         return 0
     if not a.base:
         ap.error('check требует --base REF')
-    return check(a.code, a.base, a.docs)
+    return check(a.code, a.base, a.docs, a.out if a.append else None)
 
 
 if __name__ == '__main__':
