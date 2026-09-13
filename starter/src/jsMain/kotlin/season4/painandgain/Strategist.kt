@@ -1595,9 +1595,9 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     }
     val raceFree = ctx.flags.filter { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
         (armedEnemies.minOfOrNull { getRange(it, f.pos) } ?: 999) > (raceForce.minOfOrNull { getRange(it, f.pos) } ?: 999) }
-    val racePaired = emptyList<FlagInfo>()
-    val raceTargets = raceFree.size + racePaired.size
-    val raceSlots = raceFree.size + racePaired.size * 2   // по два бегуна на флаг под стаей (см. USE_RUNNER_PAIRS)
+    // флаги под стаей для пары бегунов (USE_RUNNER_PAIRS, USE_RACE_PAIR_TARGETS) отвергнуты — список всегда был пуст, снят в v261
+    val raceTargets = raceFree.size
+    val raceSlots = raceFree.size
     // расколот (v119): ВТОРАЯ группа его вооружённых (вне крупнейшей, в ENGAGE_RANGE друг от друга) не меньше SPLIT_MIN —
     // две группы фермера, а не отставшие от колонны на марше: первый срез «двое вне крупнейшей» стартовал гонку на
     // двадцатом тике по хвосту колонны spread, и spread m19/m31/m33 из побед в 20403:24313, 14392:24330, 14990:24318
@@ -1718,7 +1718,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         }
     }
     if (DEBUG_LOG && Memory.detachedIds.size != detachedBefore)
-        println("detach t=$now: ${Memory.detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow targets=$raceTargets(${racePaired.size} paired) largest=$largestGroup/${armedEnemies.size} dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
+        println("detach t=$now: ${Memory.detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow targets=$raceTargets(0 paired) largest=$largestGroup/${armedEnemies.size} dry=${now - lastDistanceKeptTick} hurt=${now - lastHurtTick} fire=${now - lastFireTick} reach=${now - lastReachTick} contact=$contact theirs=${theirs.toInt()}")
     val interceptDenies = interceptFlag != null && !interceptFlag.ours
     // ЗАЧИСТКА ФЛАГОВ ВМЕСТО ПОГОНИ (v124, стенд blitz m28 на v122, 3961:23980): позади по очкам против врага, который не
     // дерётся, армия 200 тиков (42–239) толкала его пятёрку в 647 мощи при своих 3575 — та уходит в шести на той же
@@ -1731,9 +1731,8 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     val cpuGuardArmy =  now > 1 && cpuMs() > CPU_GUARD_MS
     if (cpuGuardArmy && DEBUG_LOG) println("cpu t=$now guard: posture keeps the objective (${(cpuMs() * 10).toInt() / 10.0}ms)")
     val dryNow = (lastFireTick < 0 || now - lastFireTick >= PASSIVE_TICKS) && now - lastHurtTick >= PASSIVE_TICKS
-    val sweepObjective: FlagInfo? = null   // USE_SWEEP_OVER_CHASE снят (v214): см. docs
     cpuMark("a.sweep")
-    val chaseVeto = (enemyNotFightingNow && (interceptDenies || !behindOnScore)) || sweepObjective != null
+    val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)   // USE_SWEEP_OVER_CHASE снят (v214), вместе с ним и слагаемое цели зачистки (v261)
     // ОТКРЫТАЯ НАХОДКА (матч 70): второй источник мигания — «ловимых нет»: блоб, шагнувший назад на две клетки, делает
     // «уходящими» всех двенадцать на восемь тиков (см. evasive), и наступление снимается на эти тики, армия к посту.
     // Два устранения ОТВЕРГНУТЫ стендом: гистерезис по ловимости (наступление снимается лишь после целого CHASE_WINDOW без
@@ -1827,7 +1826,6 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // считается здесь, до постуры: вторая редакция — нет точки и он в контакте, значит бой строем, а не стояние в
     // отходе (первая редакция парковала армию у точки отхода, и он добивал её там, стоящую: 0-8 против Coldkimchi#1)
     // поля выхода — этим тиком, а не прошлым: на первом тике режима их ещё нет, и уходить было бы «некуда»
-    val survEvade = null
     val annihilate = (pushing || contactFight || holdingSpot) 
     // ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, `warmNow` — см. hotContact): ровно то, что правка
     // называет «не боем». `warm` — доля такого контакта во всём контакте; `warmann` — тики, где боевую постуру

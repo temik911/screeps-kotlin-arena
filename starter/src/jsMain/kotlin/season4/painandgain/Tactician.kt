@@ -410,7 +410,6 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // ...а при УДЕРЖИМОЙ жертве (v228, см. USE_HEAL_WALL) подопечный — она: лечение вплотную 72 против 24 издали,
             // и именно её он бьёт сейчас, а самый раненый в дальности — уже отведённый в тыл
             (if (victimSaveable) victimNow?.takeIf { v -> v.id != creep.id && getRange(creep, v) <= HEAL_RANGE + 1 } else null)
-                ?: (null)
                 ?: near.maxByOrNull { it.hitsMax - it.hits }
                 ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
                 ?: fighters.minByOrNull { getRange(creep, it) }
@@ -436,9 +435,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         } else null
         val healerNear: Creep? = if (wounded || rotating) {
             val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
-            val mine = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
-            (null)
-                ?: hs.minByOrNull { getRange(creep, it) }
+            hs.minByOrNull { getRange(creep, it) }
         } else null
         // под огнём без двух бойцов вплотную — назад к строю, не вперёд: шип в строй врага бьют трое-четверо, а он один
         // вплотную, не «в двух клетках»: со счётом союзников в двух клетках мили под огнём не отходили и ныряли в блоб
@@ -755,10 +752,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // крип доходит до своей клетки в 7 % случаев (10 из 144) и даже приближается лишь в 32 %. Прогноз
                 // при этом считает, что армия встанет по плану: он опирался на фикцию. Клетка в ОДНОМ шаге теперь
                 // запрашивается напрямую, как это делают захватчики
-                val ordered: Position? = null
-                orderPull = if (commandOf.containsKey(creep.id)) ORDER_PULL else 1.0
-                val chosen = ordered ?: bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW, focusTarget)
-                orderPull = 1.0
+                val chosen = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW, focusTarget)
                 chosen
             }
         }
@@ -801,7 +795,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             }
         }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-            println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (wounded) " WOUNDED" else ""}${if (pressTarget != null || false) " PRESS" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
+            println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (wounded) " WOUNDED" else ""}${if (pressTarget != null) " PRESS" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
         }
         // СОГЛАСОВАНИЕ ДВИЖЕНИЙ — ЗА КОМАНДИРОМ (v170, оператор). Разрешение конфликтов уже устроено правильно:
         // поиск в глубину с цепочками и свопами, по ПРИОРИТЕТУ. Но приоритет задавали разрозненные места — раненый,
@@ -1015,9 +1009,9 @@ internal fun PainAndGain.scoreCell(creep: Creep, x: Int, y: Int, target: Positio
             damage * PAIR_W_DAMAGE * AGGRO_MELEE_FACTOR
         else 0.0
     val pinned = (periodAt(creep, x, y) - 1) * InfluenceMap.fireAt(x, y, enemyCreeps) * PAIR_W_DAMAGE
-    // ...и притяжение к ПРИКАЗУ сильнее (v168, см. orderPull): назначенная клетка была одним слагаемым наравне с
-    // влиянием, угрозой мили и разделением, и они её перевешивали — до своей клетки доходили 7 % крипов
-    return -firePenalty * PAIR_W_DIST * orderPull - damageTerm + influence * PAIR_W_INFLUENCE +
+    // ...притяжение к ПРИКАЗУ (v168, множитель orderPull) снято в v261: крип с приказом до свободного шага не доходит —
+    // его перехватывает ветка order цепочки шага, и множитель здесь всегда был единицей
+    return -firePenalty * PAIR_W_DIST - damageTerm + influence * PAIR_W_INFLUENCE +
         (outgoing + focusPull) * PAIR_W_OUTGOING - meleeThreat - separation - swampPenalty - pinned - lethalTerm
 }
 
@@ -1399,11 +1393,6 @@ internal const val LETHAL_PENALTY = 1e6      // не запрет, а вес: е
  *  и было командой «в атаку по одному». */
 internal const val FORM_RANGE = 2
 
-// множитель замерен: при 4 приборы лучше всего (исполнение 9 % против 7,6 %, приближение 36 % против 33 %, ошибка
-// прогноза 832 против 956), но гейт падает до 133 из 135 (camp 19 521:20 793, brawl+heals с потерей армии) —
-// слишком сильное притяжение ведёт крипа в клетку сквозь огонь. При 2 гейт держит 135, приближение 34 %
-internal const val ORDER_PULL = 2.0
-
 /** Цена уцелевшего тела в оценке симуляции (v138): аннигиляция — поражение при любом счёте, значит крип дороже
  *  своего оружия. Величина в тех же единицах, что профиль: 240 — удар мили, то есть тело весит примерно один удар. */
 internal const val KITE_STANDOFF = MELEE_HOLD_RANGE   // ОТСКОК (порог 2, отход на 3) отвергнут: 0-6 и 1-5 против 5-7 и 2-10
@@ -1505,8 +1494,6 @@ internal const val SEPARATION_RADIUS = 1
 
 /** Тик, с которого строй ждёт готовности (см. FORM_PATIENCE); -1 — не ждёт. */
 internal var formWaitSince = -1
-
-internal var orderPull = 1.0                    // множитель притяжения к назначенной клетке (v168)
 
 internal var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
 

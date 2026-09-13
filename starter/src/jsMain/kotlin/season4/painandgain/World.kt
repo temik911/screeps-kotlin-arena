@@ -730,9 +730,6 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
         group.isNotEmpty() && group.any { e -> chasers.any { getRange(it, e) <= ENGAGE_RANGE + RANGED_RANGE } } &&
             ourPowerOf(chasers, group) >= enemyPowerOf(group, chasers) * PUSH_RATIO
     }
-    // залипание (v134, см. USE_CORNERED_STICKY): условие сидит на границе и в матче 6a9fa6ad переключалось 154 раза,
-    // а вместе с ним и keepsDistance — армии на чётных тиках говорили «стой», на нечётных «иди»
-    if (corneredInReach) corneredUntil = now + CORNERED_STICK
     val cornered = corneredInReach 
     if (DEBUG_LOG && cornered != corneredWas) println("cornered t=$now: ${if (cornered) "a still weak group of his in reach — no distance stall" else "gone"}")
     corneredWas = cornered
@@ -988,7 +985,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     val enemyWithinReach = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
     enemyNotFightingNow =  noFireTicks >= STALL_TICKS && !enemyWithinReach
     if (hurt) lastHurtTick = getTicks()
-    if (enemyWithinReach) { lastReachTick = getTicks(); if (firstReachTick < 0) firstReachTick = getTicks() }
+    if (enemyWithinReach) lastReachTick = getTicks()
     // «он подходил» для фермера — по NEAR, не по броску (v72): застенчивый лагерь стенда (camp+shy) держит девять клеток и в
     // восемь не входит никогда — вся цепочка фермера (отряды, порог гонки, стая не преграда) молчала 800 тиков при
     // pushing=true в девяти клетках от него (m30, 9615:23822)
@@ -1145,8 +1142,6 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     )
 }
 
-internal const val CORNERED_STICK = 4
-
 internal const val NEAR_RELEASE = 6
 
 /** Столько тиков без сдвига — враг «стоит» и в стаи по «успеет дойти» не входит (см. packAt). */
@@ -1170,15 +1165,11 @@ internal var enemyHomePos: Position? = null
 
 internal var corneredWas = false
 
-internal var corneredUntil = 0   // залипание corneredInReach (v134, см. USE_CORNERED_STICKY)
-
 /** Режим выживания (v223, см. USE_SURVIVAL) и его приборы: тиков в режиме / тиков, где мы ведём при его вооружённых /
  *  тиков режима в контакте (то есть там, где прежняя доктрина дралась бы). */
 /** Третья постановка (v227, см. USE_ZERO_LEAD_BREAK): тиков подряд с мощью ноль при отрыве; режим разрыва контакта;
  *  приборы — тиков разрыва / тиков с мощью ноль при отрыве. */
 internal var zeroLeadTicks = 0
-
-internal var firstReachTick = -1                       // первый такой тик (см. USE_DETACH, v68: тишина считается от него)
 
 internal var lastOurHits = -1                          // сумма хитов армии на прошлом тике (для noFireTicks)
 

@@ -100,13 +100,9 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     // под огнём (v109): терявший хиты в прошлый тик — впереди любого дефицита (см. USE_HEAL_UNDER_FIRE), но только пока не покрыт
     // его запас «дефицит + HEAL_FIRE_ROOM × потеря»: первый срез слал всех троих на потерявшего 60 (216 лечения в дефицит 60),
     // и призрак 273 терял на входе 2710 против 1688 у v108 — покрытый возвращается к обычному выбору по need
-    fun rank(target: Creep): Int {
-        val n = need(target)
-        val lost = lostTick[target.id] ?: 0
-        return n
-        val fireRoom = (target.hitsMax - target.hits) + HEAL_FIRE_ROOM * lost - (healDone[target.id] ?: 0)
-        return if (fireRoom > 0) HEAL_FIRE_RANK + fireRoom else n
-    }
+    // ...ранг под огнём (HEAL_FIRE_RANK / HEAL_FIRE_ROOM) выключен давно: функция возвращала дефицит первой строкой, всё
+    // ниже было недостижимо — снято в v261, история правила выше
+    fun rank(target: Creep): Int = need(target)
     for (creep in active) {
         strike(creep, enemyCreeps, focusTarget, focusOrder)
         val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
@@ -362,7 +358,7 @@ internal fun PainAndGain.ensureGoalField(fighters: List<Creep>, combatEnemies: L
 
 internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
-                         per: Map<String, Intent>? = null, ourFlagCells: Set<Int> = emptySet()) {
+                         ourFlagCells: Set<Int> = emptySet()) {
     out.clear()
     val fighters = army.filter { canMove(it) && !it.spawning }
     if (fighters.isEmpty() || armedEnemies.isEmpty()) return
@@ -634,7 +630,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // разборе: наши раздетые в трёх клетках от его вооружённых 172 крипо-тика из 238, у него 7 из 11
     val stripped = fighters.filter { !hasWeapon(it) && !hasHeal(it) }
     // ...и замысел может быть СВОЙ у каждого крипа (v139, портфельный поиск): армия смешивает поведение
-    fun intentOf(c: Creep) = per?.get(c.id) ?: intent
+    fun intentOf(c: Creep) = intent
     // клетки лекарей — прибор согласованности `mheal` ниже: сколько мили осталось в дальности лечения
     val healerCells = healers.map { InfluenceMap.cell(it.x, it.y) }
     // ==================== ОЦЕНКА КЛЕТКИ ПОЛЕМ (v206, этап 6) ====================
@@ -977,13 +973,6 @@ internal const val CHAIN_DEPTH = 4
 internal const val PATH_DANGER_W = 1.0
 
 internal const val PATH_BLOCKED_COST = 1000.0
-
-/** РАНА ВАЖНЕЕ СОСЕДСТВА (v183, оператор): ближняя ветка бралась раньше дальней всегда, поэтому полный сосед —
- *  включая самого лекаря — обходил раненого в двух клетках. 8 лечений из 55 в разгроме 3d9532 ушли в цель на
- *  полных хитах, не получившую в этот тик урона; у соперника таких 0 из 172. */
-internal const val HEAL_FIRE_RANK = 100000   // ранг, не величина: под огнём — впереди любого дефицита
-
-internal const val HEAL_FIRE_ROOM = 2        // запас под огнём: дефицит + столько потерь прошлого тика (фокус растёт, 2–5 выстрелов в тик)
 
 internal const val LETHAL_CELL_COST = 10000.0
 
