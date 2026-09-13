@@ -44,14 +44,6 @@ import sourcemaps.runWithSourceMapSupport
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.sqrt
-import season4.painandgain.PainAndGain.Posture
-import season4.painandgain.PainAndGain.Intent
-import season4.painandgain.PainAndGain.CmdMode
-import season4.painandgain.PainAndGain.Shooter
-import season4.painandgain.PainAndGain.Objective
-import season4.painandgain.PainAndGain.ChaseSample
-import season4.painandgain.PainAndGain.FightCell
-import season4.painandgain.PainAndGain.HypoMods
 import kotlin.reflect.*
 
 /**
@@ -80,36 +72,36 @@ internal object Strategist {
         val outmatched: Boolean, val pushing: Boolean, val underFire: Boolean,
         /** ни сомкнутой армии, ни COMMAND_MIN_FOES у руки */
         val fewFoes: Boolean,
-        val posture: PainAndGain.Posture, val postureSince: Int, val now: Int,
+        val posture: Posture, val postureSince: Int, val now: Int,
         /** кандидат прошлого тика и тик, с которого он предлагается без перерыва (v250) */
-        val candidate: PainAndGain.Posture?, val candidateSince: Int,
+        val candidate: Posture?, val candidateSince: Int,
         /** событие тика (прибор evt=, в гистерезис пока не входит — см. decide): наш крип погиб или флаг сменил владельца */
         val event: Boolean,
     )
 
     class Decision(
-        val newPosture: PainAndGain.Posture, val postureTakes: Boolean,
+        val newPosture: Posture, val postureTakes: Boolean,
         /** постура после гистерезиса, до перезаписи режимом боя — применяется у решения (v241, v243) */
-        val posturePre: PainAndGain.Posture, val postureSincePre: Int,
-        val cmdMode: PainAndGain.CmdMode, val cmdWhy: String,
+        val posturePre: Posture, val postureSincePre: Int,
+        val cmdMode: CmdMode, val cmdWhy: String,
         /** постура после перезаписи режимом боя — применяется там, где стояла перезапись (v241; «один раз» v242 отвергнуто) */
-        val postureFinal: PainAndGain.Posture, val postureSinceFinal: Int,
+        val postureFinal: Posture, val postureSinceFinal: Int,
         val event: Boolean,
         /** кандидат этого тика и начало его непрерывного ряда — в Memory до следующего тика (v250) */
-        val candidate: PainAndGain.Posture, val candidateSince: Int,
+        val candidate: Posture, val candidateSince: Int,
     )
 
     fun decide(i: Inputs): Decision {
         val newPosture = when {
-            i.annihilate -> PainAndGain.Posture.ANNIHILATE
-            i.hasObjective -> PainAndGain.Posture.FLAG
-            i.evade -> PainAndGain.Posture.EVADE
-            i.retreat -> PainAndGain.Posture.RETREAT
-            else -> PainAndGain.Posture.HOLD
+            i.annihilate -> Posture.ANNIHILATE
+            i.hasObjective -> Posture.FLAG
+            i.evade -> Posture.EVADE
+            i.retreat -> Posture.RETREAT
+            else -> Posture.HOLD
         }
         // ГИСТЕРЕЗИС ПОСТУРЫ (v181): держится не меньше POSTURE_HOLD тиков; раньше срока меняется только на RETREAT —
         // спасение не ждёт; EVADE срока ждёт (v183: изъятие для EVADE само рождало пилу с периодом POSTURE_HOLD)
-        val escape = newPosture == PainAndGain.Posture.RETREAT
+        val escape = newPosture == Posture.RETREAT
         // ПЕРЕСМОТР ПО СОБЫТИЯМ (решение оператора 13.09) ПОКА НЕ ВКЛЮЧЁН — три определения события отвергнуты гейтом
         // (v242, замер в runArmy у поля event): любое изменение контакта, только появившийся контакт, гибель своего + смена
         // владельца флага — каждое роняло scatter m34 и меняло счёт 19–34 сценариев, потому что на стенде эти события
@@ -132,18 +124,18 @@ internal object Strategist {
         // РЕЖИМ КОМАНДИРА (v160): поход — врага рядом нет; гонка — затор или его отход вне рубки; бой — под его огнём,
         // его группа у руки, мы не наступаем и не бежим (v217: наступление режим боя не исключает — кулак нужен там,
         // где лечение не даёт добить, а признак «мы позади по размену» и есть !pushing … underFire)
-        val fightNow = !i.pushing && i.underFire && !i.fewFoes && pre != PainAndGain.Posture.RETREAT && pre != PainAndGain.Posture.EVADE
+        val fightNow = !i.pushing && i.underFire && !i.fewFoes && pre != Posture.RETREAT && pre != Posture.EVADE
         val mode = when {
-            i.marchNow -> PainAndGain.CmdMode.MARCH
-            i.stalled || i.hisRetreat -> PainAndGain.CmdMode.RACE
-            fightNow -> PainAndGain.CmdMode.FIGHT
-            else -> PainAndGain.CmdMode.RACE
+            i.marchNow -> CmdMode.MARCH
+            i.stalled || i.hisRetreat -> CmdMode.RACE
+            fightNow -> CmdMode.FIGHT
+            else -> CmdMode.RACE
         }
         // ...и причина берётся из той же цепочки (v215): прибор, повторяющий решение своим порядком, врёт ровно тогда,
         // когда бот меняется
         val why = when {
-            mode == PainAndGain.CmdMode.FIGHT -> "fight"
-            mode == PainAndGain.CmdMode.MARCH -> "march"
+            mode == CmdMode.FIGHT -> "fight"
+            mode == CmdMode.MARCH -> "march"
             i.outmatched -> "outmatched"
             i.stalled -> "stall"
             i.hisRetreat -> "retreat"
@@ -154,8 +146,8 @@ internal object Strategist {
         }
         // РЕЖИМ НАЗНАЧАЕТ ПОСТУРУ (v162): командир решил драться — армия уничтожает, а не держит и не бежит; запись
         // через те же часы (v215)
-        val overrideFight = mode == PainAndGain.CmdMode.FIGHT && pre != PainAndGain.Posture.ANNIHILATE
-        val final = if (overrideFight) PainAndGain.Posture.ANNIHILATE else pre
+        val overrideFight = mode == CmdMode.FIGHT && pre != Posture.ANNIHILATE
+        val final = if (overrideFight) Posture.ANNIHILATE else pre
         val sinceFinal = if (overrideFight) i.now else sincePre
         return Decision(newPosture, takes, pre, sincePre, mode, why, final, sinceFinal, i.event, newPosture, candSince)
     }
@@ -177,7 +169,7 @@ internal object Strategist {
      *  `Take` своего флага, преследователи — `Fight` остова, хранители — `Take` флага под ногами. */
     fun snapshot(army: List<Creep>, runners: List<Creep>, runnerFlag: Map<String, String>, detached: Set<String>,
                  cmdDetach: Set<String>, keepers: Map<String, String>, chase: Map<String, String>,
-                 posture: PainAndGain.Posture, cmdMode: PainAndGain.CmdMode, objectiveFlagId: String?, hisArmed: List<Creep>): Disposition {
+                 posture: Posture, cmdMode: CmdMode, objectiveFlagId: String?, hisArmed: List<Creep>): Disposition {
         val squads = ArrayList<Squad>()
         var n = 0
         val taken = HashSet<String>()
@@ -192,11 +184,11 @@ internal object Strategist {
         }
         val main = army.filter { it.id !in taken }.map { it.id }
         val mission: Mission = when {
-            cmdMode == PainAndGain.CmdMode.FIGHT || posture == PainAndGain.Posture.ANNIHILATE -> Mission.Fight(hisArmed.map { it.id })
-            posture == PainAndGain.Posture.FLAG && objectiveFlagId != null -> Mission.Take(objectiveFlagId)
-            cmdMode == PainAndGain.CmdMode.MARCH -> Mission.Goto("goal")
-            posture == PainAndGain.Posture.RETREAT -> Mission.Goto("retreat")
-            posture == PainAndGain.Posture.EVADE -> Mission.Goto("evade")
+            cmdMode == CmdMode.FIGHT || posture == Posture.ANNIHILATE -> Mission.Fight(hisArmed.map { it.id })
+            posture == Posture.FLAG && objectiveFlagId != null -> Mission.Take(objectiveFlagId)
+            cmdMode == CmdMode.MARCH -> Mission.Goto("goal")
+            posture == Posture.RETREAT -> Mission.Goto("retreat")
+            posture == Posture.EVADE -> Mission.Goto("evade")
             else -> Mission.Goto("post")
         }
         if (main.isNotEmpty()) squads.add(Squad(n, main, mission))
@@ -1121,7 +1113,7 @@ internal class ArmyStanceIn(
     val hisStill: Boolean,
     val warmNow: Boolean,
     val holdingSpot: Boolean,
-    val objective: PainAndGain.Objective?,
+    val objective: Objective?,
     val evadeTo: Position?,
     val combatArmy: List<Creep>,
     val theirMeleeIn: Boolean,
@@ -1451,7 +1443,7 @@ internal class ArmyStrategyOut(
     val hisStill: Boolean,
     val warmNow: Boolean,
     val holdingSpot: Boolean,
-    val objective: PainAndGain.Objective?,
+    val objective: Objective?,
     val evadeTo: Position?,
     val combatArmy: List<Creep>,
     val theirMeleeIn: Boolean,
@@ -2290,3 +2282,10 @@ internal var pressing = false                          // прижим вклю�
 internal var stalemateGap = 0                          // тиков подряд без контакта (см. STALEMATE_GAP)
 
 internal var lastAim = ""
+
+internal enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
+
+internal class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: Double, val travel: Int)
+
+/** Режим командира (v160): рубка со строем, гонка очков или поход. Раздача клеток — только режим FIGHT. */
+internal enum class CmdMode { FIGHT, RACE, MARCH }

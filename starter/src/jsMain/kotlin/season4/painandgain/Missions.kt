@@ -44,14 +44,6 @@ import sourcemaps.runWithSourceMapSupport
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.sqrt
-import season4.painandgain.PainAndGain.Posture
-import season4.painandgain.PainAndGain.Intent
-import season4.painandgain.PainAndGain.CmdMode
-import season4.painandgain.PainAndGain.Shooter
-import season4.painandgain.PainAndGain.Objective
-import season4.painandgain.PainAndGain.ChaseSample
-import season4.painandgain.PainAndGain.FightCell
-import season4.painandgain.PainAndGain.HypoMods
 
 /**
  * ЗАДАНИЯ БЕГУНОВ (v255, этап 10 переработки; план — раздел 1, «Mission»). Бегуны — безоружные и без лечения крипы и те,

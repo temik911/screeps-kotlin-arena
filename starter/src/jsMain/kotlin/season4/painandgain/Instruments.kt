@@ -44,14 +44,6 @@ import sourcemaps.runWithSourceMapSupport
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.sqrt
-import season4.painandgain.PainAndGain.Posture
-import season4.painandgain.PainAndGain.Intent
-import season4.painandgain.PainAndGain.CmdMode
-import season4.painandgain.PainAndGain.Shooter
-import season4.painandgain.PainAndGain.Objective
-import season4.painandgain.PainAndGain.ChaseSample
-import season4.painandgain.PainAndGain.FightCell
-import season4.painandgain.PainAndGain.HypoMods
 import kotlin.reflect.*
 
 /**
@@ -405,7 +397,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v259"
+internal const val BOT_VERSION = "v260"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и

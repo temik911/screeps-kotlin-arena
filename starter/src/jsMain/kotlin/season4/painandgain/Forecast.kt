@@ -44,14 +44,6 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 import kotlin.math.ceil
 import kotlin.math.sqrt
-import season4.painandgain.PainAndGain.Posture
-import season4.painandgain.PainAndGain.Intent
-import season4.painandgain.PainAndGain.CmdMode
-import season4.painandgain.PainAndGain.Shooter
-import season4.painandgain.PainAndGain.Objective
-import season4.painandgain.PainAndGain.ChaseSample
-import season4.painandgain.PainAndGain.FightCell
-import season4.painandgain.PainAndGain.HypoMods
 
 /**
  * ПРОГНОЗ (v239, этап 4 переработки): место для симуляции врага и оценки постановок. Пока сюда перенесено без изменений
@@ -120,7 +112,7 @@ internal object Forecast {
      *  Возвращает нашу уцелевшую боевую мощь минус его: аннигиляция проигрывает матч при любом счёте, поэтому
      *  максимизируется мощь, а не размен «крип за крипа». */
     internal fun simulate(mine: List<Creep>, his: List<Creep>, plan: Map<String, Position>, ticks: Int,
-                         focus: Creep? = null, intent: PainAndGain.Intent? = null): Double {
+                         focus: Creep? = null, intent: Intent? = null): Double {
         fun mk(c: Creep, ours: Boolean): SimC {
             val pr = InfluenceMap.profileOf(c)
             // боевые части (ATTACK / RANGED_ATTACK / HEAL) стоят в начале тела, MOVE и TOUGH — хвост; урон идёт спереди,
@@ -175,9 +167,9 @@ internal object Forecast {
                     val near = liveThem0.minByOrNull { d(c, it) }!!
                     val dist = d(c, near)
                     val want = when (intent) {
-                        PainAndGain.Intent.PRESS, PainAndGain.Intent.FOCUS -> if (c.melee > 0.0) 1 else RANGED_RANGE
-                        PainAndGain.Intent.HOLD, PainAndGain.Intent.KITE -> if (c.melee > 0.0) MELEE_HOLD_RANGE else RANGED_RANGE
-                        PainAndGain.Intent.YIELD -> RANGED_RANGE + 1
+                        Intent.PRESS, Intent.FOCUS -> if (c.melee > 0.0) 1 else RANGED_RANGE
+                        Intent.HOLD, Intent.KITE -> if (c.melee > 0.0) MELEE_HOLD_RANGE else RANGED_RANGE
+                        Intent.YIELD -> RANGED_RANGE + 1
                     }
                     // КУЛАК ДЕЙСТВУЕТ И В ПРОГНОЗЕ (v159): в бою крипу нельзя выйти за FIST_RADIUS от якоря, а в
                     // раскатке было можно — прогноз считал бой, которого не будет, и хвалил замыслы, растаскивающие
@@ -435,3 +427,8 @@ internal fun PainAndGain.ourPowerOf(ours: List<Creep>, theirs: List<Creep>): Dou
 internal fun PainAndGain.enemyPowerOf(theirs: List<Creep>, ours: List<Creep>): Double = powerOf(theirs, ours, NO_MODS, NO_MODS)
 
 internal const val POWER_REACH_TICKS = 2
+
+internal class Shooter(val cell: Int, val ranged: Double, val melee: Double)
+
+/** Гипотетические множители стороны сверх текущих эффектов (маргинальная цена флага, см. powerAfter). */
+internal class HypoMods(val ranged: Double = 1.0, val melee: Double = 1.0, val heal: Double = 1.0, val hits: Double = 1.0)

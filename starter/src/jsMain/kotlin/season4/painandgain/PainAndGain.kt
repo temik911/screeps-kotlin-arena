@@ -161,7 +161,6 @@ object PainAndGain {
         0 to 0, -1 to -1, 0 to -1, 1 to -1, -1 to 0, 1 to 0, -1 to 1, 0 to 1, 1 to 1,
     )
 
-    internal enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
 
     internal var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
     internal var posture = Posture.HOLD
@@ -216,7 +215,6 @@ object PainAndGain {
     internal var enemyDamageTaken = 0                      // снято с него за матч
     internal val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
     internal val ghostLogged = HashMap<String, Int>()
-    internal class Shooter(val cell: Int, val ranged: Double, val melee: Double)
     internal var prevShooters: List<Shooter> = emptyList()
 
     // ---------- счёт ----------
@@ -347,14 +345,11 @@ object PainAndGain {
     internal val hpDelta = DoubleArray(8)
     internal var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     internal var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
-    /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
-    internal class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
     internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
     internal val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
 
 
 
-    internal class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: Double, val travel: Int)
 
     private fun runArmy(ctx: Ctx) {
         val army = ctx.army
@@ -597,30 +592,7 @@ object PainAndGain {
     /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
     internal val damageBooked = HashMap<String, Double>()
 
-    /** План строя (см. USE_BLOCK): фронт — наши мили (без слотов, дерутся по своим правилам), стрелки — в ряду за центром
-     *  мили на RANGED_RANGE − d клеток, где d — дистанция фронта до ближайшей угрозы (вплотную — в 2, достают на клетку
-     *  за фронт, как стрелки врага за его мили; враг в 3 — в одном ряду с мили, иначе не достают вовсе: матч 17 — линия
-     *  врага встала в 3 от наших мили, его мили не лезли, наши стрелки «в 2 за мили» стояли в 5–6 от целей и молчали, а
-     *  наш фронт били бесплатно), тыл на клетку дальше. Первая правка делила случаи «есть их мили в 3 / нет» и меняла
-     *  местами ряды стрелков и мили — при подходе толпы случай менялся через пару тиков, и строй переворачивался под
-     *  ударами (стенд m6 sleeper, армия потеряна). Ряды поперёк оси центр → ближайшая группа врагов с боем; слоты по
-     *  порядку SLOT_ORDER от середины ряда, стены и клетки мили пропускаются; крип берёт ближайший свободный слот
-     *  своего ряда. */
-    /** КОМАНДИР (v137, см. USE_COMMANDER): одно решение на всю армию в бою с сомкнутым блобом. Раздаёт КЛЕТКИ — по одной
-     *  на крипа, — считая для каждой опасность СЕЙЧАС и опасность НА СЛЕДУЮЩИЙ ТИК (его мили в MELEE_KEEP_RANGE шагнёт и
-     *  ударит). Мили ставятся первыми — туда, где они достают его вооружённых; стрелки вторыми — где есть цель в
-     *  RANGED_RANGE и меньше всего входящего на следующий тик; лекари последними — в HEAL_RANGE от раненого и вне огня.
-     *  Клетка занимается один раз, крипы обслуживаются от самого стеснённого, поэтому свои друг друга не загораживают.
-     *  Атаки идут своим проходом и назначением не затрагиваются: крип, уже стоящий где надо, просто бьёт. */
-    /** Замысел, по которому командир раздаёт клетки (v138): напор, удержание или уступка. */
-    /** Замыслы командира (v138). SPREAD (рассредоточение против веера) отвергнут гейтом — 130/131 в двух формах,
-     *  и живьём проверить не успели: лимит загрузок кода на сервере кончился. */
-    internal enum class Intent { PRESS, HOLD, YIELD, FOCUS, KITE }
 
-    internal class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
-                            val meleeAdj: Int, val meleeNear: Int, val dist: Int)
-    /** Режим командира (v160): рубка со строем, гонка очков или поход. Раздача клеток — только режим FIGHT. */
-    internal enum class CmdMode { FIGHT, RACE, MARCH }
     internal var cmdMode = CmdMode.MARCH
     /** Событие этого тика для стратега (v242): флаг сменил владельца — считается при сборе флагов, до решения. */
     internal var flagFlipNow = false
@@ -696,8 +668,6 @@ object PainAndGain {
     internal val annEmpty = HashMap<String, Int>()
     internal var annEmptyAll = 0
 
-    /** Гипотетические множители стороны сверх текущих эффектов (маргинальная цена флага, см. powerAfter). */
-    internal class HypoMods(val ranged: Double = 1.0, val melee: Double = 1.0, val heal: Double = 1.0, val hits: Double = 1.0)
     internal val NO_MODS = HypoMods()
 
 }

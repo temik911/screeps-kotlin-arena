@@ -44,14 +44,6 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 import kotlin.math.ceil
 import kotlin.math.sqrt
-import season4.painandgain.PainAndGain.Posture
-import season4.painandgain.PainAndGain.Intent
-import season4.painandgain.PainAndGain.CmdMode
-import season4.painandgain.PainAndGain.Shooter
-import season4.painandgain.PainAndGain.Objective
-import season4.painandgain.PainAndGain.ChaseSample
-import season4.painandgain.PainAndGain.FightCell
-import season4.painandgain.PainAndGain.HypoMods
 import kotlin.reflect.*
 
 /**
@@ -772,3 +764,6 @@ internal var wallAddrPrev: String? = null      // кого адресный пр
 internal var wallLostPrev: String? = null      // ...и кого назвал предсказатель по потере
 
 internal var yieldingTick = -1                        // последний тик, когда наша линия отступала (лог v96)
+
+internal class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
+                        val meleeAdj: Int, val meleeNear: Int, val dist: Int)

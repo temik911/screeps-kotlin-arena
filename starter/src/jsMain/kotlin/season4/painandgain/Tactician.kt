@@ -44,14 +44,6 @@ import sourcemaps.runWithSourceMapSupport
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.sqrt
-import season4.painandgain.PainAndGain.Posture
-import season4.painandgain.PainAndGain.Intent
-import season4.painandgain.PainAndGain.CmdMode
-import season4.painandgain.PainAndGain.Shooter
-import season4.painandgain.PainAndGain.Objective
-import season4.painandgain.PainAndGain.ChaseSample
-import season4.painandgain.PainAndGain.FightCell
-import season4.painandgain.PainAndGain.HypoMods
 import kotlin.reflect.*
 
 /**
@@ -119,7 +111,7 @@ internal class ArmyTick(
     val chasers: List<Creep>,
     val stalled: Boolean,
     val contact: Boolean,
-    val objective: PainAndGain.Objective?,
+    val objective: Objective?,
     val evadeTo: Position?,
     val combatArmy: List<Creep>,
     val retreatTo: Position?,
@@ -1060,7 +1052,7 @@ internal class ArmyTargetsIn(
     val contact: Boolean,
     val sweep: Boolean,
     val gathered: Boolean,
-    val objective: PainAndGain.Objective?,
+    val objective: Objective?,
     val combatArmy: List<Creep>,
     val centroid: Position,
 )
@@ -1517,3 +1509,6 @@ internal var formWaitSince = -1
 internal var orderPull = 1.0                    // множитель притяжения к назначенной клетке (v168)
 
 internal var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
+
+/** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
+internal class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
