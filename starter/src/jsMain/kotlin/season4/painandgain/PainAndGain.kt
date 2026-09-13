@@ -759,7 +759,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v242"
+    private const val BOT_VERSION = "v243"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3348,11 +3348,13 @@ object PainAndGain {
         // (срок вышел), EVADE на 62-м, HOLD на 67-м, EVADE на 74-м — семь переходов за сто тиков перед контактом в
         // тестовой игре 3d95b5, и каждый EVADE отодвигал армию назад, пока он шёл вперёд: к первому выстрелу наш центр
         // стоял в восьми клетках от края, и все 37 тиков боя прошли спиной к стене. Срока не ждёт только RETREAT
-        // ПОСТАНОВКА ПРИМЕНЯЕТСЯ ОДИН РАЗ (v242): постура после перезаписи режимом боя действует с этого места — её видят
-        // фокус, строй и командир; до v242 перезапись применялась на шестьсот строк ниже, и блоки между ними видели
-        // постуру до неё
-        posture = decision.postureFinal
-        postureSince = decision.postureSinceFinal
+        // «ПОСТАНОВКА ПРИМЕНЯЕТСЯ ОДИН РАЗ» (v242) ОТВЕРГНУТА живым A/B: постура после перезаписи режимом боя, действующая
+        // отсюда (её видели бы фокус, строй и blockOn), вместе с «одним составом для прогноза» дала против MetalicaX#15 0-8
+        // при контроле v241 2-6 (армия в ноль 7 из 8 против 6, леджер −53 315 против −34 943), против Coldkimchi#2 3-5
+        // против 2-6 при леджере −50 855 против −29 572. Здесь применяется постура после гистерезиса, перезапись режимом
+        // боя — ниже, там, где стояла (v241)
+        posture = decision.posturePre
+        postureSince = decision.postureSincePre
         cmdMode = decision.cmdMode
         val cmdWhyNow = decision.cmdWhy
 
@@ -3880,6 +3882,8 @@ object PainAndGain {
         // ПАРА К КОМАНДИРУ (v221, см. warmNow): сколько тиков режима боя командир держит при тёплом контакте — на
         // этих тиках он вернёт ANNIHILATE сам, что бы ни решила постура
         if (cmdMode == CmdMode.FIGHT) { warmCmdAll++; if (warmNow) warmCmd++ }
+        posture = decision.postureFinal
+        postureSince = decision.postureSinceFinal
         // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
         // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
         // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
@@ -4040,7 +4044,7 @@ object PainAndGain {
                     commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
                     // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                     // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
-                    val sc = Forecast.simulate(commandArmy, armedEnemies, trial, Forecast.SIM_TICKS, focusTarget, intent)   // тот же состав, что у плана (v242)
+                    val sc = Forecast.simulate(mobileArmy, armedEnemies, trial, Forecast.SIM_TICKS, focusTarget, intent)   // состав без хранителей: «тот же, что у плана» (v242) отвергнут A/B вместе с применением постуры один раз
                     if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
                 }
                 // ГИСТОГРАММА ЗАМЫСЛА (этап 8): перебор из пяти стоит пяти раздач за тик, и окупается ли он —
@@ -4063,7 +4067,7 @@ object PainAndGain {
                 // выбирает замысел числом, которому нельзя верить
                 // ...и факт меряется ТОЙ ЖЕ формулой, что прогноз: сравнивать оценку симуляции с ланчестеровской
                 // мощью — сравнивать разные величины, и первая редакция прибора именно этим и занималась
-                val nowDiff = Forecast.simulate(commandArmy, armedEnemies, emptyMap(), 0, focusTarget, null)
+                val nowDiff = Forecast.simulate(mobileArmy, armedEnemies, emptyMap(), 0, focusTarget, null)
                 Forecast.simPending[getTicks() + Forecast.SIM_TICKS] = bestScore to nowDiff
                 Forecast.simPending.remove(getTicks())?.let { (predicted, was) ->
                     val actual = nowDiff - was          // как разность изменилась НА САМОМ ДЕЛЕ за Forecast.SIM_TICKS
