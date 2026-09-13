@@ -752,7 +752,7 @@ object PainAndGain {
 
     // ---------- отладка ----------
     // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-    private const val BOT_VERSION = "v249"
+    private const val BOT_VERSION = "v250"
     private const val DEBUG_LOG = true
     /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
      *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -3282,6 +3282,7 @@ object PainAndGain {
             outmatched = outmatchedTicks >= BREAK_OFF_TICKS, pushing = pushing, underFire = underTheirFire,
             fewFoes = !(enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES),
             posture = posture, postureSince = postureSince, now = getTicks(),
+            candidate = Memory.postureCandidate, candidateSince = Memory.candidateSince,
             // событие — прибор evt= (в гистерезис пока не входит, см. Strategist.decide): гибель своего (по числу живых,
             // не по составу армии — отряжённый в бегуны не потеря) и смена владельца флага. Замер v242 на стенде: события
             // в гистерезисе — любое изменение контакта 635 за матч, появившийся контакт 126, гибель + флаг 71 — и каждое
@@ -3289,6 +3290,8 @@ object PainAndGain {
             event = ctx.myCreeps.size < Memory.armyPrev || flagFlipNow))
         Memory.contactPrev = contact
         Memory.armyPrev = ctx.myCreeps.size
+        Memory.postureCandidate = decision.candidate
+        Memory.candidateSince = decision.candidateSince
         if (decision.event) stateEventTicks++
         // ПРИНЯЛА ЛИ ПОСТУРА НОВОЕ ЗНАЧЕНИЕ — считается ЗДЕСЬ, до всех, кто от этого зависит (v215). Прежде
         // решение принималось на сорок строк ниже, а `objectiveFlagId` присваивался выше и безусловно

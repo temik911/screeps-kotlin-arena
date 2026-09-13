@@ -84,4 +84,7 @@ internal object Memory {
     /** Контакт и численность армии на прошлом тике — события для стратега (v242). */
     var contactPrev = false
     var armyPrev = 0
+    /** Кандидат постуры прошлого тика и тик, с которого он предлагается без перерыва (v250, см. Strategist.decide). */
+    var postureCandidate: PainAndGain.Posture? = null
+    var candidateSince = 0
 }

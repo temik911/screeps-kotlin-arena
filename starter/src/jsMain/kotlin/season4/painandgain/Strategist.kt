@@ -29,6 +29,8 @@ internal object Strategist {
         /** ни сомкнутой армии, ни COMMAND_MIN_FOES у руки */
         val fewFoes: Boolean,
         val posture: PainAndGain.Posture, val postureSince: Int, val now: Int,
+        /** кандидат прошлого тика и тик, с которого он предлагается без перерыва (v250) */
+        val candidate: PainAndGain.Posture?, val candidateSince: Int,
         /** событие тика (прибор evt=, в гистерезис пока не входит — см. decide): наш крип погиб или флаг сменил владельца */
         val event: Boolean,
     )
@@ -41,6 +43,8 @@ internal object Strategist {
         /** постура после перезаписи режимом боя — применяется там, где стояла перезапись (v241; «один раз» v242 отвергнуто) */
         val postureFinal: PainAndGain.Posture, val postureSinceFinal: Int,
         val event: Boolean,
+        /** кандидат этого тика и начало его непрерывного ряда — в Memory до следующего тика (v250) */
+        val candidate: PainAndGain.Posture, val candidateSince: Int,
     )
 
     fun decide(i: Inputs): Decision {
@@ -60,7 +64,17 @@ internal object Strategist {
         // случаются десятки раз за матч и срок POSTURE_HOLD перестаёт что-либо держать. Что должно быть верно, чтобы
         // правило заработало: событие — не одиночный тик, а перемена, устоявшаяся дольше мерцания (например, новое
         // решение стабильно ≥ 3 тиков) — отдельный замеряемый срез. Событие считается прибором evt=
-        val takes = newPosture == i.posture || escape || i.now - i.postureSince >= PainAndGain.POSTURE_HOLD
+        // ...И СРОК ОТСЧИТЫВАЕТСЯ ОТ КАНДИДАТА, А НЕ ОТ ПРЕЖНЕЙ ПОСТУРЫ (v250, остаток этапа 6 — то самое «что должно быть
+        // верно» из абзаца выше). Прежде срок держал только прежнюю постуру: простояв POSTURE_HOLD, она сменялась на ЛЮБОГО
+        // кандидата этого тика, даже мелькнувшего на один тик. Стенд match34:scatter (v249) — последние 300 тиков кандидат
+        // FLAG↔ANNIHILATE менялся через 1–10 тиков (пикеты его россыпи то входили в досягаемость, то уходили: contact и
+        // pushing мигали при постоянной мощи 3985 против 2114), применённая постура качалась каждые 5–20, армия шла к A3 и
+        // возвращалась, матч проигран 23558:24314. Мера мощи по всей силе вместе с отрядом (первая проба среза) счёт не
+        // сдвинула ни на очко — мигали не меры, а сама смена. Здесь смена берётся, когда новый кандидат предлагается
+        // POSTURE_HOLD тиков подряд — это и минимальный срок постуры, потому что следующему кандидату нужно столько же.
+        // Спасение (RETREAT) по-прежнему без срока; бой под огнём тоже: его ставит перезапись режимом FIGHT ниже
+        val candSince = if (newPosture == i.candidate) i.candidateSince else i.now
+        val takes = newPosture == i.posture || escape || i.now - candSince >= PainAndGain.POSTURE_HOLD
         val pre = if (takes) newPosture else i.posture
         val sincePre = if (takes && newPosture != i.posture) i.now else i.postureSince
         // РЕЖИМ КОМАНДИРА (v160): поход — врага рядом нет; гонка — затор или его отход вне рубки; бой — под его огнём,
@@ -91,7 +105,7 @@ internal object Strategist {
         val overrideFight = mode == PainAndGain.CmdMode.FIGHT && pre != PainAndGain.Posture.ANNIHILATE
         val final = if (overrideFight) PainAndGain.Posture.ANNIHILATE else pre
         val sinceFinal = if (overrideFight) i.now else sincePre
-        return Decision(newPosture, takes, pre, sincePre, mode, why, final, sinceFinal, i.event)
+        return Decision(newPosture, takes, pre, sincePre, mode, why, final, sinceFinal, i.event, newPosture, candSince)
     }
 
     // ---- постановка: типы плана (раздел 3) — пока только снимок для прибора ----
