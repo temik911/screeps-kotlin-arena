@@ -94,7 +94,18 @@ internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
     stepCount[p.stepTag] = (stepCount[p.stepTag] ?: 0) + 1
     tacCount[p.why] = (tacCount[p.why] ?: 0) + 1
     prioCount[p.priority.name] = (prioCount[p.priority.name] ?: 0) + 1
-    if (p.step != null) { TrafficManager.request(p.creep, p.step, p.rank); planCapture(ctx, p.step) }
+    // ЗАХВАТ — ТОЛЬКО ЧЕРЕЗ ВОРОТА (v282). Флаг берёт всякий, кто встал на его клетку, а ворота захвата (`captureBlock`)
+    // спрашивали бегун и цели армии (objective, grab), но не шаг бойца: поле потока всегда открывает клетку ЦЕЛИ
+    // (`DistanceMap.flowFieldTo`, «цель всегда достижима»), и когда цель — пост на клетке чужого флага, боец встаёт на
+    // флаг. Из угла (85,88) пост — сама клетка D5 (49,49): в руке v281 ворота к 60-му тику отказали всем 413 предложениям,
+    // а `melee_3` на 57-м, уже в уклонении, шагнул (50,50) → (49,49) — D5 (весь входящий ×1,1) наш за 9 тиков до первого
+    // размена, и так во всех девяти играх из этого угла (свой дебафф на 56–74-м, размен на 67–76-м). Находка записана с
+    // v230 («D5 из угла (85,88) берётся прямо на точке сбора») и с тех пор открыта. Здесь — единственное место, где
+    // рождается интент шага армии, поэтому проверка одна на все ветки: разрешённый захват проходит как прежде
+    // (planCapture), запрещённый — крип стоит, как POISED-бегун
+    val flagAt = p.step?.let { s -> ctx.flags.firstOrNull { !it.ours && it.pos.x == s.x && it.pos.y == s.y } }
+    val step = if (flagAt != null && captureBlock(ctx, flagAt) != null) { strayCapRefused++; null } else p.step
+    if (step != null) { TrafficManager.request(p.creep, step, p.rank); planCapture(ctx, step) }
 }
 
 /** Величины тика, которые покрипный цикл читает из runArmy; все посчитаны до цикла и в нём не меняются. */
