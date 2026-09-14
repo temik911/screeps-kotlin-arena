@@ -242,7 +242,6 @@ internal fun PainAndGain.commandFire(army: List<Creep>, enemies: List<Creep>, fo
     if (shooters.isEmpty() || enemies.isEmpty()) return
     val live = enemies.filter { it.hits > 0 }
     fun reach(c: Creep, e: Creep) = if (hasRanged(c)) c.getRangeTo(e) <= RANGED_RANGE else c.getRangeTo(e) <= 1
-    fun frac(e: Creep) = e.hits.toDouble() / e.hitsMax.coerceAtLeast(1)
     // ...кого добиваем ЭТИМ тиком: залп достающих минус лечение, дотягивающееся до цели
     // РАЗОРУЖЁННЫЙ — НЕ ЦЕЛЬ (v178, оператор: «наши крипы во время боя зачем-то начали добивать разоружённых,
     // которые в текущий момент нам никак не вредят, вместо того чтобы снимать хиты тем, кто наносит урон прямо
@@ -275,35 +274,14 @@ internal fun PainAndGain.commandFire(army: List<Creep>, enemies: List<Creep>, fo
         // Первая редакция ставила приказ в assignChase, и он не доживал до выстрела: крип догонял и молчал
         val chased = Memory.chaseTarget[c.id]
         if (chased != null && chased.hits > 0 && reach(c, chased)) { out[c.id] = chased.id; continue }
-        val chosen = when {
+        val t = when {
+            killable != null && reach(c, killable) -> killable
             focus != null && focus.hits > 0 && reach(c, focus) -> focus
             else -> order.firstOrNull { reach(c, it) && it.hits > 0 && (it in dangerous) }
                 ?: pool.filter { reach(c, it) }.minByOrNull { it.hits }
                 ?: live.filter { reach(c, it) }.minByOrNull { it.hits }
         }
-        // ДОБИВАНИЕ ПО ДОЛЕ ХИТОВ (v279): ствол бьёт того, у кого в его досягаемости наименьшая доля хитов, если она
-        // СТРОГО ниже, чем у цели по ранжиру выше. Это правило ●ω<♥♪#6 (100 % из 24 903 его выстрелов), и разборы 150 игр
-        // против него показали, что проигрываем мы не лечением (30–35 на лекаре-тик против его 28–32), а тем, чей огонь
-        // становится потерями: его огонь по нашим уже раненым — 56–63 %, наш по его — 42–46 %, по раненым на три части и
-        // больше — 36–43 % против 13–17 %. Раненый умирает от меньшего залпа, и убитый не лечится обратно; ранжир по
-        // угрозе (стрелок первым, больше стволов) переводит огонь на свежую цель ровно тогда, когда прежняя подбита.
-        // При равенстве — и когда раненых в досягаемости нет вовсе — решает прежний ранжир, поэтому первый залп идёт в
-        // фокус, а подбитый фокус сам становится наименьшей долей: липкость v45/v267 не спорит с правилом, а совпадает.
-        // Пул прежний — только вооружённые или лечащие (v178: разоружённый не цель), добиваемый за тик — выше всего
-        val weakest = pool.filter { reach(c, it) }.minByOrNull { frac(it) }
-        val old = if (killable != null && reach(c, killable)) killable else chosen
-        val t = when {
-            killable != null && reach(c, killable) -> killable
-            chosen != null && weakest != null && frac(weakest) < frac(chosen) -> weakest
-            else -> chosen
-        }
-        if (t != null) {
-            out[c.id] = t.id
-            frfOrders++
-            if (t.id != old?.id) frfChanged++
-            if (old != null && old.hits < old.hitsMax) frfWoundOld++
-            if (t.hits < t.hitsMax) frfWoundNew++
-        }
+        if (t != null) out[c.id] = t.id
     }
 }
 
