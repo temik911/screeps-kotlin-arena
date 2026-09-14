@@ -403,7 +403,7 @@ internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int
 
 internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
-                         ourFlagCells: Set<Int> = emptySet(), armyFocus: Creep? = null) {
+                         ourFlagCells: Set<Int> = emptySet()) {
     out.clear()
     val fighters = army.filter { canMove(it) && !it.spawning }
     if (fighters.isEmpty() || armedEnemies.isEmpty()) return
@@ -795,15 +795,14 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         val chased = Memory.chaseTarget[c.id]
         // ...и ЦЕЛЬ ПАЧКИ МИЛИ во всех замыслах (v221, см. USE_MELEE_PACK_CELLS): притяжение к одной его цели
         // вместо суммы по всем — четыре мили в одну клетку-соседа, а не каждый к своей
-        // НОГИ СТРЕЛКА ЗА ФОКУСОМ АРМИИ (v268, наблюдение оператора: «часть группы бежит к одному врагу, а часть к
-        // другому»). Огонь идёт по фокусу (commandFire), а ноги стрелка тянуло поле притяжения по ВСЕМ его крипам —
-        // ни в одном замысле, кроме FOCUS (15–25 % переборов), и там к самому слабому, а не к фокусу (совпадают в 22–24 %).
-        // Реплеи серии v263 и рук v266: у наших стрелков фокус в досягаемости на начало тика 25–32 %, после шага 14–20 % —
-        // шаг уводит ствол с цели; когда его армия разбита на две группы и больше, наши шагающие идут к двум и больше
-        // в 60–64 % тиков, а урон ложится на две — в 20 %. Теперь притяжение стрелка во всех замыслах — к фокусу армии (пик
-        // на дальности три); порог выживания, опасность и прочие слагаемые те же. Мили — прежним полем: погоню нашего мили
-        // за его линией реплеи v264 опровергли (со двух клеток вплотную к следующему тику 3–20 %)
-        val focus = chased ?: (if (role == 1 && armyFocus != null && armyFocus.hits > 0) armyFocus else null)
+        // Две правки «ноги за фокусом» ОТВЕРГНУТЫ живьём (14.09.2026, по 16 игр против Coldkimchi#1 и 8 против ●ω<♥♪#6,
+        // разбор реплеев — docs, абзацы v268–v271): притяжение стрелка к фокусу армии во всех замыслах (v268) и клетка,
+        // держащая фокус у стрелка, который его достаёт (v269). Счёт в полосе шума (9-7 и 8-8 при 7-9 у v267), а убийства
+        // провалились: его боевых погибло к контакту +400 четыре и пять за 16 игр против 24 у v267 и 16–17 у v263–v266,
+        // стволов на фокусе 0,62 против 0,75 (p = 0,009). Фокус, липкий с v267, часто стоит в четырёх, и стрелок, которого
+        // тянут к нему, уходит от целей, которые достаёт; удержание клетки на фокусе стоило стрелку 51 огня в тик против 32
+        // (p = 0,010), а стволов на цели не прибавило — фокус уходит своим шагом
+        val focus = chased ?: (null)
             ?: if (i == Intent.FOCUS) (if (role == 0) weakestMelee else weakestFoe) else null
         val kite = i == Intent.KITE
         val rank = { p: Position ->
@@ -813,22 +812,6 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 1 -> scoreRanged(c, key, p, att, dan, focus)
                 else -> scoreHeal(c, key, p, att, dan)
             }
-        }
-        // СТВОЛ НЕ УХОДИТ С ФОКУСА (v269). Притяжение v268 ноги не сдвинуло (прибор ffoc: фокус в досягаемости стрелка под
-        // приказом 11 % до шага и 11 % после, против ●ω<♥♪ 19 → 14 %), и причина в величинах, а не в знаке: цена цели —
-        // её ценность, умноженная на доступность, а у цели вне нашего залпа доступность на полу 0,25, так что клетка в трёх
-        // от фокуса лучше клетки в четырёх на 7 единиц, когда опасность соседних клеток у его строя разнится на десятки и
-        // сотни. Вес этого не исправит — исправит правило: стрелок, у которого фокус в досягаемости СЕЙЧАС, получает
-        // клетку, из которой он его достаёт, если такая проходит порог выживания своего замысла (ttlMin); нет такой —
-        // прежняя лестница. В досягаемость, которой нет, правило никого не тянет: оно закрывает ровно измеренную потерю
-        // «фокус в досягаемости у 25–32 % стрелков до шага и у 14–20 % после» (реплеи серии v263 и рук v266)
-        val holdFocus = role == 1 && armyFocus != null && armyFocus.hits > 0 && getRange(c, armyFocus) <= RANGED_RANGE
-        if (holdFocus) {
-            val ok = place(c, { p ->
-                (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
-                    getRange(p, armyFocus!!) <= RANGED_RANGE && ttlAt(c, p.x * 100 + p.y, p) >= ttlMin
-            }, rank)
-            if (ok) { gateLevels[minOf(ttlMin, gateLevels.size - 1)]++; return true }
         }
         for (lvl in ttlMin downTo 1) {
             val ok = place(c, { p ->
