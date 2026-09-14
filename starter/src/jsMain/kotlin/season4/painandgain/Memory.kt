@@ -87,6 +87,8 @@ internal object Memory {
     val rotByFocus = HashSet<String>()
     /** Наше лечение, назначенное каждому своему за прошлый тик (v276): полученный урон = потеря + это лечение. */
     val healGiven = HashMap<String, Int>()
+    /** Уходящий раненый -> лекарь, которому приказана клетка рядом с ним (v276, прибор meet=): сверка на следующем тике. */
+    val meetWatch = HashMap<String, String>()
     val fracHits = ArrayDeque<Boolean>()
     val addrHits = ArrayDeque<Boolean>()
     var fracPrev: String? = null

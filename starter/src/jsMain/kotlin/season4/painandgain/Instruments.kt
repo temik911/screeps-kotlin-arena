@@ -85,6 +85,11 @@ internal var rotfA = 0
 internal var rotfN = 0
 /** Встречи уходящего раненого с лекарём в раздаче командира (v276, rotfm=). */
 internal var rotfMeet = 0
+internal var meetRot = 0
+internal var meetNear = 0
+internal var meetPlan = 0
+internal var meetDone = 0
+internal var meetChk = 0
 /** Самолечение в добиваемости (v266, fself=сменилось/всего): его лекарь в досягаемости наших стволов, пробиваемый без
  *  своего лечения и непробиваемый с ним. */
 internal var fselfFlip = 0
@@ -291,6 +296,27 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
         if (getRange(c, e) <= 1) pinHeld++
     }
     Memory.pinWatch.clear()
+    // ВСТРЕЧА РАНЕНОГО С ЛЕКАРЁМ — ПРИБОР ПО ИСПОЛНЕНИЮ (v276, meet=план/лекарь рядом/уходящих с приказом/исполнено/сверено):
+    // счётчик rotfm считал встречи в пробных планах, а по реплеям лекарь после выхода раненого стоит в двух клетках, как и
+    // до правки. Здесь — по итоговым приказам: у уходящего по фокусу с приказом был ли лекарь в двух клетках от его
+    // клетки, получил ли лекарь клетку вплотную к ней, и стояли ли они вплотную на следующем тике
+    for ((rid, hid) in Memory.meetWatch) {
+        val r = commandArmy.firstOrNull { it.id == rid } ?: continue
+        val h = commandArmy.firstOrNull { it.id == hid } ?: continue
+        meetChk++
+        if (getRange(r, h) <= 1) meetDone++
+    }
+    Memory.meetWatch.clear()
+    for (rid in Memory.rotByFocus) {
+        val r = commandArmy.firstOrNull { it.id == rid } ?: continue
+        val dest = commandOf[rid] ?: continue
+        meetRot++
+        val medics = commandArmy.filter { it.id != rid && hasHeal(it) && !hasWeapon(it) }
+        if (medics.any { getRange(it, dest) <= 2 }) meetNear++
+        val m = medics.firstOrNull { h -> commandOf[h.id]?.let { getRange(it, dest) <= 1 } == true } ?: continue
+        meetPlan++
+        Memory.meetWatch[rid] = m.id
+    }
     // НОГИ ЗА ФОКУСОМ — ПРИБОР (v268, ffoc=до/после/стрелков): стрелки под приказом командира при живом фокусе — у скольких
     // фокус в досягаемости с нынешней клетки и с клетки приказа. Реплеи до правки: 25–32 % до шага, 14–20 % после
     focusTarget?.takeIf { it.hits > 0 }?.let { f ->
@@ -457,7 +483,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
             "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
             "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
             "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-            "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries srch=$srchCut/$srchTicks/${cmdTailMax.toInt()} pin=$pinOrd/$pinOpp/$pinHeld/$pinChk fself=$fselfFlip/$fselfAll rotf=$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN rotfm=$rotfMeet fsw=$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare ffoc=$ffocBefore/$ffocAfter/$ffocAll ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hwallx=$hwallYield/$hwallFar hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+            "shooters=${army.count { hasWeapon(it) && hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries srch=$srchCut/$srchTicks/${cmdTailMax.toInt()} pin=$pinOrd/$pinOpp/$pinHeld/$pinChk fself=$fselfFlip/$fselfAll rotf=$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN rotfm=$rotfMeet meet=$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk fsw=$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare ffoc=$ffocBefore/$ffocAfter/$ffocAll ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hwallx=$hwallYield/$hwallFar hpick=$hpN/$hpAdj/$hpAvail/$hpGate dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
             "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                 "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
                 "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
@@ -503,7 +529,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v276"
+internal const val BOT_VERSION = "v277"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
