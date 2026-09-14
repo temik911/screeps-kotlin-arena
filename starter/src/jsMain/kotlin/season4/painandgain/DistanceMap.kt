@@ -86,6 +86,32 @@ object DistanceMap {
         }
     }
 
+    private var midCache: Position? = null
+    private var midSignature = -2
+
+    /** Середина пути между стартами (v283): клетка, куда обе стороны приходят одновременно, — наименьшая разница путей
+     *  от наших и его стартов, при равной — наименьшая их сумма (то есть середина самого быстрого пути между ними). Поля те
+     *  же, что у [inOurHalf]; пересчёт — вместе с ними. */
+    fun midpoint(): Position? {
+        val my = distFromMy ?: return null
+        val enemy = distFromEnemy ?: return null
+        if (midSignature == rampartSignature) return midCache
+        var best = -1
+        var bestGap = Int.MAX_VALUE
+        var bestSum = Int.MAX_VALUE
+        for (i in my.indices) {
+            val a = my[i]
+            val b = enemy[i]
+            if (a < 0 || b < 0) continue
+            val gap = abs(a - b)
+            val sum = a + b
+            if (gap < bestGap || (gap == bestGap && sum < bestSum)) { best = i; bestGap = gap; bestSum = sum }
+        }
+        midSignature = rampartSignature
+        midCache = if (best < 0) null else InfluenceMap.cell(best / FIELD, best % FIELD)
+        return midCache
+    }
+
     /**
      * Строит «карман» спавна: клетки, достижимые от спавна по сухой земле, не пересекая болото,
      * стены и рампарты. В раннем гейме обороны бойцы не выходят за этот карман — враг вязнет на

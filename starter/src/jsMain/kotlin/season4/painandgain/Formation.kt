@@ -389,13 +389,33 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
     if (field[ax * 100 + ay] >= 0) { fx = ax; fy = ay }
     else if (field[lead.x * 100 + lead.y] >= 0) { fx = lead.x; fy = lead.y }
     else return null
-    var bestD = field[fx * 100 + fy]; var bx = 0; var by = 0
+    // НИЧЬЯ СПУСКА — ПРЕЖНЕЕ НАПРАВЛЕНИЕ, ЗАТЕМ САМОЕ ПРЯМОЕ К ЦЕЛИ (v283). Сосед с наименьшим расстоянием брался ПЕРВЫЙ по
+    // порядку обхода, а на открытой земле равных соседей два-три (восемь направлений при чебышёвском шаге). Якорь —
+    // медиана ядра, и после шага колонны она ложится то на одну, то на другую из двух клеток, у которых первый по обходу
+    // спуск разный: стенд match35:screen (v283, пост в середине пути) — якорь (44,45) → шаг (1,0), якорь (45,44) → шаг
+    // (0,1), колонна перестраивается под новое направление и возвращает медиану назад; 1 300 тиков в пяти клетках от D5,
+    // центр армии на месте, счёт отдан 10 791:14 495. Прибор разворотов `mdir` этого не видел: направления не
+    // противоположны, а перпендикулярны. Выбор среди равных теперь не зависит от порядка обхода: прежнее направление, если
+    // оно среди лучших, иначе ближайшее к прямой на цель
+    val here = field[fx * 100 + fy]
+    var bestD = here
     for (dx in -1..1) for (dy in -1..1) {
         if (dx == 0 && dy == 0) continue
         val nx = fx + dx; val ny = fy + dy
         if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
         val d = field[nx * 100 + ny]
-        if (d >= 0 && d < bestD) { bestD = d; bx = dx; by = dy }
+        if (d >= 0 && d < bestD) bestD = d
+    }
+    if (bestD >= here) return Pair(0, 0)
+    var bx = 0; var by = 0; var bestDot = Int.MIN_VALUE
+    for (dx in -1..1) for (dy in -1..1) {
+        if (dx == 0 && dy == 0) continue
+        val nx = fx + dx; val ny = fy + dy
+        if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+        if (field[nx * 100 + ny] != bestD) continue
+        if (dx == marchPrevSx && dy == marchPrevSy) return Pair(dx, dy)
+        val dot = dx * (goal.x - fx) + dy * (goal.y - fy)
+        if (dot > bestDot) { bestDot = dot; bx = dx; by = dy }
     }
     return Pair(bx, by)
 }
