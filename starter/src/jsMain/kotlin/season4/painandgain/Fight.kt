@@ -897,22 +897,13 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // куда его поставила оценка поля нужды — по опасности у подопечного, которой у ушедшего из-под огня уже нет). Лекарь,
         // который за шаг встаёт вплотную к клетке, куда уходит раненый по его фокусу (Memory.rotByFocus, клетка — из
         // прохода отхода), встаёт туда, если переживёт её с порогом своего замысла; раненый — ближайший ещё без лекаря
-        // ...И ВСТРЕЧА ИДЁТ НЕСКОЛЬКО ТИКОВ (v277, прибор meet= на стенде: у уходящего с приказом лекарь в двух клетках от его
-        // клетки был в 25 случаях из 46, встреча запланирована в 9 и исполнена в 9 из 9 — исполняется всё, что
-        // планируется, а планировалось только то, где лекарь встаёт вплотную за шаг). Его лекарь сходится с раненым с трёх
-        // клеток до вплотную за пять тиков; здесь раненому, у которого ещё нет лекаря, достаётся ближайший лекарь, и его
-        // клетка — ближе всего к клетке раненого среди тех, что проходят порог выживания замысла (вплотную, если можно),
-        // при равенстве — безопаснее
-        val medicFor = rotatingMeet.entries.filter { (rid, _) -> rid !in medicked }
-            .filter { (rid, dest) -> healers.filter { h -> h.id !in out || h.id == c.id }.minByOrNull { getRange(it, dest) }?.id == c.id }
+        val medicFor = rotatingMeet.entries.filter { (rid, dest) -> rid !in medicked && getRange(c, dest) <= 2 }
             .minByOrNull { getRange(c, it.value) }
         var met = false
         if (medicFor != null) {
             val dest = medicFor.value
             val (_, _, ttlMin) = weightsOf(intentOf(c))
-            val now = getRange(c, dest)
-            if (place(c, { p -> (getRange(p, dest) < now || getRange(p, dest) <= 1) && ttlAt(c, p.x * 100 + p.y, p) >= ttlMin },
-                    { p -> getRange(p, dest) * 1000.0 + danOf(c, p.x * 100 + p.y) })) {
+            if (place(c, { p -> getRange(p, dest) <= 1 && ttlAt(c, p.x * 100 + p.y, p) >= ttlMin }, { p -> danOf(c, p.x * 100 + p.y) })) {
                 medicked.add(medicFor.key)
                 rotfMeet++
                 met = true
