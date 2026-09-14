@@ -991,7 +991,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         val cpuTight =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
         if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
         // ...и при разрыве контакта (v227, см. USE_ZERO_LEAD_BREAK) замысел не выбирается прогоном — он задан: KITE
-        if (cpuTight) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf, Intent.PRESS, ourFlagCells = ourFlagCells)
+        if (cpuTight) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf, Intent.PRESS, ourFlagCells = ourFlagCells, armyFocus = focusTarget)
         else {
             // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через Forecast.SIM_TICKS (v138)
             var bestScore = -Double.MAX_VALUE
@@ -1018,7 +1018,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
                 if (bestPlan != null && cpuMs() + lastCost > CPU_GUARD_MS) { srchCut++; break }
                 val t0 = cpuMs()
                 val trial = HashMap<String, Position>()
-                commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
+                commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent, ourFlagCells = ourFlagCells, armyFocus = focusTarget)
                 // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                 // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
                 val sc = Forecast.simulate(mobileArmy, armedEnemies, trial, Forecast.SIM_TICKS, focusTarget, intent)   // состав без хранителей: «тот же, что у плана» (v242) отвергнут A/B вместе с применением постуры один раз

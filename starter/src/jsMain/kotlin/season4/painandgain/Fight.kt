@@ -380,7 +380,7 @@ internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int
 
 internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
-                         ourFlagCells: Set<Int> = emptySet()) {
+                         ourFlagCells: Set<Int> = emptySet(), armyFocus: Creep? = null) {
     out.clear()
     val fighters = army.filter { canMove(it) && !it.spawning }
     if (fighters.isEmpty() || armedEnemies.isEmpty()) return
@@ -772,7 +772,15 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         val chased = Memory.chaseTarget[c.id]
         // ...и ЦЕЛЬ ПАЧКИ МИЛИ во всех замыслах (v221, см. USE_MELEE_PACK_CELLS): притяжение к одной его цели
         // вместо суммы по всем — четыре мили в одну клетку-соседа, а не каждый к своей
-        val focus = chased ?: (null)
+        // НОГИ СТРЕЛКА ЗА ФОКУСОМ АРМИИ (v268, наблюдение оператора: «часть группы бежит к одному врагу, а часть к
+        // другому»). Огонь идёт по фокусу (commandFire), а ноги стрелка тянуло поле притяжения по ВСЕМ его крипам —
+        // ни в одном замысле, кроме FOCUS (15–25 % переборов), и там к самому слабому, а не к фокусу (совпадают в 22–24 %).
+        // Реплеи серии v263 и рук v266: у наших стрелков фокус в досягаемости на начало тика 25–32 %, после шага 14–20 % —
+        // шаг уводит ствол с цели; когда его армия разбита на две группы и больше, наши шагающие идут к двум и больше
+        // в 60–64 % тиков, а урон ложится на две — в 20 %. Теперь притяжение стрелка во всех замыслах — к фокусу армии (пик
+        // на дальности три); порог выживания, опасность и прочие слагаемые те же. Мили — прежним полем: погоню нашего мили
+        // за его линией реплеи v264 опровергли (со двух клеток вплотную к следующему тику 3–20 %)
+        val focus = chased ?: (if (role == 1 && armyFocus != null && armyFocus.hits > 0) armyFocus else null)
             ?: if (i == Intent.FOCUS) (if (role == 0) weakestMelee else weakestFoe) else null
         val kite = i == Intent.KITE
         val rank = { p: Position ->

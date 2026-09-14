@@ -520,6 +520,7 @@ object PainAndGain {
         val orderAuditSeg = orderAudit(ctx, OrderAuditIn(
             enemyCreeps = enemyCreeps,
             commandArmy = commandArmy,
+            focusTarget = focusTarget,
         ))
         val healerWallSeg = healerWall(ctx, HealerWallIn(
             army = army,
