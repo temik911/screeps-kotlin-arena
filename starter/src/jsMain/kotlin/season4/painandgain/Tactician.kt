@@ -815,7 +815,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                     val armedMates = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }
                     val myRange = getRange(creep, armedCentroid)
                     val loose = HashSet<Int>()
-                    for ((dx, dy) in DIRECTIONS) {
+                    for ((dx, dy) in dirsNow()) {
                         val x = creep.x + dx; val y = creep.y + dy
                         if (x < 0 || y < 0 || x > 99 || y > 99) continue
                         val c = InfluenceMap.cell(x, y)
@@ -847,7 +847,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 if (support && !inReach && avoidCells.isNotEmpty() && !(healingNow)) myBlocked = myBlocked + avoidCells
                 if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
                     val front = HashSet<Int>()
-                    for ((dx, dy) in DIRECTIONS) {
+                    for ((dx, dy) in dirsNow()) {
                         if (dx == 0 && dy == 0) continue
                         val x = creep.x + dx; val y = creep.y + dy
                         if (x < 0 || y < 0 || x > 99 || y > 99) continue
@@ -934,7 +934,7 @@ internal fun PainAndGain.slotStep(creep: Creep, slot: Position, blockedSet: Set<
     var bestFire = Double.MAX_VALUE
     var push: Position? = null
     var pushD = here
-    for ((dx, dy) in DIRECTIONS) {
+    for ((dx, dy) in dirsNow()) {
         if (dx == 0 && dy == 0) continue
         val x = creep.x + dx; val y = creep.y + dy
         if (!passable(x, y, blockedSet, enemyPositions) || (x * 100 + y) in banned) continue
@@ -973,7 +973,7 @@ internal fun PainAndGain.bestSingleMove(
     var pushX = -1; var pushY = -1
     var blockedByStatic = false
     val stuck = TrafficManager.isStuck(creep.id)
-    for ((dx, dy) in DIRECTIONS) {
+    for ((dx, dy) in dirsNow()) {
         if (dx == 0 && dy == 0) continue
         val x = creep.x + dx; val y = creep.y + dy
         if (!passable(x, y, blockedSet, enemyPositions)) continue
@@ -1001,7 +1001,7 @@ internal fun PainAndGain.bestSingleMove(
         mquietAll++
         val chosen = InfluenceMap.netDamageAt(bx, by, enemyCreeps, allies)
         var qx = bx; var qy = by; var qd = chosen
-        for ((dx, dy) in DIRECTIONS) {
+        for ((dx, dy) in dirsNow()) {
             val x = creep.x + dx; val y = creep.y + dy
             if ((x == bx && y == by) || maxOf(abs(x - target.x), abs(y - target.y)) > 1) continue
             if ((dx != 0 || dy != 0) && (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(x * 100 + y))) continue
@@ -1019,7 +1019,7 @@ internal fun PainAndGain.bestSingleMove(
         // мимо оценки клетки. При равном расстоянии по потоку берётся клетка под меньшим огнём — тай-брейк, а
         // не приоритет: выбраться из-за статической помехи всё равно важнее
         var dx0 = 0; var dy0 = 0; var best = hereDist + DistanceMap.SWAMP_COST; var bestDan = Double.MAX_VALUE
-        for ((dx, dy) in DIRECTIONS) {
+        for ((dx, dy) in dirsNow()) {
             if (dx == 0 && dy == 0) continue
             val x = creep.x + dx; val y = creep.y + dy
             if (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(x * 100 + y)) continue
@@ -1403,7 +1403,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     // нужно дойти ДО него, а не встать на него
     fun travelTo(e: Creep): Int {
         var best = -1
-        for (dx in -1..1) for (dy in -1..1) {
+        for (dx in sym(1)) for (dy in sym(1)) {
             val x = e.x + dx; val y = e.y + dy
             if (x !in 0..99 || y !in 0..99) continue
             val d = preyField[x * 100 + y]
@@ -1489,7 +1489,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         val q = InfluenceMap.profileOf(e)
         val r = if (q.ranged > 0.0) RANGED_RANGE else if (q.melee > 0.0) 2 else 0
         if (r == 0) continue
-        for (dx in -r..r) for (dy in -r..r) {
+        for (dx in sym(r)) for (dy in sym(r)) {
             val x = e.x + dx; val y = e.y + dy
             if (x in 0..99 && y in 0..99) reachCells.add(x * 100 + y)
         }
@@ -1501,14 +1501,14 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     val meleeReachCells = HashSet<Int>()
     for (e in combatEnemies) {
         if (InfluenceMap.profileOf(e).melee <= 0.0) continue
-        for (dx in -1..1) for (dy in -1..1) {
+        for (dx in sym(1)) for (dy in sym(1)) {
             val x = e.x + dx; val y = e.y + dy
             if (x in 0..99 && y in 0..99) meleeReachCells.add(x * 100 + y)
         }
     }
     val reachNow = if (contact) meleeReachCells else reachCells
     val fireCells = HashSet<Int>()
-    for (e in combatEnemies) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
+    for (e in combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
         val x = e.x + dx; val y = e.y + dy
         if (x in 0..99 && y in 0..99) fireCells.add(x * 100 + y)
     }

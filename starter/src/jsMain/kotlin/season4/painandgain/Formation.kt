@@ -67,8 +67,10 @@ internal object Formation {
     /** ЯКОРЬ — МЕДИАНА боевых покоординатно, а не среднее (v150, оператор): среднее тянет один отставший крип, медиана
      *  держится середины строя. Одна формула на изготовку, колонну, кулак и подтягивание отставших. */
     fun median(core: List<Creep>): Pair<Int, Int> {
+        // ...средняя из двух при чётном — в своей системе координат (v286, см. mirrorTL): верхняя из (85,88), нижняя из (12,9)
         val xs = core.map { it.x }.sorted(); val ys = core.map { it.y }.sorted()
-        return Pair(xs[xs.size / 2], ys[ys.size / 2])
+        val k = if (mirrorTL) (xs.size - 1) / 2 else xs.size / 2
+        return Pair(xs[k], ys[k])
     }
 
     /** ОДНО ПРАВИЛО НАЗНАЧЕНИЯ КРИП → МЕСТО (v249, этап 8). Строй собран, когда встал ПОСЛЕДНИЙ, поэтому назначение
@@ -221,7 +223,7 @@ internal object Formation {
             // ...и шаг ВЫБИРАЕТСЯ из восьми, а не идёт напролом: прямой упирался в стену и в занятую клетку, и строй
             // застревал целиком — гейт поймал шестью строками (scouts, screen, army, camp, scatter)
             var best: Position? = null; var bestD = Int.MAX_VALUE
-            for (dx in -1..1) for (dy in -1..1) {
+            for (dx in sym(1)) for (dy in sym(1)) {
                 if (dx == 0 && dy == 0) continue
                 val nx = c.x + dx; val ny = c.y + dy
                 if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
@@ -399,7 +401,7 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
     // оно среди лучших, иначе ближайшее к прямой на цель
     val here = field[fx * 100 + fy]
     var bestD = here
-    for (dx in -1..1) for (dy in -1..1) {
+    for (dx in sym(1)) for (dy in sym(1)) {
         if (dx == 0 && dy == 0) continue
         val nx = fx + dx; val ny = fy + dy
         if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
@@ -408,7 +410,7 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
     }
     if (bestD >= here) return Pair(0, 0)
     var bx = 0; var by = 0; var bestDot = Int.MIN_VALUE
-    for (dx in -1..1) for (dy in -1..1) {
+    for (dx in sym(1)) for (dy in sym(1)) {
         if (dx == 0 && dy == 0) continue
         val nx = fx + dx; val ny = fy + dy
         if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
@@ -479,7 +481,7 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     val ourC = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })
     val theirC = centroidOf(threats)
     val cells = HashMap<Int, FightCell>()
-    for (c in army) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
+    for (c in army) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
         val x = c.x + dx; val y = c.y + dy
         val key = x * 100 + y
         if (key in cells || x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || key in enemyAt) continue
@@ -661,7 +663,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
         for (c in army) if (!hasHeal(c) || hasWeapon(c)) occupied.add(c.x * 100 + c.y)
         for (e in ctx.enemyCreeps) occupied.add(e.x * 100 + e.y)
         val cells = ArrayList<Position>()
-        for (dx in -1..1) for (dy in -1..1) {
+        for (dx in sym(1)) for (dy in sym(1)) {
             if (dx == 0 && dy == 0) continue
             val x = v.x + dx; val y = v.y + dy
             if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in occupied) continue

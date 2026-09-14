@@ -93,30 +93,22 @@ object DistanceMap {
     /** Точка самого быстрого пути между стартами, куда мы приходим на [lead] тиков раньше его (v283 — середина при
      *  lead = 0, v284 — с запасом): наименьшее отклонение разницы путей от −lead, при равном — наименьшая сумма путей.
      *  Поля те же, что у [inOurHalf]; пересчёт — вместе с ними. */
-    // ...и НИЧЬЯ — В СВОЕЙ СИСТЕМЕ КООРДИНАТ (v285): первой по индексу клеткой из равных (меньший x) пост v283 выходил
-    // (45,49) из обоих углов — из (12,9) за серединой, из (85,88) перед ней. Среди равных по отклонению и сумме берётся
-    // клетка, куда мы приходим раньше, затем ближайшая к нашему дому — одинаково из обоих углов
-    fun midpoint(lead: Int = 0, home: Position? = null): Position? {
+    // ...и ничья — первая клетка в СВОЕЙ системе координат (v286, см. mirrorTL): из (85,88) — по индексу, как было, из
+    // (12,9) — с конца индекса
+    fun midpoint(lead: Int = 0): Position? {
         val my = distFromMy ?: return null
         val enemy = distFromEnemy ?: return null
         if (midSignature == rampartSignature && midLead == lead) return midCache
         var best = -1
         var bestGap = Int.MAX_VALUE
         var bestSum = Int.MAX_VALUE
-        var bestA = Int.MAX_VALUE
-        var bestHome = Int.MAX_VALUE
-        for (i in my.indices) {
+        for (i in (if (mirrorTL) my.indices.reversed() else my.indices)) {
             val a = my[i]
             val b = enemy[i]
             if (a < 0 || b < 0) continue
             val gap = abs(a - b + lead)
             val sum = a + b
-            val hx = i / FIELD - (home?.x ?: 0)
-            val hy = i % FIELD - (home?.y ?: 0)
-            val toHome = hx * hx + hy * hy
-            if (gap < bestGap || (gap == bestGap && (sum < bestSum || (sum == bestSum && (a < bestA || (a == bestA && toHome < bestHome)))))) {
-                best = i; bestGap = gap; bestSum = sum; bestA = a; bestHome = toHome
-            }
+            if (gap < bestGap || (gap == bestGap && sum < bestSum)) { best = i; bestGap = gap; bestSum = sum }
         }
         midSignature = rampartSignature
         midLead = lead
@@ -244,8 +236,8 @@ object DistanceMap {
         var anyDist = Int.MAX_VALUE
         var anyX = -1
         var anyY = -1
-        for (dx in -1..1) {
-            for (dy in -1..1) {
+        for (dx in sym(1)) {
+            for (dy in sym(1)) {
                 if (dx == 0 && dy == 0) continue
                 val nx = x + dx
                 val ny = y + dy
@@ -322,8 +314,8 @@ object DistanceMap {
         val pocket = bfs(spawn.x, spawn.y, block)
 
         fun touchesPocket(x: Int, y: Int): Boolean {
-            for (dx in -1..1) {
-                for (dy in -1..1) {
+            for (dx in sym(1)) {
+                for (dy in sym(1)) {
                     if (dx == 0 && dy == 0) continue
                     val nx = x + dx
                     val ny = y + dy
@@ -352,8 +344,8 @@ object DistanceMap {
                     component.add(cell)
                     val cx = cell / FIELD
                     val cy = cell % FIELD
-                    for (dx in -1..1) {
-                        for (dy in -1..1) {
+                    for (dx in sym(1)) {
+                        for (dy in sym(1)) {
                             if (dx == 0 && dy == 0) continue
                             val nx = cx + dx
                             val ny = cy + dy
@@ -375,8 +367,8 @@ object DistanceMap {
                     val cellX = cell / FIELD
                     val cellY = cell % FIELD
                     var touchesOutside = false
-                    loop@ for (dx in -1..1) {
-                        for (dy in -1..1) {
+                    loop@ for (dx in sym(1)) {
+                        for (dy in sym(1)) {
                             if (dx == 0 && dy == 0) continue
                             val nx = cellX + dx
                             val ny = cellY + dy
@@ -452,8 +444,8 @@ object DistanceMap {
 
             val cx = cell / FIELD
             val cy = cell % FIELD
-            for (dx in -1..1) {
-                for (dy in -1..1) {
+            for (dx in sym(1)) {
+                for (dy in sym(1)) {
                     if (dx == 0 && dy == 0) continue
                     val nx = cx + dx
                     val ny = cy + dy

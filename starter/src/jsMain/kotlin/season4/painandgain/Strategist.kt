@@ -728,7 +728,7 @@ internal fun PainAndGain.postPoint(ctx: Ctx): Position {
     // ядра строем идёт, только пока его вооружённые дальше MARCH_SAFE, ближе армию ведут тактические ветки; пост, куда мы
     // приходим на MARCH_SAFE тиков раньше него, — место, где марш кончается до того, как он войдёт в эту зону. Из обоих углов
     // точка сдвинута к своему старту одинаково
-    val midway = DistanceMap.midpoint(MARCH_SAFE, ctx.home)
+    val midway = DistanceMap.midpoint(MARCH_SAFE)
     // центральный флаг наш — пост на нём (v102, USE_POST_ON_CENTRE)
     val centre = ctx.flags.firstOrNull { it.ours && it.type == EFF_DAMAGE_TAKEN_MODIFIER }?.pos
     val c = centre ?: centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: midway ?: ctx.home
@@ -761,7 +761,7 @@ internal fun PainAndGain.fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
     fun pick(away: Boolean): Position? {
         var best: Position? = null
         var bestD = -1
-        for ((dx, dy) in DIRECTIONS) {
+        for ((dx, dy) in dirsNow()) {
             if (dx == 0 && dy == 0) continue
             val dot = dx * ax + dy * ay
             if (if (away) dot <= 0 else dot < 0) continue

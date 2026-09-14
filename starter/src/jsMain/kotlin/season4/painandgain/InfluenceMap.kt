@@ -308,8 +308,8 @@ object InfluenceMap {
         // пятьдесят тиков (t=1120–1170), а армия кралась на 1–2 клетки за 20 тиков — клетки в 2–3 от них считались под
         // ударом мили «с шагом сближения», которого у застрявшего нет
         if (enemy.fatigue > 0) return@getOrPut origins.toIntArray()
-        for (dx in -1..1) {
-            for (dy in -1..1) {
+        for (dx in sym(1)) {
+            for (dy in sym(1)) {
                 if (dx == 0 && dy == 0) continue
                 val nx = enemy.x + dx
                 val ny = enemy.y + dy
@@ -779,7 +779,7 @@ object InfluenceMap {
 
     /** Ставит притязание на клетку и её соседей: следующий крип видит её как занятую. */
     fun addClaim(x: Int, y: Int) {
-        for (dx in -1..1) for (dy in -1..1) {
+        for (dx in sym(1)) for (dy in sym(1)) {
             val nx = x + dx
             val ny = y + dy
             if (nx < 0 || ny < 0 || nx > FIELD_MAX || ny > FIELD_MAX) continue
@@ -879,8 +879,8 @@ object InfluenceMap {
         for (enemy in enemies) {
             val profile = profileOf(enemy)
             if (profile.melee + profile.ranged + profile.heal <= 0.0) continue
-            for (dx in -RANGED_RADIUS..RANGED_RADIUS) {
-                for (dy in -RANGED_RADIUS..RANGED_RADIUS) {
+            for (dx in sym(RANGED_RADIUS)) {
+                for (dy in sym(RANGED_RADIUS)) {
                     val x = enemy.x + dx
                     val y = enemy.y + dy
                     if (x < 0 || y < 0 || x > FIELD_MAX || y > FIELD_MAX) continue

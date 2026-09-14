@@ -391,7 +391,7 @@ internal fun PainAndGain.ensureGoalField(fighters: List<Creep>, combatEnemies: L
  */
 internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int>): Boolean {
     if (foe.fatigue > 0) return true
-    for (dx in -1..1) for (dy in -1..1) {
+    for (dx in sym(1)) for (dy in sym(1)) {
         if (dx == 0 && dy == 0) continue
         val x = foe.x + dx
         val y = foe.y + dy
@@ -414,7 +414,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     for (e in combatEnemies) enemyAt.add(e.x * 100 + e.y)
     // кандидаты: всё проходимое в двух клетках от любого нашего бойца
     val cells = HashMap<Int, Position>()
-    for (c in fighters) for (dx in -2..2) for (dy in -2..2) {
+    for (c in fighters) for (dx in sym(2)) for (dy in sym(2)) {
         val x = c.x + dx; val y = c.y + dy
         val key = x * 100 + y
         if (key in cells || x < 0 || y < 0 || x > 99 || y > 99) continue
@@ -506,7 +506,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     fun pathDanger(c: Creep, p: Position): Double {
         if (getRange(c, p) <= 1) return 0.0
         var best = Double.MAX_VALUE
-        for (dx in -1..1) for (dy in -1..1) {
+        for (dx in sym(1)) for (dy in sym(1)) {
             if (dx == 0 && dy == 0) continue
             val x = c.x + dx; val y = c.y + dy
             if (maxOf(abs(x - p.x), abs(y - p.y)) > 1) continue          // должна быть смежной с целью
@@ -521,7 +521,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // `Script execution timed out` почти в каждом матче (v181)
     fun nearCells(c: Creep): List<Pair<Int, Position>> {
         val near = ArrayList<Pair<Int, Position>>(9)
-        for (dx in -COMMAND_REACH..COMMAND_REACH) for (dy in -COMMAND_REACH..COMMAND_REACH) {
+        for (dx in sym(COMMAND_REACH)) for (dy in sym(COMMAND_REACH)) {
             val key = (c.x + dx) * 100 + (c.y + dy)
             cells[key]?.let { near.add(key to it) }
         }

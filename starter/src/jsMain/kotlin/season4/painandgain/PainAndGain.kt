@@ -146,6 +146,8 @@ object PainAndGain {
     internal val DIRECTIONS = listOf(
         0 to 0, -1 to -1, 0 to -1, 1 to -1, -1 to 0, 1 to 0, -1 to 1, 0 to 1, 1 to 1,
     )
+    /** Те же направления в зеркальной системе координат (v286, см. mirrorTL). */
+    internal val DIRECTIONS_MIRROR = DIRECTIONS.map { (dx, dy) -> -dx to -dy }
 
 
     internal var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике

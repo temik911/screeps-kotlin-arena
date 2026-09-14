@@ -201,7 +201,7 @@ internal fun PainAndGain.flowTo(ctx: Ctx, target: Position, avoid: Boolean = fal
 internal fun PainAndGain.avoidCells(ctx: Ctx): List<Position> = avoidCellsCache ?: run {
     val seen = HashSet<Int>()
     val out = ArrayList<Position>()
-    for (e in ctx.combatEnemies) for (dx in -AVOID_RANGE..AVOID_RANGE) for (dy in -AVOID_RANGE..AVOID_RANGE) {
+    for (e in ctx.combatEnemies) for (dx in sym(AVOID_RANGE)) for (dy in sym(AVOID_RANGE)) {
         if (!stationary(e)) continue
         val x = e.x + dx; val y = e.y + dy
         if (x < 0 || y < 0 || x > 99 || y > 99) continue
@@ -317,7 +317,7 @@ internal fun PainAndGain.projectAlong(flow: IntArray, start: Int, ticks: Int): I
     while (left > 0 && flow[cell] > 0) {
         val cx = cell / 100; val cy = cell % 100
         var next = -1; var nv = flow[cell]
-        for ((dx, dy) in DIRECTIONS) {
+        for ((dx, dy) in dirsNow()) {
             val x = cx + dx; val y = cy + dy
             if (x < 0 || y < 0 || x > 99 || y > 99) continue
             val v = flow[x * 100 + y]
@@ -335,7 +335,7 @@ internal fun PainAndGain.flowNear(flow: IntArray, p: Position): Int {
     val here = flow[p.x * 100 + p.y]
     if (here >= 0) return here
     var best = -1
-    for ((dx, dy) in DIRECTIONS) {
+    for ((dx, dy) in dirsNow()) {
         if (dx == 0 && dy == 0) continue
         val x = p.x + dx; val y = p.y + dy
         if (x < 0 || y < 0 || x > 99 || y > 99) continue
@@ -349,7 +349,7 @@ internal fun PainAndGain.flowNear(flow: IntArray, p: Position): Int {
  *  армия стояла на месте, пока враг подходил (матч 11, t=90–103). */
 internal fun PainAndGain.passableNear(p: Position): Position {
     if (!DistanceMap.isTerrainWall(p.x, p.y)) return p
-    for (r in 1..30) for (dx in -r..r) for (dy in -r..r) {
+    for (r in 1..30) for (dx in sym(r)) for (dy in sym(r)) {
         if (maxOf(abs(dx), abs(dy)) != r) continue
         val x = p.x + dx; val y = p.y + dy
         if (x in 0..99 && y in 0..99 && !DistanceMap.isTerrainWall(x, y)) return InfluenceMap.cell(x, y)
@@ -461,7 +461,7 @@ internal fun PainAndGain.pathTicks(creep: Creep, flow: IntArray, startCell: Int)
         val cy = cell % 100
         var best = -1
         var bestFlow = flow[cell]
-        for (dx in -1..1) for (dy in -1..1) {
+        for (dx in sym(1)) for (dy in sym(1)) {
             val nx = cx + dx
             val ny = cy + dy
             if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
@@ -498,7 +498,7 @@ internal fun PainAndGain.greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>
     // force: лучшая из соседних, даже если она не лучше своей клетки (см. SCOUT_FLEE_TRIGGER)
     var bestRange = if (force) -1 else (enemies.minOfOrNull { getRange(creep, it) } ?: 0)
     var bestFire = if (force) Double.MAX_VALUE else InfluenceMap.fireAt(creep.x, creep.y, enemies)
-    for ((dx, dy) in DIRECTIONS) {
+    for ((dx, dy) in dirsNow()) {
         if (dx == 0 && dy == 0) continue
         val x = creep.x + dx; val y = creep.y + dy
         if (x < 0 || y < 0 || x > 99 || y > 99) continue
@@ -535,28 +535,30 @@ internal fun PainAndGain.clusterCentroid(cs: List<Creep>): Position? {
 
 internal fun PainAndGain.centroidOf(points: List<Position>): Position? {
     if (points.isEmpty()) return null
-    return InfluenceMap.cell(roundToAxis(points.sumOf { it.x }, points.size), roundToAxis(points.sumOf { it.y }, points.size))
+    val n = points.size
+    val sx = points.sumOf { it.x }
+    val sy = points.sumOf { it.y }
+    return if (mirrorTL) InfluenceMap.cell((sx + n - 1) / n, (sy + n - 1) / n) else InfluenceMap.cell(sx / n, sy / n)
 }
 
-/** СРЕДНЕЕ КЛЕТОК БЕЗ ПЕРЕКОСА К УГЛУ (v285). Центр делился нацело, то есть округлялся к (0,0): у армии из (12,9) — назад,
- *  к её углу, у армии из (85,88) — вперёд, к центру карты; и «дом» второй стороны выходил (85,88), хотя карта симметрична
- *  как x → 98 − x (флаги D5 (49,49), R3 (13,49)/(85,49), A3 (31,67)/(67,31), H4 (8,90)/(90,8); остов стен — тоже, разбор
- *  399 матчей) и партнёр (12,9) — (86,89). Разбор углов (v283, 24 игры; 150 игр против ●ω<♥♪#6) показал, что его бот
- *  из обоих углов одинаков, а наш — нет: из (12,9) пост и точки уклонения смещены к нашему краю, армия до контакта не
- *  уклоняется ни разу (0 из 5 против 10 из 11) и сама идёт на него; счёт углов 2-71 против 13-62. Округление — к
- *  ближайшему, половина — к оси карты, то есть одинаково из обоих углов. */
-internal fun roundToAxis(sum: Int, n: Int): Int {
-    val lo = sum / n                        // координаты неотрицательны: деление — это пол
-    val twice = 2 * (sum - lo * n)          // удвоенный остаток: > n — выше половины, == n — ровно половина
-    return when {
-        twice > n -> lo + 1
-        twice < n -> lo
-        else -> if (lo < MAP_AXIS) lo + 1 else lo
-    }
-}
+/**
+ * ОДИН БОТ ИЗ ОБОИХ УГЛОВ (v286). Ничьи и округления в коде ориентированы по АБСОЛЮТНЫМ координатам: центр делится нацело
+ * (к (0,0)), соседи обходятся с (−1,−1), медиана берёт верхний из двух средних, из равных клеток побеждает первая по индексу.
+ * Для армии из (85,88) это одно поведение, для армии из (12,9) — его зеркальная противоположность: там, где первая при
+ * ничьей шагает к врагу, вторая — к своему углу. Разбор углов (v283, 399 матчей): его бот из обоих углов одинаков, наш —
+ * нет, и счёт против ●ω<♥♪#6 — 2-71 из (12,9) против 13-62 из (85,88); после v282 (без своего дебаффа в первом бою) — 1-22
+ * против 17-24 (Fisher p ≈ 0,002). Симметричное округление к ближайшему (v285) сделало оба угла такими, как (12,9), —
+ * (85,88) упал с 5-3 до 3-9. Здесь наоборот: из (85,88) всё как было, а армия из (12,9) получает его ЗЕРКАЛО — те же
+ * ничьи в своей системе координат (центр — вверх, обход — с (+1,+1), медиана — нижняя, клетки — с конца индекса).
+ * Сторона берётся на первом тике по сырому среднему армии: сумма координат меньше 98 (ось карты x → 98 − x) — угол (12,9).
+ */
+internal var mirrorTL = false
 
-/** Ось точечной симметрии карты Pain and Gain (x → 2·MAP_AXIS − x): центральный флаг D5 стоит на ней. */
-internal const val MAP_AXIS = 49
+/** Обход −r..r в своей системе координат (см. mirrorTL): из (85,88) как был, из (12,9) — зеркально. */
+internal fun sym(r: Int): IntProgression = if (mirrorTL) r downTo -r else -r..r
+
+/** Восемь направлений и стояние в своей системе координат (см. mirrorTL). */
+internal fun PainAndGain.dirsNow(): List<Pair<Int, Int>> = if (mirrorTL) DIRECTIONS_MIRROR else DIRECTIONS
 
 /** МЕРЫ АРМИИ ЗА ТИК (v256, этап 10; сегмент runArmy): бойцы и его вооружённые, сомкнутость, охота (huntable), масса и контакт, истории дистанций и центров, простой и бесплодная охота, отход по размену, признак «слабее», выполнимость отхода. Перенесено дословно. */
 internal class ArmyMeasuresIn(
@@ -1055,6 +1057,8 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     val combatEnemies = enemyCreeps.filter { val p = InfluenceMap.profileOf(it); p.melee + p.ranged + p.heal > 0.0 }
 
     // дома сторон — стартовые центры армий: спавнов на карте нет, половины и пост считаются от них
+    // ...и сторона — до первого центра: округление центра уже в своей системе координат (v286, см. mirrorTL)
+    if (homePos == null && active.isNotEmpty()) mirrorTL = (active.sumOf { it.x } + active.sumOf { it.y }) < 98 * active.size
     if (homePos == null && active.isNotEmpty()) homePos = centroidOf(active)
     if (enemyHomePos == null && enemyCreeps.isNotEmpty()) enemyHomePos = centroidOf(enemyCreeps)
     val home = homePos ?: centroidOf(active) ?: InfluenceMap.cell(50, 50)
