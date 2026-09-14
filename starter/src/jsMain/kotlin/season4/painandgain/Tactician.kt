@@ -390,7 +390,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ...И НЕ ДЕРЖИМ ЛИНИЮ, КОГДА РЯДОМ ПЕРЕВЕС (v214): здесь мили получал цель «своя клетка», то есть
         // буквально стоял, как только любой враг оказывался в трёх клетках. Замер по 12 живым матчам: доля
         // касаний наших мили в затяжном бою 1,4 %, то есть четверо из четырнадцати не бьют вовсе
-        val holdMelee =  (isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
+        val holdMelee =  (!openingNow && isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
             !spotNow && localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
         // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
         // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
@@ -433,7 +433,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         fun mateNear(e: Creep, r: Int) = combatArmy.any { m -> m.id != creep.id && isMelee(m) && !hasRanged(m) && hasMelee(m) && getRange(m, e) <= r }
         // ...и присоединяется к напарнику, уже стоящему в MELEE_HOLD_RANGE от цели: досягаемость на клетку больше
         fun holdReach(e: Creep) = if (meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
-        val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it))  }.let { c ->
+        val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it) || openingNow)  }.let { c ->
             // ОДНА ЦЕЛЬ НА ВСЕХ МИЛИ (v221, см. USE_MELEE_PACK): цель пачки, если она среди допустимых этому мили,
             // иначе прежний ближайший — пачка ничего не запрещает, она только выбирает
             c.minByOrNull { getRange(creep, it) } } else null
