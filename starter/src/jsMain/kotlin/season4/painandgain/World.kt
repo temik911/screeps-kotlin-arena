@@ -1013,107 +1013,6 @@ internal class BuildWorldOut(
     val ctx: Ctx,
 )
 
-/**
- * ОДНА ЦЕЛЕВАЯ ГРУППА (v272, наблюдение оператора: «его армия распалась на 2 группы, каждая слабее нас, но наша армия
- * мечется между ними и не может загнать в угол ни одну из них; мы растягиваемся, и наших вырезают по одиночке — а фронт
- * делался затем, чтобы вся армия шла за самым опасным участком и давила его в стену»). Разбор реплея 6aa7f947 (v271
- * против ●ω<♥♪#6): его армия 420–700-й тик в двух группах 264 тика из 280, каждая слабее нашей (урон-потенциал наш к
- * группам 1,6–3,0 и 2,6); наша армия компактна (один кластер 94 %), но направление её шага сменило группу 49 раз за 340
- * тиков (медиана серии 2 тика), в 110 тиках часть армии шла к одной группе, часть к другой, и за 270 тиков погони слабая
- * группа ни разу не прижата, а вторая шла у нас в тылу и нанесла 46 % его урона. Понятия «группа противника» не было ни в
- * одном правиле движения: затравки очага (ensureGoalField) ложились кольцами вокруг ОБЕИХ групп в 16 замерах из 17, центр
- * очага приходился на нас, и поле вело каждого крипа к ближнему кольцу.
- *
- * Группа — его боевые крипы, поддерживающие друг друга огнём в пределах шага: связь, пока соседи не дальше
- * RANGED_RANGE + 1 (выстрел плюс шаг — дальности движка, не подобранное число); его лекарь — в группе ближнего вооружённого
- * в той же дальности. Цель — самая опасная группа (наибольшая живая боевая мощь) из тех, что В КОНТАКТЕ (хотя бы один её
- * вооружённый в пределах выстрела плюс шаг, RANGED_RANGE + 1, от нашего вооружённого) и ЛОВИМЫ (ловимы — см. catchable:
- * вплотную к нашему, медленнее нас на своей клетке или не уходит — не меньше половины её вооружённых); удерживается по
- * СОСТАВУ — группа, где больше всего прежних членов, пока в ней есть вооружённый, она в контакте и ловима, — до
- * уничтожения или ухода. Правило — про бой с несколькими группами разом, как у ●ω<♥♪, где одна группа стояла в 2–3
- * клетках, а другая шла у нас в тылу в 3–6; фермер, держащий шесть клеток, боя не ведёт, и под правило не попадает. Две
- * первые редакции провалили гейт на match30:camp (отходящий от наших в шести фермер-лагерь): «самая опасная в коробке
- * очага» держалась за уходящий кусок блоба, «самая опасная ловимая в коробке» — за кусок, который отходит и возвращается
- * (ловимость по смещению за окно его не выдаёт), и в обоих случаях уничтожение на 701-м тике стало проигрышем по очкам
- * (17 573:23 966 и 19 104:23 960). Групп в контакте меньше двух — null, поля прежние.
- */
-internal fun PainAndGain.targetGroup(ours: List<Creep>, enemies: List<Creep>): Set<String>? {
-    val armed = enemies.filter { !it.spawning && InfluenceMap.profileOf(it).let { p -> p.melee + p.ranged > 0.0 } }
-    val fighters = ours.filter { hasWeapon(it) }
-    if (armed.isEmpty() || fighters.isEmpty()) { Memory.targetGroup.clear(); return null }
-    // ...И ЦЕЛЬ УСТУПАЕТ ОБЪЯВЛЕННОМУ ЗАСТОЮ (v273, гейт: три лагеря match29–31:camp), как кайт с v269. Фермер держит шесть
-    // клеток и отходит, но наш вооружённый на подходе на тик оказывается в четырёх — этого хватало для выбора, а удержание
-    // коробкой армии уводило её в погоню за тем, кто не дерётся: уничтожения лагеря на 548–734-м тике стали победами и
-    // проигрышем по очкам. «Враг держит дистанцию» у бота уже есть — это застой (stallUntil); пока он объявлен, цели нет
-    if (getTicks() < stallUntil) { Memory.targetGroup.clear(); prsStall++; return null }
-    val groupOf = HashMap<String, Int>()
-    var n = 0
-    for (seed in armed) {
-        if (seed.id in groupOf) continue
-        val stack = ArrayList<Creep>()
-        stack.add(seed); groupOf[seed.id] = n
-        while (stack.isNotEmpty()) {
-            val a = stack.removeAt(stack.size - 1)
-            for (b in armed) if (b.id !in groupOf && getRange(a, b) <= RANGED_RANGE + 1) { groupOf[b.id] = n; stack.add(b) }
-        }
-        n++
-    }
-    // УДЕРЖАНИЕ — КОРОБКОЙ АРМИИ, А НЕ ДАЛЬНОСТЬЮ КОНТАКТА (v273). Разбор v272: цель выбиралась заново 22,8 раза на 100
-    // тиков правила, серии по 2 тика — удержание рвалось, стоило группе отойти за четыре клетки (41 %) или мигнуть
-    // ловимостью (35 %), и из 180 эпизодов удержания в цели погиб один его крип. Выбор по-прежнему требует контакта и
-    // ловимости (фермер, держащий шесть, не цель), а держится цель, пока в ней есть вооружённый и она в коробке очага
-    // армии (SEED_BOX от медианы наших вооружённых) — до гибели или настоящего ухода. И цель есть и при ОДНОЙ группе:
-    // 68–80 % урона, убившего наших, приходится на фазу, когда рядом одна его группа, — прижим нужен там в первую очередь
-    val xs = fighters.map { it.x }.sorted()
-    val ys = fighters.map { it.y }.sorted()
-    val mx = xs[xs.size / 2]
-    val my = ys[ys.size / 2]
-    val inArmyBox = BooleanArray(n)
-    for (e in armed) if (maxOf(abs(e.x - mx), abs(e.y - my)) <= SEED_BOX) inArmyBox[groupOf[e.id]!!] = true
-    val power = DoubleArray(n)
-    val inBox = BooleanArray(n)
-    val size = IntArray(n)
-    val caught = IntArray(n)
-    for (e in armed) {
-        val g = groupOf[e.id]!!
-        power[g] += InfluenceMap.profileOf(e).let { it.melee + it.ranged }
-        if (fighters.any { getRange(e, it) <= RANGED_RANGE + 1 }) inBox[g] = true
-        size[g]++
-        if (catchable(e, fighters)) caught[g]++
-    }
-    // в контакте И ловима: только такую группу армия может загнать
-    for (g in 0 until n) if (caught[g] * 2 < size[g]) inBox[g] = false
-    if (n >= 2) tgrpTicks++
-    if (inBox.count { it } >= 2) tgrpSplit++
-    val prev = Memory.targetGroup
-    var keep = -1
-    if (prev.isNotEmpty()) {
-        val votes = IntArray(n)
-        for (e in armed) if (e.id in prev) votes[groupOf[e.id]!!]++
-        val best = votes.indices.maxByOrNull { votes[it] }!!
-        if (votes[best] > 0 && inArmyBox[best]) keep = best
-    }
-    val pick = if (keep >= 0) keep else (0 until n).filter { inBox[it] }.maxByOrNull { power[it] }
-    if (pick == null) { Memory.targetGroup.clear(); return null }
-    if (keep < 0 && prev.isNotEmpty()) tgrpSwitch++
-    val ids = HashSet<String>()
-    for (e in armed) if (groupOf[e.id] == pick) ids.add(e.id)
-    // лекари и прочие его крипы с лечением — к группе ближнего вооружённого в той же дальности
-    for (e in enemies) {
-        if (e.id in groupOf || e.spawning || InfluenceMap.profileOf(e).heal <= 0.0) continue
-        val near = armed.filter { getRange(e, it) <= RANGED_RANGE + 1 }.minByOrNull { getRange(e, it) } ?: continue
-        if (groupOf[near.id] == pick) ids.add(e.id)
-    }
-    Memory.targetGroup.clear()
-    Memory.targetGroup.addAll(ids)
-    // притяжение — только от цели, пока в контакте две ловимые группы и больше (правило v272, прошедшее гейт). Удержание
-    // коробкой армии держит ИМЯ цели — для прижима (см. pressSeeds), — но не притяжение: четвёртая редакция v273 давала
-    // притяжение от цели всё время, пока в коробке была другая группа, и гейт падал на трёх лагерях — армия шла за куском
-    // блоба-фермера, отходящего от наших в шести (match30:camp 19 075:23 964), как первая редакция v272
-    if (inBox.count { it } >= 2) tgrpOn++
-    return if (inBox.count { it } >= 2) ids else null
-}
-
 internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg) {
     bodyWeightNow.clear()
     liveMovesNow.clear()
@@ -1177,7 +1076,7 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     // ПОЛЯ ВЛИЯНИЯ (v204): строятся ОДИН раз за тик над одним множеством крипов — прежде commandFight
     // пересобирал ту же опасность пять раз за тик, по разу на замысел, и звал profileOf внутри цикла
     // по клеткам. Опасность клетки в раздаче читается отсюда (см. inc в commandFight).
-    InfluenceMap.buildFields(active, enemyCreeps, targetGroup(active, enemyCreeps))
+    InfluenceMap.buildFields(active, enemyCreeps)
     // скауты врага: сколько их и сколько крипо-тиков они провели в дальности наших стволов. Знаменатель
     // большой при нулевом числителе — это и есть «мы их пропускаем», сказанное числом
     for (e in enemyCreeps) if (scoutFoe(e)) {

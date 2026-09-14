@@ -652,7 +652,7 @@ object InfluenceMap {
      * обеих сторон), потом производные — цена убийства врага читает НАШЕ поле урона в ЕГО клетке,
      * а нужда своего читает ЕГО поле урона в клетке своего.
      */
-    fun buildFields(allies: List<Creep>, enemies: List<Creep>, attract: Set<String>? = null) {
+    fun buildFields(allies: List<Creep>, enemies: List<Creep>) {
         fieldTick = getTicks()
         targetValueCache.clear()
         enemyCanHeal = enemies.any { profileOf(it).heal > 0.0 }
@@ -696,10 +696,6 @@ object InfluenceMap {
         }
         lastBestPressure = bestPressure
         for (e in enemies) {
-            // ОДНА ЦЕЛЕВАЯ ГРУППА (v272, см. PainAndGain.targetGroup): когда его армия разбита на группы, притяжение — и с ним
-            // затравки очага (ensureGoalField) и направление раздачи — строится только от выбранной группы; опасность,
-            // фронт и лечение — от всех, как прежде
-            if (attract != null && e.id !in attract) continue
             val p = profileOf(e)
             val value = p.melee + p.ranged + HEAL_VALUE * p.heal
             if (value <= 0.0) continue

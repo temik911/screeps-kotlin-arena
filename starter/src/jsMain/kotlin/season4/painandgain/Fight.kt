@@ -340,76 +340,10 @@ internal fun PainAndGain.commandHeal(army: List<Creep>, enemies: List<Creep>, ou
  * соседей по строю в разные бои. Затравок при этом много, и армия растекается по ФРОНТУ, приходя к
  * ближайшему его участку, а не толпясь в одной точке.
  */
-/**
- * ПРИЖИМ К СТЕНЕ (v273, замысел оператора: «вся армия шла бы за самым опасным участком и давила бы его в стену и
- * уничтожала без возможности уклонения и отхода»). Разбор v272: к цели наш вооружённый вплотную 1,2 % времени, у её крипов
- * 2,3 свободной клетки отхода, и 760–906-й тик игры оператора его единственная группа стояла у края карты (18 стен из 49
- * клеток в радиусе трёх) — стена была, прижать было некому: армия подходила со стороны стены и выталкивала его в поле.
- * Затравки очага при цели армии (см. targetGroup) — клетки её досягаемости (не дальше RANGED_RANGE от её крипа), но только на
- * ОТКРЫТОЙ стороне: для каждого из восьми направлений от её центра считается свободный ход луча до стены или края (не
- * дальше SEED_BOX), и сторона — сумма направлений, взвешенная этим ходом. Армия идёт на кольцо с той стороны, куда цель
- * побежала бы, и её отход ведёт к стенам. Если стороны нет (ходы равны — она в открытом поле со всех сторон), затравки —
- * всё кольцо. Геометрия — свежая каждый тик: цель ходит. Возвращает null без цели — тогда прежний очаг.
- * ...И ДАВИТ ТОЛЬКО ТО, ЧТО МОЖЕТ РАЗДАВИТЬ: наш живой боевой потенциал (атака и выстрел живых частей всех наших
- * вооружённых) не меньше PUSH_RATIO его у цели — тот же порог, что открывает толчок и местный бросок (v214). Мера — по
- * живым частям, без скидки на касание: разбор игры оператора показал, что прежняя мера мощи из-за этой скидки нашего
- * перевеса (1,6–3,0 к каждой группе) не видела вовсе. Без условия гейт падал на лагере (match31:camp 17 414:22 809): в
- * первой стычке 12 на 12 с фермером армия шла в обход его блоба на открытую сторону, теряла темп на флагах и отставала
- * с 80-го тика до конца матча
- */
-internal fun PainAndGain.pressSeeds(fighters: List<Creep>, combatEnemies: List<Creep>): IntArray? {
-    if (Memory.targetGroup.isEmpty()) return null
-    val members = combatEnemies.filter { it.id in Memory.targetGroup }
-    if (members.isEmpty()) return null
-    val ours = fighters.sumOf { InfluenceMap.profileOf(it).let { p -> p.melee + p.ranged } }
-    val his = members.sumOf { InfluenceMap.profileOf(it).let { p -> p.melee + p.ranged } }
-    if (ours < his * PUSH_RATIO) { prsWeak++; return null }
-    val gx = members.sumOf { it.x } / members.size
-    val gy = members.sumOf { it.y } / members.size
-    var ox = 0.0
-    var oy = 0.0
-    var roomMin = Int.MAX_VALUE
-    for ((dx, dy) in DIRECTIONS) {
-        if (dx == 0 && dy == 0) continue
-        var run = 0
-        var x = gx + dx
-        var y = gy + dy
-        while (run < SEED_BOX && x in 0..99 && y in 0..99 && !DistanceMap.isTerrainWall(x, y)) { run++; x += dx; y += dy }
-        val len = kotlin.math.sqrt((dx * dx + dy * dy).toDouble())
-        ox += run * dx / len
-        oy += run * dy / len
-        if (run < roomMin) roomMin = run
-    }
-    val enemyAt = HashSet<Int>()
-    for (e in combatEnemies) enemyAt.add(e.x * 100 + e.y)
-    val open = kotlin.math.sqrt(ox * ox + oy * oy)
-    val sided = open >= 1.0
-    val seeds = ArrayList<Int>(64)
-    for (m in members) for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
-        val x = m.x + dx
-        val y = m.y + dy
-        if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
-        val key = x * 100 + y
-        if (key in enemyAt) continue
-        if (sided && (x - gx) * ox + (y - gy) * oy <= 0.0) continue
-        seeds.add(key)
-    }
-    if (seeds.isEmpty()) return null
-    prsTicks++
-    if (sided) prsSided++
-    prsRoom += roomMin
-    return seeds.distinct().toIntArray()
-}
-
 internal fun PainAndGain.ensureGoalField(fighters: List<Creep>, combatEnemies: List<Creep>): IntArray? {
     if (goalTick == getTicks()) return goalField
     goalTick = getTicks()
     if (fighters.isEmpty() || combatEnemies.isEmpty()) { goalField = null; goalSeeds = IntArray(0); return null }
-    pressSeeds(fighters, combatEnemies)?.let { seeds ->
-        goalSeeds = seeds
-        goalField = DistanceMap.goalField(seeds, combatEnemies.map { InfluenceMap.cell(it.x, it.y) })
-        return goalField
-    }
     val xs = fighters.map { it.x }.sorted(); val ys = fighters.map { it.y }.sorted()
     val ax = xs[xs.size / 2]; val ay = ys[ys.size / 2]
     var peak = 0
