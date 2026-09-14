@@ -1223,7 +1223,18 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     // в 14 %. При 216 лечения в тик пробивают только четыре-пять стволов в одну цель — мы этого не делали почти никогда:
     // цель фокуса менялась, ряд стоял поперёк оси, каждый стрелок доставал своего (оператор: «нет фокус-файра — каждый
     // рэндж стреляет в своего соперника»)
-    val focusPrev = focusId?.let { id -> focusPool.firstOrNull { it.id == id } }
+    // ЛИПКОСТЬ РАБОТАЕТ, КАК ЗАПИСАНА (v267, наблюдение оператора: «фокус часто меняется — мы одного бьём, потом кидаем,
+    // бежим к другому, а тот за это время лечится»). Правило v45 держит цель, пока она «в шаге от досягаемости хоть
+    // одного нашего стрелка», — но прежнюю цель искали в focusPool, а это враги НЕ ДАЛЬШЕ трёх (inFireRange): цель,
+    // шагнувшая на четыре, сбрасывалась в тот же тик, и льгота «в шаге» не срабатывала никогда. Реплеи серии v263 и рук
+    // v266 (модель выбора повторяет наши выстрелы на 94–98 %): фокус меняется 37–45 раз на 100 тиков контакта, средняя
+    // серия 1,9 тика, 64–68 % смен — «цель ушла на четыре» (в 85–88 % из них — ровно на четыре); 61 % сброшенных
+    // возвращаются в три за три тика, а фокус к ним — лишь в 33–38 %. Теперь прежняя цель ищется и среди живых боевых
+    // врагов вне досягаемости, а её стволы для правила v70 считаются тем же «в шаге» (gunsNear): у цели на четырёх в
+    // досягаемости ноль стволов, и moreGuns сбрасывал бы её тем же тиком
+    val focusPrevId = focusId
+    val focusPrev = focusId?.let { id -> focusPool.firstOrNull { it.id == id } ?: combatEnemies.firstOrNull { it.id == id } }
+    fun gunsNear(e: Creep) = combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE + 1 }
     val killableNow = focusBest != null && focusBest.hits <= fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
     // …и не к мили, чья угроза схлопнулась (v49): матч 91 (Coldkimchi, 430 тиков боя) — его мили тычет вплотную (угроза 240,
     // фокус на нём), отходит к лекарям, и фокус на нём держится: 395 выстрелов в мили под 727 его лечений вплотную, 101 в
@@ -1233,10 +1244,27 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     // липкость уступает стрелку (v60): прежняя цель не стрелок, а лучшая — вооружённый стрелок
     val rangedNow =  armedRanged(focusBest) && !armedRanged(focusPrev)
     // липкость уступает цели, которую достают на FOCUS_GUNS_SWITCH стволов больше (v70)
-    val moreGuns =  focusBest != null && focusPrev != null && gunsAt(focusBest) >= gunsAt(focusPrev) + FOCUS_GUNS_SWITCH
-    val focusTarget = if (focusPrev != null && !killableNow && !rangedNow && !moreGuns && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 } &&
-        combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }) focusPrev else focusBest
+    val moreGuns =  focusBest != null && focusPrev != null && gunsAt(focusBest) >= gunsNear(focusPrev) + FOCUS_GUNS_SWITCH
+    val prevArmed = focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 }
+    val prevNear = focusPrev != null && combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }
+    val focusTarget = if (focusPrev != null && !killableNow && !rangedNow && !moreGuns && prevArmed && prevNear) focusPrev else focusBest
     focusId = focusTarget?.id
+    // прибор v267 (fsw=смен/тиков:ушла/далеко/стрелок/стволы/добиваем/раздета): смена фокуса и её причина — на тиках, где
+    // есть кого бить в досягаемости
+    if (focusPool.isNotEmpty()) {
+        fswTicks++
+        if (focusPrevId != null && focusTarget?.id != focusPrevId) {
+            fswN++
+            when {
+                focusPrev == null -> fswLost++
+                !prevNear -> fswFar++
+                killableNow -> fswKill++
+                rangedNow -> fswRanged++
+                moreGuns -> fswGuns++
+                else -> fswBare++
+            }
+        }
+    }
     val packMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) && hasMelee(it) }
     if (packMelee.isNotEmpty() && combatEnemies.isNotEmpty()) packTicks++
     // ВЕЕР НЕ РАСФОКУСИРУЕТ СОШЕДШИЕСЯ СТВОЛЫ (v218, см. USE_FAN_KEEPS_FOCUS). Признак снимается ЗДЕСЬ,
