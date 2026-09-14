@@ -959,8 +959,8 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
         val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
         maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= APPROACH_WINDOW / 4
     })
-    fightImminentNow = unflaggedRushNow ||
-        (!ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved)
+    approachingNow = !ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
+    fightImminentNow = unflaggedRushNow || approachingNow
     // ...и ЗАПОМИНАЕМ РАССТОЯНИЕ НА НАЧАЛО ПОДХОДА (v215, см. USE_RUSH_VETO_EXPIRES). Первая редакция срока
     // сравнивала с ТЕКУЩИМ расстоянием между центрами — а оно по мере подхода сокращается, то есть срок
     // ужесточался ровно наоборот и вето снималось в тот момент, когда бой действительно начинался: строка

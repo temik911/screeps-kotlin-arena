@@ -176,6 +176,7 @@ object PainAndGain {
     internal var approachRate = 0.0
     internal var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
+    internal var approachingNow = false                    // та же, но по его подходу, без безфлагового броска (v284, см. captureBlock)
     internal var rushStartDist = 0                         // расстояние между центрами на начало броска (v215)
     internal var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
     internal var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)

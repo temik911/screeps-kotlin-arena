@@ -88,14 +88,15 @@ object DistanceMap {
 
     private var midCache: Position? = null
     private var midSignature = -2
+    private var midLead = Int.MIN_VALUE
 
-    /** Середина пути между стартами (v283): клетка, куда обе стороны приходят одновременно, — наименьшая разница путей
-     *  от наших и его стартов, при равной — наименьшая их сумма (то есть середина самого быстрого пути между ними). Поля те
-     *  же, что у [inOurHalf]; пересчёт — вместе с ними. */
-    fun midpoint(): Position? {
+    /** Точка самого быстрого пути между стартами, куда мы приходим на [lead] тиков раньше его (v283 — середина при
+     *  lead = 0, v284 — с запасом): наименьшее отклонение разницы путей от −lead, при равном — наименьшая сумма путей.
+     *  Поля те же, что у [inOurHalf]; пересчёт — вместе с ними. */
+    fun midpoint(lead: Int = 0): Position? {
         val my = distFromMy ?: return null
         val enemy = distFromEnemy ?: return null
-        if (midSignature == rampartSignature) return midCache
+        if (midSignature == rampartSignature && midLead == lead) return midCache
         var best = -1
         var bestGap = Int.MAX_VALUE
         var bestSum = Int.MAX_VALUE
@@ -103,11 +104,12 @@ object DistanceMap {
             val a = my[i]
             val b = enemy[i]
             if (a < 0 || b < 0) continue
-            val gap = abs(a - b)
+            val gap = abs(a - b + lead)
             val sum = a + b
             if (gap < bestGap || (gap == bestGap && sum < bestSum)) { best = i; bestGap = gap; bestSum = sum }
         }
         midSignature = rampartSignature
+        midLead = lead
         midCache = if (best < 0) null else InfluenceMap.cell(best / FIELD, best % FIELD)
         return midCache
     }
