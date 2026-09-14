@@ -791,6 +791,22 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 else -> scoreHeal(c, key, p, att, dan)
             }
         }
+        // СТВОЛ НЕ УХОДИТ С ФОКУСА (v269). Притяжение v268 ноги не сдвинуло (прибор ffoc: фокус в досягаемости стрелка под
+        // приказом 11 % до шага и 11 % после, против ●ω<♥♪ 19 → 14 %), и причина в величинах, а не в знаке: цена цели —
+        // её ценность, умноженная на доступность, а у цели вне нашего залпа доступность на полу 0,25, так что клетка в трёх
+        // от фокуса лучше клетки в четырёх на 7 единиц, когда опасность соседних клеток у его строя разнится на десятки и
+        // сотни. Вес этого не исправит — исправит правило: стрелок, у которого фокус в досягаемости СЕЙЧАС, получает
+        // клетку, из которой он его достаёт, если такая проходит порог выживания своего замысла (ttlMin); нет такой —
+        // прежняя лестница. В досягаемость, которой нет, правило никого не тянет: оно закрывает ровно измеренную потерю
+        // «фокус в досягаемости у 25–32 % стрелков до шага и у 14–20 % после» (реплеи серии v263 и рук v266)
+        val holdFocus = role == 1 && armyFocus != null && armyFocus.hits > 0 && getRange(c, armyFocus) <= RANGED_RANGE
+        if (holdFocus) {
+            val ok = place(c, { p ->
+                (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                    getRange(p, armyFocus!!) <= RANGED_RANGE && ttlAt(c, p.x * 100 + p.y, p) >= ttlMin
+            }, rank)
+            if (ok) { gateLevels[minOf(ttlMin, gateLevels.size - 1)]++; return true }
+        }
         for (lvl in ttlMin downTo 1) {
             val ok = place(c, { p ->
                 (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
