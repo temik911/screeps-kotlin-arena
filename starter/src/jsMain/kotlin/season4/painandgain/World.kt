@@ -630,6 +630,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // этих тиков размена нет вовсе, — это 35 % матча против 4 % в выигранных (v219: 24 % против 5 %)
     val exchangeLive = ourLostWindow >= STALL_DAMAGE || hisLostWindow >= STALL_DAMAGE
     exchangeLiveNow = exchangeLive
+    if (exchangeLive && firstFightTick == 0) firstFightTick = getTicks()
     // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
     val exchangePaying = Memory.ourHitsHist.size < STALL_TICKS ||
         (Memory.enemyHitsHist.first() - enemyHitsNow) >= (Memory.ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
@@ -934,6 +935,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     }
     if (massedByArrival && !massedByShape) massArrivalAdded++
     val enemyMassed = massedByShape || massedByArrival
+    enemyMassedSignal = enemyMassed
     // с гистерезисом: темп сближения ходит вокруг порога (колонна на марше то растягивается шире MASS_RANGE, то
     // замедляется), и без него уклонение сменялось стоянием каждые десять-тридцать тиков, пока враг шёл — матч 32:
     // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.

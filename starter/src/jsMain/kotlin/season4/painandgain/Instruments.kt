@@ -468,7 +468,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
             "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
             "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +
             "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum" +
+            " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum ffight=$firstFightTick" +
             " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
             "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
             "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost objnone=${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll " +
@@ -529,7 +529,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v280"
+internal const val BOT_VERSION = "v281"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
