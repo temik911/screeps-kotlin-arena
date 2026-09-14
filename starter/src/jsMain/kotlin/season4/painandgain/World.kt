@@ -1040,7 +1040,12 @@ internal class BuildWorldOut(
 internal fun PainAndGain.targetGroup(ours: List<Creep>, enemies: List<Creep>): Set<String>? {
     val armed = enemies.filter { !it.spawning && InfluenceMap.profileOf(it).let { p -> p.melee + p.ranged > 0.0 } }
     val fighters = ours.filter { hasWeapon(it) }
-    if (armed.size < 2 || fighters.isEmpty()) { Memory.targetGroup.clear(); return null }
+    if (armed.isEmpty() || fighters.isEmpty()) { Memory.targetGroup.clear(); return null }
+    // ...И ЦЕЛЬ УСТУПАЕТ ОБЪЯВЛЕННОМУ ЗАСТОЮ (v273, гейт: три лагеря match29–31:camp), как кайт с v269. Фермер держит шесть
+    // клеток и отходит, но наш вооружённый на подходе на тик оказывается в четырёх — этого хватало для выбора, а удержание
+    // коробкой армии уводило её в погоню за тем, кто не дерётся: уничтожения лагеря на 548–734-м тике стали победами и
+    // проигрышем по очкам. «Враг держит дистанцию» у бота уже есть — это застой (stallUntil); пока он объявлен, цели нет
+    if (getTicks() < stallUntil) { Memory.targetGroup.clear(); prsStall++; return null }
     val groupOf = HashMap<String, Int>()
     var n = 0
     for (seed in armed) {
@@ -1053,7 +1058,18 @@ internal fun PainAndGain.targetGroup(ours: List<Creep>, enemies: List<Creep>): S
         }
         n++
     }
-    if (n < 2) { Memory.targetGroup.clear(); return null }
+    // УДЕРЖАНИЕ — КОРОБКОЙ АРМИИ, А НЕ ДАЛЬНОСТЬЮ КОНТАКТА (v273). Разбор v272: цель выбиралась заново 22,8 раза на 100
+    // тиков правила, серии по 2 тика — удержание рвалось, стоило группе отойти за четыре клетки (41 %) или мигнуть
+    // ловимостью (35 %), и из 180 эпизодов удержания в цели погиб один его крип. Выбор по-прежнему требует контакта и
+    // ловимости (фермер, держащий шесть, не цель), а держится цель, пока в ней есть вооружённый и она в коробке очага
+    // армии (SEED_BOX от медианы наших вооружённых) — до гибели или настоящего ухода. И цель есть и при ОДНОЙ группе:
+    // 68–80 % урона, убившего наших, приходится на фазу, когда рядом одна его группа, — прижим нужен там в первую очередь
+    val xs = fighters.map { it.x }.sorted()
+    val ys = fighters.map { it.y }.sorted()
+    val mx = xs[xs.size / 2]
+    val my = ys[ys.size / 2]
+    val inArmyBox = BooleanArray(n)
+    for (e in armed) if (maxOf(abs(e.x - mx), abs(e.y - my)) <= SEED_BOX) inArmyBox[groupOf[e.id]!!] = true
     val power = DoubleArray(n)
     val inBox = BooleanArray(n)
     val size = IntArray(n)
@@ -1067,7 +1083,7 @@ internal fun PainAndGain.targetGroup(ours: List<Creep>, enemies: List<Creep>): S
     }
     // в контакте И ловима: только такую группу армия может загнать
     for (g in 0 until n) if (caught[g] * 2 < size[g]) inBox[g] = false
-    tgrpTicks++
+    if (n >= 2) tgrpTicks++
     if (inBox.count { it } >= 2) tgrpSplit++
     val prev = Memory.targetGroup
     var keep = -1
@@ -1075,7 +1091,7 @@ internal fun PainAndGain.targetGroup(ours: List<Creep>, enemies: List<Creep>): S
         val votes = IntArray(n)
         for (e in armed) if (e.id in prev) votes[groupOf[e.id]!!]++
         val best = votes.indices.maxByOrNull { votes[it] }!!
-        if (votes[best] > 0 && inBox[best]) keep = best
+        if (votes[best] > 0 && inArmyBox[best]) keep = best
     }
     val pick = if (keep >= 0) keep else (0 until n).filter { inBox[it] }.maxByOrNull { power[it] }
     if (pick == null) { Memory.targetGroup.clear(); return null }
@@ -1090,6 +1106,10 @@ internal fun PainAndGain.targetGroup(ours: List<Creep>, enemies: List<Creep>): S
     }
     Memory.targetGroup.clear()
     Memory.targetGroup.addAll(ids)
+    // притяжение — только от цели, пока в контакте две ловимые группы и больше (правило v272, прошедшее гейт). Удержание
+    // коробкой армии держит ИМЯ цели — для прижима (см. pressSeeds), — но не притяжение: четвёртая редакция v273 давала
+    // притяжение от цели всё время, пока в коробке была другая группа, и гейт падал на трёх лагерях — армия шла за куском
+    // блоба-фермера, отходящего от наших в шести (match30:camp 19 075:23 964), как первая редакция v272
     if (inBox.count { it } >= 2) tgrpOn++
     return if (inBox.count { it } >= 2) ids else null
 }
