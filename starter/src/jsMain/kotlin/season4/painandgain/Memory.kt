@@ -83,6 +83,12 @@ internal object Memory {
     /** Мили -> зажатый враг, к которому его поставил приказ (v264): на следующем тике прибор pin= сверяет, стоял ли
      *  зажатый вплотную, то есть состоялся ли удар. */
     val pinWatch = HashMap<String, String>()
+    /** Ротация по его фокусу (v275, см. rotateByFocus): кто ушёл по ней; сверка двух правил его выбора цели с фактом. */
+    val rotByFocus = HashSet<String>()
+    val fracHits = ArrayDeque<Boolean>()
+    val addrHits = ArrayDeque<Boolean>()
+    var fracPrev: String? = null
+    var addrPrev: String? = null
     val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
     /** Контакт и численность армии на прошлом тике — события для стратега (v242). */
     var contactPrev = false

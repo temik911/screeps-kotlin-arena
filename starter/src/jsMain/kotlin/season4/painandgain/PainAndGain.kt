@@ -501,6 +501,7 @@ object PainAndGain {
             pressOn = pressOn,
         ))
         cpuMark("block")
+        rotateByFocus(army, combatEnemies)
         val armyCommandSeg = armyCommand(ctx, ArmyCommandIn(
             army = army,
             enemyCreeps = enemyCreeps,

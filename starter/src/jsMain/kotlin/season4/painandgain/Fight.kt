@@ -633,9 +633,14 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         val hurtBadly = (lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
         val alone = InfluenceMap.damageAt(c.x, c.y, combatEnemies) > 0.0 &&
             army.none { it.id != c.id && hasHeal(it) && getRange(c, it) <= HEAL_RANGE }
-        if (!hurtBadly && !alone) continue
+        // ...и уходящий по его фокусу (v275, см. rotateByFocus): та же самая безопасная клетка, и среди равных — ближе к
+        // нашему лекарю: встреча раненого с лекарём вне его досягаемости (у него — 3 → 1 клетка за пять тиков)
+        val rotate = c.id in Memory.rotByFocus
+        if (!hurtBadly && !alone && !rotate) continue
+        val medics = if (rotate) army.filter { it.id != c.id && hasHeal(it) && !hasWeapon(it) } else emptyList()
         place(c, { true }, rescue = true, rank = { p -> danOf(c, p.x * 100 + p.y) * 100 -
-            (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
+            (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() +
+            (if (rotate) (medics.minOfOrNull { getRange(p, it) } ?: 0).toDouble() else 0.0) })
     }
     // ОТСТАВШИЙ И ВЫРВАВШИЙСЯ ПОДТЯГИВАЮТСЯ (v177, оператор: «в момент начала боя у нас всегда был 1 крип где-то
     // впереди, и его очень быстро убивали»). Кулак ограничивал КАНДИДАТНЫЕ клетки, но крипа, уже стоящего вне

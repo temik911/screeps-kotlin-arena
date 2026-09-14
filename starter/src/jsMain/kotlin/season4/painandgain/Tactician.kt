@@ -137,6 +137,92 @@ internal class ArmyTick(
     val pressOn: Boolean,
 )
 
+/**
+ * РОТАЦИЯ ПО ЕГО ФОКУСУ (v275, разбор 97 игр против ●ω<♥♪#6: все версии 0-8…2-14). Его стволы бьют нашего крипа с
+ * наименьшей долей хитов в досягаемости (100 % выстрелов с выбором), и его раненые выходят из-под нашего огня за 1–2 тика
+ * и возвращаются вылеченными (вылечено 95 %, погибло 4 %, больше четырёх частей он не теряет), а наши уходят по порогу
+ * ROTATE_OUT — половине живого оружия — поздно: выход за 3 тика, 19 % не выходят вовсе, вылечено 65 %, погибло 35 %. И
+ * в бою ротацию перебивал приказ командира, который уводил только добиваемого (hurtBadly). Наши пять побед над ним — игры,
+ * где выжили раненые (93 % вылеченных против 52 %).
+ *
+ * Правило соперника берётся из сверки: каждый тик предсказываются главные жертвы его стволов по двум правилам — «наименьшая
+ * доля» (Forecast.fracTargetOf) и «лекарь, иначе ближайший» (Forecast.wallTargetOf, v224/v229), — и на следующем тике
+ * сверяются с тем, кто потерял больше всех; за окно TOUCH_WINDOW, не раньше STALL_TICKS замеров, действует то, что попадает
+ * чаще. Пока его правило — «наименьшая доля»: боец, раненый и предсказанный жертвой его стволов, чей предсказанный урон
+ * больше нашего лечения, доходящего до его клетки, уходит СРАЗУ — до потери частей, а не на половине оружия; возвращается,
+ * когда вылечен полностью или уже не самый раненый среди наших в его досягаемости (тогда его стволы и так бьют другого).
+ * Так его огонь переходит с одного на другого, и ни один не раздевается — его же цикл. Пока правило не его — ротация по
+ * фокусу снимается, прежняя (ROTATE_OUT) остаётся. Новых чисел нет: дальности — движка, окна — существующие.
+ */
+internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
+    val live = army.filter { it.hits > 0 && (hasWeapon(it) || hasHeal(it)) }
+    var mostLost: Creep? = null
+    var mostLoss = 0
+    for (c in live) {
+        val l = (Memory.lastHits[c.id] ?: c.hits) - c.hits
+        if (l > mostLoss) { mostLoss = l; mostLost = c }
+    }
+    val truth = mostLost
+    if (truth != null && (Memory.fracPrev != null || Memory.addrPrev != null)) {
+        Memory.fracHits.addLast(Memory.fracPrev == truth.id)
+        Memory.addrHits.addLast(Memory.addrPrev == truth.id)
+        while (Memory.fracHits.size > TOUCH_WINDOW) Memory.fracHits.removeFirst()
+        while (Memory.addrHits.size > TOUCH_WINDOW) Memory.addrHits.removeFirst()
+        rotfN++
+        if (Memory.fracPrev == truth.id) rotfF++
+        if (Memory.addrPrev == truth.id) rotfA++
+    }
+    val byFrac = HashMap<String, Double>()
+    val byAddr = HashMap<String, Double>()
+    for (e in combatEnemies) {
+        val q = InfluenceMap.profileOf(e)
+        if (q.ranged > 0.0) {
+            Forecast.fracTargetOf(e, live, RANGED_RANGE)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
+            Forecast.wallTargetOf(e, live, RANGED_RANGE)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
+        }
+        if (q.melee > 0.0) {
+            Forecast.fracTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
+            Forecast.wallTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
+        }
+    }
+    Memory.fracPrev = byFrac.maxByOrNull { it.value }?.key
+    Memory.addrPrev = byAddr.maxByOrNull { it.value }?.key
+    val healersLive = live.any { hasHeal(it) && !hasWeapon(it) }
+    val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
+    if (!fracRules) {
+        for (id in Memory.rotByFocus) Memory.rotatingIds.remove(id)
+        Memory.rotByFocus.clear()
+        return
+    }
+    rotfOn++
+    fun frac(c: Creep) = c.hits.toDouble() / maxOf(1, c.hitsMax)
+    fun inReach(c: Creep) = combatEnemies.any { e ->
+        val q = InfluenceMap.profileOf(e)
+        (q.ranged > 0.0 && getRange(e, c) <= RANGED_RANGE) || (q.melee > 0.0 && getRange(e, c) <= MELEE_STEP_REACH)
+    }
+    // возврат: вылечен полностью или уже не самый раненый среди наших в его досягаемости
+    val back = ArrayList<String>()
+    for (id in Memory.rotByFocus) {
+        val c = live.firstOrNull { it.id == id }
+        if (c == null) { back.add(id); continue }
+        if (c.hits >= c.hitsMax) { back.add(id); continue }
+        val lowest = live.filter { it.id != id && it.id !in Memory.rotByFocus && inReach(it) }.minOfOrNull { frac(it) }
+        if (lowest != null && frac(c) > lowest) back.add(id)
+    }
+    for (id in back) { Memory.rotByFocus.remove(id); Memory.rotatingIds.remove(id); rotfBack++ }
+    // выход: раненый, предсказанная жертва его стволов, и их урон больше нашего лечения в его клетке
+    for (c in live) {
+        if (!hasWeapon(c) || c.id in Memory.rotByFocus || !canMove(c) || c.hits >= c.hitsMax) continue
+        val inc = byFrac[c.id] ?: continue
+        if (inc <= InfluenceMap.healReachAt(c.x * 100 + c.y)) continue
+        Memory.rotByFocus.add(c.id)
+        Memory.rotatingIds.add(c.id)
+        Memory.rotateSince[c.id] = getTicks()
+        rotfOut++
+    }
+    rotfTicks += Memory.rotByFocus.size
+}
+
 /** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). */
 internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
     with(t) {
@@ -147,7 +233,8 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
         val wounded = !healer && !hasWeapon(creep)
         // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
-        val rotating =  !healer && hasWeapon(creep) && healersAlive && run {
+        // ...и ротация по его фокусу (v275, см. rotateByFocus) решена до командира и старым порогом не снимается
+        val rotating = creep.id in Memory.rotByFocus || !healer && hasWeapon(creep) && healersAlive && run {
             val weapons = creep.body.count { it.type == ATTACK || it.type == RANGED_ATTACK }
             val live = creep.body.count { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
             val frac = if (weapons == 0) 1.0 else live.toDouble() / weapons
