@@ -1114,7 +1114,15 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         .ifEmpty { inFireRange }
     fun fireAvailableAt(e: Creep) = fireAvailable(e)
     // лечение, которое враг получит на этой цели: вплотную — полное, на дистанции — треть (rangedHeal 4 против 12)
-    fun healOn(e: Creep) = enemyCreeps.filter { h -> h.id != e.id && getRange(h, e) <= HEAL_RANGE }.sumOf { h -> val q = InfluenceMap.profileOf(h); if (getRange(h, e) <= 1) q.heal else q.heal / 3.0 }
+    // ...И САМА ЦЕЛЬ ТОЖЕ ЛЕЧИТ СЕБЯ (v266, разбор стены лечения по реплеям серии v263). Сумма шла по всем, КРОМЕ цели, и
+    // его лекарь под нашим огнём выглядел пробиваемым, хотя лечит себя в 52–71 % таких тиков (против Coldkimchi; у ●ω<♥♪ —
+    // 21 %): модель завышала чистый урон по лекарю на +29 в тик, и 39 % тиков, где лекарь «пробиваем», им не были. Ровно на
+    // этой ложной посылке стоят ярусы «лекарь в досягаемости — первым» (v224) и «лекарь, из-за которого цель не умирает»
+    // (v134) — обоим нужен конечный killTicks. С самолечением ложных «пробиваемых» ноль. Добиваемость в commandFire
+    // (`killable`) самолечение уже считала — её сумма идёт по всем врагам, включая саму цель; здесь это та же модель, а не
+    // вторая. Каскадный пересчёт по реплеям: чистый урон армии в тик против Coldkimchi +8,9 → +22,2 при его лечении как
+    // было, −9,8 → −7,9 при его лекарях, успевающих перераспределиться; против ротации ●ω разницы нет
+    fun healOn(e: Creep) = enemyCreeps.filter { h -> getRange(h, e) <= HEAL_RANGE }.sumOf { h -> val q = InfluenceMap.profileOf(h); if (getRange(h, e) <= 1) q.heal else q.heal / 3.0 }
     // дистанция каждого врага до ближайшего нашего боеспособного сейчас и тик назад — «идёт ли» (см. threatOf)
     val prevArmedRange = HashMap(Memory.lastArmedRange)
     Memory.lastArmedRange.clear()
@@ -1199,6 +1207,15 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         .thenByDescending { getRange(it, centroid) }
     val focusBest = focusPool.maxWithOrNull(focusCmp)
     // прибор яруса «лекарь первым» (v224): его лекарь в досягаемости наших стволов был / фокус лёг на лекаря
+    // ...и прибор v266 (fself=): его лекарь в досягаемости наших стволов, которого модель без самолечения читала
+    // пробиваемым, а с ним — нет, то есть сколько решений о добиваемости правка поменяла
+    for (e in focusPool) if (armedHealer(e) && gunsAt(e) > 0) {
+        fselfAll++
+        val fire = fireAvailableAt(e) * InfluenceMap.takenOf(e)
+        val own = InfluenceMap.profileOf(e).heal
+        val others = healOn(e) - own
+        if (fire - others > 0.0 && fire - others - own <= 0.0) fselfFlip++
+    }
     if (focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail++; if (focusBest != null && armedHealer(focusBest)) fhlChosen++ }
     // ЛИПКИЙ фокус (v45): цель держится, пока жива с оружием или лечением и в шаге от досягаемости хоть одного нашего стрелка;
     // сменяется на ту, что добивается за тик. Замер по реплеям (матчи 78, 73, 67): наибольшее число наших выстрелов в ОДНУ
