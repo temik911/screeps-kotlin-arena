@@ -85,6 +85,8 @@ internal object Memory {
     val pinWatch = HashMap<String, String>()
     /** Ротация по его фокусу (v275, см. rotateByFocus): кто ушёл по ней; сверка двух правил его выбора цели с фактом. */
     val rotByFocus = HashSet<String>()
+    /** Наше лечение, назначенное каждому своему за прошлый тик (v276): полученный урон = потеря + это лечение. */
+    val healGiven = HashMap<String, Int>()
     val fracHits = ArrayDeque<Boolean>()
     val addrHits = ArrayDeque<Boolean>()
     var fracPrev: String? = null

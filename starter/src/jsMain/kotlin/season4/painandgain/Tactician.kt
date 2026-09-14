@@ -156,10 +156,17 @@ internal class ArmyTick(
  */
 internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
     val live = army.filter { it.hits > 0 && (hasWeapon(it) || hasHeal(it)) }
+    // ПРЕДСКАЗАТЕЛЬ ТОЧНЕЕ (v276, разбор v275 по реплеям: предсказатель угадывал 64,8 % против 100 % его правила). Три
+    // причины и три поправки: кандидаты его стволов — ВСЕ наши, и раздетые тоже (он их бьёт, а они выпадали из «живых»);
+    // мили бьёт только вплотную — дальность удара движок сверяет по клеткам начала тика, и шаг перед ударом этого тика не
+    // даёт (было MELEE_STEP_REACH = 2); истина — полученный УРОН, а не чистая потеря (жертву, которую подлечили, чистая
+    // потеря не называла): урон = потеря за тик плюс наше лечение, назначенное ей прошлым тиком (Memory.healGiven). По
+    // реплеям трёх поправок хватает на 92 % против урона, и правило перестаёт мигать (было выключено 30 % тиков контакта)
+    val all = army.filter { it.hits > 0 }
     var mostLost: Creep? = null
     var mostLoss = 0
-    for (c in live) {
-        val l = (Memory.lastHits[c.id] ?: c.hits) - c.hits
+    for (c in all) {
+        val l = (Memory.lastHits[c.id] ?: c.hits) - c.hits + (Memory.healGiven[c.id] ?: 0)
         if (l > mostLoss) { mostLoss = l; mostLost = c }
     }
     val truth = mostLost
@@ -177,12 +184,12 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     for (e in combatEnemies) {
         val q = InfluenceMap.profileOf(e)
         if (q.ranged > 0.0) {
-            Forecast.fracTargetOf(e, live, RANGED_RANGE)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
-            Forecast.wallTargetOf(e, live, RANGED_RANGE)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
+            Forecast.fracTargetOf(e, all, RANGED_RANGE)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
+            Forecast.wallTargetOf(e, all, RANGED_RANGE)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
         }
         if (q.melee > 0.0) {
-            Forecast.fracTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
-            Forecast.wallTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
+            Forecast.fracTargetOf(e, all, 1)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
+            Forecast.wallTargetOf(e, all, 1)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
         }
     }
     Memory.fracPrev = byFrac.maxByOrNull { it.value }?.key

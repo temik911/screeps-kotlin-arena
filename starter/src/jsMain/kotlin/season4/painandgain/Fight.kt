@@ -176,6 +176,9 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
         }
         shoot(creep, enemyCreeps, focusTarget, focusOrder)
     }
+    // лечение, назначенное за тик, — для истины предсказателя его фокуса на следующем тике (v276, см. rotateByFocus)
+    Memory.healGiven.clear()
+    Memory.healGiven.putAll(healDone)
     damageBooked.clear()
     val most = shotsAt.values.maxOrNull() ?: 0
     if (most > 0) {
@@ -628,6 +631,9 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // командира. Теперь он сам уводит того, кому грозит гибель, — потерявшего за тик больше половины остатка или
     // стоящего под огнём без лечения рядом
     passTag = "retreat"
+    // уходящие по его фокусу и их клетки — для встречи с лекарём (v276, см. проход лекарей)
+    val rotatingMeet = HashMap<String, Position>()
+    val medicked = HashSet<String>()
     for (c in fighters) {
         if (c.id in out) continue
         val hurtBadly = (lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
@@ -641,6 +647,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         place(c, { true }, rescue = true, rank = { p -> danOf(c, p.x * 100 + p.y) * 100 -
             (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() +
             (if (rotate) (medics.minOfOrNull { getRange(p, it) } ?: 0).toDouble() else 0.0) })
+        if (rotate) out[c.id]?.let { rotatingMeet[c.id] = it }
     }
     // ОТСТАВШИЙ И ВЫРВАВШИЙСЯ ПОДТЯГИВАЮТСЯ (v177, оператор: «в момент начала боя у нас всегда был 1 крип где-то
     // впереди, и его очень быстро убивали»). Кулак ограничивал КАНДИДАТНЫЕ клетки, но крипа, уже стоящего вне
@@ -885,7 +892,27 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // ЛЕКАРЕЙ +0,32 — они впереди мили, и в 155 тиках из 335 лекари в среднем ближе к врагу, чем мили; на
         // t=63, через три тика после контакта, один лекарь уже без лечащих частей. Условие простое и жёсткое:
         // хотя бы один свой боец стоит к врагу БЛИЖЕ, чем клетка лекаря, — считая по уже назначенным клеткам
-        val ok = placeScored(c, 2, intentOf(c)).also { placed ->
+        // ВСТРЕЧА РАНЕНОГО С ЛЕКАРЁМ (v276, разбор v275: наш уходящий раненый за пять тиков получает 198 урона при 144
+        // лечения, его — 76 при 144; его лекарь сходится с раненым с трёх клеток до вплотную за пять тиков, а наш стоял там,
+        // куда его поставила оценка поля нужды — по опасности у подопечного, которой у ушедшего из-под огня уже нет). Лекарь,
+        // который за шаг встаёт вплотную к клетке, куда уходит раненый по его фокусу (Memory.rotByFocus, клетка — из
+        // прохода отхода), встаёт туда, если переживёт её с порогом своего замысла; раненый — ближайший ещё без лекаря
+        val medicFor = rotatingMeet.entries.filter { (rid, dest) -> rid !in medicked && getRange(c, dest) <= 2 }
+            .minByOrNull { getRange(c, it.value) }
+        var met = false
+        if (medicFor != null) {
+            val dest = medicFor.value
+            val (_, _, ttlMin) = weightsOf(intentOf(c))
+            if (place(c, { p -> getRange(p, dest) <= 1 && ttlAt(c, p.x * 100 + p.y, p) >= ttlMin }, { p -> danOf(c, p.x * 100 + p.y) })) {
+                medicked.add(medicFor.key)
+                rotfMeet++
+                met = true
+                out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
+            }
+        }
+        // лекаря, поставленного проходом отхода, оценка по-прежнему переставляет — не встреча, не трогается (первая
+        // редакция v276 это переразмещение снимала попутно, и гейт переменил 89 строк и уронил match30:camp)
+        val ok = met || placeScored(c, 2, intentOf(c)).also { placed ->
             if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
         }
         // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
