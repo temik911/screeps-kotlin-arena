@@ -356,6 +356,28 @@ internal fun PainAndGain.ensureGoalField(fighters: List<Creep>, combatEnemies: L
     return goalField
 }
 
+/**
+ * ЗАЖАТ ЛИ ОН (v264): враг [foe] не может за ход уйти от клетки [p] дальше чем на одну — устал, или каждая его
+ * соседняя клетка в двух и дальше от p закрыта: край карты, стена, наш крип по плану ([ours]) или его уставший крип
+ * ([hisStuck]). Его ПОДВИЖНЫЙ крип клетку не закрывает: его линия отступает целиком, задний шаг освобождает клетку
+ * переднему, и счёт «занятое — закрыто» записал бы зажатым того, кто уходит. Наш мили, вставший в p, бьёт его
+ * следующим тиком наверняка: удар сверяется с позицией на начало тика.
+ */
+internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int>): Boolean {
+    if (foe.fatigue > 0) return true
+    for (dx in -1..1) for (dy in -1..1) {
+        if (dx == 0 && dy == 0) continue
+        val x = foe.x + dx
+        val y = foe.y + dy
+        if (maxOf(abs(x - p.x), abs(y - p.y)) <= 1) continue
+        if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
+        val key = x * 100 + y
+        if (key in ours || key in hisStuck) continue
+        return false
+    }
+    return true
+}
+
 internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
                          ourFlagCells: Set<Int> = emptySet()) {
@@ -900,6 +922,39 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         if (c.id in out) continue
         place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) * 10 +
             maxOf(abs(p.x - c.x), abs(p.y - c.y)).toDouble() })
+    }
+    // ЗАЖАТОГО БЬЁМ (v264, разбор стены лечения серии v263). Против стоячей линии с лекарями наш урон возвращается
+    // лечением на 81–99 %, и пересиливает его одно — удар нашего мили: 192–240 за удар против 71–91 его лечения на
+    // цели в тик; из девяти его погибших боевых восемь умерли с уроном нашего мили. Но его линия отступает на нашей
+    // скорости, и погоня касания не даёт: со двух клеток вплотную к следующему тику 3–20 %, а нырок к лекарю — 550
+    // подходов без единой смерти и без просадки его лечения. Касание дают моменты, когда уйти ему НЕКУДА (см.
+    // pinnedAt): тогда в следующем тике он в досягаемости клетки удара всегда — 71 из 71 по реплеям, — а мы вставали
+    // туда в 16–57 %, потому что оценка у его строя весит опасность клетки выше удара. Проход идёт ПОСЛЕДНИМ: только
+    // здесь план остальных окончателен, и «наш крип закрывает ему отход» значит его ИТОГОВУЮ клетку, а не нынешнюю,
+    // которую он вот-вот освободит (первая редакция шла до стрелков и лекарей и ставила мили к «зажатому», которого
+    // их же шаг отпускал). Мили, которого оценка уже поставила вплотную к зажатому, не трогается; остальной получает
+    // клетку удара, если переживёт её с порогом своего замысла, иначе прежний приказ. Порог — тот же ttlMin, что у
+    // оценки, новых чисел нет; кайт свой запрет сохраняет — к его мили ближе двух не подходит
+    passTag = "pinned"
+    val pinFoes = combatEnemies.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } }
+    val hisStuck = HashSet<Int>()
+    for (e in combatEnemies) if (e.fatigue > 0) hisStuck.add(e.x * 100 + e.y)
+    for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
+        val near = pinFoes.filter { getRange(c, it) <= COMMAND_REACH + 1 }
+        if (near.isEmpty()) continue
+        val ours = HashSet<Int>()
+        for (f in army) if (f.hits > 0 && f.id != c.id) { val q = cellOf(f); ours.add(q.x * 100 + q.y) }
+        fun strikes(p: Position) = near.any { e -> getRange(p, e) <= 1 && pinnedAt(p, e, ours, hisStuck) }
+        val cur = out[c.id]
+        if (cur != null && strikes(cur)) continue
+        val ttlMin = weightsOf(intentOf(c)).third
+        val kite = intentOf(c) == Intent.KITE
+        if (cur != null) { out.remove(c.id); taken.remove(cur.x * 100 + cur.y) }
+        val ok = place(c, { p ->
+            (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                strikes(p) && ttlAt(c, p.x * 100 + p.y, p) >= ttlMin
+        }, { p -> danOf(c, p.x * 100 + p.y) })
+        if (!ok && cur != null) { out[c.id] = cur; taken.add(cur.x * 100 + cur.y) }
     }
     // ПРИБОР СОГЛАСОВАННОСТИ (v200): меряется РЕЗУЛЬТАТ раздачи, а не факт вызова правила — сколько стрелков
     // получили клетку с целью в дальности, сколько мили остались в дальности лечения, сколько лекарей стоят за

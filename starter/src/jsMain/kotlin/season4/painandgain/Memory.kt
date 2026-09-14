@@ -80,6 +80,9 @@ internal object Memory {
     val packTicksCache = HashMap<Int, Pair<IntArray, Map<String, Int>>>()   // клетка флага → (поле, id врага → тики пути), см. packAt
     val cmdDetach = HashSet<String>()      // кого командир отправил за флагами (v160, режимы RACE и MARCH)
     val orderPrev = HashMap<String, Position>()   // приказы прошлого тика — для проверки исполнения (v167)
+    /** Мили -> зажатый враг, к которому его поставил приказ (v264): на следующем тике прибор pin= сверяет, стоял ли
+     *  зажатый вплотную, то есть состоялся ли удар. */
+    val pinWatch = HashMap<String, String>()
     val lastPlan = HashMap<String, Int>()   // крип → клетка прошлого плана (см. planFight: память расстановки)
     /** Контакт и численность армии на прошлом тике — события для стратега (v242). */
     var contactPrev = false
