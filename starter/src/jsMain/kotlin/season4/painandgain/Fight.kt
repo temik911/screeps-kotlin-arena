@@ -117,15 +117,38 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
             if (victimSaveable) hwallHealsAll++
             val wallTarget = if (victimSaveable) victimNow?.takeIf { v -> !v.spawning && creep.getRangeTo(v) <= HEAL_RANGE } else null
             if (wallTarget != null) {
-                hwallHeals++
                 if (creep.getRangeTo(wallTarget) <= 1) {
+                    hwallHeals++
                     Executor.heal(creep, wallTarget)
                     book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
-                } else {
-                    Executor.rangedHeal(creep, wallTarget)
-                    book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
+                    continue
                 }
+                // ДАЛЬНЕЕ ЛЕЧЕНИЕ ЖЕРТВЫ УСТУПАЕТ ЛЕЧЕНИЮ ВПЛОТНУЮ, КОТОРОЕ СТОИТ БОЛЬШЕ (v270, наблюдение оператора: «хиллеры
+                // очень часто хилят рэнжхиллом вместо контактного»). Стена ставила жертву раньше всякого соседа, и лекарь,
+                // стоящий вплотную к раненому своему, лечил её из трёх клеток: по реплеям серии v263 и рук v266–v267 в окнах
+                // стены раненый сосед пропускается в 97–100 % дальних лечений, а жертва без этого лечения не умирала — в тот
+                // же тик в 0,0–0,1 %, за пять тиков в 0,1–0,3 %. Потеря — 2,5–3,1 доставленного лечения на лекаре-тик, 9–11 %
+                // всего нашего (оракул «вылечи соседа с наибольшим min(12·H, дефицит + урон тика), иначе дальним»).
+                // Выбор теперь по одной мере — доставленному: min(лечение с дистанции, нужда цели), где нужда та же, что у
+                // всего лечения (дефицит + ожидаемый урон − уже назначенное); жертва вплотную лечится как прежде. Сосед —
+                // только раненый: снять фильтр v183 и лечить полного под огнём по оценке бота — ноль выигрыша при 10–16 %
+                // лечений впустую (тот же разбор)
+                val nearPower = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble())
+                val farPower = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble())
+                val mate = candidates.filter { it.id != wallTarget.id && creep.getRangeTo(it) <= 1 && it.hitsMax - it.hits > 0 }
+                    .maxByOrNull { minOf(nearPower, need(it).toDouble()) }
+                hwallFar++
+                if (mate != null && minOf(nearPower, need(mate).toDouble()) > minOf(farPower, need(wallTarget).toDouble())) {
+                    hwallYield++
+                    Executor.heal(creep, mate)
+                    book(mate, nearPower.toInt())
+                    shoot(creep, enemyCreeps, focusTarget, focusOrder)
+                    continue
+                }
+                hwallHeals++
+                Executor.rangedHeal(creep, wallTarget)
+                book(wallTarget, farPower.toInt())
                 continue
             }
             // ...и СОСЕДСТВО НЕ ВАЖНЕЕ РАНЫ (v183, оператор: «лекари лечат себя фулловыми, хотя могли бы лечить
@@ -730,11 +753,11 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // полученный урон», и клетка под огнём в 500 ради 72 лечения проигрывает сама, без запрета
         val deliver = InfluenceMap.healOf(c)
         val raw = InfluenceMap.attHealAt(key)
-        // ...И ПРИТЯЖЕНИЕ — ЭТО ТО, ЧТО ОН ДОСТАВИТ ИЗ ЭТОЙ КЛЕТКИ (v224, см. USE_HEAL_PULL_DELIVERED): лучший
-        // подопечный, а не насыщенная сумма — у суммы при нужде в тысячи нет разницы между «вплотную» и «в двух»
+        // Две замены этого притяжения ОТВЕРГНУТЫ живьём (v224, по 0-4): «доставленное из клетки лечение лучшему
+        // подопечному» (USE_HEAL_PULL_DELIVERED) и «без слагаемого влияния» (USE_HEALER_NO_LINE). Действуют насыщенная сумма
+        // здесь и влияние W_LINE ниже; зонд `hpick` называет влияние решающим (разбор v270: −5…−7 в пользу выбранной клетки
+        // против свободной клетки вплотную к бойцу первой линии). Комментарий до v270 описывал обе редакции как действующие
         val pull = if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
-        // ...И БЕЗ СЛАГАЕМОГО ВЛИЯНИЯ (v224, третья редакция, см. USE_HEALER_NO_LINE): у лекаря оно тянет туда, где
-        // наш залп гуще, — в глубину строя, от бойца первой линии; зонд назвал его единственным решающим
         // ...И ПРИ УДЕРЖИМОЙ ЖЕРТВЕ ЦЕНА КЛЕТКИ — ДОСТАВЛЕННОЕ В НЕЁ ЛЕЧЕНИЕ (v228, см. USE_HEAL_WALL): вплотную полное, в трёх
         // треть, без насыщенной суммы и без слагаемого влияния — клетка вплотную к жертве получает положительную цену, которой
         // обе редакции v224 ей дать не смогли (72 против 24)
