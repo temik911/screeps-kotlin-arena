@@ -535,8 +535,28 @@ internal fun PainAndGain.clusterCentroid(cs: List<Creep>): Position? {
 
 internal fun PainAndGain.centroidOf(points: List<Position>): Position? {
     if (points.isEmpty()) return null
-    return InfluenceMap.cell(points.sumOf { it.x } / points.size, points.sumOf { it.y } / points.size)
+    return InfluenceMap.cell(roundToAxis(points.sumOf { it.x }, points.size), roundToAxis(points.sumOf { it.y }, points.size))
 }
+
+/** СРЕДНЕЕ КЛЕТОК БЕЗ ПЕРЕКОСА К УГЛУ (v285). Центр делился нацело, то есть округлялся к (0,0): у армии из (12,9) — назад,
+ *  к её углу, у армии из (85,88) — вперёд, к центру карты; и «дом» второй стороны выходил (85,88), хотя карта симметрична
+ *  как x → 98 − x (флаги D5 (49,49), R3 (13,49)/(85,49), A3 (31,67)/(67,31), H4 (8,90)/(90,8); остов стен — тоже, разбор
+ *  399 матчей) и партнёр (12,9) — (86,89). Разбор углов (v283, 24 игры; 150 игр против ●ω<♥♪#6) показал, что его бот
+ *  из обоих углов одинаков, а наш — нет: из (12,9) пост и точки уклонения смещены к нашему краю, армия до контакта не
+ *  уклоняется ни разу (0 из 5 против 10 из 11) и сама идёт на него; счёт углов 2-71 против 13-62. Округление — к
+ *  ближайшему, половина — к оси карты, то есть одинаково из обоих углов. */
+internal fun roundToAxis(sum: Int, n: Int): Int {
+    val lo = sum / n                        // координаты неотрицательны: деление — это пол
+    val twice = 2 * (sum - lo * n)          // удвоенный остаток: > n — выше половины, == n — ровно половина
+    return when {
+        twice > n -> lo + 1
+        twice < n -> lo
+        else -> if (lo < MAP_AXIS) lo + 1 else lo
+    }
+}
+
+/** Ось точечной симметрии карты Pain and Gain (x → 2·MAP_AXIS − x): центральный флаг D5 стоит на ней. */
+internal const val MAP_AXIS = 49
 
 /** МЕРЫ АРМИИ ЗА ТИК (v256, этап 10; сегмент runArmy): бойцы и его вооружённые, сомкнутость, охота (huntable), масса и контакт, истории дистанций и центров, простой и бесплодная охота, отход по размену, признак «слабее», выполнимость отхода. Перенесено дословно. */
 internal class ArmyMeasuresIn(

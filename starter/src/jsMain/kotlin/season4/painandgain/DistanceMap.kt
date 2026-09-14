@@ -93,20 +93,30 @@ object DistanceMap {
     /** Точка самого быстрого пути между стартами, куда мы приходим на [lead] тиков раньше его (v283 — середина при
      *  lead = 0, v284 — с запасом): наименьшее отклонение разницы путей от −lead, при равном — наименьшая сумма путей.
      *  Поля те же, что у [inOurHalf]; пересчёт — вместе с ними. */
-    fun midpoint(lead: Int = 0): Position? {
+    // ...и НИЧЬЯ — В СВОЕЙ СИСТЕМЕ КООРДИНАТ (v285): первой по индексу клеткой из равных (меньший x) пост v283 выходил
+    // (45,49) из обоих углов — из (12,9) за серединой, из (85,88) перед ней. Среди равных по отклонению и сумме берётся
+    // клетка, куда мы приходим раньше, затем ближайшая к нашему дому — одинаково из обоих углов
+    fun midpoint(lead: Int = 0, home: Position? = null): Position? {
         val my = distFromMy ?: return null
         val enemy = distFromEnemy ?: return null
         if (midSignature == rampartSignature && midLead == lead) return midCache
         var best = -1
         var bestGap = Int.MAX_VALUE
         var bestSum = Int.MAX_VALUE
+        var bestA = Int.MAX_VALUE
+        var bestHome = Int.MAX_VALUE
         for (i in my.indices) {
             val a = my[i]
             val b = enemy[i]
             if (a < 0 || b < 0) continue
             val gap = abs(a - b + lead)
             val sum = a + b
-            if (gap < bestGap || (gap == bestGap && sum < bestSum)) { best = i; bestGap = gap; bestSum = sum }
+            val hx = i / FIELD - (home?.x ?: 0)
+            val hy = i % FIELD - (home?.y ?: 0)
+            val toHome = hx * hx + hy * hy
+            if (gap < bestGap || (gap == bestGap && (sum < bestSum || (sum == bestSum && (a < bestA || (a == bestA && toHome < bestHome)))))) {
+                best = i; bestGap = gap; bestSum = sum; bestA = a; bestHome = toHome
+            }
         }
         midSignature = rampartSignature
         midLead = lead
