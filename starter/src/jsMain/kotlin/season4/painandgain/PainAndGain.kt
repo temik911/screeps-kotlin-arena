@@ -633,6 +633,7 @@ object PainAndGain {
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     internal var fightOnNow = false
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
+    internal var coreContactNow = false                    // v299: контакт массы армии (тот, что входит в fightOnNow)
     internal var groupDmgWindow = 0
     /** Пара «крипов отозвано в кулак / тиков боя» (v215). */
     internal var recalled = 0

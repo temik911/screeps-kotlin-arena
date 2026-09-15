@@ -110,7 +110,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     for (s in runners) heldFlag(ctx, s)?.let { holds[s.id] = it }
     // ...И ОХРАНА ПРИ НЁМ (v298, см. GROUP_SAFE_DMG): второй из пары стоит рядом с флагом, который взял первый
     val guards = HashMap<String, FlagInfo>()
-    for (s in runners) if (s.id !in holds && hasWeapon(s)) guardFlag(ctx, s)?.let { guards[s.id] = it }
+    for (s in runners) if (s.id !in holds && hasWeapon(s) && groupSafe && s.id in Memory.cmdDetach) guardFlag(ctx, s)?.let { guards[s.id] = it }
     // ...и пара, посланная командиром, идёт к своему флагу вместе, а не расходится паросочетанием по одному
     val orders = HashMap<String, FlagInfo>()
     if (groupSafe) for (s in runners) if (s.id !in holds && s.id !in guards && s.id in Memory.cmdDetach)

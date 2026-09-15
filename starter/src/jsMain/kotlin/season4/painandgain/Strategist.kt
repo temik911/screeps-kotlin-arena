@@ -930,7 +930,9 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
     // перестали стрелять, и командир раздавал задания на захват посреди рубки. Держателей, которых бой вне контакта
     // ядра оставил (см. armyMeasures), он не отпускает, а оставляет
-    if (fightOnNow && holding.isEmpty()) return
+    // ...и в режиме пар (v299) бой вне контакта ядра выпуска не останавливает — см. отзыв в armyMeasures
+    val fightBlocks = fightOnNow && !(groupSafe && !coreContactNow)
+    if (fightBlocks && holding.isEmpty()) return
     // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
     // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
     // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
@@ -964,7 +966,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         val f = heldFlag(ctx, h) ?: guardFlag(ctx, h) ?: continue
         Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace++
     }
-    if (fightOnNow) return
+    if (fightBlocks) return
     if (budget <= 0) return
     // флаги — от ближайшего к армии; занятые нами пропускаем
     // ...и только те, которые БРАТЬ МОЖНО: флаг вешает дебафф на ВЛАДЕЛЬЦА (−20 % удару, −25 % лечению, +10 %
@@ -977,6 +979,22 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) && !(safe && it.occupant != null) }
 
         .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
+    // ...И ОТРЯД НА ПУТИ К ФЛАГУ СОХРАНЯЕТ ЗАДАНИЕ (v299): задание раздавалось заново каждый тик, а флаг, к которому уже
+    // идёт бегун, командир не дублирует, — своя же пара с прошлого тика закрывала ему этот флаг, и её распускали через
+    // тик: против けろびー#19 армия мерцала 12↔6 каждые десять тиков, охрана у взятого флага стояла 0–12 тиков за матч
+    if (safe) {
+        val outIds = alreadyOut.mapTo(HashSet()) { it.id }
+        val enRoute = free.filter { it.id in outIds }.groupBy { Memory.runnerFlag[it.id] }
+        for ((fid, members) in enRoute) {
+            val f = wanted.firstOrNull { it.id == fid } ?: continue
+            if (budget < members.size) continue
+            val without = free.filter { c -> members.none { it.id == c.id } }
+            if (!coreHolds(without)) break
+            for (c in members) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c) }
+            budget -= members.size
+            routeKept += members.size
+        }
+    }
     for (f in wanted) {
         if (budget <= 0) break
         // ...и размер горстки задаёт НЕ флаг, а его армия: пока она цела и на ходу, одиночку она перехватывает и
