@@ -61,6 +61,11 @@ internal fun PainAndGain.wantsRunner(f: FlagInfo): Boolean {
     return !f.ours || occ == null
 }
 
+/** Флаг, который крип держит (v297, см. HOLD_WATCH): наш флаг под ним, пока его крип не дальше HOLD_WATCH от флага. */
+internal fun PainAndGain.heldFlag(ctx: Ctx, c: Creep): FlagInfo? =
+    ctx.flags.firstOrNull { it.ours && it.pos.x == c.x && it.pos.y == c.y }
+        ?.takeIf { f -> ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+
 internal fun PainAndGain.runRunners(ctx: Ctx) {
     val runners = ctx.runners
     Memory.idleRunnerIds.clear()
@@ -88,10 +93,16 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     // следующим НЕ НАШИМ; сидеть на своём — когда чужих свободных на всех не хватает
     class Cand(val runner: Creep, val flag: FlagInfo, val value: Double)
     val cands = ArrayList<Cand>()
+    // ДЕРЖАТЕЛЬ ОСТАЁТСЯ (v297, см. HOLD_WATCH): бегун на нашем флаге при его крипе рядом в паросочетании не участвует —
+    // флаг за ним и закрыт для других. Прежде сидеть на своём стоило половину его очков, любой чужой флаг перевешивал, и
+    // скаут уходил, а его крип вставал на клетку через 11–15 тиков
+    val holds = HashMap<String, FlagInfo>()
+    for (s in runners) heldFlag(ctx, s)?.let { holds[s.id] = it }
     // страховка CPU (v131): тик уже дороже CPU_GUARD_MS — бегуны оставляют прежние флаги, кандидаты не пересчитываются
     val cpuGuard =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
     if (cpuGuard && DEBUG_LOG) println("cpu t=${getTicks()} guard: runners keep their flags (${(cpuMs() * 10).toInt() / 10.0}ms)")
     if (!cpuGuard) for (s in runners) {
+        if (s.id in holds) continue
         val currentId = Memory.runnerFlag[s.id]
         val armedRunner = hasWeapon(s)
         for (f in ctx.flags) {
@@ -139,6 +150,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     cands.sortByDescending { it.value }
     val assigned = HashSet<String>()
     val taken = HashSet<String>()
+    for ((id, f) in holds) { assigned.add(id); taken.add(f.id); Memory.runnerFlag[id] = f.id; holdPinned++ }
     if (cpuGuard) for (s in runners) Memory.runnerFlag[s.id]?.let { id -> if (flagById[id] != null) { assigned.add(s.id); taken.add(id) } }
     for (c in cands) {
         if (c.runner.id in assigned || c.flag.id in taken) continue
@@ -177,7 +189,16 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         // захватчик без замены: от врага «с боем» ближе SCOUT_FLEE_TRIGGER — прочь (пустой MOVE ходит клетку за тик и
         // по болоту, где стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
         val threats = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER && threatening(it, ctx.enemyCreeps) }
-        if (canMove(s) && (underFire || threats.isNotEmpty())) {
+        // ...а ВООРУЖЁННЫЙ бегун бежит от силы, а не от всякого (v297, см. HOLD_WATCH): его одиночный стрелок или мили в
+        // восьми клетках снимал нашего бойца с флага, хотя тот бьёт его один на один; уходит, когда его стволы рядом
+        // перевешивают наших в досягаемости
+        val outgunned = !hasWeapon(s) || run {
+            val foes = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER }
+            val mates = (ctx.army + runners).filter { hasWeapon(it) && getRange(s, it) <= RANGED_RANGE }
+            foes.isNotEmpty() && enemyPowerOf(foes, mates) >= ourPowerOf(mates, foes)
+        }
+        if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay++
+        if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned) {
             // поиск пути бегства может не дать шага (скаут в матче 3 «бежал» на месте три тика и погиб) —
             // тогда жадно: соседняя клетка подальше от врагов и под меньшим огнём; в опасности шаг делается ВСЕГДА,
             // и на не лучшую клетку тоже: скаут у стены (4,40) «бежал» стоя тридцать тиков рядом с боем и погиб

@@ -835,11 +835,18 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // ОТЗЫВ (v215, см. USE_NO_SPLIT_IN_FIGHT): едва бой начался, отпущенные возвращаются в кулак. Очистка стоит
     // ЗДЕСЬ, а не внутри `commandRace`: выйдя из режима гонки, командир эту функцию не зовёт вовсе, и `cmdDetach`
     // оставался с прошлого тика — отпущенные не возвращались никогда
+    // ...КРОМЕ ДЕРЖАТЕЛЕЙ, пока ядро не в контакте (v297, см. HOLD_WATCH): «бой» — это и выстрел любого нашего, и урон по
+    // любому нашему, и одиночный стрелок фермера, подстреливший держателя на краю карты, снимал с флагов всех. В контакте
+    // ядра в кулак возвращаются все, как прежде
     if (fightOnNow) {
         fightTicksNow++
-        recalled += Memory.cmdDetach.size + Memory.detachedIds.size
-        Memory.cmdDetach.clear()
-        Memory.detachedIds.clear()
+        val keep = if (contact) emptySet() else ctx.runners.filter { heldFlag(ctx, it) != null }.mapTo(HashSet()) { it.id }
+        val before = Memory.cmdDetach.size + Memory.detachedIds.size
+        Memory.cmdDetach.retainAll(keep)
+        Memory.detachedIds.retainAll(keep)
+        val kept = Memory.cmdDetach.size + Memory.detachedIds.size
+        holdKeptFight += kept
+        recalled += before - kept
     }
     val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
     val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4

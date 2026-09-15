@@ -914,10 +914,16 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // ...и состав берётся ДО очистки (v215, см. USE_RACE_COUNTS_RELEASED): очистка стояла строкой выше чтения
     val alreadyOut = ctx.runners.filter { it.id in Memory.cmdDetach }
     Memory.cmdDetach.clear()
+    // ДЕРЖАТЕЛИ ОСТАЮТСЯ (v297, см. HOLD_WATCH): отпущенный, стоящий на взятом флаге при его крипе рядом, сохраняет
+    // задание, пока хватает бюджета и ядро без него держит паритет. Задания раздавались только на ЧУЖИЕ флаги, и
+    // взявший флаг на следующем тике уходил за другим или в армию — против けろびー#19 130 из 194 сходов вооружённых
+    val holding = alreadyOut.filter { canMove(it) && hasWeapon(it) && heldFlag(ctx, it) != null }
+        .sortedByDescending { heldFlag(ctx, it)?.score ?: 0 }
     // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
     // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
-    // перестали стрелять, и командир раздавал задания на захват посреди рубки
-    if (fightOnNow) return
+    // перестали стрелять, и командир раздавал задания на захват посреди рубки. Держателей, которых бой вне контакта
+    // ядра оставил (см. armyMeasures), он не отпускает, а оставляет
+    if (fightOnNow && holding.isEmpty()) return
     // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
     // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
     // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
@@ -941,11 +947,18 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         val hisRanged = near.count { hasRanged(it) }
         minOf(free.count { hasMelee(it) && !hasRanged(it) }, hisMelee) + minOf(free.count { hasRanged(it) }, hisRanged)
     }
-    symCore += core
-    symFree += free.size
+    if (!fightOnNow) { symCore += core; symFree += free.size }
     var budget = free.size - core
-    budgetSum += maxOf(0, budget)
-    budgetTicks++
+    if (!fightOnNow) { budgetSum += maxOf(0, budget); budgetTicks++ }
+    for (h in holding) {
+        if (budget <= 0) break
+        val without = free.filter { it.id != h.id }
+        if (without.none { hasWeapon(it) }) break
+        if (ourPowerOf(without, armedEnemies) < enemyPowerOf(armedEnemies, without) * PARITY_FLOOR) break
+        val f = heldFlag(ctx, h) ?: continue
+        Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace++
+    }
+    if (fightOnNow) return
     if (budget <= 0) return
     // флаги — от ближайшего к армии; занятые нами пропускаем
     // ...и только те, которые БРАТЬ МОЖНО: флаг вешает дебафф на ВЛАДЕЛЬЦА (−20 % удару, −25 % лечению, +10 %
@@ -1737,7 +1750,9 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         val short = core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * theirsDown * floorNow
         coreShortTicks = if (short) coreShortTicks + 1 else 0
         while (Memory.detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * theirsDown * floorNow) {
-            val back = ctx.runners.filter { it.id in Memory.detachedIds }.maxByOrNull { ourPowerOf(listOf(it), emptyList()) } ?: break
+            // держатель флага (v297, см. HOLD_WATCH) возвращается последним
+            val back = ctx.runners.filter { it.id in Memory.detachedIds }
+                .maxWithOrNull(compareBy({ heldFlag(ctx, it) == null }, { ourPowerOf(listOf(it), emptyList()) })) ?: break
             Memory.detachedIds.remove(back.id); core = core + back; recalled++
         }
         if (recalled > 0) { detachRecallTick = now; coreShortTicks = 0 }   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
@@ -1763,8 +1778,10 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         val pool = if ((viaDryHunt || viaRace || meleeIdle)) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
             else armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
         var remaining = army.filter { it.id !in Memory.detachedIds }
+        // держатели (v297) стоят на своих флагах, которые в `unmanned` уже не считаются: выпуск меряется без них
+        val holdingDet = ctx.runners.count { it.id in Memory.detachedIds && heldFlag(ctx, it) != null }
         for (c in pool) {
-            if (Memory.detachedIds.size >= unmanned) break
+            if (Memory.detachedIds.size - holdingDet >= unmanned) break
             if (viaRace && Memory.detachedIds.size >= raceSlots) break
             val without = remaining.filter { it.id != c.id }
 
