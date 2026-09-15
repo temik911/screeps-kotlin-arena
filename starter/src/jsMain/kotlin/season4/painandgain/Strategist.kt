@@ -1711,12 +1711,23 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // (PARITY_FLOOR_LOST, v88): это исключение про захват стороной, а не про раскол ядра — с 0,75 для ядра пул против
     // пар spread отпускал лишних, и spread из 6/6 стал 2/6 (m28 24322:19608 → 14960:24320); при паритете выпуска с
     // дебаффом цели просто нет, а скауты берут при 0,75 как раньше
+    // ...И ОТЗЫВ — ПО ТЕМ, КТО ДОЙДЁТ ДО ЯДРА (v296). Опора отзыва бралась по всей армии, кроме россыпи на выпуске и гонки,
+    // и против фермера, распознанного тишиной боя или неподвижным мили, ядро без бегунов сравнивалось с его армией,
+    // разбросанной по пяти флагам. Разбор рейтинговой серии v295 (Opus): против けろびー#17/#18 и ricardo18informatica2020#12
+    // — все четыре поражения по очкам, 6–9 тыс. против 24 тыс. при целых армиях; из 19 отзывов бегунов 14 сработали по
+    // «ядро слабее 0,97/1,3 его армии», хотя в 8 клетках от ядра не было ни одного его крипа. Отзыв теперь меряется мерой
+    // боя (`fightPackIds`, кто успевает прийти к нашей массе; та же локализация, что у ворот захвата с v214; пусто — значит
+    // пусто, v216). Выпуск остаётся по всей армии: первая редакция перевела на меру боя и его, и у рассыпанного соперника
+    // мера прыгала от тика к тику — выпуск и отзыв по кругу (123 строки detach против 19, match28/30:scatter по очкам).
+    // Качель рождается, когда выпуск мягче отзыва; здесь наоборот — отряжаем по-прежнему осторожно, зовём назад только
+    // при настоящей угрозе ядру
+    val packRef = combatEnemies.filter { it.id in fightPackIds }
     val coreRef = if (viaRace) largestMembers else combatEnemies
     val coreFloor = if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR
     // при россыпи (v97, USE_SCATTER_RECALL_REF) опора ОТЗЫВА — его крупнейшая группа при PUSH_RATIO; выпуск — как был
     if (Memory.detachedIds.isEmpty()) scatteredAtRelease = scattered   // без отряда ярлык свежий; с отрядом — как при выпуске (v117)
     val recallGroup = viaRace || ((scatteredAtRelease))
-    val recallRef = if (recallGroup) largestMembers else combatEnemies
+    val recallRef = if (recallGroup) largestMembers else packRef
     val recallFloor = if (viaDryHunt || recallGroup) PUSH_RATIO else PARITY_FLOOR
     // одна мера ядра (v94): порог держится каждый тик — просело, сильнейший отделённый возвращается
     if (farmer && Memory.detachedIds.isNotEmpty()) {
