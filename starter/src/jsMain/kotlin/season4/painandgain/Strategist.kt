@@ -924,7 +924,14 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // Прежде ядро без отпущенных сравнивалось со всей его армией, разбросанной группами по 1–4 по пяти флагам, и при
     // целых армиях 14 на 14 выпуск не случался: против けろびー#19 226 назначений за 1040 тиков гонки при бюджете 5,6
     val safe = groupSafe
-    fun coreHolds(without: List<Creep>) = if (safe) without.count { hasWeapon(it) } >= 2
+    // ...и мера ядра в режиме пар — его КРУПНЕЙШАЯ ГРУППА, а не «двое с оружием» (v301): доктрина паритета остаётся, меняется
+    // только опора — та же локализация, что у ворот захвата с v214 и у отзыва с v296. «Двое с оружием» (первая редакция)
+    // отпускали столько, что ядро переставало брать флаг, на котором сидит его крип: стендовый фермер scatter держал
+    // оба H4 до конца (match33/34:scatter 21 199:24 238 и 20 803:24 322 — FAIL гейта), тогда как целая армия их отбивала
+    val seedNear = armedEnemies.maxByOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } }
+    val largestNear = if (seedNear == null) armedEnemies else armedEnemies.filter { getRange(seedNear, it) <= ENGAGE_RANGE }
+    fun coreHolds(without: List<Creep>) = if (safe) without.count { hasWeapon(it) } >= 2 &&
+            ourPowerOf(without, largestNear) >= enemyPowerOf(largestNear, without) * PARITY_FLOOR
         else without.any { hasWeapon(it) } && ourPowerOf(without, armedEnemies) >= enemyPowerOf(armedEnemies, without) * PARITY_FLOOR
     // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
     // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
