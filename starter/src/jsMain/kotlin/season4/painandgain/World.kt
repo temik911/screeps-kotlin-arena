@@ -822,7 +822,6 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
     // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
     fightOnNow = contact || exchangeRecent
-    coreContactNow = contact
     // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
     // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
     if (fightOnNow) { warmFightAll++; if (!exchangeLive) warmFight++ }
@@ -841,10 +840,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // ядра в кулак возвращаются все, как прежде
     if (fightOnNow) {
         fightTicksNow++
-        // ...а в режиме пар (v299, см. GROUP_SAFE_DMG) — и отряды командира на пути к флагу: «бой» здесь — выстрел нашей
-        // армии по его уходящим или его стрелок по нашему одиночке, а группу он не бьёт
-        val keep = if (contact) emptySet() else ctx.runners.filter { (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null ||
-            (groupSafe && it.id in Memory.cmdDetach) }.mapTo(HashSet()) { it.id }
+        val keep = if (contact) emptySet() else ctx.runners.filter { (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null }.mapTo(HashSet()) { it.id }
         val before = Memory.cmdDetach.size + Memory.detachedIds.size
         Memory.cmdDetach.retainAll(keep)
         Memory.detachedIds.retainAll(keep)
