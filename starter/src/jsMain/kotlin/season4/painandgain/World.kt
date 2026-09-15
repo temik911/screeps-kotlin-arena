@@ -653,16 +653,6 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     val exchangeLive = ourLostWindow >= STALL_DAMAGE || hisLostWindow >= STALL_DAMAGE
     exchangeLiveNow = exchangeLive
     if (exchangeLive && firstFightTick == 0) firstFightTick = getTicks()
-    // ДЕБЮТ КОНТАКТА (v287): от первого размена до первой смерти боевого крипа любой стороны — по телу, а не по живым
-    // частям (раздетый жив), — и не дольше STALL_TICKS (окно размена): см. проход мили в Fight
-    fun combatBody(c: Creep) = c.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
-    val oursNow = army.count { combatBody(it) }
-    val hisNow = getObjectsByPrototype(Creep::class).count { !it.my && it.exists && combatBody(it) }
-    if (oursNow > combatPeakOurs) combatPeakOurs = oursNow
-    if (hisNow > combatPeakHis) combatPeakHis = hisNow
-    if (firstDeathTick == 0 && firstFightTick != 0 && (oursNow < combatPeakOurs || hisNow < combatPeakHis)) firstDeathTick = getTicks()
-    openingNow = firstFightTick != 0 && firstDeathTick == 0 && getTicks() - firstFightTick <= STALL_TICKS
-    if (openingNow) openTicks++
     // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
     val exchangePaying = Memory.ourHitsHist.size < STALL_TICKS ||
         (Memory.enemyHitsHist.first() - enemyHitsNow) >= (Memory.ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
