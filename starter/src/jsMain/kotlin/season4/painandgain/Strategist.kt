@@ -971,7 +971,10 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // получаемому урону за штуку), поэтому доктрина паритета держит захват в узде через captureAllowed, и гонка
     // мимо неё — не гонка, а разоружение. Первая редакция это правило игнорировала, и гейт поймал: camp
     // 7 911:17 364, scatter 15 273:24 303 против 22 810:19 091 и 24 268:17 098 без режима
-    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) }
+    // ...а пара (v298) — только на свободную клетку: флаг, на котором сидит его крип, берёт армия силой. Первая редакция
+    // слала пары и на занятые — стендовый фермер scatter держит на каждом своём флаге по крипу, пары весь матч ходили к ним и
+    // бежали, ядро из шести флагов не брало, и match28/19:scatter проиграны по очкам (18 873:24 312, 14 925:24 322)
+    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) && !(safe && it.occupant != null) }
 
         .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
     for (f in wanted) {

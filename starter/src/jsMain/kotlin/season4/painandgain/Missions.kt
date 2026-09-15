@@ -114,7 +114,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     // ...и пара, посланная командиром, идёт к своему флагу вместе, а не расходится паросочетанием по одному
     val orders = HashMap<String, FlagInfo>()
     if (groupSafe) for (s in runners) if (s.id !in holds && s.id !in guards && s.id in Memory.cmdDetach)
-        Memory.runnerFlag[s.id]?.let { id -> flagById[id] }?.let { orders[s.id] = it }
+        Memory.runnerFlag[s.id]?.let { id -> flagById[id] }?.takeIf { it.occupant == null || it.occupant?.my == true }?.let { orders[s.id] = it }
     // страховка CPU (v131): тик уже дороже CPU_GUARD_MS — бегуны оставляют прежние флаги, кандидаты не пересчитываются
     val cpuGuard =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
     if (cpuGuard && DEBUG_LOG) println("cpu t=${getTicks()} guard: runners keep their flags (${(cpuMs() * 10).toInt() / 10.0}ms)")
