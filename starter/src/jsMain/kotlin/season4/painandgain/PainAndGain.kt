@@ -507,6 +507,7 @@ object PainAndGain {
         ))
         cpuMark("block")
         rotateByFocus(army, combatEnemies)
+        stepOutWounded(army, reachCells, enemyRetreating)
         val armyCommandSeg = armyCommand(ctx, ArmyCommandIn(
             army = army,
             enemyCreeps = enemyCreeps,

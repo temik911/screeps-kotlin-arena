@@ -641,7 +641,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             army.none { it.id != c.id && hasHeal(it) && getRange(c, it) <= HEAL_RANGE }
         // ...и уходящий по его фокусу (v275, см. rotateByFocus): та же самая безопасная клетка, и среди равных — ближе к
         // нашему лекарю: встреча раненого с лекарём вне его досягаемости (у него — 3 → 1 клетка за пять тиков)
-        val rotate = c.id in Memory.rotByFocus
+        val rotate = c.id in Memory.rotByFocus || c.id in Memory.stepOutIds
         if (!hurtBadly && !alone && !rotate) continue
         val medics = if (rotate) army.filter { it.id != c.id && hasHeal(it) && !hasWeapon(it) } else emptyList()
         place(c, { true }, rescue = true, rank = { p -> danOf(c, p.x * 100 + p.y) * 100 -
