@@ -241,46 +241,6 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     rotfTicks += Memory.rotByFocus.size
 }
 
-/**
- * РАНЕНЫЙ ВЫХОДИТ ИЗ ЕГО ЗОНЫ И НЕ ВОЗВРАЩАЕТСЯ, ПОКА НЕ ВЫЛЕЧЕН (v285) — его же приём. Разбор 87 игр против ●ω<♥♪#6
- * (первые 100 тиков контакта, эпизоды «потерял три части и больше, в его досягаемости»): за три тика его раненый отходит
- * сам на +1,84 клетки, наш — на +0,42 (p < 0,001); свободная клетка дальше от его стрелков и нулевая усталость были у
- * наших в 81 % тиков, а отошли они в 42 %, его — в 70 %. Его склонность уходить растёт с уроном — у мили с 28 % до 68 %
- * к трём потерянным частям, у стрелков с 55 % до 80 % уже при одной, — у наших от урона не зависит (стрелки 43–52 %,
- * мили 26–45 %). Наши лекари стоят в его зоне 8,4–8,9 % тиков, его — 2,7–4,8 %. Отсюда и пороги, их никто не называл
- * числом: стрелок и лекарь выходят с первой потерянной части, мили — со второй (восемь ATTACK впереди тела), зона —
- * клетки его досягаемости (`reachCells`: стрелок в трёх, мили в двух). Ротация ROTATE_OUT уходила на половине оружия, а
- * ротация по фокусу (v275) — только по прогнозу его цели; обе в бою перебивались приказом и слотом строя. Здесь выход —
- * ступень выживания в лестнице (как бегство, v240: выше приказа) и проход отхода командира; вышедший — в `rotatingIds`
- * (слот строя и пары гонки его не берут), возвращается, когда потерянных частей меньше порога.
- */
-internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enemyRetreating: Boolean) {
-    fun lost(c: Creep) = c.body.count { it.hits <= 0 }
-    fun need(c: Creep) = if (c.body.any { it.type == ATTACK }) 2 else 1
-    val live = army.filter { it.hits > 0 }
-    // ...И НЕ ПРОТИВ ОТХОДЯЩЕГО (вторая редакция): первая выводила раненых и против кайтера — тот покусывает с трёх и
-    // отходит, раненые уходили и не возвращались, и боя не было вовсе: гейт — пять FAIL (четыре kite, match28:brawl+heals,
-    // 1 665 : 22 474). Его приём — против стоящего строя, который добивает раненого; когда его армия отходит
-    // (`enemyRetreating`), добивать некому, и выведенные возвращаются, а новые не выходят
-    val back = Memory.stepOutIds.filter { id -> enemyRetreating || live.none { it.id == id && lost(it) >= need(it) } }
-    for (id in back) {
-        Memory.stepOutIds.remove(id)
-        if (id !in Memory.rotByFocus) Memory.rotatingIds.remove(id)
-        soutBack++
-    }
-    for (c in live) {
-        if (enemyRetreating) break
-        if (c.id in Memory.stepOutIds || !canMove(c)) continue
-        if (!hasWeapon(c) && !hasHeal(c)) continue   // раздетый — своя ветка (support: бегство из досягаемости, v123)
-        if (lost(c) < need(c) || (c.x * 100 + c.y) !in reach) continue
-        Memory.stepOutIds.add(c.id)
-        Memory.rotatingIds.add(c.id)
-        Memory.rotateSince[c.id] = getTicks()
-        soutOut++
-    }
-    soutTicks += Memory.stepOutIds.size
-}
-
 /** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). */
 internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
     with(t) {
@@ -292,8 +252,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         val wounded = !healer && !hasWeapon(creep)
         // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
         // ...и ротация по его фокусу (v275, см. rotateByFocus) решена до командира и старым порогом не снимается
-        val stepOut = creep.id in Memory.stepOutIds
-        val rotating = creep.id in Memory.rotByFocus || stepOut || !healer && hasWeapon(creep) && healersAlive && run {
+        val rotating = creep.id in Memory.rotByFocus || !healer && hasWeapon(creep) && healersAlive && run {
             val weapons = creep.body.count { it.type == ATTACK || it.type == RANGED_ATTACK }
             val live = creep.body.count { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
             val frac = if (weapons == 0) 1.0 else live.toDouble() / weapons
@@ -758,7 +717,6 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         if (healer && inCombat) { hexpAll++; if ((creep.x * 100 + creep.y) in reachCells) hexpN++; hlostSum += (lostTick[creep.id] ?: 0) }
         val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
             (support && inReach) ||
-            (stepOut && (creep.x * 100 + creep.y) in reachCells) ||
             (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
             (ghost > 0 && creep.hits <= ghost)
 
@@ -816,7 +774,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             mustFlee -> {
                 stepTag = "flee"
                 if (commandOf.containsKey(creep.id)) orderFled++
-                fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support || stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
             }
             // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
             // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
