@@ -1887,6 +1887,18 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     //      ОДИН раз на 125 110 тиков. Это не осторожная редакция, а мёртвый код, и потому отвергнута.
     // Живое основание сильнее стендового: из 1 189 быстрых смен постуры в рейтинговой серии 852 несут смену
     // `pushing`, а стенд в режим боя почти не входит (cmdwhy fight:8 из 570 тиков). Судит живая серия
+    // ЕГО ОСТАТОК БЕЗ МИЛИ НЕ ЗАБИРАЕТ НАСТУПЛЕНИЯ (v300). Разбор 18 реплеев блобов MetalicaX (Opus): в контакте всё решает,
+    // уступаем ли мы землю. Тики, где центр армии идёт назад быстрее 0,15 клетки, дают размен 0,46 против #15 и 0,68 против
+    // #9-типа; стоим — 0,93/1,19; идём вперёд — 1,50/0,90. В пяти поражениях от #15 из пяти окно размена переворачивается на
+    // +27…+33 тике боя (в победах не раньше +51 или никогда, p ≈ 0,008), наступление снимается, командир уходит в FIGHT
+    // (258 тиков в поражениях против 22 в победах), и там пятятся все роли по 0,2 клетки в тик при его 0,27 вперёд, размен
+    // 0,34. При этом все четыре его мили к тому времени уже разоружены и мертвы (10 матчей из 10), то есть отдаём мы
+    // наступление ровно тогда, когда его остаток бьёт только с трёх клеток. Условие узкое: けろびー#19 — 0 тиков за
+    // 16 матчей, MetalicaX#3 — 1 тик, Coldkimchi#2 — 11 тиков за 8 матчей
+    val nearFoes = armedEnemies.filter { e -> army.any { getRange(e, it) <= RANGED_RANGE + 1 } }
+    val toothless = nearFoes.isNotEmpty() && nearFoes.none { InfluenceMap.profileOf(it).melee > 0.0 } &&
+        army.count { hasWeapon(it) } >= nearFoes.size &&
+        army.any { InfluenceMap.damageAt(it.x, it.y, combatEnemies) > 0.0 }
     pushHeld = false
     // ...и РАЗМЕН НИЖЕ ПАРИТЕТА ГАСИТ НАСТУПЛЕНИЕ (v217, см. USE_BREAK_OFF_HOLDS_LINE), а не разворачивает
     // армию: толчка вперёд нет, строй и лекари остаются
@@ -1896,6 +1908,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     if (breakOffNow) { pushing = false } else
     pushing = when {
         pushRaw -> { if (!pushing) pushSince = now; true }
+        pushing && toothless && !stalled -> { pushToothless++; pushHeld = true; true }
         pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease -> {
             pushHeld = true; pushHeldTicks++; true
         }
