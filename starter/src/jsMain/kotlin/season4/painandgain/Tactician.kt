@@ -210,7 +210,10 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     val addrN = Memory.addrHits.count { it }
     focusPredDmg = if (Memory.fracHits.size < STALL_TICKS) null else if (fracN >= addrN) HashMap(byFrac) else HashMap(byAddr)
     // ОН ОХОТИТСЯ ЗА РАНЕНЫМИ (v294): модель «наименьшая доля» за окно попадает чаще модели «лекарь, иначе ближайший»
-    huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN
+    // ...и не в штурме, к которому нас вынуждает гонка очков (v295): отставая, мы обязаны брать его флаги, и в штурме лекари
+    // идут за бойцами, а раненые не выходят — стенд match31:camp (лагерь бьёт наименьшие хиты и держит центр) при лекарях
+    // позади проигрывал по очкам 23 934 : 24 002; ●ω<♥♪#6 флагов до 1500-го тика не берёт, и штурмовать его гонка не велит
+    huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN && !behindOnScore
     val healersLive = live.any { hasHeal(it) && !hasWeapon(it) }
     val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
     if (!fracRules) {
