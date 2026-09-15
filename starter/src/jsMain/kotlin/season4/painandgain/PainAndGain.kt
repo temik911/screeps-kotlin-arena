@@ -632,6 +632,8 @@ object PainAndGain {
     internal val cmdWhy = HashMap<String, Int>()
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     internal var fightOnNow = false
+    internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
+    internal var groupDmgWindow = 0
     /** Пара «крипов отозвано в кулак / тиков боя» (v215). */
     internal var recalled = 0
     internal var outmatchedTicks = 0                // сколько тиков подряд наша мощь ниже BREAK_OFF_RATIO от его (v185)

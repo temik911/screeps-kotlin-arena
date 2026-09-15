@@ -61,10 +61,20 @@ internal fun PainAndGain.wantsRunner(f: FlagInfo): Boolean {
     return !f.ours || occ == null
 }
 
-/** Флаг, который крип держит (v297, см. HOLD_WATCH): наш флаг под ним, пока его крип не дальше HOLD_WATCH от флага. */
+/** Флаг, который крип держит (v297, см. HOLD_WATCH): наш флаг под ним, пока его крип не дальше HOLD_WATCH от флага; в
+ *  режиме пар (v298, см. GROUP_SAFE_DMG) — всегда: фермер возвращается, а гонять держателя туда и обратно — пустая трата. */
 internal fun PainAndGain.heldFlag(ctx: Ctx, c: Creep): FlagInfo? =
     ctx.flags.firstOrNull { it.ours && it.pos.x == c.x && it.pos.y == c.y }
-        ?.takeIf { f -> ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+        ?.takeIf { f -> groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+
+/** Флаг, при котором крип стоит охраной (v298): наш флаг его задания, на клетке — другой наш крип, сам крип не дальше
+ *  двух клеток, и его крип не дальше HOLD_WATCH от флага (в режиме пар — всегда, как у держателя). */
+internal fun PainAndGain.guardFlag(ctx: Ctx, c: Creep): FlagInfo? {
+    val f = Memory.runnerFlag[c.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } } ?: return null
+    val occ = f.occupant ?: return null
+    if (!f.ours || occ.my != true || occ.id == c.id || getRange(c, f.pos) > 2) return null
+    return f.takeIf { groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+}
 
 internal fun PainAndGain.runRunners(ctx: Ctx) {
     val runners = ctx.runners
@@ -98,11 +108,18 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     // скаут уходил, а его крип вставал на клетку через 11–15 тиков
     val holds = HashMap<String, FlagInfo>()
     for (s in runners) heldFlag(ctx, s)?.let { holds[s.id] = it }
+    // ...И ОХРАНА ПРИ НЁМ (v298, см. GROUP_SAFE_DMG): второй из пары стоит рядом с флагом, который взял первый
+    val guards = HashMap<String, FlagInfo>()
+    for (s in runners) if (s.id !in holds && hasWeapon(s)) guardFlag(ctx, s)?.let { guards[s.id] = it }
+    // ...и пара, посланная командиром, идёт к своему флагу вместе, а не расходится паросочетанием по одному
+    val orders = HashMap<String, FlagInfo>()
+    if (groupSafe) for (s in runners) if (s.id !in holds && s.id !in guards && s.id in Memory.cmdDetach)
+        Memory.runnerFlag[s.id]?.let { id -> flagById[id] }?.let { orders[s.id] = it }
     // страховка CPU (v131): тик уже дороже CPU_GUARD_MS — бегуны оставляют прежние флаги, кандидаты не пересчитываются
     val cpuGuard =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
     if (cpuGuard && DEBUG_LOG) println("cpu t=${getTicks()} guard: runners keep their flags (${(cpuMs() * 10).toInt() / 10.0}ms)")
     if (!cpuGuard) for (s in runners) {
-        if (s.id in holds) continue
+        if (s.id in holds || s.id in guards || s.id in orders) continue
         val currentId = Memory.runnerFlag[s.id]
         val armedRunner = hasWeapon(s)
         for (f in ctx.flags) {
@@ -151,6 +168,8 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     val assigned = HashSet<String>()
     val taken = HashSet<String>()
     for ((id, f) in holds) { assigned.add(id); taken.add(f.id); Memory.runnerFlag[id] = f.id; holdPinned++ }
+    for ((id, f) in guards) { assigned.add(id); Memory.runnerFlag[id] = f.id; flagGuardTicks++ }
+    for ((id, f) in orders) { assigned.add(id); taken.add(f.id); Memory.runnerFlag[id] = f.id }
     if (cpuGuard) for (s in runners) Memory.runnerFlag[s.id]?.let { id -> if (flagById[id] != null) { assigned.add(s.id); taken.add(id) } }
     for (c in cands) {
         if (c.runner.id in assigned || c.flag.id in taken) continue
@@ -230,6 +249,13 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         }
         if (onIt) {
             dbg(s, if (f.ours) "HOLD" else "HOLD_WAIT", f)
+            continue
+        }
+        // ОХРАНА (v298): у флага, который держит свой, стоит рядом; дальше клетки — подходит
+        if (f.ours && f.occupant?.my == true && f.occupant?.id != s.id) {
+            val step = if (getRange(s, f.pos) > 1) pathStep(s, f.pos, 1, crowdMatrixOf(ctx, -1)) else null
+            if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
+            dbg(s, "GUARD", f, step)
             continue
         }
         // брать ли флаг сейчас (дебафф): нельзя — ждём рядом, шаг на клетку сделаем, когда станет можно

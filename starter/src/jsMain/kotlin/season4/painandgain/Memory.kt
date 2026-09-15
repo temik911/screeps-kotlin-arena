@@ -87,6 +87,9 @@ internal object Memory {
     val rotByFocus = HashSet<String>()
     /** Раненые, вышедшие из его зоны (v285, см. stepOutWounded): держатся вне её, пока не вылечены ниже порога. */
     val stepOutIds = HashSet<String>()
+    /** Хиты каждого нашего крипа на прошлом тике и урон по «группе» за последние GROUP_WINDOW тиков (v298, см. groupSafe). */
+    val groupHitsPrev = HashMap<String, Int>()
+    val groupDmgHist = ArrayDeque<Int>()
     /** Наше лечение, назначенное каждому своему за прошлый тик (v276): полученный урон = потеря + это лечение. */
     val healGiven = HashMap<String, Int>()
     /** Уходящий раненый -> лекарь, которому приказана клетка рядом с ним (v276, прибор meet=): сверка на следующем тике. */

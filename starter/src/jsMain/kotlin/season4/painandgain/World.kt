@@ -840,7 +840,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // ядра в кулак возвращаются все, как прежде
     if (fightOnNow) {
         fightTicksNow++
-        val keep = if (contact) emptySet() else ctx.runners.filter { heldFlag(ctx, it) != null }.mapTo(HashSet()) { it.id }
+        val keep = if (contact) emptySet() else ctx.runners.filter { (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null }.mapTo(HashSet()) { it.id }
         val before = Memory.cmdDetach.size + Memory.detachedIds.size
         Memory.cmdDetach.retainAll(keep)
         Memory.detachedIds.retainAll(keep)
@@ -1008,6 +1008,24 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     val hurt = lastOurHits >= 0 && ourHitsSum < lastOurHits
     if (hurt) ourDamageTaken += lastOurHits - ourHitsSum
     lastOurHits = ourHitsSum
+    // УРОН ПО ГРУППЕ (v298, см. GROUP_SAFE_DMG): по нашим крипам, у которых свой крип с оружием в двух клетках. Режим
+    // включается, когда его армия не одним кулаком (крупнейшая группа с оружием в ENGAGE_RANGE — не больше двух третей
+    // его вооружённых), и держится, пока он не бьёт группу: кулак, притихший на время, режима не открывает
+    var groupDmg = 0
+    val oursArmed = ctx.myCreeps.filter { hasWeapon(it) }
+    for (c in ctx.myCreeps) {
+        val prev = Memory.groupHitsPrev[c.id]
+        if (prev != null && c.hits < prev && oursArmed.any { it.id != c.id && getRange(it, c) <= 2 }) groupDmg += prev - c.hits
+        Memory.groupHitsPrev[c.id] = c.hits
+    }
+    Memory.groupDmgHist.addLast(groupDmg)
+    while (Memory.groupDmgHist.size > GROUP_WINDOW) Memory.groupDmgHist.removeFirst()
+    groupDmgWindow = Memory.groupDmgHist.sum()
+    val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
+    val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
+    val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
+    groupSafe = getTicks() >= GROUP_WINDOW && groupDmgWindow <= GROUP_SAFE_DMG && (groupSafe || splitNow)
+    if (groupSafe) groupSafeTicks++
     val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
     noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
     // фермер — не только «не стреляет», но и «держится дальше броска»: стоящий в 3–6 экран стенда тоже не стрелял, пока

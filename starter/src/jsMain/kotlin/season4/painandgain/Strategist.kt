@@ -917,8 +917,15 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // ДЕРЖАТЕЛИ ОСТАЮТСЯ (v297, см. HOLD_WATCH): отпущенный, стоящий на взятом флаге при его крипе рядом, сохраняет
     // задание, пока хватает бюджета и ядро без него держит паритет. Задания раздавались только на ЧУЖИЕ флаги, и
     // взявший флаг на следующем тике уходил за другим или в армию — против けろびー#19 130 из 194 сходов вооружённых
-    val holding = alreadyOut.filter { canMove(it) && hasWeapon(it) && heldFlag(ctx, it) != null }
-        .sortedByDescending { heldFlag(ctx, it)?.score ?: 0 }
+    val holding = alreadyOut.filter { canMove(it) && hasWeapon(it) && (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null }
+        .sortedByDescending { (heldFlag(ctx, it) ?: guardFlag(ctx, it))?.score ?: 0 }
+    // ОТРЯД ИЗ ДВУХ ЕМУ НЕ ЦЕЛЬ (v298, см. GROUP_SAFE_DMG): пока он не бьёт наших, стоящих группой, выпуск меряется не всей
+    // его армией, а тем, чтобы в ядре оставались двое с оружием, и флаг берёт пара — если его стая у флага её не бьёт.
+    // Прежде ядро без отпущенных сравнивалось со всей его армией, разбросанной группами по 1–4 по пяти флагам, и при
+    // целых армиях 14 на 14 выпуск не случался: против けろびー#19 226 назначений за 1040 тиков гонки при бюджете 5,6
+    val safe = groupSafe
+    fun coreHolds(without: List<Creep>) = if (safe) without.count { hasWeapon(it) } >= 2
+        else without.any { hasWeapon(it) } && ourPowerOf(without, armedEnemies) >= enemyPowerOf(armedEnemies, without) * PARITY_FLOOR
     // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
     // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
     // перестали стрелять, и командир раздавал задания на захват посреди рубки. Держателей, которых бой вне контакта
@@ -953,9 +960,8 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     for (h in holding) {
         if (budget <= 0) break
         val without = free.filter { it.id != h.id }
-        if (without.none { hasWeapon(it) }) break
-        if (ourPowerOf(without, armedEnemies) < enemyPowerOf(armedEnemies, without) * PARITY_FLOOR) break
-        val f = heldFlag(ctx, h) ?: continue
+        if (!coreHolds(without)) break
+        val f = heldFlag(ctx, h) ?: guardFlag(ctx, h) ?: continue
         Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace++
     }
     if (fightOnNow) return
@@ -981,16 +987,24 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         // ...а флаг, который уже берёт бегун, командир не дублирует: засчитывать бегуна в группу и досылать бойца
         // замерено хуже — 131 из 135 против 133 (roost трижды, camp)
         if (ctx.runners.any { r -> Memory.runnerFlag[r.id] == f.id }) continue
-        val need = if (guarded) 2 else if (loose) RACE_PARTY else 1
+        val need = if (safe || guarded) 2 else if (loose) RACE_PARTY else 1
         if (budget < need) continue
-        val party = free.sortedBy { getRange(it, f.pos) }.take(need)
+        // ...а пара — со стрелком (v298): два мили не отвечают его стрелку, который бьёт их с трёх клеток
+        val party = if (safe) run {
+            val byRange = free.sortedBy { getRange(it, f.pos) }
+            val r = byRange.firstOrNull { hasRanged(it) }
+            if (r == null) byRange.take(2) else listOf(r) + byRange.filter { it.id != r.id }.take(1)
+        } else free.sortedBy { getRange(it, f.pos) }.take(need)
         if (party.size < need) continue
+        if (safe) {
+            val pack = armedEnemies.filter { getRange(it, f.pos) <= ENGAGE_RANGE }
+            if (pack.isNotEmpty() && enemyPowerOf(pack, party) >= ourPowerOf(party, pack)) continue
+        }
         // ...и ЯДРО ОБЯЗАНО ОСТАТЬСЯ СИЛЬНЕЕ ЕГО АРМИИ — та же проверка, которой держится отряд (см. USE_DETACH):
         // аннигиляция проигрывает матч при любом счёте, поэтому отпускать можно лишь до тех пор, пока оставшиеся
         // держат паритет. Без неё командир растаскивал армию грубее прежней логики и ронял army-сценарии (гейт 127)
         val without = free.filter { c -> party.none { it.id == c.id } }
-        if (without.none { hasWeapon(it) }) break
-        if (ourPowerOf(without, armedEnemies) < enemyPowerOf(armedEnemies, without) * PARITY_FLOOR) break
+        if (!coreHolds(without)) break
         // ...и ЗАДАНИЕ — это зачисление в захватчики с целью, а не клетка: вооружённый крип, приведённый к флагу
         // как боец, флага НЕ БЕРЁТ (захват делают бегуны), и первая редакция на сценарии kite набрала 0 очков.
         // Командир решает КТО и КУДА, а ведёт и берёт существующий механизм захвата (v160)
