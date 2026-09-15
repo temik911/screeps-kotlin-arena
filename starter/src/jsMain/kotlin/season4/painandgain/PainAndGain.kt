@@ -188,6 +188,9 @@ object PainAndGain {
     /** Предсказанный урон его стволов по нашим на этот тик — по модели его выбора цели, что чаще попадает (v292, см.
      *  rotateByFocus); null, пока сверок меньше окна. Читает лечение вместо неадресного damageAt. */
     internal var focusPredDmg: Map<String, Double>? = null
+    /** Его стволы, по сверке с фактом, бьют нашего с наименьшей долей хитов в досягаемости — охотятся за ранеными (v294,
+     *  см. rotateByFocus): тогда раненые уходят к лекарям позади, а лекари стоят вне его досягаемости. */
+    internal var huntsWounded = false
     internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
     internal var lastDistanceKeptTick = -1000              // последний тик, когда погоня не сближала (см. USE_DETACH, v57)
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
@@ -510,7 +513,8 @@ object PainAndGain {
         ))
         cpuMark("block")
         rotateByFocus(army, combatEnemies)
-        stepOutWounded(army, reachCells, enemyRetreating)
+        // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)
+        stepOutWounded(army, reachCells, enemyRetreating || !huntsWounded)
         val armyCommandSeg = armyCommand(ctx, ArmyCommandIn(
             army = army,
             enemyCreeps = enemyCreeps,

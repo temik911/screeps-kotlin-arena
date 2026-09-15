@@ -209,6 +209,8 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     val fracN = Memory.fracHits.count { it }
     val addrN = Memory.addrHits.count { it }
     focusPredDmg = if (Memory.fracHits.size < STALL_TICKS) null else if (fracN >= addrN) HashMap(byFrac) else HashMap(byAddr)
+    // ОН ОХОТИТСЯ ЗА РАНЕНЫМИ (v294): модель «наименьшая доля» за окно попадает чаще модели «лекарь, иначе ближайший»
+    huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN
     val healersLive = live.any { hasHeal(it) && !hasWeapon(it) }
     val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
     if (!fracRules) {
@@ -1556,7 +1558,11 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     // отходят к ним сами (+1,84 клетки за три тика против наших +0,42). Каждая половина порознь отвергнута: лекарь вне
     // досягаемости без выхода раненых — мили гибли без лечения (матч 21, эта строка до v293), выход раненых без лекарей
     // позади — v290 (5-11 против Coldkimchi#1). Здесь обе
-    val reachNow = reachCells
+    // ...И ТОЛЬКО ПРОТИВ ТОГО, КТО ОХОТИТСЯ ЗА РАНЕНЫМИ (v294, см. huntsWounded). Живьём v293 — 13-19 против ●ω<♥♪#6 (у v289
+    // 15-33, у v292 8-24) и 2-14 против Coldkimchi#1 (у v289 10-6, p ≈ 0,01): против бьющего наименьшую долю раненому надо
+    // уходить к лекарям позади, против бьющего «лекаря, иначе ближайшего» уведённый из боя раненый — огонь, потерянный даром.
+    // Правило его стволов бот мерит сам (сверка двух моделей с фактом), это не подгонка под имя
+    val reachNow = if (!contact || huntsWounded) reachCells else meleeReachCells
     val fireCells = HashSet<Int>()
     for (e in combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
         val x = e.x + dx; val y = e.y + dy
