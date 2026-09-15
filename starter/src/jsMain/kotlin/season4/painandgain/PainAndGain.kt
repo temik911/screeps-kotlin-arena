@@ -185,6 +185,9 @@ object PainAndGain {
     internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     internal var enemyMassedSignal = false                 // его вооружённые сомкнуты по форме или по прибытию (v281, readSignals)
     internal var firstFightTick = 0                        // тик первого размена (exchangeLive); 0 — первый бой впереди (v281)
+    /** Предсказанный урон его стволов по нашим на этот тик — по модели его выбора цели, что чаще попадает (v292, см.
+     *  rotateByFocus); null, пока сверок меньше окна. Читает лечение вместо неадресного damageAt. */
+    internal var focusPredDmg: Map<String, Double>? = null
     internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
     internal var lastDistanceKeptTick = -1000              // последний тик, когда погоня не сближала (см. USE_DETACH, v57)
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)

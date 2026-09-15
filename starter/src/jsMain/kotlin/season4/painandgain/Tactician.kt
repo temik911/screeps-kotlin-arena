@@ -205,6 +205,10 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     }
     Memory.fracPrev = byFrac.maxByOrNull { it.value }?.key
     Memory.addrPrev = byAddr.maxByOrNull { it.value }?.key
+    // ОЖИДАЕМЫЙ ВХОДЯЩИЙ ДЛЯ ЛЕЧЕНИЯ — АДРЕСНЫЙ (v292, см. focusPredDmg): модель, чаще попадающая за окно
+    val fracN = Memory.fracHits.count { it }
+    val addrN = Memory.addrHits.count { it }
+    focusPredDmg = if (Memory.fracHits.size < STALL_TICKS) null else if (fracN >= addrN) HashMap(byFrac) else HashMap(byAddr)
     val healersLive = live.any { hasHeal(it) && !hasWeapon(it) }
     val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
     if (!fracRules) {

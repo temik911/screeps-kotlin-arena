@@ -80,10 +80,17 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     val incoming = HashMap<String, Int>()
     // подтверждённый входящий (v233, см. USE_HEAL_BY_DEFICIT): адресный огонь этого тика или потеря прошлого
     fun confirmed(target: Creep) = (addressedDmg[target.id] ?: 0.0) > 0.0 || (lostTick[target.id] ?: 0) > 0
+    // ...И ОЖИДАЕМЫЙ УРОН — АДРЕСНЫЙ (v292). Нужда была «недостача + весь урон, который его стволы МОГУТ положить в клетку»
+    // (damageAt), и полный крип у фронта выглядел нуждающимся, хотя его стволы бьют другого: аудит 112 игр (v289–v290,
+    // Opus) — наше лечение полных и не битых в этот тик 16,7 хита за тик контакта против его 0,0, не той цели 9,9 против
+    // 3,7 (p < 0,001); против ●ω<♥♪#6, который бьёт наименьшую долю хитов в досягаемости, полный крип — не его цель, пока
+    // есть раненые. Ожидаемый урон берётся из предсказателя его выбора (rotateByFocus: две модели, сверка с фактом, 92 %
+    // попаданий против ●ω) — той модели, что попадает чаще; пока сверок меньше окна — прежний damageAt
+    fun expectedOn(target: Creep): Int = focusPredDmg?.let { (it[target.id] ?: 0.0).toInt() }
+        ?: InfluenceMap.damageAt(target.x, target.y, enemyCreeps).toInt()
     fun need(target: Creep): Int {
         val deficit = target.hitsMax - target.hits
-        val expected = incoming.getOrPut(target.id) {
-            InfluenceMap.damageAt(target.x, target.y, enemyCreeps).toInt() }
+        val expected = incoming.getOrPut(target.id) { expectedOn(target) }
         return deficit + expected - (healDone[target.id] ?: 0)
     }
     // нужда по подтверждённому — для прибора и для переназначения соседу (не зависит от тумблера)
@@ -294,10 +301,13 @@ internal fun PainAndGain.commandHeal(army: List<Creep>, enemies: List<Creep>, ou
     out.clear()
     val healers = army.filter { hasHeal(it) && !it.spawning }
     if (healers.isEmpty()) return
-    val mates = army.filter { it.hits < it.hitsMax || InfluenceMap.damageAt(it.x, it.y, enemies) > 0.0 }
+    // ...ожидаемый урон — адресный, по той же модели его выбора, что у исполнителя (v292, см. healAndShoot.need)
+    val pred = focusPredDmg
+    fun expected(m: Creep) = pred?.let { it[m.id] ?: 0.0 } ?: (InfluenceMap.damageAt(m.x, m.y, enemies) * InfluenceMap.takenOf(m))
+    val mates = army.filter { it.hits < it.hitsMax || expected(it) > 0.0 }
     if (mates.isEmpty()) return
     val incoming = HashMap<String, Double>()
-    for (m in mates) incoming[m.id] = InfluenceMap.damageAt(m.x, m.y, enemies) * InfluenceMap.takenOf(m)
+    for (m in mates) incoming[m.id] = expected(m)
     // сколько лечения дотянется до цели от ещё не занятых лекарей
     fun healPool(t: Creep, free: List<Creep>) = free.sumOf { h ->
         val d = h.getRangeTo(t); val pr = InfluenceMap.profileOf(h)
