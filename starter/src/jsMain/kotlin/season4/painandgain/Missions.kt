@@ -216,8 +216,17 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
             val mates = (ctx.army + runners).filter { hasWeapon(it) && getRange(s, it) <= RANGED_RANGE }
             foes.isNotEmpty() && enemyPowerOf(foes, mates) >= ourPowerOf(mates, foes)
         }
+        // ДЕРЖАТЕЛЬ УХОДИТ ОТ УРОНА, А НЕ ОТ СЧЁТА СТВОЛОВ (v327). Разбор 16 матчей v325/v326 по реплеям: 90,6 % потерь
+        // флага — «держатель сам сошёл» (581 из 641), и НИ ОДНОЙ потери под нашим телом; у 82 % сошедших за предыдущие
+        // десять тиков ноль полученного урона, а его ближайший крип — в семи клетках, ровно порог SCOUT_FLEE_TRIGGER.
+        // Сидеть дёшево: 1 177 эпизодов сидения, 98,2 % кончаются уходом и 0,5 % смертью при 4–5 хитах в тик; самое
+        // долгое сидение 1 140 тиков, крип жив. Раздетый бежал безусловно — это ещё 52 % сходов, хотя очков он на флаге
+        // приносит столько же, сколько целый. Контрфакт: четыре тела на флагах дают 20 018 : 16 559 и 15 побед из 16
+        val holderStays = groupSafe && holds.containsKey(s.id) && s.hits * 2 >= s.hitsMax &&
+            (Memory.hitDrop[s.id] ?: 0) * 3 < s.hits
+        if (holderStays && (underFire || threats.isNotEmpty())) holdArmedStay++
         if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay++
-        if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned) {
+        if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned && !holderStays) {
             // поиск пути бегства может не дать шага (скаут в матче 3 «бежал» на месте три тика и погиб) —
             // тогда жадно: соседняя клетка подальше от врагов и под меньшим огнём; в опасности шаг делается ВСЕГДА,
             // и на не лучшую клетку тоже: скаут у стены (4,40) «бежал» стоя тридцать тиков рядом с боем и погиб
