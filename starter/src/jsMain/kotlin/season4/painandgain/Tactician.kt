@@ -590,8 +590,16 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 val free = medics.toMutableList()
                 var mine: Creep? = null
                 var taken = 0
+                // ...И В РЕЖИМЕ ПАР ИДУТ ВСЕ ТРОЕ (v362). Оговорка «один лекарь всегда с ядром» (v311) писалась под
+                // гейт match33:camp (15 828 : 23 982) — там лагерь ДЕРЁТСЯ, когда к нему подходят; но camp в режим пар
+                // не попадает вовсе (он сидит на флагах, см. sitsOnFlags), а этот блок и так работает только при
+                // groupSafe и вне контакта ядра. Цена оговорки измерена прибором gcov: против けろびー#19 под лечением
+                // лишь 32,5 % гарнизонных крипо-тиков (25–37 % по матчам) — три лекаря, из них отпускаются два, на
+                // пять-шесть флагов в 40–78 клетках друг от друга. Отсюда же 11 из 12 смертей без лекаря в шести
+                // клетках при медиане 24
+                val budget = if (groupSafe) medics.size else medics.size - 1
                 for (k in hurt.sortedBy { it.hits }) {
-                    if (taken >= medics.size - 1) break
+                    if (taken >= budget) break
                     val m = free.minByOrNull { getRange(it, k) } ?: break
                     free.remove(m); taken++
                     if (m.id == creep.id) { mine = k; break }
