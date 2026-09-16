@@ -825,6 +825,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
     // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
     fightOnNow = contact || exchangeRecent
+    coreContactNow = contact
     // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
     // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
     if (fightOnNow) { warmFightAll++; if (!exchangeLive) warmFight++ }
