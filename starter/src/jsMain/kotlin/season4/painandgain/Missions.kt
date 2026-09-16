@@ -110,7 +110,13 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     for (s in runners) heldFlag(ctx, s)?.let { holds[s.id] = it }
     // ...И ОХРАНА ПРИ НЁМ (v298, см. GROUP_SAFE_DMG): второй из пары стоит рядом с флагом, который взял первый
     val guards = HashMap<String, FlagInfo>()
-    for (s in runners) if (s.id !in holds && hasWeapon(s) && groupSafe && s.id in Memory.cmdDetach) guardFlag(ctx, s)?.let { guards[s.id] = it }
+    // ...и ОХРАНА ТОЛЬКО ОТ БЕЗДЕЛЬЯ (v335): вооружённый рядом с уже нашим флагом не приносит ничего, а стоит тела.
+    // Разбор 16 матчей: на флагах стоит 1,5 нашего тела, и ЕЩЁ 1,5 топчется в 1–3 клетках от флага, который уже наш
+    // (34 764 крипо-тика). Те же тела на других флагах — это втрое больше очков, поэтому охрана остаётся, только если
+    // брать больше нечего: ни одного не нашего свободного флага и ни одного своего без тела
+    val nothingElse = ctx.flags.none { f -> (!f.ours && f.occupant == null) || (f.ours && f.occupant?.my != true) }
+    if (nothingElse) for (s in runners) if (s.id !in holds && hasWeapon(s) && groupSafe && s.id in Memory.cmdDetach)
+        guardFlag(ctx, s)?.let { guards[s.id] = it }
     // ...и пара, посланная командиром, идёт к своему флагу вместе, а не расходится паросочетанием по одному
     val orders = HashMap<String, FlagInfo>()
     if (groupSafe) for (s in runners) if (s.id !in holds && s.id !in guards && s.id in Memory.cmdDetach)

@@ -1137,11 +1137,6 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             if (!coreHolds(without)) break
             Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); budget--
             manned++
-            val mate = free.minByOrNull { getRange(it, f.pos) }
-            if (budget > 0 && mate != null && coreHolds(free.filter { it.id != mate.id })) {
-                Memory.cmdDetach.add(mate.id); Memory.runnerFlag[mate.id] = f.id; free.remove(mate); budget--
-                manned++
-            }
         }
     }
     for (f in wanted) {
