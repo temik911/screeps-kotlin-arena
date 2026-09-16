@@ -92,8 +92,6 @@ internal object Memory {
     val groupDmgHist = ArrayDeque<Int>()
     /** Его флаги и из них занятые его крипом за последние GROUP_WINDOW тиков, упаковано как флаги * 8 + занятые (v302). */
     val flagSitHist = ArrayDeque<Int>()
-    /** Тиков подряд, что на флаг давят PRESS_COUNT его боевых в PRESS_CELLS клетках: id флага -> тики (v307). */
-    val flagPress = HashMap<String, Int>()
     /** Наше лечение, назначенное каждому своему за прошлый тик (v276): полученный урон = потеря + это лечение. */
     val healGiven = HashMap<String, Int>()
     /** Уходящий раненый -> лекарь, которому приказана клетка рядом с ним (v276, прибор meet=): сверка на следующем тике. */
