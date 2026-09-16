@@ -789,6 +789,14 @@ internal fun PainAndGain.fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
 
 internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
     val armedEnemies = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+    // ХРАНИТЕЛЬ В РЕЖИМЕ ПАР (v303, см. GROUP_SAFE_DMG): его держит не близость врага, а сила ядра без него. Флаг, с
+    // которого армия ушла, фермер забирает через 11–15 тиков, а хранителя ставило только «его крип в KEEP_RANGE» —
+    // против けろびー армия брала флаг и уходила, и мы держали 2,15 флага против его 4,6
+    val seedNear = armedEnemies.maxByOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } }
+    val largestNear = if (seedNear == null) armedEnemies else armedEnemies.filter { getRange(seedNear, it) <= ENGAGE_RANGE }
+    fun coreHolds(core: List<Creep>) = core.any { hasWeapon(it) } &&
+        ourPowerOf(core, largestNear) >= enemyPowerOf(largestNear, core) * PARITY_FLOOR
+    var core = army.filter { it.id !in Memory.keeperIds }
     val iter = Memory.keeperIds.entries.iterator()
     while (iter.hasNext()) {
         val e = iter.next()
@@ -797,11 +805,12 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // враг с боем в KEEP_RANGE от флага — хранителя нет: стрелок стоял на R3 весь бой, пока в десяти клетках
         // висели скауты врага, и не стрелял (матч 18)
         val stay = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && c.hits * 2 >= c.hitsMax &&
-            enemyCreeps(ctx).any { it.id != c.id && getRange(f.pos, it) <= KEEP_RELEASE } &&
+            (if (groupSafe) coreHolds(core) else enemyCreeps(ctx).any { it.id != c.id && getRange(f.pos, it) <= KEEP_RELEASE }) &&
             armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } <= KEEP_PICKET
         if (!stay) {
             if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value}")
             iter.remove()
+            if (c != null) core = core + c
         }
     }
     for (f in ctx.flags) {
@@ -812,9 +821,11 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // цепочке целей, и пришпиленный к флагу лекарь выключается из боя целиком
         if (army.any { it.id == occ.id && !hasWeapon(it) && hasHeal(it) }) continue
         if (Memory.runnerFlag.values.contains(f.id)) continue
-        if (enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
+        if (!groupSafe && enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
         if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
+        if (groupSafe && !coreHolds(core.filter { it.id != occ.id })) continue
         Memory.keeperIds[occ.id] = f.id
+        if (groupSafe) core = core.filter { it.id != occ.id }
         if (DEBUG_LOG) println("keeper t=${getTicks()}: ${occ.id} keeps ${f.id} at (${f.pos.x},${f.pos.y})")
     }
 }
@@ -2022,7 +2033,10 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // подходящем враге, была поймана колонной на марше (стенд m3 sleeper, t=529–540); флаги в это время — скаутам
     // ...и тёплый контакт линии не стоит (v221, см. USE_FIGHT_BY_LEDGER): иначе, погасив боевую постуру, правка
     // отдала бы флаг-цель этой же строке — и армия осталась бы у поста, как в v90
-    val holdLine = enemyNear && !pushing && !annihilate && !stalled && !(farmerQuietNow)    // тихий фермер линии не стоит (v105)
+    // ...и НЕ ПРОТИВ ТОГО, КТО НЕ БЬЁТ НАШИХ В ГРУППЕ (v303, см. GROUP_SAFE_DMG): ярлык `farmerQuietNow` требует полной
+    // тишины и гаснет от одного подстреленного скаута, а けろびー стреляет по одиночкам весь матч — линия против него
+    // стоила армии флаг-цели 584 тика из 1400 (ещё 496 снимало «добить»), и матч кончался 10 тыс. против 23 тыс.
+    val holdLine = enemyNear && !pushing && !annihilate && !stalled && !(farmerQuietNow || groupSafe)
     val interceptObjective: Objective? = interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it) }?.let { f ->
         val group = strikers.ifEmpty { mobileArmy }
         val flow = flowTo(ctx, f.pos)
