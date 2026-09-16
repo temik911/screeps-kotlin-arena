@@ -863,9 +863,15 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // 0 HP: лекаря ближе шести клеток не было ни разу, ближайший свой ствол — медиана 16 клеток, 15–23 тика хода
         // при агонии 3–12 тиков. Предупреждение при этом огромно: его вооружённый стоит в четырёх клетках медиану
         // 19 тиков до первого удара
-        val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax ||
+        // ...И ТОЛЬКО В РЕЖИМЕ ПАР (v366). Правило, ставшее решающим, против けろびー#19 дало 10-6 при потерях 0,50 тела
+        // за матч вместо 3,75, но против блоба MetalicaX#15 уронило блок до 1-7: перевес по флагам −1,09 против +1,82
+        // у v357, потери 8,88 тела против 4,25. Разница по существу та же, что у упреждения (см. KEEP_ALONE): у
+        // фермера хранитель стоит один, помощи нет ни от лекаря (медиана 16 клеток), ни от своих стволов (16 клеток,
+        // 15–23 тика хода), и уход — единственное, что у него есть; в бою с кулаком он стоит в строю, где уход с
+        // клетки рушит строй и отдаёт флаг. Вне режима пар порог остаётся прежним — половина хитов
+        val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax || (groupSafe &&
             InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
-            InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) }))
+            InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) })))
         val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && !keeperLeaves
         val stay = onFlag && (if (groupSafe) coreHolds(core)
             else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
