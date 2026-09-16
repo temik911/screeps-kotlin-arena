@@ -562,7 +562,15 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // Остаётся выбор ЦЕЛИ лечения под огнём (см. rank в healAndShoot); подопечный — самый раненый вооружённый, как прежде
             // ...а при УДЕРЖИМОЙ жертве (v228, см. USE_HEAL_WALL) подопечный — она: лечение вплотную 72 против 24 издали,
             // и именно её он бьёт сейчас, а самый раненый в дальности — уже отведённый в тыл
-            (if (victimSaveable) victimNow?.takeIf { v -> v.id != creep.id && getRange(creep, v) <= HEAL_RANGE + 1 } else null)
+            // ЛЕКАРЬ К РАНЕНОМУ ХРАНИТЕЛЮ (v310, см. GROUP_SAFE_DMG): в режиме пар ядро не дерётся вовсе, а хранителя на
+            // флаге расстреливают его одиночки — 25 снятий «хиты ниже половины» за матч, и флаг возвращается к нему.
+            // Правило v120 выше стояло против того, чтобы лечение уходило ОТ УДАРНОЙ ГРУППЫ; здесь её нет, а пара
+            // «хранитель и лекарь» — уже группа, а группы он не бьёт (см. GROUP_SAFE_DMG). Идёт ближайший лекарь
+            val medic = if (!groupSafe) null else army.filter { it.id in Memory.keeperIds && it.hits < it.hitsMax }
+                .minByOrNull { getRange(creep, it) }
+                ?.takeIf { k -> army.none { h -> h.id != creep.id && !hasWeapon(h) && hasHeal(h) && canMove(h) && getRange(h, k) < getRange(creep, k) } }
+            medic
+                ?: (if (victimSaveable) victimNow?.takeIf { v -> v.id != creep.id && getRange(creep, v) <= HEAL_RANGE + 1 } else null)
                 ?: near.maxByOrNull { it.hitsMax - it.hits }
                 ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
                 ?: fighters.minByOrNull { getRange(creep, it) }
