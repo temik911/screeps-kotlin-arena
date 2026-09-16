@@ -1057,6 +1057,23 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             routeKept += members.size
         }
     }
+    // СВОЙ ПУСТОЙ ФЛАГ — СНАЧАЛА (v316, см. GROUP_SAFE_DMG): держатели заводились только из захвата армией, и на флагах
+    // стоял в среднем ОДИН наш крип из четырнадцати: 1,6 нашего флага против его 5,1 при 37 взятиях и 36 потерях за матч,
+    // среднее владение 59 тиков. Гарнизон ставится прямо: на каждый наш флаг без нашего крипа на клетке — ближайший
+    // свободный боец, и лишь затем пары за чужими флагами
+    if (safe) {
+        val unmanned = flags.filter { it.ours && it.occupant?.my != true &&
+            ctx.runners.none { r -> Memory.runnerFlag[r.id] == it.id } }
+            .sortedByDescending { it.score }
+        for (f in unmanned) {
+            if (budget <= 0) break
+            val c = free.minByOrNull { getRange(it, f.pos) } ?: break
+            val without = free.filter { it.id != c.id }
+            if (!coreHolds(without)) break
+            Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); budget--
+            manned++
+        }
+    }
     for (f in wanted) {
         if (budget <= 0) break
         // ...и размер горстки задаёт НЕ флаг, а его армия: пока она цела и на ходу, одиночку она перехватывает и
