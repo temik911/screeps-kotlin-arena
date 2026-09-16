@@ -537,7 +537,10 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
         // цена боя — гейт на ВХОД к охраняемому флагу (лазейка «уже в контакте» отправила армию к дальнему
         // флагу с девятью охранниками сквозь наступающую армию — стенд rush, t=61)
         // проигранная гонка (v99, USE_LOST_RACE_PACK_PARITY): стая у флага, у которого его вооружённых сейчас нет, — по паритету
-        val ok = pack.isEmpty() || (farmerQuietNow) ||
+        // ...и тот же обход в режиме пар (v304, см. GROUP_SAFE_DMG): «цена боя у флага» считает бой, которого не будет —
+        // он от наших групп отходит. Против けろびー#19 стая отменяла флаг-цель 4 146 раз из 8 057 отказов, армия
+        // оставалась без цели три четверти матча, и мы держали 1,9 флага против его 4,8
+        val ok = pack.isEmpty() || (farmerQuietNow) || groupSafe ||
             (ourPowerOf(group, pack) >= enemyPowerOf(pack, group) * ratio && fightCost(pack, group) <= group.maxOf { speedSlack(it) })
         if (!ok) { objDrop["pack"] = (objDrop["pack"] ?: 0) + 1; continue }
         objDrop["taken"] = (objDrop["taken"] ?: 0) + 1
@@ -1890,7 +1893,9 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     val leadHolds =  !behindOnScore && ourScore > enemyScore && armedEnemies.isNotEmpty()
     if (DEBUG_LOG && leadHolds != leadHoldsWas) println("lead t=$now: holds ${if (leadHolds) "on" else "off"} score=$ourScore:$enemyScore rate=$ourRate:$enemyRate push=${oursPush.toInt()}:${theirsPush.toInt()}")
     leadHoldsWas = leadHolds
-    val pushRaw = !stalled && !leadHolds && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && oursPush >= theirsPush * (if (pushing) pushRelease else pushRatio)))
+    // ...и В РЕЖИМЕ ПАР АРМИЯ НЕ ГОНИТСЯ (v304): он уходит от групп (646 шагов прочь против 67 навстречу), догнать его
+    // нельзя, а наступление держит постуру ДОБИТЬ, и та снимает флаг-цель — 179 тиков из 322 «без цели» несут именно его
+    val pushRaw = !stalled && !leadHolds && !groupSafe && (sweep || (exchangePaying && !chaseVeto && huntable.isNotEmpty() && strikers.isNotEmpty() && oursPush >= theirsPush * (if (pushing) pushRelease else pushRatio)))
     // ...и СРОК (v215, см. USE_PUSH_DWELL): начатое наступление живёт минимум PUSH_DWELL тиков, и снимают его
     // досрочно только затор и настоящая слабость — мощь ниже порога отпускания. Мигание любого из пяти прочих
     // множителей за этот срок армию не разворачивает.
