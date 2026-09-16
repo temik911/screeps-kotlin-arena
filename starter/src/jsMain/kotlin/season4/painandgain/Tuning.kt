@@ -362,7 +362,7 @@ internal const val HOLD_WATCH = 12
  *  4,5 тыс. на 43 тиках), одиночкам — 0,3–6,7 тыс.; Coldkimchi#2 — 14–94 тыс. с 41–47-го тика, MetalicaX — 5–19 тыс. с
  *  48–76-го. Пока за GROUP_WINDOW тиков урон по группе не больше GROUP_SAFE_DMG (и режим включился, когда его армия не
  *  была одним кулаком), отряд из двух ему не цель: командир выпускает пары, не меряя выпуск всей его армией */
-internal const val GROUP_WINDOW = 20
+internal const val GROUP_WINDOW = 40
 internal const val GROUP_SAFE_DMG = 300
 
 /** ЗАГОН (v331, см. commandHunt): дальше этого цель не ищем — гнаться через полкарты значит бросить свои флаги; точка
