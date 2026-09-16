@@ -825,6 +825,9 @@ internal fun PainAndGain.fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
 
 internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
     val armedEnemies = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+    // упреждение ухода — только против сомкнутого и только ОДИНОКОМУ (v355/v356, см. KEEP_LEAD)
+    fun keepLeadFor(c: Creep) = if (enemyMassedSignal &&
+        army.none { it.id != c.id && hasWeapon(it) && getRange(it, c) <= KEEP_ALONE }) KEEP_LEAD else 0
     // ХРАНИТЕЛЬ В РЕЖИМЕ ПАР (v303, см. GROUP_SAFE_DMG): его держит не близость врага, а сила ядра без него. Флаг, с
     // которого армия ушла, фермер забирает через 11–15 тиков, а хранителя ставило только «его крип в KEEP_RANGE» —
     // против けろびー армия брала флаг и уходила, и мы держали 2,15 флага против его 4,6
@@ -878,7 +881,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
                 // снятий за матч при 74 эпизодах «под огнём у флага» — угроза видна ровно тогда, когда уходить уже
                 // поздно, потому что полная скорость держится всего 3,0 тика после первого удара
                 c.hits * 2 < c.hitsMax ||
-                    InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, KEEP_LEAD) >
+                    InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
                     InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) }) -> { keepOffHurt++; "hurt" }
                 else -> "core"
             }
@@ -901,7 +904,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // же тиком: 21 из 27 событий «released (hurt)» сопровождались строкой `keeps` в ТОМ ЖЕ тике (78 %), и правка
         // выше без этой была бы отменена каждым тиком заново
         if (cand.hits * 2 < cand.hitsMax ||
-            InfluenceMap.damageSoonAt(cand.x, cand.y, ctx.combatEnemies, KEEP_LEAD) >
+            InfluenceMap.damageSoonAt(cand.x, cand.y, ctx.combatEnemies, keepLeadFor(cand)) >
             InfluenceMap.healAt(cand.x, cand.y, ctx.army.filter { hasHeal(it) })) { keepOffHurt++; continue }
         if (groupSafe) {
             if (!coreHolds(core.filter { it.id != occ.id })) continue
