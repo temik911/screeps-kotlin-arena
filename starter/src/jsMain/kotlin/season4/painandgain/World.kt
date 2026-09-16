@@ -659,7 +659,10 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     val mobileArmy = army.filter { canMove(it) && it.id !in Memory.keeperIds }
     // ...а командир видит ВСЁ поле, включая хранителей флагов: решение снять хранителя — его, а не следствие того,
     // что он невидим (v173, оператор). Держат флаг они по-прежнему сами, пока приказа нет
-    val commandArmy = army.filter { canMove(it) }
+    // ...и В РЕЖИМЕ ПАР БЕЗ ХРАНИТЕЛЕЙ (v306, см. GROUP_SAFE_DMG): состав командира — единственное место, где хранитель
+    // ему виден (марш и погоня берут mobileArmy и strikers, а те его исключают), и приказ уводит его с флага (правило
+    // v173, «хранитель тоже слушает приказ»). Против けろびー#19 это 71 снятие хранителя из 110 за матч — «сошёл с клетки»
+    val commandArmy = army.filter { canMove(it) && !(groupSafe && it.id in Memory.keeperIds) }
     val chasers = strikers.ifEmpty { mobileArmy }
     // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
     // пикет простоя — поэтому охота посчитана здесь, до простоя
