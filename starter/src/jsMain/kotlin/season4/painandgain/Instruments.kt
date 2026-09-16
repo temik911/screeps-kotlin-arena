@@ -125,6 +125,8 @@ internal var manned = 0
 /** Покрытие гарнизона лечением (v361, прибор): гарнизонных крипов, у которых наш лекарь в дальности лечения / всего.
  *  Разбор 12 смертей против けろびー#19 сказал, что помощь не приходит никогда — ближайший лекарь в медиане 24 клетках
  *  при агонии 5,8 тика, — но своего числа у этого не было. */
+/** Тиков с назначенным курьером на дорогой флаг (v367, прибор courier=). */
+internal var courierTicks = 0
 internal var garCovered = 0
 internal var garAll = 0
 /** Загон (v331, hunt=тиков с целью/крипо-тиков в загоне). */
@@ -512,7 +514,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
             "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
             "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +
             "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum ffight=$firstFightTick stray=$strayCapRefused sout=$soutOut/$soutBack/$soutTicks hold=$holdPinned/$holdArmedStay/$holdKeptRace/$holdKeptFight gsafe=$groupSafeTicks/$groupDmgWindow fguard=$flagGuardTicks route=$routeKept man=$manned gcov=$garCovered/$garAll hunt=$huntTicks/$huntCreepTicks toothless=$pushToothless sit=$flagSitOcc/$flagSitAll keep2=$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft keep3=$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" +
+            " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum ffight=$firstFightTick stray=$strayCapRefused sout=$soutOut/$soutBack/$soutTicks hold=$holdPinned/$holdArmedStay/$holdKeptRace/$holdKeptFight gsafe=$groupSafeTicks/$groupDmgWindow fguard=$flagGuardTicks route=$routeKept man=$manned gcov=$garCovered/$garAll courier=$courierTicks hunt=$huntTicks/$huntCreepTicks toothless=$pushToothless sit=$flagSitOcc/$flagSitAll keep2=$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft keep3=$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" +
             " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
             "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
             "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost objnone=${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll " +
@@ -573,7 +575,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v366"
+internal const val BOT_VERSION = "v368"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и

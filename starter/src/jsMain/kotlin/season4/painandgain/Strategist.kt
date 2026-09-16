@@ -1201,6 +1201,29 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         // закреплённых в среднем стоит двое — остальные в пути, — и два скаута добавляют ровно недостающие тела
         val scoutsFree = ctx.runners.filter { !hasWeapon(it) && !hasHeal(it) && canMove(it) && it.id !in Memory.garrisonOf }
             .toMutableList()
+        // КУРЬЕР НА ДОРОГОЙ ФЛАГ, КОТОРЫЙ ОН НЕ ДЕРЖИТ ТЕЛОМ (v367). Замер владения по каждому флагу за 8 матчей на
+        // соперника показал, что весь проигрыш по очкам сидит в дорогих флагах, и у ОБОИХ соперников там дыра одного
+        // вида. けろびー#19: H4#2 даёт ему −44 560 очков разрыва, H4#1 −15 920, и на клетке он стоит 0–1 % тиков —
+        // флаг его, а тела нет. ricardo18informatica2020#14 (топ-1): R3#5 и R3#6 он ДЕРЖИТ телом 94–97 % тиков и
+        // отдавать не станет, но H4#1 у него не охраняется вовсе (0 %) при владении вровень с нами — занять его
+        // целиком даёт +3 460 очков за матч при дефиците 1 400. Пустую клетку берёт кто угодно, поэтому идёт скаут:
+        // он тело, в бою не нужен и стоит 100 хитов вместо 1 200–1 600
+        // ...и приз должен быть свободен НЕ ТОЛЬКО НА КЛЕТКЕ (v367, сужение по гейту): первая редакция смотрела лишь
+        // на occupant и уронила match34:camp (14 481 : 23 960) — скаут уходил на флаг, у которого стоит его
+        // вооружённый, и там гиб, ничего не удержав. Скаута сгоняет любой ствол (см. SCOUT_FLEE_TRIGGER), поэтому
+        // приз — это флаг, у которого его стволов нет вовсе
+        val prize = flags.filter { !it.ours && it.score >= COURIER_SCORE && it.occupant == null &&
+            ctx.combatEnemies.none { e -> getRange(e, it.pos) <= SCOUT_FLEE_TRIGGER } }
+            .maxByOrNull { it.swing * 100 - getRange(it.pos, ctx.home) }
+        val courier = if (prize != null && scoutsFree.size > 1) scoutsFree.minByOrNull { getRange(it, prize.pos) } else null
+        if (courier != null && prize != null) {
+            scoutsFree.remove(courier)
+            Memory.garrisonOf.remove(courier.id)
+            Memory.cmdDetach.add(courier.id)
+            Memory.runnerFlag[courier.id] = prize.id
+            free.removeAll { it.id == courier.id }
+            courierTicks++
+        }
         for (f in homeFlags) {
             if (Memory.garrisonOf.values.contains(f.id)) continue
             val sc = scoutsFree.minByOrNull { getRange(it, f.pos) }
