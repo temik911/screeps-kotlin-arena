@@ -578,9 +578,14 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // けろびー боя нет вовсе (kills=0, fire=0 за матч), гонку решают тела на флагах, а одиночку он
                 // расстреливает — мы теряем 5,3 крипа за матч против его 0,5. Лекарь в ядре при этом проводит 65 % времени
                 // без дела; у флага он делает пару, которую сгонять нечем
+                // ...и к гарнизону лекарь идёт ЗАРАНЕЕ, а не по ране (v342): уход держателя решается сравнением «его
+                // возможный урон по клетке против нашего лечения на ней» (v340), а лечение там ноль, пока лекарь в ядре, —
+                // к раненому он уже не успевает, тот ушёл. Гарнизонных флагов четыре, лекарей три, один всегда с ядром
+                val garrison = ctx.runners.filter { r -> Memory.garrisonOf[r.id] != null &&
+                    ctx.flags.any { f -> f.ours && f.pos.x == r.x && f.pos.y == r.y } }
                 val holders = ctx.runners.filter { r -> r.hits < r.hitsMax &&
                     ctx.flags.any { f -> f.ours && f.pos.x == r.x && f.pos.y == r.y } }
-                val hurt = army.filter { it.id in Memory.keeperIds && it.hits < it.hitsMax } + holders
+                val hurt = army.filter { it.id in Memory.keeperIds && it.hits < it.hitsMax } + holders + garrison
                 if (hurt.isEmpty()) return@run null
                 val free = medics.toMutableList()
                 var mine: Creep? = null
