@@ -235,8 +235,21 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         // достающих клетку (с его дебаффами), healAt — лечение наших лекарей в дальности (с нашими)
         val incoming = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies)
         val healing = InfluenceMap.healAt(s.x, s.y, ctx.army.filter { hasHeal(it) })
+        // ...НО ПРАВО ОСТАВАТЬСЯ — ТОЛЬКО У ВООРУЖЁННОГО (v358). Правило меряет урон по клетке СЕЙЧАС, а скаут держит
+        // 100 хитов при 185–192 уроне его мили вплотную и 66 с трёх клеток: для него «урон превысил лечение» и
+        // «он уже мёртв» — один и тот же тик. Разбор 12 наших смертей против けろびー#19: трое из них скауты, агония
+        // 1–2 тика, и метка бегства в двух случаях сработала ровно в тик смерти (t=1030 → 1031, t=1490 → 1491), хотя
+        // предупреждение было: ближайший его вооружённый стоял в десяти клетках 8–11 тиков и в шести 4–5 тиков.
+        // Без этого права скаут живёт по общему правилу бегуна — уходит от вооружённого в SCOUT_FLEE_TRIGGER, — и
+        // флаг всё равно остаётся нашим, пока враг сам на него не встал
+        // ...и для БЕЗОРУЖНОГО мера берётся с упреждением (v359): снять право оставаться целиком (v358) значило гнать
+        // скаута от всякого вооружённого в SCOUT_FLEE_TRIGGER = 8 клетках, и гейт показал цену на match29:camp, где
+        // враг сидит у флагов и не нападает: 23 869 : 23 159 против 21 341 : 7 964, то есть отрыв съеден целиком.
+        // Порог из разбора точнее: скауту нужен тот, кто достанет его ЗА ДВА ТИКА, а не всякий в восьми клетках
+        val soon = if (hasWeapon(s)) incoming
+            else InfluenceMap.damageSoonAt(s.x, s.y, ctx.combatEnemies, SCOUT_LEAD)
         val garrisonStays = groupSafe && Memory.garrisonOf[s.id] != null && holds.containsKey(s.id) &&
-            s.hits * 2 >= s.hitsMax && incoming <= healing
+            s.hits * 2 >= s.hitsMax && soon <= healing
         if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay++
         if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay++
         if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned && !garrisonStays) {
