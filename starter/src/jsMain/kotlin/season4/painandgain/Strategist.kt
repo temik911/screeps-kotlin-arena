@@ -1131,14 +1131,24 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     if (safe) {
         Memory.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Memory.cmdDetach.contains(id) }
         val homeFlags = flags.sortedBy { getRange(it.pos, ctx.home) }.take(GARRISON_FLAGS)
+        // ...И СКАУТЫ — ТОЖЕ ГАРНИЗОН (v341): они тела, в бою не нужны, а держат флаг не хуже вооружённого; из четырёх
+        // закреплённых в среднем стоит двое — остальные в пути, — и два скаута добавляют ровно недостающие тела
+        val scoutsFree = ctx.runners.filter { !hasWeapon(it) && !hasHeal(it) && canMove(it) && it.id !in Memory.garrisonOf }
+            .toMutableList()
         for (f in homeFlags) {
-            if (budget <= 0) break
             if (Memory.garrisonOf.values.contains(f.id)) continue
+            val sc = scoutsFree.minByOrNull { getRange(it, f.pos) }
+            if (sc != null && scoutsFree.size >= homeFlags.count { fl -> !Memory.garrisonOf.values.contains(fl.id) }) {
+                Memory.garrisonOf[sc.id] = f.id; scoutsFree.remove(sc); continue
+            }
+            if (budget <= 0) break
             val c = free.filter { it.id !in Memory.garrisonOf }.minByOrNull { getRange(it, f.pos) } ?: break
             val without = free.filter { it.id != c.id }
             if (!coreHolds(without)) break
             Memory.garrisonOf[c.id] = f.id
         }
+        // скаут-гарнизон ходит по тем же правилам бегуна: задание за ним, пока он жив
+        for ((id, fid) in Memory.garrisonOf) if (ctx.runners.any { it.id == id && !hasWeapon(it) }) Memory.runnerFlag[id] = fid
         for ((id, fid) in Memory.garrisonOf) {
             val c = free.firstOrNull { it.id == id } ?: continue
             if (budget <= 0) break
