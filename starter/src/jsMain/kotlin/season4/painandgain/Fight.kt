@@ -433,6 +433,15 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     }
     if (cells.isEmpty()) return
     val (ax, ay) = Formation.fist(fighters, cells)
+    // ЗЕМЛЯ НЕ ОТДАЁТСЯ, ПОКА МЫ НЕ СЛАБЕЕ (v320). Разбор 18 реплеев блобов MetalicaX (Opus): тики, где центр армии идёт
+    // назад быстрее 0,15 клетки, дают размен 0,46 против #15 и 0,68 против #9-типа; стоим — 0,93/1,19; идём вперёд —
+    // 1,50/0,90. В поражениях от #15 армия проводит так 40 % тиков контакта (размен 0,32), в победах 7 %; в режиме FIGHT
+    // пятятся все роли по 0,2 клетки в тик даже при замысле PRESS. Здесь это запрет на клетку ДАЛЬШЕ от его массы для
+    // вооружённого, пока ядро в контакте и мы не слабее; раненые в ротации, лекари и замысел кайта — не под правилом
+    val hisMass = centroidOf(armedEnemies)
+    val standFast = intent != Intent.KITE && coreContactNow && !groupSafe && hisMass != null &&
+        ourPowerOf(army, armedEnemies) >= enemyPowerOf(armedEnemies, army) * PARITY_FLOOR
+    if (standFast) standFastTicks++
     // ОПАСНОСТЬ КЛЕТКИ ЧИТАЕТСЯ ИЗ ПОЛЯ (v204, этап 4). Прежде она строилась здесь, то есть ПЯТЬ раз за тик —
     // по разу на замысел, над одним и тем же множеством врагов, — и внутри цикла по клеткам звалась profileOf,
     // читающая тело крипа через границу изоляции. Поле строится один раз в прологе тика (см. buildFields), и
@@ -561,6 +570,10 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             if (key in taken) continue
             if (!wants(p)) continue
             val self = p.x == c.x && p.y == c.y
+            if (standFast && !self && hasWeapon(c) && c.id !in Memory.rotatingIds && c.id !in Memory.stepOutIds &&
+                maxOf(abs(p.x - hisMass!!.x), abs(p.y - hisMass.y)) > maxOf(abs(c.x - hisMass.x), abs(c.y - hisMass.y))) {
+                standFastSkipped++; continue
+            }
             // ...и жилец, которому приказано СТОЯТЬ, остаётся препятствием (v175): прежде всякий, кто уже получил
             // приказ, считался уходящим — а приказ «стой» (хранитель флага, крип на своём месте) никуда его не
             // уводит, и назначенная поверх него клетка оказывалась неисполнимой. Это и есть весь оставшийся

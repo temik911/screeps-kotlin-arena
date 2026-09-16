@@ -1068,7 +1068,10 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             .sortedByDescending { it.score }
         for (f in unmanned) {
             if (budget <= 0) break
-            val c = free.minByOrNull { getRange(it, f.pos) } ?: break
+            // ...и на флаг садится СТРЕЛОК, если он свободен (v319): его одиночный стрелок бьёт с трёх клеток, и наш мили
+            // на флаге ему не отвечает — за матч 25 снятий хранителя «хиты ниже половины»; стрелок отвечает и сгоняет его
+            val c = free.filter { hasRanged(it) }.minByOrNull { getRange(it, f.pos) }
+                ?: free.minByOrNull { getRange(it, f.pos) } ?: break
             val without = free.filter { it.id != c.id }
             if (!coreHolds(without)) break
             Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); budget--
