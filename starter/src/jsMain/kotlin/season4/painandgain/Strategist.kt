@@ -972,7 +972,9 @@ internal fun PainAndGain.assignChase(army: List<Creep>, enemyCreeps: List<Creep>
  */
 internal fun PainAndGain.commandHunt(ctx: Ctx, hunters: List<Creep>, armedEnemies: List<Creep>,
                                      out: MutableMap<String, Position>): Boolean {
-    if (!groupSafe || hunters.size < 3) return false
+    // ...и НЕ ПРОТИВ СОБРАННОЙ АРМИИ (v332, гейт: match29:camp 17 855:23 669): у лагеря пикет отходит к своим, загон
+    // тянется за ним и бросает флаги, а рядом с его массой цель перестаёт быть одиночкой на следующем же шаге
+    if (!groupSafe || enemyMassedSignal || hunters.size < 3) return false
     val centre = centroidOf(hunters) ?: return false
     // цель — его одиночка (не больше одного своего в ENGAGE_RANGE) поближе к нам и в пределах HUNT_REACH
     fun lone(e: Creep) = ctx.combatEnemies.count { it.id != e.id && getRange(e, it) <= ENGAGE_RANGE } <= 1
