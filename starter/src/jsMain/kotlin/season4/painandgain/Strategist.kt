@@ -803,10 +803,16 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
     // ХРАНИТЕЛЬ В РЕЖИМЕ ПАР (v303, см. GROUP_SAFE_DMG): его держит не близость врага, а сила ядра без него. Флаг, с
     // которого армия ушла, фермер забирает через 11–15 тиков, а хранителя ставило только «его крип в KEEP_RANGE» —
     // против けろびー армия брала флаг и уходила, и мы держали 2,15 флага против его 4,6
-    val seedNear = armedEnemies.maxByOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } }
-    val largestNear = if (seedNear == null) armedEnemies else armedEnemies.filter { getRange(seedNear, it) <= ENGAGE_RANGE }
-    fun coreHolds(core: List<Creep>) = core.any { hasWeapon(it) } &&
-        ourPowerOf(core, largestNear) >= enemyPowerOf(largestNear, core) * PARITY_FLOOR
+    // ...И МЕРА ЯДРА — ТЕ, КТО К НЕМУ ПОДОШЁЛ (v314): «крупнейшая его группа на карте» (v301) держала при ядре почти всех,
+    // и хранитель на флаге бывал один: 24–33 назначения за матч, 0,8 стоящего хранителя в среднем, 1,7 нашего флага против
+    // его 5,0. Опора та же, что у отзыва с v296, — его крипы, которые успевают дойти до нашей массы; в ядре при этом
+    // всегда остаются двое с оружием
+    fun coreHolds(core: List<Creep>): Boolean {
+        if (core.count { hasWeapon(it) } < 2) return false
+        val near = armedEnemies.filter { e -> core.any { getRange(e, it) <= MARCH_SAFE } }
+        if (near.isEmpty()) return true
+        return ourPowerOf(core, near) >= enemyPowerOf(near, core) * PARITY_FLOOR
+    }
     // ...И СНИМАЕТ ХРАНИТЕЛЯ МЕСТНАЯ СИЛА, А НЕ СЧЁТ (v305): порог «больше двух его вооружённых в десяти клетках» снимал
     // хранителя каждые несколько тиков — его крипы бродят мимо, — и флаг оставался пустым: «keeps at t=46 … released at
     // t=50», 174 таких события за матч при 1,96 наших флага против его 4,79. Здесь тот же вопрос, что у бегуна с v297:
@@ -973,10 +979,10 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // только опора — та же локализация, что у ворот захвата с v214 и у отзыва с v296. «Двое с оружием» (первая редакция)
     // отпускали столько, что ядро переставало брать флаг, на котором сидит его крип: стендовый фермер scatter держал
     // оба H4 до конца (match33/34:scatter 21 199:24 238 и 20 803:24 322 — FAIL гейта), тогда как целая армия их отбивала
-    val seedNear = armedEnemies.maxByOrNull { e -> armedEnemies.count { getRange(e, it) <= ENGAGE_RANGE } }
-    val largestNear = if (seedNear == null) armedEnemies else armedEnemies.filter { getRange(seedNear, it) <= ENGAGE_RANGE }
-    fun coreHolds(without: List<Creep>) = if (safe) without.count { hasWeapon(it) } >= 2 &&
-            ourPowerOf(without, largestNear) >= enemyPowerOf(largestNear, without) * PARITY_FLOOR
+    fun coreHolds(without: List<Creep>) = if (safe) without.count { hasWeapon(it) } >= 2 && run {
+            val near = armedEnemies.filter { e -> without.any { getRange(e, it) <= MARCH_SAFE } }
+            near.isEmpty() || ourPowerOf(without, near) >= enemyPowerOf(near, without) * PARITY_FLOOR
+        }
         else without.any { hasWeapon(it) } && ourPowerOf(without, armedEnemies) >= enemyPowerOf(armedEnemies, without) * PARITY_FLOOR
     // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
     // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
