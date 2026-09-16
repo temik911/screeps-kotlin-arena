@@ -369,7 +369,7 @@ internal const val GROUP_SAFE_DMG = 300
  *  перехвата ставится на столько клеток впереди цели по её вектору отхода. */
 /** Сколько ближайших к дому флагов держит постоянный гарнизон (v337): четвёрка — порог контрфакта (три флага дают
  *  15 620 : 20 957 и ноль побед, четыре — 19 838 : 16 739 и шестнадцать из шестнадцати). */
-internal const val GARRISON_FLAGS = 5
+internal const val GARRISON_FLAGS = 6
 
 internal const val HUNT_REACH = 20
 internal const val HUNT_CUT = 6
