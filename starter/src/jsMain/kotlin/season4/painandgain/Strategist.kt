@@ -72,6 +72,8 @@ internal object Strategist {
         val outmatched: Boolean, val pushing: Boolean, val underFire: Boolean,
         /** ни сомкнутой армии, ни COMMAND_MIN_FOES у руки */
         val fewFoes: Boolean,
+        /** его вооружённые сомкнуты в кулак И мы уже позади по суммарным хитам (v352, см. fightNow) */
+        val enemyMassed: Boolean,
         val posture: Posture, val postureSince: Int, val now: Int,
         /** кандидат прошлого тика и тик, с которого он предлагается без перерыва (v250) */
         val candidate: Posture?, val candidateSince: Int,
@@ -124,7 +126,24 @@ internal object Strategist {
         // РЕЖИМ КОМАНДИРА (v160): поход — врага рядом нет; гонка — затор или его отход вне рубки; бой — под его огнём,
         // его группа у руки, мы не наступаем и не бежим (v217: наступление режим боя не исключает — кулак нужен там,
         // где лечение не даёт добить, а признак «мы позади по размену» и есть !pushing … underFire)
-        val fightNow = !i.pushing && i.underFire && !i.fewFoes && pre != Posture.RETREAT && pre != Posture.EVADE
+        // ...И ПРОТИВ КУЛАКА СТРОЕВОГО БОЯ НЕ БЫВАЕТ (v351). Замер по 40 матчам против MetalicaX#15 (версии
+        // v342–v348): исход двоичный — либо мы переживаем первое столкновение всеми четырнадцатью и выигрываем
+        // 20–22 тыс. против 5–9 тыс., либо нас вырезают к 200-му тику (8 побед, 32 поражения). Различитель — режим
+        // командира в первые 60 тиков контакта: в победах одно окно FIGHT против шести RACE, в поражениях четыре
+        // против трёх; за 50 тиков контакта убито 4,0 его крипа против 0,0, наших живых 14,0 против 13,0, наши хиты
+        // 12 560 против 8 133, его 5 719 против 9 935. Причинность проверена по времени: в 26 поражениях из 32 режим
+        // боя включался РАНЬШЕ первой нашей смерти (медиана 80-й тик против 100-го), а три победы из восьми прошли
+        // вовсе без него. Возражение к этому выводу названо и оно честное: `!pushing` само означает «мы позади по
+        // размену», и в момент включения у нас уже 10 556 хитов из 16 000 против 12 668 в победах, — то есть связь
+        // может быть обратной. Различает их только живой замер, и он здесь: A/B 8+8 против MetalicaX#15.
+        // ⚠️ СУЖЕНО ГЕЙТОМ (v352): запрет «никогда против кулака» уронил match20:brawl+heals — там строй УНИЧТОЖАЕТ
+        // его армию за 221 тик (1 739 : 562), а без него матч тянется до 1 980-го и проигран 14 982 : 15 493;
+        // exposure показал «командир в бою 0,0 %», то есть правило сняло режим боя во всех 135 сценариях. Различитель
+        // взят из того же живого замера, которым правило и обосновано: в победах в момент боя у нас 12 560 хитов
+        // против его 5 719 — мы впереди вдвое и добиваем, в поражениях 8 133 против 9 935 — мы уже позади, и строй
+        // проигранный размен не выправляет. Поэтому запрет действует только позади по хитам: впереди — бьём строем
+        val fightNow = !i.pushing && i.underFire && !i.fewFoes && pre != Posture.RETREAT && pre != Posture.EVADE &&
+            !(i.enemyMassed && USE_NO_FIST_FIGHT)
         val mode = when {
             i.marchNow -> CmdMode.MARCH
             i.stalled || i.hisRetreat -> CmdMode.RACE
@@ -2282,6 +2301,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         stalled = stalledNow, hisRetreat = enemyRetreating && !(underTheirFire && theirMeleeIn),
         outmatched = outmatchedTicks >= BREAK_OFF_TICKS, pushing = pushing, underFire = underTheirFire,
         fewFoes = !(enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES),
+        enemyMassed = enemyMassedSignal && ctx.army.sumOf { it.hits } < ctx.combatEnemies.sumOf { it.hits },
         posture = posture, postureSince = postureSince, now = getTicks(),
         candidate = Memory.postureCandidate, candidateSince = Memory.candidateSince,
         // событие — прибор evt= (в гистерезис пока не входит, см. Strategist.decide): гибель своего (по числу живых,
