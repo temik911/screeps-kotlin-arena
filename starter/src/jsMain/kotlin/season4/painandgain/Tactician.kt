@@ -598,6 +598,23 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // пять-шесть флагов в 40–78 клетках друг от друга. Отсюда же 11 из 12 смертей без лекаря в шести
                 // клетках при медиане 24
                 val budget = if (groupSafe) medics.size else medics.size - 1
+                // ...И ПАРА ЛИПКАЯ (v363). Отпустить к гарнизону всех трёх (v362) покрытия НЕ ДАЛО: 31,4 % против
+                // 32,5 % при двоих, — потому что подопечный выбирался заново каждый тик по «самый раненый», и лекарь
+                // ходил между гарнизонными, не стоя рядом ни с кем. Теперь лекарь закрепляется за гарнизонным крипом,
+                // пока оба живы: три лекаря — три покрытых флага, а не три бегающих лекаря
+                if (groupSafe) {
+                    Memory.medicOf.keys.retainAll { id -> medics.any { it.id == id } }
+                    Memory.medicOf.entries.retainAll { e -> hurt.any { it.id == e.value } }
+                    val mineSticky = Memory.medicOf[creep.id]
+                    if (mineSticky != null) return@run hurt.firstOrNull { it.id == mineSticky }
+                    val takenWards = Memory.medicOf.values.toSet()
+                    val ward = hurt.filter { it.id !in takenWards }.minByOrNull { getRange(creep, it) }
+                    if (ward != null && Memory.medicOf.size < budget) {
+                        Memory.medicOf[creep.id] = ward.id
+                        return@run ward
+                    }
+                    return@run null
+                }
                 for (k in hurt.sortedBy { it.hits }) {
                     if (taken >= budget) break
                     val m = free.minByOrNull { getRange(it, k) } ?: break
