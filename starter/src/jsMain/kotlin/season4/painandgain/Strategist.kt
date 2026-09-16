@@ -957,6 +957,56 @@ internal fun PainAndGain.assignChase(army: List<Creep>, enemyCreeps: List<Creep>
     Memory.chasedIds.addAll(Memory.chaseOf.values)
 }
 
+/**
+ * ЗАГОН (v331, предложение оператора 16.09.2026: «получить преимущество по крипам — делить армию на несколько
+ * независимых групп, чтобы несколько групп догоняли конкретную цель, загоняя её с разных сторон, пока кто-то не выйдет
+ * на огневой рубеж»).
+ *
+ * Основание в числах: против けろびー#19 мы теряем 5,3 крипа за матч, он — 0,5, и каждый его живой крип забирает флаг,
+ * едва мы с него уйдём. Догнать его кулаком нельзя: скорости равны, и за CHASE_WINDOW он отходит ровно на столько же.
+ * Загон решает это геометрией, а не скоростью: одна пара идёт ПРЯМО на цель и гонит её, вторая — в точку на ЕГО векторе
+ * отхода (от первой пары), то есть туда, куда он побежит; сойдясь, они держат его в дальности выстрела.
+ *
+ * Работает только в режиме пар (см. GROUP_SAFE_DMG): там ядро всё равно не дерётся строем, а цель — одиночка, от
+ * которой он сам не помогает (от наших групп из двух и больше он отходит).
+ */
+internal fun PainAndGain.commandHunt(ctx: Ctx, hunters: List<Creep>, armedEnemies: List<Creep>,
+                                     out: MutableMap<String, Position>): Boolean {
+    if (!groupSafe || hunters.size < 3) return false
+    val centre = centroidOf(hunters) ?: return false
+    // цель — его одиночка (не больше одного своего в ENGAGE_RANGE) поближе к нам и в пределах HUNT_REACH
+    fun lone(e: Creep) = ctx.combatEnemies.count { it.id != e.id && getRange(e, it) <= ENGAGE_RANGE } <= 1
+    val sticky = Memory.huntQuarry?.let { id -> ctx.combatEnemies.firstOrNull { it.id == id } }
+        ?.takeIf { lone(it) && getRange(centre, it) <= HUNT_REACH }
+    val quarry = sticky ?: ctx.combatEnemies
+        .filter { lone(it) && getRange(centre, it) <= HUNT_REACH }
+        .minByOrNull { getRange(centre, it) } ?: run { Memory.huntQuarry = null; return false }
+    Memory.huntQuarry = quarry.id
+    huntTicks++
+    // ближняя половина гонит, дальняя режет отход: его вектор отхода — от центра гонящих
+    val byNear = hunters.sortedBy { getRange(it, quarry) }
+    val chase = byNear.take(maxOf(2, byNear.size / 2))
+    val cut = byNear.drop(chase.size)
+    val chaseCentre = centroidOf(chase) ?: centre
+    val dx = quarry.x - chaseCentre.x
+    val dy = quarry.y - chaseCentre.y
+    val n = maxOf(1, maxOf(abs(dx), abs(dy)))
+    val cutX = (quarry.x + dx * HUNT_CUT / n).coerceIn(1, 98)
+    val cutY = (quarry.y + dy * HUNT_CUT / n).coerceIn(1, 98)
+    val cutCell = passableNear(InfluenceMap.cell(cutX, cutY))
+    val matrix = crowdMatrixOf(ctx, -1)
+    for (c in chase) {
+        val step = pathStep(c, InfluenceMap.cell(quarry.x, quarry.y), if (hasRanged(c)) RANGED_RANGE - 1 else 1, matrix)
+        if (step != null) out[c.id] = step
+    }
+    for (c in cut) {
+        val step = pathStep(c, cutCell, 1, matrix)
+        if (step != null) out[c.id] = step
+    }
+    huntCreepTicks += hunters.size
+    return true
+}
+
 internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>,
                         out: MutableMap<String, Position>) {
     out.clear()
@@ -1286,7 +1336,10 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         // задания на захват, а ядро шло врозь по прежним веткам и приходило к бою растянутым
         // ...и только пока враг ДАЛЕКО: рядом с ним решают тактические ветки — экран, добыча, перехват, — а строй,
         // ведущий ядро на флаг мимо них, ронял screen и scatter (гейт 131 из 135)
-        if (armedEnemies.none { e -> mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
+        // ЗАГОН ВМЕСТО МАРША (v331): ядро, оставшееся после раздачи флагов, ловит его одиночку двумя группами
+        val restCore = mobileArmy.filter { it.id !in Memory.cmdDetach }
+        val hunting = commandHunt(ctx, restCore, armedEnemies, commandOf)
+        if (!hunting && armedEnemies.none { e -> mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
             val goal = commandGoal(ctx, mobileArmy, armedEnemies)
             cpuMark("p.goal")
