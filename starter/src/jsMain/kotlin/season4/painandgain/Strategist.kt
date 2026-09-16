@@ -825,8 +825,9 @@ internal fun PainAndGain.fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
 
 internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
     val armedEnemies = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
-    // упреждение ухода — только против сомкнутого и только ОДИНОКОМУ (v355/v356, см. KEEP_LEAD)
-    fun keepLeadFor(c: Creep) = if (enemyMassedSignal &&
+    // упреждение ухода — только против СОМКНУТОГО и только ОДИНОКОМУ (v357, см. KEEP_LEAD): обе проверки нужны, и
+    // каждая отвергла свою отдельную редакцию живым замером
+    fun keepLeadFor(c: Creep) = if (!groupSafe && enemyMassedSignal &&
         army.none { it.id != c.id && hasWeapon(it) && getRange(it, c) <= KEEP_ALONE }) KEEP_LEAD else 0
     // ХРАНИТЕЛЬ В РЕЖИМЕ ПАР (v303, см. GROUP_SAFE_DMG): его держит не близость врага, а сила ядра без него. Флаг, с
     // которого армия ушла, фермер забирает через 11–15 тиков, а хранителя ставило только «его крип в KEEP_RANGE» —
