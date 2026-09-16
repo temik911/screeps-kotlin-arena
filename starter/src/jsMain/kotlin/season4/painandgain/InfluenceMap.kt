@@ -452,6 +452,29 @@ object InfluenceMap {
     }
 
     /**
+     * Урон по клетке ЧЕРЕЗ [lead] тиков хода: то же, что [damageAt], но враг успевает подойти ещё на столько клеток
+     * (v354). Нужно там, где решение об уходе принимается заранее: разбор 12 наших смертей против けろびー#19 показал,
+     * что его мили стоит в четырёх клетках от жертвы в среднем 2,9 тика и в шести — 4,9 тика ДО первого удара, а
+     * полную скорость крип теряет уже через 3,0 тика после первого удара (M6R6 замедляется при 500 хитах, M8A8 при
+     * 700). Мера «кто достаёт сейчас» видит угрозу ровно тогда, когда уходить поздно.
+     */
+    fun damageSoonAt(x: Int, y: Int, enemies: List<Creep>, lead: Int): Double {
+        if (x * 100 + y in protectedCells) return 0.0
+        var damage = 0.0
+        for (enemy in enemies) {
+            val distance = getRange(enemy, cell(x, y))
+            if (distance > RANGED_RADIUS + lead) continue
+            val base = if (wallBetween(enemy.x, enemy.y, x, y)) distance else effectiveRangeTo(enemy, x, y)
+            val effective = maxOf(0, base - lead)
+            val profile = profileOf(enemy)
+            if (effective <= 1) damage += profile.melee * ourTaken
+            if (effective <= 3) damage += profile.ranged * ourTaken
+        }
+        damage += towerSustainedAt(x, y)
+        return damage
+    }
+
+    /**
      * Фактический огонь по клетке в ЭТОТ тик: только то, что враг достаёт с текущей позиции, без
      * шага сближения и без стен (выстрелы стен не знают). Для оценки «сколько сниму, стоя тут K
      * тиков» — цены болотного шага под огнём; карты опасности и влияния остаются на damageAt.

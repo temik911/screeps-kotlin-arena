@@ -874,8 +874,11 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
                 // клетки увеличивали дистанцию), и он работает: по тик-парам шаг выводит из-под его мили в 56 %
                 // случаев против 27 % у стоящего, из-под стрелка — 32 % против 10 %. Помощь не успевала: ближайший
                 // наш лекарь в медиане 24 клетках (22 тика хода), свой ствол в трёх клетках — 0 случаев из 12
+                // ...И СМОТРИТ НА ДВА ТИКА ВПЕРЁД (v354, см. damageSoonAt): мера «кто достаёт сейчас» дала 14
+                // снятий за матч при 74 эпизодах «под огнём у флага» — угроза видна ровно тогда, когда уходить уже
+                // поздно, потому что полная скорость держится всего 3,0 тика после первого удара
                 c.hits * 2 < c.hitsMax ||
-                    InfluenceMap.damageAt(c.x, c.y, ctx.combatEnemies) >
+                    InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, KEEP_LEAD) >
                     InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) }) -> { keepOffHurt++; "hurt" }
                 else -> "core"
             }
@@ -898,7 +901,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // же тиком: 21 из 27 событий «released (hurt)» сопровождались строкой `keeps` в ТОМ ЖЕ тике (78 %), и правка
         // выше без этой была бы отменена каждым тиком заново
         if (cand.hits * 2 < cand.hitsMax ||
-            InfluenceMap.damageAt(cand.x, cand.y, ctx.combatEnemies) >
+            InfluenceMap.damageSoonAt(cand.x, cand.y, ctx.combatEnemies, KEEP_LEAD) >
             InfluenceMap.healAt(cand.x, cand.y, ctx.army.filter { hasHeal(it) })) { keepOffHurt++; continue }
         if (groupSafe) {
             if (!coreHolds(core.filter { it.id != occ.id })) continue
