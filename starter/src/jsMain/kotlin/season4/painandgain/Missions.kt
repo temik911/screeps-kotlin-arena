@@ -246,7 +246,11 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
             // (матч 12) — стоящего враг на равной скорости достаёт следующим тиком, идущего нет
             val foes = threats.ifEmpty { ctx.combatEnemies }
             val danger = underFire || nearby.isNotEmpty()
-            val step = fleeStep(s, foes, ctx.dangerMatrix, SCOUT_FLEE_RANGE) ?: greedyFlee(ctx, s, foes, force = danger)
+            // ...а ГАРНИЗОННЫЙ ОТХОДИТ НА ШАГ ИЗ-ПОД ВЫСТРЕЛА (v347): бегство на SCOUT_FLEE_RANGE уводит его на дюжину
+            // клеток, и флаг стоит пустым все двадцать тиков дороги туда и обратно; из четырёх-семи закреплённых стоит
+            // в среднем 2,4. Достаточно выйти за дальность его стрелка — вернётся он через два-три тика
+            val fleeTo = if (groupSafe && Memory.garrisonOf[s.id] != null) RANGED_RANGE + 1 else SCOUT_FLEE_RANGE
+            val step = fleeStep(s, foes, ctx.dangerMatrix, fleeTo) ?: greedyFlee(ctx, s, foes, force = danger)
             if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
             dbg(s, "FLEE", f, step)
             continue
