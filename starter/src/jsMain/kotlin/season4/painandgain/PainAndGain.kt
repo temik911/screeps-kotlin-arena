@@ -634,6 +634,8 @@ object PainAndGain {
     internal var fightOnNow = false
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
     internal var coreContactNow = false                    // v315: контакт массы армии (а не всякий выстрел за окно)
+    internal var standFastNow = false                      // v321: в контакте и не слабее — клетки назад закрыты
+    internal var hisMassNow: Position? = null              // v321: центр его вооружённых (мера «назад»)
     internal var groupDmgWindow = 0
     /** Пара «крипов отозвано в кулак / тиков боя» (v215). */
     internal var recalled = 0

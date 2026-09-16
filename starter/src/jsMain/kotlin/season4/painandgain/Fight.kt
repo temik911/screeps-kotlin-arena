@@ -438,9 +438,8 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // 1,50/0,90. В поражениях от #15 армия проводит так 40 % тиков контакта (размен 0,32), в победах 7 %; в режиме FIGHT
     // пятятся все роли по 0,2 клетки в тик даже при замысле PRESS. Здесь это запрет на клетку ДАЛЬШЕ от его массы для
     // вооружённого, пока ядро в контакте и мы не слабее; раненые в ротации, лекари и замысел кайта — не под правилом
-    val hisMass = centroidOf(armedEnemies)
-    val standFast = intent != Intent.KITE && coreContactNow && !groupSafe && hisMass != null &&
-        ourPowerOf(army, armedEnemies) >= enemyPowerOf(armedEnemies, army) * PARITY_FLOOR
+    val hisMass = hisMassNow
+    val standFast = intent != Intent.KITE && standFastNow && hisMass != null
     if (standFast) standFastTicks++
     // ОПАСНОСТЬ КЛЕТКИ ЧИТАЕТСЯ ИЗ ПОЛЯ (v204, этап 4). Прежде она строилась здесь, то есть ПЯТЬ раз за тик —
     // по разу на замысел, над одним и тем же множеством врагов, — и внутри цикла по клеткам звалась profileOf,

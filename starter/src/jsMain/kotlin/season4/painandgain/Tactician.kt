@@ -938,6 +938,19 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // крип доходит до своей клетки в 7 % случаев (10 из 144) и даже приближается лишь в 32 %. Прогноз
                 // при этом считает, что армия встанет по плану: он опирался на фикцию. Клетка в ОДНОМ шаге теперь
                 // запрашивается напрямую, как это делают захватчики
+                // ...и ЗЕМЛЯ НЕ ОТДАЁТСЯ (v321): тот же запрет, что у командира (v320), в свободном шаге
+                val hm = hisMassNow
+                if (standFastNow && hm != null && hasWeapon(creep) && !rotating && !mustFlee) {
+                    val back = HashSet<Int>()
+                    val myD = maxOf(abs(creep.x - hm.x), abs(creep.y - hm.y))
+                    for ((dx, dy) in dirsNow()) {
+                        if (dx == 0 && dy == 0) continue
+                        val x = creep.x + dx; val y = creep.y + dy
+                        if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                        if (maxOf(abs(x - hm.x), abs(y - hm.y)) > myD) { back.add(x * 100 + y); standFastSkipped++ }
+                    }
+                    if (back.isNotEmpty()) myBlocked = myBlocked + back
+                }
                 val chosen = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW, focusTarget)
                 chosen
             }

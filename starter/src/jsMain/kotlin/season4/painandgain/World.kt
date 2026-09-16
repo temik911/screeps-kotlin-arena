@@ -826,6 +826,10 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
     fightOnNow = contact || exchangeRecent
     coreContactNow = contact
+    // ЗЕМЛЯ НЕ ОТДАЁТСЯ (v321, см. v320): признак считается здесь один раз за тик — его читают и командир, и свободный
+    // шаг. Командир правит лишь часть тиков (fight:35 из 125 в разгроме от MetalicaX#15), а пятится армия всё время
+    standFastNow = contact && !groupSafe && armedEnemies.isNotEmpty() && ours >= theirs * PARITY_FLOOR
+    hisMassNow = centroidOf(armedEnemies)
     // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
     // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
     if (fightOnNow) { warmFightAll++; if (!exchangeLive) warmFight++ }
