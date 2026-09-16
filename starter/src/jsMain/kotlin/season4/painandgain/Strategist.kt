@@ -1124,7 +1124,26 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // стоял в среднем ОДИН наш крип из четырнадцати: 1,6 нашего флага против его 5,1 при 37 взятиях и 36 потерях за матч,
     // среднее владение 59 тиков. Гарнизон ставится прямо: на каждый наш флаг без нашего крипа на клетке — ближайший
     // свободный боец, и лишь затем пары за чужими флагами
+    // ПОСТОЯННЫЙ ГАРНИЗОН (v337, контрфакт разбора: ядро расходится по четырём ближним флагам с первого тика — 19 838 :
+    // 16 739 и 16 побед из 16). Прежде назначение пересчитывалось каждый тик, и крип половину матча шёл через карту:
+    // среднее владение 74–105 тиков против его 158, потому что он берёт флаги рядом с собой, а мы — где придётся.
+    // Здесь четыре ближайших к дому флага закрепляются за крипами на весь матч и меняются, только если крип погиб
     if (safe) {
+        Memory.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Memory.cmdDetach.contains(id) }
+        val homeFlags = flags.sortedBy { getRange(it.pos, ctx.home) }.take(GARRISON_FLAGS)
+        for (f in homeFlags) {
+            if (budget <= 0) break
+            if (Memory.garrisonOf.values.contains(f.id)) continue
+            val c = free.filter { it.id !in Memory.garrisonOf }.minByOrNull { getRange(it, f.pos) } ?: break
+            val without = free.filter { it.id != c.id }
+            if (!coreHolds(without)) break
+            Memory.garrisonOf[c.id] = f.id
+        }
+        for ((id, fid) in Memory.garrisonOf) {
+            val c = free.firstOrNull { it.id == id } ?: continue
+            if (budget <= 0) break
+            Memory.cmdDetach.add(id); Memory.runnerFlag[id] = fid; free.remove(c); budget--; manned++
+        }
         val unmanned = flags.filter { it.ours && it.occupant?.my != true &&
             ctx.runners.none { r -> Memory.runnerFlag[r.id] == it.id } }
             .sortedByDescending { it.score }
