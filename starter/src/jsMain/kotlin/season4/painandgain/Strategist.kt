@@ -1215,13 +1215,24 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         val prize = flags.filter { !it.ours && it.score >= COURIER_SCORE && it.occupant == null &&
             ctx.combatEnemies.none { e -> getRange(e, it.pos) <= SCOUT_FLEE_TRIGGER } }
             .maxByOrNull { it.swing * 100 - getRange(it.pos, ctx.home) }
-        val courier = if (prize != null && scoutsFree.size > 1) scoutsFree.minByOrNull { getRange(it, prize.pos) } else null
-        if (courier != null && prize != null) {
-            scoutsFree.remove(courier)
-            Memory.garrisonOf.remove(courier.id)
-            Memory.cmdDetach.add(courier.id)
-            Memory.runnerFlag[courier.id] = prize.id
-            free.removeAll { it.id == courier.id }
+        // ...и слот курьера ПОСТОЯННЫЙ, как гарнизон (v369). Первая редакция брала скаута из «свободных», а свободных
+        // нет: обоих с первого тика забирает постоянный гарнизон, — прибор показал ОДИН тик курьера за матч, и тот
+        // единственный тик вырывал скаута из гарнизона и ломал закрепление (0-8 против топ-1, флагов 2,65 против
+        // 3,07). Теперь скаут закрепляется за призом на весь матч и в гарнизон не входит вовсе
+        Memory.courierOf.keys.retainAll { id -> ctx.runners.any { it.id == id } }
+        Memory.courierOf.entries.retainAll { e -> flags.any { it.id == e.value && !it.ours } }
+        if (prize != null && Memory.courierOf.isEmpty()) {
+            val pick = ctx.runners.filter { !hasWeapon(it) && !hasHeal(it) && canMove(it) }
+                .minByOrNull { getRange(it, prize.pos) }
+            if (pick != null) Memory.courierOf[pick.id] = prize.id
+        }
+        for ((id, fid) in Memory.courierOf) {
+            val c = ctx.runners.firstOrNull { it.id == id } ?: continue
+            Memory.garrisonOf.remove(id)
+            scoutsFree.removeAll { it.id == id }
+            Memory.cmdDetach.add(id)
+            Memory.runnerFlag[id] = fid
+            free.removeAll { it.id == c.id }
             courierTicks++
         }
         for (f in homeFlags) {
