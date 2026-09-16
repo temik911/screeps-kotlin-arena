@@ -503,6 +503,14 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
         if (f.ours) { objDrop["ours"] = (objDrop["ours"] ?: 0) + 1; continue }
         if (onlyFlagId != null && f.id != onlyFlagId) { objDrop["cpu"] = (objDrop["cpu"] ?: 0) + 1; continue }   // страховка CPU (v131c)
         if (!captureAllowed(ctx, f)) { objDrop["gate"] = (objDrop["gate"] ?: 0) + 1; continue }
+        // СВОЯ ПОЛОВИНА (v312, см. GROUP_SAFE_DMG): против фермера гонка решается не числом захватов, а числом
+        // УДЕРЖАННЫХ флагов, а удержать можно те, до которых ему дальше, чем нам. Свои R3, A3, H4 и центральный D5 — это
+        // 15 очков в тик против его 10; контрфакт разбора (гарнизоны на своих R3, A3 и обоих H4) давал 30,4 тыс. : 18,1 тыс.
+        // и 20 побед из 21. Флаг его половины берётся, только когда своя уже наша
+        if (groupSafe && getRange(f.pos, ctx.home) > getRange(f.pos, ctx.enemyHome) &&
+            ctx.flags.any { !it.ours && getRange(it.pos, ctx.home) <= getRange(it.pos, ctx.enemyHome) }) {
+            objDrop["far"] = (objDrop["far"] ?: 0) + 1; continue
+        }
         // ЦЕЛЬ АРМИИ НЕ ДУБЛИРУЕТ ФЛАГ БЕГУНА (v216). Обе соседние раздачи это уже проверяют — `commandRace`
         // («флаг, взятый бегуном, не дублируем») и `grabberOf` (исключает флаг-цель), — а самая дорогая, цель
         // ВСЕЙ армии, не проверяла. При потолке в один-два работающих крипа на семи флагах дубль означает, что
@@ -1022,7 +1030,9 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // ...а пара (v298) — только на свободную клетку: флаг, на котором сидит его крип, берёт армия силой. Первая редакция
     // слала пары и на занятые — стендовый фермер scatter держит на каждом своём флаге по крипу, пары весь матч ходили к ним и
     // бежали, ядро из шести флагов не брало, и match28/19:scatter проиграны по очкам (18 873:24 312, 14 925:24 322)
-    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) && !(safe && it.occupant != null) }
+    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) && !(safe && it.occupant != null) &&
+        !(safe && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
+            flags.any { o -> !o.ours && getRange(o.pos, ctx.home) <= getRange(o.pos, ctx.enemyHome) }) }
 
         .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
     // ...И ОТРЯД НА ПУТИ К ФЛАГУ СОХРАНЯЕТ ЗАДАНИЕ (v299): задание раздавалось заново каждый тик, а флаг, к которому уже
