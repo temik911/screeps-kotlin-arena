@@ -799,6 +799,16 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
     val largestNear = if (seedNear == null) armedEnemies else armedEnemies.filter { getRange(seedNear, it) <= ENGAGE_RANGE }
     fun coreHolds(core: List<Creep>) = core.any { hasWeapon(it) } &&
         ourPowerOf(core, largestNear) >= enemyPowerOf(largestNear, core) * PARITY_FLOOR
+    // ...И СНИМАЕТ ХРАНИТЕЛЯ МЕСТНАЯ СИЛА, А НЕ СЧЁТ (v305): порог «больше двух его вооружённых в десяти клетках» снимал
+    // хранителя каждые несколько тиков — его крипы бродят мимо, — и флаг оставался пустым: «keeps at t=46 … released at
+    // t=50», 174 таких события за матч при 1,96 наших флага против его 4,79. Здесь тот же вопрос, что у бегуна с v297:
+    // бьёт ли его стая у флага того, кто на нём стоит, вместе с нашими рядом
+    fun outgunnedAt(c: Creep, f: FlagInfo): Boolean {
+        val pack = armedEnemies.filter { getRange(f.pos, it) <= ENGAGE_RANGE }
+        if (pack.isEmpty()) return false
+        val mates = (army + ctx.runners).filter { hasWeapon(it) && getRange(c, it) <= RANGED_RANGE }
+        return enemyPowerOf(pack, mates) >= ourPowerOf(mates, pack)
+    }
     var core = army.filter { it.id !in Memory.keeperIds }
     val iter = Memory.keeperIds.entries.iterator()
     while (iter.hasNext()) {
@@ -807,14 +817,17 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         val f = ctx.flags.firstOrNull { it.id == e.value }
         // враг с боем в KEEP_RANGE от флага — хранителя нет: стрелок стоял на R3 весь бой, пока в десяти клетках
         // висели скауты врага, и не стрелял (матч 18)
-        val stay = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && c.hits * 2 >= c.hitsMax &&
-            (if (groupSafe) coreHolds(core) else enemyCreeps(ctx).any { it.id != c.id && getRange(f.pos, it) <= KEEP_RELEASE }) &&
-            armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } <= KEEP_PICKET
+        val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && c.hits * 2 >= c.hitsMax
+        val stay = onFlag && (if (groupSafe) coreHolds(core) && !outgunnedAt(c!!, f!!)
+            else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
+                armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } <= KEEP_PICKET)
         if (!stay) {
+            keepOff++
+            if (!onFlag) keepOffLeft++ else if (groupSafe && !coreHolds(core)) keepOffCore++ else keepOffPack++
             if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value}")
             iter.remove()
             if (c != null) core = core + c
-        }
+        } else keepTicks++
     }
     for (f in ctx.flags) {
         if (!f.ours) continue
@@ -825,9 +838,13 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         if (army.any { it.id == occ.id && !hasWeapon(it) && hasHeal(it) }) continue
         if (Memory.runnerFlag.values.contains(f.id)) continue
         if (!groupSafe && enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
-        if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
-        if (groupSafe && !coreHolds(core.filter { it.id != occ.id })) continue
+        val cand = army.firstOrNull { it.id == occ.id } ?: continue
+        if (groupSafe) {
+            if (!coreHolds(core.filter { it.id != occ.id })) continue
+            if (outgunnedAt(cand, f)) continue
+        } else if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
         Memory.keeperIds[occ.id] = f.id
+        keepOn++
         if (groupSafe) core = core.filter { it.id != occ.id }
         if (DEBUG_LOG) println("keeper t=${getTicks()}: ${occ.id} keeps ${f.id} at (${f.pos.x},${f.pos.y})")
     }
