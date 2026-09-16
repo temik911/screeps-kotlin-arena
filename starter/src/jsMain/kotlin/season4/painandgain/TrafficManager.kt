@@ -40,6 +40,7 @@ object TrafficManager {
 
     /** moverId -> упакованная желаемая клетка. */
     private val desired = HashMap<String, Int>()
+    private val pinned = HashSet<String>()
 
     /** moverId -> приоритет (выше — обрабатывается раньше и может проталкивать менее приоритетных). */
     private val priorityOf = HashMap<String, Int>()
@@ -66,6 +67,11 @@ object TrafficManager {
         desired[creep.id] = pack(target.x, target.y)
         priorityOf[creep.id] = priority
     }
+
+    /** ПРИКРЕПЛЁННЫЙ КРИП (v313): стоит и не выталкивается цепочкой. Хранитель флага шага не просит, а значит у него нет
+     *  ни желания, ни приоритета, — и любой свой с приказом занимал его клетку: против けろびー#19 хранитель «сходил с
+     *  клетки» 19–63 раза за матч, и флаг возвращался к сопернику. Метка ставится на тик и снимается вместе с желаниями. */
+    fun pin(id: String) { pinned.add(id) }
 
     /** Крип на прошлом тике шага не просил (стоял по своей воле или обездвижен). */
     fun wasStatic(id: String): Boolean = id !in lastDesired
@@ -145,6 +151,7 @@ object TrafficManager {
         lastDesired.putAll(desired)
         desired.clear()
         priorityOf.clear()
+        pinned.clear()
         return moves
     }
 
@@ -204,7 +211,7 @@ object TrafficManager {
             // проталкиваем блокера, если он сам хочет двигаться (есть интент) ИЛИ мы приоритетнее его
             // (большой толкает стоящего маленького). Равный/выше по приоритету стоящий — не сдвигается.
             // Уставшего (fatigue > 0) не толкаем вовсе — он физически не может шагнуть.
-            val canPush = occ.fatigue <= 0 && (desired.containsKey(occ.id) ||
+            val canPush = occ.fatigue <= 0 && occ.id !in pinned && (desired.containsKey(occ.id) ||
                 (priorityOf[creep.id] ?: 0) > (priorityOf[occ.id] ?: 0))
             if (occ.id in moverIds && occ.id !in visited && canPush) {
                 if (dfs(occ, pack(creep.x, creep.y), occupant, moverIds, movement, assignedCoord, kindOf, visited)) {

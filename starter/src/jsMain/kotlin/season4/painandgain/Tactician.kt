@@ -853,7 +853,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
              keeper && commandOf.containsKey(creep.id) -> commandOf[creep.id]!!
                 .takeIf { it.x != creep.x || it.y != creep.y }.also { stepTag = "keeperOrder" }
-            keeper -> { stepTag = "keeperStay"; null }
+            keeper -> { stepTag = "keeperStay"; TrafficManager.pin(creep.id); null }
             // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
             // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
             // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
