@@ -590,33 +590,8 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 val free = medics.toMutableList()
                 var mine: Creep? = null
                 var taken = 0
-                // ...И В РЕЖИМЕ ПАР ИДУТ ВСЕ ТРОЕ (v362). Оговорка «один лекарь всегда с ядром» (v311) писалась под
-                // гейт match33:camp (15 828 : 23 982) — там лагерь ДЕРЁТСЯ, когда к нему подходят; но camp в режим пар
-                // не попадает вовсе (он сидит на флагах, см. sitsOnFlags), а этот блок и так работает только при
-                // groupSafe и вне контакта ядра. Цена оговорки измерена прибором gcov: против けろびー#19 под лечением
-                // лишь 32,5 % гарнизонных крипо-тиков (25–37 % по матчам) — три лекаря, из них отпускаются два, на
-                // пять-шесть флагов в 40–78 клетках друг от друга. Отсюда же 11 из 12 смертей без лекаря в шести
-                // клетках при медиане 24
-                val budget = if (groupSafe) medics.size else medics.size - 1
-                // ...И ПАРА ЛИПКАЯ (v363). Отпустить к гарнизону всех трёх (v362) покрытия НЕ ДАЛО: 31,4 % против
-                // 32,5 % при двоих, — потому что подопечный выбирался заново каждый тик по «самый раненый», и лекарь
-                // ходил между гарнизонными, не стоя рядом ни с кем. Теперь лекарь закрепляется за гарнизонным крипом,
-                // пока оба живы: три лекаря — три покрытых флага, а не три бегающих лекаря
-                if (groupSafe) {
-                    Memory.medicOf.keys.retainAll { id -> medics.any { it.id == id } }
-                    Memory.medicOf.entries.retainAll { e -> hurt.any { it.id == e.value } }
-                    val mineSticky = Memory.medicOf[creep.id]
-                    if (mineSticky != null) return@run hurt.firstOrNull { it.id == mineSticky }
-                    val takenWards = Memory.medicOf.values.toSet()
-                    val ward = hurt.filter { it.id !in takenWards }.minByOrNull { getRange(creep, it) }
-                    if (ward != null && Memory.medicOf.size < budget) {
-                        Memory.medicOf[creep.id] = ward.id
-                        return@run ward
-                    }
-                    return@run null
-                }
                 for (k in hurt.sortedBy { it.hits }) {
-                    if (taken >= budget) break
+                    if (taken >= medics.size - 1) break
                     val m = free.minByOrNull { getRange(it, k) } ?: break
                     free.remove(m); taken++
                     if (m.id == creep.id) { mine = k; break }
