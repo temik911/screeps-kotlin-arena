@@ -122,8 +122,6 @@ internal var flagGuardTicks = 0
 internal var routeKept = 0
 /** Свои пустые флаги, на которые командир посадил бойца (v316, man=). */
 internal var manned = 0
-/** Смены на флаге (v346, swap=): раненый гарнизонный отдал флаг целому. */
-internal var garrisonSwaps = 0
 /** Загон (v331, hunt=тиков с целью/крипо-тиков в загоне). */
 internal var huntTicks = 0
 internal var huntCreepTicks = 0
@@ -509,7 +507,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
             "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
             "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +
             "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum ffight=$firstFightTick stray=$strayCapRefused sout=$soutOut/$soutBack/$soutTicks hold=$holdPinned/$holdArmedStay/$holdKeptRace/$holdKeptFight gsafe=$groupSafeTicks/$groupDmgWindow fguard=$flagGuardTicks route=$routeKept man=$manned swap=$garrisonSwaps hunt=$huntTicks/$huntCreepTicks toothless=$pushToothless sit=$flagSitOcc/$flagSitAll keep2=$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft keep3=$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" +
+            " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum ffight=$firstFightTick stray=$strayCapRefused sout=$soutOut/$soutBack/$soutTicks hold=$holdPinned/$holdArmedStay/$holdKeptRace/$holdKeptFight gsafe=$groupSafeTicks/$groupDmgWindow fguard=$flagGuardTicks route=$routeKept man=$manned hunt=$huntTicks/$huntCreepTicks toothless=$pushToothless sit=$flagSitOcc/$flagSitAll keep2=$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft keep3=$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" +
             " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
             "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
             "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost objnone=${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll " +
