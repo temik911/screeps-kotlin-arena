@@ -844,7 +844,11 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // ядра в кулак возвращаются все, как прежде
     if (fightOnNow) {
         fightTicksNow++
-        val keep = if (contact) emptySet() else ctx.runners.filter { (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null }.mapTo(HashSet()) { it.id }
+        // ...а в режиме пар (v326) — и отряды на пути к флагу: «бой» здесь держится двадцать тиков после любого выстрела,
+        // и отзыв срабатывал 506 раз за матч, отправляя в ядро тех, кого командир только что послал (man=124, split=392).
+        // Возражение v301 снято тем же, чем и в v325: сидящий на флагах в режим пар не попадает (v302)
+        val keep = if (contact) emptySet() else ctx.runners.filter { (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null ||
+            (groupSafe && it.id in Memory.cmdDetach) }.mapTo(HashSet()) { it.id }
         val before = Memory.cmdDetach.size + Memory.detachedIds.size
         Memory.cmdDetach.retainAll(keep)
         Memory.detachedIds.retainAll(keep)
