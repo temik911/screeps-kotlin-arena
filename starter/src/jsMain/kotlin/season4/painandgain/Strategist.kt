@@ -1202,6 +1202,13 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         // ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v347): смена на флаге — раненый гарнизонный отдаёт флаг целому из ядра (v346). Наших
         // флагов 2,81 против 3,03 у пятёрки без смены, тел на флагах 2,27 против 2,43: смена меняет ОДНОГО уходящего на
         // другого идущего, а клетка всё равно пустует, пока сменщик идёт
+        // прибор покрытия гарнизона лечением (v361): считается по стоящим, до раздачи заданий
+        val medics = ctx.army.filter { !hasWeapon(it) && hasHeal(it) }
+        for ((id, _) in Memory.garrisonOf) {
+            val c = ctx.runners.firstOrNull { it.id == id } ?: ctx.army.firstOrNull { it.id == id } ?: continue
+            garAll++
+            if (medics.any { getRange(it, c) <= HEAL_RANGE }) garCovered++
+        }
         for ((id, fid) in Memory.garrisonOf) {
             val c = free.firstOrNull { it.id == id } ?: continue
             if (budget <= 0) break
