@@ -1149,6 +1149,20 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         }
         // скаут-гарнизон ходит по тем же правилам бегуна: задание за ним, пока он жив
         for ((id, fid) in Memory.garrisonOf) if (ctx.runners.any { it.id == id && !hasWeapon(it) }) Memory.runnerFlag[id] = fid
+        // СМЕНА НА ФЛАГЕ (v346): гарнизонный крип, у которого хитов меньше половины, отдаёт флаг целому из ядра и уходит
+        // лечиться. Лекарей три, а гарнизонных флагов пять (см. GARRISON_FLAGS): держатель без лекаря уходит от первого
+        // же выстрела по правилу «урон против лечения» (v340), и флаг пустеет на дюжину тиков. Смена держит клетку
+        for ((id, fid) in Memory.garrisonOf.entries.toList()) {
+            val c = (free + ctx.runners).firstOrNull { it.id == id } ?: continue
+            if (c.hits * 2 >= c.hitsMax) continue
+            val f = flags.firstOrNull { it.id == fid } ?: continue
+            val relief = free.filter { it.id !in Memory.garrisonOf && it.hits * 2 >= it.hitsMax }
+                .minByOrNull { getRange(it, f.pos) } ?: continue
+            if (!coreHolds(free.filter { it.id != relief.id })) continue
+            Memory.garrisonOf.remove(id); Memory.garrisonOf[relief.id] = fid
+            Memory.cmdDetach.remove(id); Memory.runnerFlag.remove(id)
+            garrisonSwaps++
+        }
         for ((id, fid) in Memory.garrisonOf) {
             val c = free.firstOrNull { it.id == id } ?: continue
             if (budget <= 0) break
