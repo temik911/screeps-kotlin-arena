@@ -90,6 +90,8 @@ internal object Memory {
     /** Хиты каждого нашего крипа на прошлом тике и урон по «группе» за последние GROUP_WINDOW тиков (v298, см. groupSafe). */
     val groupHitsPrev = HashMap<String, Int>()
     val groupDmgHist = ArrayDeque<Int>()
+    /** Его флаги и из них занятые его крипом за последние GROUP_WINDOW тиков, упаковано как флаги * 8 + занятые (v302). */
+    val flagSitHist = ArrayDeque<Int>()
     /** Наше лечение, назначенное каждому своему за прошлый тик (v276): полученный урон = потеря + это лечение. */
     val healGiven = HashMap<String, Int>()
     /** Уходящий раненый -> лекарь, которому приказана клетка рядом с ним (v276, прибор meet=): сверка на следующем тике. */

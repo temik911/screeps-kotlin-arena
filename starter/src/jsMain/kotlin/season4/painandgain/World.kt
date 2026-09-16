@@ -1024,8 +1024,21 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
     val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
-    groupSafe = getTicks() >= GROUP_WINDOW && groupDmgWindow <= GROUP_SAFE_DMG && (groupSafe || splitNow)
+    // ...И НЕ ПРОТИВ ТОГО, КТО ДЕРЖИТ СВОИ ФЛАГИ ТЕЛОМ (v302): на занятую клетку пара не встанет, такой флаг отбирает
+    // только сила ядра, и дробить армию парами не за чем. Замер по 44 реплеям: его флаго-тики с его крипом НА клетке —
+    // けろびー 4 %, Coldkimchi#2 и MetalicaX по 1 %, а System и 恒哥吊 66 %; стендовые фермеры (scatter, camp, farm+weak)
+    // сажают крипа на каждый свой флаг — там пары ходили впустую, а ядру не хватало силы отбить занятый H4
+    // (match33:scatter 22 377:24 235, FAIL гейта)
+    val hisFlagsNow = ctx.flags.count { it.theirs }
+    val hisSitNow = ctx.flags.count { it.theirs && it.occupant != null && it.occupant?.my != true }
+    Memory.flagSitHist.addLast(hisFlagsNow * 8 + hisSitNow)
+    while (Memory.flagSitHist.size > GROUP_WINDOW) Memory.flagSitHist.removeFirst()
+    val sitHis = Memory.flagSitHist.sumOf { it / 8 }
+    val sitOcc = Memory.flagSitHist.sumOf { it % 8 }
+    val sitsOnFlags = sitOcc * 3 >= sitHis
+    groupSafe = getTicks() >= GROUP_WINDOW && groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (groupSafe || splitNow)
     if (groupSafe) groupSafeTicks++
+    flagSitOcc = sitOcc; flagSitAll = sitHis
     val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
     noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
     // фермер — не только «не стреляет», но и «держится дальше броска»: стоящий в 3–6 экран стенда тоже не стрелял, пока
