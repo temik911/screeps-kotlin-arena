@@ -1078,14 +1078,21 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             .sortedByDescending { it.score }
         for (f in unmanned) {
             if (budget <= 0) break
-            // ...и на флаг садится СТРЕЛОК, если он свободен (v319): его одиночный стрелок бьёт с трёх клеток, и наш мили
-            // на флаге ему не отвечает — за матч 25 снятий хранителя «хиты ниже половины»; стрелок отвечает и сгоняет его
+            // ...и на флаг садится ПАРА (v330), а в ней первым — стрелок (v319): одиночка на флаге живёт мало. Разбор
+            // 16 матчей v325/v326: мы теряем 5,3 крипа за матч против его 0,5, и 100 % наших смертей — в одиночку
+            // (ни одного своего с оружием в трёх клетках), 75 % — в трёх клетках от флага; от групп из двух и больше он
+            // отходит (см. GROUP_SAFE_DMG). Второй стоит рядом охраной (см. guardFlag) и не даёт бить первого даром
             val c = free.filter { hasRanged(it) }.minByOrNull { getRange(it, f.pos) }
                 ?: free.minByOrNull { getRange(it, f.pos) } ?: break
             val without = free.filter { it.id != c.id }
             if (!coreHolds(without)) break
             Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); budget--
             manned++
+            val mate = free.minByOrNull { getRange(it, f.pos) }
+            if (budget > 0 && mate != null && coreHolds(free.filter { it.id != mate.id })) {
+                Memory.cmdDetach.add(mate.id); Memory.runnerFlag[mate.id] = f.id; free.remove(mate); budget--
+                manned++
+            }
         }
     }
     for (f in wanted) {
