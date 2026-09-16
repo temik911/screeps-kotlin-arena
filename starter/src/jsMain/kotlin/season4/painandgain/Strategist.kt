@@ -823,7 +823,15 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         if (!stay) {
             keepOff++
             if (!onFlag) keepOffLeft++ else if (groupSafe && !coreHolds(core)) keepOffCore++ else keepOffPack++
-            if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value}")
+            // ПОЧЕМУ СНЯТ (v309, прибор): «сошёл с клетки» — это три разных случая, и порог чинить можно, только зная, какой
+            val why = when {
+                c == null -> { keepOffGone++; "gone" }
+                f == null || !f.ours -> { keepOffFlag++; "flag" }
+                c.x != f.pos.x || c.y != f.pos.y -> { keepOffMoved++; "moved" }
+                c.hits * 2 < c.hitsMax -> { keepOffHurt++; "hurt" }
+                else -> "core"
+            }
+            if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value} ($why)")
             iter.remove()
             if (c != null) core = core + c
         } else keepTicks++
