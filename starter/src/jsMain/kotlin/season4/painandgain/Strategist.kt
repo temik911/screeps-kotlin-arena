@@ -1130,7 +1130,11 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // Здесь четыре ближайших к дому флага закрепляются за крипами на весь матч и меняются, только если крип погиб
     if (safe) {
         Memory.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Memory.cmdDetach.contains(id) }
-        val homeFlags = flags.sortedBy { getRange(it.pos, ctx.home) }.take(GARRISON_FLAGS)
+        // ...и ШЕСТОЙ ФЛАГ — ТОЛЬКО ПРОТИВ РАССЫПАННОГО (v348): шестёрку гейт отверг на match29:camp (15 991 : 23 801),
+        // где его армия собрана и ядру тоньше двух вооружённых уже не устоять; у けろびー армия рассыпана весь матч, и
+        // шестое тело — это ровно тот флаг, которого не хватило в двух матчах, проигранных на 22 и 33 очка
+        val homeFlags = flags.sortedBy { getRange(it.pos, ctx.home) }
+            .take(if (enemyMassedSignal) GARRISON_FLAGS else GARRISON_FLAGS + 1)
         // ...И СКАУТЫ — ТОЖЕ ГАРНИЗОН (v341): они тела, в бою не нужны, а держат флаг не хуже вооружённого; из четырёх
         // закреплённых в среднем стоит двое — остальные в пути, — и два скаута добавляют ровно недостающие тела
         val scoutsFree = ctx.runners.filter { !hasWeapon(it) && !hasHeal(it) && canMove(it) && it.id !in Memory.garrisonOf }
