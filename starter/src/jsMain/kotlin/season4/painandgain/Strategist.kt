@@ -983,29 +983,26 @@ internal fun PainAndGain.commandHunt(ctx: Ctx, hunters: List<Creep>, armedEnemie
     val quarry = sticky ?: ctx.combatEnemies
         .filter { lone(it) && getRange(centre, it) <= HUNT_REACH }
         .minByOrNull { getRange(centre, it) } ?: run { Memory.huntQuarry = null; return false }
+    // ...И ТОЛЬКО ТОГО, КТО УЖЕ ЗАЖАТ (v333). Первая редакция (v331) слала половину ядра в точку на его векторе отхода в
+    // шести клетках впереди: при равных скоростях она недостижима — он уходит ровно на столько же, и за 457–644 тика
+    // загона в матче убитых НОЛЬ при его 11–12 живых. Догнать равного по скорости в поле нельзя; поймать можно только
+    // того, кто уже между двумя нашими группами, — тогда его отход перпендикулярен обеим, и стрелок держит три клетки
+    val near = hunters.filter { getRange(it, quarry) <= HUNT_REACH / 2 }
+    if (near.size < 3) { Memory.huntQuarry = null; return false }
+    // две группы по сторонам от цели: делим по знаку проекции на ось «цель — ближайший наш»
+    val lead = near.minByOrNull { getRange(it, quarry) } ?: return false
+    val ax = lead.x - quarry.x; val ay = lead.y - quarry.y
+    val sideA = near.filter { (it.x - quarry.x) * ax + (it.y - quarry.y) * ay >= 0 }
+    val sideB = near.filter { (it.x - quarry.x) * ax + (it.y - quarry.y) * ay < 0 }
+    if (sideA.isEmpty() || sideB.isEmpty()) { Memory.huntQuarry = null; return false }
     Memory.huntQuarry = quarry.id
     huntTicks++
-    // ближняя половина гонит, дальняя режет отход: его вектор отхода — от центра гонящих
-    val byNear = hunters.sortedBy { getRange(it, quarry) }
-    val chase = byNear.take(maxOf(2, byNear.size / 2))
-    val cut = byNear.drop(chase.size)
-    val chaseCentre = centroidOf(chase) ?: centre
-    val dx = quarry.x - chaseCentre.x
-    val dy = quarry.y - chaseCentre.y
-    val n = maxOf(1, maxOf(abs(dx), abs(dy)))
-    val cutX = (quarry.x + dx * HUNT_CUT / n).coerceIn(1, 98)
-    val cutY = (quarry.y + dy * HUNT_CUT / n).coerceIn(1, 98)
-    val cutCell = passableNear(InfluenceMap.cell(cutX, cutY))
     val matrix = crowdMatrixOf(ctx, -1)
-    for (c in chase) {
+    for (c in near) {
         val step = pathStep(c, InfluenceMap.cell(quarry.x, quarry.y), if (hasRanged(c)) RANGED_RANGE - 1 else 1, matrix)
         if (step != null) out[c.id] = step
     }
-    for (c in cut) {
-        val step = pathStep(c, cutCell, 1, matrix)
-        if (step != null) out[c.id] = step
-    }
-    huntCreepTicks += hunters.size
+    huntCreepTicks += near.size
     return true
 }
 
