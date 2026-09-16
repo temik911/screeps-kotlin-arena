@@ -569,7 +569,8 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             if (key in taken) continue
             if (!wants(p)) continue
             val self = p.x == c.x && p.y == c.y
-            if (standFast && !self && hasWeapon(c) && c.id !in Memory.rotatingIds && c.id !in Memory.stepOutIds &&
+            if (standFast && !self && hasWeapon(c) && maxOf(abs(c.x - hisMass!!.x), abs(c.y - hisMass.y)) <= ENGAGE_RANGE &&
+                c.id !in Memory.rotatingIds && c.id !in Memory.stepOutIds &&
                 maxOf(abs(p.x - hisMass!!.x), abs(p.y - hisMass.y)) > maxOf(abs(c.x - hisMass.x), abs(c.y - hisMass.y))) {
                 standFastSkipped++; continue
             }

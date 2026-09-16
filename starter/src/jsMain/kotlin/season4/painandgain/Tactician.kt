@@ -940,7 +940,8 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // запрашивается напрямую, как это делают захватчики
                 // ...и ЗЕМЛЯ НЕ ОТДАЁТСЯ (v321): тот же запрет, что у командира (v320), в свободном шаге
                 val hm = hisMassNow
-                if (standFastNow && hm != null && hasWeapon(creep) && !rotating && !mustFlee) {
+                if (standFastNow && hm != null && hasWeapon(creep) && !rotating && !mustFlee &&
+                    maxOf(abs(creep.x - hm.x), abs(creep.y - hm.y)) <= ENGAGE_RANGE) {
                     val back = HashSet<Int>()
                     val myD = maxOf(abs(creep.x - hm.x), abs(creep.y - hm.y))
                     for ((dx, dy) in dirsNow()) {

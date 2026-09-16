@@ -828,7 +828,10 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     coreContactNow = contact
     // ЗЕМЛЯ НЕ ОТДАЁТСЯ (v321, см. v320): признак считается здесь один раз за тик — его читают и командир, и свободный
     // шаг. Командир правит лишь часть тиков (fight:35 из 125 в разгроме от MetalicaX#15), а пятится армия всё время
-    standFastNow = contact && !groupSafe && armedEnemies.isNotEmpty() && ours >= theirs * PARITY_FLOOR
+    // ...и ТОЛЬКО ПРОТИВ КУЛАКА (v322, гейт: пять строк scatter по 11 тыс. против 24 тыс.): у рассыпанного соперника
+    // «его масса» — это середина между пикетами, и запрет шага от неё запирал армию у центра, не давая ей ни брать
+    // флаги, ни отходить. Правило про бой с блобом: его армия сомкнута (см. enemyMassedSignal), мы в контакте и не слабее
+    standFastNow = contact && !groupSafe && enemyMassedSignal && armedEnemies.isNotEmpty() && ours >= theirs * PARITY_FLOOR
     hisMassNow = centroidOf(armedEnemies)
     // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
     // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
