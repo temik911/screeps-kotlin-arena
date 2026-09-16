@@ -1013,7 +1013,11 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         minOf(free.count { hasMelee(it) && !hasRanged(it) }, hisMelee) + minOf(free.count { hasRanged(it) }, hisRanged)
     }
     if (!fightOnNow) { symCore += core; symFree += free.size }
-    var budget = free.size - core
+    // ...и В РЕЖИМЕ ПАР БЮДЖЕТ НЕ СИММЕТРИЧЕН (v324): симметрия (v214, решение оператора) держит в ядре столько же, сколько
+    // его боевых рядом, и против けろびー это 4–6 крипов независимо от того, что он с ядром не дерётся, — на флагах стоит
+    // полтора наших тела из четырнадцати при его пяти флагах. В режиме пар в ядре остаются двое с оружием, остальные идут
+    // на флаги; ярлык режима и означает «он не бьёт наших в группе», а начнёт — окно в сто тиков его закроет
+    var budget = if (safe) free.size - 2 else free.size - core
     if (!fightOnNow) { budgetSum += maxOf(0, budget); budgetTicks++ }
     for (h in holding) {
         if (budget <= 0) break
