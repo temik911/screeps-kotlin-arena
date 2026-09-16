@@ -803,12 +803,13 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
     // хранителя каждые несколько тиков — его крипы бродят мимо, — и флаг оставался пустым: «keeps at t=46 … released at
     // t=50», 174 таких события за матч при 1,96 наших флага против его 4,79. Здесь тот же вопрос, что у бегуна с v297:
     // бьёт ли его стая у флага того, кто на нём стоит, вместе с нашими рядом
-    fun outgunnedAt(c: Creep, f: FlagInfo): Boolean {
-        val pack = armedEnemies.filter { getRange(f.pos, it) <= ENGAGE_RANGE }
-        if (pack.isEmpty()) return false
-        val mates = (army + ctx.runners).filter { hasWeapon(it) && getRange(c, it) <= RANGED_RANGE }
-        return enemyPowerOf(pack, mates) >= ourPowerOf(mates, pack)
+    // ...А СНИМАЕТ ЕГО ДАВЛЕНИЕ (v307, см. PRESS_COUNT): сравнение сил (v305) сгоняло нашего мили с флага одним его
+    // стрелком — 34–43 снятия за матч, — хотя флаг стоит очков, а вернуть его стоит дюжины тиков
+    for (f in ctx.flags) {
+        val press = ctx.combatEnemies.count { getRange(f.pos, it) <= PRESS_CELLS }
+        Memory.flagPress[f.id] = if (press >= PRESS_COUNT) (Memory.flagPress[f.id] ?: 0) + 1 else 0
     }
+    fun pressedAt(f: FlagInfo): Boolean = (Memory.flagPress[f.id] ?: 0) >= PRESS_TICKS
     var core = army.filter { it.id !in Memory.keeperIds }
     val iter = Memory.keeperIds.entries.iterator()
     while (iter.hasNext()) {
@@ -818,7 +819,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // враг с боем в KEEP_RANGE от флага — хранителя нет: стрелок стоял на R3 весь бой, пока в десяти клетках
         // висели скауты врага, и не стрелял (матч 18)
         val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && c.hits * 2 >= c.hitsMax
-        val stay = onFlag && (if (groupSafe) coreHolds(core) && !outgunnedAt(c!!, f!!)
+        val stay = onFlag && (if (groupSafe) coreHolds(core) && !pressedAt(f!!)
             else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
                 armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } <= KEEP_PICKET)
         if (!stay) {
@@ -841,7 +842,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         val cand = army.firstOrNull { it.id == occ.id } ?: continue
         if (groupSafe) {
             if (!coreHolds(core.filter { it.id != occ.id })) continue
-            if (outgunnedAt(cand, f)) continue
+            if (pressedAt(f)) continue
         } else if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
         Memory.keeperIds[occ.id] = f.id
         keepOn++
