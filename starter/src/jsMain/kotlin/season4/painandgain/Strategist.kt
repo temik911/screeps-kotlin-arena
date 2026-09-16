@@ -854,7 +854,19 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         val f = ctx.flags.firstOrNull { it.id == e.value }
         // враг с боем в KEEP_RANGE от флага — хранителя нет: стрелок стоял на R3 весь бой, пока в десяти клетках
         // висели скауты врага, и не стрелял (матч 18)
-        val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && c.hits * 2 >= c.hitsMax
+        // ⚠️ ПРАВИЛО УХОДА ПРИНИМАЕТ РЕШЕНИЕ, А НЕ ПОДПИСЫВАЕТ ЕГО (v365, дефект v353). Проверка «его возможный урон по
+        // клетке больше нашего фактического лечения» стояла НИЖЕ, в `when`, вычисляющем ярлык `why`, куда попадают уже
+        // ПОСЛЕ того, как `!stay` решено, — то есть правило только переименовывало снятие по половине хитов в «hurt» и
+        // не снимало никого ни разу. Разбор 4 матчей v361: все 13 снятий с ярлыком «hurt» произошли при 0,37–0,49
+        // хитов, медианное запаздывание от первого удара — 7 тиков, его мили при снятии стоял в ОДНОЙ клетке, и 8 из
+        // 13 кончились смертью в течение 40 тиков (это 8 из наших 9 смертей). Лечения за все девять агоний получено
+        // 0 HP: лекаря ближе шести клеток не было ни разу, ближайший свой ствол — медиана 16 клеток, 15–23 тика хода
+        // при агонии 3–12 тиков. Предупреждение при этом огромно: его вооружённый стоит в четырёх клетках медиану
+        // 19 тиков до первого удара
+        val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax ||
+            InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
+            InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) }))
+        val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && !keeperLeaves
         val stay = onFlag && (if (groupSafe) coreHolds(core)
             else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
                 armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } <= KEEP_PICKET)
@@ -881,9 +893,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
                 // ...И СМОТРИТ НА ДВА ТИКА ВПЕРЁД (v354, см. damageSoonAt): мера «кто достаёт сейчас» дала 14
                 // снятий за матч при 74 эпизодах «под огнём у флага» — угроза видна ровно тогда, когда уходить уже
                 // поздно, потому что полная скорость держится всего 3,0 тика после первого удара
-                c.hits * 2 < c.hitsMax ||
-                    InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
-                    InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) }) -> { keepOffHurt++; "hurt" }
+                keeperLeaves -> { keepOffHurt++; "hurt" }
                 else -> "core"
             }
             if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value} ($why)")
