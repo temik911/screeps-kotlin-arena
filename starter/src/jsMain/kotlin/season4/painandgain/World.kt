@@ -1024,7 +1024,6 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     for (c in ctx.myCreeps) {
         val prev = Memory.groupHitsPrev[c.id]
         if (prev != null && c.hits < prev && oursArmed.any { it.id != c.id && getRange(it, c) <= 2 }) groupDmg += prev - c.hits
-        Memory.hitDrop[c.id] = if (prev != null && c.hits < prev) prev - c.hits else 0
         Memory.groupHitsPrev[c.id] = c.hits
     }
     Memory.groupDmgHist.addLast(groupDmg)
