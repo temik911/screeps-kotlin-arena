@@ -566,9 +566,24 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // флаге расстреливают его одиночки — 25 снятий «хиты ниже половины» за матч, и флаг возвращается к нему.
             // Правило v120 выше стояло против того, чтобы лечение уходило ОТ УДАРНОЙ ГРУППЫ; здесь её нет, а пара
             // «хранитель и лекарь» — уже группа, а группы он не бьёт (см. GROUP_SAFE_DMG). Идёт ближайший лекарь
-            val medic = if (!groupSafe) null else army.filter { it.id in Memory.keeperIds && it.hits < it.hitsMax }
-                .minByOrNull { getRange(creep, it) }
-                ?.takeIf { k -> army.none { h -> h.id != creep.id && !hasWeapon(h) && hasHeal(h) && canMove(h) && getRange(h, k) < getRange(creep, k) } }
+            // ...и НЕ ВО ВРЕМЯ БОЯ И НЕ ПОСЛЕДНИМ ЛЕКАРЕМ (v311, гейт: match33:camp 15 828:23 982 — лагерь стенда дерётся,
+            // когда к нему подходят, а лечение ушло к хранителям): один лекарь всегда остаётся с ядром
+            val medic = if (!groupSafe || fightOnNow) null else run {
+                val medics = army.filter { !hasWeapon(it) && hasHeal(it) && canMove(it) }
+                if (medics.size < 2) return@run null
+                val hurt = army.filter { it.id in Memory.keeperIds && it.hits < it.hitsMax }
+                if (hurt.isEmpty()) return@run null
+                val free = medics.toMutableList()
+                var mine: Creep? = null
+                var taken = 0
+                for (k in hurt.sortedBy { it.hits }) {
+                    if (taken >= medics.size - 1) break
+                    val m = free.minByOrNull { getRange(it, k) } ?: break
+                    free.remove(m); taken++
+                    if (m.id == creep.id) { mine = k; break }
+                }
+                mine
+            }
             medic
                 ?: (if (victimSaveable) victimNow?.takeIf { v -> v.id != creep.id && getRange(creep, v) <= HEAL_RANGE + 1 } else null)
                 ?: near.maxByOrNull { it.hitsMax - it.hits }
