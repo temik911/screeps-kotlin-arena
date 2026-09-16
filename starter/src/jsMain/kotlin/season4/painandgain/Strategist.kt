@@ -1048,7 +1048,12 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         val outIds = alreadyOut.mapTo(HashSet()) { it.id }
         val enRoute = free.filter { it.id in outIds }.groupBy { Memory.runnerFlag[it.id] }
         for ((fid, members) in enRoute) {
-            val f = wanted.firstOrNull { it.id == fid } ?: continue
+            // ...и СВОЙ ПУСТОЙ ФЛАГ ТОЖЕ ЖДЁТ (v317): гарнизонный боец (v316) шёл к нашему флагу, а удержание задания
+            // знало только про чужие флаги — его распускали через тик, и он возвращался в армию, не дойдя: man=14–99
+            // назначений за матч при 1,74 нашего флага
+            val f = wanted.firstOrNull { it.id == fid }
+                ?: flags.firstOrNull { it.id == fid && it.ours && it.occupant?.my != true }
+                ?: continue
             if (budget < members.size) continue
             val without = free.filter { c -> members.none { it.id == c.id } }
             if (!coreHolds(without)) break
