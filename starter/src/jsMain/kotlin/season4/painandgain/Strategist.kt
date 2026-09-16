@@ -862,7 +862,21 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
                 c == null -> { keepOffGone++; "gone" }
                 f == null || !f.ours -> { keepOffFlag++; "flag" }
                 c.x != f.pos.x || c.y != f.pos.y -> { keepOffMoved++; "moved" }
-                c.hits * 2 < c.hitsMax -> { keepOffHurt++; "hurt" }
+                // ...И ХРАНИТЕЛЬ УХОДИТ ПО ТОМУ ЖЕ ПРАВИЛУ, ЧТО ГАРНИЗОННЫЙ БЕГУН (v353, правило оператора
+                // 16.09.2026 «уходить только тогда, когда его потенциальный урон превышает наш фактический хил»).
+                // Разбор 4 матчей v348 по реплеям: за четыре матча мы потеряли 12 крипов, он — 1, и 9 из 12 умерших
+                // были ХРАНИТЕЛЯМИ — крипами армии, приколотыми к клетке флага через TrafficManager.pin, для которых
+                // правило v340 не действовало вовсе: оно написано в ветке бегунов (Missions.kt), а хранителя снимало
+                // только «ниже половины хитов». Цена разнобоя измерена: снятие по хитам фиксируется за 1–3 тика до
+                // смерти во всех семи наблюдаемых случаях, агония длится в среднем 5,8 тика, а полную скорость крип
+                // теряет через 3,0 тика после первого удара — то есть прежний порог назначен ровно на последний тик,
+                // когда уйти ещё можно. Уход был физически возможен в 12 случаях из 12 (в среднем 4,0 свободной
+                // клетки увеличивали дистанцию), и он работает: по тик-парам шаг выводит из-под его мили в 56 %
+                // случаев против 27 % у стоящего, из-под стрелка — 32 % против 10 %. Помощь не успевала: ближайший
+                // наш лекарь в медиане 24 клетках (22 тика хода), свой ствол в трёх клетках — 0 случаев из 12
+                c.hits * 2 < c.hitsMax ||
+                    InfluenceMap.damageAt(c.x, c.y, ctx.combatEnemies) >
+                    InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) }) -> { keepOffHurt++; "hurt" }
                 else -> "core"
             }
             if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value} ($why)")
@@ -880,6 +894,12 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         if (Memory.runnerFlag.values.contains(f.id)) continue
         if (!groupSafe && enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
         val cand = army.firstOrNull { it.id == occ.id } ?: continue
+        // ...и НЕ НАЗНАЧАЕТСЯ ТОТ, КОГО ПРАВИЛО ТУТ ЖЕ СНИМЕТ (v353). Без зеркального условия снятие отменялось тем
+        // же тиком: 21 из 27 событий «released (hurt)» сопровождались строкой `keeps` в ТОМ ЖЕ тике (78 %), и правка
+        // выше без этой была бы отменена каждым тиком заново
+        if (cand.hits * 2 < cand.hitsMax ||
+            InfluenceMap.damageAt(cand.x, cand.y, ctx.combatEnemies) >
+            InfluenceMap.healAt(cand.x, cand.y, ctx.army.filter { hasHeal(it) })) { keepOffHurt++; continue }
         if (groupSafe) {
             if (!coreHolds(core.filter { it.id != occ.id })) continue
         } else if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
