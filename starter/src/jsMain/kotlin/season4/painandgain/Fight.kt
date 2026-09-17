@@ -760,8 +760,13 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     val breachers = armedEnemies.filter { e ->
         hasMelee(e) && army.any { a -> a.id != e.id && !hasMelee(a) && (hasRanged(a) || hasHeal(a)) && getRange(e, a) <= 1 }
     }
-    fun breachBonus(p: Position): Double =
-        if (breachers.any { getRange(p, it) <= 1 }) W_BREACH else 0.0
+    // ...и тянется только ТОТ, КОМУ ХВАТИТ ОДНОГО ШАГА (v375). Безусловное притяжение (v374, вес 300 для всякого
+    // нашего мили) дало против топ-3 2-6 против 3-5, счёт +252 против +1 859, потери 8,88 тела против 8,00 и убитых
+    // 0,25 против 0,50 — хуже по всем приборам: мили бросал позицию и шёл к прорвавшемуся через полполя, теряя строй
+    // и не успевая. Разбор говорил ровно про один шаг: наш мили в этот момент в медиане 2–3 клетках, и бьёт в 9
+    // случаях из 26 — значит тянуть надо того, кто уже в двух клетках, и не трогать остальных
+    fun breachBonus(c: Creep, p: Position): Double =
+        if (breachers.any { getRange(c, it) <= 2 && getRange(p, it) <= 1 }) W_BREACH else 0.0
     fun stayBonus(c: Creep, p: Position) = if (p.x == c.x && p.y == c.y) STAY_BONUS else 0.0
     // МИЛИ: к тому, что достанет ногами; по гребню фронта и туда, где он проседает; не выходя из-под лечения.
     // «Не выходя из-под лечения» было ЗАПРЕТОМ (inHealReach) и потому либо не давало клеток вовсе, либо
@@ -771,7 +776,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
             W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
             W_HEALCOVER * InfluenceMap.healReachAt(key) +
-            CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p) - breachBonus(p)
+            CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p) - breachBonus(c, p)
     }
     // СТРЕЛОК: притяжение с пиком на дальности 3 (он останавливается сам, вместо запрета «не ближе мили»),
     // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
@@ -1169,7 +1174,7 @@ internal const val STAY_BONUS = 1.0
 /** Насколько клетка вплотную к его мили, который УЖЕ касается нашего стрелка или лекаря, дороже прочих для нашего
  *  мили (v374, см. breachers). Основание: 4 320–5 760 урона за матч уходит именно в этот прорыв — 75–121 % всего
  *  разрыва по урону в поражениях против топ-3. */
-internal const val W_BREACH = 300.0
+internal const val W_BREACH = 120.0
 
 /** Гребень фронта — там, где уязвимость не ниже этой доли своего максимума (доля, не абсолют). */
 internal const val FRONT_RIDGE = 0.15
