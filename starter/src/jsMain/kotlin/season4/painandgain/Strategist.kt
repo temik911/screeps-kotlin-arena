@@ -520,6 +520,13 @@ internal fun PainAndGain.captureCost(ctx: Ctx, f: FlagInfo): Double {
     return (powerAfter(ctx, f).first / now).coerceIn(0.0, 1.0)
 }
 
+/** Мы впереди по суммарным хитам (v379, см. chooseFlagObjective): та же мера, что у гейта строевого боя в v352. */
+internal fun PainAndGain.aheadOnHits(ctx: Ctx): Boolean =
+    ctx.army.sumOf { it.hits } >= ctx.combatEnemies.sumOf { it.hits }
+
+internal fun PainAndGain.armedEnemiesOf(ctx: Ctx): List<Creep> =
+    ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+
 internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushRatio: Double, escapeNeeded: Boolean = false, onlyFlagId: String? = null): Objective? {
     if (group.isEmpty()) return null
     var best: Objective? = null
@@ -535,6 +542,17 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
         if (groupSafe && getRange(f.pos, ctx.home) > getRange(f.pos, ctx.enemyHome) &&
             ctx.flags.any { !it.ours && getRange(it.pos, ctx.home) <= getRange(it.pos, ctx.enemyHome) }) {
             objDrop["far"] = (objDrop["far"] ?: 0) + 1; continue
+        }
+        // ...И НЕ ЛЕЗЕМ ПОД КУЛАК ЗА ФЛАГОМ (v379). Разбор 5 реплеев против топ-3 `●ω<♥♪#6`: в дальность его огня
+        // входим МЫ — 5 матчей из 5, причём его передний крип в 3 случаях из 5 стоит на месте. Матч кончается
+        // истреблением за 825 тиков, хотя ПО ОЧКАМ мы его выигрываем: +1 859 в среднем при счёте блока 3-5, а в
+        // победах держим по два флага сотнями тиков после того, как поле осталось за нами. То есть бой нам не нужен
+        // вовсе — нужен он ему. Три правки ВНУТРИ боя (мили на прорвавшегося двумя весами, вес роли в лечении)
+        // отвергнуты замером подряд, поэтому правится не бой, а решение в него входить: пока он сомкнут и мы не
+        // впереди по суммарным хитам, целью не берётся флаг, стоящий в его зоне поражения
+        if (enemyMassedSignal && !aheadOnHits(ctx) &&
+            armedEnemiesOf(ctx).any { getRange(f.pos, it) <= ENGAGE_RANGE + RANGED_RANGE }) {
+            objDrop["fist"] = (objDrop["fist"] ?: 0) + 1; continue
         }
         // ЦЕЛЬ АРМИИ НЕ ДУБЛИРУЕТ ФЛАГ БЕГУНА (v216). Обе соседние раздачи это уже проверяют — `commandRace`
         // («флаг, взятый бегуном, не дублируем») и `grabberOf` (исключает флаг-цель), — а самая дорогая, цель
