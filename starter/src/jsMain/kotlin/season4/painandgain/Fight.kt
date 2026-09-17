@@ -193,6 +193,20 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
         concAll += most; concAllTicks++
         if (most > concMax) concMax = most
     }
+    // ПЕРЕКРЫТИЕ (v391, прибор ovl=). `conc` считает, сколько выстрелов ЛЕГЛО в одну цель, то есть выбор; этот прибор
+    // считает, сколько их МОГЛО лечь — сколько наших стрелков физически достаёт лучшую его цель. Разница и есть
+    // предмет: восемь правок боя отвергнуты замером, и последняя (v389) показала, что выбор цели ничего не решает,
+    // пока стволы не сходятся. Разбор давал 15–26 % тиков с тремя стволами на цели и 2–7 % с четырьмя — но то был
+    // срез по реплеям пяти матчей; здесь величина меряется в каждом бою и попадает в строку тика
+    run {
+        val shooters = allies.filter { hasRanged(it) && !it.spawning }
+        val best = enemyCreeps.filter { it.hits > 0 }.maxOfOrNull { e -> shooters.count { it.getRangeTo(e) <= RANGED_RANGE } } ?: 0
+        if (shooters.isNotEmpty() && enemyCreeps.isNotEmpty()) {
+            ovlSum += best; ovlTicks++
+            if (best >= 3) ovlThree++
+            if (best >= 4) ovlFour++
+        }
+    }
     // ...и то же ДЛЯ МИЛИ (v221, см. mconcAll): удар не кладёт ничего в `shotsAt`, поэтому `conc` про мили
     // слеп — сложены ли четыре удара в одну цель, не измерял ни один прибор
     val mostStrikes = strikesAt.values.maxOrNull() ?: 0

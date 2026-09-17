@@ -521,7 +521,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
             "objdrop=${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN budget=$budgetSum/$budgetTicks " +
             "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
             "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
-            "conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
+            "ovl=$ovlSum/$ovlTicks/$ovlThree/$ovlFour conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
             "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold close3=$closeHeld/$closeTicks guard=$guardFired/$guardTicks " +
             // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
             // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
@@ -575,7 +575,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v390"
+internal const val BOT_VERSION = "v391"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
@@ -868,6 +868,12 @@ internal var dangerMoves = 0
 
 internal var fightTicksNow = 0
 
+/** Перекрытие (v391, прибор ovl=): сколько наших стрелков ДОСТАЁТ лучшую его цель — против `conc`, который считает,
+ *  сколько выстрелов в неё легло. Разница между «могло» и «легло» и есть предмет боя с кулаком. */
+internal var ovlSum = 0
+internal var ovlTicks = 0
+internal var ovlThree = 0
+internal var ovlFour = 0
 internal var concSum = 0                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
 
 internal var concTicks = 0                        // тиков с выстрелами с прошлой строки t=
