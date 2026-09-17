@@ -183,7 +183,10 @@ object PainAndGain {
     internal var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
     internal var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
-    internal var enemyMassedSignal = false                 // его вооружённые сомкнуты по форме или по прибытию (v281, readSignals)
+    internal var enemyMassedSignal = false
+    /** Он держит свои флаги ТЕЛОМ (v370, см. readSignals): режим пар это больше не выключает, но на занятый флаг
+     *  пара не идёт — отбить его нечем. */
+    internal var enemySitsSignal = false                 // его вооружённые сомкнуты по форме или по прибытию (v281, readSignals)
     internal var firstFightTick = 0                        // тик первого размена (exchangeLive); 0 — первый бой впереди (v281)
     /** Предсказанный урон его стволов по нашим на этот тик — по модели его выбора цели, что чаще попадает (v292, см.
      *  rotateByFocus); null, пока сверок меньше окна. Читает лечение вместо неадресного damageAt. */

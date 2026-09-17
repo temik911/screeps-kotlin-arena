@@ -1043,7 +1043,20 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     while (Memory.flagSitHist.size > GROUP_WINDOW) Memory.flagSitHist.removeFirst()
     val sitHis = Memory.flagSitHist.sumOf { it / 8 }
     val sitOcc = Memory.flagSitHist.sumOf { it % 8 }
-    val sitsOnFlags = sitOcc * 3 >= sitHis
+    // ...и «сидит» — это сидит на ВСЕХ, а не на трети (v371). Порог в треть (sitOcc * 3 >= sitHis) равнял стендовый
+    // scatter, где его крип стоит на 95,8 % флаго-тиков (минимум по шести строкам 75 %), с топ-1
+    // `ricardo18informatica2020#14`, который сидит на 47 %: у первого отбирать нечего и пары ходят впустую (четыре
+    // строки гейта scatter падали 11–19 тыс. против 24 тыс.), у второго половина флагов пуста — там и гарнизон, и
+    // курьер имеют смысл. Порог три четверти разводит их с запасом: camp 20 %, farm 50 %, けろびー 6 %
+    val sitsOnFlags = sitOcc * 4 >= sitHis * 3
+    enemySitsSignal = sitsOnFlags
+    // ...И «ОН СИДИТ НА ФЛАГАХ» БОЛЬШЕ НЕ ВЫКЛЮЧАЕТ РЕЖИМ ПАР (v370). Признак вводился против стендовых лагерей, где
+    // пары ходили отбивать занятый флаг и не могли (match33:scatter 22 377 : 24 235), — но он гасил ВЕСЬ аппарат, а
+    // не только поход на занятую клетку. Цена измерена на топ-1 `ricardo18informatica2020#14`: у него групповой урон
+    // по нашим 36 при пороге 300 (в восемь раз ниже — он наши группы не бьёт вовсе, kills=0 за матч), то есть режим
+    // пар ему подходит идеально, а сидит он на 47 % своих флаго-тиков — и режим не включался НИ РАЗУ (1,2 % тиков
+    // против 97,3 % у けろびー). Ни постоянного гарнизона, ни правила ухода, ни курьера против топ-1 не работало.
+    // Запрет на занятые флаги живёт там, где он и нужен: пара и курьер не идут на клетку под его телом
     groupSafe = getTicks() >= GROUP_WINDOW && groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (groupSafe || splitNow)
     if (groupSafe) groupSafeTicks++
     flagSitOcc = sitOcc; flagSitAll = sitHis
