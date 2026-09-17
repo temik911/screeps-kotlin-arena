@@ -273,31 +273,6 @@ internal fun PainAndGain.commandFire(army: List<Creep>, enemies: List<Creep>, fo
         }
         burst >= e.hits + cover
     }.minByOrNull { it.hits }
-    // ЗАЛП ПО ОДНОМУ (v386). Когда добить некого, каждый ствол бил ПЕРВОГО, кого достаёт, — и огонь размазывался:
-    // разбор 5 реплеев против кулака дал концентрацию 1,54–1,75 ствола на цель, то есть 92–105 урона в тик, при его
-    // лечении 129–147 в тик и 216 на пике (три лекаря вплотную). Оттого мы и не убиваем: за 16 игр против
-    // `MetalicaX#9` убито 0,0 его крипов при наших потерях 7,4–8,2 тела, и ни один его крип за матч не опускался
-    // ниже 53 % хитов. Убийство в этой арене — это залп 420–720 за тик против потолка лечения 216, и собрать его
-    // можно только выбрав ОДНУ цель, по которой работает больше всего стволов, вместо ближайшей для каждого.
-    // Только против сомкнутого: у рассыпанного соперника цели и так расходятся по разным концам карты
-    // ...и цель залпа считается ЗА ВЫЧЕТОМ ЛЕЧЕНИЯ (v387): по голому урону цель выбиралась та, до которой дотянулось
-    // больше стволов, даже если её всю перекрывают его лекари, — гейт поймал это на match20:brawl+heals
-    // (5 641 : 12 756). Проходит сквозь лечение только чистый остаток, и именно он делает залп убийством
-    fun coverOf(e: Creep) = enemies.sumOf { h ->
-        val pr = InfluenceMap.profileOf(h)
-        val d = h.getRangeTo(e)
-        if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
-    }
-    val volley = if (!enemyMassedSignal) null else pool
-        .map { e ->
-            val burst = shooters.filter { reach(it, e) }.sumOf { c ->
-                val pr = InfluenceMap.profileOf(c)
-                (if (hasRanged(c)) pr.ranged else pr.melee) * InfluenceMap.takenOf(e)
-            }
-            e to (burst - coverOf(e))
-        }
-        .filter { it.second > 0.0 }
-        .maxByOrNull { it.second }?.first
     for (c in shooters) {
         // ПРЕСЛЕДОВАТЕЛЬ СТРЕЛЯЕТ В СВОЙ ОСТОВ (v211). Общее правило «разоружённый — не цель» поставил оператор
         // в v178 и оно остаётся в силе для ВСЕЙ армии: пока идёт бой, огонь идёт по тем, кто бьёт сейчас.
@@ -308,7 +283,6 @@ internal fun PainAndGain.commandFire(army: List<Creep>, enemies: List<Creep>, fo
         if (chased != null && chased.hits > 0 && reach(c, chased)) { out[c.id] = chased.id; continue }
         val t = when {
             killable != null && reach(c, killable) -> killable
-            volley != null && volley.hits > 0 && reach(c, volley) -> volley
             focus != null && focus.hits > 0 && reach(c, focus) -> focus
             else -> order.firstOrNull { reach(c, it) && it.hits > 0 && (it in dangerous) }
                 ?: pool.filter { reach(c, it) }.minByOrNull { it.hits }
