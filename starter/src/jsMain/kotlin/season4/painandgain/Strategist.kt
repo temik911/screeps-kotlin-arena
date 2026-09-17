@@ -2385,7 +2385,15 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         stalled = stalledNow, hisRetreat = enemyRetreating && !(underTheirFire && theirMeleeIn),
         outmatched = outmatchedTicks >= BREAK_OFF_TICKS, pushing = pushing, underFire = underTheirFire,
         fewFoes = !(enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES),
-        enemyMassed = enemyMassedSignal && ctx.army.sumOf { it.hits } < ctx.combatEnemies.sumOf { it.hits },
+        // ...И «ПОЗАДИ» МЕРЯЕТСЯ МОЩЬЮ, А НЕ ХИТАМИ (v382). Гейт строевого боя (v352) читал сумму хитов, и разбор 5
+        // реплеев против топ-3 показал, насколько это тонко: худшая ПОБЕДА отличается от лучшего ПОРАЖЕНИЯ на 282
+        // хита — 1,8 % армии, — а решение по знаку запирает нас в гонке на весь бой. Хиты не знают ни оружия, ни
+        // лечения: крип с выбитыми стволами весит столько же, сколько целый. Ланчестеровская мощь знает (powerOf
+        // считает живые части и досягаемость за POWER_REACH_TICKS), и она уже служит мерой во всех прочих решениях
+        // бота — от пары за флагом до бюджета погони. Прогноз `Forecast.simulate` для этого не годится: он не уходит
+        // в минус НИ РАЗУ (см. комментарий у simPending), то есть на вопрос «выигрываем ли размен» всегда отвечает да
+        enemyMassed = enemyMassedSignal &&
+            ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army),
         posture = posture, postureSince = postureSince, now = getTicks(),
         candidate = Memory.postureCandidate, candidateSince = Memory.candidateSince,
         // событие — прибор evt= (в гистерезис пока не входит, см. Strategist.decide): гибель своего (по числу живых,
