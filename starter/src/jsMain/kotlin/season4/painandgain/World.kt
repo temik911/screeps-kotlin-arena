@@ -498,6 +498,13 @@ internal fun PainAndGain.greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>
     // force: лучшая из соседних, даже если она не лучше своей клетки (см. SCOUT_FLEE_TRIGGER)
     var bestRange = if (force) -1 else (enemies.minOfOrNull { getRange(creep, it) } ?: 0)
     var bestFire = if (force) Double.MAX_VALUE else InfluenceMap.fireAt(creep.x, creep.y, enemies)
+    // ...И ПРИ РАВНОМ ОТРЫВЕ — К ДОМУ (v373). Жадное бегство знало только дистанцию до врага и потому уводило в угол
+    // карты, где клеток больше нет: разбор 4 матчей против топ-1 `ricardo18informatica2020#14` — из шести погибших
+    // скаутов ПЯТЬ кончили бегство дальше от дома, чем начали (один 57 → 85 клеток), ЧЕТВЕРО умерли в 3–7 клетках от
+    // края, и число клеток, увеличивающих дистанцию, падало до нуля в пяти случаях из шести. Цена — 2 671 очко за
+    // матч потерянного владения, тогда как один ДОШЕДШИЙ и выживший курьер дал 8 155 очков (34 % нашего счёта в том
+    // матче). Дом — это и сторона, где стоят свои, и сторона, где карта не кончается
+    var bestHome = getRange(creep, ctx.home)
     for ((dx, dy) in dirsNow()) {
         if (dx == 0 && dy == 0) continue
         val x = creep.x + dx; val y = creep.y + dy
@@ -507,7 +514,11 @@ internal fun PainAndGain.greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>
         val pos = InfluenceMap.cell(x, y)
         val range = enemies.minOfOrNull { getRange(pos, it) } ?: 0
         val fire = InfluenceMap.fireAt(x, y, enemies)
-        if (range > bestRange || (range == bestRange && fire < bestFire)) { best = pos; bestRange = range; bestFire = fire }
+        val home = getRange(pos, ctx.home)
+        val better = range > bestRange ||
+            (range == bestRange && fire < bestFire) ||
+            (range == bestRange && fire == bestFire && home < bestHome)
+        if (better) { best = pos; bestRange = range; bestFire = fire; bestHome = home }
     }
     return best
 }
