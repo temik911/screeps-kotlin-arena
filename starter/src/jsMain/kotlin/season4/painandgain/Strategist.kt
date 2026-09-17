@@ -2392,8 +2392,12 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         // считает живые части и досягаемость за POWER_REACH_TICKS), и она уже служит мерой во всех прочих решениях
         // бота — от пары за флагом до бюджета погони. Прогноз `Forecast.simulate` для этого не годится: он не уходит
         // в минус НИ РАЗУ (см. комментарий у simPending), то есть на вопрос «выигрываем ли размен» всегда отвечает да
+        // ...и у порога есть ЗАПАС (v383): по знаку решение запирает армию в гонке от любого минимального отставания,
+        // а разбор показал, что дерутся как раз победы — строевой бой занимает 8–10 замеров из 13 в выигранных
+        // матчах против 0–2 в проигранных, и худшая победа отстаёт от лучшего поражения всего на 1,8 % армии.
+        // Отказ от строя стоит брать, когда мы отстаём ЗАМЕТНО, а не на волос
         enemyMassed = enemyMassedSignal &&
-            ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army),
+            ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * FIGHT_POWER_ROOM,
         posture = posture, postureSince = postureSince, now = getTicks(),
         candidate = Memory.postureCandidate, candidateSince = Memory.candidateSince,
         // событие — прибор evt= (в гистерезис пока не входит, см. Strategist.decide): гибель своего (по числу живых,
