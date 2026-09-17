@@ -2343,6 +2343,27 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // v217; дифф отчёта пуст побайтово, как и обязан быть у мёртвого
     val evadeTo = evadeFirst ?: (if ((hunted) && !rushFar && !annihilate && (!contact) && objective == null) evadePoint(ctx, armedEnemies, strikers) else null)
     cpuMark("a.evade")
+    // ПРИБОР ДЕЛЬТЫ ПРОГНОЗА (v397). Решение «драться ли с кулаком» стоит на СТАТИЧЕСКОЙ мере мощи, потому что
+    // прогноз `simulate` возвращает АБСОЛЮТНУЮ разность мощей (наша минус его) — при живой армии она положительна
+    // всегда, и потому «не уходит в минус ни разу». Но величина, отвечающая на вопрос «выигрываем ли мы размен», —
+    // не абсолют, а ДЕЛЬТА: насколько прокат на SIM_TICKS изменит эту разность. Дельта уже считается рядом (v166,
+    // simPending: expected = predicted − was), но только для прибора ошибки, а в решение не входит. Здесь она
+    // меряется на тех тиках, где решение и принимается: враг сомкнут и его вооружённый центроид близко. Поведение
+    // НЕ меняется — прежде чем менять решение, надо знать, различает ли дельта исход (три пробы прогноза до этого
+    // отвергнуты живьём именно потому, что их ставили в решение, не измерив)
+    val simdFoeCentroid = if (armedEnemies.isEmpty()) null else centroidOf(armedEnemies)
+    if (enemyMassedSignal && simdFoeCentroid != null && ctx.army.isNotEmpty() &&
+        getRange(ctx.ourCentroid, simdFoeCentroid) <= ENGAGE_RANGE + RANGED_RANGE) {
+        val base = Forecast.simulate(ctx.army, armedEnemies, emptyMap(), 0, null, null)
+        val next = Forecast.simulate(ctx.army, armedEnemies, emptyMap(), Forecast.SIM_TICKS, null, null)
+        val delta = next - base
+        simdSum += delta; simdTicks++
+        if (delta > 0.0) simdPos++
+        Memory.simdShare = (1.0 - SIMD_SMOOTH) * Memory.simdShare + SIMD_SMOOTH * (if (delta > 0.0) 1.0 else 0.0)
+        // расходится ли знак прогноза с действующим решением по мощи: «мощь говорит не драться, прогноз — драться»
+        val powerSaysNo = ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * FIGHT_POWER_ROOM
+        if (powerSaysNo != (delta <= 0.0)) simdDisagree++
+    }
     val evade = evadeTo != null
     if (!evade) evadeTarget = null
     // ...и в выживании отход к ТОЧКЕ не берётся: стоящую у точки армию он добивает (v223, вторая редакция)
@@ -2396,7 +2417,19 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         // а разбор показал, что дерутся как раз победы — строевой бой занимает 8–10 замеров из 13 в выигранных
         // матчах против 0–2 в проигранных, и худшая победа отстаёт от лучшего поражения всего на 1,8 % армии.
         // Отказ от строя стоит брать, когда мы отстаём ЗАМЕТНО, а не на волос
-        enemyMassed = enemyMassedSignal &&
+        // ...И ОТКАЗ ОТ СТРОЯ СНИМАЕТСЯ, КОГДА ПРОГНОЗ ОБЕЩАЕТ ВЫИГРАННЫЙ РАЗМЕН (v398). Мера мощи статична: она
+        // знает состав армий, но не знает, чем кончится ТЕКУЩИЙ обмен, — а исход решают первые шесть-пятнадцать
+        // тиков размена (разбор 55 матчей `MetalicaX#9` и 16 `#13`: различителя до контакта нет вовсе, 26 %
+        // случайных перемешиваний меток разделяют данные лучше настоящего исхода). Прогноз это знает и меряет:
+        // `simulate` возвращает АБСОЛЮТНУЮ разность мощей, которая при живой армии положительна всегда — оттого
+        // «не уходит в минус ни разу», — но её ДЕЛЬТА за прокат отвечает ровно на вопрос «выигрываем ли мы
+        // размен». Прибор v397 показал, что дельта различает исход: доля тиков с положительной дельтой 0,59 в
+        // победах против 0,30 в поражениях, при том что действующее решение по мощи расходится с прогнозом в
+        // 35-60 % тиков. ⚠️ И это НЕ четвёртая проба прогноза вслед за отвергнутыми: v244/v246 ставили прогноз в
+        // опасность клетки, v394 в пробиваемость цели, v395 в сходимость стволов, и все три меняли ОЦЕНКУ, не
+        // меняя того, кто и куда идёт, — оценка уходила вперёд исполнения. Здесь прогноз питает решение, которое
+        // тот же командир и ИСПОЛНЯЕТ раздачей клеток в том же тике. Запрет остаётся, пока против нас обе меры
+        enemyMassed = enemyMassedSignal && Memory.simdShare <= SIMD_FIGHT_SHARE &&
             ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * FIGHT_POWER_ROOM,
         posture = posture, postureSince = postureSince, now = getTicks(),
         candidate = Memory.postureCandidate, candidateSince = Memory.candidateSince,
