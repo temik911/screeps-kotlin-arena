@@ -367,7 +367,8 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     // (отставание по очкам, застой, перехват) не тронуты: отстав по счёту, флаг берём — и это же открывает ворота,
     // когда флаги начнёт брать он. ⚠️ Гейт стенда к правке СЛЕП: отчёт побайтово тождествен базе, потому что на
     // стенде размен идёт тогда же, когда армия в контакте, а контакт перекрыт воротами `contact.mass` выше
-    val firstFightAhead = (firstFightTick == 0 || exchangeLiveNow) && enemyMassedSignal && !ctx.passiveEnemy
+    val firstFightAhead = (firstFightTick == 0 || (USE_FIRST_FIGHT_UNSETTLED && exchangeLiveNow)) &&
+        enemyMassedSignal && !ctx.passiveEnemy
     if (firstFightAhead && !behindOnScore && !stalledNow && !intercept) {
         val ourAfter = ctx.flags.count { it.ours } + 1
         val hisAfter = ctx.flags.count { it.theirs } - (if (f.theirs) 1 else 0)
