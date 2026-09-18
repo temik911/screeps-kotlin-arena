@@ -788,7 +788,22 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // отбрасывалось молча; здесь это слагаемое, и оно конкурирует с притяжением честно
     fun scoreMelee(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
         val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, true) else InfluenceMap.attMeleeAt(key)
-        return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
+        // УДАР ВХОДИТ В ЦЕНУ КЛЕТКИ ЯВНО И В ЕДИНИЦАХ УРОНА (v425). Ранг мили складывал притяжение `attMeleeAt` с
+        // опасностью, и сам УДАР в нём выражен не был — а он решает размен: наш мили вплотную даёт 240 в тик одним
+        // крипом, тогда как три стрелка дают 180 против его лечения 129–147 на цель, то есть ЧИСТЫМИ 33–51. Пробить
+        // лечение стрелками нельзя в принципе; пробивает мили. Чистая пара 16 игр против MetalicaX#13 говорит это
+        // прямо: в победах наш мили стоит в 1,35 ± 0,11 клетки от его ближайшего и теряет первую боевую часть на
+        // контакте+8,8, в поражениях — 1,95 ± 0,57 и остаётся ЦЕЛЫМ (ноль выбитых частей к контакту+10 в 8 матчах
+        // из 9), пока раздевают наших стрелков; его огонь переходит на стрелков уже на контакте+6,4. Разрез по
+        // дистанции <= 1,45 даёт 6 побед из 6 против 0 из 9. Слагаемое считается так же, как у лекаря («доставленное
+        // лечение минус полученный урон»): клетка, из которой мили достаёт вооружённого, приносит армии его удар с
+        // поправкой на входящий модификатор цели, и этот удар конкурирует с опасностью честно, а не через вес
+        val strike = if (!USE_MELEE_STRIKE_VALUE) 0.0 else {
+            val hit = InfluenceMap.profileOf(c).melee
+            if (hit <= 0.0) 0.0
+            else armedEnemies.filter { getRange(p, it) <= 1 }.maxOfOrNull { hit * InfluenceMap.takenOf(it) } ?: 0.0
+        }
+        return -W_ATT * att * pull - strike + W_DAN * dan * danOf(c, key) -
             W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
             W_HEALCOVER * InfluenceMap.healReachAt(key) +
             CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
