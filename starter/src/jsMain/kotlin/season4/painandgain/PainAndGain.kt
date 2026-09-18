@@ -339,6 +339,8 @@ object PainAndGain {
     internal var planGunsIn = 0; internal var planGunsAll = 0        // прибор согласованности строя (v200)
     internal var planMeleeHealed = 0; internal var planMeleeAll = 0
     internal var planHealBehind = 0; internal var planHealAll = 0
+    /** fall= (v421): запасных ходов стрелка, сохранивших цель в дальности, и ушедших из дальности. */
+    internal var fallReach = 0; internal var fallAny = 0
     /** ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224): раздач / выбрана клетка вплотную к бойцу вне его огня / такая свободная клетка была
      *  рядом, а выбрана другая / из них кандидат не прошёл ворота выживания; и средняя разница слагаемых оценки
      *  «выбранная минус кандидат» (положительная — слагаемое тянуло ОТ кандидата): притяжение, огонь, линия, экран,
