@@ -878,34 +878,12 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 else -> scoreHeal(c, key, p, att, dan)
             }
         }
-        // ЛЕКАРЬ ЗА ЛИНИЕЙ — И БЕЗ СТРОЯ (v418). Правило «перед лекарем стоит свой вооружённый» существует с v200 и
-        // МЕРИТСЯ прибором `hline=`, но живёт оно внутри `planBlock`, то есть внутри СТРОЯ, — а против блоба строй
-        // отключён с v357 (он дал 12 % -> 47 % побед), и в каждом разгроме прибор печатает `hline=0/0`: правило
-        // просто не достаёт до того случая, где решается матч. Разбор шести матчей против MetalicaX (5 поражений
-        // против победы, реплеи): его стволов в трёх клетках от НАШЕГО лекаря 3,94 ± 0,47 в поражениях против 1,69
-        // в победе (z = −4,8) — сильнейшее различие среди всех измеренных, а наших на ЕГО лекаре 1,9–3,2 против
-        // 3,11. Следствие видно приборами консоли: на контакт+40 его части лечения целы (17–18 из 18) во всех пяти
-        // поражениях и выбиты (0 из 18) в победе, и счётчик вооружённых рушится вслед за лечением через 3–6 тиков —
-        // лечение возвращает ЧАСТИ, поэтому армия жива ровно пока жив её лекарь. Мили при этом НЕ предмет: они
-        // разоружаются на контакт+4…+17 и принимают 5 400–5 900 урона одинаково в победе и в поражениях.
-        // Формула «за линией» взята у прибора дословно, новых чисел нет. Требование МЯГКОЕ: если ни одна клетка ему
-        // не отвечает, лекарь ставится по-прежнему — счётчик `hbl=` показывает, как часто пришлось отступить
-        val needBehindLine = role == 2 && USE_HEAL_BEHIND_LINE && armedEnemies.isNotEmpty()
-        for (attempt in 0..(if (needBehindLine) 1 else 0)) {
-            val behind = needBehindLine && attempt == 0
-            for (lvl in ttlMin downTo 1) {
-                val ok = place(c, { p ->
-                    (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
-                        ttlAt(c, p.x * 100 + p.y, p) >= lvl &&
-                        (!behind || foeDist(p.x, p.y).let { dp ->
-                            fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp } })
-                }, rank)
-                if (ok) {
-                    gateLevels[minOf(lvl, gateLevels.size - 1)]++
-                    if (needBehindLine) { if (behind) healBehindKept++ else healBehindGave++ }
-                    return true
-                }
-            }
+        for (lvl in ttlMin downTo 1) {
+            val ok = place(c, { p ->
+                (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                    ttlAt(c, p.x * 100 + p.y, p) >= lvl
+            }, rank)
+            if (ok) { gateLevels[minOf(lvl, gateLevels.size - 1)]++; return true }
         }
         gateFell++
         return false
