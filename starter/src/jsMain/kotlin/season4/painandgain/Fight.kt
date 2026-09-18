@@ -812,7 +812,21 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
     fun scoreRanged(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
         val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, false) else InfluenceMap.attRangedAt(key)
-        return -W_ATT * att * pull + W_DAN * dan * danOf(c, key) -
+        // ВЫСТРЕЛ ВХОДИТ В ЦЕНУ КЛЕТКИ ЯВНО (v427) — тот же пропуск, что у мили в v425, и та же форма. В ранге
+        // стрелка стояло поле притяжения `attRangedAt` с пиком на дальности три, опасность и влияние линии, но
+        // САМ ВЫСТРЕЛ выражен не был: клетка, откуда стрелок достаёт вооружённого, и клетка, откуда не достаёт,
+        // различались только полем, а не тем уроном, который армия из этой клетки получает. Поле — величина без
+        // размерности, урон — в тех же единицах, что входящий, поэтому здесь они сравниваются честно, как у лекаря
+        // («доставленное лечение минус полученный урон»). Числа v425 дают и цену вопроса: выстрел 60 против удара
+        // мили 240, то есть слагаемое вчетверо меньше и не должно переворачивать расстановку — оно лишь перестаёт
+        // отдавать выстрел даром. Прежняя мера этого не ловила: v421 вернула выстрел ЗАПАСНОМУ ходу, но основной
+        // ранг по-прежнему не знал, что клетка вне дальности не стреляет вовсе
+        val shot = if (!USE_RANGED_SHOT_VALUE) 0.0 else {
+            val hit = InfluenceMap.profileOf(c).ranged
+            if (hit <= 0.0) 0.0
+            else armedEnemies.filter { getRange(p, it) <= RANGED_RANGE }.maxOfOrNull { hit * InfluenceMap.takenOf(it) } ?: 0.0
+        }
+        return -W_ATT * att * pull - shot + W_DAN * dan * danOf(c, key) -
             W_LINE * InfluenceMap.influenceOf(key) +
             CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
     }
