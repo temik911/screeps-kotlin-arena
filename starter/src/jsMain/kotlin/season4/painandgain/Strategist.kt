@@ -2364,6 +2364,18 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         val powerSaysNo = ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * FIGHT_POWER_ROOM
         if (powerSaysNo != (delta <= 0.0)) simdDisagree++
     }
+    // прибор разлёта (v409): радиус боевой части армии на тиках, где по нам стреляют
+    if (contact && ctx.army.size >= 2) {
+        val live = ctx.army.filter { it.hits > 0 }
+        if (live.size >= 2) {
+            val cx = live.sumOf { it.x } / live.size
+            val cy = live.sumOf { it.y } / live.size
+            val r = live.maxOf { maxOf(abs(it.x - cx), abs(it.y - cy)) }
+            radSum += r.toDouble(); radTicks++
+            if (r > radMax) radMax = r
+            if (r > 5) radWide++
+        }
+    }
     val evade = evadeTo != null
     if (!evade) evadeTarget = null
     // ...и в выживании отход к ТОЧКЕ не берётся: стоящую у точки армию он добивает (v223, вторая редакция)
