@@ -127,7 +127,7 @@ function buildFromReplay(doc) {
   const TYPE = { vulnerability: ['eff_damage_taken_modifier', 5], heal_reduction: ['eff_heal_modifier', 4], attack_reduction: ['eff_attack_modifier', 3], ranged_attack_reduction: ['eff_ranged_attack_modifier', 3] };
   for (const o of doc.objects) if (o.kind === 'flag') { const [t, sc] = TYPE[o.id.replace(/^pg_flag_/, '').replace(/_[ab]$/, '')]; world.objects.push(new ScoreFlag(o.x, o.y, t, sc)); }
   const us = (doc.meta.players.find((pl) => pl.username.startsWith(process.env.US || 'temik911')) || { side: 0 }).side;
-  ghostMeta.us = us; ghostMeta.ticks = doc.meta.ticks; ghostMeta.winner = doc.meta.result.winnerName; ghostMeta.id = doc.meta.shortId;
+  ghostMeta.us = us; ghostMeta.ticks = doc.meta.ticks; ghostMeta.winner = doc.meta.result.winnerName; ghostMeta.id = doc.meta.shortId || doc.meta.gameId;   // a replay fetched through the API carries no shortId
   // the record's hits per side per tick and its first contact (a fighter of each side within three) — the entry measure
   // printed at the end compares the exchange of the first 20/50/100 ticks after contact here against the record's
   const last = new Map(), sideOf = new Map(), hits = new Map(), scout = new Set();
