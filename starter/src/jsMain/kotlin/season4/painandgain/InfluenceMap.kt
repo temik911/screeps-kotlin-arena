@@ -796,17 +796,23 @@ object InfluenceMap {
     fun bestDeliveryAt(healer: Creep, x: Int, y: Int, allies: List<Creep>): Double {
         val h = profileOf(healer).heal
         if (h <= 0.0) return 0.0
+        val k = if (USE_HEAL_STEP_KERNEL) K_HEAL_STEP else K_ATT_HEAL
         var best = 0.0
         for (a in allies) {
             val d = maxOf(abs(a.x - x), abs(a.y - y))
-            if (d >= K_ATT_HEAL.size) continue
+            if (d >= k.size) continue
             val left = needLeft[a.id] ?: continue
             if (left <= 0.0) continue
-            val v = minOf(left, h * K_ATT_HEAL[d])
+            val v = minOf(left, h * k[d])
             if (v > best) best = v
         }
         return best
     }
+    /** ШАГОВОЕ ЯДРО ЦЕНЫ ДОСТАВКИ (v437, см. USE_HEAL_STEP_KERNEL): клетка стоит лучшее из «лечу отсюда сейчас»
+     *  (12/часть на ≤ 1, 4/часть на ≤ 3) и «шагну и вылечу со следующего тика» со скидкой GAMMA — той же, что у ядер
+     *  мили и стрелка. Ядро healRate плоское на 2…3 (обе клетки — треть), и из трёх в два лекарь не шёл: платил
+     *  только последний шаг. Насыщение (saturateHeal) считает по настоящему healRate — там нужна доставка, а не цена. */
+    private val K_HEAL_STEP = doubleArrayOf(1.0, 1.0, maxOf(HEAL_FALLOFF, GAMMA), maxOf(HEAL_FALLOFF, GAMMA * HEAL_FALLOFF), GAMMA * HEAL_FALLOFF)
 
     /** Доля нужды, покрытая назначенными лекарями: 0 — никто никого не прикрывает, 1 — покрыты все. */
     fun healCoverage(): Pair<Double, Double> {

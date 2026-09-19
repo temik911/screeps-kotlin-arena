@@ -873,8 +873,16 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             val wall = if (d <= 1 && wallCells.any { it.x == p.x && it.y == p.y }) deliver else if (d <= HEAL_RANGE) deliver / 3.0 else 0.0
             return -W_ATT * att * wall + W_DAN * dan * fire - W_SCREEN * shielded + CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
         }
+        // ...И ВЛИЯНИЕ ЛИНИИ НЕ ВЫТЕСНЯЕТ ДОСТАВКУ (v437, см. USE_HEAL_NO_LINE): у лекаря все прочие слагаемые — в хитах
+        // (доставка, огонь, экран), а влияние безразмерно и ни на что в арене не опирается; зонд dh в трёх сборках подряд
+        // называет его единственным, что уводит лекаря от безопасной клетки вплотную к теряющему хиты (−8…−38 против
+        // +3…+10 доставки). Первая редакция снимала влияние целиком и уронила гейт на match29:camp (13 254 : 23 910):
+        // когда рядом никто не теряет хитов, притяжение равно нулю везде, и без влияния лекарей ничто не держит при
+        // армии — пятеро бойцов ушли в лагерь и погибли нелечеными (hadj=0/347, hlost=0). Влияние — клей строя, и оно
+        // остаётся там, где доставки нет; там, где она есть, цена клетки считается в хитах
+        val line = if (USE_HEAL_NO_LINE && pull > 0.0) 0.0 else W_LINE * InfluenceMap.influenceOf(key)
         return -W_ATT * att * pull + W_DAN * dan * fire -
-            (W_LINE * InfluenceMap.influenceOf(key)) - W_SCREEN * shielded +
+            line - W_SCREEN * shielded +
             CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
     }
     /**
@@ -1058,7 +1066,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                     else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
                 val self = p.x == c.x && p.y == c.y
                 val tenant = if (self) null else allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
-                return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, -W_LINE * InfluenceMap.influenceOf(key),
+                return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEAL_NO_LINE && pull > 0.0) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
                     -W_SCREEN * shielded, CLAIM_COST * InfluenceMap.claimAt(key), -stayBonus(c, p),
                     if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
             }
