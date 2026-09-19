@@ -23,6 +23,15 @@ truth, and nothing to keep in sync by hand. What it adds is the join that was be
         "which of our own numbers differs between the matches we win and the ones we lose" — read the
         top of that list before designing the next version.
 
+    tools/series.py reach [--arena pain-and-gain] [--version 444] [--by-opponent] [--stand DIR [--tag land]]
+        the decision tables' reachability (the bot's `reach t=` line: per table, per row `tag:won/true/shadowed`,
+        cumulative over a match — so the LAST line of each match is read, never a sum of lines). One row per
+        table row: in how many matches its condition was never true, in how many it was true and never won
+        (shadowed by the ORDER of the table — a row that cannot fire because of what stands above it), and the
+        share of its true ticks it lost to a row above. `--stand DIR` reads the stub's logs instead of the
+        store, so the gate and the live series answer the same question in the same words. Rare is not dead:
+        the list is where to LOOK, the proof that a row is unreachable is an argument, not a count.
+
 Why it exists: three versions in a row were designed off numbers read by eye out of ONE match's log
 (the focus share that produced v42 among them). One match is an anecdote; the instrument was already
 printing, nothing was aggregating it.
@@ -404,6 +413,63 @@ def cmd_foes(args):
     print("worst first by rating moved; a bot we never beat is a hole in ours, not a bad draw")
 
 
+REACH_TABLE = re.compile(r" (\w+)=((?:\w+:\d+/\d+/\d+,?)+)")
+REACH_ROW = re.compile(r"(\w+):(\d+)/(\d+)/(\d+)")
+
+
+def last_reach(lines):
+    """{table: [(tag, won, true), ...]} out of the last `reach t=` line of one match, rows in table order."""
+    last = None
+    for line in lines:
+        if line.startswith("reach t="):
+            last = line
+    if last is None:
+        return None
+    return {table: [(tag, int(w), int(o)) for tag, w, o, _ in REACH_ROW.findall(body)]
+            for table, body in REACH_TABLE.findall(last)}
+
+
+def cmd_reach(args):
+    import glob
+    matches = []                                    # (group, reach)
+    if args.stand:
+        for f in sorted(glob.glob(os.path.join(args.stand, f"run-{args.tag}-*.log"))):
+            got = last_reach(open(f, encoding="utf-8", errors="replace"))
+            if got:
+                matches.append(("stand", got))
+    else:
+        for r in rows(args):
+            ticks = matchlog.log_ticks(r["game"], {r["game"]: r["logs"]})
+            got = last_reach(line for t in sorted(ticks) for line in ticks[t].split("\n"))
+            if got:
+                matches.append((bot(r) if args.by_opponent else "all", got))
+    if not matches:
+        sys.exit("no match carries a `reach t=` line (the instrument is printed since pain-and-gain v444)")
+    for group in sorted({g for g, _ in matches}):
+        sub_ = [m for g, m in matches if g == group]
+        print(f"\n{group}: {len(sub_)} matches — per row: matches never true / true but never won; won, true, "
+              f"share of true lost to a row above")
+        order, agg = [], {}
+        for m in sub_:
+            for table, table_rows in m.items():
+                for tag, won, on in table_rows:
+                    k = (table, tag)
+                    if k not in agg:
+                        agg[k] = [0, 0, 0, 0]
+                        order.append(k)
+                    a = agg[k]
+                    a[0] += on == 0
+                    a[1] += on > 0 and won == 0
+                    a[2] += won
+                    a[3] += on
+        for table, tag in order:
+            never, shadowed, won, on = agg[(table, tag)]
+            note = ("   <- never true" if on == 0 else "   <- true, never wins: shadowed by the order" if won == 0
+                    else "")
+            print(f"  {table + '.' + tag:<20} {never:>4} {shadowed:>4}   won {won:>9}  true {on:>9}  "
+                  f"lost {100.0 * (on - won) / max(on, 1):5.1f}%{note}")
+
+
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -431,6 +497,15 @@ p.add_argument("--t0", type=int, default=0)
 p.add_argument("--t1", type=int, default=10 ** 9)
 p.set_defaults(func=cmd_field)
 
+p = sub.add_parser("reach", parents=[common],
+                   help="decision tables: rows never true, rows shadowed by the order (the bot's reach t= line)")
+p.add_argument("--version", type=int, nargs="*", help="only these bot versions")
+p.add_argument("--opponent", help="only matches against this opponent (substring)")
+p.add_argument("--by-opponent", action="store_true", help="one table per opponent bot (name#version)")
+p.add_argument("--stand", help="read the stub's logs in this directory instead of the match store")
+p.add_argument("--tag", default="land", help="with --stand: the regress.sh tag of the logs")
+p.set_defaults(func=cmd_reach)
+
 p = sub.add_parser("metrics", parents=[common],
                    help="the bot's own printed numbers, aggregated across matches")
 p.add_argument("--version", type=int, nargs="*", help="only these bot versions")
@@ -443,7 +518,7 @@ p.add_argument("--top", type=int, default=30)
 p.set_defaults(func=cmd_metrics)
 
 args = ap.parse_args()
-if args.cmd not in ("metrics", "field"):
+if args.cmd not in ("metrics", "field", "reach"):
     args.version = None
     args.opponent = None
 args.func(args)
