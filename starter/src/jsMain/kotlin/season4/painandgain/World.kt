@@ -1138,10 +1138,6 @@ internal fun PainAndGain.readSignals(ctx: Ctx, bw: BuildWorldOut): ReadSignalsOu
     )
 }
 
-/** СБОРКА МИРА (v257, этап 10; начало tickBody): сброс тиковых кэшей, крипы обеих сторон, дом, флаги с эффектами и счётом, раздел армии и бегунов, препятствия, поля влияния, матрицы опасности, карта расстояний, Ctx, прибытие врага. Перенесено дословно. */
-internal class BuildWorldIn(
-)
-
 internal class BuildWorldOut(
     val myCreeps: List<Creep>,
     val enemyCreeps: List<Creep>,
@@ -1157,7 +1153,8 @@ internal class BuildWorldOut(
     val ctx: Ctx,
 )
 
-internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg) {
+/** СБОРКА МИРА (v257, этап 10; начало tickBody): сброс тиковых кэшей, крипы обеих сторон, дом, флаги с эффектами и счётом, раздел армии и бегунов, препятствия, поля влияния, матрицы опасности, карта расстояний, Ctx, прибытие врага. Перенесено дословно. */
+internal fun PainAndGain.buildWorld(): BuildWorldOut {
     bodyWeightNow.clear()
     liveMovesNow.clear()
     Executor.clear()
@@ -1277,7 +1274,7 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     // холодный JIT, 60–95 мс живьём) находит их в кэше вместо семи BFS
     if (getTicks() == 1) { for (f in ctx.flags) flowTo(ctx, f.pos); cpuMark("prefetch") }
     cpuMark("arrival")
-    BuildWorldOut(
+    return BuildWorldOut(
         myCreeps = myCreeps,
         enemyCreeps = enemyCreeps,
         active = active,

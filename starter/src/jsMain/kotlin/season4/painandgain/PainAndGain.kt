@@ -263,21 +263,9 @@ object PainAndGain {
     }
 
     private fun tickBody() {
-        val buildWorldSeg = buildWorld(BuildWorldIn(
-        ))
-        val myCreeps = buildWorldSeg.myCreeps
-        val enemyCreeps = buildWorldSeg.enemyCreeps
-        val active = buildWorldSeg.active
-        val combatEnemies = buildWorldSeg.combatEnemies
-        val flags = buildWorldSeg.flags
-        val wounded = buildWorldSeg.wounded
-        val army = buildWorldSeg.army
-        val runners = buildWorldSeg.runners
-        val passiveEnemy = buildWorldSeg.passiveEnemy
-        val ourCentroid = buildWorldSeg.ourCentroid
-        val enemyCentroid = buildWorldSeg.enemyCentroid
-        val ctx = buildWorldSeg.ctx
-        val readSignalsSeg = readSignals(ctx, buildWorldSeg)
+        val bw = buildWorld()
+        val ctx = bw.ctx
+        readSignals(ctx, bw)
         runRunners(ctx)
         cpuMark("runners")
         runArmy(ctx)
@@ -285,16 +273,15 @@ object PainAndGain {
         // боевые интенты уходят в API до разрешения движения: стенд разрешает конфликты за клетку в порядке первого
         // интента крипа, и порядок «удар, затем ход» — часть тождества с эталоном v235 (движку порядок безразличен)
         TrafficManager.markOrdered(commandOf.keys)
-        val moves = TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
+        val moves = TrafficManager.resolve(bw.active.filter { canMove(it) }, bw.myCreeps + bw.enemyCreeps)
         Arbiter.audit()
         Executor.run(moves)
         cpuMark("resolve")
         cpuSummary()
         // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
         if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
-        val rememberTickSeg = rememberTick(ctx, buildWorldSeg)
-        val armedCentroid = rememberTickSeg.armedCentroid
-        val printTickSeg = printTick(ctx, buildWorldSeg, rememberTickSeg)
+        val rem = rememberTick(ctx, bw)
+        printTick(ctx, bw, rem)
     }
 
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
@@ -338,135 +325,27 @@ object PainAndGain {
 
 
     private fun runArmy(ctx: Ctx) {
-        val army = ctx.army
-        if (army.isEmpty()) return
-        val armyMeasuresSeg = armyMeasures(ctx)
-        val allies = armyMeasuresSeg.allies
-        val enemyCreeps = armyMeasuresSeg.enemyCreeps
-        val combatEnemies = armyMeasuresSeg.combatEnemies
-        val strikers = armyMeasuresSeg.strikers
-        val armedEnemies = armyMeasuresSeg.armedEnemies
-        val enemyMassedNow = armyMeasuresSeg.enemyMassedNow
-        val now = armyMeasuresSeg.now
-        val exchangeLedger = armyMeasuresSeg.exchangeLedger
-        val exchangeLive = armyMeasuresSeg.exchangeLive
-        val exchangePaying = armyMeasuresSeg.exchangePaying
-        val mobileArmy = armyMeasuresSeg.mobileArmy
-        val commandArmy = armyMeasuresSeg.commandArmy
-        val chasers = armyMeasuresSeg.chasers
-        val huntable = armyMeasuresSeg.huntable
-        val meleeAdjacent = armyMeasuresSeg.meleeAdjacent
-        val exchangeRecent = armyMeasuresSeg.exchangeRecent
-        val fightOn = armyMeasuresSeg.fightOn
-        val cornered = armyMeasuresSeg.cornered
-        val stalled = armyMeasuresSeg.stalled
-        val ours = armyMeasuresSeg.ours
-        val theirs = armyMeasuresSeg.theirs
-        val theirsUp = armyMeasuresSeg.theirsUp
-        val theirsDown = armyMeasuresSeg.theirsDown
-        val enemyNear = armyMeasuresSeg.enemyNear
-        val massCentroid = armyMeasuresSeg.massCentroid
-        val massArmy = armyMeasuresSeg.massArmy
-        val contact = armyMeasuresSeg.contact
-        val breakOffNow = armyMeasuresSeg.breakOffNow
-        val retreatFeasible = armyMeasuresSeg.retreatFeasible
-        val armyStrategySeg = armyStrategy(ctx, armyMeasuresSeg)
-        val sweep = armyStrategySeg.sweep
-        val gathered = armyStrategySeg.gathered
-        val leadHolds = armyStrategySeg.leadHolds
-        val hisStill = armyStrategySeg.hisStill
-        val warmNow = armyStrategySeg.warmNow
-        val holdingSpot = armyStrategySeg.holdingSpot
-        val objective = armyStrategySeg.objective
-        val evadeTo = armyStrategySeg.evadeTo
-        val combatArmy = armyStrategySeg.combatArmy
-        val theirMeleeIn = armyStrategySeg.theirMeleeIn
-        val underTheirFire = armyStrategySeg.underTheirFire
-        val enemyRetreating = armyStrategySeg.enemyRetreating
-        val decision = armyStrategySeg.decision
-        val retreatTo = armyStrategySeg.retreatTo
-        val post = armyStrategySeg.post
-        val cmdWhyNow = armyStrategySeg.cmdWhyNow
-        val centroid = armyStrategySeg.centroid
-        val threat = armyStrategySeg.threat
-        val raider = armyStrategySeg.raider
-        val armyTargetsSeg = armyTargets(ctx, armyMeasuresSeg, armyStrategySeg)
-        val enemyPositions = armyTargetsSeg.enemyPositions
-        val blockedSet = armyTargetsSeg.blockedSet
-        val meleeEnemies = armyTargetsSeg.meleeEnemies
-        val killTicks = armyTargetsSeg.killTicks
-        val focusTarget = armyTargetsSeg.focusTarget
-        val focusOrder = armyTargetsSeg.focusOrder
-        val occupantAt = armyTargetsSeg.occupantAt
-        val prey = armyTargetsSeg.prey
-        val armedCentroid = armyTargetsSeg.armedCentroid
-        val objectiveCapturer = armyTargetsSeg.objectiveCapturer
-        val grabberOf = armyTargetsSeg.grabberOf
-        val formVan = armyTargetsSeg.formVan
-        val formationReady = armyTargetsSeg.formationReady
-        val reachCells = armyTargetsSeg.reachCells
-        val reachNow = armyTargetsSeg.reachNow
-        val healersAlive = armyTargetsSeg.healersAlive
-        val slotOf = armyTargetsSeg.slotOf
-        val armyStanceSeg = armyStance(ctx, armyMeasuresSeg, armyStrategySeg, armyTargetsSeg)
-        val blockOn = armyStanceSeg.blockOn
-        val armiesClosing = armyStanceSeg.armiesClosing
-        val enemyApproaching = armyStanceSeg.enemyApproaching
-        val ourYielding = armyStanceSeg.ourYielding
-        val pressOn = armyStanceSeg.pressOn
-        val armyBlockSeg = armyBlock(ctx, armyMeasuresSeg, armyStrategySeg, armyTargetsSeg, armyStanceSeg)
+        if (ctx.army.isEmpty()) return
+        val meas = armyMeasures(ctx)
+        val strat = armyStrategy(ctx, meas)
+        val targ = armyTargets(ctx, meas, strat)
+        val stanceOut = armyStance(ctx, meas, strat, targ)
+        armyBlock(ctx, meas, strat, targ, stanceOut)
         cpuMark("block")
-        rotateByFocus(army, combatEnemies)
+        rotateByFocus(ctx.army, meas.combatEnemies)
         // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)
-        stepOutWounded(army, reachCells, enemyRetreating || !huntsWounded)
-        val armyCommandSeg = armyCommand(ctx, armyMeasuresSeg, armyStrategySeg, armyTargetsSeg, armyStanceSeg)
+        stepOutWounded(ctx.army, targ.reachCells, strat.enemyRetreating || !huntsWounded)
+        armyCommand(ctx, meas, strat, targ, stanceOut)
         cpuMark("command")
-        val orderAuditSeg = orderAudit(ctx, armyMeasuresSeg, armyTargetsSeg)
-        val healerWallSeg = healerWall(ctx, armyMeasuresSeg)
+        orderAudit(ctx, meas, targ)
+        healerWall(ctx, meas)
         cpuMark("plan")
         // ПОКРИПНАЯ ЛЕСТНИЦА — В ТАКТИКЕ (v251, этап 9): тело цикла перенесено в Tactician.kt дословно, величины тика —
         // в ArmyTick; порядок крипов тот же, проход один (см. заголовок Tactician.kt)
-        val tick = ArmyTick(
-            army = army,
-            allies = allies,
-            enemyCreeps = enemyCreeps,
-            combatEnemies = combatEnemies,
-            strikers = strikers,
-            armedEnemies = armedEnemies,
-            enemyMassedNow = enemyMassedNow,
-            now = now,
-            mobileArmy = mobileArmy,
-            chasers = chasers,
-            stalled = stalled,
-            contact = contact,
-            objective = objective,
-            evadeTo = evadeTo,
-            combatArmy = combatArmy,
-            retreatTo = retreatTo,
-            post = post,
-            threat = threat,
-            raider = raider,
-            enemyPositions = enemyPositions,
-            blockedSet = blockedSet,
-            meleeEnemies = meleeEnemies,
-            killTicks = killTicks,
-            focusTarget = focusTarget,
-            occupantAt = occupantAt,
-            prey = prey,
-            armedCentroid = armedCentroid,
-            objectiveCapturer = objectiveCapturer,
-            grabberOf = grabberOf,
-            formVan = formVan,
-            formationReady = formationReady,
-            reachCells = reachCells,
-            reachNow = reachNow,
-            healersAlive = healersAlive,
-            slotOf = slotOf,
-            pressOn = pressOn,
-        )
-        for (creep in army) creepTurn(creep, ctx, tick)
+        val tick = ArmyTick(meas, strat, targ, stanceOut)
+        for (creep in ctx.army) creepTurn(creep, ctx, tick)
 
-        val armyFireAndHealSeg = armyFireAndHeal(ctx, armyMeasuresSeg, armyTargetsSeg)
+        armyFireAndHeal(ctx, meas, targ)
     }
 
     /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
