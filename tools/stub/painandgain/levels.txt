@@ -11,6 +11,7 @@
 # Tactician — предложения в Arbiter. Приёмник, в который пишут все, — нижний слой; «кто зовёт run() последним» видно в
 # оркестровке, а не в уровне файла. Семь рёбер стартовой таблицы были рёбрами вверх только из-за этой расстановки.
 1: Executor Arbiter TrafficManager
+1: Format                                        # bodySummary, typeChar, num — запись крипа и флага строкой лога
 1: Clock                                         # cpuMs, cpuMark — часы тика: их читают предохранители CPU всех стадий
 1: Power                                         # модель мощи и размена: чистые функции над телами и профилями
 1: Geometry                                      # sym, mirrorTL — обход и сторона карты в своей системе координат
@@ -27,9 +28,4 @@ outside: Instruments <- PainAndGain
 # — рёбра вверх, названные планом (раздел 2.5):
 # — рёбра вверх, которых раздел 2.5 не называет (находка этапа 0, решаются на этапе 5 вместе с пересмотром таблицы):
 # — стадии импортируют Instruments (этап 6: счётчик живёт у того, кто считает):
-known: Fight>Instruments
-known: Formation>Instruments
-known: Missions>Instruments
-known: Strategist>Instruments
-known: Tactician>Instruments
-known: World>Instruments
+# (19.09.2026, v447) список пуст: рёбер вопреки уровням нет, ни одна стадия не импортирует Instruments.
