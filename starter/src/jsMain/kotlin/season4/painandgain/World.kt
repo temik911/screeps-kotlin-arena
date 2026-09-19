@@ -984,6 +984,9 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     if (massedByArrival && !massedByShape) massArrivalAdded++
     val enemyMassed = massedByShape || massedByArrival
     enemyMassedSignal = enemyMassed
+    // ДРАЛСЯ ЛИ ОН С НАМИ СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER): защёлка на матч. Россыпь дерётся стычками по одному-два
+    // крипа у флагов и сюда не попадает; блок, который между боями расходится группами по флагам, — попадает первым же боем
+    if (exchangeLiveNow && enemyMassed) fightMassedSeen = true
     // с гистерезисом: темп сближения ходит вокруг порога (колонна на марше то растягивается шире MASS_RANGE, то
     // замедляется), и без него уклонение сменялось стоянием каждые десять-тридцать тиков, пока враг шёл — матч 32:
     // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.

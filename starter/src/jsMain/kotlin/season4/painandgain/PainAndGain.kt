@@ -188,6 +188,7 @@ object PainAndGain {
      *  пара не идёт — отбить его нечем. */
     internal var enemySitsSignal = false                 // его вооружённые сомкнуты по форме или по прибытию (v281, readSignals)
     internal var firstFightTick = 0                        // тик первого размена (exchangeLive); 0 — первый бой впереди (v281)
+    internal var fightMassedSeen = false                   // он хоть раз дрался с нами СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER)
     /** Предсказанный урон его стволов по нашим на этот тик — по модели его выбора цели, что чаще попадает (v292, см.
      *  rotateByFocus); null, пока сверок меньше окна. Читает лечение вместо неадресного damageAt. */
     internal var focusPredDmg: Map<String, Double>? = null
