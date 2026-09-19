@@ -375,48 +375,9 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         val ours = ourPowerOf(bw.army, bw.combatEnemies)
         val theirs = enemyPowerOf(bw.combatEnemies, bw.army)
-        println(
-            "t=${getTicks()} army=${bw.army.size} runners=${bw.runners.size}(${Memory.detachedIds.size} detached) enemies=${bw.enemyCreeps.size}/${bw.combatEnemies.size} " +
-            "reach=${bw.army.count { hasRanged(it) && bw.combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${bw.army.count { hasRanged(it) }} " +
-            // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
-            // центра. Реплеи говорят, что стирание приходит на диаметре 21, а пат — на диаметре 3
-            "spread=${bw.army.filter { hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${bw.army.count { hasWeapon(it) && getRange(it, rem.armedCentroid) > LEASH_RANGE }} " +
-            // ...и отдельно ЛЕКАРИ за поводком (v202): именно они разъезжались, а прибор их не считал вовсе
-            "hfar=${bw.army.count { healerOnly(it) && getRange(it, rem.armedCentroid) > LEASH_RANGE }}/${bw.army.count { healerOnly(it) }} " +
-            // ЛЕКАРИ СУДЯТСЯ ВЫЖИВАНИЕМ, А НЕ ДОСТАВЛЕННЫМ ЛЕЧЕНИЕМ (этап 7): v202 поднял лечение и дал 0:3.
-            // Тело лекаря — h6m6, лечащие части СПЕРЕДИ, поэтому урон уничтожает именно их и первыми; замер
-            // разгрома 3d97c4 говорит, что его лекари сохраняют 100 % лечащих частей, наши 8 %. hcov — доля
-            // нужды, покрытая назначенными клетками: прибор раздачи, а не исхода
-            "hparts=${withHeal(bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }} " +
-            "ehparts=${bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }} " +
-            "hcov=${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
-            "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +
-            "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
-            " capq=$capqVeto/$capqAsked capqu=$capquVeto/$capquAsked capu=" + capquWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " capeval=$capqEval capidle=$capIdleRush/$capIdleEdge mstrip=$mstripTicks/$mstripAny/$mstripReach" +
-            " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum ffight=$firstFightTick fmassed=${if (fightMassedSeen) 1 else 0}stray=$strayCapRefused sout=$soutOut/$soutBack/$soutTicks hold=$holdPinned/$holdArmedStay/$holdKeptRace/$holdKeptFight gsafe=$groupSafeTicks/$groupDmgWindow fguard=$flagGuardTicks route=$routeKept man=$manned gcov=$garCovered/$garAll courier=$courierTicks hunt=$huntTicks/$huntCreepTicks toothless=$pushToothless sit=$flagSitOcc/$flagSitAll keep2=$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft keep3=$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" +
-            " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
-            "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
-            "race=${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }} poisedcost=$poisedCost objnone=${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll " +
-            "objdrop=${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN budget=$budgetSum/$budgetTicks " +
-            "runner=${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN " +
-            "cmdwhy=${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN " +
-            "ovl=$ovlSum/$ovlTicks/$ovlThree/$ovlFour conc=$concSum/$concTicks concall=$concAll/$concAllTicks concmax=$concMax concfan=$fanShots/$fireShots " +
-            "lostrace=$lostRaceOpened/$lostRaceOffers gather=$gatherSpread/$gatherHold close3=$closeHeld/$closeTicks guard=$guardFired/$guardTicks " +
-            // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
-            // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
-            // консоль не показывала (имя `guns=` занято прибором v200)
-            "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
-            "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
-            "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-            "shooters=${bw.army.count { hasRanged(it) }}/${bw.combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries srch=$srchCut/$srchTicks/${cmdTailMax.toInt()} deals=$dealsChosen/$dealsTried srchd=$srchDiff pin=$pinOrd/$pinOpp/$pinHeld/$pinChk fself=$fselfFlip/$fselfAll rotf=$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN rotfm=$rotfMeet meet=$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk fsw=$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare ffoc=$ffocBefore/$ffocAfter/$ffocAll ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame rad=${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide simd=${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hwallx=$hwallYield/$hwallFar hpick=$hpN/$hpAdj/$hpAvail/$hpGate hadj=$hadjN/$hadjAll hadjn=$hadjnN/$hadjnAll hfire=$hfireN/$hfireAll/$hfireAdj hstill=${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged} cmdheal=$cmdHealGiven/$cmdHealTicks dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
-            "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
-                "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=${bw.passiveEnemy} flags=${flagsSummary(bw.flags)} " +
-                "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=${kiteNow - kiteSeen} massed=$kiteMassed plan=${planStrict - planStrictSeen}/${planLoose - planLooseSeen} cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> bw.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} touchl=${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll fall=$fallReach/$fallAny our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${bw.army.count { stripped(it) }} hits=${bw.army.sumOf { it.hits }}/${bw.army.sumOf { it.hitsMax }} enemyHits=${bw.combatEnemies.sumOf { it.hits }}/${bw.combatEnemies.sumOf { it.hitsMax }} " +
-                "centroid=(${bw.ourCentroid.x},${bw.ourCentroid.y}) enemyCentroid=${bw.enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
-        )
+        tickView = TickView(bw, rem, ours, theirs)
+        declareLine()
+        println(Gauges.line(T_LINE))
         // ПЕРЕПИСЬ (v203): только ненулевые ветки, накопительно за матч. Сумма stepCount обязана равняться
         // размеру армии, умноженному на число тиков, — если не равна, перепись врёт, и всё на ней построенное тоже
         println("rung t=${getTicks()}: why=" + rungCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
@@ -462,6 +423,230 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
     }
     return PrintTickOut(
     )
+}
+
+/** То, что вычисляемым полям строки `t=` нужно от тика: мир, память тика и мощь сторон. Ставится перед печатью строки. */
+internal class TickView(val bw: BuildWorldOut, val rem: RememberTickOut, val ours: Double, val theirs: Double)
+
+private lateinit var tickView: TickView
+private var lineDeclared = false
+
+/**
+ * РАСКЛАДКА СТРОКИ `t=` (v455, второй шаг архитектуры, этап 2): порядок полей — ЭТОТ список, и другого описания порядка нет.
+ * Поле объявляет тот, кто его считает (`Gauges.counter("имя", часть)` у стадии — см. Gauges.kt); здесь — только имена. Имя с
+ * хвостом `@2` — второе поле с тем же печатным именем (в строке два `hunt=`: охота за остовами и «охотимся на угрозу»); имя с
+ * ведущим `<` печатается без пробела перед собой: `fmassed=0stray=0` — склейка, которой прибор `stray` невидим для `series.py`
+ * с момента появления; она воспроизводится побайтно до решения оператора (docs/pain-and-gain-architecture-2.md, 2.8, п. 1).
+ */
+internal val T_LINE = listOf(
+    "t", "army", "runners", "enemies", "reach", "spread", "hfar", "hparts", "ehparts", "hcov", "hulk", "hulkreach",
+    "revived", "chase", "kills", "capgate", "cap", "capq", "capqu", "capu", "capeval", "capidle", "mstrip", "poised", "edge",
+    "capopp", "ffight", "fmassed", "<stray", "sout", "hold", "gsafe", "fguard", "route", "man", "gcov", "courier", "hunt",
+    "toothless", "sit", "keep2", "keep3", "scout", "spotm", "spothold", "sym", "split", "recall", "healgap", "nomedic",
+    "flip", "aggro", "pushheld", "lethal", "ledgerw", "breakoff", "race", "poisedcost", "objnone", "objdrop", "budget",
+    "runner", "cmdwhy", "ovl", "conc", "concall", "concmax", "concfan", "lostrace", "gather", "close3", "guard", "warm",
+    "warmann", "warmhold", "warmcmd", "warmfight", "warmcap", "mconc", "mconcmax", "mpack", "pack", "mpackon", "kchase",
+    "kveto", "gathera", "annempty", "shooters", "abort", "srch", "deals", "srchd", "pin", "fself", "rotf", "rotfm", "meet",
+    "fsw", "ffoc", "ovw", "conf", "rtr", "mquiet", "mquietc", "maj", "surv", "adr", "rad", "simd", "fhl", "mrush", "zlb",
+    "hwall", "hwallh", "hwalla", "hwallp", "postc", "rot", "mdir", "hfull", "hover", "hswap", "hexp", "hlost", "hwallx",
+    "hpick", "hadj", "hadjn", "hfire", "hstill", "cmdheal", "dh", "retr", "standfire", "outmw", "score", "rate", "behind",
+    "passive", "flags", "obey", "branch", "fled", "clash", "lost", "kite", "massed", "plan", "cmd", "mode", "disp", "evt",
+    "fire", "posture", "obj", "hunt@2", "rush", "weak", "pat", "strip", "touch", "touchl", "out", "back", "guns", "mheal",
+    "hline", "fall", "our", "enemy", "ledger", "wounded", "hits", "enemyHits", "centroid", "enemyCentroid",
+)
+
+/** Поля строки `t=`, которые считаются НА МЕСТЕ ПЕЧАТИ: снимок мира, величины состояния, отношения накопителей. Объявляются один
+ *  раз, при первой печати; расширение оркестратора — пока они читают его члены (величины одного тика уходят к носителям на этапе 6). */
+private fun PainAndGain.declareLine() {
+    if (lineDeclared) return
+    lineDeclared = true
+    Gauges.computed("t") { "${getTicks()}" }
+    Gauges.computed("army") { "${tickView.bw.army.size}" }
+    Gauges.computed("runners") { "${tickView.bw.runners.size}(${Memory.detachedIds.size} detached)" }
+    Gauges.computed("enemies") { "${tickView.bw.enemyCreeps.size}/${tickView.bw.combatEnemies.size}" }
+    Gauges.computed("reach") { "${tickView.bw.army.count { hasRanged(it) && tickView.bw.combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${tickView.bw.army.count { hasRanged(it) }}" }
+    // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
+    // центра. Реплеи говорят, что стирание приходит на диаметре 21, а пат — на диаметре 3
+    Gauges.computed("spread") { "${tickView.bw.army.filter { hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${tickView.bw.army.count { hasWeapon(it) && getRange(it, tickView.rem.armedCentroid) > LEASH_RANGE }}" }
+    // ...и отдельно ЛЕКАРИ за поводком (v202): именно они разъезжались, а прибор их не считал вовсе
+    Gauges.computed("hfar") { "${tickView.bw.army.count { healerOnly(it) && getRange(it, tickView.rem.armedCentroid) > LEASH_RANGE }}/${tickView.bw.army.count { healerOnly(it) }}" }
+    // ЛЕКАРИ СУДЯТСЯ ВЫЖИВАНИЕМ, А НЕ ДОСТАВЛЕННЫМ ЛЕЧЕНИЕМ (этап 7): v202 поднял лечение и дал 0:3.
+    // Тело лекаря — h6m6, лечащие части СПЕРЕДИ, поэтому урон уничтожает именно их и первыми; замер
+    // разгрома 3d97c4 говорит, что его лекари сохраняют 100 % лечащих частей, наши 8 %. hcov — доля
+    // нужды, покрытая назначенными клетками: прибор раздачи, а не исхода
+    Gauges.computed("hparts") { "${withHeal(tickView.bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(tickView.bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }}" }
+    Gauges.computed("ehparts") { "${tickView.bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${tickView.bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }}" }
+    Gauges.computed("hcov") { "${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }}" }
+    Gauges.computed("hulk") { "${disarmedFoe.size}" }
+    Gauges.computed("hulkreach") { "$hulkInReach/$hulkTicks" }
+    Gauges.computed("revived") { "$hulkRevived" }
+    Gauges.computed("chase") { "${Memory.chaseOf.size}/$chaseTicks" }
+    Gauges.computed("kills") { "$chaseKills" }
+    Gauges.computed("capgate") { "${capBlocked.values.sum()}/$capOffered" }
+    // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
+    Gauges.computed("cap") { "${capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}" }
+    Gauges.computed("capq") { "$capqVeto/$capqAsked" }
+    Gauges.computed("capqu") { "$capquVeto/$capquAsked" }
+    Gauges.computed("capu") { "${capquWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}" }
+    Gauges.computed("capeval") { "$capqEval" }
+    Gauges.computed("capidle") { "$capIdleRush/$capIdleEdge" }
+    Gauges.computed("mstrip") { "$mstripTicks/$mstripAny/$mstripReach" }
+    Gauges.computed("poised") { "$poisedTicks/$poisedAll" }
+    Gauges.computed("edge") { "$edgeSpot/$edgeAll" }
+    Gauges.computed("capopp") { "$capOppSum/$capAllSum" }
+    Gauges.computed("ffight") { "$firstFightTick" }
+    Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
+    Gauges.computed("stray") { "$strayCapRefused" }
+    Gauges.computed("sout") { "$soutOut/$soutBack/$soutTicks" }
+    Gauges.computed("hold") { "$holdPinned/$holdArmedStay/$holdKeptRace/$holdKeptFight" }
+    Gauges.computed("gsafe") { "$groupSafeTicks/$groupDmgWindow" }
+    Gauges.computed("fguard") { "$flagGuardTicks" }
+    Gauges.computed("route") { "$routeKept" }
+    Gauges.computed("man") { "$manned" }
+    Gauges.computed("gcov") { "$garCovered/$garAll" }
+    Gauges.computed("courier") { "$courierTicks" }
+    Gauges.computed("hunt") { "$huntTicks/$huntCreepTicks" }
+    Gauges.computed("toothless") { "$pushToothless" }
+    Gauges.computed("sit") { "$flagSitOcc/$flagSitAll" }
+    Gauges.computed("keep2") { "$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft" }
+    Gauges.computed("keep3") { "$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" }
+    Gauges.computed("scout") { "$scoutShots/$scoutReach/$scoutTicks" }
+    Gauges.computed("spotm") { "$spotMeleeTicks" }
+    Gauges.computed("spothold") { "$spotHoldNew/$spotHoldAll" }
+    Gauges.computed("sym") { "$symCore/$symFree" }
+    Gauges.computed("split") { "$splitFight/$splitAll" }
+    Gauges.computed("recall") { "$recalled/$fightTicksNow" }
+    Gauges.computed("healgap") { "$healGap/$healGapN" }
+    Gauges.computed("nomedic") { "$noMedic/$healGapN" }
+    Gauges.computed("flip") { "$aimFlips/$aimTicks" }
+    Gauges.computed("aggro") { "$dangerBlind/$dangerBlindFar/$dangerMoves" }
+    Gauges.computed("pushheld") { "$pushHeldTicks/$pushTicks" }
+    Gauges.computed("lethal") { "$lethalHits/$lethalCells" }
+    Gauges.computed("ledgerw") { "$ledgerWindow/$ourLostWindow/$hisLostWindow" }
+    Gauges.computed("breakoff") { "$breakOffSplit/$breakOffN" }
+    Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
+    Gauges.computed("poisedcost") { "$poisedCost" }
+    Gauges.computed("objnone") { "${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll" }
+    Gauges.computed("objdrop") { "${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN" }
+    Gauges.computed("budget") { "$budgetSum/$budgetTicks" }
+    Gauges.computed("runner") { "${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN" }
+    Gauges.computed("cmdwhy") { "${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN" }
+    Gauges.computed("ovl") { "$ovlSum/$ovlTicks/$ovlThree/$ovlFour" }
+    Gauges.computed("conc") { "$concSum/$concTicks" }
+    Gauges.computed("concall") { "$concAll/$concAllTicks" }
+    Gauges.computed("concmax") { "$concMax" }
+    Gauges.computed("concfan") { "$fanShots/$fireShots" }
+    Gauges.computed("lostrace") { "$lostRaceOpened/$lostRaceOffers" }
+    Gauges.computed("gather") { "$gatherSpread/$gatherHold" }
+    Gauges.computed("close3") { "$closeHeld/$closeTicks" }
+    Gauges.computed("guard") { "$guardFired/$guardTicks" }
+    // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
+    // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
+    // консоль не показывала (имя `guns=` занято прибором v200)
+    Gauges.computed("warm") { "$warmTicks/$warmContact" }
+    Gauges.computed("warmann") { "$warmAnn/$warmAnnAll" }
+    Gauges.computed("warmhold") { "$warmHold/$warmAnn" }
+    Gauges.computed("warmcmd") { "$warmCmd/$warmCmdAll" }
+    Gauges.computed("warmfight") { "$warmFight/$warmFightAll" }
+    Gauges.computed("warmcap") { "$warmCap/$warmCapAll" }
+    Gauges.computed("mconc") { "$mconcAll/$mconcTicks" }
+    Gauges.computed("mconcmax") { "$mconcMax" }
+    Gauges.computed("mpack") { "$mpackHit/$mpackAll" }
+    Gauges.computed("pack") { "$packHeld/$packTicks" }
+    Gauges.computed("mpackon") { "$mpackOnHit/$mpackOn" }
+    Gauges.computed("kchase") { "$kchaseTicks/$kchaseAnn" }
+    Gauges.computed("kveto") { "$kvetoHit/$kvetoAll" }
+    Gauges.computed("gathera") { "$gatherAnn/$gatherAnnAll" }
+    Gauges.computed("annempty") { "${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll" }
+    Gauges.computed("shooters") { "${tickView.bw.army.count { hasRanged(it) }}/${tickView.bw.combatEnemies.count { hasRanged(it) }}" }
+    Gauges.computed("abort") { "$abortTicks/$abortEntries" }
+    Gauges.computed("srch") { "$srchCut/$srchTicks/${cmdTailMax.toInt()}" }
+    Gauges.computed("deals") { "$dealsChosen/$dealsTried" }
+    Gauges.computed("srchd") { "$srchDiff" }
+    Gauges.computed("pin") { "$pinOrd/$pinOpp/$pinHeld/$pinChk" }
+    Gauges.computed("fself") { "$fselfFlip/$fselfAll" }
+    Gauges.computed("rotf") { "$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN" }
+    Gauges.computed("rotfm") { "$rotfMeet" }
+    Gauges.computed("meet") { "$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk" }
+    Gauges.computed("fsw") { "$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare" }
+    Gauges.computed("ffoc") { "$ffocBefore/$ffocAfter/$ffocAll" }
+    Gauges.computed("ovw") { "${Executor.ovwContact}/${Executor.ovwRanged}" }
+    Gauges.computed("conf") { "${Arbiter.confReach}/${Arbiter.confFatigue}" }
+    Gauges.computed("rtr") { "$rtrRemoved/$rtrOld/$rtrAdded" }
+    Gauges.computed("mquiet") { "$mquietMoved/$mquietAll/${mquietGain.toInt()}" }
+    Gauges.computed("mquietc") { "$cmdQuietMoved/$cmdQuietAll" }
+    Gauges.computed("maj") { "$majOpened/$majOffers" }
+    Gauges.computed("surv") { "$survTicks/$survLead/$survContact/$survFights" }
+    Gauges.computed("adr") { "$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame" }
+    Gauges.computed("rad") { "${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide" }
+    Gauges.computed("simd") { "${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree" }
+    Gauges.computed("fhl") { "$fhlChosen/$fhlAvail" }
+    Gauges.computed("mrush") { "$rushByArrival/$rushSignalAll/$massArrivalAdded" }
+    Gauges.computed("zlb") { "$zlbTicks/$zlbZero" }
+    Gauges.computed("hwall") { "$hwallTicks/$hwallVictimTicks" }
+    Gauges.computed("hwallh") { "$hwallHeals/$hwallHealsAll" }
+    Gauges.computed("hwalla") { "$hwallAddr/$hwallVictimTicks" }
+    Gauges.computed("hwallp") { "$hwallPredA/$hwallPredL/$hwallPredN" }
+    Gauges.computed("postc") { "$postContest/$postAll" }
+    Gauges.computed("rot") { "$rotOut" }
+    Gauges.computed("mdir") { "$marchFlow/$marchAll/$marchFlip" }
+    Gauges.computed("hfull") { "$hfullN/$hfullAll" }
+    Gauges.computed("hover") { "$hoverSum/$hdelivSum" }
+    Gauges.computed("hswap") { "$hswapN" }
+    Gauges.computed("hexp") { "$hexpN/$hexpAll" }
+    Gauges.computed("hlost") { "$hlostSum" }
+    Gauges.computed("hwallx") { "$hwallYield/$hwallFar" }
+    Gauges.computed("hpick") { "$hpN/$hpAdj/$hpAvail/$hpGate" }
+    Gauges.computed("hadj") { "$hadjN/$hadjAll" }
+    Gauges.computed("hadjn") { "$hadjnN/$hadjnAll" }
+    Gauges.computed("hfire") { "$hfireN/$hfireAll/$hfireAdj" }
+    Gauges.computed("hstill") { "${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged}" }
+    Gauges.computed("cmdheal") { "$cmdHealGiven/$cmdHealTicks" }
+    Gauges.computed("dh") { "${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }}" }
+    Gauges.computed("retr") { "$retrTicks/$retrWithPoint/$retrUnderFire" }
+    Gauges.computed("standfire") { "$standFire/$standTicks" }
+    Gauges.computed("outmw") { "$outmTicks/$outmRetreat" }
+    Gauges.computed("score") { "${ourScore.toInt()}/${enemyScore.toInt()}" }
+    Gauges.computed("rate") { "$ourRate/$enemyRate" }
+    Gauges.computed("behind") { "$behindOnScore" }
+    Gauges.computed("passive") { "${tickView.bw.passiveEnemy}" }
+    Gauges.computed("flags") { "${flagsSummary(tickView.bw.flags)}" }
+    Gauges.computed("obey") { "$orderAuditOk/$orderAuditN" }
+    Gauges.computed("branch") { "$orderBranch" }
+    Gauges.computed("fled") { "$orderFled" }
+    Gauges.computed("clash") { "$orderClash" }
+    Gauges.computed("lost") { "stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere" }
+    Gauges.computed("kite") { "${kiteNow - kiteSeen}" }
+    Gauges.computed("massed") { "$kiteMassed" }
+    Gauges.computed("plan") { "${planStrict - planStrictSeen}/${planLoose - planLooseSeen}" }
+    Gauges.computed("cmd") { "${commandOf.size}/$cmdTicks:$cmdBlocked" }
+    Gauges.computed("mode") { "$cmdMode" }
+    Gauges.computed("disp") { "$dispNow" }
+    Gauges.computed("evt") { "$stateEventTicks" }
+    Gauges.computed("fire") { "${fireOf.size}" }
+    Gauges.computed("posture") { "$posture" }
+    Gauges.computed("obj") { "${objectiveFlagId?.let { id -> tickView.bw.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"}" }
+    Gauges.computed("hunt@2") { "$huntingThreat" }
+    Gauges.computed("rush") { "$unflaggedRushNow" }
+    Gauges.computed("weak") { "$outmatchedTicks" }
+    Gauges.computed("pat") { "$stalemateTicks/$patMax" }
+    Gauges.computed("strip") { "$stripTicks" }
+    Gauges.computed("touch") { "${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()}" }
+    Gauges.computed("touchl") { "${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()}" }
+    Gauges.computed("out") { "$outOfFireTicks" }
+    Gauges.computed("back") { "$meleeBackTicks" }
+    Gauges.computed("guns") { "$planGunsIn/$planGunsAll" }
+    Gauges.computed("mheal") { "$planMeleeHealed/$planMeleeAll" }
+    Gauges.computed("hline") { "$planHealBehind/$planHealAll" }
+    Gauges.computed("fall") { "$fallReach/$fallAny" }
+    Gauges.computed("our") { "${tickView.ours.toInt()}" }
+    Gauges.computed("enemy") { "${tickView.theirs.toInt()}" }
+    Gauges.computed("ledger") { "${enemyDamageTaken - ourDamageTaken}" }
+    Gauges.computed("wounded") { "${tickView.bw.army.count { stripped(it) }}" }
+    Gauges.computed("hits") { "${tickView.bw.army.sumOf { it.hits }}/${tickView.bw.army.sumOf { it.hitsMax }}" }
+    Gauges.computed("enemyHits") { "${tickView.bw.combatEnemies.sumOf { it.hits }}/${tickView.bw.combatEnemies.sumOf { it.hitsMax }}" }
+    Gauges.computed("centroid") { "(${tickView.bw.ourCentroid.x},${tickView.bw.ourCentroid.y})" }
+    Gauges.computed("enemyCentroid") { "${tickView.bw.enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}" }
 }
 
 /** Снимки накопительных счётчиков `kiteNow` (тактик) и `planStrict` / `planLoose` (строй) в конце прошлого тика (v448):
