@@ -203,3 +203,51 @@ landing like any scenario (`tools/land.sh` reads every stdout line that way); th
 **`cputrace.py` — the stand's cpu trace out of the gate's logs**: the largest `max=`, the sum of `slow`, the mean tick
 by phase over the hundred-tick samples, for one log directory or two (`--against`). Absolute numbers say nothing about
 the arena's cold VM; the shift from stage to stage on one machine does. It gives no verdict.
+
+## One-place instruments — `gategap.py`, `identity.sh --rows`, self-masking `logdiff.py`, five lint rules, `order.txt` (20.09.2026)
+
+Stage 0 of `docs/pain-and-gain-architecture-2.md`. None of them touches the bot.
+
+**`gategap.py` — where the gate is blind against live matches, per table row.** `reach t=` prints on the stand and live
+alike, so blindness is counted per ROW of every decision table: gate scenarios where the row wins against live matches
+where it does (`--versions 447-452`; the last `reach` line of a log, the counters are cumulative). Without options: the
+rows that win live and never on the gate, the under-exposed rows by gap, and a greedy pick of live records for the blind
+ones. `--rows a,b` lists the gate scenarios where the rows win (`--list`: labels only — the input of the fast cycle).
+`--scan a,b [--pool won|range|replays --limit N]` plays stored records as ghosts on the CURRENT build, clock off, and
+picks the ones on which the rows win ON THE STAND: **a record enters the gate by the `reach` of its ghost log, never by
+what happened live** — the ghost walks its record and our side may never get where it got live. Measured on the first
+use: the record the plan named for `pass.catchall` / `pass.pinned` (…030b6e, live 3 and 8 cells) gives neither on the
+stand, the ghost dies at t=93; of the 600 newest stored records one closes both — …e3224f, v282 against ●ω<♥♪#6 — and
+it is the fifth ghost line of the gate. For `pass` and `gate` tables "wins" reads "handed out a cell" / "decided".
+By `reach` alone nearly every scenario "adds nothing" — that is the coarseness of the criterion (the gate judges
+outcomes, not rows), not a licence to thin the gate.
+
+**`identity.sh <baseline> --rows a,b` — the fast cycle.** Runs only the scenarios where the named rows win by the
+BASELINE's reach (`regress.sh` honours `ONLY=<file of labels>`), and checks them against the same baseline logs: seconds
+instead of a minute and a half. It is the cycle BETWEEN commits; what lands, and the last commit of a stage, pass the full
+run. A filtered run cannot pass `tools/land.sh`: `regress.sh` ends it with a `PART` line that carries no `PASS`.
+
+**`logdiff.py` — a new instrument field masks itself.** A field `k=…` (or a whole instrument line, by its first word) that
+the WHOLE baseline does not know is dropped from the new log and NAMED in the report (`новые поля: …`, `новые строки: …`);
+`identity.sh` prints those lines, so there is no silent mask. "The whole baseline", not "this log": an event line that
+simply never happened in this scenario before (`cornered t=…`), or an optional field that was not printed here, is a
+behaviour divergence, not a new instrument. The other direction has no allowance: an existing field that changed or
+vanished is a divergence as before — existing fields are never masked, that is the oracle. The hand-written `MASK` list
+is history and is not extended any more. Reading stops at a log's first real divergence (lines after it are shifted).
+
+**Five lint rules with a known list that only shrinks — `lint-known.txt`.** `plumbing` (an `x = x` argument: the field
+name written a third time), `needless_receiver` (declared an extension of `PainAndGain`, touches the object neither itself
+nor through its callees), `tag_outside_table` (a row tag compared as a string with `==` / `!=` / `in`), `single_writer` (a
+`Memory` field or a `PainAndGain` member written from more than one file; by text — assignment, `++`, indexed write, a
+mutating collection call; a same-named local or parameter does not count), `table_order` (below). A violation is an ATOM
+`rule key`, stable against line shifts; the list follows the rule `levels.txt` already uses for known edges: a violation
+not in the list fails (new), a line without a violation fails (remove it — the list empties with the violations), a line
+`main`'s copy does not have fails (the list grew). `lint.py --known` prints the known violations — the work list of stages
+1–6 of the plan; `--write-known` rewrites the list from the present state (growth is still refused against `main`).
+
+**`order.txt` — the reason a row stands above another, as a checked record.** `rung: kite > slot   # v135: why`. The
+order of a table's list is its priority and the only description of it; the reason used to be a comment between two rows,
+which nothing checked. The lint reads every table's tags from the SOURCE (a `listOf(…)` block of `Row` / `Gate` / `Pass`
+lines; the table's name is the name of the `Tally` it is walked with — `rung`, `step`, `gate`, `pass`, `posture`, `mode`,
+`cmdwhy`, `push`) and checks each record: both rows exist, the first is above the second, the reason is there. Reordering
+against a record means overturning a decision and is done by editing this file together with the table.
