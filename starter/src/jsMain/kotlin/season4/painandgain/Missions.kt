@@ -61,21 +61,6 @@ internal fun PainAndGain.wantsRunner(f: FlagInfo): Boolean {
     return !f.ours || occ == null
 }
 
-/** Флаг, который крип держит (v297, см. HOLD_WATCH): наш флаг под ним, пока его крип не дальше HOLD_WATCH от флага; в
- *  режиме пар (v298, см. GROUP_SAFE_DMG) — всегда: фермер возвращается, а гонять держателя туда и обратно — пустая трата. */
-internal fun PainAndGain.heldFlag(ctx: Ctx, c: Creep): FlagInfo? =
-    ctx.flags.firstOrNull { it.ours && it.pos.x == c.x && it.pos.y == c.y }
-        ?.takeIf { f -> groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
-
-/** Флаг, при котором крип стоит охраной (v298): наш флаг его задания, на клетке — другой наш крип, сам крип не дальше
- *  двух клеток, и его крип не дальше HOLD_WATCH от флага (в режиме пар — всегда, как у держателя). */
-internal fun PainAndGain.guardFlag(ctx: Ctx, c: Creep): FlagInfo? {
-    val f = Memory.runnerFlag[c.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } } ?: return null
-    val occ = f.occupant ?: return null
-    if (!f.ours || occ.my != true || occ.id == c.id || getRange(c, f.pos) > 2) return null
-    return f.takeIf { groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
-}
-
 internal fun PainAndGain.runRunners(ctx: Ctx) {
     val runners = ctx.runners
     Memory.idleRunnerIds.clear()

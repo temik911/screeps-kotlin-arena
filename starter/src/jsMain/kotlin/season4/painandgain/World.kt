@@ -405,6 +405,23 @@ internal fun PainAndGain.sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0
 /** Хранители флагов (см. KEEP_RANGE): снятие, потом назначение. */
 internal fun PainAndGain.enemyCreeps(ctx: Ctx): List<Creep> = ctx.enemyCreeps
 
+// ==================== факты о флагах (v446: до этапа 5 жили у заданий бегунов, а читал их и мир — ребро вверх) ====================
+
+/** Флаг, который крип держит (v297, см. HOLD_WATCH): наш флаг под ним, пока его крип не дальше HOLD_WATCH от флага; в
+ *  режиме пар (v298, см. GROUP_SAFE_DMG) — всегда: фермер возвращается, а гонять держателя туда и обратно — пустая трата. */
+internal fun PainAndGain.heldFlag(ctx: Ctx, c: Creep): FlagInfo? =
+    ctx.flags.firstOrNull { it.ours && it.pos.x == c.x && it.pos.y == c.y }
+        ?.takeIf { f -> groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+
+/** Флаг, при котором крип стоит охраной (v298): наш флаг его задания, на клетке — другой наш крип, сам крип не дальше
+ *  двух клеток, и его крип не дальше HOLD_WATCH от флага (в режиме пар — всегда, как у держателя). */
+internal fun PainAndGain.guardFlag(ctx: Ctx, c: Creep): FlagInfo? {
+    val f = Memory.runnerFlag[c.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } } ?: return null
+    val occ = f.occupant ?: return null
+    if (!f.ours || occ.my != true || occ.id == c.id || getRange(c, f.pos) > 2) return null
+    return f.takeIf { groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+}
+
 // ==================== тело, скорость, мощь ====================
 
 /** Факты крипа в этом тике (см. Facts.kt). Обёртки ниже — тонкие: определение каждого факта одно, в `Unit`. */
