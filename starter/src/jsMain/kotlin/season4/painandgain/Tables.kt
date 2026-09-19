@@ -34,6 +34,11 @@ internal class Tally(val name: String) {
         tags = table.map { it.tag }; on = IntArray(table.size); won = IntArray(table.size)
     }
 
+    fun fitTags(names: List<String>) {
+        if (on.size == names.size) return
+        tags = names; on = IntArray(names.size); won = IntArray(names.size)
+    }
+
     /** `имя=тег:won/true/shadowed,…` — в порядке таблицы (порядок и есть приоритет), нулевые строки тоже: они и нужны. */
     fun print(): String = "$name=" + tags.indices.joinToString(",") { "${tags[it]}:${won[it]}/${on[it]}/${on[it] - won[it]}" }
 }
@@ -56,4 +61,31 @@ internal fun <F, R> walk(table: List<Row<F, R>>, facts: F, tally: Tally): Row<F,
     }
     if (winner < 0) throw IllegalStateException("decision table ${tally.name} without a closing row")
     return table[winner]
+}
+
+/** Вердикт ворот: разрешить, запретить с причиной, идти к следующим воротам. */
+internal sealed class Verdict {
+    object Allow : Verdict()
+    object Next : Verdict()
+    class Veto(val reason: String) : Verdict()
+}
+
+/**
+ * ВОРОТА — строка ПОСЛЕДОВАТЕЛЬНОЙ таблицы (v445, план архитектуры, 4.3 и этап 4): цепочка ранних `return`, где между выходами
+ * стоят вычисления и счётчики. В отличие от [Row], ворота вычисляются строго по очереди и только пока решения нет: их величины
+ * дороги (мощь сторон) и зависят от момента вызова, а счётчик между воротами — часть своей строки и исполняется, только если до
+ * неё дошли. Полного обхода у такой таблицы нет по построению.
+ */
+internal class Gate<F>(val tag: String, val verdict: F.() -> Verdict)
+
+/** Проход по воротам: первые ворота, сказавшие не `Next`, решают. В счётчиках `on[i]` — до ворот ДОШЛИ, `won[i]` — они решили;
+ *  `on − won` — прошли насквозь. Последние ворота обязаны решать. */
+internal fun <F> pass(gates: List<Gate<F>>, facts: F, tally: Tally): Verdict {
+    tally.fitTags(gates.map { it.tag })
+    for (i in gates.indices) {
+        tally.on[i]++
+        val v = gates[i].verdict(facts)
+        if (v !== Verdict.Next) { tally.won[i]++; return v }
+    }
+    throw IllegalStateException("gate table ${tally.name} without a closing gate")
 }
