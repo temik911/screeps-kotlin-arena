@@ -23,21 +23,20 @@ SRC = os.path.normpath(os.path.join(HERE, '../../../starter/src/jsMain/kotlin/se
 
 # (имя правила, выражение, {файлы, где разрешено}, что писать вместо)
 A = r'([\w.]+)'          # аргумент ролевого теста: `it`, `creep`, `m.creep`
+Q = r'(?:PainAndGain\.)?'  # тест, позванный через синглтон из `object` (так три написания пережили инвентарь этапа 1 в Formation.kt)
 RULES = [
     # этап 1, «чистый мили»: два разных факта — А (рождён мили) и Б/В (живая ATTACK); не сводить, см. Facts.kt
-    ('чистый мили А', r'isMelee\(%s\) && !hasRanged\(\1\)' % A, {'Facts.kt'}, 'meleeOnlyBorn(x)'),
-    ('чистый мили ¬А', r'!isMelee\(%s\) \|\| hasRanged\(\1\)' % A, {'Facts.kt'}, '!meleeOnlyBorn(x)'),
-    ('чистый мили Б/В', r'hasMelee\(%s\) && !hasRanged\(\1\)' % A, {'Facts.kt'}, 'meleeOnlyLive(x)'),
+    ('чистый мили А', Q + r'isMelee\(%s\) && !' % A + Q + r'hasRanged\(\1\)', {'Facts.kt'}, 'meleeOnlyBorn(x)'),
+    ('чистый мили ¬А', '!' + Q + r'isMelee\(%s\) \|\| ' % A + Q + r'hasRanged\(\1\)', {'Facts.kt'}, '!meleeOnlyBorn(x)'),
+    ('чистый мили Б/В', Q + r'hasMelee\(%s\) && !' % A + Q + r'hasRanged\(\1\)', {'Facts.kt'}, 'meleeOnlyLive(x)'),
     # этап 1, роли: лекарь, раздетый (у тактика звался wounded, у командира stripped), в строю
-    ('лекарь', r'!(PainAndGain\.)?hasWeapon\(%s\) && (PainAndGain\.)?hasHeal\(\2\)' % A, {'Facts.kt'}, 'healerOnly(x)'),
-    ('лекарь', r'hasHeal\(%s\) && !hasWeapon\(\1\)' % A, {'Facts.kt'}, 'healerOnly(x)'),
-    ('не лекарь', r'hasWeapon\(%s\) \|\| !hasHeal\(\1\)|!hasHeal\(%s\) \|\| hasWeapon\(\2\)' % (A, A), {'Facts.kt'}, '!healerOnly(x)'),
-    ('раздетый', r'!hasWeapon\(%s\) && !hasHeal\(\1\)' % A, {'Facts.kt'}, 'stripped(x)'),
-    ('в строю', r'hasWeapon\(%s\) \|\| hasHeal\(\1\)' % A, {'Facts.kt'}, 'combatant(x)'),
-    ('стрелок', r'hasWeapon\(%s\) && hasRanged\(\1\)|!hasRanged\(%s\) \|\| !hasWeapon\(\2\)' % (A, A), {'Facts.kt'},
+    ('лекарь', '!' + Q + r'hasWeapon\(%s\) && ' % A + Q + r'hasHeal\(\1\)', {'Facts.kt'}, 'healerOnly(x)'),
+    ('лекарь', Q + r'hasHeal\(%s\) && !' % A + Q + r'hasWeapon\(\1\)', {'Facts.kt'}, 'healerOnly(x)'),
+    ('не лекарь', Q + r'hasWeapon\(%s\) \|\| !' % A + Q + r'hasHeal\(\1\)|!' + Q + r'hasHeal\(%s\) \|\| ' % A + Q + r'hasWeapon\(\2\)', {'Facts.kt'}, '!healerOnly(x)'),
+    ('раздетый', '!' + Q + r'hasWeapon\(%s\) && !' % A + Q + r'hasHeal\(\1\)', {'Facts.kt'}, 'stripped(x)'),
+    ('в строю', Q + r'hasWeapon\(%s\) \|\| ' % A + Q + r'hasHeal\(\1\)', {'Facts.kt'}, 'combatant(x)'),
+    ('стрелок', Q + r'hasWeapon\(%s\) && ' % A + Q + r'hasRanged\(\1\)|!' + Q + r'hasRanged\(%s\) \|\| !' % A + Q + r'hasWeapon\(\2\)', {'Facts.kt'},
      'hasRanged(x): живая RANGED_ATTACK уже значит «вооружён»'),
-    # ролевой тест сканом тела: определение факта одно, в Unit. InfluenceMap — объект уровня 1, таблицы фактов тика не
-    # видит (она у оркестратора), его `armed` остаётся сканом до этапа 5
     # этап 1, ключ клетки: 184 написания `x * 100 + y` инлайном в десяти файлах
     ('ключ клетки', r'\* 100 \+', {'Facts.kt'}, 'key(x, y) или pos.key — inline, скомпилированный код тот же'),
     # этап 1, группа постур «отход»: две полярности одного множества
