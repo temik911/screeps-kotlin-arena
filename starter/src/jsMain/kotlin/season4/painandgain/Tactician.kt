@@ -838,19 +838,34 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
     }
 }
 
-/** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). С v444 оно разложено по швам, в том
- *  же порядке: факты ([buildTurn]) → цель по лестнице → поле, бегство, сплочение → шаг → предложение арбитру.
- *  Имена читаются так: локальная → поле [Turn] → поле [ArmyTick] → член `PainAndGain` → верх пакета. */
-internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
-    val turn = buildTurn(creep, ctx, t)
-    with(t) { with(turn) {
-        // ПЕРЕПИСЬ РЕШЕНИЙ (v203, этап 1): каждая ветка обеих цепочек называет себя, и счётчик копится за матч.
-        // Повод — пять правил за сутки, которые прошли гейт и не исполнились ни разу: по коду нельзя было
-        // сказать, какая ветка живая. Перепись отвечает на это числом, а не чтением. Она же заменяет ручной
-        // дубль цепочки в TRACE_WHY, который успел рассинхронизироваться и рассказывал о боте неправду
-        val rung = walk(ladder(), turn)
-        val whyTag = rung.tag
-        val aim = rung.act(turn)
+/**
+ * ФАКТЫ ШАГА (v444, план архитектуры, этап 3): то, что становится известно ПОСЛЕ выбора цели, — поле потока к ней, огонь,
+ * бегство, сплочение. Определение каждой величины — в [buildStride], в прежнем порядке; здесь имена и типы тех, что читают
+ * цепочка шага ([steps]) и хвост хода. `creep`, `ctx`, `t` — те же объекты, что у [Turn].
+ */
+internal class Stride(
+    val turn: Turn,
+    val aim: Aim,
+    val flow: IntArray,
+    val nearbyEnemies: List<Creep>,
+    val inCombat: Boolean,
+    val localThreats: List<Creep>,
+    val reachMine: Set<Int>,
+    val inReach: Boolean,
+    val avoidCells: Set<Int>,
+    val mustFlee: Boolean,
+    val myFlow: Int,
+    val retreatHold: Boolean,
+    val hold: Boolean,
+) {
+    val creep: Creep get() = turn.creep
+    val ctx: Ctx get() = turn.ctx
+    val t: ArmyTick get() = turn.t
+}
+
+/** Факты шага: прежняя третья секция [creepTurn] дословно и в прежнем порядке (записи терпения — на своих местах). */
+internal fun PainAndGain.buildStride(turn: Turn, aim: Aim): Stride {
+    with(turn.t) { with(turn) {
         val target = aim.target
         val standoff = aim.standoff
         val avoid = aim.avoid
@@ -938,111 +953,144 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         Memory.impatientLatch.update(creep.id, enter = waitedOut, exit = !cohesionHold)
         val hold = (cohesionHold && creep.id !in Memory.impatientIds) || formHold || retreatHold
 
-        var stepTag = "?"
-        val step: Position?
-        when {
-            !canMove(creep) -> { stepTag = "immobile"; step = null }
-            // ВЫЖИВАНИЕ ВЫШЕ ЗАДАНИЯ (v240, этап 5 переработки, решение оператора 13.09.2026): крип под смертельным
-            // огнём бежит, даже если у него приказ командира или пост хранителя. До v240 приказ стоял выше бегства
-            // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
-            // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
-            mustFlee -> {
-                stepTag = "flee"
-                if (commandOf.containsKey(creep.id)) orderFled++
-                step = fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support || stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+        return Stride(turn, aim, flow = flow, nearbyEnemies = nearbyEnemies, inCombat = inCombat, localThreats = localThreats,
+            reachMine = reachMine, inReach = inReach, avoidCells = avoidCells, mustFlee = mustFlee, myFlow = myFlow,
+            retreatHold = retreatHold, hold = hold)
+    } }
+}
+
+/** Свободный шаг (строка `free` цепочки шага): прежнее тело ветки дословно. Имена: локальная → [Stride] → [Turn] → [ArmyTick]. */
+internal fun PainAndGain.freeStep(s: Stride): Position? {
+    with(s.turn.t) { with(s.turn) { with(s) {
+        val target = aim.target
+        val standoff = aim.standoff
+        // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
+        val designated = grab?.pos ?: objective?.flag?.pos?.takeIf { objectiveCapturer == creep.id }
+        var myBlocked = if (designated != null) blockedSet - (designated.key) else blockedSet
+        // плотность (см. COMPACT_RANGE): при враге в досягаемости — только на клетки строя
+        // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
+        // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
+        // матча 8 в 4–5 клетках от строя
+        if (!stripped && localThreats.isNotEmpty() && !posture.withdrawing && canMove(creep)) {
+            val armedMates = armedMatesOf(mobileArmy, creep)
+            val myRange = getRange(creep, armedCentroid)
+            val loose = HashSet<Int>()
+            for ((dx, dy) in dirsNow()) {
+                val x = creep.x + dx; val y = creep.y + dy
+                if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                val c = InfluenceMap.cell(x, y)
+                val r = getRange(c, armedCentroid)
+                // шаг ВПЕРЁД (по потоку к цели) открыт на клетку в COMPACT_RANGE + 1: иначе авангард не мог
+                // выйти из зоны, а центр не сдвигался, пока никто не выходил, — блоб 1200 тиков стоял в
+                // четырёх клетках от последнего лекаря врага и проиграл по очкам (стенд m5 kite); линия
+                // ползёт гусеницей — впереди не дальше трёх от центра, остальные подтягиваются
+                val fd = flow[key(x, y)]
+                val advancing = myFlow >= 0 && fd in 0 until myFlow
+                val compact = r <= COMPACT_RANGE || (advancing && r <= COMPACT_RANGE + 1) || armedMates.count { getRange(c, it) <= 1 } >= 2 || (r < myRange)
+                if (!compact) loose.add(key(x, y))
             }
-            // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
-            // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
-            // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
-             keeper && commandOf.containsKey(creep.id) -> {
-                stepTag = "keeperOrder"
-                step = commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y }
-            }
-            keeper -> { stepTag = "keeperStay"; TrafficManager.pin(creep.id); step = null }
-            // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
-            // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
-            // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
-            // считая того, что считает крип, — теперь считает (см. rankStep в commandFight), и цена ошибки лежит
-            // на нём, а не на непослушании
-            // ...и во ВСЕХ режимах, а не только в бою (v172, оператор): «все крипы должны двигаться ТОЛЬКО по
-            // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
-             commandOf.containsKey(creep.id) -> {
-                orderBranch++          // сколько приказов реально дошло до ветки исполнения (v173)
-                stepTag = "order"
-                val cell = commandOf[creep.id]!!
-                step = if (cell.x == creep.x && cell.y == creep.y) null else cell
-            }
-            slot != null -> { stepTag = if (slotHold) "slotHold" else "slotStep"; step = if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet()) }
-            // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
-            // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
-            // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
-            // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
-            hold -> { stepTag = "hold"; step = null }
-            else -> {
-                stepTag = "free"
-                // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
-                val designated = grab?.pos ?: objective?.flag?.pos?.takeIf { objectiveCapturer == creep.id }
-                var myBlocked = if (designated != null) blockedSet - (designated.key) else blockedSet
-                // плотность (см. COMPACT_RANGE): при враге в досягаемости — только на клетки строя
-                // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
-                // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
-                // матча 8 в 4–5 клетках от строя
-                if (!stripped && localThreats.isNotEmpty() && !posture.withdrawing && canMove(creep)) {
-                    val armedMates = armedMatesOf(mobileArmy, creep)
-                    val myRange = getRange(creep, armedCentroid)
-                    val loose = HashSet<Int>()
-                    for ((dx, dy) in dirsNow()) {
-                        val x = creep.x + dx; val y = creep.y + dy
-                        if (x < 0 || y < 0 || x > 99 || y > 99) continue
-                        val c = InfluenceMap.cell(x, y)
-                        val r = getRange(c, armedCentroid)
-                        // шаг ВПЕРЁД (по потоку к цели) открыт на клетку в COMPACT_RANGE + 1: иначе авангард не мог
-                        // выйти из зоны, а центр не сдвигался, пока никто не выходил, — блоб 1200 тиков стоял в
-                        // четырёх клетках от последнего лекаря врага и проиграл по очкам (стенд m5 kite); линия
-                        // ползёт гусеницей — впереди не дальше трёх от центра, остальные подтягиваются
-                        val fd = flow[key(x, y)]
-                        val advancing = myFlow >= 0 && fd in 0 until myFlow
-                        val compact = r <= COMPACT_RANGE || (advancing && r <= COMPACT_RANGE + 1) || armedMates.count { getRange(c, it) <= 1 } >= 2 || (r < myRange)
-                        if (!compact) loose.add(key(x, y))
-                    }
-                    if (loose.isNotEmpty()) myBlocked = myBlocked + loose
-                }
-                // передний ряд — вооружённым: лекарь и раненый не встают на клетку вплотную к боевому врагу (она
-                // нужна нашему мили; трое лекарей без штрафа за соседей заняли ряд перед своими мили у самого
-                // раненого бойца, и размен шёл без наших ударов — стенд m7 sleeper, 4 убитых врага против 5)
-                // уже вплотную к врагу — блок переднего ряда снят: окружённый лекарь стоял (все соседи «передний
-                // ряд»), а не уходил (матч 10, healer_2 на (14,10) между двумя мили врага)
-                // лекарь и раненый снаружи досягаемости в неё не входят (см. reachCells)
-                // лекарь с РАНЕНЫМ подопечным в дальности лечения принимает дальний огонь ради лечения вплотную (72 за часть
-                // против 24): запреты «не входить в досягаемость» и «не вставать рядом с врагом» держали его в двух-трёх
-                // клетках от того, кого бьют. Матч 34 (бой 57–550): урона получено поровну (42285 против 41684), вылечено
-                // 29275 против их 39420, у них вдвое больше событий «+144» (два лекаря вплотную на одном) — 46 против 22;
-                // наш лекарь стоял вплотную к самому раненому в 13% замеров и дальше трёх клеток — в 32%. Закрытыми
-                // остаются клетки вплотную к вражескому МИЛИ: там лекарь не лечит, а умирает
-                val healingNow = healer && healMate != null && healMate.hits < healMate.hitsMax && getRange(creep, healMate) <= HEAL_RANGE + 1
-                if (support && !inReach && avoidCells.isNotEmpty() && !(healingNow)) myBlocked = myBlocked + avoidCells
-                if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
-                    val front = HashSet<Int>()
-                    for ((dx, dy) in dirsNow()) {
-                        if (dx == 0 && dy == 0) continue
-                        val x = creep.x + dx; val y = creep.y + dy
-                        if (x < 0 || y < 0 || x > 99 || y > 99) continue
-                        val c = InfluenceMap.cell(x, y)
-                        val byMelee = meleeEnemies.any { getRange(c, it) <= 1 }
-                        val byPatient = healingNow && getRange(c, healMate!!) <= 1
-                        if (localEnemies.any { getRange(c, it) <= 1 } && (byMelee || !byPatient)) front.add(key(x, y))
-                    }
-                    if (front.isNotEmpty()) myBlocked = myBlocked + front
-                }
-                // ПРИКАЗ ИСПОЛНЯЕТСЯ, А НЕ ПЕРЕСЧИТЫВАЕТСЯ (v167): назначенная клетка была лишь ОДНИМ слагаемым в
-                // оценке шага наравне с опасностью и соседями, и опасность её перевешивала — прибор показал, что
-                // крип доходит до своей клетки в 7 % случаев (10 из 144) и даже приближается лишь в 32 %. Прогноз
-                // при этом считает, что армия встанет по плану: он опирался на фикцию. Клетка в ОДНОМ шаге теперь
-                // запрашивается напрямую, как это делают захватчики
-                val chosen = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW, focusTarget)
-                step = chosen
-            }
+            if (loose.isNotEmpty()) myBlocked = myBlocked + loose
         }
+        // передний ряд — вооружённым: лекарь и раненый не встают на клетку вплотную к боевому врагу (она
+        // нужна нашему мили; трое лекарей без штрафа за соседей заняли ряд перед своими мили у самого
+        // раненого бойца, и размен шёл без наших ударов — стенд m7 sleeper, 4 убитых врага против 5)
+        // уже вплотную к врагу — блок переднего ряда снят: окружённый лекарь стоял (все соседи «передний
+        // ряд»), а не уходил (матч 10, healer_2 на (14,10) между двумя мили врага)
+        // лекарь и раненый снаружи досягаемости в неё не входят (см. reachCells)
+        // лекарь с РАНЕНЫМ подопечным в дальности лечения принимает дальний огонь ради лечения вплотную (72 за часть
+        // против 24): запреты «не входить в досягаемость» и «не вставать рядом с врагом» держали его в двух-трёх
+        // клетках от того, кого бьют. Матч 34 (бой 57–550): урона получено поровну (42285 против 41684), вылечено
+        // 29275 против их 39420, у них вдвое больше событий «+144» (два лекаря вплотную на одном) — 46 против 22;
+        // наш лекарь стоял вплотную к самому раненому в 13% замеров и дальше трёх клеток — в 32%. Закрытыми
+        // остаются клетки вплотную к вражескому МИЛИ: там лекарь не лечит, а умирает
+        val healingNow = healer && healMate != null && healMate.hits < healMate.hitsMax && getRange(creep, healMate) <= HEAL_RANGE + 1
+        if (support && !inReach && avoidCells.isNotEmpty() && !(healingNow)) myBlocked = myBlocked + avoidCells
+        if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
+            val front = HashSet<Int>()
+            for ((dx, dy) in dirsNow()) {
+                if (dx == 0 && dy == 0) continue
+                val x = creep.x + dx; val y = creep.y + dy
+                if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                val c = InfluenceMap.cell(x, y)
+                val byMelee = meleeEnemies.any { getRange(c, it) <= 1 }
+                val byPatient = healingNow && getRange(c, healMate!!) <= 1
+                if (localEnemies.any { getRange(c, it) <= 1 } && (byMelee || !byPatient)) front.add(key(x, y))
+            }
+            if (front.isNotEmpty()) myBlocked = myBlocked + front
+        }
+        // ПРИКАЗ ИСПОЛНЯЕТСЯ, А НЕ ПЕРЕСЧИТЫВАЕТСЯ (v167): назначенная клетка была лишь ОДНИМ слагаемым в
+        // оценке шага наравне с опасностью и соседями, и опасность её перевешивала — прибор показал, что
+        // крип доходит до своей клетки в 7 % случаев (10 из 144) и даже приближается лишь в 32 %. Прогноз
+        // при этом считает, что армия встанет по плану: он опирался на фикцию. Клетка в ОДНОМ шаге теперь
+        // запрашивается напрямую, как это делают захватчики
+        val chosen = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW, focusTarget)
+        return chosen
+    } } }
+}
+
+private var stepRows: List<Row<Stride, Position?>>? = null
+
+/**
+ * ЦЕПОЧКА ШАГА: девять строк, порядок списка = приоритет; действие отдаёт клетку шага или null («стоять»). Получатель строк —
+ * [Stride]: голое имя — факт шага, `turn.` — факт хода, `t.` — величина тика. Счётчики `orderFled` / `orderBranch` и `pin`
+ * хранителя стоят в действии своей строки — исполняются только у выигравшей, как прежде в теле ветки.
+ */
+internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stride, Position?>>(
+    Row("immobile", { !canMove(creep) }) { null },
+    // ВЫЖИВАНИЕ ВЫШЕ ЗАДАНИЯ (v240, этап 5 переработки, решение оператора 13.09.2026): крип под смертельным
+    // огнём бежит, даже если у него приказ командира или пост хранителя. До v240 приказ стоял выше бегства
+    // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
+    // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
+    Row("flee", { mustFlee }) {
+        if (commandOf.containsKey(creep.id)) orderFled++
+        fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (turn.support || turn.stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, t.retreatTo ?: t.post, 1, ctx.dangerMatrix)
+    },
+    // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
+    // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
+    // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
+    Row("keeperOrder", { turn.keeper && commandOf.containsKey(creep.id) }) { commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y } },
+    Row("keeperStay", { turn.keeper }) { TrafficManager.pin(creep.id); null },
+    // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
+    // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
+    // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
+    // считая того, что считает крип, — теперь считает (см. rankStep в commandFight), и цена ошибки лежит
+    // на нём, а не на непослушании
+    // ...и во ВСЕХ режимах, а не только в бою (v172, оператор): «все крипы должны двигаться ТОЛЬКО по
+    // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
+    Row("order", { commandOf.containsKey(creep.id) }) {
+        orderBranch++          // сколько приказов реально дошло до ветки исполнения (v173)
+        val cell = commandOf[creep.id]!!
+        if (cell.x == creep.x && cell.y == creep.y) null else cell
+    },
+    Row("slotHold", { turn.slot != null && turn.slotHold }) { null },
+    Row("slotStep", { turn.slot != null }) { slotStep(creep, turn.slot!!, t.blockedSet, t.enemyPositions, t.occupantAt, t.combatEnemies, if (turn.support && !inReach) reachMine else emptySet()) },
+    // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
+    // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
+    // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
+    // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
+    Row("hold", { hold }) { null },
+    Row("free", { true }) { freeStep(this) },
+).also { stepRows = it }
+
+/** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). С v444 оно разложено по швам, в том
+ *  же порядке: факты ([buildTurn]) → цель по лестнице → поле, бегство, сплочение → шаг → предложение арбитру.
+ *  Имена читаются так: локальная → поле [Turn] → поле [ArmyTick] → член `PainAndGain` → верх пакета. */
+internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
+    val turn = buildTurn(creep, ctx, t)
+    // ПЕРЕПИСЬ РЕШЕНИЙ (v203, этап 1): каждая ветка обеих цепочек называет себя, и счётчик копится за матч.
+    // Повод — пять правил за сутки, которые прошли гейт и не исполнились ни разу: по коду нельзя было
+    // сказать, какая ветка живая. Перепись отвечает на это числом, а не чтением. Она же заменяет ручной
+    // дубль цепочки в TRACE_WHY, который успел рассинхронизироваться и рассказывал о боте неправду
+    val rung = walk(ladder(), turn)
+    val whyTag = rung.tag
+    val aim = rung.act(turn)
+    val stride = buildStride(turn, aim)
+    val pace = walk(steps(), stride)
+    val stepTag = pace.tag
+    val step = pace.act(stride)
+    with(t) { with(turn) { with(stride) {
+        val target = aim.target
+        val standoff = aim.standoff
         // СЛЕПОТА К ОПАСНОСТИ НА ШАГЕ (v215, оператор: «линия фронта должна работать ВСЕГДА на
         // передвижение»). Пара: шагов в клетку, несущую урон, при ВЫКЛЮЧЕННОМ слагаемом опасности —
         // против всех шагов. Слагаемое выключено в двух местах: вне боя `scoreCell` возвращается до него
@@ -1097,7 +1145,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             if (stepTag == "free") whyTag else stepTag, whyTag, stepTag), ctx)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.key
-    } }
+    } } }
 }
 
 /** Шаг к слоту строя без поля потока: соседняя проходимая клетка, ближайшая к слоту (при равенстве — под меньшим
