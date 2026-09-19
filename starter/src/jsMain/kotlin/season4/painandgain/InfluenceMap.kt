@@ -776,7 +776,9 @@ object InfluenceMap {
             // держащий три; мили ходит клетку в тик и бьёт лекаря первым на 240, наступающий стрелок через тик стреляет с трёх
             // туда, где сейчас безопасно. Боец под таким огнём лечится по-старому: с look-ahead шагового ядра и клеем
             if (eRanged[key] > 0) wardsUnderRanged++
-            if (eRangedStill[key] > 0) { inFire.add(a.id); wardsUnderStill++ }
+            if (eRangedStill[key] > 0) wardsUnderStill++
+            // при выключенном точном ядре (v440) зона огня — как у v438: его мили вплотную или стрелок в ≤ 3 (eFire)
+            if (if (USE_HEAL_EXACT_IN_FIRE) eRangedStill[key] > 0 else eFire[key] > 0) inFire.add(a.id)
             val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
             // НУЖДА — ТО, ЧТО ЛЕЧЕНИЕ МОЖЕТ ВЕРНУТЬ (v435, см. USE_HEAL_NEED_ACTUAL): недобор хитов плюс потеря за прошлый
             // тик; целый крип во втором ряду нужды не имеет, как бы ни было опасно его поле
@@ -836,7 +838,7 @@ object InfluenceMap {
         // этот тик» верна, пока угроза следующего тика равна нынешней — стрелок держит три и стоит, мили ходит клетку в тик и
         // бьёт лекаря первым на 240; клетка в двух от него вне огня сейчас и под топором через тик. Поле eMelee (K_MELEE,
         // радиус 2 — «шаг + удар») и есть эта досягаемость
-        if (fireMode && (eFire[x * 100 + y] > 0 || eMelee[x * 100 + y] > 0)) return 0.0
+        if (fireMode && (eFire[x * 100 + y] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[x * 100 + y] > 0))) return 0.0
         var best = 0.0
         for (a in allies) {
             if (fireMode && (a.id !in inFire || a.id in advancingWards)) continue
