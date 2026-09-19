@@ -413,8 +413,10 @@ def cmd_foes(args):
     print("worst first by rating moved; a bot we never beat is a hole in ours, not a bad draw")
 
 
-REACH_TABLE = re.compile(r" (\w+)=((?:\w+:\d+/\d+/\d+,?)+)")
-REACH_ROW = re.compile(r"(\w+):(\d+)/(\d+)/(\d+)")
+# tables that are not "first true wins": what the two counters of a row mean there
+SEQUENTIAL = {"pass": ("ran", "assigned a cell"), "gate": ("reached", "decided")}
+REACH_TABLE = re.compile(r" (\w+)=((?:[\w.]+:\d+/\d+/\d+,?)+)")   # a tag may carry a dot: contact.mass, race.stall
+REACH_ROW = re.compile(r"([\w.]+):(\d+)/(\d+)/(\d+)")
 
 
 def last_reach(lines):
@@ -464,6 +466,13 @@ def cmd_reach(args):
                     a[3] += on
         for table, tag in order:
             never, shadowed, won, on = agg[(table, tag)]
+            if table in SEQUENTIAL:
+                # a sequence (pass) runs every row, gates are walked in order until one decides: `true` means RAN /
+                # REACHED, `won` means cells assigned / decided - "shadowed" is not a notion here
+                a, b = SEQUENTIAL[table]
+                note = f"   <- never {a}" if on == 0 else f"   <- never {b}" if won == 0 else ""
+                print(f"  {table + '.' + tag:<20} {never:>4} {shadowed:>4}   {b} {won:>9}  {a} {on:>9}{note}")
+                continue
             note = ("   <- never true" if on == 0 else "   <- true, never wins: shadowed by the order" if won == 0
                     else "")
             print(f"  {table + '.' + tag:<20} {never:>4} {shadowed:>4}   won {won:>9}  true {on:>9}  "
