@@ -405,6 +405,12 @@ internal fun PainAndGain.hasHeal(creep: Creep) = unitOf(creep).liveHeal
 
 internal fun PainAndGain.hasWeapon(creep: Creep) = unitOf(creep).armed
 
+/** «Чистый мили», написание А — рождён мили: истинно и с выбитым оружием (см. Unit.meleeOnlyBorn). */
+internal fun PainAndGain.meleeOnlyBorn(creep: Creep) = unitOf(creep).meleeOnlyBorn
+
+/** «Чистый мили», написания Б и В — с живой ATTACK (см. Unit.meleeOnlyLive). */
+internal fun PainAndGain.meleeOnlyLive(creep: Creep) = unitOf(creep).meleeOnlyLive
+
 /** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)
  *  плюс гружёные CARRY. */
 internal fun PainAndGain.bodyWeight(creep: Creep): Int {

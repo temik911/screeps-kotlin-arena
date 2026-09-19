@@ -49,6 +49,15 @@ internal class Unit(val creep: Creep) {
 
     /** Есть живое оружие — ближнее или дальнее. */
     val armed: Boolean = liveMelee || liveRanged
+
+    // «ЧИСТЫЙ МИЛИ» — ДВА РАЗНЫХ ФАКТА, и они не сведены намеренно (план, правило 3.4, решение оператора 9): до v442 это
+    // были написания А `isMelee(x) && !hasRanged(x)` (23 места) и Б `hasWeapon(x) && hasMelee(x) && !hasRanged(x)` / В
+    // `hasMelee(x) && !hasRanged(x)` (5 мест). Расходятся они на мили с ВЫБИТЫМ оружием: для него А истинно, Б ложно.
+    // Таблица «место → написание → что это значит» — docs/pain-and-gain.md, абзац v442; свести их — решение о поведении.
+    /** Написание А: рождён мили и без живого дальнего. Истинно и для мили, у которого выбиты все ATTACK. */
+    val meleeOnlyBorn: Boolean = bornMelee && !liveRanged
+    /** Написания Б и В: живая ATTACK и без живого дальнего. Для мили с выбитым оружием ложно. */
+    val meleeOnlyLive: Boolean = liveMelee && !liveRanged
 }
 
 /**

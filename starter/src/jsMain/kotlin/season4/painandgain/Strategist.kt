@@ -1163,7 +1163,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         }
         val hisMelee = near.count { hasMelee(it) }
         val hisRanged = near.count { hasRanged(it) }
-        minOf(free.count { hasMelee(it) && !hasRanged(it) }, hisMelee) + minOf(free.count { hasRanged(it) }, hisRanged)
+        minOf(free.count { meleeOnlyLive(it) }, hisMelee) + minOf(free.count { hasRanged(it) }, hisRanged)
     }
     if (!fightOnNow) { symCore += core; symFree += free.size }
     // ...и В РЕЖИМЕ ПАР БЮДЖЕТ НЕ СИММЕТРИЧЕН (v324): симметрия (v214, решение оператора) держит в ядре столько же, сколько
@@ -1641,13 +1641,13 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // контакта. Величина измеряется, а не назначается: против кайтера она падает до нуля сама, против того, кто
     // идёт в размен, держится высокой, и правило снимается без порога, подогнанного под сегодняшнего соперника
     if (contact) {
-        val meleeN = combatArmy.count { isMelee(it) && !hasRanged(it) }
-        val touched = combatArmy.count { isMelee(it) && !hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= 1 } }
+        val meleeN = combatArmy.count { meleeOnlyBorn(it) }
+        val touched = combatArmy.count { meleeOnlyBorn(it) && combatEnemies.any { e -> getRange(it, e) <= 1 } }
         // ...и при НУЛЕ мили в ядре окно не трогается вовсе: иначе отряд, уведённый по этому же признаку, обнуляет
         // мили в строю, доля прыгает к единице, признак гаснет и отряд отзывается — качели через тик
         if (meleeN > 0) Memory.touchHist.addLast(100 * touched / meleeN)
-        val hisMelee = combatEnemies.count { isMelee(it) && !hasRanged(it) }
-        val hisTouched = combatEnemies.count { isMelee(it) && !hasRanged(it) && combatArmy.any { a -> getRange(it, a) <= 1 } }
+        val hisMelee = combatEnemies.count { meleeOnlyBorn(it) }
+        val hisTouched = combatEnemies.count { meleeOnlyBorn(it) && combatArmy.any { a -> getRange(it, a) <= 1 } }
         if (hisMelee > 0) Memory.hisTouchHist.addLast(100 * hisTouched / hisMelee)
     } else { Memory.touchHist.clear(); Memory.hisTouchHist.clear() }
     while (Memory.touchHist.size > TOUCH_WINDOW) Memory.touchHist.removeFirst()
@@ -1704,7 +1704,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     val pressOn = pressing
     // «цель уходит» (см. PRESS_GIVEUP): за два тика прижима дистанция от наших мили до неё не сократилась
     if (blockOn) {
-        val ourMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) && hasMelee(it) }
+        val ourMelee = combatArmy.filter { meleeOnlyLive(it) }
         for (e in combatEnemies) {
             val near = ourMelee.minByOrNull { getRange(e, it) } ?: continue
             val d = getRange(e, near)

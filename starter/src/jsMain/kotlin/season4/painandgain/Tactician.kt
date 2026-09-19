@@ -364,7 +364,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // числитель — из них те, где МЕСТНАЯ арифметика в клетке врага даёт перевес не ниже PUSH_RATIO, а
         // армейская мера при этом говорит «не наступать». Ненулевой числитель и есть наблюдение оператора
         // «трое наших мили боялись подойти к одному чужому», выраженное числом
-        if (isMelee(creep) && !hasRanged(creep)) {
+        if (meleeOnlyBorn(creep)) {
             val near = localEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE }
             if (near.isNotEmpty()) {
                 edgeAll++
@@ -388,7 +388,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ⚠️ Это НЕ второе издание отвергнутого USE_INLINE_CONTACT_FREE: тот открывал ворота «врагом в трёх»,
         // и одиночный пикет фермера снимал их (blitz 7-1 -> 5-3). Здесь пикет даёт 240/240 = 1.0 и ворот
         // не открывает — открывает только настоящий численный перевес.
-        val spotNow =  isMelee(creep) && !hasRanged(creep) && !support && !rotating &&
+        val spotNow =  meleeOnlyBorn(creep) && !support && !rotating &&
             localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && spotEdgeAt(e) >= PUSH_RATIO && !killTicks(e).isInfinite() }
         if (spotNow) spotMeleeTicks++
         // МИЛИ ЗАЩИЩАЕТ СВОЕГО (v220, см. USE_MELEE_GUARDS_LINE). Ворота `inLine` требуют двух ВООРУЖЁННЫХ
@@ -402,10 +402,10 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // то, что его вооружённый мили УЖЕ дотянулся до нашего небоевого — стрелка, лекаря или раздетого.
         // Пикет одиночки такого не делает, а блоб делает первым же тиком
         fun guards(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
-            combatArmy.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= MELEE_KEEP_RANGE }
-        val guardNow =  isMelee(creep) && !hasRanged(creep) && !support && !rotating &&
+            combatArmy.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
+        val guardNow =  meleeOnlyBorn(creep) && !support && !rotating &&
             localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && guards(e) }
-        if (isMelee(creep) && !hasRanged(creep) && localEnemies.isNotEmpty()) { guardTicks++; if (guardNow) guardFired++ }
+        if (meleeOnlyBorn(creep) && localEnemies.isNotEmpty()) { guardTicks++; if (guardNow) guardFired++ }
         val inLine =  spotNow || guardNow || (formationReady && combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
         // при бесплодной охоте (см. STALL_TICKS) броска нет: висящие крипы россыпи «ловимы» (не уходят стабильно), и
         // каждый наш крип танцевал со своим соседом вместо марша к флагу-цели (стенд m19 spread, travel=23 четыреста тиков)
@@ -414,8 +414,8 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // здравии (M8A8 1600 на 140-м тике), пока двое дрались и армия гибла — 14:1 при равной мощи
         // прижим (см. USE_PRESS): мили в пачке — вплотную к цели фокуса в PRESS_RANGE, иначе к ближайшему ловимому врагу с
         // боем; стрелок — в кольцо ровно в RANGED_RANGE от цели фокуса
-        val pack = pressOn && isMelee(creep) && !hasRanged(creep) && hasMelee(creep) && !rotating && localAggressive &&
-            (combatArmy.any { it.id != creep.id && isMelee(it) && !hasRanged(it) && hasMelee(it) && getRange(creep, it) <= PRESS_PACK } ||
+        val pack = pressOn && meleeOnlyLive(creep) && !rotating && localAggressive &&
+            (combatArmy.any { it.id != creep.id && meleeOnlyLive(it) && getRange(creep, it) <= PRESS_PACK } ||
                 localEnemies.any { getRange(creep, it) <= 1 })
         // отказ (см. PRESS_GIVEUP) действует, пока цель не вернулась в три (v111, USE_GIVEUP_RETURNS), и снимается,
         // когда цель стоит ВПЛОТНУЮ к нашему не-мили (v135, см. USE_GIVEUP_LIFTS_ON_BACK): отказ — про погоню, а
@@ -438,7 +438,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ...И НЕ ДЕРЖИМ ЛИНИЮ, КОГДА РЯДОМ ПЕРЕВЕС (v214): здесь мили получал цель «своя клетка», то есть
         // буквально стоял, как только любой враг оказывался в трёх клетках. Замер по 12 живым матчам: доля
         // касаний наших мили в затяжном бою 1,4 %, то есть четверо из четырнадцати не бьют вовсе
-        val holdMelee =  (isMelee(creep) && !hasRanged(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
+        val holdMelee =  (meleeOnlyBorn(creep) && posture == Posture.ANNIHILATE && !pushing && contact && pressTarget == null &&
             !spotNow && localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
         // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
         // ENGAGE_RANGE, поверх «держать линию в двух». Матч 73 (Coldkimchi): его мили подходили к нашим стрелкам и лекарям,
@@ -447,9 +447,9 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ...и ротирующий защищает тыл (v135, см. USE_POKER_WHILE_ROTATING): ротация значит «оружия меньше половины, иду
         // лечиться», но три живых ATTACK из восьми — это 90 урона в удар, а лекарь, к которому он идёт, — тот самый,
         // которого рубят. Ротация не отменяет poker, пока у бойца есть чем ударить
-        val poker: Creep? = if (isMelee(creep) && !hasRanged(creep) && !support && (!rotating) && !stalled) combatEnemies.filter { e ->
+        val poker: Creep? = if (meleeOnlyBorn(creep) && !support && (!rotating) && !stalled) combatEnemies.filter { e ->
             InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && !givenUp(e) &&
-                army.any { a -> a.id != creep.id && !(isMelee(a) && !hasRanged(a)) && getRange(e, a) <= 1 }
+                army.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= 1 }
         }.let { c ->
             // защита своего — тоже одной целью на всех (v221, см. USE_MELEE_PACK): цель пачки, если она среди них
             c.minByOrNull { getRange(creep, it) } } else null
@@ -477,11 +477,11 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // центра между ними — 800 тиков pushing=true, huntable 12/12, `step=stay` у всех, 9615:23822 (m30). Живьём — толчок к
         // стоящему блобу, который не сближается (матчи 70, 133, 152, 159)
         // мили входит парой (v101, USE_MELEE_PAIR_ENGAGE): к цели в досягаемости — другой наш мили в MELEE_HOLD_RANGE + 1 от неё
-        val meleeOnly = isMelee(creep) && !hasRanged(creep)
-        fun mateNear(e: Creep, r: Int) = combatArmy.any { m -> m.id != creep.id && isMelee(m) && !hasRanged(m) && hasMelee(m) && getRange(m, e) <= r }
+        val meleeOnly = meleeOnlyBorn(creep)
+        fun mateNear(e: Creep, r: Int) = combatArmy.any { m -> m.id != creep.id && meleeOnlyLive(m) && getRange(m, e) <= r }
         // ...и присоединяется к напарнику, уже стоящему в MELEE_HOLD_RANGE от цели: досягаемость на клетку больше
         fun holdReach(e: Creep) = if (meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
-        val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!isMelee(creep) || hasRanged(creep) || covered(it))  }.let { c ->
+        val engage = if (pressTarget != null) pressTarget else poker ?: if ((localAggressive || spotNow) && !support && inLine && !rotating && !stalled) combatEnemies.filter { getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE) && catchable(it, chasers) && threatening(it, enemyCreeps) && !givenUp(it) && (!meleeOnlyBorn(creep) || covered(it))  }.let { c ->
             // ОДНА ЦЕЛЬ НА ВСЕХ МИЛИ (v221, см. USE_MELEE_PACK): цель пачки, если она среди допустимых этому мили,
             // иначе прежний ближайший — пачка ничего не запрещает, она только выбирает
             c.minByOrNull { getRange(creep, it) } } else null
@@ -537,8 +537,8 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         val foeMeleeLive = enemyMassedNow && localEnemies.any { hasMelee(it) && InfluenceMap.profileOf(it).melee > 0.0 }
         val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
         if (hasRanged(creep) && localAggressive) { closeTicks++; if (foeMeleeLive) closeHeld++ }
-        val melee = isMelee(creep) && !hasRanged(creep)
-        val meleeMate: Creep? = if (melee) combatArmy.filter { it.id != creep.id && isMelee(it) && !hasRanged(it) && hasMelee(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
+        val melee = meleeOnlyBorn(creep)
+        val meleeMate: Creep? = if (melee) combatArmy.filter { it.id != creep.id && meleeOnlyLive(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
         // мили со слотом стены (см. planBlock) оставляет его ради цели: прижим или враг в досягаемости удара
         val slot = if (melee && engage != null) null else slot0
         val grab = grabberOf[creep.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } }
@@ -1002,7 +1002,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // боец, захватчик, — и замысел в нём не участвовал. Теперь очередь назначает командир: крип, исполняющий
         // приказ, идёт первым, а среди приказов вперёд пропускается тот, чья клетка важнее для боя — мили,
         // выходящий в контакт, затем стрелок с целью, затем лекарь к подопечному, и лишь потом все прочие
-        val prio = Arbiter.pushRank(ordered = commandOf.containsKey(creep.id), melee = hasWeapon(creep) && hasMelee(creep) && !hasRanged(creep),
+        val prio = Arbiter.pushRank(ordered = commandOf.containsKey(creep.id), melee = meleeOnlyLive(creep),
             armed = hasWeapon(creep), healer = hasHeal(creep), wounded = wounded)
         // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
         // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
@@ -1085,7 +1085,7 @@ internal fun PainAndGain.bestSingleMove(
     // МИЛИ БЬЁТ ИЗ ТИХОЙ КЛЕТКИ (v222, см. USE_MELEE_QUIET_CELL): выбранная клетка оставляет мили вплотную к его цели —
     // из клеток, где он так же бьёт ту же цель (своя и свободные соседние), берётся та, куда приходит меньше чистого
     // урона. Прибор считает и при выключенном тумблере: сколько раз правка увела бы и сколько опасности сняла бы
-    if (inCombat && aggressive && isMelee(creep) && !hasRanged(creep) && hasMelee(creep) &&
+    if (inCombat && aggressive && meleeOnlyLive(creep) &&
         (target.x * 100 + target.y) in enemyPositions && maxOf(abs(bx - target.x), abs(by - target.y)) <= 1) {
         mquietAll++
         val chosen = InfluenceMap.netDamageAt(bx, by, enemyCreeps, allies)
@@ -1164,7 +1164,7 @@ internal fun PainAndGain.scoreCell(creep: Creep, x: Int, y: Int, target: Positio
         val meleeReach = meleeEnemies.count { getRange(InfluenceMap.cell(x, y), it) <= 1 } * HEALER_W_MELEE
         return -firePenalty * PAIR_W_DIST - fire * healerFireW - meleeReach - (0.0) - pinnedHealer - lethalTerm
     }
-    val meleeSelf = isMelee(creep) && !hasRanged(creep)
+    val meleeSelf = meleeOnlyBorn(creep)
     val meleeWeight = if (aggressive) PAIR_W_MELEE * AGGRO_MELEE_FACTOR else PAIR_W_MELEE
     val meleeThreat = if (meleeSelf) 0.0 else meleeEnemies.count { getRange(InfluenceMap.cell(x, y), it) <= MELEE_KEEP_RANGE } * meleeWeight
     val swampPenalty = if (!aggressive && DistanceMap.isSwamp(x, y)) PAIR_W_SWAMP else 0.0
@@ -1508,7 +1508,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
             }
         }
     }
-    val packMelee = combatArmy.filter { isMelee(it) && !hasRanged(it) && hasMelee(it) }
+    val packMelee = combatArmy.filter { meleeOnlyLive(it) }
     if (packMelee.isNotEmpty() && combatEnemies.isNotEmpty()) packTicks++
     // ВЕЕР НЕ РАСФОКУСИРУЕТ СОШЕДШИЕСЯ СТВОЛЫ (v218, см. USE_FAN_KEEPS_FOCUS). Признак снимается ЗДЕСЬ,
     // потому что `killTicks` живёт только в этой области видимости, а нужен он в `shoot` — на 1500 строк ниже

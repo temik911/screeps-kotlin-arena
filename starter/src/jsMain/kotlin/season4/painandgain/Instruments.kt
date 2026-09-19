@@ -384,7 +384,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
         val plan = HashMap<String, Int>()
         for (f in commandArmy) if (f.hits > 0) plan[f.id] = (commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.x * 100 + it.y }
         for (c in commandArmy) {
-            if (!(isMelee(c) && !hasRanged(c) && hasMelee(c))) continue
+            if (!(meleeOnlyLive(c))) continue
             val mine = commandOf[c.id] ?: continue
             val near = foes.filter { getRange(c, it) <= 2 }
             if (near.isEmpty()) continue

@@ -425,7 +425,7 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
 /** Мини-состояние для симуляции (v138): позиция, хиты и профиль крипа. */
 
 internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
-    val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in Memory.rotatingIds }
+    val melees = army.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
     val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in Memory.rotatingIds }
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
     val armed = melees + rangeds
@@ -458,7 +458,7 @@ internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>
  *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
  *  клетка занята. */
 internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, enemyCreeps: List<Creep>, slotOf: MutableMap<String, Position>, focusTarget: Creep?) {
-    val melees = army.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) && it.id !in Memory.rotatingIds }
+    val melees = army.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
     val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in Memory.rotatingIds }
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
     if (melees.isEmpty() && rangeds.isEmpty()) return

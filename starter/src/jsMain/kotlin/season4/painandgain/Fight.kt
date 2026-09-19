@@ -741,7 +741,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // назначенных клеток остальных, а не их нынешних позиций: иначе «согласованность» сравнивает план с прошлым
     fun cellOf(f: Creep): Position = out[f.id] ?: InfluenceMap.cell(f.x, f.y)
     fun foeDist(x: Int, y: Int) = armedEnemies.minOfOrNull { maxOf(abs(x - it.x), abs(y - it.y)) } ?: 99
-    val melees = fighters.filter { hasWeapon(it) && hasMelee(it) && !hasRanged(it) }
+    val melees = fighters.filter { meleeOnlyLive(it) }
     val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
     val healers = fighters.filter { !hasWeapon(it) && hasHeal(it) }
     // РАЗДЕТЫЕ ТОЖЕ ПОД ПРИКАЗОМ (v144): крип, потерявший все боевые части, не попадал НИ В ОДНУ группу — ни
