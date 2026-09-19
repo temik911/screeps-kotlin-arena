@@ -545,7 +545,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
         // ...и ТА ЖЕ ПЕРЕПИСЬ ПО ПРЕДЛОЖЕНИЯМ (v252, этап 9): «задание отряда . терм» и приоритет; сумма обязана совпасть с
         // суммой rung — оба счёта растут один раз на крипа армии за тик
         // ДОСТИЖИМОСТЬ ПО СТРОКАМ ТАБЛИЦ (v444, прибор `reach t=`, см. Tables.kt): тег:выиграла/условие истинно/перекрыта порядком
-        println("reach t=${getTicks()}: ${ladderTally.print()} ${stepsTally.print()} ${captureTally.print()} err=${ladderTally.err + stepsTally.err}")
+        println("reach t=${getTicks()}: ${ladderTally.print()} ${stepsTally.print()} ${captureTally.print()} ${fightTally.print()} err=${ladderTally.err + stepsTally.err}")
         println("tac t=${getTicks()}: mt=" + tacCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
             " prio=" + prioCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
             " sum=${prioCount.values.sum()}")

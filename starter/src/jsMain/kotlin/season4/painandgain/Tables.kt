@@ -22,7 +22,7 @@ internal class Row<F, R>(val tag: String, val guard: F.() -> Boolean, val act: F
  * kite и wall»); `on = 0` на всём гейте и всех живых сериях — условие ни разу не было истинно. Массивы, а не таблицы:
  * чинить после оборванного тика нечего.
  */
-internal class Tally(val name: String) {
+internal class Tally(val name: String, val sequence: Boolean = false) {
     var tags: List<String> = emptyList()
     var on = IntArray(0)
     var won = IntArray(0)
@@ -34,13 +34,18 @@ internal class Tally(val name: String) {
         tags = table.map { it.tag }; on = IntArray(table.size); won = IntArray(table.size)
     }
 
+    /** Только у последовательности ([sequence]): проход исполнен и не выдал ничего. */
+    var idle = IntArray(0)
+
     fun fitTags(names: List<String>) {
         if (on.size == names.size) return
-        tags = names; on = IntArray(names.size); won = IntArray(names.size)
+        tags = names; on = IntArray(names.size); won = IntArray(names.size); idle = IntArray(names.size)
     }
 
     /** `имя=тег:won/true/shadowed,…` — в порядке таблицы (порядок и есть приоритет), нулевые строки тоже: они и нужны. */
-    fun print(): String = "$name=" + tags.indices.joinToString(",") { "${tags[it]}:${won[it]}/${on[it]}/${on[it] - won[it]}" }
+    fun print(): String = "$name=" + tags.indices.joinToString(",") {
+        "${tags[it]}:${won[it]}/${on[it]}/${if (sequence) idle[it] else on[it] - won[it]}"
+    }
 }
 
 /** Обходчик, один на все таблицы: первая строка с истинным условием выигрывает — семантика прежнего `when`. Порядок списка —
@@ -88,4 +93,20 @@ internal fun <F> pass(gates: List<Gate<F>>, facts: F, tally: Tally): Verdict {
         if (v !== Verdict.Next) { tally.won[i]++; return v }
     }
     throw IllegalStateException("gate table ${tally.name} without a closing gate")
+}
+
+/** ПРОХОД — строка таблицы-ПОСЛЕДОВАТЕЛЬНОСТИ (v445): исполняются все, по порядку списка; имя — адрес и тег прибора. */
+internal class Pass(val tag: String, val run: () -> kotlin.Unit)
+
+/** Исполняет проходы по порядку; [before] получает номер и имя прохода до его запуска. В счётчиках `on[i]` — проход исполнен,
+ *  `won[i]` ведёт сам владелец таблицы (у раздачи — клеток выдано), `idle[i]` — исполнен и не выдал ничего: у последовательности
+ *  третье число прибора — оно, а не `on − won`. */
+internal inline fun runPasses(passes: List<Pass>, tally: Tally, before: (Int, String) -> kotlin.Unit) {
+    tally.fitTags(passes.map { it.tag })
+    for (i in passes.indices) {
+        before(i, passes[i].tag); tally.on[i]++
+        val had = tally.won[i]
+        passes[i].run()
+        if (tally.won[i] == had) tally.idle[i]++
+    }
 }
