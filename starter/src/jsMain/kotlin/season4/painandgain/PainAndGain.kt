@@ -418,22 +418,7 @@ object PainAndGain {
         val centroid = armyStrategySeg.centroid
         val threat = armyStrategySeg.threat
         val raider = armyStrategySeg.raider
-        val armyTargetsSeg = armyTargets(ctx, ArmyTargetsIn(
-            army = army,
-            enemyCreeps = enemyCreeps,
-            combatEnemies = combatEnemies,
-            armedEnemies = armedEnemies,
-            mobileArmy = mobileArmy,
-            chasers = chasers,
-            huntable = huntable,
-            ours = ours,
-            contact = contact,
-            sweep = sweep,
-            gathered = gathered,
-            objective = objective,
-            combatArmy = combatArmy,
-            centroid = centroid,
-        ))
+        val armyTargetsSeg = armyTargets(ctx, armyMeasuresSeg, armyStrategySeg)
         val enemyPositions = armyTargetsSeg.enemyPositions
         val blockedSet = armyTargetsSeg.blockedSet
         val meleeEnemies = armyTargetsSeg.meleeEnemies
