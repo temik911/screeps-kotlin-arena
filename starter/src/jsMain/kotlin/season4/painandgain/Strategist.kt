@@ -2852,15 +2852,6 @@ internal var stalemateGap = 0                          // тиков подря�
 
 internal var lastAim = ""
 
-internal enum class Posture {
-    HOLD, RETREAT, ANNIHILATE, FLAG, EVADE;
-
-    /** Отход: армия уходит от врага — к дому (RETREAT) или от его массы (EVADE). Одно множество вместо двух полярностей
-     *  `== RETREAT || == EVADE` / `!= RETREAT && != EVADE`, выписанных в девяти местах. */
-    val withdrawing: Boolean get() = this == RETREAT || this == EVADE
-}
 
 internal class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: Double, val travel: Int)
 
-/** Режим командира (v160): рубка со строем, гонка очков или поход. Раздача клеток — только режим FIGHT. */
-internal enum class CmdMode { FIGHT, RACE, MARCH }

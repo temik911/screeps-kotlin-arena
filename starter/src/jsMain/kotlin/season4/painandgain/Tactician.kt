@@ -1870,5 +1870,3 @@ internal var formWaitSince = -1
 
 internal var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
 
-/** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
-internal class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)
