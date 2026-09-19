@@ -1445,27 +1445,11 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     }
 }
 
-/** РАЗДАЧА КОМАНДИРА (v256, этап 10; сегмент runArmy): режим FIGHT — перебор замыслов commandFight с прогнозом Forecast.simulate, изготовка (Formation.brace) и гонка (commandRace, commandGoal, commandMarch), погоня (assignChase), постановка стратега для прибора disp= и букв заданий missionOf. Перенесено дословно. */
-internal class ArmyCommandIn(
-    val army: List<Creep>,
-    val enemyCreeps: List<Creep>,
-    val combatEnemies: List<Creep>,
-    val armedEnemies: List<Creep>,
-    val enemyMassedNow: Boolean,
-    val mobileArmy: List<Creep>,
-    val commandArmy: List<Creep>,
-    val ours: Double,
-    val contact: Boolean,
-    val cmdWhyNow: String,
-    val focusTarget: Creep?,
-    val armiesClosing: Boolean,
-    val enemyApproaching: Boolean,
-)
-
 internal class ArmyCommandOut(
 )
 
-internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandOut = with(seg) {
+/** РАЗДАЧА КОМАНДИРА (v256, этап 10; сегмент runArmy): режим FIGHT — перебор замыслов commandFight с прогнозом Forecast.simulate, изготовка (Formation.brace) и гонка (commandRace, commandGoal, commandMarch), погоня (assignChase), постановка стратега для прибора disp= и букв заданий missionOf. Перенесено дословно. */
+internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargetsOut, stanceOut: ArmyStanceOut): ArmyCommandOut {
     val ourFlagCells = ctx.ourFlags.mapTo(HashSet()) { it.pos.key }
     val commanderNow =  cmdMode == CmdMode.FIGHT
     // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
@@ -1477,7 +1461,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         (cmdMode == CmdMode.RACE || (cmdMode == CmdMode.MARCH))
     // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
     // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
-    if (commanderNow) cmdTicks++ else cmdBlocked = cmdWhyNow
+    if (commanderNow) cmdTicks++ else cmdBlocked = strat.cmdWhyNow
     // ПОГОНЯ НАЗНАЧАЕТСЯ ДО ПЕРЕБОРА (v211): раздача прогоняется пять раз, по разу на замысел, и отряд обязан
     // быть один и тот же во всех пяти — иначе прогноз оценивает пять разных армий.
     // ...И НЕ ЗАВИСИТ ОТ ТОГО, ПРАВИТ ЛИ КОМАНДИР (v212). Первая редакция стояла под `commanderNow`, и первый же
@@ -1485,9 +1469,9 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
     // выдалась ни разу (`chase=0/0` при двух остовах). Доля командира гуляет по матчам от 8 тиков до двух
     // третей, поэтому назначение стоит выше него: приказ один, а исполняют его оба пути движения — командирская
     // раздача, когда он правит, и обычная цепочка целей (ветка `chase`), когда молчит
-    assignChase(mobileArmy, enemyCreeps, armedEnemies)
-    val disposition = Strategist.snapshot(army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
-        Memory.keeperIds, Memory.chaseOf, posture, cmdMode, objectiveFlagId, armedEnemies)
+    assignChase(meas.mobileArmy, meas.enemyCreeps, meas.armedEnemies)
+    val disposition = Strategist.snapshot(ctx.army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
+        Memory.keeperIds, Memory.chaseOf, posture, cmdMode, objectiveFlagId, meas.armedEnemies)
     dispNow = Strategist.summary(disposition)
     missionOf.clear()
     for (sq in disposition.squads) for (id in sq.members) missionOf[id] = sq.mission.tag
@@ -1499,7 +1483,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         val cpuTight =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
         if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
         // ...и при разрыве контакта (v227, см. USE_ZERO_LEAD_BREAK) замысел не выбирается прогоном — он задан: KITE
-        if (cpuTight) commandFight(commandArmy, combatEnemies, armedEnemies, commandOf, Intent.PRESS, ourFlagCells = ourFlagCells)
+        if (cpuTight) commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, commandOf, Intent.PRESS, ourFlagCells = ourFlagCells)
         else {
             // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через Forecast.SIM_TICKS (v138)
             var bestScore = -Double.MAX_VALUE
@@ -1526,10 +1510,10 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
                 if (bestPlan != null && cpuMs() + lastCost > CPU_GUARD_MS) { srchCut++; break }
                 val t0 = cpuMs()
                 val trial = HashMap<String, Position>()
-                commandFight(commandArmy, combatEnemies, armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
+                commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
                 // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                 // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
-                val sc = Forecast.simulate(mobileArmy, armedEnemies, trial, Forecast.SIM_TICKS, focusTarget, intent)   // состав без хранителей: «тот же, что у плана» (v242) отвергнут A/B вместе с применением постуры один раз
+                val sc = Forecast.simulate(meas.mobileArmy, meas.armedEnemies, trial, Forecast.SIM_TICKS, targ.focusTarget, intent)   // состав без хранителей: «тот же, что у плана» (v242) отвергнут A/B вместе с применением постуры один раз
                 if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
                 lastCost = cpuMs() - t0
             }
@@ -1554,7 +1538,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
             // выбирает замысел числом, которому нельзя верить
             // ...и факт меряется ТОЙ ЖЕ формулой, что прогноз: сравнивать оценку симуляции с ланчестеровской
             // мощью — сравнивать разные величины, и первая редакция прибора именно этим и занималась
-            val nowDiff = Forecast.simulate(mobileArmy, armedEnemies, emptyMap(), 0, focusTarget, null)
+            val nowDiff = Forecast.simulate(meas.mobileArmy, meas.armedEnemies, emptyMap(), 0, targ.focusTarget, null)
             Forecast.simPending[getTicks() + Forecast.SIM_TICKS] = bestScore to nowDiff
             Forecast.simPending.remove(getTicks())?.let { (predicted, was) ->
                 val actual = nowDiff - was          // как разность изменилась НА САМОМ ДЕЛЕ за Forecast.SIM_TICKS
@@ -1573,9 +1557,9 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
     // отпускать в бою запрещено вовсе (см. USE_NO_SPLIT_IN_FIGHT)
     // ...и ТОЛЬКО когда он ИДЁТ на нас: изготовка при всяком враге в десяти клетках вставала поперёк гонки за
     // флагами — армия строилась вместо захвата, и гейт рухнул до 122 из 135 (roost трижды)
-    } else if (!contact && !pushing &&
-            (armiesClosing || (enemyApproaching && enemyMassedNow)) &&
-            armedEnemies.any { e -> commandArmy.any { getRange(e, it) <= BRACE_RANGE } }) {
+    } else if (!meas.contact && !pushing &&
+            (stanceOut.armiesClosing || (stanceOut.enemyApproaching && meas.enemyMassedNow)) &&
+            meas.armedEnemies.any { e -> meas.commandArmy.any { getRange(e, it) <= BRACE_RANGE } }) {
         // ИЗГОТОВКА (v179): враг идёт, контакта ещё нет — строим фронт, а не ждём его растянутыми
         // ...и строится ЯДРО, а отпущенные за флагами своего задания не бросают (v183) — ровно как в марше ядра.
         // Изготовка отзывала в строй и захватчиков, и гонка очков от этого проседала: сценарий camp 15 983:16 266
@@ -1583,13 +1567,13 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         // ...и гонка идёт ПАРАЛЛЕЛЬНО строю: изготовка стояла В ЦЕПОЧКЕ ПЕРЕД гонкой, поэтому, пока враг
         // подходил, командир не отпускал за флагами вовсе — ни одного захватчика не назначалось, и сценарий
         // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
-        commandRace(ctx, commandArmy, armedEnemies, ctx.flags, commandOf)
+        commandRace(ctx, meas.commandArmy, meas.armedEnemies, ctx.flags, commandOf)
         val runners = HashMap(commandOf)
-        Formation.brace(commandArmy.filter { it.id !in Memory.cmdDetach }, armedEnemies, commandOf)
+        Formation.brace(meas.commandArmy.filter { it.id !in Memory.cmdDetach }, meas.armedEnemies, commandOf)
         commandOf.putAll(runners)
     } else if (raceCommandNow) {
         cmdTicks++
-        commandRace(ctx, commandArmy, armedEnemies, ctx.flags, commandOf)
+        commandRace(ctx, meas.commandArmy, meas.armedEnemies, ctx.flags, commandOf)
         // прибор второго тика (v222): фаза plan стоит 20–28 мс на тиках 1–2 и 0,7 мс на третьем — метки внутри неё
         // называют, что именно (строка cpu печатается на первых трёх тиках и на медленных)
         cpuMark("p.race")
@@ -1598,14 +1582,14 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         // ...и только пока враг ДАЛЕКО: рядом с ним решают тактические ветки — экран, добыча, перехват, — а строй,
         // ведущий ядро на флаг мимо них, ронял screen и scatter (гейт 131 из 135)
         // ЗАГОН ВМЕСТО МАРША (v331): ядро, оставшееся после раздачи флагов, ловит его одиночку двумя группами
-        val restCore = notCmdDetached(mobileArmy)
-        val hunting = commandHunt(ctx, restCore, armedEnemies, commandOf)
-        if (!hunting && armedEnemies.none { e -> mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
+        val restCore = notCmdDetached(meas.mobileArmy)
+        val hunting = commandHunt(ctx, restCore, meas.armedEnemies, commandOf)
+        if (!hunting && meas.armedEnemies.none { e -> meas.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
-            val goal = commandGoal(ctx, mobileArmy, armedEnemies)
+            val goal = commandGoal(ctx, meas.mobileArmy, meas.armedEnemies)
             cpuMark("p.goal")
             val steps = HashMap<String, Position>()
-            commandMarch(ctx, notCmdDetached(mobileArmy), goal, steps)
+            commandMarch(ctx, notCmdDetached(meas.mobileArmy), goal, steps)
             commandOf.putAll(steps)
             cpuMark("p.march")
         }
@@ -1618,11 +1602,11 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
     // лекаря выбирают ветки тактика: healMate ведёт к самому раненому в четырёх (уже отведённому из огня; совпадает с
     // теряющим хиты в 38,7 %), и цена доставки v435 действовала на ≤ 20 % лекаре-тиков (Opus, 32 реплея). Здесь командир
     // раздаёт ОДНИХ лекарей той же ценой клетки; бойцов не трогает — «командир на любой контакт» ронял roost и scatter
-    if (USE_COMMANDER_HEALERS_IN_CONTACT && !commanderNow && contact && armedEnemies.isNotEmpty()) {
+    if (USE_COMMANDER_HEALERS_IN_CONTACT && !commanderNow && meas.contact && meas.armedEnemies.isNotEmpty()) {
         val only = HashMap<String, Position>()
-        commandFight(commandArmy, combatEnemies, armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true)
+        commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true)
         var given = 0
-        for (h in commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
+        for (h in meas.commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
         cmdHealTicks++; cmdHealGiven += given
     }
 
@@ -1632,7 +1616,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
     // КОЛЛИЗИИ ПРИКАЗОВ (v172, оператор: «не должно быть такого, что по приказам командира в одну клетку
     // собрались двое»). Внутри одной раздачи это исключено множеством taken, но приказы приходят из РАЗНЫХ
     // мест — бой, гонка, марш ядра, — и вот там пересечение возможно; здесь оно считается
-    ArmyCommandOut(
+    return ArmyCommandOut(
     )
 }
 

@@ -447,21 +447,7 @@ object PainAndGain {
         rotateByFocus(army, combatEnemies)
         // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)
         stepOutWounded(army, reachCells, enemyRetreating || !huntsWounded)
-        val armyCommandSeg = armyCommand(ctx, ArmyCommandIn(
-            army = army,
-            enemyCreeps = enemyCreeps,
-            combatEnemies = combatEnemies,
-            armedEnemies = armedEnemies,
-            enemyMassedNow = enemyMassedNow,
-            mobileArmy = mobileArmy,
-            commandArmy = commandArmy,
-            ours = ours,
-            contact = contact,
-            cmdWhyNow = cmdWhyNow,
-            focusTarget = focusTarget,
-            armiesClosing = armiesClosing,
-            enemyApproaching = enemyApproaching,
-        ))
+        val armyCommandSeg = armyCommand(ctx, armyMeasuresSeg, armyStrategySeg, armyTargetsSeg, armyStanceSeg)
         cpuMark("command")
         val orderAuditSeg = orderAudit(ctx, OrderAuditIn(
             enemyCreeps = enemyCreeps,
