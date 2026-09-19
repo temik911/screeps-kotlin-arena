@@ -97,6 +97,8 @@ internal class Ctx(
     val side: List<Creep> = army + combatRunners
     /** Армия с живым оружием. */
     val armedArmy: List<Creep> = army.filter { units.of(it).armed }
+    /** Лекари армии: без живого оружия, с живой HEAL. */
+    val armyHealers: List<Creep> = army.filter { units.of(it).healerOnly }
     /** Армия с живой HEAL — лекари и вооружённые с лечением. */
     val armyWithHeal: List<Creep> = army.filter { units.of(it).liveHeal }
     val ourFlags: List<FlagInfo> = oursOf(flags)
