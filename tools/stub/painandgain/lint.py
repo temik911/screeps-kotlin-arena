@@ -380,13 +380,13 @@ WRITE = r'\s*(?:=(?!=)|\+=|-=|\*=|/=|\+\+|--|\[[^\]]*\]\s*(?:=(?!=)|\+=|-=)|\.(?
 def single_writer(files):
     """ОДИН ПИСАТЕЛЬ: поле `Memory` или член `PainAndGain` пишется более чем из одного файла. По тексту: запись — присваивание,
     `++`, запись по индексу, изменяющий метод коллекции; одноимённая локальная или параметр функции запись не считает."""
-    owners = {'Memory': _object_vars(files, 'Memory'), 'PainAndGain': _object_vars(files, 'PainAndGain')}
+    owners = {o: _object_vars(files, o) for o in _state_owners(files)}
     writers = {}
     for f, rows in files.items():
         text = [STRING.sub('""', code) for _, code in rows]     # `posture=` в тексте строки лога — не запись
         local = _local_names(text)
         for i, code in enumerate(text):
-            for m in re.finditer(r'(?<![\w.])(?:(Memory|PainAndGain)\.)?(\w+)(?=%s)' % WRITE, code):
+            for m in re.finditer(r'(?<![\w.])(?:(%s)\.)?(\w+)(?=%s)' % ('|'.join(sorted(owners)), WRITE), code):
                 obj, name = m.group(1), m.group(2)
                 if obj is None:
                     if name not in owners['PainAndGain'] or name in local[i] or re.search(r'\bva[lr] %s\b' % name, code):
@@ -399,8 +399,24 @@ def single_writer(files):
     for field in sorted(writers):
         if len(writers[field]) > 1:
             for f in sorted(writers[field]):
+                # атом — по ИМЕНИ поля, без владельца: поле, переехавшее от одного владельца к другому (член PainAndGain ->
+                # BodyMemo, Squads, Prev…), уносит своё нарушение с собой, а не теряет его вместе с прежним именем
                 out.append((f, writers[field][f], '%s пишется из %d файлов: %s' % (field, len(writers[field]), ', '.join(sorted(writers[field]))),
-                            'writer %s<-%s' % (field, f)))
+                            'writer %s<-%s' % (field.split('.', 1)[1], f)))
+    return out
+
+
+def _state_owners(files):
+    """Объекты общего состояния: `Memory`, `PainAndGain` и владельцы, заведённые вторым шагом архитектуры, — объекты из списка
+    починки `repairAfterAbort`, объявленные в файле СТАДИИ (службы `InfluenceMap`, `DistanceMap`, `TrafficManager`, `Executor`,
+    `Forecast` — приёмники, в которые по построению пишут многие; у них своё правило — уровни)."""
+    services = {'InfluenceMap', 'DistanceMap', 'TrafficManager', 'Executor', 'Forecast', 'Arbiter', 'AbortRepair'}
+    out = {'Memory', 'PainAndGain'}
+    for rows in files.values():
+        for _, code in rows:
+            m = re.search(r'for \(owner in listOf<Any>\(([^)]*)\)\)', code)
+            if m:
+                out |= {x.strip() for x in m.group(1).split(',') if x.strip() not in ('this',)} - services
     return out
 
 
@@ -487,7 +503,9 @@ KNOWN_CHECKS = [(plumbing, True), (needless_receiver, True), (tag_outside_table,
 
 
 def read_known(text):
-    return [l.split('#')[0].strip() for l in text.split('\n') if l.split('#')[0].strip()]
+    rows = [l.split('#')[0].strip() for l in text.split('\n') if l.split('#')[0].strip()]
+    # до v454 атом правила одного писателя нёс владельца (`writer PainAndGain.x<-F.kt`) — читается как нынешний
+    return [re.sub(r'^writer \w+\.(\w+<-)', r'writer \1', r) for r in rows]
 
 
 def main_known():

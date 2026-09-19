@@ -142,21 +142,30 @@ internal fun meleeOnlyLive(creep: Creep) = unitOf(creep).meleeOnlyLive
 
 // ==================== тело и скорость (до v446 жили в World.kt; модель мощи уровнем ниже мира читала отсюда swampPeriod) ====================
 
+/** Кэш тела на тик — владелец двух словарей (до v454 — члены `PainAndGain`: из-за них 16 функций веса и скорости были
+ *  расширениями синглтона). Словарь, переживающий тик, обязан быть ПРЯМЫМ ПОЛЕМ объекта из списка `repairAfterAbort`
+ *  (PainAndGain.kt): оборванный посреди вставки тик чинит только такие — поэтому объект, а не верх файла. */
+internal object BodyMemo {
+    /** Вес тела и живые MOVE на этот тик (см. USE_BODY_MEMO); чистятся в начале тика. */
+    val bodyWeightNow = HashMap<String, Int>()
+    val liveMovesNow = HashMap<String, Int>()
+}
+
 /** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)
  *  плюс гружёные CARRY. */
-internal fun PainAndGain.bodyWeight(creep: Creep): Int {
-    bodyWeightNow[creep.id]?.let { return it }
+internal fun bodyWeight(creep: Creep): Int {
+    BodyMemo.bodyWeightNow[creep.id]?.let { return it }
     val parts = creep.body.count { it.type != MOVE && it.type != CARRY }
     val carried = creep.store[RESOURCE_ENERGY] ?: 0
     val w = parts + (carried + CARRY_CAPACITY - 1) / CARRY_CAPACITY
-    bodyWeightNow[creep.id] = w
+    BodyMemo.bodyWeightNow[creep.id] = w
     return w
 }
 
-internal fun PainAndGain.liveMoves(creep: Creep): Int {
-    liveMovesNow[creep.id]?.let { return it }
+internal fun liveMoves(creep: Creep): Int {
+    BodyMemo.liveMovesNow[creep.id]?.let { return it }
     val m = creep.body.count { it.type == MOVE && it.hits > 0 }
-    liveMovesNow[creep.id] = m
+    BodyMemo.liveMovesNow[creep.id] = m
     return m
 }
 
@@ -168,17 +177,17 @@ internal fun periodOn(weight: Int, moves: Int, rate: Int): Int {
     return if (left <= 0) 1 else 1 + (left + 2 * moves - 1) / (2 * moves)
 }
 
-internal fun PainAndGain.plainPeriod(creep: Creep) = periodOn(bodyWeight(creep), liveMoves(creep), 2)
+internal fun plainPeriod(creep: Creep) = periodOn(bodyWeight(creep), liveMoves(creep), 2)
 
-internal fun PainAndGain.periodAt(creep: Creep, x: Int, y: Int) =
+internal fun periodAt(creep: Creep, x: Int, y: Int) =
     periodOn(bodyWeight(creep), liveMoves(creep), if (DistanceMap.isSwamp(x, y)) 10 else 2)
 
-internal fun PainAndGain.swampPeriod(creep: Creep) = periodOn(bodyWeight(creep), liveMoves(creep), 10)
+internal fun swampPeriod(creep: Creep) = periodOn(bodyWeight(creep), liveMoves(creep), 10)
 
-internal fun PainAndGain.fullSpeed(creep: Creep) = plainPeriod(creep) == 1
+internal fun fullSpeed(creep: Creep) = plainPeriod(creep) == 1
 
 /** Сколько урона крип ещё выдержит, не теряя скорости (части умирают спереди). */
-internal fun PainAndGain.speedSlack(creep: Creep): Int {
+internal fun speedSlack(creep: Creep): Int {
     val weight = bodyWeight(creep)
     if (weight == 0) return creep.hits // тела без веса (чистый MOVE) скорости не теряют
     var moves = liveMoves(creep)

@@ -1230,7 +1230,7 @@ internal fun PainAndGain.bestSingleMove(
 
 /** Оценка клетки: приблизиться на standoff к цели по реальному пути; в бою — исходящий урон, чистый
  *  входящий (с хилом), влияние, штраф за зону мили, за болото (без перевеса) и цена прижатия. */
-internal fun PainAndGain.scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: IntArray, standoff: Int, aggressive: Boolean, inCombat: Boolean, enemyCreeps: List<Creep>, allies: List<Creep>, meleeEnemies: List<Creep>, healerFireW: Double = HEALER_W_DAMAGE, focus: Creep? = null): Double {
+internal fun scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: IntArray, standoff: Int, aggressive: Boolean, inCombat: Boolean, enemyCreeps: List<Creep>, allies: List<Creep>, meleeEnemies: List<Creep>, healerFireW: Double = HEALER_W_DAMAGE, focus: Creep? = null): Double {
     val flowDist = flow[key(x, y)]
     val cheb = getRange(InfluenceMap.cell(x, y), target)
     val firePenalty = when {

@@ -53,7 +53,7 @@ import kotlin.math.sqrt
 
 /** Цена боя: хиты, которые снимут с нас, пока враги умирают по одному под нашим огнём (лекари первыми,
  *  их лечение вычитается); урон врага — с НАШИМ множителем входящего, наш — с ЕГО. */
-internal fun PainAndGain.fightCost(enemies: List<Creep>, ours: List<Creep>): Double {
+internal fun fightCost(enemies: List<Creep>, ours: List<Creep>): Double {
     val ourDps = ours.sumOf { effectiveDps(it, enemies) }
     if (ourDps <= 0.0) return Double.MAX_VALUE
     val order = enemies.sortedWith(compareByDescending<Creep> { InfluenceMap.profileOf(it).heal }.thenBy { it.hits })
@@ -73,7 +73,7 @@ internal fun PainAndGain.fightCost(enemies: List<Creep>, ours: List<Creep>): Dou
 
 /** Тики боя: пока враги умирают по одному под нашим огнём (порядок и лечение — как в fightCost; удар мили — с долей
  *  смежности, как в мощи); MAX, если чистый урон не положителен. */
-internal fun PainAndGain.fightTicks(enemies: List<Creep>, ours: List<Creep>): Int {
+internal fun fightTicks(enemies: List<Creep>, ours: List<Creep>): Int {
     val meleeK = 1.0
     val ourDps = ours.sumOf { effectiveDps(it, enemies, 1.0, meleeK) }
     if (ourDps <= 0.0) return Int.MAX_VALUE / 2
@@ -109,7 +109,7 @@ internal fun lanchester(dps: Double, enemyHeal: Double, hits: Double): Double {
 
 /** Доля удара мили, которая ДОЙДЁТ: кайт-дисконт, только если противники сплошь стрелки, никто не
  *  прижат вплотную и мили медленнее каждого из них на болоте. */
-internal fun PainAndGain.meleeFactor(unit: Creep, opponents: List<Creep>): Double {
+internal fun meleeFactor(unit: Creep, opponents: List<Creep>): Double {
     if (opponents.any { hasMelee(it) || getRange(unit, it) <= MELEE_KEEP_RANGE }) return 1.0
     val ranged = opponents.filter { hasRanged(it) }
     if (ranged.isEmpty()) return 1.0
@@ -119,7 +119,7 @@ internal fun PainAndGain.meleeFactor(unit: Creep, opponents: List<Creep>): Doubl
 
 /** Действенный урон крипа в тик против группы (с его эффектами): стрельба целиком, мили — по meleeFactor. */
 
-internal fun PainAndGain.effectiveDps(unit: Creep, opponents: List<Creep>, rangedK: Double = 1.0, meleeK: Double = 1.0): Double {
+internal fun effectiveDps(unit: Creep, opponents: List<Creep>, rangedK: Double = 1.0, meleeK: Double = 1.0): Double {
     val p = InfluenceMap.profileOf(unit)
     val full = p.ranged * rangedK + p.melee * meleeK * meleeFactor(unit, opponents)
     return full
@@ -165,7 +165,7 @@ internal fun fightingHits(c: Creep): Double {
     return sum
 }
 
-internal fun PainAndGain.weightedHits(unit: Creep, opponents: List<Creep>, hitsK: Double = 1.0): Double {
+internal fun weightedHits(unit: Creep, opponents: List<Creep>, hitsK: Double = 1.0): Double {
     val p = InfluenceMap.profileOf(unit)
     val raw = p.ranged + p.melee
     val taken = InfluenceMap.takenOf(unit).coerceAtLeast(0.01)

@@ -237,9 +237,6 @@ object PainAndGain {
 
     /** Отметка «тик открыт» (см. USE_ABORT_REPAIR) и пара прибора: оборванных тиков / записей, положенных обратно. */
     private var tickOpen = false
-    /** Вес тела и живые MOVE на этот тик (см. USE_BODY_MEMO); чистятся в начале тика. */
-    internal val bodyWeightNow = HashMap<String, Int>()
-    internal val liveMovesNow = HashMap<String, Int>()
 
     fun tick() {
         if (tickOpen) repairAfterAbort()
@@ -251,7 +248,7 @@ object PainAndGain {
     private fun repairAfterAbort() {
         abortTicks++
         var maps = 0; var sets = 0; var entries = 0
-        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory)) {
+        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo)) {
             val r = AbortRepair.repairFields(owner)
             maps += r.maps; sets += r.sets; entries += r.entries
         }

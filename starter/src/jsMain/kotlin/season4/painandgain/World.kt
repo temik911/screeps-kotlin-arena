@@ -240,7 +240,7 @@ internal fun PainAndGain.flowAvoiding(ctx: Ctx, target: Position, creep: Creep, 
 /** Стая у цели: боевые враги рядом с ней и те, кто дойдёт до неё (своим телом по полю) не позже нас —
  *  из ХОДЯЧИХ: стоящий на месте STILL_TICKS тиков в стаю по «успеет дойти» не зачисляется (матч 1:
  *  армия врага не сделала ни шага за 1570 тиков, а «успевала» к каждому флагу, и армия простояла на посту). */
-internal fun PainAndGain.packAt(ctx: Ctx, pos: Position, flow: IntArray, ourTravel: Int): List<Creep> {
+internal fun packAt(ctx: Ctx, pos: Position, flow: IntArray, ourTravel: Int): List<Creep> {
     // МЕМО СТАИ (v132): пути его крипов к клетке флага ходятся раз в тик на флаг и поле, а не на каждого бегуна: пять отцепленных
     // бегунов × семь флагов × одиннадцать его крипов давали ~150 000 шагов по полю за тик (фаза r.cands 52–73 мс из 80–99 мс боевого
     // тика, восемь таймаутов в матче с Coldkimchi 07.09). Результат тот же
@@ -320,7 +320,7 @@ internal fun evasive(e: Creep): Boolean {
 
 /** Ловим ли враг: вплотную к нашему вооружённому (MELEE_KEEP_RANGE), медленнее нашего самого быстрого или не
  *  уходит (см. evasive). Только за ловимым идут стая, охота, добивание и местный бросок (см. CHASE_WINDOW). */
-internal fun PainAndGain.catchable(e: Creep, armed: List<Creep>): Boolean {
+internal fun catchable(e: Creep, armed: List<Creep>): Boolean {
     if (armed.any { getRange(e, it) <= MELEE_KEEP_RANGE }) return true
     // медленнее нас ТАМ, ГДЕ СТОИТ (v48): период на его клетке — в болоте тело с половиной MOVE ходит клетку в пять
     // тиков, и застрявший в болоте ловим, хотя на равнине он равен нам (матч 90, см. InfluenceMap.enemyOrigins)
@@ -440,7 +440,7 @@ internal fun mobileOf(creeps: List<Creep>) = creeps.filter { canMove(it) && !it.
 internal fun lineMelees(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
 internal fun lineRangeds(creeps: List<Creep>) = creeps.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
 /** Состав гонки за флагом: вооружённый, на полной скорости, не хранитель и не в ротации (память — в момент вызова). */
-internal fun PainAndGain.raceCapable(creeps: List<Creep>) = creeps.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Memory.keeperIds && it.id !in Memory.rotatingIds }
+internal fun raceCapable(creeps: List<Creep>) = creeps.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Memory.keeperIds && it.id !in Memory.rotatingIds }
 /** Отряд за флагами и остальные — по памяти В МОМЕНТ ВЫЗОВА: стратег правит detachedIds и cmdDetach посреди тика. */
 internal fun detachedRunners(ctx: Ctx) = ctx.runners.filter { it.id in Memory.detachedIds }
 internal fun notDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.detachedIds }
@@ -455,7 +455,7 @@ internal fun List<Creep>.without(c: Creep) = filter { it.id != c.id }
 
 
 /** Тики хода крипа по спуску вдоль поля потока от клетки до цели — по его телу и местности (periodAt). */
-internal fun PainAndGain.pathTicks(creep: Creep, flow: IntArray, startCell: Int): Int {
+internal fun pathTicks(creep: Creep, flow: IntArray, startCell: Int): Int {
     var cell = startCell
     if (cell < 0 || flow[cell] < 0) return Int.MAX_VALUE / 2
     var ticks = 0
@@ -1062,8 +1062,8 @@ internal class BuildWorldOut(
 
 /** СБОРКА МИРА (v257, этап 10; начало tickBody): сброс тиковых кэшей, крипы обеих сторон, дом, флаги с эффектами и счётом, раздел армии и бегунов, препятствия, поля влияния, матрицы опасности, карта расстояний, Ctx, прибытие врага. Перенесено дословно. */
 internal fun PainAndGain.buildWorld(): BuildWorldOut {
-    bodyWeightNow.clear()
-    liveMovesNow.clear()
+    BodyMemo.bodyWeightNow.clear()
+    BodyMemo.liveMovesNow.clear()
     Executor.clear()
     flagFlipNow = false
     bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick)
