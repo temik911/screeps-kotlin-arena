@@ -414,6 +414,29 @@ internal fun PainAndGain.effectiveDps(unit: Creep, opponents: List<Creep>, range
 
 /** Хиты в счёте мощи: по доле удара, которая дойдёт (кайтимая мили в бою не участвует; лекарь и
  *  безоружный — полностью), с поправкой на множитель входящего урона (флаг уязвимости). */
+/**
+ * БОЕВЫЕ ХИТЫ (v428): сколько урона надо снять, чтобы крип перестал БИТЬ, а не чтобы он умер. Движок снимает части
+ * тела ПО ПОРЯДКУ, спереди назад, поэтому хвост из MOVE за последней боевой частью мощи стороне не добавляет: он
+ * дотягивает труп, который уже не стреляет. Цена пропуска измерена в самих телах этой арены — у мили ATTACK стоит
+ * ВПЕРЕДИ (`a8m8`), и он разоружается на hits <= 800 из 1600, то есть мера завышала его вдвое; у лекаря MOVE
+ * впереди, HEAL сзади, и он лечит почти до смерти, то есть его 1200 засчитывались верно. Разбор шести матчей против
+ * MetalicaX подтверждает это фактом: наши мили разоружаются на контакте+4…+17 в КАЖДОМ матче, включая победы, —
+ * то есть половина их хитов перестаёт быть боевой в первые же тики размена.
+ */
+internal fun fightingHits(c: Creep): Double {
+    if (!USE_FIGHTING_HITS) return c.hits.toDouble()
+    val body = c.body
+    var last = -1
+    for (i in body.indices) {
+        val t = body[i].type
+        if (body[i].hits > 0 && (t == ATTACK || t == RANGED_ATTACK || t == HEAL)) last = i
+    }
+    if (last < 0) return 0.0
+    var sum = 0.0
+    for (i in 0..last) sum += body[i].hits.toDouble()
+    return sum
+}
+
 internal fun PainAndGain.weightedHits(unit: Creep, opponents: List<Creep>, hitsK: Double = 1.0): Double {
     val p = InfluenceMap.profileOf(unit)
     val raw = p.ranged + p.melee
@@ -421,7 +444,7 @@ internal fun PainAndGain.weightedHits(unit: Creep, opponents: List<Creep>, hitsK
     // раненый (оружие или лечение в теле мертво) хитов в счёт не даёт: он не в строю и огня на себя не берёт
     if (raw <= 0.0 && p.heal <= 0.0 && unit.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }) return 0.0
     val share = if (raw <= 0.0) 1.0 else effectiveDps(unit, opponents) / raw
-    return unit.hits * share * hitsK / taken
+    return fightingHits(unit) * share * hitsK / taken
 }
 
 internal fun PainAndGain.hypoMods(type: String, k: Double) = HypoMods(
