@@ -288,8 +288,60 @@ internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enem
     soutTicks += Memory.stepOutIds.size
 }
 
-/** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). */
-internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
+/**
+ * ФАКТЫ ОДНОГО ХОДА (v444, план архитектуры, 4.3 и этап 3): то, что крип знает о себе и о соседях ДО выбора цели. Каждая
+ * величина определена один раз — в [buildTurn], рядом со своим комментарием-вердиктом, в прежнем порядке вычислений; здесь —
+ * только имена и типы тех, что читают таблицы (лестница [LADDER], цепочка шага) и хвост хода. Имена полей не пересекаются с
+ * полями [ArmyTick], [Ctx] и членами `PainAndGain` — это держит линт: строки таблиц — лямбды с получателем `Turn`, и поле,
+ * совпавшее по имени с величиной тика, молча поменяло бы смысл условия. `givenUp`, `covered`, `holdReach` — прежние
+ * локальные функции хода (замыкания над его фактами): их зовёт трассировка простоя мили.
+ */
+internal class Turn(
+    val creep: Creep,
+    val ctx: Ctx,
+    val t: ArmyTick,
+    val mobile: Boolean,
+    val healer: Boolean,
+    val keeper: Boolean,
+    val stripped: Boolean,
+    val stepOut: Boolean,
+    val rotating: Boolean,
+    val support: Boolean,
+    val nearestEnemyRange: Int,
+    val localAllies: List<Creep>,
+    val localEnemies: List<Creep>,
+    val ratio: Double,
+    val ghost: Int,
+    val localAggressive: Boolean,
+    val spotNow: Boolean,
+    val inLine: Boolean,
+    val givenUp: (Creep) -> Boolean,
+    val pressTarget: Creep?,
+    val holdMelee: Boolean,
+    val covered: (Creep) -> Boolean,
+    val meleeOnly: Boolean,
+    val holdReach: (Creep) -> Int,
+    val engage: Creep?,
+    val leashed: Boolean,
+    val closeIn: Int,
+    val melee: Boolean,
+    val meleeMate: Creep?,
+    val slot: Position?,
+    val grab: FlagInfo?,
+    val healMate: Creep?,
+    val massKite: Creep?,
+    val healerNear: Creep?,
+    val aloneInFire: Boolean,
+    val healerFireW: Double,
+    val rallyTo: Position?,
+    val formHold: Boolean,
+    val formGo: Boolean,
+    val slotHold: Boolean,
+)
+
+/** Факты хода: прежняя первая секция [creepTurn] дословно и в прежнем порядке — с записями защёлок, счётчиками приборов и
+ *  печатью на своих местах последовательности. */
+internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
     with(t) {
         val mobile = strikers.any { it.id == creep.id }
         val healer = healerOnly(creep)
@@ -684,12 +736,29 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             !(stalled)
         val formHold = forming && (formVan!!.id == creep.id || getRange(creep, formVan) <= FORM_RANGE)
         val formGo = forming && !formHold
+        // в строю (см. USE_BLOCK): мили вплотную к врагу стоит и рубит, остальные — в свой слот
+        val slotHold = slot != null && melee && localEnemies.any { getRange(creep, it) <= 1 }
+        return Turn(creep, ctx, t,
+            mobile = mobile, healer = healer, keeper = keeper, stripped = stripped, stepOut = stepOut, rotating = rotating,
+            support = support, nearestEnemyRange = nearestEnemyRange, localAllies = localAllies, localEnemies = localEnemies, ratio = ratio, ghost = ghost,
+            localAggressive = localAggressive, spotNow = spotNow, inLine = inLine, givenUp = ::givenUp, pressTarget = pressTarget, holdMelee = holdMelee,
+            covered = ::covered, meleeOnly = meleeOnly, holdReach = ::holdReach, engage = engage, leashed = leashed, closeIn = closeIn,
+            melee = melee, meleeMate = meleeMate, slot = slot, grab = grab, healMate = healMate, massKite = massKite,
+            healerNear = healerNear, aloneInFire = aloneInFire, healerFireW = healerFireW, rallyTo = rallyTo, formHold = formHold, formGo = formGo,
+            slotHold = slotHold)
+    }
+}
+
+/** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). С v444 оно разложено по швам, в том
+ *  же порядке: факты ([buildTurn]) → цель по лестнице → поле, бегство, сплочение → шаг → предложение арбитру.
+ *  Имена читаются так: локальная → поле [Turn] → поле [ArmyTick] → член `PainAndGain` → верх пакета. */
+internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
+    val turn = buildTurn(creep, ctx, t)
+    with(t) { with(turn) {
         val target: Position
         val standoff: Int
         var avoid = false
         var nearFlow = false   // цель-крип рядом: поле «вблизи» (см. NEAR_FLOW)
-        // в строю (см. USE_BLOCK): мили вплотную к врагу стоит и рубит, остальные — в свой слот
-        val slotHold = slot != null && melee && localEnemies.any { getRange(creep, it) <= 1 }
         // ПЕРЕПИСЬ РЕШЕНИЙ (v203, этап 1): каждая ветка обеих цепочек называет себя, и счётчик копится за матч.
         // Повод — пять правил за сутки, которые прошли гейт и не исполнились ни разу: по коду нельзя было
         // сказать, какая ветка живая. Перепись отвечает на это числом, а не чтением. Она же заменяет ручной
@@ -1017,7 +1086,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             if (stepTag == "free") whyTag else stepTag, whyTag, stepTag), ctx)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.key
-    }
+    } }
 }
 
 /** Шаг к слоту строя без поля потока: соседняя проходимая клетка, ближайшая к слоту (при равенстве — под меньшим
