@@ -158,3 +158,46 @@ block whose first sixty normalised characters are already in docs is skipped). E
 gated by `verdicts.py check --base <ref>`: the version numbers, the comment lines longer than forty characters and
 the measurement numbers (`128/131`, `4-4`, `23 954:23 223`) in the deleted lines must all be found in
 `docs/pain-and-gain*.md`; a non-zero count exits 1 and the commit is not made. Run both from the worktree root.
+
+## Structure instruments — `reach.py`, `lint.py`, `levels.txt`, `cputrace.py` (19.09.2026)
+
+Stage 0 of `docs/pain-and-gain-architecture.md`. None of them touches the bot.
+
+**`reach.py` — which Kotlin lines the gate never executes.** The identity oracle (`compare.py` + `logdiff.py`) proves a
+mechanical change only on the lines the gate runs; a line outside the coverage is NOT verified by identity and needs a
+scenario that reaches it, or a second reader. V8 takes the coverage, the source maps turn it into `.kt` lines:
+
+```shell
+NOCLOCK=1 NODE_V8_COVERAGE=$PWD/runs/cov_<v> zsh tools/stub/painandgain/regress.sh land > runs/cov_<v>.gate.txt
+python3 tools/stub/painandgain/reach.py runs/cov_<v> --tag land --fun creepTurn --fun commandFight \
+        --save runs/reach_<v>.json --report runs/reach_<v>.txt
+python3 tools/stub/painandgain/reach.py diff runs/reach_<a>.json runs/reach_<b>.json --fun creepTurn   # what lost coverage
+```
+
+A line is *executed* when any piece of it ran in its own module or inlined into another; *partial* when it ran but a
+piece of it in its own module never did (a branch of `&&`, `?:`, a lambda). `diff` matches lines by TEXT, because after
+a transfer the file and the number are different and the text is the same; it lists same-text lines that lost coverage
+and new lines that never ran. Per-process colourings are OR-ed, not the counters by range key as the plan's prototype
+did: V8 drops a nested range whose count equals its parent's, so the process where a branch DID run reports no range
+for it, the process where it did not reports it with zero, and a maximum by key declares an executed branch dead.
+**`NOCLOCK=1` is the condition of the measure**: `run.mjs` then never starts the stand's clock, `getCpuTime()` answers 0
+and none of the bot's cpu guards can fire. Under coverage node is slower, the guards fired 255 times in
+three scenarios and the bot played a different match than the gate does. `reach.py` REFUSES a run whose logs carry a
+`guard:` line, and says so when the clock was on: two clock-reading branches (the bounded flow field, the commander's
+search budget `srch=`) print no `guard:` line of their own. A `NOCLOCK` run of the gate is also the clean reference
+for the identity oracle — `logdiff.py` between it and an ordinary run says whether the ordinary run carried a
+clock-made decision.
+
+**`lint.py` — forbidden spellings.** A list of (regex, file where it is allowed, what to write instead), matched against
+code with the comments cut out. A spelling brought to one definition is added here by the commit that follows the
+replacement, so it does not come back inline twenty versions later. **`levels.txt` + `tools/depgraph.py`** — the
+package's dependency levels and the known edges against them, read from the COMPILED per-file modules (a flat Kotlin
+package has no imports to read; after inlining, so an `inline fun` moves its edge to the caller): a new edge fails,
+a removed edge must take its `known:` line with it, a `known:` line that `main`'s copy of the file does not have
+fails — the list only shrinks. Both print one `PASS … | errors: 0 ` line at the end of `regress.sh`, so they BLOCK the
+landing like any scenario (`tools/land.sh` reads every stdout line that way); the details go to stderr, and
+`compare.py` does not read these lines (no ` at t=` in them).
+
+**`cputrace.py` — the stand's cpu trace out of the gate's logs**: the largest `max=`, the sum of `slow`, the mean tick
+by phase over the hundred-tick samples, for one log directory or two (`--against`). Absolute numbers say nothing about
+the arena's cold VM; the shift from stage to stage on one machine does. It gives no verdict.

@@ -2,6 +2,10 @@
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
 //   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp|tour|split (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate; +poke, +wall, +blob: the line's forms, see README)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
+//   NOCLOCK=1: the stand's clock stays off — getCpuTime() answers 0 all match, so none of the bot's cpu guards (CPU_GUARD_MS: runners,
+//   the commander's search and its budget, posture, the bounded flow field) can fire and the run is deterministic on any machine.
+//   Coverage (reach.py) is taken this way: under NODE_V8_COVERAGE node is slower, the guards fired 255 times in three scenarios and
+//   the bot played a different match than the gate does
 //   REPLAY=<id>.replay.json.gz + scenario `ghost`: the map, flags, bodies and start cells come from a live replay (`tools/match-log.py replay`,
 //   see tools/replay.py) and the enemy's creeps walk the cells the replay recorded, tick for tick, while our bot plays live —
 //   the only stand where the opponent's formation, tempo and entry points are the real ones (tool 3 of the analysis set)
@@ -1090,7 +1094,7 @@ let cpuMax = 0, cpuMaxTick = 0, cpuSlow = 0;
 for (let t = 1; t <= ticks; t++) {
   world.perspective = 0;
   const tLoop = performance.now();
-  world.tickStartNs = process.hrtime.bigint();   // getCpuTime() of the bot's cpu trace counts from here
+  if (!process.env.NOCLOCK) world.tickStartNs = process.hrtime.bigint();   // getCpuTime() of the bot's cpu trace counts from here; NOCLOCK=1 leaves it 0 (see the header)
   try { bot.loop(); } catch (e) { loopErrors++; lines.push('loop error (uncaught): ' + (e && e.stack || e)); }
   const msLoop = performance.now() - tLoop;
   oursAct();

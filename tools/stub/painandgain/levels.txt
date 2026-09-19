@@ -1,0 +1,44 @@
+# Уровни пакета season4/painandgain — docs/pain-and-gain-architecture.md, раздел 4.6. Стартовая таблица принята
+# оператором 19.09.2026 (решение 6); пересмотр — на этапе 5, отличия возвращаются оператору, а не правятся молча.
+# Зависимость направлена ВНИЗ или внутри уровня. Проверяет `tools/depgraph.py --gate` из regress.sh — по
+# скомпилированным модулям, то есть после инлайна; Rules и Tuning — одни `const val`, модулей у них нет.
+0: Rules Tuning
+1: Memory DistanceMap InfluenceMap
+2: World
+3: Forecast Strategist Missions
+4: Tactician Fight Formation
+5: Arbiter TrafficManager
+6: Executor
+7: PainAndGain AbortRepair
+# вне уровней: читает всех, импортировать его может только оркестратор
+outside: Instruments <- PainAndGain
+
+# ИЗВЕСТНЫЕ РЁБРА ВОПРЕКИ УРОВНЯМ на v440. Список может только УБЫВАТЬ: новое ребро — FAIL, снятое ребро обязано
+# унести свою строку, строка, которой нет в версии этого файла из main, — FAIL. Пустеет на этапах 5 (рёбра вверх) и 6
+# (импорты Instruments стадиями).
+# — рёбра вверх, названные планом (раздел 2.5):
+known: DistanceMap>World        # этап 5: sym / mirrorTL — к геометрии карты (уровень 1)
+known: Forecast>PainAndGain     # этап 5: нужная величина приходит параметром
+known: Formation>PainAndGain    # этап 5: нужная величина приходит параметром
+known: InfluenceMap>World       # этап 5: sym — туда же
+known: World>Forecast           # этап 5: модель мощи — отдельный файл уровня 1
+known: World>Missions           # этап 5: heldFlag / guardFlag — факты о флагах, в World
+known: World>Strategist         # этап 5: updateKeepers в runArmy; Posture — тип уровня 0, чтение через Memory.prevPosture
+# — рёбра вверх, которых раздел 2.5 не называет (находка этапа 0, решаются на этапе 5 вместе с пересмотром таблицы):
+known: Arbiter>Executor
+known: Fight>Executor
+known: Missions>Executor
+known: Missions>TrafficManager
+known: Strategist>Fight
+known: Strategist>Formation
+known: Strategist>Tactician
+known: Tactician>Arbiter
+known: Tactician>TrafficManager
+known: World>Executor
+# — стадии импортируют Instruments (этап 6: счётчик живёт у того, кто считает):
+known: Fight>Instruments
+known: Formation>Instruments
+known: Missions>Instruments
+known: Strategist>Instruments
+known: Tactician>Instruments
+known: World>Instruments
