@@ -93,14 +93,47 @@ internal object Strategist {
         val candidate: Posture, val candidateSince: Int,
     )
 
+    /** Один вопрос о режиме командира: вход решения, признак «бой сейчас» и — для цепочки причин — уже выбранный режим. */
+    class ModeCase(val i: Inputs, val fightNow: Boolean) { var mode: CmdMode = CmdMode.RACE }
+
+    /** Счётчики трёх таблиц решения (прибор `reach t=`): постура, режим командира, причина режима. */
+    val postureTally = Tally("posture")
+    val modeTally = Tally("mode")
+    val whyTally = Tally("cmdwhy")
+
+    /** ПРАВИЛА ПОСТУРЫ (v445): порядок списка = приоритет. Строка выигрывает — её действие называет постуру; условие истинно, а
+     *  выиграла строка выше — `shadowed`: так видно, например, сколько тиков уклонение перекрыто целью-флагом. */
+    private val POSTURE_RULES: List<Row<Inputs, Posture>> by lazy { listOf<Row<Inputs, Posture>>(
+        Row("annihilate", { annihilate }) { Posture.ANNIHILATE },
+        Row("flag", { hasObjective }) { Posture.FLAG },
+        Row("evade", { evade }) { Posture.EVADE },
+        Row("retreat", { retreat }) { Posture.RETREAT },
+        Row("hold", { true }) { Posture.HOLD },
+    ) }
+
+    /** РЕЖИМ КОМАНДИРА: поход → гонка при застое или его отходе → бой → гонка. */
+    private val MODE_RULES: List<Row<ModeCase, CmdMode>> by lazy { listOf<Row<ModeCase, CmdMode>>(
+        Row("march", { i.marchNow }) { CmdMode.MARCH },
+        Row("race.stall", { i.stalled || i.hisRetreat }) { CmdMode.RACE },
+        Row("fight", { fightNow }) { CmdMode.FIGHT },
+        Row("race", { true }) { CmdMode.RACE },
+    ) }
+
+    /** ПРИЧИНА РЕЖИМА — из той же цепочки (v215); тег строки и есть причина, которую печатает `cmdwhy=`. */
+    private val WHY_RULES: List<Row<ModeCase, String>> by lazy { listOf<Row<ModeCase, String>>(
+        Row("fight", { mode == CmdMode.FIGHT }) { "fight" },
+        Row("march", { mode == CmdMode.MARCH }) { "march" },
+        Row("outmatched", { i.outmatched }) { "outmatched" },
+        Row("stall", { i.stalled }) { "stall" },
+        Row("retreat", { i.hisRetreat }) { "retreat" },
+        Row("push", { i.pushing }) { "push" },
+        Row("nofire", { !i.underFire }) { "nofire" },
+        Row("few", { i.fewFoes }) { "few" },
+        Row("posture", { true }) { "posture" },
+    ) }
+
     fun decide(i: Inputs): Decision {
-        val newPosture = when {
-            i.annihilate -> Posture.ANNIHILATE
-            i.hasObjective -> Posture.FLAG
-            i.evade -> Posture.EVADE
-            i.retreat -> Posture.RETREAT
-            else -> Posture.HOLD
-        }
+        val newPosture = walk(POSTURE_RULES, i, postureTally).act(i)
         // ГИСТЕРЕЗИС ПОСТУРЫ (v181): держится не меньше POSTURE_HOLD тиков; раньше срока меняется только на RETREAT —
         // спасение не ждёт; EVADE срока ждёт (v183: изъятие для EVADE само рождало пилу с периодом POSTURE_HOLD)
         val escape = newPosture == Posture.RETREAT
@@ -144,25 +177,12 @@ internal object Strategist {
         // проигранный размен не выправляет. Поэтому запрет действует только позади по хитам: впереди — бьём строем
         val fightNow = !i.pushing && i.underFire && !i.fewFoes && !pre.withdrawing &&
             !(i.enemyMassed && USE_NO_FIST_FIGHT)
-        val mode = when {
-            i.marchNow -> CmdMode.MARCH
-            i.stalled || i.hisRetreat -> CmdMode.RACE
-            fightNow -> CmdMode.FIGHT
-            else -> CmdMode.RACE
-        }
+        val case = ModeCase(i, fightNow)
+        val mode = walk(MODE_RULES, case, modeTally).act(case)
         // ...и причина берётся из той же цепочки (v215): прибор, повторяющий решение своим порядком, врёт ровно тогда,
         // когда бот меняется
-        val why = when {
-            mode == CmdMode.FIGHT -> "fight"
-            mode == CmdMode.MARCH -> "march"
-            i.outmatched -> "outmatched"
-            i.stalled -> "stall"
-            i.hisRetreat -> "retreat"
-            i.pushing -> "push"
-            !i.underFire -> "nofire"
-            i.fewFoes -> "few"
-            else -> "posture"
-        }
+        case.mode = mode
+        val why = walk(WHY_RULES, case, whyTally).tag
         // РЕЖИМ НАЗНАЧАЕТ ПОСТУРУ (v162): командир решил драться — армия уничтожает, а не держит и не бежит; запись
         // через те же часы (v215)
         val overrideFight = mode == CmdMode.FIGHT && pre != Posture.ANNIHILATE
@@ -1926,6 +1946,32 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     )
 }
 
+/** Один вопрос «идём ли в наступление»: то, что `armyStrategy` уже посчитал к этому месту. `pushing` и `pushSince` строки читают
+ *  у `PainAndGain` — СТАРЫМИ: условия всех строк вычисляются до действия выигравшей; `fightOnNow` — тоже его член. */
+internal class PushCase(val breakOffNow: Boolean, val pushRaw: Boolean, val toothless: Boolean, val stalled: Boolean,
+                        val now: Int, val oursPush: Double, val theirsPush: Double, val pushRelease: Double)
+
+/** Счётчики решения о наступлении (прибор `reach t=`, таблица `push`). */
+internal val pushTally = Tally("push")
+
+private var pushRuleRows: List<Row<PushCase, Boolean>>? = null
+
+/**
+ * РЕШЕНИЕ О НАСТУПЛЕНИИ (v445): пять строк, порядок списка = приоритет; действие отдаёт новое `pushing`. Прежде это был `if
+ * (breakOffNow) { pushing = false } else pushing = when { … }` — `if` оборачивал присваивание, и счётчики ветвей (`pushSince`,
+ * `pushToothless`, `pushHeldTicks`, `pushHeld`) при разрыве контакта не двигались; здесь то же самое: счётчик стоит в действии
+ * своей строки и исполняется только у выигравшей.
+ */
+internal fun PainAndGain.pushRules(): List<Row<PushCase, Boolean>> = pushRuleRows ?: listOf<Row<PushCase, Boolean>>(
+    Row("breakOff", { breakOffNow }) { false },
+    Row("raw", { pushRaw }) { if (!pushing) pushSince = now; true },
+    Row("toothless", { pushing && toothless && !stalled }) { pushToothless++; pushHeld = true; true },
+    Row("dwell", { pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease }) {
+        pushHeld = true; pushHeldTicks++; true
+    },
+    Row("none", { true }) { false },
+).also { pushRuleRows = it }
+
 /** СТРАТЕГИЯ ТИКА (v256, этап 10; сегмент runArmy): стая боя и стая толчка по порядку прихода (fightPack, pushPack), толчок (pushing), отряд за флагами (detachedIds) и его отзыв, вето погони, поля выхода, цель-флаг, уклонение, отход и решение Strategist.decide с применением постуры до перезаписи режимом. Перенесено дословно. */
 internal class ArmyStrategyIn(
     val army: List<Creep>,
@@ -2317,15 +2363,8 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // ...и БЕЗ СВОЕГО pushTicks++ (v218, дефект прибора): счётчик увеличивается безусловно десятью строками
     // ниже, поэтому на тиках размена он рос ДВАЖДЫ — и `pushheld` занижался ровно на тех тиках, ради которых
     // прибор и ставился
-    if (breakOffNow) { pushing = false } else
-    pushing = when {
-        pushRaw -> { if (!pushing) pushSince = now; true }
-        pushing && toothless && !stalled -> { pushToothless++; pushHeld = true; true }
-        pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease -> {
-            pushHeld = true; pushHeldTicks++; true
-        }
-        else -> false
-    }
+    val pushCase = PushCase(breakOffNow, pushRaw, toothless, stalled, now, oursPush, theirsPush, pushRelease)
+    pushing = walk(pushRules(), pushCase, pushTally).act(pushCase)
     pushTicks++
     // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
     // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
