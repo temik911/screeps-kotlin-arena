@@ -535,7 +535,7 @@ internal fun planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemi
     val constrained = rangeds.sortedBy { c -> cells.values.count { it.targets > 0 && it.meleeAdj == 0 && getRange(c, it.pos) <= 1 } }
     for (r in constrained) {
         val strict = place(r, rangedCmp(r), { it.targets > 0 && it.meleeAdj == 0 && it.meleeNear == 0 && behindMelee(it) }) { behindMelee(it) }
-        if (strict != null) planStrict++ else planLoose++
+        if (strict != null) planStrict.n++ else planLoose.n++
         val cell = strict ?: place(r, rangedCmp(r), null) { true } ?: continue
         rangedCells[r.id] = cell
     }
@@ -772,9 +772,9 @@ internal class FightCell(val pos: Position, val key: Int, val dmg: Double, val t
 /** Стрелков, вставших в клетку без его мили в двух, и вставших куда придётся — за матч (v135, `planFight`). До v448 — за
  *  тик: мир сбрасывал в `readSignals`, а считал строй — счётчики с двумя писателями (находка этапа 6). Теперь они
  *  накопительные и живут у того, кто считает; разницу за тик берёт печать (`plan=`), и печатаемые числа те же. */
-internal var planStrict = 0
+internal val planStrict = Gauges.counter("plan", perTick = true)
 
-internal var planLoose = 0
+internal val planLoose = Gauges.counter("plan", 1, perTick = true)
 
 /** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
 internal val marchFlow = Gauges.counter("mdir")

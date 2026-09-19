@@ -408,11 +408,11 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
             // посчитанная версия прежнего МОЛЧАЛИВОГО провала требования
             " gate=${Gauges.intsAt("gateLevels").drop(1).take(5).joinToString("/")} fell=${Gauges.counterAt("fell")}" +
             " intent=" + Memory.intentHist.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" })
-        concSum.n = 0; concTicks.n = 0
+        Gauges.endWindow()
         if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
     }
     // снимок накопительных счётчиков тактика и строя — КАЖДЫЙ тик, в конце: следующая печать отдаст разницу за свой тик
-    kiteSeen = kiteNow; planStrictSeen = planStrict; planLooseSeen = planLoose
+    Gauges.endTick()
     // МИЛИ БЕЗ ЖИВОЙ ATTACK (счётчик к пункту Д оператора, v451): крипо-тиков, где рождённый мили стоит без живой ATTACK (написание
     // А истинно, Б ложно), тиков с хотя бы одним таким, и крипо-тиков таких в трёх клетках от его вооружённого — редкое
     // состояние, которое обязано быть посчитано до правки мест, где оно решает про урон
@@ -501,9 +501,7 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("behind") { "$behindOnScore" }
     Gauges.computed("passive") { "${tickView.bw.passiveEnemy}" }
     Gauges.computed("flags") { "${flagsSummary(tickView.bw.flags)}" }
-    Gauges.computed("kite") { "${kiteNow - kiteSeen}" }
     Gauges.computed("massed") { "$kiteMassed" }
-    Gauges.computed("plan") { "${planStrict - planStrictSeen}/${planLoose - planLooseSeen}" }
     Gauges.computed("cmd") { "${commandOf.size}/$cmdTicks:$cmdBlocked" }
     Gauges.computed("mode") { "$cmdMode" }
     Gauges.computed("disp") { "$dispNow" }
@@ -524,13 +522,6 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("centroid") { "(${tickView.bw.ourCentroid.x},${tickView.bw.ourCentroid.y})" }
     Gauges.computed("enemyCentroid") { "${tickView.bw.enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}" }
 }
-
-/** Снимки накопительных счётчиков `kiteNow` (тактик) и `planStrict` / `planLoose` (строй) в конце прошлого тика (v448):
- *  печать `kite=` и `plan=` отдаёт разницу — то же «за этот тик», что до v448 давал сброс в `readSignals`. Печатает
- *  прибор, поэтому и снимок его; после оборванного тика в разницу войдёт и оборванный — прежний сброс его терял. */
-private var kiteSeen = 0
-private var planStrictSeen = 0
-private var planLooseSeen = 0
 
 /** Мили без живой ATTACK (v451, счётчик к пункту Д): крипо-тиков / тиков с хотя бы одним / крипо-тиков в досягаемости его
  *  стволов — прибор `mstrip=`; считает и печатает сам прибор. */
