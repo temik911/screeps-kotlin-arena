@@ -40,6 +40,8 @@ RULES = [
     # видит (она у оркестратора), его `armed` остаётся сканом до этапа 5
     # этап 1, ключ клетки: 184 написания `x * 100 + y` инлайном в десяти файлах
     ('ключ клетки', r'\* 100 \+', {'Facts.kt'}, 'key(x, y) или pos.key — inline, скомпилированный код тот же'),
+    # этап 1, группа постур «отход»: две полярности одного множества
+    ('отход', r'Posture\.RETREAT (\|\||&&) \w+ [!=]= Posture\.EVADE', {}, 'posture.withdrawing / !posture.withdrawing'),
     ('скан тела', r'\.body\.(any|all|none)\b', {'Facts.kt', 'InfluenceMap.kt'}, 'факт Unit: bornMelee / bornArmed / bornCombatant / live*'),
 ]
 
