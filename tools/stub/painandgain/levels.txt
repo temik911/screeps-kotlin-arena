@@ -11,11 +11,12 @@
 # Tactician — предложения в Arbiter. Приёмник, в который пишут все, — нижний слой; «кто зовёт run() последним» видно в
 # оркестровке, а не в уровне файла. Семь рёбер стартовой таблицы были рёбрами вверх только из-за этой расстановки.
 1: Executor Arbiter TrafficManager
+1: Clock                                         # cpuMs, cpuMark — часы тика: их читают предохранители CPU всех стадий
 1: Power                                         # модель мощи и размена: чистые функции над телами и профилями
 1: Geometry                                      # sym, mirrorTL — обход и сторона карты в своей системе координат
 2: World
 3: Forecast Strategist Missions
-4: Tactician Fight Formation
+4: Tactician Fight Formation Commander            # Commander — раздача командира (armyCommand): зовёт бой и строй, читает стратега
 7: PainAndGain AbortRepair
 # вне уровней: читает всех, импортировать его может только оркестратор
 outside: Instruments <- PainAndGain
@@ -25,8 +26,6 @@ outside: Instruments <- PainAndGain
 # (импорты Instruments стадиями).
 # — рёбра вверх, названные планом (раздел 2.5):
 # — рёбра вверх, которых раздел 2.5 не называет (находка этапа 0, решаются на этапе 5 вместе с пересмотром таблицы):
-known: Strategist>Fight
-known: Strategist>Formation
 # — стадии импортируют Instruments (этап 6: счётчик живёт у того, кто считает):
 known: Fight>Instruments
 known: Formation>Instruments
