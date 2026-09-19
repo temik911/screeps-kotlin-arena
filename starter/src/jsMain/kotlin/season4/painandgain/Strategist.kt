@@ -748,7 +748,7 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
     return best
 }
 
-internal fun PainAndGain.retreatPoint(ctx: Ctx): Position {
+internal fun retreatPoint(ctx: Ctx): Position {
     val enemy = ctx.enemyCentroid ?: return ctx.home
     // точка одна на весь отход, пока враг не ближе к ней, чем мы: смена точки на ходу ((3,96), потом (96,96))
     // развела армию по трём углам карты, и погоня добила всех поодиночке (матч 4)
@@ -1876,7 +1876,6 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
     // RETREAT_CONTACT_RATIO, которая существовала только ради него
     // ДОБИТЬ по перевесу — с гистерезисом; по контакту — пока контакт есть (без гистерезиса: см. PUSH_RELEASE_RATIO)
     val stalemate = behindTicks >= BEHIND_PATIENCE
-    stalemateNow = stalemate
     val holdingFlag =  !meas.fightOn &&
         ctx.flags.any { it.ours && getRange(it.pos, ctx.ourCentroid) <= POST_STANDOFF }
     // (размен матча и размен за окно считаются выше, у историй хитов — перенесены в v221, см. exchangeLive)

@@ -1602,9 +1602,6 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     }
     val packMelee = pureMeleeOf(strat.combatArmy)
     if (packMelee.isNotEmpty() && meas.combatEnemies.isNotEmpty()) packTicks++
-    // ВЕЕР НЕ РАСФОКУСИРУЕТ СОШЕДШИЕСЯ СТВОЛЫ (v218, см. USE_FAN_KEEPS_FOCUS). Признак снимается ЗДЕСЬ,
-    // потому что `killTicks` живёт только в этой области видимости, а нужен он в `shoot` — на 1500 строк ниже
-    focusBreakableNow = focusTarget != null && !killTicks(focusTarget).isInfinite()
     // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
     // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
     val focusOrder = focusPool.sortedWith(focusCmp.reversed())

@@ -358,7 +358,7 @@ internal object Formation {
     }
 }
 
-internal fun PainAndGain.commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: MutableMap<String, Position>) {
+internal fun commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: MutableMap<String, Position>) {
     out.clear()
     if (goal == null) return
     val core = mobileOf(army)
@@ -385,7 +385,7 @@ internal fun PainAndGain.commandMarch(ctx: Ctx, army: List<Creep>, goal: Positio
 
 /** Шаг колонны по полю потока к цели (v232, см. USE_MARCH_FLOW_DIRECTION): сосед клетки якоря с наименьшим расстоянием
  *  до цели; якорь на стене — от клетки ведущего; null — цель по полю недостижима; (0,0) — якорь на цели. */
-internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int, lead: Creep): Pair<Int, Int>? {
+internal fun flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int, lead: Creep): Pair<Int, Int>? {
     val field = flowTo(ctx, goal)
     val fx: Int; val fy: Int
     if (field[key(ax, ay)] >= 0) { fx = ax; fy = ay }

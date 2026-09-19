@@ -190,7 +190,7 @@ internal fun PainAndGain.accountScore(flags: List<FlagInfo>) {
 // ==================== армия ====================
 
 /** Поле к цели; не наши флаги — стены (кроме самой цели: flowFieldTo всегда открывает целевую клетку). */
-internal fun PainAndGain.flowTo(ctx: Ctx, target: Position, avoid: Boolean = false, near: Boolean = false): IntArray {
+internal fun flowTo(ctx: Ctx, target: Position, avoid: Boolean = false, near: Boolean = false): IntArray {
     val key = target.key + (if (avoid) 10000 else 0) + (if (near) 20000 else 0)
     val now = getTicks()
     val hit = Memory.flowCache[key]
@@ -212,7 +212,6 @@ internal fun PainAndGain.flowTo(ctx: Ctx, target: Position, avoid: Boolean = fal
     val f = DistanceMap.flowFieldTo(target, ctx.flagBlocked + (if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked),
         maxDist = if (bounded) NEAR_FLOW else Int.MAX_VALUE)
     Memory.flowCache[key] = f
-    flowFull[key] = !bounded
     Memory.flowCacheTick[key] = if (bounded && !near) -1000 else now
     return f
 }
@@ -232,7 +231,7 @@ internal fun avoidCells(ctx: Ctx): List<Position> = avoidCellsCache ?: run {
 
 /** Поле к НЕ-вражеской цели (флаг, пост, сбор, отход): в обход врагов, если оттуда, где стоит крип, такой
  *  путь есть, иначе обычное (матч 2 на стенде: маршрут к дальнему флагу вёл через стоящий отряд врага). */
-internal fun PainAndGain.flowAvoiding(ctx: Ctx, target: Position, creep: Creep, near: Boolean = false): IntArray {
+internal fun flowAvoiding(ctx: Ctx, target: Position, creep: Creep, near: Boolean = false): IntArray {
     val f = flowTo(ctx, target, true, near)
     return if (f[creep.key] >= 0) f else flowTo(ctx, target, near = near)
 }
@@ -797,8 +796,6 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     val massCentroid = clusterCentroid(ctx.armedArmy.ifEmpty { ctx.army }) ?: ctx.ourCentroid
     val massArmy = ctx.army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { ctx.army }
     val contact = inContact(armedEnemies, massArmy)
-    // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): назначение и тыльная клетка считаются здесь — до командира и ступеней
-    meleeWardOf.clear(); meleeWardCell.clear()
     // ТРЕТЬЯ ПОСТАНОВКА (v227, см. USE_ZERO_LEAD_BREAK): мощь ноль при отрыве по очкам STALL_TICKS подряд — армия
     // разрывает контакт СТРОЕМ: командир раздаёт клетки замыслом KITE с дальностью «вне его стрелкового огня», свободный
     // шаг отскакивает от ближайшего вооружённого на RANGED_RANGE + 1; постура не меняется, все механизмы боя живут.
@@ -1018,7 +1015,6 @@ internal fun PainAndGain.readSignals(ctx: Ctx, bw: BuildWorldOut): ReadSignalsOu
     // строки гейта scatter падали 11–19 тыс. против 24 тыс.), у второго половина флагов пуста — там и гарнизон, и
     // курьер имеют смысл. Порог три четверти разводит их с запасом: camp 20 %, farm 50 %, けろびー 6 %
     val sitsOnFlags = sitOcc * 4 >= sitHis * 3
-    enemySitsSignal = sitsOnFlags
     // ...И «ОН СИДИТ НА ФЛАГАХ» БОЛЬШЕ НЕ ВЫКЛЮЧАЕТ РЕЖИМ ПАР (v370). Признак вводился против стендовых лагерей, где
     // пары ходили отбивать занятый флаг и не могли (match33:scatter 22 377 : 24 235), — но он гасил ВЕСЬ аппарат, а
     // не только поход на занятую клетку. Цена измерена на топ-1 `ricardo18informatica2020#14`: у него групповой урон
