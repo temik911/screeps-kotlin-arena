@@ -70,7 +70,7 @@ def repeated_selection(files):
 # Этап 2: в этих функциях запись в память и счётчик прибора — ОПЕРАТОРЫ, а не часть выражения `val … = …`. Условие,
 # спрятавшее запись внутрь `val x = … run { … Memory.X.add(id) … }`, нельзя ни посчитать отдельно от записи, ни вычислить
 # дважды (а полный обход таблиц этапа 3 вычисляет условия всех строк). Список пополняется этапами 3 и 4.
-PURE_INITIALIZERS = {'creepTurn', 'commandFight'}
+PURE_INITIALIZERS = {'creepTurn', 'buildTurn', 'commandFight'}
 EFFECT = re.compile(r'(?<![+\w])(\w+)(?:\.\w+)*\+\+|\+\+\w|Memory\.\w+(\[[^\]]*\]\s*=(?!=)|\.(add|remove|clear|put|addAll|retainAll|removeAll|getOrPut)\b)')
 DECL = re.compile(r'^\s*(?:private |internal )?va[lr] [\w<>?:, ()]+?=(?!=)')
 FUN = re.compile(r'\bfun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?(\w+)\s*\(')
@@ -113,8 +113,60 @@ def effect_in_initializer(files):
     return out
 
 
+# Этап 3: классы фактов, которые читают строки таблиц решений. Строка таблицы — лямбда с получателем такого класса, внутри
+# `with(PainAndGain)`; величины тика она берёт через `t.`. Поле, совпавшее по имени с полем другого класса фактов, с полем
+# ArmyTick / Ctx или с членом объекта PainAndGain, МОЛЧА меняет смысл условия: компилятор возьмёт ближайшего получателя.
+FACT_CLASSES = ['Turn', 'Stride', 'ArmyTick', 'Ctx']
+
+
+def _ctor_fields(files, cls):
+    for f, rows in files.items():
+        text = '\n'.join(code for _, code in rows)
+        m = re.search(r'\bclass %s\((.*?)\n\)' % cls, text, re.S)
+        if m:
+            body = text[m.end():].split('\n}\n')[0] if text[m.end():].lstrip().startswith('{') else ''
+            return f, set(re.findall(r'\bva[lr] (\w+)\s*:', m.group(1))) | set(re.findall(r'\n    va[lr] (\w+)\b', body))
+    return None, set()
+
+
+def _object_members(files, obj):
+    out = set()
+    for f, rows in files.items():
+        depth, inside, base = 0, False, 0
+        for _, code in rows:
+            if re.search(r'\bobject %s\b' % obj, code):
+                inside, base = True, depth
+            if inside and depth == base + 1:
+                m = re.match(r'\s*(?:internal |private |override |lateinit )*(?:val|var|fun) (?:[\w.<>?, ]+\.)?(\w+)', code)
+                if m:
+                    out.add(m.group(1))
+            depth += code.count('{') - code.count('}')
+            if inside and depth <= base and '}' in code:
+                inside = False
+    return out
+
+
+def shadowed_fact_names(files):
+    """Этап 3: множества имён классов фактов и членов PainAndGain попарно не пересекаются (кроме `creep`, `ctx`, `t` — это
+    один и тот же объект, откуда ни читай; `army`, `combatEnemies`, `enemyCreeps` у ArmyTick и Ctx — один и тот же список)."""
+    same = {'creep', 'ctx', 't', 'army', 'combatEnemies', 'enemyCreeps'}
+    sets = {}
+    where = {}
+    for cls in FACT_CLASSES:
+        where[cls], sets[cls] = _ctor_fields(files, cls)
+    sets['PainAndGain'] = _object_members(files, 'PainAndGain')
+    names = list(sets)
+    out = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            for n in sorted((sets[a] & sets[b]) - same):
+                out.append((where.get(a) or 'PainAndGain.kt', 0, 'имя `%s` есть и у %s, и у %s — строка таблицы прочтёт ближайшего получателя' % (n, a, b)))
+    return out
+
+
 # Проверки, которым мало одной строки: функция (исходники: {файл: [(номер, код)]}) -> [(файл, номер, текст)]
 CHECKS = [
+    shadowed_fact_names,
     repeated_selection,
     effect_in_initializer,
 ]
