@@ -131,8 +131,6 @@ object PainAndGain {
     internal val capSeen = HashSet<String>()      // (тик, флаг) считается один раз, а не по разу на вызывающего
     internal val disarmedFoe = HashSet<String>()
 
-    /** Крипов, вставших на каждом уровне ворот (индекс = порог выживания в тиках), и добор мимо ворот. */
-    internal val gateLevels = IntArray(8)
 
 
 
@@ -257,21 +255,6 @@ object PainAndGain {
     internal val tacCount = HashMap<String, Int>()         // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
     internal val prioCount = HashMap<String, Int>()        // ...и с каким приоритетом (SURVIVE / MISSION / OPPORTUNITY)
     internal val missionOf = HashMap<String, Char>()      // крип → буква задания его отряда этим тиком (v252, из Strategist.snapshot)
-    internal val passCount = HashMap<String, Int>()        // ...и какой проход раздачи командира сколько клеток назначил
-    internal var planGunsIn = 0; internal var planGunsAll = 0        // прибор согласованности строя (v200)
-    internal var planMeleeHealed = 0; internal var planMeleeAll = 0
-    internal var planHealBehind = 0; internal var planHealAll = 0
-    /** fall= (v421): запасных ходов стрелка, сохранивших цель в дальности, и ушедших из дальности. */
-    internal var fallReach = 0; internal var fallAny = 0
-    /** ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224): раздач / выбрана клетка вплотную к бойцу вне его огня / такая свободная клетка была
-     *  рядом, а выбрана другая / из них кандидат не прошёл ворота выживания; и средняя разница слагаемых оценки
-     *  «выбранная минус кандидат» (положительная — слагаемое тянуло ОТ кандидата): притяжение, огонь, линия, экран,
-     *  занятость, стоять, жилец, очаг. */
-    internal var hpN = 0; internal var hpAdj = 0; internal var hpAvail = 0; internal var hpGate = 0
-    internal val hpDelta = DoubleArray(8)
-    internal var hadjN = 0; internal var hadjAll = 0        // прилегание лекаря к теряющему хиты (v435, прибор hadj=)
-    internal var hadjnN = 0; internal var hadjnAll = 0      // ...то же, нормированное на назначения при теряющем хиты рядом (hadjn=)
-    internal var hfireN = 0; internal var hfireAll = 0; internal var hfireAdj = 0   // режим «в зоне огня» у доставки (v438, hfire=)
     internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
     internal val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
 

@@ -382,7 +382,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
         // размеру армии, умноженному на число тиков, — если не равна, перепись врёт, и всё на ней построенное тоже
         println("rung t=${getTicks()}: why=" + rungCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
             " step=" + stepCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " pass=" + passCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+            " pass=" + Gauges.labelledAt("pass").shown() +
             " sum=${stepCount.values.sum()}")
         // ...и ТА ЖЕ ПЕРЕПИСЬ ПО ПРЕДЛОЖЕНИЯМ (v252, этап 9): «задание отряда . терм» и приоритет; сумма обязана совпасть с
         // суммой rung — оба счёта растут один раз на крипа армии за тик
@@ -402,11 +402,11 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
             // ЦЕЛЬ (этап 5): затравок в очаге, перестроек против удержаний очага, и — главное — доля решений
             // раздачи, которые слагаемое цели ИЗМЕНИЛО. flips=0 за сто тиков есть операционное определение
             // мёртвого кода
-            " seeds=${goalSeeds.size} goal=(${goalCx},${goalCy}) rebuild=$goalRebuilds/$goalHolds flips=$goalFlips/$goalDecisions" +
+            " seeds=${goalSeeds.size} goal=(${goalCx},${goalCy}) rebuild=$goalRebuilds/$goalHolds flips=${Gauges.counterAt("flips")}/${Gauges.counterAt("flips", 1)}" +
             // ВОРОТА (этап 6): на каком пороге выживания крип нашёл клетку. gate5..gate1 — уровни лестницы,
             // fell — сколько раз клетки не нашлось даже при пороге в один тик и сработал общий добор. Это
             // посчитанная версия прежнего МОЛЧАЛИВОГО провала требования
-            " gate=${gateLevels.drop(1).take(5).joinToString("/")} fell=$gateFell" +
+            " gate=${Gauges.intsAt("gateLevels").drop(1).take(5).joinToString("/")} fell=${Gauges.counterAt("fell")}" +
             " intent=" + Memory.intentHist.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" })
         concSum.n = 0; concTicks.n = 0
         if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
@@ -498,19 +498,12 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("annempty") { "${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll" }
     Gauges.computed("shooters") { "${tickView.bw.army.count { hasRanged(it) }}/${tickView.bw.combatEnemies.count { hasRanged(it) }}" }
     Gauges.computed("srch") { "$srchCut/$srchTicks/${cmdTailMax.toInt()}" }
-    Gauges.computed("rotfm") { "$rotfMeet" }
     Gauges.computed("ovw") { "${Executor.ovwContact}/${Executor.ovwRanged}" }
     Gauges.computed("conf") { "${Arbiter.confReach}/${Arbiter.confFatigue}" }
     Gauges.computed("mquiet") { "$mquietMoved/$mquietAll/${mquietGain.toInt()}" }
-    Gauges.computed("adr") { "$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame" }
     Gauges.computed("rad") { "${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide" }
     Gauges.computed("simd") { "${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree" }
-    Gauges.computed("hpick") { "$hpN/$hpAdj/$hpAvail/$hpGate" }
-    Gauges.computed("hadj") { "$hadjN/$hadjAll" }
-    Gauges.computed("hadjn") { "$hadjnN/$hadjnAll" }
-    Gauges.computed("hfire") { "$hfireN/$hfireAll/$hfireAdj" }
     Gauges.computed("hstill") { "${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged}" }
-    Gauges.computed("dh") { "${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }}" }
     Gauges.computed("score") { "${ourScore.toInt()}/${enemyScore.toInt()}" }
     Gauges.computed("rate") { "$ourRate/$enemyRate" }
     Gauges.computed("behind") { "$behindOnScore" }
@@ -530,10 +523,6 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("weak") { "$outmatchedTicks" }
     Gauges.computed("touch") { "${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()}" }
     Gauges.computed("touchl") { "${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()}" }
-    Gauges.computed("guns") { "$planGunsIn/$planGunsAll" }
-    Gauges.computed("mheal") { "$planMeleeHealed/$planMeleeAll" }
-    Gauges.computed("hline") { "$planHealBehind/$planHealAll" }
-    Gauges.computed("fall") { "$fallReach/$fallAny" }
     Gauges.computed("our") { "${tickView.ours.toInt()}" }
     Gauges.computed("enemy") { "${tickView.theirs.toInt()}" }
     Gauges.computed("ledger") { "${enemyDamageTaken - ourDamageTaken}" }

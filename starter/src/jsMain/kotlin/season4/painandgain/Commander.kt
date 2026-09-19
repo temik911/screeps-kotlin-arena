@@ -239,7 +239,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
  *  её пробы вливаются в приборы (DealRecord.mergeInto); пробы всех раздач тика считаются отдельно — прибор `deals=выбрано/сыграно`.
  *  Зовётся из трёх мест, где командир раздаёт клетки: перебор замыслов (победитель), раздача при нехватке CPU, раздача одних
  *  лекарей. */
-internal fun PainAndGain.publishDeal(rec: DealRecord?, tried: Int) {
+internal fun publishDeal(rec: DealRecord?, tried: Int) {
     dealsTried.n += tried
     if (rec == null) return
     dealsChosen.n++

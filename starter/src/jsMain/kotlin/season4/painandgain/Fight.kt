@@ -442,39 +442,47 @@ internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int
 internal class DealRecord {
     val need = InfluenceMap.HealNeed()
     val tally = Tally("pass", sequence = true)
-    val passCount = HashMap<String, Int>()
-    var hpN = 0; var hpAdj = 0; var hpAvail = 0; var hpGate = 0
-    val hpDelta = DoubleArray(8)
-    var hadjN = 0; var hadjAll = 0; var hadjnN = 0; var hadjnAll = 0
-    var hfireN = 0; var hfireAll = 0; var hfireAdj = 0
-    val gateLevels = IntArray(8)
-    var gateFell = 0
-    var goalDecisions = 0; var goalFlips = 0
-    var adrN = 0; var adrE = 0.0; var adrT = 0.0; var adrSame = 0
-    var fallReach = 0; var fallAny = 0
-    var rotfMeet = 0
-    var planGunsAll = 0; var planGunsIn = 0; var planMeleeAll = 0; var planMeleeHealed = 0; var planHealAll = 0; var planHealBehind = 0
-
+    /** Приборы записи (Gauges.kt): объявление ОДНО — здесь; близнец матча заводится сам, строка `t=` печатает его по имени поля. */
+    val g = GaugeSet()
+    /** ...и какой проход раздачи командира сколько клеток назначил (перепись `rung t=`, поле `pass=`). */
+    val passCount = g.labelled("pass", printed = false)
+    /** ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224): раздач / выбрана клетка вплотную к бойцу вне его огня / такая свободная клетка была
+     *  рядом, а выбрана другая / из них кандидат не прошёл ворота выживания; и средняя разница слагаемых оценки
+     *  «выбранная минус кандидат» (положительная — слагаемое тянуло ОТ кандидата): притяжение, огонь, линия, экран,
+     *  занятость, стоять, жилец, очаг. */
+    val hpN = g.counter("hpick"); val hpAdj = g.counter("hpick", 1); val hpAvail = g.counter("hpick", 2); val hpGate = g.counter("hpick", 3)
+    val hpDelta = g.reals("hpDelta", 8)
+    val hadjN = g.counter("hadj"); val hadjAll = g.counter("hadj", 1)        // прилегание лекаря к теряющему хиты (v435, прибор hadj=)
+    val hadjnN = g.counter("hadjn"); val hadjnAll = g.counter("hadjn", 1)      // ...то же, нормированное на назначения при теряющем хиты рядом (hadjn=)
+    val hfireN = g.counter("hfire"); val hfireAll = g.counter("hfire", 1); val hfireAdj = g.counter("hfire", 2)   // режим «в зоне огня» у доставки (v438, hfire=)
+    /** Крипов, вставших на каждом уровне ворот (индекс = порог выживания в тиках), и добор мимо ворот. */
+    val gateLevels = g.ints("gateLevels", 8)
+    val gateFell = g.counter("fell")
+    /** Решений раздачи, где слагаемое цели изменило выбранную клетку, и решений всего. */
+    val goalFlips = g.counter("flips"); val goalDecisions = g.counter("flips", 1)
+    /** Пара к USE_ADDRESSED_DANGER (v224): раздач командира, сумма E и сумма T в выбранных клетках, раздач с T >= E. */
+    val adrN = g.counter("adr"); val adrE = g.real("adrE"); val adrT = g.real("adrT"); val adrSame = g.counter("adr", 3)
+    /** fall= (v421): запасных ходов стрелка, сохранивших цель в дальности, и ушедших из дальности. */
+    val fallReach = g.counter("fall"); val fallAny = g.counter("fall", 1)
+    val rotfMeet = g.counter("rotfm")
+    // прибор согласованности строя (v200): у выбранной раздачи — её значение, а не сумма (при вливании ЗАМЕНЯЕТСЯ, `last`)
+    val planGunsIn = g.counter("guns", 0, last = true); val planGunsAll = g.counter("guns", 1, last = true)
+    val planMeleeHealed = g.counter("mheal", 0, last = true); val planMeleeAll = g.counter("mheal", 1, last = true)
+    val planHealBehind = g.counter("hline", 0, last = true); val planHealAll = g.counter("hline", 1, last = true)
 }
 
-/** Вливает пробы раздачи [rec] в приборы матча — зовётся для ВЫБРАННОЙ раздачи тика (Commander.publishDeal). Расширение
- *  оркестратора, а не метод записи: приборы — члены `PainAndGain`, и объект уровня 4, читающий синглтон уровня 7, был бы
- *  ребром вверх (гейт `graph` это поймал в первой редакции). */
-internal fun PainAndGain.mergeDeal(rec: DealRecord) {
-    hpN += rec.hpN; hpAdj += rec.hpAdj; hpAvail += rec.hpAvail; hpGate += rec.hpGate
-    for (i in rec.hpDelta.indices) hpDelta[i] += rec.hpDelta[i]
-    hadjN += rec.hadjN; hadjAll += rec.hadjAll; hadjnN += rec.hadjnN; hadjnAll += rec.hadjnAll
-    hfireN += rec.hfireN; hfireAll += rec.hfireAll; hfireAdj += rec.hfireAdj
-    for (i in rec.gateLevels.indices) gateLevels[i] += rec.gateLevels[i]
-    gateFell += rec.gateFell
-    goalDecisions += rec.goalDecisions; goalFlips += rec.goalFlips
-    adrN += rec.adrN; adrE += rec.adrE; adrT += rec.adrT; adrSame += rec.adrSame
-    fallReach += rec.fallReach; fallAny += rec.fallAny
-    rotfMeet += rec.rotfMeet
-    for ((k, v) in rec.passCount) passCount[k] = (passCount[k] ?: 0) + v
-    planGunsAll = rec.planGunsAll; planGunsIn = rec.planGunsIn
-    planMeleeAll = rec.planMeleeAll; planMeleeHealed = rec.planMeleeHealed
-    planHealAll = rec.planHealAll; planHealBehind = rec.planHealBehind
+/** Поля записи раздачи обязаны быть объявлены до первой печати строки `t=`, а первая настоящая запись появляется только с первым
+ *  боем: одна запись строится при инициализации файла. Здесь же — части полей, которые считаются из накопителей на месте печати. */
+private val dealGaugesDeclared = DealRecord().also {
+    Gauges.computed("adr", 1) { (Gauges.realAt("adrE").x / maxOf(Gauges.counterAt("adr").n, 1)).toInt().toString() }
+    Gauges.computed("adr", 2) { (Gauges.realAt("adrT").x / maxOf(Gauges.counterAt("adr").n, 1)).toInt().toString() }
+    Gauges.computed("dh") { Gauges.realsAt("hpDelta").joinToString(",") { (it / maxOf(Gauges.counterAt("hpick", 2).n, 1)).toInt().toString() } }
+}
+
+/** Вливает пробы раздачи [rec] в приборы матча — зовётся для ВЫБРАННОЙ раздачи тика (Commander.publishDeal). До v455 влив
+ *  перечислял все поля записи руками — четвёртый список тех же имён (запись, влив, члены `PainAndGain`, печать). */
+internal fun mergeDeal(rec: DealRecord) {
+    Gauges.absorb(rec.g)
     fightTally.fitTags(rec.tally.tags)
     for (i in rec.tally.on.indices) { fightTally.on[i] += rec.tally.on[i]; fightTally.won[i] += rec.tally.won[i]; fightTally.idle[i] += rec.tally.idle[i] }
 }
@@ -707,9 +715,9 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 if (sc0 < bareScore) { bareScore = sc0; bare = p }
             }
             val b = best ?: return false
-            rec.goalDecisions++
+            rec.goalDecisions.n++
             val bs = bare
-            if (bs == null || bs.x != b.x || bs.y != b.y) rec.goalFlips++
+            if (bs == null || bs.x != b.x || bs.y != b.y) rec.goalFlips.n++
             val tenant = bestTenant
             if (tenant != null) {
                 if (depth >= CHAIN_DEPTH) return false
@@ -738,14 +746,14 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             if (depth == 0) {
                 val e = InfluenceMap.dangerAt(b.key)
                 val t = addressedAt(c, b.x, b.y)
-                rec.adrN++; rec.adrE += e; rec.adrT += t
-                if (t >= e) rec.adrSame++
+                rec.adrN.n++; rec.adrE.x += e; rec.adrT.x += t
+                if (t >= e) rec.adrSame.n++
             }
             // временное отталкивание в занятой клетке (Hagelbäck & Johansson): следующий крип видит её как
             // тесную. Без этого двое выбирают одну клетку, третий загораживает четвёртого — записанная причина
             // провала USE_FORWARD_SEARCH: «каждый крип считает за себя»
             claimed.add(c.id)          // притязание — из приказа в `out`, снимается вместе с ним (v450, см. claimAt)
-            if (depth == 0) { rec.passCount[passTag] = (rec.passCount[passTag] ?: 0) + 1; rec.tally.won[passIndex]++ }
+            if (depth == 0) { rec.passCount.bump(passTag); rec.tally.won[passIndex]++ }
             return true
         }
         // поля, которые пишет один проход, а читает другой (до v445 — локальные посреди тела функции)
@@ -951,7 +959,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 }, rank)
                 if (ok) { rec.gateLevels[minOf(lvl, rec.gateLevels.size - 1)]++; return true }
             }
-            rec.gateFell++
+            rec.gateFell.n++
             return false
         }
 
@@ -1084,7 +1092,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 if (c.id !in out) {
                     val keptReach = USE_RANGED_FALLBACK_KEEPS_REACH &&
                         place(c, { p -> armedEnemies.any { getRange(p, it) <= RANGED_RANGE } }, { p -> danOf(c, p.key) })
-                    if (keptReach) rec.fallReach++ else { rec.fallAny++; place(c, { true }, { p -> danOf(c, p.key) }) }
+                    if (keptReach) rec.fallReach.n++ else { rec.fallAny.n++; place(c, { true }, { p -> danOf(c, p.key) }) }
                 }
             }
         }
@@ -1157,7 +1165,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                     val (_, _, ttlMin) = weightsOf(intentOf(c))
                     if (place(c, { p -> getRange(p, dest) <= 1 && ttlAt(c, p.key, p) >= ttlMin }, { p -> danOf(c, p.key) })) {
                         medicked.add(medicFor.key)
-                        rec.rotfMeet++
+                        rec.rotfMeet.n++
                         met = true
                         out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
                     }
@@ -1167,7 +1175,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 // ПРИБОР РЕЖИМА «В ЗОНЕ ОГНЯ» (v438, `hfire=`): лекарей, у которых доставка считалась по подопечным под огнём / всех /
                 // из первых — поставленных вплотную к теряющему хиты; снимается ДО раздачи — насыщение меняет режим следующему
                 val fireMode = !met && rec.need.deliveryFireMode(c, living(army))
-                rec.hfireAll++; if (fireMode) rec.hfireN++
+                rec.hfireAll.n++; if (fireMode) rec.hfireN.n++
                 val ok = met || placeScored(c, 2, intentOf(c)).also { placed ->
                     if (placed) out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
                 }
@@ -1176,14 +1184,14 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 // ПРИБОР ПРИЛЕГАНИЯ (v435, `hadj=`): назначенная клетка лекаря вплотную к своему, терявшему хиты за прошлый тик, /
                 // все назначения лекарей — та величина, по которой разбор E делил стороны (26 % лечений вплотную против 75 %)
                 out[c.id]?.let { b ->
-                    rec.hadjAll++
+                    rec.hadjAll.n++
                     val losing = army.filter { a -> a.id != c.id && a.hits > 0 && (Memory.lastHits[a.id] ?: a.hits) > a.hits }
-                    if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) { rec.hadjN++; if (fireMode) rec.hfireAdj++ }
+                    if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) { rec.hadjN.n++; if (fireMode) rec.hfireAdj.n++ }
                     // ...и НОРМИРОВАННЫЙ прибор (`hadjn=`): среди назначений, при которых кто-то из своих в дальности шага и
                     // лечения (HEAL_RANGE + 1) терял хиты, — доля клеток вплотную к такому; без него hadj делится и на тихие тики
                     if (losing.any { a -> getRange(a, c) <= HEAL_RANGE + 1 }) {
-                        rec.hadjnAll++
-                        if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) rec.hadjnN++
+                        rec.hadjnAll.n++
+                        if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) rec.hadjnN.n++
                     }
                 }
                 // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
@@ -1214,8 +1222,8 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                             -W_SCREEN * shielded, CLAIM_COST * claimAt(key), -stayBonus(c, p),
                             if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
                     }
-                    rec.hpN++
-                    if (adjSafe(b)) { rec.hpAdj++; return@run }
+                    rec.hpN.n++
+                    if (adjSafe(b)) { rec.hpAdj.n++; return@run }
                     var best: Position? = null; var bestSc = Double.MAX_VALUE; var gated = 0
                     for ((key, p) in nearCells(c)) {
                         if (p.x == b.x && p.y == b.y) continue
@@ -1226,8 +1234,8 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                         if (sc < bestSc) { bestSc = sc; best = p }
                     }
                     val a = best
-                    if (a == null) { if (gated > 0) rec.hpGate++; return@run }
-                    rec.hpAvail++
+                    if (a == null) { if (gated > 0) rec.hpGate.n++; return@run }
+                    rec.hpAvail.n++
                     val tb = terms(b); val ta = terms(a)
                     for (i in tb.indices) rec.hpDelta[i] += tb[i] - ta[i]
                 }
@@ -1305,12 +1313,12 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             // ПРИБОР СОГЛАСОВАННОСТИ (v200): меряется РЕЗУЛЬТАТ раздачи, а не факт вызова правила — сколько стрелков
             // получили клетку с целью в дальности, сколько мили остались в дальности лечения, сколько лекарей стоят за
             // линией. Три числа отвечают ровно на три замечания оператора и видны в строке `t=` каждым тиком
-            rec.planGunsAll = rangeds.size
-            rec.planGunsIn = rangeds.count { c -> out[c.id]?.let { p -> armedEnemies.any { e -> getRange(p, e) <= RANGED_RANGE } } == true }
-            rec.planMeleeAll = melees.size
-            rec.planMeleeHealed = melees.count { c -> out[c.id]?.let { p -> healerCells.any { h -> maxOf(abs(p.x - h.x), abs(p.y - h.y)) <= HEAL_RANGE } } == true }
-            rec.planHealAll = healers.size
-            rec.planHealBehind = healers.count { c ->
+            rec.planGunsAll.n = rangeds.size
+            rec.planGunsIn.n = rangeds.count { c -> out[c.id]?.let { p -> armedEnemies.any { e -> getRange(p, e) <= RANGED_RANGE } } == true }
+            rec.planMeleeAll.n = melees.size
+            rec.planMeleeHealed.n = melees.count { c -> out[c.id]?.let { p -> healerCells.any { h -> maxOf(abs(p.x - h.x), abs(p.y - h.y)) <= HEAL_RANGE } } == true }
+            rec.planHealAll.n = healers.size
+            rec.planHealBehind.n = healers.count { c ->
                 val p = out[c.id] ?: return@count false
                 val dp = foeDist(p.x, p.y)
                 fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp }
@@ -1480,8 +1488,6 @@ internal var goalTick = -1
 // ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
 // Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
 
-internal var rotfMeet = 0
-
 /** Лечение по дефициту (v233): лечений в полного / всех, лечения сверх подтверждённой нужды / доставлено, переназначений. */
 internal val hfullN = Gauges.counter("hfull")
 
@@ -1491,25 +1497,9 @@ internal val hoverSum = Gauges.counter("hover")
 
 internal val hdelivSum = Gauges.counter("hover", 1)
 
-internal var gateFell = 0
-
 internal var goalRebuilds = 0
 
 internal var goalHolds = 0
-
-/** Решений раздачи, где слагаемое цели изменило выбранную клетку, и решений всего. */
-internal var goalFlips = 0
-
-internal var goalDecisions = 0
-
-/** Пара к USE_ADDRESSED_DANGER (v224): раздач командира, сумма E и сумма T в выбранных клетках, раздач с T >= E. */
-internal var adrN = 0
-
-internal var adrE = 0.0
-
-internal var adrT = 0.0
-
-internal var adrSame = 0
 
 /** Стена лечения (v270, hwallx=уступлено/дальних): дальних лечений жертвы стены, и сколько из них уступило лечению
  *  вплотную раненого соседа, которое доставляет больше. */

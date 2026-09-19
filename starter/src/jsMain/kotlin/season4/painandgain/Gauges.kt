@@ -126,6 +126,13 @@ internal object Gauges {
         field(field).put(at, GaugePart(sep, label, text))
     }
 
+    /** Накопитель матча по ключу — тому, кто печатает отношение накопителей или строку НЕ из раскладки (`fld t=`, `rung t=`). */
+    fun counterAt(field: String, at: Int = 0): Counter = twins["$field#$at"] as Counter
+    fun realAt(key: String): Real = twins[key] as Real
+    fun intsAt(key: String): IntArray = twins[key] as IntArray
+    fun realsAt(key: String): DoubleArray = twins[key] as DoubleArray
+    fun labelledAt(field: String): Labelled = twins["$field#0"] as Labelled
+
     /** Строка приборов по раскладке: имена полей через пробел; имя с ведущим `<` печатается БЕЗ пробела перед собой. */
     fun line(layout: List<String>): String {
         val sb = StringBuilder()
