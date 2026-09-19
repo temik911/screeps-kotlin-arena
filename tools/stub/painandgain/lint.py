@@ -42,6 +42,9 @@ RULES = [
     ('ключ клетки', r'\* 100 \+', {'Facts.kt'}, 'key(x, y) или pos.key — inline, скомпилированный код тот же'),
     # этап 1, группа постур «отход»: две полярности одного множества
     ('отход', r'Posture\.RETREAT (\|\||&&) \w+ [!=]= Posture\.EVADE', {}, 'posture.withdrawing / !posture.withdrawing'),
+    # этап 2, защёлка руками: гистерезис идёт через Latch (Memory.kt) — множество остаётся полем Memory, Latch — вид
+    ('защёлка руками', r'if \(.*\) Memory\.\w+\.add\(.*\) else Memory\.\w+\.remove\(', {'Memory.kt'},
+     'Memory.<имя>Latch.set(id, условие) / .update(id, enter, exit) — оператором на том же месте'),
     ('скан тела', r'\.body\.(any|all|none)\b', {'Facts.kt', 'InfluenceMap.kt'}, 'факт Unit: bornMelee / bornArmed / bornCombatant / live*'),
 ]
 
@@ -64,9 +67,56 @@ def repeated_selection(files):
     return out
 
 
+# Этап 2: в этих функциях запись в память и счётчик прибора — ОПЕРАТОРЫ, а не часть выражения `val … = …`. Условие,
+# спрятавшее запись внутрь `val x = … run { … Memory.X.add(id) … }`, нельзя ни посчитать отдельно от записи, ни вычислить
+# дважды (а полный обход таблиц этапа 3 вычисляет условия всех строк). Список пополняется этапами 3 и 4.
+PURE_INITIALIZERS = {'creepTurn', 'commandFight'}
+EFFECT = re.compile(r'(?<![+\w])(\w+)(?:\.\w+)*\+\+|\+\+\w|Memory\.\w+(\[[^\]]*\]\s*=(?!=)|\.(add|remove|clear|put|addAll|retainAll|removeAll|getOrPut)\b)')
+DECL = re.compile(r'^\s*(?:private |internal )?va[lr] [\w<>?:, ()]+?=(?!=)')
+FUN = re.compile(r'\bfun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?(\w+)\s*\(')
+
+
+def effect_in_initializer(files):
+    """Этап 2: `++` прибора или запись в Memory внутри выражения `val … = …` в функциях PURE_INITIALIZERS. Счётчик, объявленный
+    `var` внутри того же выражения, — локальная переменная алгоритма, а не прибор, и не считается."""
+    out = []
+    for f, rows in files.items():
+        stack, scope = [], None                  # открытые скобки: ('decl'|'fun'|'blk', строка, локальные var) ; scope — имя функции
+        depth_of_scope = None
+        for n, code in rows:
+            m = FUN.search(code)
+            if m and scope is None and m.group(1) in PURE_INITIALIZERS:
+                scope, depth_of_scope = m.group(1), len(stack)
+            decl_line = bool(DECL.match(code))
+            if scope is not None:
+                decls = [x for x in stack if x[0] == 'decl']
+                for x in decls:
+                    x[2].update(re.findall(r'\bvar (\w+)', code))
+                hit = None
+                for e in EFFECT.finditer(code if decls else (code.split('=', 1)[1] if decl_line else '')):
+                    name = e.group(1)
+                    if name and any(name in x[2] for x in decls):
+                        continue
+                    hit = e
+                if hit:
+                    out.append((f, n, '%s: запись или счётчик внутри выражения `val … =` — %s' % (scope, code.strip()[:110])))
+            for i, ch in enumerate(code):
+                if ch == '{':
+                    head = code[:i]
+                    kind = 'fun' if re.search(r'\bfun\b[^{]*$', head) else 'decl' if decl_line and '=' in head else 'blk'
+                    stack.append([kind, n, set()])
+                elif ch == '}' and stack:
+                    stack.pop()
+                    if scope is not None and len(stack) <= depth_of_scope:
+                        scope = None
+        # (локальная `fun` внутри объявления остаётся «внутри выражения» намеренно: в этих функциях таких нет)
+    return out
+
+
 # Проверки, которым мало одной строки: функция (исходники: {файл: [(номер, код)]}) -> [(файл, номер, текст)]
 CHECKS = [
     repeated_selection,
+    effect_in_initializer,
 ]
 
 
