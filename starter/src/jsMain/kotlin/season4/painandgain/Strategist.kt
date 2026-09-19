@@ -1554,13 +1554,15 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // контакта. Величина измеряется, а не назначается: против кайтера она падает до нуля сама, против того, кто
     // идёт в размен, держится высокой, и правило снимается без порога, подогнанного под сегодняшнего соперника
     if (meas.contact) {
-        val meleeN = strat.combatArmy.count { meleeOnlyBorn(it) }
-        val touched = strat.combatArmy.count { meleeOnlyBorn(it) && meas.combatEnemies.any { e -> getRange(it, e) <= 1 } }
+        // ...ПО ЖИВОЙ ATTACK (v452, пункт Д): «достаёт ли наш мили» — вопрос об ударе, и раздетый мили в знаменателе занижал долю
+        // касания (у него — завышал симметрично, см. hisMelee ниже). Написание Б = meleeOnlyLive
+        val meleeN = strat.combatArmy.count { meleeOnlyLive(it) }
+        val touched = strat.combatArmy.count { meleeOnlyLive(it) && meas.combatEnemies.any { e -> getRange(it, e) <= 1 } }
         // ...и при НУЛЕ мили в ядре окно не трогается вовсе: иначе отряд, уведённый по этому же признаку, обнуляет
         // мили в строю, доля прыгает к единице, признак гаснет и отряд отзывается — качели через тик
         if (meleeN > 0) Memory.touchHist.addLast(100 * touched / meleeN)
-        val hisMelee = meas.combatEnemies.count { meleeOnlyBorn(it) }
-        val hisTouched = meas.combatEnemies.count { meleeOnlyBorn(it) && strat.combatArmy.any { a -> getRange(it, a) <= 1 } }
+        val hisMelee = meas.combatEnemies.count { meleeOnlyLive(it) }
+        val hisTouched = meas.combatEnemies.count { meleeOnlyLive(it) && strat.combatArmy.any { a -> getRange(it, a) <= 1 } }
         if (hisMelee > 0) Memory.hisTouchHist.addLast(100 * hisTouched / hisMelee)
     } else { Memory.touchHist.clear(); Memory.hisTouchHist.clear() }
     while (Memory.touchHist.size > TOUCH_WINDOW) Memory.touchHist.removeFirst()

@@ -490,7 +490,9 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         // ⚠️ Это НЕ второе издание отвергнутого USE_INLINE_CONTACT_FREE: тот открывал ворота «врагом в трёх»,
         // и одиночный пикет фермера снимал их (blitz 7-1 -> 5-3). Здесь пикет даёт 240/240 = 1.0 и ворот
         // не открывает — открывает только настоящий численный перевес.
-        val spotNow =  meleeOnlyBorn(creep) && !support && !rotating &&
+        // ...и ТОЛЬКО С ЖИВОЙ ATTACK (v452, пункт Д оператора; таблица А/Б в абзаце v442): местный перевес пускает мили ВПЕРЁД
+        // БИТЬ, а раздетому бить нечем — он шёл вперёд по перевесу и не наносил ничего. Написание Б = meleeOnlyLive
+        val spotNow =  meleeOnlyLive(creep) && !support && !rotating &&
             localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && spotEdgeAt(e) >= PUSH_RATIO && !targ.killTicks(e).isInfinite() }
         if (spotNow) spotMeleeTicks++
         // МИЛИ ЗАЩИЩАЕТ СВОЕГО (v220, см. USE_MELEE_GUARDS_LINE). Ворота `inLine` требуют двух ВООРУЖЁННЫХ
@@ -505,6 +507,8 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         // Пикет одиночки такого не делает, а блоб делает первым же тиком
         fun guards(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
             strat.combatArmy.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
+        // защита своего — работа ТЕЛОМ, остаётся написание А (рождённый мили): встать между его мили и своим мягким может и
+        // раздетый (v452, пункт Д — разбиение оператора: тело — А, урон — Б)
         val guardNow =  meleeOnlyBorn(creep) && !support && !rotating &&
             localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && guards(e) }
         if (meleeOnlyBorn(creep) && localEnemies.isNotEmpty()) { guardTicks++; if (guardNow) guardFired++ }
@@ -540,6 +544,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         // ...И НЕ ДЕРЖИМ ЛИНИЮ, КОГДА РЯДОМ ПЕРЕВЕС (v214): здесь мили получал цель «своя клетка», то есть
         // буквально стоял, как только любой враг оказывался в трёх клетках. Замер по 12 живым матчам: доля
         // касаний наших мили в затяжном бою 1,4 %, то есть четверо из четырнадцати не бьют вовсе
+        // держать линию — работа ТЕЛОМ, остаётся написание А: линию держит и раздетый мили (v452, пункт Д — разбиение оператора)
         val holdMelee =  (meleeOnlyBorn(creep) && posture == Posture.ANNIHILATE && !pushing && meas.contact && pressTarget == null &&
             !spotNow && localEnemies.any { getRange(creep, it) <= MELEE_HOLD_RANGE + 1 })
         // прилипший (v43): его вооружённый мили ВПЛОТНУЮ к нашему стрелку, лекарю или раненому — цель ближайшего нашего мили в
@@ -549,7 +554,9 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         // ...и ротирующий защищает тыл (v135, см. USE_POKER_WHILE_ROTATING): ротация значит «оружия меньше половины, иду
         // лечиться», но три живых ATTACK из восьми — это 90 урона в удар, а лекарь, к которому он идёт, — тот самый,
         // которого рубят. Ротация не отменяет poker, пока у бойца есть чем ударить
-        val poker: Creep? = if (meleeOnlyBorn(creep) && !support && (!rotating) && !meas.stalled) meas.combatEnemies.filter { e ->
+        // ...и ТОЛЬКО С ЖИВОЙ ATTACK (v452, пункт Д): «бьёт того, кто ткнулся в наших мягких» — без живой ATTACK он идёт к цели и
+        // ударить нечем; сама ротация poker не отменяет (см. выше), отменяет пустое оружие. Написание Б = meleeOnlyLive
+        val poker: Creep? = if (meleeOnlyLive(creep) && !support && (!rotating) && !meas.stalled) meas.combatEnemies.filter { e ->
             InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && !givenUp(e) &&
                 ctx.army.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= 1 }
         }.let { c ->
@@ -639,6 +646,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         val foeMeleeLive = meas.enemyMassedNow && localEnemies.any { hasMelee(it) && InfluenceMap.profileOf(it).melee > 0.0 }
         val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
         if (hasRanged(creep) && localAggressive) { closeTicks++; if (foeMeleeLive) closeHeld++ }
+        // сброс слота строя у мили с целью — работа ТЕЛОМ, остаётся написание А (v452, пункт Д — разбиение оператора)
         val melee = meleeOnlyBorn(creep)
         val meleeMate: Creep? = if (melee) strat.combatArmy.filter { it.id != creep.id && meleeOnlyLive(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
         // мили со слотом стены (см. planBlock) оставляет его ради цели: прижим или враг в досягаемости удара
@@ -1263,7 +1271,9 @@ internal fun PainAndGain.scoreCell(creep: Creep, x: Int, y: Int, target: Positio
         val meleeReach = meleeEnemies.count { getRange(InfluenceMap.cell(x, y), it) <= 1 } * HEALER_W_MELEE
         return -firePenalty * PAIR_W_DIST - fire * healerFireW - meleeReach - (0.0) - pinnedHealer - lethalTerm
     }
-    val meleeSelf = meleeOnlyBorn(creep)
+    // клетка «как для бьющего мили» — угроза его мили в двух не штрафуется, а исходящий считается «есть кто вплотную» — только
+    // пока есть ЖИВАЯ ATTACK (v452, пункт Д): раздетый мили бить не может и платит за его мили в двух, как стрелок. Написание Б
+    val meleeSelf = meleeOnlyLive(creep)
     val meleeWeight = if (aggressive) PAIR_W_MELEE * AGGRO_MELEE_FACTOR else PAIR_W_MELEE
     val meleeThreat = if (meleeSelf) 0.0 else meleeEnemies.count { getRange(InfluenceMap.cell(x, y), it) <= MELEE_KEEP_RANGE } * meleeWeight
     val swampPenalty = if (!aggressive && DistanceMap.isSwamp(x, y)) PAIR_W_SWAMP else 0.0
