@@ -368,9 +368,7 @@ object PainAndGain {
     private fun runArmy(ctx: Ctx) {
         val army = ctx.army
         if (army.isEmpty()) return
-        val armyMeasuresSeg = armyMeasures(ctx, ArmyMeasuresIn(
-            army = army,
-        ))
+        val armyMeasuresSeg = armyMeasures(ctx)
         val allies = armyMeasuresSeg.allies
         val enemyCreeps = armyMeasuresSeg.enemyCreeps
         val combatEnemies = armyMeasuresSeg.combatEnemies

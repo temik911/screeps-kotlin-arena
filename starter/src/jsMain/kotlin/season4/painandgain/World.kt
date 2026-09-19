@@ -639,11 +639,6 @@ internal fun sym(r: Int): IntProgression = if (mirrorTL) r downTo -r else -r..r
 /** Восемь направлений и стояние в своей системе координат (см. mirrorTL). */
 internal fun PainAndGain.dirsNow(): List<Pair<Int, Int>> = if (mirrorTL) DIRECTIONS_MIRROR else DIRECTIONS
 
-/** МЕРЫ АРМИИ ЗА ТИК (v256, этап 10; сегмент runArmy): бойцы и его вооружённые, сомкнутость, охота (huntable), масса и контакт, истории дистанций и центров, простой и бесплодная охота, отход по размену, признак «слабее», выполнимость отхода. Перенесено дословно. */
-internal class ArmyMeasuresIn(
-    val army: List<Creep>,
-)
-
 internal class ArmyMeasuresOut(
     val allies: List<Creep>,
     val enemyCreeps: List<Creep>,
@@ -676,13 +671,14 @@ internal class ArmyMeasuresOut(
     val retreatFeasible: Boolean,
 )
 
-internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasuresOut = with(seg) {
+/** МЕРЫ АРМИИ ЗА ТИК (v256, этап 10; сегмент runArmy): бойцы и его вооружённые, сомкнутость, охота (huntable), масса и контакт, истории дистанций и центров, простой и бесплодная охота, отход по размену, признак «слабее», выполнимость отхода. Перенесено дословно. */
+internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     val allies = ctx.myCreeps
     val enemyCreeps = ctx.enemyCreeps
     val combatEnemies = ctx.combatEnemies
-    updateKeepers(ctx, army)
+    updateKeepers(ctx, ctx.army)
 
-    val strikers = army.filter { fullSpeed(it) && hasWeapon(it) && it.id !in Memory.keeperIds }
+    val strikers = ctx.army.filter { fullSpeed(it) && hasWeapon(it) && it.id !in Memory.keeperIds }
     // враги, с которыми есть бой: с уроном — и лекари, у которых рядом (в дальности лечения плюс шаг) есть свой с
     // оружием в теле, живым или мёртвым: такого лекарь вернёт в строй за шесть тиков (стенд m2 rush: армия ушла за
     // флагами от лекарей с обломками, и через сто тиков те вернулись в полном теле). Стая из одних лекарей при
@@ -704,7 +700,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     val enemyHitsNow = enemyCreeps.sumOf { it.hits }
     if (lastEnemyHitsTotal >= 0 && enemyHitsNow < lastEnemyHitsTotal) enemyDamageTaken += lastEnemyHitsTotal - enemyHitsNow
     lastEnemyHitsTotal = enemyHitsNow
-    val ourHitsNow = army.sumOf { it.hits }
+    val ourHitsNow = ctx.army.sumOf { it.hits }
     Memory.enemyHitsHist.addLast(enemyHitsNow); Memory.ourHitsHist.addLast(ourHitsNow)
     while (Memory.enemyHitsHist.size > STALL_TICKS) Memory.enemyHitsHist.removeFirst()
     while (Memory.ourHitsHist.size > STALL_TICKS) Memory.ourHitsHist.removeFirst()
@@ -735,13 +731,13 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
     val exchangePaying = Memory.ourHitsHist.size < STALL_TICKS ||
         (Memory.enemyHitsHist.first() - enemyHitsNow) >= (Memory.ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
-    val mobileArmy = army.filter { canMove(it) && it.id !in Memory.keeperIds }
+    val mobileArmy = ctx.army.filter { canMove(it) && it.id !in Memory.keeperIds }
     // ...а командир видит ВСЁ поле, включая хранителей флагов: решение снять хранителя — его, а не следствие того,
     // что он невидим (v173, оператор). Держат флаг они по-прежнему сами, пока приказа нет
     // ...и В РЕЖИМЕ ПАР БЕЗ ХРАНИТЕЛЕЙ (v306, см. GROUP_SAFE_DMG): состав командира — единственное место, где хранитель
     // ему виден (марш и погоня берут mobileArmy и strikers, а те его исключают), и приказ уводит его с флага (правило
     // v173, «хранитель тоже слушает приказ»). Против けろびー#19 это 71 снятие хранителя из 110 за матч — «сошёл с клетки»
-    val commandArmy = army.filter { canMove(it) && !(groupSafe && it.id in Memory.keeperIds) }
+    val commandArmy = ctx.army.filter { canMove(it) && !(groupSafe && it.id in Memory.keeperIds) }
     val chasers = strikers.ifEmpty { mobileArmy }
     // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
     // пикет простоя — поэтому охота посчитана здесь, до простоя
@@ -749,7 +745,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     cpuMark("a.hunt")
     // его мили вплотную к нашим — поднято сюда из блока постуры (v221, перенос без тумблера): читать его нужно и
     // прибору погони ниже, а между старым и новым местом он не менялся и не читался
-    val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && army.any { getRange(e, it) <= 1 } }
+    val meleeAdjacent = combatEnemies.any { e -> hasMelee(e) && ctx.army.any { getRange(e, it) <= 1 } }
     // ПАРА К ПОГОНЕ ЗА КАЙТЕРОМ (v221, только прибор; см. kchaseTicks). Разбор v220, матч с ●ω<♥♪#1: он не взял ни
     // одного флага за 700 тиков, мы 300 тиков гнались за его отходящей линией в постуре ANNIHILATE и легли 12 → 0,
     // а вето безфлагового броска отказало захвату 3329 раз. Простой «держит дистанцию» против него не наступает:
@@ -784,7 +780,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // двигать центр вооружённой массы: за MARCH_STALL_TICKS тиков он не сдвинулся НИ НА КЛЕТКУ — это не марш.
     // Матч 25: добыча стояла в 11 клетках, ближе никого, армия 990 тиков дёргалась на месте у (46,34); за весь
     // матч ни одного урона ни с одной стороны, и проигрыш по очкам 19927:24205 при 12 против 13 в тик
-    val marchCell = centroidOf(ctx.armedArmy.ifEmpty { army })?.let { it.key } ?: -1
+    val marchCell = centroidOf(ctx.armedArmy.ifEmpty { ctx.army })?.let { it.key } ?: -1
     Memory.marchHist.addLast(marchCell)
     // ТРЕТИЙ вид простоя — враг, который держит дистанцию: в добивании без контакта дистанция между центрами армий за
     // CHASE_WINDOW тиков не сократилась, и враг дальше броска. Матч 48 (けろびー v5, фермер): он взял шесть флагов к 80-му
@@ -792,15 +788,15 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // пикет не срабатывал (враг дальше ENGAGE_RANGE), марш не «стоял» (армия за ним ходила), и ANNIHILATE держал армию
     // лицом к нему на двух-трёх флагах против его пяти: 8 в тик против 17, проигрыш 15652:22950 при 16000/16000 у обоих
     // застой по ближайшей группе (v132, USE_STALL_NEAREST_GROUP): центр его группы, ближайшей к нашему вооружённому центру
-    val ourArmedCentroid = centroidOf(ctx.armedArmy.ifEmpty { army })
+    val ourArmedCentroid = centroidOf(ctx.armedArmy.ifEmpty { ctx.army })
     val stallCentroid: Position? = ctx.enemyCentroid
     val armyDist = stallCentroid?.let { getRange(ourArmedCentroid ?: it, it) } ?: -1
     // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
     val exchangeRecent = now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && now - lastHurtTick <= STALL_TICKS)
-    val fightOn = inContact(armedEnemies, army) && (exchangeRecent)
+    val fightOn = inContact(armedEnemies, ctx.army) && (exchangeRecent)
     val pauseReach = 2 * ENGAGE_RANGE   // v106: окно сквозь мигание
     val pausedChase =  posture == Posture.HOLD &&
-        armedEnemies.any { e -> army.any { getRange(e, it) <= pauseReach } }
+        armedEnemies.any { e -> ctx.army.any { getRange(e, it) <= pauseReach } }
     if ((posture == Posture.ANNIHILATE || pausedChase) && !fightOn && armyDist >= 0) {
         Memory.armyDistHist.addLast(armyDist)
         // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
@@ -864,8 +860,8 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     stalledNow = stalled
 
     // ---- постура ----
-    val ours = ourPowerOf(army, combatEnemies)
-    val theirs = enemyPowerOf(combatEnemies, army)
+    val ours = ourPowerOf(ctx.army, combatEnemies)
+    val theirs = enemyPowerOf(combatEnemies, ctx.army)
     // РЕЖИМ ВЫЖИВАНИЯ (v223, доктрина оператора, см. USE_SURVIVAL): ведём по очкам, а его армия сильнее — не деремся,
     // а уходим, беря флаги с выходом. Порог и гистерезис — как у «слабее», по мощи всей армии
     val leadingNow = ourScore > enemyScore
@@ -881,15 +877,15 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // Целевой сценарий m22 spread не сдвинулся вовсе (16622:24323), а m20 spread перешёл из победы в проигрыш
     // (24337:21666 -> 19400:24328) и m19 block из уничтожения армии врага на 389-м в победу по очкам на 1142-м;
     // выиграли только россыпи на 12, 19 и 21. Мигание постуры на россыпи — открытая находка
-    val enemyNear = armedEnemies.any { e -> army.any { getRange(e, it) <= nearRange } }
+    val enemyNear = armedEnemies.any { e -> ctx.army.any { getRange(e, it) <= nearRange } }
     // контакт решает сам: пассивного поста в контакте нет — он отдаёт армию по одному (стенд rush: десять
     // за двоих). Отход из контакта возможен, только если он не бегство: никто из врагов-мили не вплотную
     // и наш строй не медленнее их самого быстрого — при равной скорости преследователь стреляет в спину
     // каждый тик, а обездвиженные остаются врагу (стенд rush: отход при 1250 против 1619 отдал ещё
     // шестерых). Иначе в контакте — бой всем составом, даже слабее: рубка с фокусом лучше разгрома
     // контакт армии — контакт её МАССЫ (см. MASS_RANGE): один оторвавшийся не переводит армию в бой
-    val massCentroid = clusterCentroid(ctx.armedArmy.ifEmpty { army }) ?: ctx.ourCentroid
-    val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
+    val massCentroid = clusterCentroid(ctx.armedArmy.ifEmpty { ctx.army }) ?: ctx.ourCentroid
+    val massArmy = ctx.army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { ctx.army }
     val contact = inContact(armedEnemies, massArmy)
     // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): назначение и тыльная клетка считаются здесь — до командира и ступеней
     meleeWardOf.clear(); meleeWardCell.clear()
@@ -948,7 +944,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // стоял враг (стенд m7 sleeper: три лекаря с flee=true разбежались по карте и были добиты поодиночке)
     val retreatFeasible = (!contact || strikers.isEmpty()) && !atRetreatPoint
     cpuMark("a.retreat")
-    ArmyMeasuresOut(
+    return ArmyMeasuresOut(
         allies = allies,
         enemyCreeps = enemyCreeps,
         combatEnemies = combatEnemies,
