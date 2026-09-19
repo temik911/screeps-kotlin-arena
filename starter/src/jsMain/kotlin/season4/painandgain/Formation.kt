@@ -426,7 +426,7 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
 
 internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
     val melees = army.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
-    val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in Memory.rotatingIds }
+    val rangeds = army.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
     val armed = melees + rangeds
     if (armed.isEmpty()) return
@@ -459,7 +459,7 @@ internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>
  *  клетка занята. */
 internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, enemyCreeps: List<Creep>, slotOf: MutableMap<String, Position>, focusTarget: Creep?) {
     val melees = army.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
-    val rangeds = army.filter { hasWeapon(it) && hasRanged(it) && it.id !in Memory.rotatingIds }
+    val rangeds = army.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
     if (melees.isEmpty() && rangeds.isEmpty()) return
     val threats = armedEnemies.ifEmpty { combatEnemies }
@@ -631,14 +631,14 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
     // текущим клеткам — лекарь в досягаемости первым, иначе ближайший, при равенстве с меньшими хитами
     // ...и карта адресного урона живёт тик (v233, см. USE_HEAL_BY_DEFICIT): её читает выбор пациента
     val addressed = addressedDmg
-    val live = army.filter { it.hits > 0 && (hasWeapon(it) || hasHeal(it)) }
+    val live = army.filter { it.hits > 0 && (combatant(it)) }
     for (e in ctx.combatEnemies) {
         val q = InfluenceMap.profileOf(e)
         if (q.ranged > 0.0) Forecast.wallTargetOf(e, live, RANGED_RANGE)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.ranged }
         if (q.melee > 0.0) Forecast.wallTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.melee }
     }
     val byAddress = addressed.entries.maxByOrNull { it.value }
-    val lostV = army.filter { (hasWeapon(it) || hasHeal(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
+    val lostV = army.filter { (combatant(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
     // ...И АДРЕС БЕРЁТСЯ, ПОКА ОН ПОПАДАЕТ (v229, вторая редакция по стенду m28 brawl+heals: его сценарий стреляет «в
     // вооружённого стрелка первым», а не в лекаря, и адресная жертва промахивалась — уничтожение на 442-м стало
     // проигрышем на 1570-м). Оба предсказателя сверяются с фактом следующего тика (кто потерял больше всех) за окно
@@ -660,7 +660,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
         val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
         val hisRanged = ctx.combatEnemies.filter { hasRanged(it) }
         val occupied = HashSet<Int>()
-        for (c in army) if (!hasHeal(c) || hasWeapon(c)) occupied.add(c.x * 100 + c.y)
+        for (c in army) if (!healerOnly(c)) occupied.add(c.x * 100 + c.y)
         for (e in ctx.enemyCreeps) occupied.add(e.x * 100 + e.y)
         val cells = ArrayList<Position>()
         for (dx in sym(1)) for (dy in sym(1)) {

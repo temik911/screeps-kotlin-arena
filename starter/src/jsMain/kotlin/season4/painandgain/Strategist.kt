@@ -413,7 +413,7 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     capOppSum += opp.size
     capAllSum += ctx.combatEnemies.size
     val (ours, theirs) = powerAfterFor(ctx,
-        ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) },
+        ctx.army + ctx.runners.filter { combatant(it) },
         opp, f)
     // ИНВЕРСИЯ СНЯТА (v214). Здесь стояло `needed = ourScore <= enemyScore || ourRate <= enemyRate`, и когда
     // мы ВЕДЁМ по счёту и по темпу, пол становился CAPTURE_FLOOR = 1.0 — СТРОЖЕ, чем PARITY_FLOOR = 0.97 при
@@ -449,7 +449,7 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     // ФЛАГОВ БОЛЬШЕ ЦЕНОЙ НЕБОЛЬШОГО МИНУСА (v222, решение оператора, см. USE_FLAG_MAJORITY): армии СЕЙЧАС на паритете,
     // перевеса по флагам у нас нет, а этот флаг его даёт — минус ровно дебафф этого флага
     run {
-        val side = ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }
+        val side = ctx.army + ctx.runners.filter { combatant(it) }
         val oursNow = ourPowerOf(side, opp)
         val theirsNow = enemyPowerOf(opp, side)
         if (oursNow >= theirsNow * floor) {
@@ -512,7 +512,7 @@ internal fun PainAndGain.planCapture(ctx: Ctx, step: Position?) {
 /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
  *  вражья — без них, если флаги были его. */
 internal fun PainAndGain.powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double> =
-    powerAfterFor(ctx, ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }, ctx.combatEnemies, f)
+    powerAfterFor(ctx, ctx.army + ctx.runners.filter { combatant(it) }, ctx.combatEnemies, f)
 
 /** То же для заданной стороны и группы врага (v95: пул проверяет ядро без крипа с дебаффом его флага-цели). */
 internal fun PainAndGain.powerAfterFor(ctx: Ctx, side: List<Creep>, opp: List<Creep>, f: FlagInfo): Pair<Double, Double> {
@@ -544,7 +544,7 @@ internal fun PainAndGain.captureCost(ctx: Ctx, f: FlagInfo): Double {
     if (f.ours || ctx.combatEnemies.isEmpty()) return 1.0
     // ОДИН СОСТАВ ПО ОБЕ СТОРОНЫ ДРОБИ (v216, см. USE_CAPTURE_COST_ONE_SIDE): знаменатель обязан считаться по
     // той же стороне, что и числитель в powerAfter, иначе отношение выходит больше единицы и обрезается в 1,0
-    val side = ctx.army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }
+    val side = ctx.army + ctx.runners.filter { combatant(it) }
     val now = ourPowerOf(side, ctx.combatEnemies)
     if (now <= 0.0) return 1.0
     return (powerAfter(ctx, f).first / now).coerceIn(0.0, 1.0)
@@ -943,7 +943,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         if (occ.my != true || army.none { it.id == occ.id } || occ.id in Memory.keeperIds) continue
         // ...и хранителем не становится лекарь (v215, см. USE_HEALER_NEVER_PINNED): ветка `keeper` первая в
         // цепочке целей, и пришпиленный к флагу лекарь выключается из боя целиком
-        if (army.any { it.id == occ.id && !hasWeapon(it) && hasHeal(it) }) continue
+        if (army.any { it.id == occ.id && healerOnly(it) }) continue
         if (Memory.runnerFlag.values.contains(f.id)) continue
         if (!groupSafe && enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
         val cand = army.firstOrNull { it.id == occ.id } ?: continue
@@ -1232,7 +1232,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             .take(if (enemyMassedSignal) GARRISON_FLAGS else GARRISON_FLAGS + 1)
         // ...И СКАУТЫ — ТОЖЕ ГАРНИЗОН (v341): они тела, в бою не нужны, а держат флаг не хуже вооружённого; из четырёх
         // закреплённых в среднем стоит двое — остальные в пути, — и два скаута добавляют ровно недостающие тела
-        val scoutsFree = ctx.runners.filter { !hasWeapon(it) && !hasHeal(it) && canMove(it) && it.id !in Memory.garrisonOf }
+        val scoutsFree = ctx.runners.filter { stripped(it) && canMove(it) && it.id !in Memory.garrisonOf }
             .toMutableList()
         // КУРЬЕР НА ДОРОГОЙ ФЛАГ, КОТОРЫЙ ОН НЕ ДЕРЖИТ ТЕЛОМ (v367). Замер владения по каждому флагу за 8 матчей на
         // соперника показал, что весь проигрыш по очкам сидит в дорогих флагах, и у ОБОИХ соперников там дыра одного
@@ -1255,7 +1255,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         Memory.courierOf.keys.retainAll { id -> ctx.runners.any { it.id == id } }
         Memory.courierOf.entries.retainAll { e -> flags.any { it.id == e.value && !it.ours } }
         if (prize != null && Memory.courierOf.isEmpty()) {
-            val pick = ctx.runners.filter { !hasWeapon(it) && !hasHeal(it) && canMove(it) }
+            val pick = ctx.runners.filter { stripped(it) && canMove(it) }
                 .minByOrNull { getRange(it, prize.pos) }
             if (pick != null) Memory.courierOf[pick.id] = prize.id
         }
@@ -1286,7 +1286,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         // флагов 2,81 против 3,03 у пятёрки без смены, тел на флагах 2,27 против 2,43: смена меняет ОДНОГО уходящего на
         // другого идущего, а клетка всё равно пустует, пока сменщик идёт
         // прибор покрытия гарнизона лечением (v361): считается по стоящим, до раздачи заданий
-        val medics = ctx.army.filter { !hasWeapon(it) && hasHeal(it) }
+        val medics = ctx.army.filter { healerOnly(it) }
         for ((id, _) in Memory.garrisonOf) {
             val c = ctx.runners.firstOrNull { it.id == id } ?: ctx.army.firstOrNull { it.id == id } ?: continue
             garAll++
@@ -1530,7 +1530,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         val only = HashMap<String, Position>()
         commandFight(commandArmy, combatEnemies, armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true)
         var given = 0
-        for (h in commandArmy) if (!hasWeapon(h) && hasHeal(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
+        for (h in commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
         cmdHealTicks++; cmdHealGiven += given
     }
 
@@ -1587,7 +1587,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // Прежний `hfar` мерил другое — расстояние лекаря до центроида ВООРУЖЁННЫХ; у армии, растянутой на
     // тридцать клеток, этот центроид стоит посреди пустоты, и «лекарь при армии» там ничего не значит.
     // Здесь вопрос задан по КАЖДОМУ дерущемуся: есть ли свой лекарь в дальности лечения
-    val medsNow = army.filter { !hasWeapon(it) && hasHeal(it) }
+    val medsNow = army.filter { healerOnly(it) }
     for (c in combatArmy) {
         if (!hasWeapon(c) || armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 1 }) continue
         healGapN++
@@ -1820,7 +1820,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // Мал числитель — основание верно, трогать сбор незачем
     if (posture == Posture.HOLD) {
         gatherHold++
-        val shooters = combatArmy.filter { hasWeapon(it) && hasRanged(it) }
+        val shooters = combatArmy.filter { hasRanged(it) }
         if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread++
     }
     // ...И ТА ЖЕ ПАРА В ПОСТУРЕ БОЯ (v221, только прибор). Разбор v220, матч #11: ведём +1077, на 1400-м армия
@@ -1829,7 +1829,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // огонь по своим. Прибор отдельный, чтобы прежний `gather=` по HOLD остался сравним с логами v218–v220
     if (posture == Posture.ANNIHILATE) {
         gatherAnnAll++
-        val sh = combatArmy.filter { hasWeapon(it) && hasRanged(it) }
+        val sh = combatArmy.filter { hasRanged(it) }
         if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn++
     }
     if (posture == Posture.RETREAT || posture == Posture.EVADE) {
@@ -2431,7 +2431,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     val retreat = armedEnemies.isNotEmpty() && !annihilate && objective == null && !evade && enemyNear && weaker && retreatFeasible 
     // ---- меры, которые читает решение о режиме командира (подняты сюда в v241: одно решение — одни входы) ----
     // боеспособные: вооружённые и лекари — фокус, контакт и местные группы считаются по ним, раненые не в счёт
-    val combatArmy = army.filter { hasWeapon(it) || hasHeal(it) }
+    val combatArmy = army.filter { combatant(it) }
     // «их мили в бою» — только ВПЛОТНУЮ к нашему вооружённому: в 2–3 клетках это экран, не атака. Матч 43 (けろびー v2):
     // его мили сорок тиков стояли в двух-трёх от наших и не били (вплотную 7 % крип-тиков, 8 ударов за бой), его стрелки в
     // трёх снимали наших мили по одному (r→melee 132 из 180), а прижим считал «мили в трёх» атакой и молчал до 104-го

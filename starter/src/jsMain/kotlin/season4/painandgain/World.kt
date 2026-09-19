@@ -278,7 +278,7 @@ internal fun PainAndGain.spotEdgeAt(e: Creep): Double {
 
 internal fun PainAndGain.threatening(e: Creep, enemyCreeps: List<Creep>): Boolean {
     val q = InfluenceMap.profileOf(e)
-    return q.melee + q.ranged > 0.0 || enemyCreeps.any { w -> w.id != e.id && getRange(w, e) <= HEAL_RANGE + 1 && w.body.any { it.type == ATTACK || it.type == RANGED_ATTACK } }
+    return q.melee + q.ranged > 0.0 || enemyCreeps.any { w -> w.id != e.id && getRange(w, e) <= HEAL_RANGE + 1 && bornArmed(w) }
 }
 
 /** Точка отхода: дом и углы НАШЕЙ половины — достижимая и самая дальняя от центра армии врага (отход в
@@ -404,6 +404,19 @@ internal fun PainAndGain.hasRanged(creep: Creep) = unitOf(creep).liveRanged
 internal fun PainAndGain.hasHeal(creep: Creep) = unitOf(creep).liveHeal
 
 internal fun PainAndGain.hasWeapon(creep: Creep) = unitOf(creep).armed
+
+/** Лекарь: без живого оружия, с живой HEAL. */
+internal fun PainAndGain.healerOnly(creep: Creep) = unitOf(creep).healerOnly
+
+/** Раздет: ни живого оружия, ни живой HEAL (у тактика это звалось `wounded`, у командира `stripped`). */
+internal fun PainAndGain.stripped(creep: Creep) = unitOf(creep).stripped
+
+/** В строю: живое оружие или живая HEAL. */
+internal fun PainAndGain.combatant(creep: Creep) = unitOf(creep).combatant
+
+/** Рождён с оружием / рождён бойцом: часть в теле есть, живая или нет. */
+internal fun PainAndGain.bornArmed(creep: Creep) = unitOf(creep).bornArmed
+internal fun PainAndGain.bornCombatant(creep: Creep) = unitOf(creep).bornCombatant
 
 /** «Чистый мили», написание А — рождён мили: истинно и с выбитым оружием (см. Unit.meleeOnlyBorn). */
 internal fun PainAndGain.meleeOnlyBorn(creep: Creep) = unitOf(creep).meleeOnlyBorn
@@ -1168,14 +1181,14 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     // раненый (см. wounded): боец, потерявший всё оружие, остаётся в армии, пока жив хоть один ходячий лекарь —
     // лечение возвращает части (движок: части живы по сумме хитов, лечение идёт с хвоста тела: в матче 8 melee_1
     // из M5 с 416 хитами стал M8A8 к 199-му тику у одного лекаря); прежде он уходил «бегуном» за флагами и гиб
-    val healersAlive = active.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
-    fun wounded(c: Creep) =  healersAlive && !hasWeapon(c) && !hasHeal(c) && c.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
+    val healersAlive = active.any { healerOnly(it) && canMove(it) }
+    fun wounded(c: Creep) =  healersAlive && stripped(c) && bornCombatant(c)
     Memory.detachedIds.retainAll { id -> active.any { it.id == id && hasWeapon(it) && canMove(it) } }
     // ...и зачисленные КОМАНДИРОМ (v160, см. commandRace): его задание на захват действует так же, как detach —
     // иначе крип, посланный за флагом, остаётся бойцом строя и флага не берёт
     val takers = { id: String -> id in Memory.detachedIds || (id in Memory.cmdDetach) }
-    val army = active.filter { (hasWeapon(it) || hasHeal(it) || wounded(it)) && !takers(it.id) }
-    val runners = active.filter { (!hasWeapon(it) && !hasHeal(it) && !wounded(it)) || takers(it.id) }
+    val army = active.filter { (combatant(it) || wounded(it)) && !takers(it.id) }
+    val runners = active.filter { (stripped(it) && !wounded(it)) || takers(it.id) }
     val immobile = active.filter { !canMove(it) }
 
     val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }

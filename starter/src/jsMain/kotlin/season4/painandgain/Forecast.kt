@@ -300,7 +300,7 @@ internal object Forecast {
             val d = getRange(shooter, f)
             if (d > reach) continue
             val frac = f.hits.toDouble() / maxOf(1, f.hitsMax)
-            val healer = !PainAndGain.hasWeapon(f) && PainAndGain.hasHeal(f)
+            val healer = PainAndGain.healerOnly(f)
             val tie = kotlin.math.abs(frac - bestFrac) <= 1e-9
             if (frac < bestFrac - 1e-9 || (tie && ((healer && !bestHealer) || (healer == bestHealer && d < bestD)))) {
                 best = f; bestFrac = frac; bestHealer = healer; bestD = d
@@ -314,7 +314,7 @@ internal object Forecast {
         for (f in live) {
             val d = getRange(shooter, f)
             if (d > reach) continue
-            val healer = !PainAndGain.hasWeapon(f) && PainAndGain.hasHeal(f)
+            val healer = PainAndGain.healerOnly(f)
             if (bestHealer && !healer) continue
             val key = d * 100000.0 + f.hits
             if ((healer && !bestHealer) || key < bestKey) { best = f; bestKey = key; bestHealer = healer }
@@ -442,7 +442,7 @@ internal fun PainAndGain.weightedHits(unit: Creep, opponents: List<Creep>, hitsK
     val raw = p.ranged + p.melee
     val taken = InfluenceMap.takenOf(unit).coerceAtLeast(0.01)
     // раненый (оружие или лечение в теле мертво) хитов в счёт не даёт: он не в строю и огня на себя не берёт
-    if (raw <= 0.0 && p.heal <= 0.0 && unit.body.any { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }) return 0.0
+    if (raw <= 0.0 && p.heal <= 0.0 && bornCombatant(unit)) return 0.0
     val share = if (raw <= 0.0) 1.0 else effectiveDps(unit, opponents) / raw
     return fightingHits(unit) * share * hitsK / taken
 }

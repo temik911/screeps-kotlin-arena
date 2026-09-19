@@ -166,7 +166,7 @@ internal class ArmyTick(
  * фокусу снимается, прежняя (ROTATE_OUT) остаётся. Новых чисел нет: дальности — движка, окна — существующие.
  */
 internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
-    val live = army.filter { it.hits > 0 && (hasWeapon(it) || hasHeal(it)) }
+    val live = army.filter { it.hits > 0 && (combatant(it)) }
     // ПРЕДСКАЗАТЕЛЬ ТОЧНЕЕ (v276, разбор v275 по реплеям: предсказатель угадывал 64,8 % против 100 % его правила). Три
     // причины и три поправки: кандидаты его стволов — ВСЕ наши, и раздетые тоже (он их бьёт, а они выпадали из «живых»);
     // мили бьёт только вплотную — дальность удара движок сверяет по клеткам начала тика, и шаг перед ударом этого тика не
@@ -214,7 +214,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     // идут за бойцами, а раненые не выходят — стенд match31:camp (лагерь бьёт наименьшие хиты и держит центр) при лекарях
     // позади проигрывал по очкам 23 934 : 24 002; ●ω<♥♪#6 флагов до 1500-го тика не берёт, и штурмовать его гонка не велит
     huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN && !behindOnScore
-    val healersLive = live.any { hasHeal(it) && !hasWeapon(it) }
+    val healersLive = live.any { healerOnly(it) }
     val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
     if (!fracRules) {
         for (id in Memory.rotByFocus) Memory.rotatingIds.remove(id)
@@ -265,7 +265,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
  */
 internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enemyRetreating: Boolean) {
     fun lost(c: Creep) = c.body.count { it.hits <= 0 }
-    fun need(c: Creep) = if (c.body.any { it.type == ATTACK }) 2 else 1
+    fun need(c: Creep) = if (isMelee(c)) 2 else 1
     val live = army.filter { it.hits > 0 }
     // ...И НЕ ПРОТИВ ОТХОДЯЩЕГО (v290): против кайтера раненые уходили и не возвращались, и боя не было; когда его армия
     // отходит (`enemyRetreating`), добивать некому — выведенные возвращаются, новые не выходят
@@ -278,7 +278,7 @@ internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enem
     for (c in live) {
         if (enemyRetreating) break
         if (c.id in Memory.stepOutIds || !canMove(c)) continue
-        if (!hasWeapon(c) && !hasHeal(c)) continue   // раздетый — своя ветка (support: бегство из досягаемости, v123)
+        if (stripped(c)) continue   // раздетый — своя ветка (support: бегство из досягаемости, v123)
         if (lost(c) < need(c) || (c.x * 100 + c.y) !in reach) continue
         Memory.stepOutIds.add(c.id)
         Memory.rotatingIds.add(c.id)
@@ -292,11 +292,11 @@ internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enem
 internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
     with(t) {
         val mobile = strikers.any { it.id == creep.id }
-        val healer = !hasWeapon(creep) && hasHeal(creep)
+        val healer = healerOnly(creep)
         val slot0 = slotOf[creep.id]
         val keeper = creep.id in Memory.keeperIds
         // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
-        val wounded = !healer && !hasWeapon(creep)
+        val stripped = unitOf(creep).stripped
         // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
         // ...и ротация по его фокусу (v275, см. rotateByFocus) решена до командира и старым порогом не снимается
         val stepOut = creep.id in Memory.stepOutIds
@@ -313,7 +313,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 Memory.rotatingIds.add(creep.id); Memory.rotateSince[creep.id] = now; rotOut++; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}"); true
             } else false
         }
-        val support = healer || wounded
+        val support = healer || stripped
         val nearestEnemyRange = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
         val localAllies = combatArmy.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
         val localEnemies = combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE + RANGED_RANGE }
@@ -511,7 +511,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ⚠️ Это НЕ повторение v202 целиком (0:3): там поводок включался ВЕЗДЕ и для всех, здесь снимается
         // ровно одна оговорка и ровно для лекаря
         val leashHolds = (healer) || (posture != Posture.RETREAT && posture != Posture.EVADE)
-        val leashed = !wounded && canMove(creep) && leashHolds &&
+        val leashed = !stripped && canMove(creep) && leashHolds &&
             (localEnemies.isNotEmpty() || (contact)) && getRange(creep, armedCentroid) > LEASH_RANGE
         // СТРЕЛОК НЕ ВСТАЁТ НА ДВЕ, ПОКА У ВРАГА ЖИВ МИЛИ (v220, решение оператора: «мы принимаем бой,
         // когда у нас впереди рэнжи, в которых его мили сразу врезаются на первом тике»).
@@ -553,7 +553,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             val keptOut =  army.any { hasWeapon(it) && canMove(it) && it.id !in Memory.keeperIds }
             val fighters = army.filter { it.id != creep.id && hasWeapon(it) && !(keptOut && it.id in Memory.keeperIds) }
             // подопечные — вооружённые; вне боя рядом — и раненые (они сами идут к лекарю, см. wounded)
-            val patients = army.filter { it.id != creep.id && !(hasHeal(it) && !hasWeapon(it)) && !(keptOut && it.id in Memory.keeperIds) }
+            val patients = army.filter { it.id != creep.id && !(healerOnly(it)) && !(keptOut && it.id in Memory.keeperIds) }
             val engagedNear = fighters.any { f -> getRange(creep, f) <= HEAL_RANGE + 1 && combatEnemies.any { getRange(f, it) <= RANGED_RANGE + 1 } }
             val near = (if (engagedNear) fighters else patients).filter { getRange(creep, it) <= HEAL_RANGE + 1 }
             // подопечный под огнём (v109b, USE_WARD_UNDER_FIRE) ОТВЕРГНУТ таблицей входов стенда: лекари шли к терявшему хиты
@@ -572,7 +572,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // двадцать тиков после любого выстрела, а фермер стреляет по одиночкам весь матч — лекарь не выходил к
             // хранителю почти никогда, и тот сходил с флага по хитам 6–11 раз за матч
             val medic = if (!groupSafe || coreContactNow) null else run {
-                val medics = army.filter { !hasWeapon(it) && hasHeal(it) && canMove(it) }
+                val medics = army.filter { healerOnly(it) && canMove(it) }
                 if (medics.size < 2) return@run null
                 // ...и подопечный — не только хранитель из армии, но и ДЕРЖАТЕЛЬ-БЕГУН на нашем флаге (v334): против
                 // けろびー боя нет вовсе (kills=0, fire=0 за матч), гонку решают тела на флагах, а одиночку он
@@ -629,14 +629,14 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             (combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE })
                 .minByOrNull { getRange(creep, it) }
         } else null
-        val healerNear: Creep? = if (wounded || rotating) {
-            val hs = army.filter { it.id != creep.id && !hasWeapon(it) && hasHeal(it) }
+        val healerNear: Creep? = if (stripped || rotating) {
+            val hs = army.filter { it.id != creep.id && healerOnly(it) }
             hs.minByOrNull { getRange(creep, it) }
         } else null
         // под огнём без двух бойцов вплотную — назад к строю, не вперёд: шип в строй врага бьют трое-четверо, а он один
         // вплотную, не «в двух клетках»: со счётом союзников в двух клетках мили под огнём не отходили и ныряли в блоб
         // врага по одному — три мили за восемь тиков при одном убитом (стенд m5 army, v22, t=300–308)
-        val aloneInFire =  !support && !wounded && posture == Posture.ANNIHILATE && !pushing && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) > 0.0 &&
+        val aloneInFire =  !support && !stripped && posture == Posture.ANNIHILATE && !pushing && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) > 0.0 &&
             combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= 1 } < 2 && pressTarget == null 
         // вес огня лекаря: подопечный в бою — только разница между клетками (HEALER_W_DAMAGE_FIGHT); место за
         // подопечным и шаг от мили задают HEALER_W_FRONT и HEALER_W_MELEE, а вес 0.05 в бою держал лекаря на кромке
@@ -739,7 +739,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             posture == Posture.EVADE && evadeTo != null -> { whyTag = "evade"; target = evadeTo; standoff = 1 }
             posture == Posture.RETREAT && retreatTo != null -> { whyTag = "retreat"; target = retreatTo; standoff = 1 }
             formGo -> { whyTag = "formGo"; target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
-            wounded && healerNear != null -> { whyTag = "wounded"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
+            stripped && healerNear != null -> { whyTag = "wounded"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
             rotating && healerNear != null -> { whyTag = "rotate"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
             // сбор пачки (см. USE_REGROUP, REGROUP_TICKS): одинокий мили под смертельным огнём — к ближайшему мили-напарнику
              aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) * REGROUP_TICKS >= creep.hits -> { whyTag = "regroup"; target = meleeMate; standoff = 1; avoid = true; nearFlow = true }
@@ -900,7 +900,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
                 // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
                 // матча 8 в 4–5 клетках от строя
-                if (!wounded && localThreats.isNotEmpty() && posture != Posture.RETREAT && posture != Posture.EVADE && canMove(creep)) {
+                if (!stripped && localThreats.isNotEmpty() && posture != Posture.RETREAT && posture != Posture.EVADE && canMove(creep)) {
                     val armedMates = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }
                     val myRange = getRange(creep, armedCentroid)
                     val loose = HashSet<Int>()
@@ -995,7 +995,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             }
         }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-            println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (wounded) " WOUNDED" else ""}${if (pressTarget != null) " PRESS" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
+            println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (stripped) " WOUNDED" else ""}${if (pressTarget != null) " PRESS" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
         }
         // СОГЛАСОВАНИЕ ДВИЖЕНИЙ — ЗА КОМАНДИРОМ (v170, оператор). Разрешение конфликтов уже устроено правильно:
         // поиск в глубину с цепочками и свопами, по ПРИОРИТЕТУ. Но приоритет задавали разрозненные места — раненый,
@@ -1003,7 +1003,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // приказ, идёт первым, а среди приказов вперёд пропускается тот, чья клетка важнее для боя — мили,
         // выходящий в контакт, затем стрелок с целью, затем лекарь к подопечному, и лишь потом все прочие
         val prio = Arbiter.pushRank(ordered = commandOf.containsKey(creep.id), melee = meleeOnlyLive(creep),
-            armed = hasWeapon(creep), healer = hasHeal(creep), wounded = wounded)
+            armed = hasWeapon(creep), healer = hasHeal(creep), stripped = stripped)
         // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
         // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
         submit(Proposal(creep, step, priorityOf(stepTag, whyTag), prio, missionOf[creep.id] ?: '?',
@@ -1073,7 +1073,7 @@ internal fun PainAndGain.bestSingleMove(
             // лекарь и раненый уступают и в бою (TrafficManager: заявитель приоритетнее стоящего — swap): раненый,
             // «прибывший» к лекарю, стоял на единственной клетке между тремя лекарями в кармане у стены и их
             // подопечным, и лечения не было (стенд m7 sleeper); лекаря толкает только вооружённый
-            val yielding = canMove(occ) && !hasWeapon(occ) && !hasHeal(occ) && hasHeal(creep) && !hasWeapon(creep)
+            val yielding = canMove(occ) && stripped(occ) && healerOnly(creep)
             if (yielding && fd in 0 until pushDist) { pushDist = fd; pushX = x; pushY = y }
             else if (fd in 0 until (if (hereDist >= 0) hereDist else Int.MAX_VALUE) && (static || stuck)) blockedByStatic = true
             else if (!inCombat && fd in 0 until pushDist) { pushDist = fd; pushX = x; pushY = y }
@@ -1655,7 +1655,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         if (x in 0..99 && y in 0..99) fireCells.add(x * 100 + y)
     }
 
-    val healersAlive = army.any { !hasWeapon(it) && hasHeal(it) && canMove(it) }
+    val healersAlive = army.any { healerOnly(it) && canMove(it) }
     // строй рядами в бою по контакту (см. USE_BLOCK); при перевесе (добивание) — прежняя охота
     val slotOf = HashMap<String, Position>()
     ArmyTargetsOut(

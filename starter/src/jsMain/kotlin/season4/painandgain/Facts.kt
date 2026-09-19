@@ -31,24 +31,37 @@ internal class Unit(val creep: Creep) {
 
     /** Часть ATTACK есть в теле, живая или нет: «рождён мили». Для мили с выбитым оружием истинно. */
     val bornMelee: Boolean
+    /** Тело несёт ATTACK или RANGED_ATTACK, живую или нет: «рождён с оружием». */
+    val bornArmed: Boolean
+    /** Тело несёт ATTACK, RANGED_ATTACK или HEAL, живую или нет: «рождён бойцом» (бегун — чистый MOVE — им не бывает). */
+    val bornCombatant: Boolean
 
+    // порядок текста = порядок инициализации: всё, что считает проход по телу, объявлено ВЫШЕ него, производное — ниже
     init {
-        var lm = false; var lr = false; var lh = false; var lv = false; var bm = false
+        var lm = false; var lr = false; var lh = false; var lv = false; var bm = false; var br = false; var bh = false
         for (p in creep.body) {
             val alive = p.hits > 0
             when (p.type) {
                 ATTACK -> { bm = true; if (alive) lm = true }
-                RANGED_ATTACK -> if (alive) lr = true
-                HEAL -> if (alive) lh = true
+                RANGED_ATTACK -> { br = true; if (alive) lr = true }
+                HEAL -> { bh = true; if (alive) lh = true }
                 MOVE -> if (alive) lv = true
                 else -> {}
             }
         }
         liveMelee = lm; liveRanged = lr; liveHeal = lh; liveMove = lv; bornMelee = bm
+        bornArmed = bm || br; bornCombatant = bm || br || bh
     }
 
     /** Есть живое оружие — ближнее или дальнее. */
     val armed: Boolean = liveMelee || liveRanged
+
+    /** Лекарь: живого оружия нет, живая HEAL есть. */
+    val healerOnly: Boolean = !armed && liveHeal
+    /** Раздет: ни живого оружия, ни живой HEAL. Одно имя на то, что тактик звал `wounded`, а командир — `stripped`. */
+    val stripped: Boolean = !armed && !liveHeal
+    /** В строю: живое оружие или живая HEAL. */
+    val combatant: Boolean = armed || liveHeal
 
     // «ЧИСТЫЙ МИЛИ» — ДВА РАЗНЫХ ФАКТА, и они не сведены намеренно (план, правило 3.4, решение оператора 9): до v442 это
     // были написания А `isMelee(x) && !hasRanged(x)` (23 места) и Б `hasWeapon(x) && hasMelee(x) && !hasRanged(x)` / В

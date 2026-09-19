@@ -477,7 +477,6 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         if (q.ranged > 0.0 || q.melee > 0.0) addrShooters.add(AddrShooter(e.x, e.y, q.ranged, q.melee))
     }
     val addrLive = army.filter { it.hits > 0 }
-    fun healerOnly(f: Creep) = !hasWeapon(f) && hasHeal(f)
     var addrFor: String? = null
     val addrRH = DoubleArray(addrShooters.size); val addrRA = DoubleArray(addrShooters.size)
     val addrMH = DoubleArray(addrShooters.size); val addrMA = DoubleArray(addrShooters.size)
@@ -670,7 +669,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // стоят, и идут по веткам тактика. Их нынешние клетки заняты как «стой»: это препятствия для раздачи и тела для
     // экрана. Разбор v435 (Opus, 32 реплея): 79,8 % лекаре-тиков окна боя лекаря ставили ветки healMate/wall, а не
     // приказ, потому что режим боя против Coldkimchi включён в 25–40 % тиков (outmatched, retreat, posture, nofire)
-    if (healersOnly) for (f in fighters) if (hasWeapon(f) || !hasHeal(f)) {
+    if (healersOnly) for (f in fighters) if (!healerOnly(f)) {
         val key = f.x * 100 + f.y
         out[f.id] = InfluenceMap.cell(f.x, f.y); taken.add(key)
     }
@@ -704,7 +703,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // ХИТОВ, тогда как MetalicaX бьёт ближайшего или лекаря. Сбор раненых у лекаря против добивающего раненых
         // — готовая мишень: мы сами сводим в одну точку тех, в кого он и целится, вместе с лекарем. Признак у бота
         // уже есть и проверен фактом (`huntsWounded`: две модели его выбора сверяются с правдой следующего тика)
-        val medics = if (huntsWounded) (if (rotate) army.filter { it.id != c.id && hasHeal(it) && !hasWeapon(it) } else emptyList())
+        val medics = if (huntsWounded) (if (rotate) army.filter { it.id != c.id && healerOnly(it) } else emptyList())
             else army.filter { it.id != c.id && hasHeal(it) && (rotate || !hasWeapon(it)) }
         place(c, { true }, rescue = true, rank = { p -> danOf(c, p.x * 100 + p.y) * 100 -
             (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() +
@@ -742,12 +741,12 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     fun cellOf(f: Creep): Position = out[f.id] ?: InfluenceMap.cell(f.x, f.y)
     fun foeDist(x: Int, y: Int) = armedEnemies.minOfOrNull { maxOf(abs(x - it.x), abs(y - it.y)) } ?: 99
     val melees = fighters.filter { meleeOnlyLive(it) }
-    val rangeds = fighters.filter { hasWeapon(it) && hasRanged(it) }
-    val healers = fighters.filter { !hasWeapon(it) && hasHeal(it) }
+    val rangeds = fighters.filter { hasRanged(it) }
+    val healers = fighters.filter { healerOnly(it) }
     // РАЗДЕТЫЕ ТОЖЕ ПОД ПРИКАЗОМ (v144): крип, потерявший все боевые части, не попадал НИ В ОДНУ группу — ни
     // оружия, ни лечения, — и приказа не получал вовсе, оставаясь стоять под огнём. Диагноз называл это в каждом
     // разборе: наши раздетые в трёх клетках от его вооружённых 172 крипо-тика из 238, у него 7 из 11
-    val stripped = fighters.filter { !hasWeapon(it) && !hasHeal(it) }
+    val stripped = fighters.filter { unitOf(it).stripped }
     // ...и замысел может быть СВОЙ у каждого крипа (v139, портфельный поиск): армия смешивает поведение
     fun intentOf(c: Creep) = intent
     // клетки лекарей — прибор согласованности `mheal` ниже: сколько мили осталось в дальности лечения
@@ -1216,7 +1215,7 @@ internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, seg: ArmyFireAndHealIn): Army
     commandFire(army + ctx.runners.filter { hasWeapon(it) }, enemyCreeps, focusTarget, focusOrder, fireOf)
     commandHeal(army, enemyCreeps, healOf)
     // ...и отряжённый лекарь без оружия лечит (v240): до этого healAndShoot получал бегунов только с оружием
-    healAndShoot(army + ctx.runners.filter { hasWeapon(it) || hasHeal(it) }, allies, enemyCreeps, focusTarget, focusOrder)
+    healAndShoot(army + ctx.runners.filter { combatant(it) }, allies, enemyCreeps, focusTarget, focusOrder)
     cpuMark("shoot")
     ArmyFireAndHealOut(
     )

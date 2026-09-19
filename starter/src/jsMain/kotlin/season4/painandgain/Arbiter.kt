@@ -26,14 +26,14 @@ internal object Arbiter {
     const val RUNNER_PRIORITY = 2
     const val WOUNDED_PRIORITY = 1
 
-    fun pushRank(ordered: Boolean, melee: Boolean, armed: Boolean, healer: Boolean, wounded: Boolean): Int = when {
+    fun pushRank(ordered: Boolean, melee: Boolean, armed: Boolean, healer: Boolean, stripped: Boolean): Int = when {
         ordered -> when {
             melee -> ORDER_PRIORITY_MELEE
             armed -> ORDER_PRIORITY_RANGED
             healer -> ORDER_PRIORITY_HEAL
             else -> ORDER_PRIORITY
         }
-        wounded -> WOUNDED_PRIORITY
+        stripped -> WOUNDED_PRIORITY
         else -> FIGHTER_PRIORITY
     }
 
