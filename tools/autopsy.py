@@ -3,12 +3,12 @@
 
     tools/autopsy.py <match-id | id-prefix | log-file> [--replay f.replay.json.gz] [--fetch] [--json] [--step 100]
 
-What it reads: our console log (the match store via match-log.py — the API's documents, fetched through the client — or a file written by play.py --logs; the
-replay's own `logs` only as a fallback — the tool records them incompletely) and, when there is one, the full replay from
-arukuka/screeps-arena-tools (both sides' intents and positions per tick; see replay.py for the setup). Replays are
+What it reads: our console log (the match store via match-log.py — the API's documents — or a file written by play.py --logs; the
+replay's own `logs` only as a fallback) and, when there is one, the full replay (both sides' intents and positions per
+tick, `match-log.py replay` — the API's `/replay/<t>` documents in arukuka's on-disk format; see replay.py). Replays are
 looked up as <dir>/<id>.replay.json.gz in --replays (default ~/ScreepsArena/replays, or $ARENA_REPLAYS); --fetch
-downloads a missing one through the running client with the tool under --tools (default
-~/ScreepsArena/screeps-arena-tools, or $ARENA_TOOLS). Without a replay the log-only sections still print.
+downloads a missing one through the API (never through the client's inspector — the operator closed that on
+19.09.2026). Without a replay the log-only sections still print.
 
 What it says, in order: the header (opponent, result, rating, our version); the outcome's form (annihilation or
 points, the tick the score and the damage ledger diverged); the opponent's form by the replay track (blob / line /
@@ -24,7 +24,7 @@ aggregation across matches (tools/ledger.py).
 Everything here used to be five scripts and half an hour per match (tfields, replay summary/track, replay-damage,
 grep counts, a look at the evade lines); the rules at the bottom are the questions those half hours kept asking.
 """
-import argparse, glob, gzip, json, os, re, subprocess, sys, time, importlib.util
+import argparse, glob, gzip, json, os, re, sys, time, importlib.util
 from collections import Counter, defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -838,19 +838,16 @@ def find_replay(gid, args):
         if hits:
             return hits[0]
     if args.fetch and len(gid) == 24:
-        tools = args.tools or os.environ.get('ARENA_TOOLS', '') or os.path.expanduser('~/ScreepsArena/screeps-arena-tools')
-        cli = os.path.join(tools, 'dist', 'src', 'cli.js')
-        node = sorted(glob.glob(os.path.expanduser('~/.gradle/nodejs/*/bin/node')))
-        if not os.path.isfile(cli) or not node:
-            print(f"# no replay tool at {cli} (or no node under ~/.gradle/nodejs); see replay.py for the setup", file=sys.stderr)
+        # through the API, like the logs (match-log.py replay) — never through the client's inspector (19.09.2026)
+        out_dir = dirs[0] if dirs and dirs[0] else ml.REPLAYS
+        try:
+            out = ml.fetch_replay(ml._play().CDP(), gid, out_dir)
+        except Exception as e:  # the client is not running, or the page's fetch failed
+            print(f"# fetch failed: {e}", file=sys.stderr)
             return None
-        out_dir = dirs[0] if dirs and dirs[0] else os.path.expanduser('~/ScreepsArena/replays')
-        os.makedirs(out_dir, exist_ok=True)
-        out = os.path.join(out_dir, f"{gid}.replay.json.gz")
-        r = subprocess.run([node[-1], cli, 'fetch', gid, '-o', out], capture_output=True, text=True)
-        if r.returncode == 0 and os.path.isfile(out):
+        if out and os.path.isfile(out):
             return out
-        print(f"# fetch failed: {(r.stdout + r.stderr).strip()[-300:]}", file=sys.stderr)
+        print(f"# fetch failed: nothing came back for {gid}", file=sys.stderr)
     return None
 
 
@@ -944,8 +941,8 @@ def main():
     ap.add_argument('match', help='match id, a unique prefix of it, or a log file (play.py --logs / match-log.py dump)')
     ap.add_argument('--replay', help='the replay file; default <replays>/<id>.replay.json.gz')
     ap.add_argument('--replays', help='directory of replays (default ~/ScreepsArena/replays or $ARENA_REPLAYS)')
-    ap.add_argument('--fetch', action='store_true', help='fetch a missing replay through the running client (arukuka tools under --tools)')
-    ap.add_argument('--tools', help='screeps-arena-tools checkout (default ~/ScreepsArena/screeps-arena-tools or $ARENA_TOOLS)')
+    ap.add_argument('--fetch', action='store_true', help='fetch a missing replay through the API (match-log.py replay)')
+    ap.add_argument('--tools', help=argparse.SUPPRESS)  # kept for old command lines; arukuka is not called any more
     ap.add_argument('--us', default='temik911', help='username prefix of our side')
     ap.add_argument('--step', type=int, default=100, help='timeline step in ticks')
     ap.add_argument('--json', action='store_true', help='print the measurement as JSON instead of the report')

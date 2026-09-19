@@ -3,21 +3,18 @@
 actually did in a fight. This closes the blind spot of our own console logs: they show our intents and the enemy's
 positions, never the enemy's shots, swings or heals, so "why did we lose the even fight" was a guess until 05.09.2026.
 
-The replay comes from arukuka/screeps-arena-tools (GPL; not vendored — it lives outside the repository). One-time setup:
+The replay is one more document of the server's API — `/api/game/<id>/replay/<t>`, the full state of every object
+for a hundred ticks, with each creep's `actionLog` (whom it attacked, healed, shot) — and it is fetched the way the
+console logs are, by `tools/match-log.py` from the running client's page (the API wants the client's session):
 
-    git clone https://github.com/arukuka/screeps-arena-tools && cd screeps-arena-tools && npm install && npm run build
+    tools/match-log.py replay <match-id>...                # -> ~/ScreepsArena/replays/<id>.replay.json.gz
 
-The Arena client must be running and started BY ITS ABSOLUTE PATH (tools/arena_cdp.py's launch hint does that: the
-tool finds the client with `ps … | grep screeps_arena.app/Contents/MacOS/screeps_arena`, and a client started as
-`./MacOS/screeps_arena` is invisible to it — "Screeps: Arena is not running" while the window is open). Then
-
-    node dist/src/cli.js history "Pain and Gain"             # match ids, results, ratings (Result is the OPPONENT's)
-    node dist/src/cli.js fetch <match-id> -o replays/<id>.replay.json.gz
-
-sends SIGUSR1 to the client (opens its Node inspector on :9229), drives it over CDP to download every replay chunk
-with the client's own session, and writes a delta-encoded `.replay.json.gz` (format: the tool's docs/FORMAT.md; the
-part order in `body` is the real one — "r6m6" is six RANGED_ATTACK parts IN FRONT of six MOVE, which is why 600
-damage disarms a ranged creep). Restart the client afterwards. Then:
+writes a delta-encoded `.replay.json.gz` in the format of arukuka/screeps-arena-tools (its docs/FORMAT.md; verified
+tick for tick against that tool's own output on 19.09.2026 — the two are interchangeable here). The part order in
+`body` is the real one — "r6m6" is six RANGED_ATTACK parts IN FRONT of six MOVE, which is why 600 damage disarms a
+ranged creep. Until 19.09.2026 the replay was pulled with arukuka's `fetch`, which sends the client SIGUSR1, opens its
+Node inspector and drives the download through it, after which the client had to be restarted; the operator closed
+that — the client is not a transport, the API is one call away. Then:
 
     tools/replay.py summary <replay.json.gz> [t0 t1] [--us temik911]
         per side: shots by (kind, target role), mass attacks, adjacent vs ranged heals; melee, healer and ranged

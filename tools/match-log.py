@@ -316,6 +316,308 @@ def cmd_fetch(args):
     print(f"fetched {fetched}, already there {skipped}, missing {missing} -> {STORE}")
 
 
+# ---------------------------------------------------------------- replays
+# The replay is one more document of the same API: `/api/game/<id>/replay/<t>` answers the full state of every
+# object for the ticks t..t+99 (tick 0 alone for t=0), and it wants the same session the logs want. Until 19.09.2026
+# replays were pulled by arukuka/screeps-arena-tools, which sends the client SIGUSR1, opens its Node inspector and
+# drives the download through it — after which the client has to be restarted. The operator closed that: the client
+# is not a transport, the API is one call away, and it is the same call `fetch_game` already makes. What is written
+# here is arukuka's on-disk format (`screeps-arena-replay` v1, its docs/FORMAT.md), so `tools/replay.py`,
+# `tools/autopsy.py` and every analysis script read the two sources alike: static objects once, per-tick deltas
+# (`n` births, `u` moves/hits, `b` bodies, `x` deaths, `a` actions, `s` structures, `w` owners), bodies run-length
+# encoded IN PART ORDER ("r6m6" is six RANGED_ATTACK parts in front of six MOVE).
+REPLAYS = os.path.expanduser(os.environ.get("ARENA_REPLAYS", "~/ScreepsArena/replays"))
+REPLAY_CHUNK = 100
+PART_CODE = {"move": "m", "work": "w", "carry": "c", "attack": "a", "ranged_attack": "r", "tough": "t", "heal": "h"}
+ACTION_CODE = {"attack": "a", "rangedAttack": "r", "rangedMassAttack": "R", "heal": "h", "rangedHeal": "H",
+               "attacked": "A", "healed": "E"}
+TERRAIN_CODE = {"0": "p", "1": "w", "2": "s", "3": "w"}
+
+
+def rle(codes):
+    """Run-length encode a sequence of one-character codes: m m a -> "m2a1"."""
+    out, cur, run = [], None, 0
+    for c in codes:
+        if c == cur:
+            run += 1
+            continue
+        if run:
+            out.append(f"{cur}{run}")
+        cur, run = c, 1
+    if run:
+        out.append(f"{cur}{run}")
+    return "".join(out)
+
+
+def encode_body(body):
+    return rle(PART_CODE.get(p.get("type"), "?") for p in (body or []))
+
+
+def replay_players(outer):
+    """Board slots player1/player2 -> {slot, side, username, userId, color, codeVersion}, the client's own mapping:
+    `usersCode` lists the submitted code pair, and `firstPlayerIndex == 1` puts the second code on the first slot."""
+    inner = outer.get("game") or {}
+    users = outer.get("users") or []
+    codes = outer.get("codes") or []
+    slot_codes = list(inner.get("usersCode") or [])
+    first = int(inner.get("firstPlayerIndex") or 0)
+    if first == 1 and len(slot_codes) >= 2:
+        slot_codes[0], slot_codes[1] = slot_codes[1], slot_codes[0]
+    by_user = {u.get("_id"): u for u in users}
+    by_code = {c.get("_id"): c for c in codes}
+    colors = inner.get("playerColor") or []
+    players = []
+    for i in range(max(len(slot_codes), len(users), 2)):
+        code = by_code.get(slot_codes[i]) if i < len(slot_codes) else None
+        if code:
+            user = by_user.get(code.get("user"))
+        elif first == 1 and len(users) >= 2 and i < 2:
+            user = users[1 - i]
+        else:
+            user = users[i] if i < len(users) else None
+        players.append({"slot": f"player{i + 1}", "side": i, "username": (user or {}).get("username"),
+                        "userId": (user or {}).get("_id"), "color": colors[i] if i < len(colors) else None,
+                        "codeVersion": (code or {}).get("version")})
+    return players, first
+
+
+def replay_result(inner, players, first):
+    """`result.winner` is the score of usersCode[0]: 1 it won, 0 the other did, 0.5 a draw — mapped to board slots."""
+    res = inner.get("result") or {}
+    raw = res.get("winner")
+    status = res.get("status")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return {"winner": None, "winnerName": None, "draw": False, "status": status, "raw": raw}
+    if raw != int(raw):
+        return {"winner": None, "winnerName": None, "draw": True, "status": status, "raw": raw}
+    code_winner = 0 if raw == 1 else 1
+    slot = (1 - code_winner) if first == 1 else code_winner
+    name = players[slot]["username"] if slot < len(players) else None
+    return {"winner": slot, "winnerName": name, "draw": False, "status": status, "raw": raw}
+
+
+class ReplayNormalizer:
+    """Full snapshots in, deltas out — one instance per match, frames pushed in tick order."""
+
+    def __init__(self, game_doc, fetched_at):
+        outer = game_doc.get("game") or {}
+        inner = outer.get("game") or {}
+        self.players, first = replay_players(outer)
+        self.result = replay_result(inner, self.players, first)
+        digits = inner.get("terrain") if isinstance(inner.get("terrain"), str) else ""
+        side = round(len(digits) ** 0.5) if digits else 0
+        self.width = self.height = side
+        self.terrain = rle(TERRAIN_CODE.get(ch, "p") for ch in digits)
+        self.meta = {"shortId": outer.get("shortId"), "gameId": outer.get("_id"),
+                     "url": f"https://arena.screeps.com/game/{outer['shortId']}" if outer.get("shortId") else None,
+                     "fetchedAt": fetched_at, "createdAt": inner.get("createdAt"), "arenaId": outer.get("arena"),
+                     "ticksLimit": (outer.get("meta") or {}).get("ticks"), "ticks": 0,
+                     "players": self.players, "result": self.result, "width": side, "height": side}
+        self.objects = {}
+        self.creeps = {}
+        self.structs = {}
+        self.ticks = []
+        self.seen = set()
+        self.max_tick = 0
+
+    def side_of(self, user):
+        if user is None:
+            return None
+        m = re.fullmatch(r"player(\d+)", str(user))
+        if m:
+            return int(m.group(1)) - 1
+        for p in self.players:
+            if p["userId"] == user or p["username"] == user:
+                return p["side"]
+        return None
+
+    def push(self, frame):
+        k = frame.get("gameTime")
+        if not isinstance(k, int) or k in self.seen:
+            return
+        self.seen.add(k)
+        self.max_tick = max(self.max_tick, k)
+        births, updates, bodies, actions, sdelta, wdelta = [], [], [], [], [], []
+        alive_c, alive_s = set(), set()
+        for o in frame.get("objects") or []:
+            oid = str(o.get("_id"))
+            if o.get("type") == "creep":
+                alive_c.add(oid)
+                body = encode_body(o.get("body"))
+                spawning = 1 if o.get("spawning") else 0
+                fatigue = o.get("fatigue") if isinstance(o.get("fatigue"), (int, float)) else 0
+                prev = self.creeps.get(oid)
+                if prev is None:
+                    births.append([oid, self.side_of(o.get("user")), o.get("x"), o.get("y"), o.get("hits"),
+                                   o.get("hitsMax"), body, spawning])
+                    self.creeps[oid] = [o.get("x"), o.get("y"), o.get("hits"), fatigue, spawning, body]
+                else:
+                    now = [o.get("x"), o.get("y"), o.get("hits"), fatigue, spawning]
+                    if prev[:5] != now:
+                        updates.append([oid] + now)
+                        prev[:5] = now
+                    if prev[5] != body:
+                        bodies.append([oid, body])
+                        prev[5] = body
+            else:
+                alive_s.add(oid)
+                side = self.side_of(o.get("user"))
+                hits = o.get("hits") if isinstance(o.get("hits"), (int, float)) else 0
+                store = o.get("store") or {}
+                energy = store.get("energy") if isinstance(store.get("energy"), (int, float)) else 0
+                st = self.structs.get(oid)
+                if st is None:
+                    cap = (o.get("storeCapacityResource") or {}).get("energy")
+                    self.objects[oid] = {"id": oid, "kind": o.get("type"), "side": side, "x": o.get("x"),
+                                         "y": o.get("y"), "hits": hits,
+                                         "hitsMax": o.get("hitsMax") if isinstance(o.get("hitsMax"), (int, float)) else 0,
+                                         "energy": energy, "energyCapacity": cap if isinstance(cap, (int, float)) else 0,
+                                         "controlledBy": o.get("controlledBy")}
+                    self.structs[oid] = [hits, energy, side]
+                else:
+                    if st[0] != hits or st[1] != energy:
+                        sdelta.append([oid, hits, energy])
+                        st[0], st[1] = hits, energy
+                    if st[2] != side:
+                        wdelta.append([oid, side])
+                        st[2] = side
+            log = o.get("actionLog")
+            if isinstance(log, dict):
+                for name, value in log.items():
+                    if value is None:
+                        continue
+                    code = ACTION_CODE.get(name, name)
+                    if isinstance(value, dict) and isinstance(value.get("x"), (int, float)):
+                        actions.append([oid, code, value.get("x"), value.get("y")])
+                    else:
+                        actions.append([oid, code])
+        dead = [cid for cid in self.creeps if cid not in alive_c]
+        for cid in dead:
+            del self.creeps[cid]
+        for sid, st in self.structs.items():
+            if sid in alive_s or st[0] == 0:
+                continue
+            st[0], st[1] = 0, 0
+            sdelta.append([sid, 0, 0])
+        tick = {"k": k}
+        for key, val in (("n", births), ("u", updates), ("b", bodies), ("x", dead), ("a", actions), ("s", sdelta),
+                         ("w", wdelta)):
+            if val:
+                tick[key] = val
+        self.ticks.append(tick)
+
+    def finish(self, logs):
+        self.meta["ticks"] = self.max_tick
+        return {"format": "screeps-arena-replay", "version": 1, "meta": self.meta, "terrain": self.terrain,
+                "objects": list(self.objects.values()), "ticks": self.ticks, "logs": logs, "extensions": {}}
+
+
+def fetch_replay_chunk(c, gid, t):
+    """One `/api/game/<id>/replay/<t>` body as it came, or None: the frames are big (a few MB per chunk), so they are
+    asked for one chunk at a time and never all at once; the same retry-once as `fetch_game`."""
+    body = c.json_eval(f"""(async () => {{
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      for (let attempt = 0; attempt < 2; attempt++) {{
+        try {{
+          const r = await fetch('{API}/game/{gid}/replay/{t}', {{credentials: 'include'}});
+          if (!r.ok) return JSON.stringify({{status: r.status}});
+          return JSON.stringify({{body: await r.text()}});
+        }} catch (e) {{ if (attempt) return JSON.stringify({{status: 0}}); await sleep(250); }}
+      }}
+      return JSON.stringify({{status: 0}});
+    }})()""")
+    if not body or "body" not in body:
+        return None
+    try:
+        return json.loads(body["body"])
+    except ValueError:
+        return None
+
+
+def store_logs(gid, store=STORE):
+    """The stored console chunks as {tick: text}, for the replay's `logs`."""
+    logs = {}
+    d = os.path.join(store, gid)
+    if not os.path.isdir(d):
+        return logs
+    for n in sorted(os.listdir(d)):
+        if not n.startswith("log-"):
+            continue
+        try:
+            with open(os.path.join(d, n), encoding="utf-8") as f:
+                for t, text in json.load(f).items():
+                    if isinstance(text, str) and text:
+                        logs[str(t)] = text
+        except (OSError, ValueError):
+            continue
+    return logs
+
+
+def fetch_replay(c, gid, out_dir=REPLAYS, refresh=False, progress=None):
+    """Fetch one match's replay through the API and write `<out_dir>/<gid>.replay.json.gz`; returns the path or None.
+
+    Also puts the match document and console into the store on the way (they are the same two calls the store
+    makes), so `list`/`dump`/autopsy see a match whose replay was asked for first."""
+    out = os.path.join(out_dir, f"{gid}.replay.json.gz")
+    if os.path.isfile(out) and not refresh:
+        return out
+    if refresh or not os.path.isfile(os.path.join(STORE, gid, "game.json")):
+        fetch_into_store(c, gid, refresh=refresh)
+    game_path = os.path.join(STORE, gid, "game.json")
+    if not os.path.isfile(game_path):
+        return None
+    with open(game_path, encoding="utf-8") as f:
+        game_doc = json.load(f)
+    total = ((game_doc.get("game") or {}).get("meta") or {}).get("ticks")
+    if not isinstance(total, int):
+        return None
+    norm = ReplayNormalizer(game_doc, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    targets = [0] + list(range(REPLAY_CHUNK, total, REPLAY_CHUNK))
+    if total > 0 and targets[-1] != total:
+        targets.append(total)
+    got = 0
+    for i, t in enumerate(targets):
+        frames = fetch_replay_chunk(c, gid, t)
+        if not isinstance(frames, list):
+            if got == 0:
+                return None
+            break
+        for fr in frames:
+            norm.push(fr)
+        got += 1
+        if progress:
+            progress(i + 1, len(targets), t)
+    doc = norm.finish(store_logs(gid))
+    os.makedirs(out_dir, exist_ok=True)
+    tmp = out + ".part"
+    with gzip.open(tmp, "wt", encoding="utf-8") as f:
+        json.dump(doc, f, separators=(",", ":"))
+    os.replace(tmp, out)
+    return out
+
+
+def cmd_replay(args):
+    play = _play()
+    c = play.CDP()
+    out_dir = args.out_dir or REPLAYS
+    done = skipped = missing = 0
+    for gid in args.games:
+        before = os.path.isfile(os.path.join(out_dir, f"{gid}.replay.json.gz"))
+        if before and not args.refresh:
+            skipped += 1
+            continue
+        path = fetch_replay(c, gid, out_dir, refresh=args.refresh,
+                            progress=lambda i, n, t: print(f"\r{gid}: chunk {i}/{n} (tick {t})", end="", flush=True))
+        print()
+        if path:
+            done += 1
+            print(f"{gid}: {path} ({os.path.getsize(path) // 1024} KB)")
+        else:
+            missing += 1
+            print(f"{gid}: nothing came back")
+    print(f"fetched {done}, already there {skipped}, missing {missing} -> {out_dir}")
+
+
 # ---------------------------------------------------------------- commands
 def cmd_list(args):
     logs, metas = scan()
@@ -360,6 +662,11 @@ def main():
     p.add_argument("--arena", help="arena name prefix for --history, e.g. pain-and-gain")
     p.add_argument("--refresh", action="store_true", help="fetch again even if the store has the match")
     p.set_defaults(func=cmd_fetch)
+    p = sub.add_parser("replay", help="fetch matches' replays through the API into ~/ScreepsArena/replays (arukuka's format)")
+    p.add_argument("games", nargs="+", help="game ids (24 hex)")
+    p.add_argument("--out-dir", help=f"where to write <id>.replay.json.gz (default {REPLAYS})")
+    p.add_argument("--refresh", action="store_true", help="fetch again even if the replay is there")
+    p.set_defaults(func=cmd_replay)
     p = sub.add_parser("list", help="list stored matches, newest last")
     p.add_argument("--arena", help="substring of the arena name, e.g. spawn-and-swamp")
     p.add_argument("--limit", type=int, default=20)
