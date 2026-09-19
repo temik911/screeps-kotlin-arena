@@ -494,14 +494,7 @@ object PainAndGain {
         )
         for (creep in army) creepTurn(creep, ctx, tick)
 
-        val armyFireAndHealSeg = armyFireAndHeal(ctx, ArmyFireAndHealIn(
-            army = army,
-            allies = allies,
-            enemyCreeps = enemyCreeps,
-            combatEnemies = combatEnemies,
-            focusTarget = focusTarget,
-            focusOrder = focusOrder,
-        ))
+        val armyFireAndHealSeg = armyFireAndHeal(ctx, armyMeasuresSeg, armyTargetsSeg)
     }
 
     /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
