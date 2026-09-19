@@ -86,8 +86,19 @@ def rows(args):
     """The matches of interest, oldest first, each as match-log.describe() plus its chunk paths."""
     logs, metas = matchlog.scan()
     out = []
+    # --relabel (tools/play.py --ab): the two sides of an A/B may carry the SAME bot version in their greeting — two
+    # commits of a mechanical change, or one tag played against itself — so the side is given per game id, and only the
+    # games of the map are read: {"<game id>": 1 | 2}
+    relabel = None
+    if getattr(args, "relabel", None):
+        with open(args.relabel, encoding="utf-8") as fh:
+            relabel = json.load(fh)
     for game in logs:
+        if relabel is not None and game not in relabel:
+            continue
         r = matchlog.describe(game, logs, metas)
+        if relabel is not None:
+            r["version"] = int(relabel[game])
         if args.arena and args.arena not in r["arena"]:
             continue
         if getattr(args, "version", None) and r["version"] not in args.version:
@@ -99,7 +110,7 @@ def rows(args):
         out.append(r)
     out.sort(key=lambda r: r["when"])
     limit = getattr(args, "limit", 0)
-    if limit and not getattr(args, "all", False):
+    if limit and not getattr(args, "all", False) and relabel is None:
         out = out[-limit:]
     return out
 
@@ -371,6 +382,8 @@ common = argparse.ArgumentParser(add_help=False)
 common.add_argument("--arena", default="spawn-and-swamp", help="substring of the arena name")
 common.add_argument("--limit", type=int, default=40, help="how many of the most recent matches to read")
 common.add_argument("--all", action="store_true", help="every stored match, not just the last --limit")
+common.add_argument("--relabel", metavar="FILE", help="a JSON map {game id: side} written by `play.py --ab`: read ONLY these games and "
+                    "take the side (1 or 2) as the bot version, so two builds with one greeting can be compared")
 
 def cmd_field(args):
     rs = rows(args)

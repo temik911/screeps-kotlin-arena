@@ -14,6 +14,8 @@ the client itself runs up to three series at once and the server keeps one match
     tools/play.py pain-and-gain --history 20                # the arena's last matches FROM THE SERVER: id, opponent, result, rating
     tools/play.py pain-and-gain --test-list                 # who can be played UNRATED: system, recent opponents, favorites
     tools/play.py pain-and-gain --test 'MetalicaX#10' -n 5  # five UNRATED games against that one bot of his
+    tools/play.py pain-and-gain --ab pain-and-gain-v449 pain-and-gain-v450 --test 'MetalicaX#10' -n 8   # a live A/B, one command
+    tools/play.py pain-and-gain --ab <refA> <refB> --dry    # the same machinery without the client and without a game
 
 `--history` reads results from the server (`/api/arena/<id>/rating-history` has every rating match); the match documents themselves go into the store `tools/match-log.py` keeps (`~/ScreepsArena/games/<id>/`) as each match ends — nothing is read from the client's cache. What the server does not know is which build played
 a match: that is the bot's greeting line in the console, so `--history` shows the code version the server assigned (a
@@ -29,6 +31,19 @@ against ONE chosen bot of his and moves NO rating (measured 08.09.2026: a game a
 rating games were against, each with the code version it played) and `favorites`, which are pinned in the client. Test
 matches land in the same store, so `tools/autopsy.py`, `series.py` and `replay.py` read them like any other; they are
 the way to price a change against a specific opponent without paying rating for it.
+
+`--ab <refA> <refB>` is a live A/B in one command (20.09.2026; before it: two builds and a series by hand, three to four
+hours of attention). Each ref — a tag, a branch, a commit — gets a temporary worktree (`git worktree add --detach` under
+`.claude/worktrees/ab-<sha>`) and its own `./gradlew build`; the payload is the arena's client folder with its
+`node_modules/screeps-kotlin-arena-starter` taken from THAT worktree's build instead of the symlink, so the session's own
+worktree is not touched and can keep working. The hands alternate A, B, A, B… against ONE bot (`--test`, unrated; `-n` is
+hands PER SIDE), because the only control over a drifting opponent pool and a warming client is interleaving. At the end
+the games of each side go to `tools/series.py compare / shares / reach` through `--relabel` — by game id, not by the
+greeting's version, so two commits of one version, or a tag against itself, can be compared. `--dry` runs the same
+machinery with no client and no game: both worktrees, both builds, both payloads (their content digests are printed — two
+identical refs must give identical payloads), and each side's hand is the arena's own stub gate
+(`tools/stub/<arena>/regress.sh`, clock off); the two reports and, where the arena has a `logdiff.py`, the two log sets
+must not differ. That is the self-test: an A/B of a ref against itself that shows a difference is measuring the machinery.
 """
 import argparse, importlib.util, base64, io, json, os, sys, time, uuid, zipfile
 
@@ -116,6 +131,137 @@ def build_zip(folder):
     if not any(i.filename == "main.mjs" for i in zipfile.ZipFile(io.BytesIO(data)).infolist()):
         raise SystemExit(f"{folder} has no main.mjs — the client folder is not wired to a build")
     return data, n
+
+
+def build_zip_from(folder, starter):
+    """The client folder's payload with `node_modules/screeps-kotlin-arena-starter` taken from `starter` (a worktree's
+    build) instead of whatever the folder's symlink points at — so one client folder serves both sides of an A/B."""
+    pkg = "node_modules/screeps-kotlin-arena-starter"
+    buf, n = io.BytesIO(), 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for dirpath, dirs, files in os.walk(folder, followlinks=False):
+            rel = os.path.relpath(dirpath, folder)
+            dirs[:] = [d for d in dirs if not (rel == "node_modules" and d == "screeps-kotlin-arena-starter")]
+            if rel != "." and IGNORE_DIRS & set(rel.split(os.sep)):
+                continue
+            for f in files:
+                if rel == "." and f in IGNORE_ROOT_FILES:
+                    continue
+                full = os.path.join(dirpath, f)
+                if os.path.islink(full) and os.path.isdir(full):
+                    continue
+                z.write(full, f if rel == "." else os.path.join(rel, f).replace(os.sep, "/")); n += 1
+        for dirpath, _dirs, files in os.walk(starter, followlinks=True):
+            rel = os.path.relpath(dirpath, starter)
+            for f in files:
+                arc = pkg + "/" + (f if rel == "." else os.path.join(rel, f).replace(os.sep, "/"))
+                try:
+                    z.write(os.path.join(dirpath, f), arc); n += 1
+                except OSError:
+                    pass
+    data = buf.getvalue()
+    names = [i.filename for i in zipfile.ZipFile(io.BytesIO(data)).infolist()]
+    if "main.mjs" not in names or not any(x.startswith(pkg + "/") for x in names):
+        raise SystemExit(f"payload from {folder} + {starter} has no main.mjs or no starter package — is the worktree built?")
+    return data, n
+
+
+def payload_digest(data, worktree):
+    """A digest of the payload's CONTENT (names and bytes, not zip timestamps): equal refs must give equal digests. The
+    path of the worktree that built it is not content — `SourceMapRegistry.mjs` carries it as `sourceRoot`, the `.map`
+    files as source paths — so it is replaced by a placeholder before hashing (measured on the first dry run: that one
+    line was the whole difference between two builds of one commit)."""
+    import hashlib
+    h = hashlib.sha256()
+    z = zipfile.ZipFile(io.BytesIO(data))
+    root = os.path.realpath(worktree).encode()
+    for name in sorted(z.namelist()):
+        h.update(name.encode()); h.update(b"\0")
+        h.update(z.read(name).replace(root, b"<worktree>").replace(worktree.encode(), b"<worktree>")); h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
+# ---------------------------------------------------------------- A/B: two refs, two worktrees, alternating hands
+def _git(*args, cwd=None):
+    import subprocess
+    r = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    if r.returncode:
+        raise SystemExit(f"git {' '.join(args)}: {r.stderr.strip()}")
+    return r.stdout.strip()
+
+
+def ab_worktree(ref, label):
+    """A detached temporary worktree of `ref`, built. Reused when it is already there at the same commit. The side's label
+    is part of the path: a ref played against itself still gets TWO worktrees and two builds — otherwise the self-test
+    would compare one directory with itself."""
+    import subprocess
+    top = _git("rev-parse", "--show-toplevel")
+    common = os.path.dirname(os.path.abspath(os.path.join(top, _git("rev-parse", "--git-common-dir"))))
+    sha = _git("rev-parse", "--verify", ref + "^{commit}")
+    wt = os.path.join(common, ".claude", "worktrees", f"ab-{label}-{sha[:10]}")
+    if not os.path.isdir(wt):
+        _git("worktree", "add", "--detach", wt, sha)
+        print(f"ab: worktree {wt} at {ref} ({sha[:10]})", flush=True)
+    elif _git("rev-parse", "HEAD", cwd=wt) != sha:
+        raise SystemExit(f"ab: {wt} exists at another commit — remove it with `git worktree remove --force {wt}`")
+    print(f"ab: building {ref} in {wt}", flush=True)
+    r = subprocess.run(["./gradlew", "build", "-q"], cwd=wt, capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f"ab: build of {ref} failed:\n{(r.stdout + r.stderr)[-2000:]}")
+    starter = os.path.join(wt, "build", "js", "packages", "screeps-kotlin-arena-starter")
+    if not os.path.isdir(starter):
+        raise SystemExit(f"ab: {starter} is missing after the build")
+    return wt, starter, sha
+
+
+def ab_cleanup(wts):
+    for wt in wts:
+        try:
+            _git("worktree", "remove", "--force", wt)
+            print(f"ab: removed {wt}")
+        except SystemExit as e:
+            print(f"ab: could not remove {wt}: {e}")
+
+
+def ab_dry(arena_slug, sides):
+    """The A/B without the client: each side's hand is its own stub gate with the clock off; nothing may differ between
+    two identical refs. Returns the number of differences found (report lines + logdiff's verdict)."""
+    import subprocess
+    stub = os.path.join("tools", "stub", arena_slug.replace("-", ""))
+    reports, diffs = [], 0
+    for label, (wt, _starter, _sha, ref) in sides.items():
+        sh = os.path.join(wt, stub, "regress.sh")
+        if not os.path.isfile(sh):
+            raise SystemExit(f"ab --dry: {ref} has no {stub}/regress.sh — this arena has no stub to play the dry hand on")
+        print(f"ab --dry: hand {label} ({ref}) — {stub}/regress.sh land, clock off", flush=True)
+        for f in os.listdir(os.path.join(wt, stub, "out")) if os.path.isdir(os.path.join(wt, stub, "out")) else []:
+            if f.startswith("run-land-"):
+                os.remove(os.path.join(wt, stub, "out", f))
+        env = dict(os.environ, NOCLOCK="1"); env.pop("ONLY", None)
+        r = subprocess.run(["zsh", sh, "land"], cwd=wt, capture_output=True, text=True, env=env)
+        lines = [l for l in r.stdout.split("\n") if l.strip()]
+        bad = [l for l in lines if not ("PASS" in l or "ENEMY SPAWN DESTROYED" in l) or "errors: 0 " not in l]
+        print(f"ab --dry: hand {label}: {len(lines)} lines, not PASS {len(bad)}")
+        reports.append(lines)
+    a, b = reports
+    changed = [(x, y) for x, y in zip(a, b) if x != y]
+    diffs += len(changed) + abs(len(a) - len(b))
+    print(f"ab --dry: gate reports — {len(a)} against {len(b)} lines, differing {len(changed)}")
+    for x, y in changed[:5]:
+        print(f"   A: {x}\n   B: {y}")
+    (wa, *_), (wb, *_) = sides["A"], sides["B"]
+    ld = os.path.join(wb, stub, "logdiff.py")
+    if os.path.isfile(ld):
+        r = subprocess.run([sys.executable, ld, "--old", os.path.join(wa, stub, "out"), "--new", os.path.join(wb, stub, "out")],
+                           capture_output=True, text=True, cwd=wb)
+        head = (r.stdout.strip().split("\n") or [""])
+        print("ab --dry: instruments (logdiff A -> B) — " + head[0])
+        for l in head[1:4]:
+            print("   " + l)
+        diffs += 0 if r.returncode == 0 else 1
+    else:
+        print(f"ab --dry: {stub} has no logdiff.py — the instruments are compared by the gate report only")
+    return diffs
 
 
 def push_zip(c, data):
@@ -360,7 +506,91 @@ def main():
     ap.add_argument("--test-list", action="store_true", help="list the bots available for unrated test games and exit")
     ap.add_argument("--history", type=int, metavar="N", help="print the arena's last N rating matches from the server and exit")
     ap.add_argument("--us", default="temik911", help="our username prefix (for --history)")
+    ap.add_argument("--ab", nargs=2, metavar=("REF_A", "REF_B"), help="a live A/B of two refs (tags, branches, commits): temporary worktrees, "
+                    "alternating hands against the --test bot, -n hands PER SIDE, then series.py compare / shares / reach")
+    ap.add_argument("--dry", action="store_true", help="with --ab: no client and no game — both builds, both payloads, each side's hand is the arena's stub gate")
+    ap.add_argument("--keep", action="store_true", help="with --ab: leave the temporary worktrees in place")
     a = ap.parse_args()
+
+    if a.ab:
+        if not a.arena:
+            raise SystemExit("--ab needs the arena")
+        if not a.dry and not a.test:
+            raise SystemExit("--ab plays UNRATED hands against one bot: name it with --test (or use --dry)")
+        sides = {}
+        for label, ref in zip("AB", a.ab):
+            wt, starter, sha = ab_worktree(ref, label)
+            sides[label] = (wt, starter, sha, ref)
+        folder = None
+        try:
+            want = a.arena.lower().replace("-", "_")
+            hits = [d for d in sorted(os.listdir(CLIENT_ROOT)) if want in d and os.path.isdir(os.path.join(CLIENT_ROOT, d))] if os.path.isdir(CLIENT_ROOT) else []
+            folder = os.path.join(CLIENT_ROOT, hits[-1]) if hits else None
+        except OSError:
+            folder = None
+        payloads = {}
+        if folder:
+            for label, (wt, starter, sha, ref) in sides.items():
+                data, files = build_zip_from(folder, starter)
+                payloads[label] = data
+                print(f"ab: payload {label} ({ref}, {sha[:10]}): {files} files, {len(data)/1024/1024:.2f} MB, content {payload_digest(data, wt)}")
+        elif not a.dry:
+            raise SystemExit(f"no client folder for {a.arena!r} under {CLIENT_ROOT}")
+        if a.dry:
+            arena_slug = a.arena if "-" in a.arena else a.arena
+            diffs = ab_dry(arena_slug, sides)
+            if payloads and sides["A"][2] == sides["B"][2]:
+                same = payload_digest(payloads["A"], sides["A"][0]) == payload_digest(payloads["B"], sides["B"][0])
+                print(f"ab --dry: the two refs are one commit — payloads {'identical' if same else 'DIFFER'}")
+                diffs += 0 if same else 1
+            print(f"ab --dry: {'no difference between the sides' if not diffs else str(diffs) + ' DIFFERENCES between the sides'}")
+            if not a.keep:
+                ab_cleanup({v[0] for v in sides.values()})
+            raise SystemExit(1 if diffs else 0)
+        c = CDP()
+        arena = pick(c, a.arena)
+        s = slot(c, arena["id"])
+        if s["game"] and s["status"] != "finished":
+            raise SystemExit(f"{arena['name']}: a match is already running ({s['game']})")
+        row = resolve_test(test_codes(c, arena["id"]), a.test)
+        who = f"{row['name']}#{row['version']}" if row["version"] else row["name"]
+        print(f"ab: {a.count} hands per side against {who} (code {row['codeId']}) — unrated, alternating A, B, A, B…")
+        if a.logs:
+            os.makedirs(a.logs, exist_ok=True)
+        games, tally = {}, {"A": {"won": 0, "lost": 0, "draw": 0}, "B": {"won": 0, "lost": 0, "draw": 0}}
+        for i in range(1, a.count + 1):
+            for label in "AB":
+                push_zip(c, payloads[label])            # the page holds ONE payload of ours: every hand sends its own side's
+                r = start(c, arena["id"], code_id=row["codeId"])
+                if r["status"] not in (200, 201) or not r.get("id"):
+                    print(f"ab {i}{label}: start failed ({r['status']} {r.get('err')}) {r.get('raw') or ''}")
+                    break
+                gid = r["id"]
+                st = wait(c, gid)
+                res = outcome(st)
+                tally[label][res] = tally[label].get(res, 0) + 1
+                games[gid] = 1 if label == "A" else 2
+                path = os.path.join(a.logs, f"{time.strftime('%m%d-%H%M')}-{label}-{res}-{gid[-6:]}.txt") if a.logs else None
+                n = save_match(c, gid, path)
+                print(f"ab {i}/{a.count} {label} ({sides[label][3]}) {gid} {res:<6} | {n} ticks stored", flush=True)
+        c.eval(f"delete window[{json.dumps(SLOT)}]; 1")
+        c.close()
+        for label in "AB":
+            print(f"ab: {label} ({sides[label][3]}): " + ", ".join(f"{k} {v}" for k, v in tally[label].items() if v))
+        os.makedirs("runs", exist_ok=True)
+        relabel = os.path.join("runs", f"ab-{time.strftime('%m%d-%H%M')}.json")
+        with open(relabel, "w", encoding="utf-8") as fh:
+            json.dump(games, fh, indent=1)
+        print(f"ab: sides by game id -> {relabel} (1 = A = {a.ab[0]}, 2 = B = {a.ab[1]})")
+        import subprocess
+        series = os.path.join(os.path.dirname(os.path.abspath(__file__)), "series.py")
+        arena_arg = ["--arena", slug(arena["name"]), "--relabel", relabel]
+        for cmd in (["compare", "1", "2"], ["shares", "--control", "1", "--final", "2", "--every"], ["reach", "--version", "1"], ["reach", "--version", "2"]):
+            print(f"\n==== series.py {' '.join(cmd)}", flush=True)
+            subprocess.run([sys.executable, series, *cmd, *arena_arg])
+        if not a.keep:
+            ab_cleanup({v[0] for v in sides.values()})
+        return
 
     c = CDP()
     if a.list or not a.arena:
