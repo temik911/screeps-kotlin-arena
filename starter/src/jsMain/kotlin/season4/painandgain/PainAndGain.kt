@@ -103,7 +103,7 @@ object PainAndGain {
     internal var flagsNow: List<FlagInfo> = emptyList()
     /** Факты крипов ЭТОГО тика (Facts.kt) — та же таблица, что `Ctx.units`; ссылка, а не таблица: `buildWorld` первым делом
      *  ставит сюда новый объект, прошлый тик (в том числе оборванный) в нём не живёт. Читают обёртки `hasMelee` и родня. */
-    internal var unitsNow: Units = Units(emptyList())
+    internal var unitsNow: TickFacts = TickFacts(emptyList())
 
 
 

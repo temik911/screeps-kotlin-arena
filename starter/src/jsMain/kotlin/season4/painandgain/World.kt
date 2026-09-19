@@ -85,7 +85,7 @@ internal class Ctx(
     val ourCentroid: Position,
     val enemyCentroid: Position?,
     /** Факты крипов тика (Facts.kt): строятся заново каждый тик, живут вместе с `Ctx`. */
-    val units: Units,
+    val units: TickFacts,
     /** Его бойцы, которые грозят (см. threatening): сами с оружием либо с чужим стволом в досягаемости лечения. */
     val threats: List<Creep>,
 ) {
@@ -1080,7 +1080,7 @@ internal fun PainAndGain.buildWorld(): BuildWorldOut {
     val myCreeps = getObjectsByPrototype(Creep::class).filter { it.my && it.exists }
     val enemyCreeps = getObjectsByPrototype(Creep::class).filter { !it.my && it.exists && !it.spawning }
     // словарь фактов тика (Facts.kt) — до первого ролевого теста: всё ниже читает его через unitOf
-    val units = Units(myCreeps + enemyCreeps)
+    val units = TickFacts(myCreeps + enemyCreeps)
     unitsNow = units
     val active = myCreeps.filter { !it.spawning }
     val combatEnemies = enemyCreeps.filter { val p = InfluenceMap.profileOf(it); p.melee + p.ranged + p.heal > 0.0 }

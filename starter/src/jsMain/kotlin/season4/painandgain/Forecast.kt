@@ -130,8 +130,8 @@ internal object Forecast {
         val them = his.map { mk(it, false) }
         // цель фокуса внутри симуляции: наши бьют её, пока достают, — так план и цель выбираются вместе (v138)
         val focusIdx = focus?.let { f -> his.indexOfFirst { it.id == f.id } } ?: -1
-        var strikeAll: () -> kotlin.Unit = {}
-        var healAll: () -> kotlin.Unit = {}
+        var strikeAll: () -> Unit = {}
+        var healAll: () -> Unit = {}
         val goal = HashMap<Int, Position>()
         mine.forEachIndexed { i, c -> plan[c.id]?.let { goal[i] = it } }
         fun d(a: SimC, b: SimC) = maxOf(abs(a.x - b.x), abs(a.y - b.y))
@@ -297,7 +297,7 @@ internal object Forecast {
     /** ЕГО ПРАВИЛО «НАИМЕНЬШАЯ ДОЛЯ ХИТОВ» (v275, модель ●ω<♥♪#6 по 97 играм): ствол бьёт нашего крипа с наименьшей
      *  долей хитов в досягаемости — 100 % из 24 903 выстрелов с выбором; при равенстве долей — лекарь, затем ближайший.
      *  Какое из двух правил у текущего соперника, решает сверка с фактом (см. rotateByFocus). */
-    internal fun fracTargetOf(units: Units, shooter: Creep, live: List<Creep>, reach: Int): Creep? {
+    internal fun fracTargetOf(units: TickFacts, shooter: Creep, live: List<Creep>, reach: Int): Creep? {
         var best: Creep? = null; var bestFrac = 2.0; var bestHealer = false; var bestD = 99
         for (f in live) {
             val d = getRange(shooter, f)
@@ -312,7 +312,7 @@ internal object Forecast {
         return best
     }
 
-    internal fun wallTargetOf(units: Units, shooter: Creep, live: List<Creep>, reach: Int): Creep? {
+    internal fun wallTargetOf(units: TickFacts, shooter: Creep, live: List<Creep>, reach: Int): Creep? {
         var best: Creep? = null; var bestKey = Double.MAX_VALUE; var bestHealer = false
         for (f in live) {
             val d = getRange(shooter, f)

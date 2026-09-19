@@ -157,7 +157,7 @@ internal object Formation {
      *  ИДЁТ, но контакта ещё нет, командир строит фронт: ось — направление на его центр, мили на ближней к нему линии,
      *  стрелки за ними, лекари в тылу. Это не отвергнутый USE_COMMANDER_APPROACH: тот вёл армию ВПЛОТНУЮ к врагу
      *  раздачей клеток по его строю, а здесь никто не сближается — строй ставится вокруг своего же якоря. */
-    fun brace(units: Units, army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, Position>) {
+    fun brace(units: TickFacts, army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, Position>) {
         out.clear()
         val core = army.filter { units.of(it).liveMove && !it.spawning }
         if (core.size < 3 || enemies.isEmpty()) return
@@ -207,7 +207,7 @@ internal object Formation {
 
     /** КОЛОННА МАРША: от якоря (ax, ay) по направлению (sx, sy), которое вызывающий берёт из поля потока; крип дальше
      *  FIST_RADIUS от якоря идёт к якорю, остальные — на два шага по оси; шаг выбирается из восьми соседей. */
-    fun marchColumn(units: Units, core: List<Creep>, ax: Int, ay: Int, sx: Int, sy: Int, out: MutableMap<String, Position>) {
+    fun marchColumn(units: TickFacts, core: List<Creep>, ax: Int, ay: Int, sx: Int, sy: Int, out: MutableMap<String, Position>) {
         val taken = HashSet<Int>()
         // ...и марш даёт те же гарантии, что бой (v173): клетка не занята своим, крип способен шагнуть, одна клетка —
         // одному. Прежде колонна раздавала клетки своим кодом без этих проверок, и приказы выходили неисполнимыми

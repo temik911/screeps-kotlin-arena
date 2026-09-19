@@ -17,13 +17,13 @@ import screeps.api.RANGED_ATTACK
  * инлайном в каждой ветке, и написания разошлись. Написание, сведённое сюда, не возвращается инлайном — это держит
  * `tools/stub/painandgain/lint.py`, строка `lint` гейта.
  *
- * ⚠️ Имя класса — из плана, и оно заслоняет `kotlin.Unit` во всём пакете: тип «ничего» здесь пишется `kotlin.Unit`
- * (так в `Forecast.kt`: `() -> kotlin.Unit`). Ошибка громкая — компилятор откажет, молча смысл не меняется.
+ * Имена классов — `CreepFacts` (факты одного крипа) и `TickFacts` (таблица тика) с v448: план звал их `Unit` / `Units`,
+ * и `Unit` заслонял `kotlin.Unit` во всём пакете — тип «ничего» приходилось писать полностью (`() -> kotlin.Unit`).
  *
  * Кэш корректен, потому что тело крипа внутри нашего `loop()` не меняется: единственный писатель API — `Executor` в
  * конце тика, а `Forecast.simulate` считает на своих профилях и `creep.body` не правит.
  */
-internal class Unit(val creep: Creep) {
+internal class CreepFacts(val creep: Creep) {
     /** Ключ клетки, на которой крип стоит в этом тике. */
     val key: Int = creep.x * 100 + creep.y
 
@@ -82,13 +82,13 @@ internal class Unit(val creep: Creep) {
  * в объекте-синглтоне вне списка владельцев `AbortRepair`, повторяет дефект v222 (оборванный тик оставляет хеш-таблицу
  * посреди перестройки, и следующая вставка виснет). Новый объект на тик оборванного тика не наследует.
  */
-internal class Units(creeps: List<Creep>) {
-    private val byId = HashMap<String, Unit>()
+internal class TickFacts(creeps: List<Creep>) {
+    private val byId = HashMap<String, CreepFacts>()
 
-    init { for (c in creeps) byId[c.id] = Unit(c) }
+    init { for (c in creeps) byId[c.id] = CreepFacts(c) }
 
     /** Факты крипа; крип, которого в снимке тика не было, считается на месте — тем же определением. */
-    fun of(creep: Creep): Unit = byId[creep.id] ?: Unit(creep).also { byId[creep.id] = it }
+    fun of(creep: Creep): CreepFacts = byId[creep.id] ?: CreepFacts(creep).also { byId[creep.id] = it }
 }
 
 /** Ключ клетки: `x * 100 + y`. `inline` даёт тот же скомпилированный код, что и написание инлайном. */
@@ -100,8 +100,8 @@ internal inline val Position.key: Int get() = x * 100 + y
 
 // ==================== обёртки над фактами тика (до v446 жили в World.kt; читают таблицу тика `unitsNow` у получателя) ====================
 
-/** Факты крипа в этом тике (см. Facts.kt). Обёртки ниже — тонкие: определение каждого факта одно, в `Unit`. */
-internal fun PainAndGain.unitOf(creep: Creep): Unit = unitsNow.of(creep)
+/** Факты крипа в этом тике (см. Facts.kt). Обёртки ниже — тонкие: определение каждого факта одно, в `CreepFacts`. */
+internal fun PainAndGain.unitOf(creep: Creep): CreepFacts = unitsNow.of(creep)
 
 internal fun PainAndGain.canMove(creep: Creep) = unitOf(creep).liveMove
 
@@ -128,10 +128,10 @@ internal fun PainAndGain.combatant(creep: Creep) = unitOf(creep).combatant
 internal fun PainAndGain.bornArmed(creep: Creep) = unitOf(creep).bornArmed
 internal fun PainAndGain.bornCombatant(creep: Creep) = unitOf(creep).bornCombatant
 
-/** «Чистый мили», написание А — рождён мили: истинно и с выбитым оружием (см. Unit.meleeOnlyBorn). */
+/** «Чистый мили», написание А — рождён мили: истинно и с выбитым оружием (см. CreepFacts.meleeOnlyBorn). */
 internal fun PainAndGain.meleeOnlyBorn(creep: Creep) = unitOf(creep).meleeOnlyBorn
 
-/** «Чистый мили», написания Б и В — с живой ATTACK (см. Unit.meleeOnlyLive). */
+/** «Чистый мили», написания Б и В — с живой ATTACK (см. CreepFacts.meleeOnlyLive). */
 internal fun PainAndGain.meleeOnlyLive(creep: Creep) = unitOf(creep).meleeOnlyLive
 
 // ==================== тело и скорость (до v446 жили в World.kt; модель мощи уровнем ниже мира читала отсюда swampPeriod) ====================

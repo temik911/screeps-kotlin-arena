@@ -96,12 +96,12 @@ internal fun <F> pass(gates: List<Gate<F>>, facts: F, tally: Tally): Verdict {
 }
 
 /** ПРОХОД — строка таблицы-ПОСЛЕДОВАТЕЛЬНОСТИ (v445): исполняются все, по порядку списка; имя — адрес и тег прибора. */
-internal class Pass(val tag: String, val run: () -> kotlin.Unit)
+internal class Pass(val tag: String, val run: () -> Unit)
 
 /** Исполняет проходы по порядку; [before] получает номер и имя прохода до его запуска. В счётчиках `on[i]` — проход исполнен,
  *  `won[i]` ведёт сам владелец таблицы (у раздачи — клеток выдано), `idle[i]` — исполнен и не выдал ничего: у последовательности
  *  третье число прибора — оно, а не `on − won`. */
-internal inline fun runPasses(passes: List<Pass>, tally: Tally, before: (Int, String) -> kotlin.Unit) {
+internal inline fun runPasses(passes: List<Pass>, tally: Tally, before: (Int, String) -> Unit) {
     if (tally.on.size != passes.size) tally.fitTags(passes.map { it.tag })
     for (i in passes.indices) {
         before(i, passes[i].tag); tally.on[i]++
