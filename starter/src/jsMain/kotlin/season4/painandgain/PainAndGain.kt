@@ -450,11 +450,7 @@ object PainAndGain {
         val armyCommandSeg = armyCommand(ctx, armyMeasuresSeg, armyStrategySeg, armyTargetsSeg, armyStanceSeg)
         cpuMark("command")
         val orderAuditSeg = orderAudit(ctx, armyMeasuresSeg, armyTargetsSeg)
-        val healerWallSeg = healerWall(ctx, HealerWallIn(
-            army = army,
-            enemyCreeps = enemyCreeps,
-            combatEnemies = combatEnemies,
-        ))
+        val healerWallSeg = healerWall(ctx, armyMeasuresSeg)
         cpuMark("plan")
         // ПОКРИПНАЯ ЛЕСТНИЦА — В ТАКТИКЕ (v251, этап 9): тело цикла перенесено в Tactician.kt дословно, величины тика —
         // в ArmyTick; порядок крипов тот же, проход один (см. заголовок Tactician.kt)

@@ -603,19 +603,13 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     Memory.lastPlan.putAll(plan)
 }
 
-/** ПОТЕРИ ТИКА И СТЕНА ЛЕКАРЕЙ (v256, этап 10; сегмент runArmy перед покрипным циклом): потеря каждого бойца за тик (lostTick), жертва по адресному огню его стволов или по потере, клетки стены вокруг неё и лекари к ним (victimNow, victimSaveable, wallCells, wallCellOf). Перенесено дословно. */
-internal class HealerWallIn(
-    val army: List<Creep>,
-    val enemyCreeps: List<Creep>,
-    val combatEnemies: List<Creep>,
-)
-
 internal class HealerWallOut(
 )
 
-internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut = with(seg) {
+/** ПОТЕРИ ТИКА И СТЕНА ЛЕКАРЕЙ (v256, этап 10; сегмент runArmy перед покрипным циклом): потеря каждого бойца за тик (lostTick), жертва по адресному огню его стволов или по потере, клетки стены вокруг неё и лекари к ним (victimNow, victimSaveable, wallCells, wallCellOf). Перенесено дословно. */
+internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasuresOut): HealerWallOut {
     lostTick.clear()
-    for (c in army) lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
+    for (c in ctx.army) lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
     // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): жертва — терявший больше всех за прошлый тик; удержима, если её потеря не
     // больше лечения, которое наши лекари доставят в неё следующим тиком (вплотную или в шаге от вплотную — полное, в трёх
     // — треть; лекарь считается и для себя)
@@ -631,14 +625,14 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
     // текущим клеткам — лекарь в досягаемости первым, иначе ближайший, при равенстве с меньшими хитами
     // ...и карта адресного урона живёт тик (v233, см. USE_HEAL_BY_DEFICIT): её читает выбор пациента
     val addressed = addressedDmg
-    val live = livingCombatants(army)
+    val live = livingCombatants(ctx.army)
     for (e in ctx.combatEnemies) {
         val q = InfluenceMap.profileOf(e)
         if (q.ranged > 0.0) Forecast.wallTargetOf(e, live, RANGED_RANGE)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.ranged }
         if (q.melee > 0.0) Forecast.wallTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.melee }
     }
     val byAddress = addressed.entries.maxByOrNull { it.value }
-    val lostV = army.filter { (combatant(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
+    val lostV = ctx.army.filter { (combatant(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
     // ...И АДРЕС БЕРЁТСЯ, ПОКА ОН ПОПАДАЕТ (v229, вторая редакция по стенду m28 brawl+heals: его сценарий стреляет «в
     // вооружённого стрелка первым», а не в лекаря, и адресная жертва промахивалась — уничтожение на 442-м стало
     // проигрышем на 1570-м). Оба предсказателя сверяются с фактом следующего тика (кто потерял больше всех) за окно
@@ -652,7 +646,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
     }
     wallAddrPrev = byAddress?.key; wallLostPrev = lostV?.id
     val addrWins = wallAddrHits.size >= STALL_TICKS && wallAddrHits.count { it } > wallLostHits.count { it }
-    val v = if (byAddress != null && addrWins) army.firstOrNull { it.id == byAddress.key } ?: lostV else lostV
+    val v = if (byAddress != null && addrWins) ctx.army.firstOrNull { it.id == byAddress.key } ?: lostV else lostV
     if (v != null) {
         val useAddr = byAddress != null && addrWins && v.id == byAddress.key
         if (useAddr) hwallAddr++
@@ -660,7 +654,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
         val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
         val hisRanged = ctx.combatEnemies.filter { hasRanged(it) }
         val occupied = HashSet<Int>()
-        for (c in army) if (!healerOnly(c)) occupied.add(c.key)
+        for (c in ctx.army) if (!healerOnly(c)) occupied.add(c.key)
         for (e in ctx.enemyCreeps) occupied.add(e.key)
         val cells = ArrayList<Position>()
         for (dx in sym(1)) for (dy in sym(1)) {
@@ -671,7 +665,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
             if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
         }
         wallCells = cells
-        val healers = army.filter { hasHeal(it) && it.id != v.id }
+        val healers = ctx.army.filter { hasHeal(it) && it.id != v.id }
         val free = ArrayList(cells)
         for (h in healers.sortedBy { getRange(it, v) }) {
             if (free.isEmpty() || getRange(h, v) > HEAL_RANGE + 1) break
@@ -679,7 +673,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
             free.remove(best)
             wallCellOf[h.id] = best
         }
-        val potential = army.filter { hasHeal(it) }.sumOf { h ->
+        val potential = ctx.army.filter { hasHeal(it) }.sumOf { h ->
             val heal = InfluenceMap.profileOf(h).heal
             val cell = wallCellOf[h.id]
             val d = getRange(h, v)
@@ -691,7 +685,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
         hwallVictimTicks++
         if (victimSaveable) hwallTicks++
     }
-    HealerWallOut(
+    return HealerWallOut(
     )
 }
 
