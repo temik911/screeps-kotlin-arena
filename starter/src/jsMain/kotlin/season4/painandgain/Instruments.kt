@@ -478,8 +478,6 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("ehparts") { "${tickView.bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${tickView.bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }}" }
     Gauges.computed("hcov") { "${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }}" }
     Gauges.computed("hulk") { "${disarmedFoe.size}" }
-    Gauges.computed("hulkreach") { "$hulkInReach/$hulkTicks" }
-    Gauges.computed("revived") { "$hulkRevived" }
     Gauges.computed("chase") { "${Memory.chaseOf.size}/$chaseTicks" }
     Gauges.computed("kills") { "$chaseKills" }
     Gauges.computed("capgate") { "${capBlocked.values.sum()}/$capOffered" }
@@ -491,36 +489,27 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("capeval") { "$capqEval" }
     Gauges.computed("capidle") { "$capIdleRush/$capIdleEdge" }
     Gauges.computed("mstrip") { "$mstripTicks/$mstripAny/$mstripReach" }
-    Gauges.computed("edge") { "$edgeSpot/$edgeAll" }
     Gauges.computed("capopp") { "$capOppSum/$capAllSum" }
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
-    Gauges.computed("stray") { "$strayCapRefused" }
-    Gauges.computed("sout") { "$soutOut/$soutBack/$soutTicks" }
     Gauges.computed("hold", 2) { "$holdKeptRace" }
-    Gauges.computed("hold", 3) { "$holdKeptFight" }
-    Gauges.computed("gsafe") { "$groupSafeTicks/$groupDmgWindow" }
+    Gauges.computed("gsafe", 1) { "$groupDmgWindow" }
     Gauges.computed("route") { "$routeKept" }
     Gauges.computed("man") { "$manned" }
     Gauges.computed("gcov") { "$garCovered/$garAll" }
     Gauges.computed("courier") { "$courierTicks" }
     Gauges.computed("hunt") { "$huntTicks/$huntCreepTicks" }
     Gauges.computed("toothless") { "$pushToothless" }
-    Gauges.computed("sit") { "$flagSitOcc/$flagSitAll" }
     Gauges.computed("keep2") { "$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft" }
     Gauges.computed("keep3") { "$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" }
-    Gauges.computed("scout") { "$scoutShots/$scoutReach/$scoutTicks" }
-    Gauges.computed("spotm") { "$spotMeleeTicks" }
     Gauges.computed("spothold") { "$spotHoldNew/$spotHoldAll" }
     Gauges.computed("sym") { "$symCore/$symFree" }
     Gauges.computed("split") { "$splitFight/$splitAll" }
-    Gauges.computed("recall") { "$recalled/$fightTicksNow" }
+    Gauges.computed("recall", 0) { "$recalled" }
     Gauges.computed("healgap") { "$healGap/$healGapN" }
     Gauges.computed("nomedic") { "$noMedic/$healGapN" }
     Gauges.computed("flip") { "$aimFlips/$aimTicks" }
-    Gauges.computed("aggro") { "$dangerBlind/$dangerBlindFar/$dangerMoves" }
     Gauges.computed("pushheld") { "$pushHeldTicks/$pushTicks" }
-    Gauges.computed("lethal") { "$lethalHits/$lethalCells" }
     Gauges.computed("ledgerw") { "$ledgerWindow/$ourLostWindow/$hisLostWindow" }
     Gauges.computed("breakoff") { "$breakOffSplit/$breakOffN" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
@@ -536,8 +525,6 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("concfan") { "$fanShots/$fireShots" }
     Gauges.computed("lostrace") { "$lostRaceOpened/$lostRaceOffers" }
     Gauges.computed("gather") { "$gatherSpread/$gatherHold" }
-    Gauges.computed("close3") { "$closeHeld/$closeTicks" }
-    Gauges.computed("guard") { "$guardFired/$guardTicks" }
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
     // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
     // консоль не показывала (имя `guns=` занято прибором v200)
@@ -545,14 +532,13 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("warmann") { "$warmAnn/$warmAnnAll" }
     Gauges.computed("warmhold") { "$warmHold/$warmAnn" }
     Gauges.computed("warmcmd") { "$warmCmd/$warmCmdAll" }
-    Gauges.computed("warmfight") { "$warmFight/$warmFightAll" }
     Gauges.computed("warmcap") { "$warmCap/$warmCapAll" }
     Gauges.computed("mconc") { "$mconcAll/$mconcTicks" }
     Gauges.computed("mconcmax") { "$mconcMax" }
-    Gauges.computed("mpack") { "$mpackHit/$mpackAll" }
-    Gauges.computed("pack") { "$packHeld/$packTicks" }
+    Gauges.computed("mpack", 0) { "$mpackHit" }
+    Gauges.computed("pack", 0) { "$packHeld" }
     Gauges.computed("mpackon") { "$mpackOnHit/$mpackOn" }
-    Gauges.computed("kchase") { "$kchaseTicks/$kchaseAnn" }
+    Gauges.computed("kchase", 0) { "$kchaseTicks" }
     Gauges.computed("kveto") { "$kvetoHit/$kvetoAll" }
     Gauges.computed("gathera") { "$gatherAnn/$gatherAnnAll" }
     Gauges.computed("annempty") { "${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll" }
@@ -560,11 +546,8 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("abort") { "$abortTicks/$abortEntries" }
     Gauges.computed("srch") { "$srchCut/$srchTicks/${cmdTailMax.toInt()}" }
     Gauges.computed("pin") { "$pinOrd/$pinOpp/$pinHeld/$pinChk" }
-    Gauges.computed("fself") { "$fselfFlip/$fselfAll" }
-    Gauges.computed("rotf") { "$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN" }
     Gauges.computed("rotfm") { "$rotfMeet" }
     Gauges.computed("meet") { "$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk" }
-    Gauges.computed("fsw") { "$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare" }
     Gauges.computed("ffoc") { "$ffocBefore/$ffocAfter/$ffocAll" }
     Gauges.computed("ovw") { "${Executor.ovwContact}/${Executor.ovwRanged}" }
     Gauges.computed("conf") { "${Arbiter.confReach}/${Arbiter.confFatigue}" }
@@ -572,21 +555,18 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("mquiet") { "$mquietMoved/$mquietAll/${mquietGain.toInt()}" }
     Gauges.computed("mquietc") { "$cmdQuietMoved/$cmdQuietAll" }
     Gauges.computed("maj") { "$majOpened/$majOffers" }
-    Gauges.computed("surv") { "$survTicks/$survLead/$survContact/$survFights" }
+    Gauges.computed("surv", 0) { "$survTicks" }
+    Gauges.computed("surv", 2) { "$survContact" }
+    Gauges.computed("surv", 3) { "$survFights" }
     Gauges.computed("adr") { "$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame" }
     Gauges.computed("rad") { "${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide" }
     Gauges.computed("simd") { "${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree" }
-    Gauges.computed("fhl") { "$fhlChosen/$fhlAvail" }
-    Gauges.computed("mrush") { "$rushByArrival/$rushSignalAll/$massArrivalAdded" }
-    Gauges.computed("zlb") { "$zlbTicks/$zlbZero" }
+    Gauges.computed("zlb", 0) { "$zlbTicks" }
     Gauges.computed("hwallh") { "$hwallHeals/$hwallHealsAll" }
     Gauges.computed("postc") { "$postContest/$postAll" }
-    Gauges.computed("rot") { "$rotOut" }
     Gauges.computed("hfull") { "$hfullN/$hfullAll" }
     Gauges.computed("hover") { "$hoverSum/$hdelivSum" }
     Gauges.computed("hswap") { "$hswapN" }
-    Gauges.computed("hexp") { "$hexpN/$hexpAll" }
-    Gauges.computed("hlost") { "$hlostSum" }
     Gauges.computed("hwallx") { "$hwallYield/$hwallFar" }
     Gauges.computed("hpick") { "$hpN/$hpAdj/$hpAvail/$hpGate" }
     Gauges.computed("hadj") { "$hadjN/$hadjAll" }

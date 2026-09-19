@@ -104,7 +104,7 @@ internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
     // рождается интент шага армии, поэтому проверка одна на все ветки: разрешённый захват проходит как прежде
     // (planCapture), запрещённый — крип стоит, как POISED-бегун
     val flagAt = p.step?.let { s -> ctx.flags.firstOrNull { !it.ours && it.pos.x == s.x && it.pos.y == s.y } }
-    val step = if (flagAt != null && captureBlock(ctx, flagAt) != null) { strayCapRefused++; null } else p.step
+    val step = if (flagAt != null && captureBlock(ctx, flagAt) != null) { strayCapRefused.n++; null } else p.step
     if (step != null) { TrafficManager.request(p.creep, step, p.rank); planCapture(ctx, step) }
 }
 
@@ -154,9 +154,9 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
         Memory.addrHits.addLast(Memory.addrPrev == truth.id)
         while (Memory.fracHits.size > TOUCH_WINDOW) Memory.fracHits.removeFirst()
         while (Memory.addrHits.size > TOUCH_WINDOW) Memory.addrHits.removeFirst()
-        rotfN++
-        if (Memory.fracPrev == truth.id) rotfF++
-        if (Memory.addrPrev == truth.id) rotfA++
+        rotfN.n++
+        if (Memory.fracPrev == truth.id) rotfF.n++
+        if (Memory.addrPrev == truth.id) rotfA.n++
     }
     val byFrac = HashMap<String, Double>()
     val byAddr = HashMap<String, Double>()
@@ -189,7 +189,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
         Memory.rotByFocus.clear()
         return
     }
-    rotfOn++
+    rotfOn.n++
     fun frac(c: Creep) = c.hits.toDouble() / maxOf(1, c.hitsMax)
     fun inReach(c: Creep) = combatEnemies.any { e ->
         val q = InfluenceMap.profileOf(e)
@@ -204,7 +204,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
         val lowest = live.filter { it.id != id && it.id !in Memory.rotByFocus && inReach(it) }.minOfOrNull { frac(it) }
         if (lowest != null && frac(c) > lowest) back.add(id)
     }
-    for (id in back) { Memory.rotByFocus.remove(id); Memory.rotatingIds.remove(id); rotfBack++ }
+    for (id in back) { Memory.rotByFocus.remove(id); Memory.rotatingIds.remove(id); rotfBack.n++ }
     // выход: раненый, предсказанная жертва его стволов, и их урон больше нашего лечения в его клетке
     for (c in live) {
         if (!hasWeapon(c) || c.id in Memory.rotByFocus || !canMove(c) || c.hits >= c.hitsMax) continue
@@ -213,9 +213,9 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
         Memory.rotByFocus.add(c.id)
         Memory.rotatingIds.add(c.id)
         Memory.rotateSince[c.id] = getTicks()
-        rotfOut++
+        rotfOut.n++
     }
-    rotfTicks += Memory.rotByFocus.size
+    rotfTicks.n += Memory.rotByFocus.size
 }
 
 /**
@@ -241,7 +241,7 @@ internal fun stepOutWounded(army: List<Creep>, reach: Set<Int>, enemyRetreating:
     for (id in back) {
         Memory.stepOutIds.remove(id)
         if (id !in Memory.rotByFocus) Memory.rotatingIds.remove(id)
-        soutBack++
+        soutBack.n++
     }
     for (c in live) {
         if (enemyRetreating) break
@@ -251,9 +251,9 @@ internal fun stepOutWounded(army: List<Creep>, reach: Set<Int>, enemyRetreating:
         Memory.stepOutIds.add(c.id)
         Memory.rotatingIds.add(c.id)
         Memory.rotateSince[c.id] = getTicks()
-        soutOut++
+        soutOut.n++
     }
-    soutTicks += Memory.stepOutIds.size
+    soutTicks.n += Memory.stepOutIds.size
 }
 
 /** Цель хода: куда идти, на каком расстоянии встать, обходить ли стоящих врагов, брать ли поле «вблизи» (см. NEAR_FLOW). */
@@ -412,7 +412,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
             val wasOut = creep.id in Memory.rotatingLatch
             val isOut = Memory.rotatingLatch.update(creep.id, enter = frac < ROTATE_OUT, exit = backIn)
             if (wasOut && !isOut && DEBUG_LOG) println("rot t=${meas.now} in ${creep.id} frac=$frac took=${meas.now - (Memory.rotateSince[creep.id] ?: meas.now)}")
-            if (!wasOut && isOut) { Memory.rotateSince[creep.id] = meas.now; rotOut++; if (DEBUG_LOG) println("rot t=${meas.now} out ${creep.id} frac=$frac hits=${creep.hits}") }
+            if (!wasOut && isOut) { Memory.rotateSince[creep.id] = meas.now; rotOut.n++; if (DEBUG_LOG) println("rot t=${meas.now} out ${creep.id} frac=$frac hits=${creep.hits}") }
         }
         val rotating = creep.id in Memory.rotByFocus || stepOut || (rotGate && creep.id in Memory.rotatingLatch)
         val support = healer || stripped
@@ -469,8 +469,8 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         if (meleeOnlyBorn(creep)) {
             val near = localEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE }
             if (near.isNotEmpty()) {
-                edgeAll++
-                if (!localAggressive && near.any { spotEdgeAt(it) >= PUSH_RATIO }) edgeSpot++
+                edgeAll.n++
+                if (!localAggressive && near.any { spotEdgeAt(it) >= PUSH_RATIO }) edgeSpot.n++
             }
         }
         // бросок — только на врага «с боем» (см. threatening): одинокий лекарь врага в восьми клетках был целью бойца,
@@ -494,7 +494,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         // БИТЬ, а раздетому бить нечем — он шёл вперёд по перевесу и не наносил ничего. Написание Б = meleeOnlyLive
         val spotNow =  meleeOnlyLive(creep) && !support && !rotating &&
             localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && spotEdgeAt(e) >= PUSH_RATIO && !targ.killTicks(e).isInfinite() }
-        if (spotNow) spotMeleeTicks++
+        if (spotNow) spotMeleeTicks.n++
         // МИЛИ ЗАЩИЩАЕТ СВОЕГО (v220, см. USE_MELEE_GUARDS_LINE). Ворота `inLine` требуют двух ВООРУЖЁННЫХ
         // своих в FORM_RANGE = 2 — и это спираль: его мили раздевает наших стрелков, раздетый перестаёт быть
         // `hasWeapon`, ворота закрываются, наши мили перестают драться, и он раздевает следующего. Разбор
@@ -511,7 +511,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         // раздетый (v452, пункт Д — разбиение оператора: тело — А, урон — Б)
         val guardNow =  meleeOnlyBorn(creep) && !support && !rotating &&
             localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && guards(e) }
-        if (meleeOnlyBorn(creep) && localEnemies.isNotEmpty()) { guardTicks++; if (guardNow) guardFired++ }
+        if (meleeOnlyBorn(creep) && localEnemies.isNotEmpty()) { guardTicks.n++; if (guardNow) guardFired.n++ }
         val inLine =  spotNow || guardNow || (targ.formationReady && strat.combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2)
         // при бесплодной охоте (см. STALL_TICKS) броска нет: висящие крипы россыпи «ловимы» (не уходят стабильно), и
         // каждый наш крип танцевал со своим соседом вместо марша к флагу-цели (стенд m19 spread, travel=23 четыреста тиков)
@@ -596,7 +596,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
             c.minByOrNull { getRange(creep, it) } } else null
         Memory.engagingLatch.set(creep.id, engage != null)
         // пара к общей цели мили (v221, см. mpackHit): как часто ноги мили и так идут к цели фокуса
-        if (meleeOnly && engage != null) { mpackAll++; if (engage.id == targ.focusTarget?.id) mpackHit++ }
+        if (meleeOnly && engage != null) { mpackAll.n++; if (engage.id == targ.focusTarget?.id) mpackHit++ }
         // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру.
         // ПОВОДОК НЕ ТЯНУЛ ИМЕННО ТОГО, КТО УБЕЖАЛ (v191, USE_LEASH_IN_CONTACT): условие требовало врага РЯДОМ С
         // КРИПОМ, а у крипа, отставшего от боя, врагов рядом уже нет — и он оставался стоять там, где остановился.
@@ -645,7 +645,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
         // новых сущностей не заводится
         val foeMeleeLive = meas.enemyMassedNow && localEnemies.any { hasMelee(it) && InfluenceMap.profileOf(it).melee > 0.0 }
         val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
-        if (hasRanged(creep) && localAggressive) { closeTicks++; if (foeMeleeLive) closeHeld++ }
+        if (hasRanged(creep) && localAggressive) { closeTicks.n++; if (foeMeleeLive) closeHeld.n++ }
         // сброс слота строя у мили с целью — работа ТЕЛОМ, остаётся написание А (v452, пункт Д — разбиение оператора)
         val melee = meleeOnlyBorn(creep)
         val meleeMate: Creep? = if (melee) strat.combatArmy.filter { it.id != creep.id && meleeOnlyLive(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
@@ -867,7 +867,7 @@ internal fun PainAndGain.buildStride(turn: Turn, aim: Aim): Stride {
         // ...и для лекаря закрытые для шага клетки — полная досягаемость (v234, вторая редакция), бегство — по прежней
         val avoidCells = reachMine
         // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
-        if (healer && inCombat) { hexpAll++; if ((creep.key) in targ.reachCells) hexpN++; hlostSum += (lostTick[creep.id] ?: 0) }
+        if (healer && inCombat) { hexpAll.n++; if ((creep.key) in targ.reachCells) hexpN.n++; hlostSum.n += (lostTick[creep.id] ?: 0) }
         val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
             (support && inReach) ||
             (stepOut && (creep.key) in targ.reachCells) ||
@@ -1067,9 +1067,9 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // вовсе, а при агрессии оно обнуляется. Приказ командира слепым не считается: он один и считается
         // по полям (см. scoreMelee/scoreRanged/scoreHeal)
         if (step != null) {
-            dangerMoves++
+            dangerMoves.n++
             if (stepTag != "order" && InfluenceMap.dangerAt(step.key) > 0.0) {
-                if (!inCombat) dangerBlindFar++ else if (localAggressive || spotNow) dangerBlind++
+                if (!inCombat) dangerBlindFar.n++ else if (localAggressive || spotNow) dangerBlind.n++
             }
         }
         if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && !posture.withdrawing) {
@@ -1257,9 +1257,9 @@ internal fun scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: Int
     // строкой: match28:farm+weak 24 003:14 553 -> 22 407:23 999, то есть выигранный флаговый забег стал
     // проигранным — крипы переставали вставать на спорные флаги. Одна величина опасности на две надобности
     val lethalNow = damage * 2.0 >= creep.hits
-    if (lethalNow) lethalHits++          // счётчик — оператором, не внутри выражения (v448, линт чистых инициализаторов)
+    if (lethalNow) lethalHits.n++          // счётчик — оператором, не внутри выражения (v448, линт чистых инициализаторов)
     val lethalTerm = if (lethalNow) LETHAL_PENALTY else 0.0
-    lethalCells++
+    lethalCells.n++
     // лекарь: вплотную к подопечному (поле), из клеток равной близости — под меньшим ФАКТИЧЕСКИМ огнём (fireAt:
     // без шага сближения мили — иначе клетка рядом с бойцом, который рубится вплотную, «стоит» 720 и лекарь
     // стоит в трёх клетках; от мили, что действительно подошёл, лекарь отойдёт следующим тиком)
@@ -1401,7 +1401,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
         scoutFoe(e) && ctx.flags.any { !it.ours && getRange(e, it.pos) <= 1 } &&
             e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)
     }
-    scoutShots += scoutTargets.size
+    scoutShots.n += scoutTargets.size
     val focusPool = (inFireRange.filter { e -> meas.combatEnemies.any { it.id == e.id } } + scoutTargets)
         .ifEmpty { inFireRange }
     fun fireAvailableAt(e: Creep) = fireAvailable(e)
@@ -1545,13 +1545,13 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // ...и прибор v266 (fself=): его лекарь в досягаемости наших стволов, которого модель без самолечения читала
     // пробиваемым, а с ним — нет, то есть сколько решений о добиваемости правка поменяла
     for (e in focusPool) if (armedHealer(e) && gunsAt(e) > 0) {
-        fselfAll++
+        fselfAll.n++
         val fire = fireAvailableAt(e) * InfluenceMap.takenOf(e)
         val own = InfluenceMap.profileOf(e).heal
         val others = healOn(e) - own
-        if (fire - others > 0.0 && fire - others - own <= 0.0) fselfFlip++
+        if (fire - others > 0.0 && fire - others - own <= 0.0) fselfFlip.n++
     }
-    if (focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail++; if (focusBest != null && armedHealer(focusBest)) fhlChosen++ }
+    if (focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail.n++; if (focusBest != null && armedHealer(focusBest)) fhlChosen.n++ }
     // ЛИПКИЙ фокус (v45): цель держится, пока жива с оружием или лечением и в шаге от досягаемости хоть одного нашего стрелка;
     // сменяется на ту, что добивается за тик. Замер по реплеям (матчи 78, 73, 67): наибольшее число наших выстрелов в ОДНУ
     // цель за тик — 1 в 57 тиках из 111, 2 в 42, 3 в 10, четыре и больше в 2 (1 %); у Coldkimchi 4+ в 11 % тиков, у けろびー
@@ -1587,21 +1587,21 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // прибор v267 (fsw=смен/тиков:ушла/далеко/стрелок/стволы/добиваем/раздета): смена фокуса и её причина — на тиках, где
     // есть кого бить в досягаемости
     if (focusPool.isNotEmpty()) {
-        fswTicks++
+        fswTicks.n++
         if (focusPrevId != null && focusTarget?.id != focusPrevId) {
-            fswN++
+            fswN.n++
             when {
-                focusPrev == null -> fswLost++
-                !prevNear -> fswFar++
-                killableNow -> fswKill++
-                rangedNow -> fswRanged++
-                moreGuns -> fswGuns++
-                else -> fswBare++
+                focusPrev == null -> fswLost.n++
+                !prevNear -> fswFar.n++
+                killableNow -> fswKill.n++
+                rangedNow -> fswRanged.n++
+                moreGuns -> fswGuns.n++
+                else -> fswBare.n++
             }
         }
     }
     val packMelee = pureMeleeOf(strat.combatArmy)
-    if (packMelee.isNotEmpty() && meas.combatEnemies.isNotEmpty()) packTicks++
+    if (packMelee.isNotEmpty() && meas.combatEnemies.isNotEmpty()) packTicks.n++
     // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
     // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
     val focusOrder = focusPool.sortedWith(focusCmp.reversed())
@@ -1895,74 +1895,74 @@ internal var kiteNow = 0
 
 /** Ротация по его фокусу (v275, rotf=выходов/возвратов/крипо-тиков в ней/тиков правила/попаданий «доля»/попаданий «лекарь,
  *  ближайший»/сверок). */
-internal var rotfOut = 0
+internal val rotfOut = Gauges.counter("rotf")
 
-internal var rotfBack = 0
+internal val rotfBack = Gauges.counter("rotf", 1)
 
-internal var rotfTicks = 0
+internal val rotfTicks = Gauges.counter("rotf", 2)
 
-internal var rotfOn = 0
+internal val rotfOn = Gauges.counter("rotf", 3)
 
-internal var rotfF = 0
+internal val rotfF = Gauges.counter("rotf", 4)
 
-internal var rotfA = 0
+internal val rotfA = Gauges.counter("rotf", 5)
 
-internal var rotfN = 0
+internal val rotfN = Gauges.counter("rotf", 6)
 
 /** Самолечение в добиваемости (v266, fself=сменилось/всего): его лекарь в досягаемости наших стволов, пробиваемый без
  *  своего лечения и непробиваемый с ним. */
-internal var fselfFlip = 0
+internal val fselfFlip = Gauges.counter("fself")
 
-internal var fselfAll = 0
+internal val fselfAll = Gauges.counter("fself", 1)
 
 /** Смены фокуса (v267, fsw=смен/тиков:ушла/далеко/стрелок/стволы/добиваем/раздета): на тиках с целью в досягаемости —
  *  сколько раз фокус сменился и почему: прежней цели нет среди живых боевых, она дальше шага от наших стрелков, лучшая
  *  добивается за тик, лучшая — стрелок (v60), у лучшей больше стволов (v70), прежняя без оружия и лечения. */
-internal var fswTicks = 0
+internal val fswTicks = Gauges.counter("fsw", 1)
 
-internal var fswN = 0
+internal val fswN = Gauges.counter("fsw")
 
-internal var fswLost = 0
+internal val fswLost = Gauges.counter("fsw", 2, sep = ":")
 
-internal var fswFar = 0
+internal val fswFar = Gauges.counter("fsw", 3)
 
-internal var fswKill = 0
+internal val fswKill = Gauges.counter("fsw", 6)
 
-internal var fswRanged = 0
+internal val fswRanged = Gauges.counter("fsw", 4)
 
-internal var fswGuns = 0
+internal val fswGuns = Gauges.counter("fsw", 5)
 
-internal var fswBare = 0
+internal val fswBare = Gauges.counter("fsw", 7)
 
 /** Выход раненого из его зоны (v285, sout=вышло/вернулось/крип-тиков вне): см. stepOutWounded. */
-internal var soutOut = 0
+internal val soutOut = Gauges.counter("sout")
 
-internal var soutBack = 0
+internal val soutBack = Gauges.counter("sout", 1)
 
-internal var soutTicks = 0
+internal val soutTicks = Gauges.counter("sout", 2)
 
 /** Шаг бойца на клетку чужого флага при закрытых воротах захвата (v282, stray=): столько раз крип остался стоять. */
-internal var strayCapRefused = 0
+internal val strayCapRefused = Gauges.counter("stray")
 
 /** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
-internal var spotMeleeTicks = 0
+internal val spotMeleeTicks = Gauges.counter("spotm")
 
-internal var rotOut = 0
+internal val rotOut = Gauges.counter("rot")
 
 /** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
-internal var hexpN = 0
+internal val hexpN = Gauges.counter("hexp")
 
-internal var hexpAll = 0
+internal val hexpAll = Gauges.counter("hexp", 1)
 
-internal var hlostSum = 0
+internal val hlostSum = Gauges.counter("hlost")
 
-internal var scoutShots = 0
+internal val scoutShots = Gauges.counter("scout")
 
 /** Очаг: тиков-мили с врагом в ENGAGE_RANGE (знаменатель) и из них тех, где МЕСТНАЯ арифметика даёт перевес,
  *  а армейская мера при этом говорит «не наступать». Ненулевой числитель — отпечаток расхождения масштабов. */
-internal var edgeSpot = 0
+internal val edgeSpot = Gauges.counter("edge")
 
-internal var edgeAll = 0
+internal val edgeAll = Gauges.counter("edge", 1)
 
 /** Пары к USE_MELEE_QUIET_CELL: шагов мили, где выбранная клетка оставляла удар, и из них тех, где правка увела в клетку
  *  тише; сумма снятой опасности (урон/тик). */
@@ -1972,39 +1972,39 @@ internal var mquietMoved = 0
 
 internal var mquietGain = 0.0
 
-internal var fhlAvail = 0
+internal val fhlAvail = Gauges.counter("fhl", 1)
 
-internal var fhlChosen = 0
+internal val fhlChosen = Gauges.counter("fhl")
 
 /** Пара «шагов в клетку под уроном при выключенном слагаемом опасности / всех шагов» (v215). */
-internal var dangerBlind = 0
+internal val dangerBlind = Gauges.counter("aggro")
 
 /** ...и отдельно — та же слепота ВНЕ боя. Ноль здесь не дефект прибора, а арифметика: поле урона достаёт
  *  на 4 клетки, а `inCombat` стоит на 5 (см. USE_DANGER_SCALED_BY_AGGRO). */
-internal var dangerBlindFar = 0
+internal val dangerBlindFar = Gauges.counter("aggro", 1)
 
 /** Пара «клеток, отвергнутых как смертельные / оценённых клеток» (v215, см. USE_LETHAL_CELL_VETO). */
-internal var lethalHits = 0
+internal val lethalHits = Gauges.counter("lethal")
 
-internal var lethalCells = 0
+internal val lethalCells = Gauges.counter("lethal", 1)
 
-internal var dangerMoves = 0
+internal val dangerMoves = Gauges.counter("aggro", 2)
 
 /** Пара «крипо-тиков, где стрелку не дали сблизиться до двух из-за живого мили врага / всех крипо-тиков
  *  стрелка в местной агрессии» (v220, см. closeIn). Числитель — сколько раз оговорка вообще сработала. */
-internal var closeHeld = 0
+internal val closeHeld = Gauges.counter("close3")
 
-internal var closeTicks = 0
+internal val closeTicks = Gauges.counter("close3", 1)
 
 /** Пара «крипо-тиков, где ворота броска открыла защита своего / всех крипо-тиков мили при враге рядом»
  *  (v220, см. USE_MELEE_GUARDS_LINE). */
-internal var guardFired = 0
+internal val guardFired = Gauges.counter("guard")
 
-internal var guardTicks = 0
+internal val guardTicks = Gauges.counter("guard", 1)
 
-internal var mpackAll = 0
+internal val mpackAll = Gauges.counter("mpack", 1)
 
-internal var packTicks = 0
+internal val packTicks = Gauges.counter("pack", 1)
 
 // ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
 

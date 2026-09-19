@@ -664,7 +664,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     val kiteChaseNow = Memory.prevPosture == Posture.ANNIHILATE && ourLostWindow >= STALL_DAMAGE && ledgerWindow < 0 && !meleeAdjacent &&
         Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
     kiteChaseSeen = kiteChaseNow
-    if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn++; if (kiteChaseNow) kchaseTicks++ }
+    if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn.n++; if (kiteChaseNow) kchaseTicks++ }
     // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
     val netDamage = Memory.enemyHitsHist.size == STALL_TICKS &&
         (Memory.enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || Memory.ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
@@ -774,7 +774,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     // РЕЖИМ ВЫЖИВАНИЯ (v223, доктрина оператора, см. USE_SURVIVAL): ведём по очкам, а его армия сильнее — не деремся,
     // а уходим, беря флаги с выходом. Порог и гистерезис — как у «слабее», по мощи всей армии
     val leadingNow = ourScore > enemyScore
-    if (leadingNow && armedEnemies.isNotEmpty()) survLead++
+    if (leadingNow && armedEnemies.isNotEmpty()) survLead.n++
     Memory.theirsHist.addLast(theirs)
     while (Memory.theirsHist.size > MEASURE_WINDOW) Memory.theirsHist.removeFirst()
     // множители окна (v114): его мощь сейчас → его сильнейшая и слабейшая за окно; при нулевой мере — 1
@@ -802,7 +802,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     // Не бегство к точке (первая редакция выживания) и не непрерывное уклонение к выходу (вторая), а шаг назад строем
     val zeroLead = leadingNow && contact && armedEnemies.isNotEmpty() && ours <= 0.0 && theirs > 0.0
     zeroLeadTicks = if (zeroLead) zeroLeadTicks + 1 else 0
-    if (zeroLead) zlbZero++
+    if (zeroLead) zlbZero.n++
     // ИДЁТ ЛИ БОЙ (v215): контакт по МАССЕ армии либо размен за последние STALL_TICKS тиков. Считается
     // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
     // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
@@ -810,7 +810,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     coreContactNow = contact
     // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
     // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
-    if (fightOnNow) { warmFightAll++; if (!exchangeLive) warmFight++ }
+    if (fightOnNow) { warmFightAll.n++; if (!exchangeLive) warmFight.n++ }
     // ПРИЗНАК ОТХОДА СЧИТАЕТСЯ ЗДЕСЬ (v217, см. USE_BREAK_OFF_HOLDS_LINE): он должен успеть погасить
     // наступление, а `pushing` решается на триста строк ниже. Величины готовы: контакт уже есть, а
     // `ourDamageTaken`/`enemyDamageTaken` копятся с начала матча
@@ -825,7 +825,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     // любому нашему, и одиночный стрелок фермера, подстреливший держателя на краю карты, снимал с флагов всех. В контакте
     // ядра в кулак возвращаются все, как прежде
     if (fightOnNow) {
-        fightTicksNow++
+        fightTicksNow.n++
         // ...а в режиме пар (v326) — и отряды на пути к флагу: «бой» здесь держится двадцать тиков после любого выстрела,
         // и отзыв срабатывал 506 раз за матч, отправляя в ядро тех, кого командир только что послал (man=124, split=392).
         // Возражение v301 снято тем же, чем и в v325: сидящий на флагах в режим пар не попадает (v302)
@@ -835,7 +835,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
         Memory.cmdDetach.retainAll(keep)
         Memory.detachedIds.retainAll(keep)
         val kept = Memory.cmdDetach.size + Memory.detachedIds.size
-        holdKeptFight += kept
+        holdKeptFight.n += kept
         recalled += before - kept
     }
     val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
@@ -933,7 +933,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, bw: BuildWorldOut): ReadSignalsOu
         val near = d.minOrNull() ?: return@run false
         d.count { it - near <= MASS_RANGE } * 3 >= armedNow.size * 2
     }
-    if (massedByArrival && !massedByShape) massArrivalAdded++
+    if (massedByArrival && !massedByShape) massArrivalAdded.n++
     val enemyMassed = massedByShape || massedByArrival
     enemyMassedSignal = enemyMassed
     // ДРАЛСЯ ЛИ ОН С НАМИ СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER): защёлка на матч. Россыпь дерётся стычками по одному-два
@@ -949,7 +949,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, bw: BuildWorldOut): ReadSignalsOu
     // с 10-го по 41-й rush=true, армия на посту, захваты под вето; он взял D5 на 41-м, R3 на 45-м, оба A3 на 60-м, наш
     // первый флаг — на 54-м. Бросок сквозь центр без захвата снова читается броском, когда его темп к флагу падает
     val rushSignal = !bw.ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed  
-    if (rushSignal) { rushSignalAll++; if (!massedByShape) rushByArrival++ }
+    if (rushSignal) { rushSignalAll.n++; if (!massedByShape) rushByArrival.n++ }
     val rushHold = unflaggedRushNow && !bw.ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
         (approachRate > 0.0 || armedNow.any { getRange(it, bw.ctx.ourCentroid) <= EVADE_RANGE })
     unflaggedRushNow = rushSignal || rushHold
@@ -1023,8 +1023,8 @@ internal fun PainAndGain.readSignals(ctx: Ctx, bw: BuildWorldOut): ReadSignalsOu
     // против 97,3 % у けろびー). Ни постоянного гарнизона, ни правила ухода, ни курьера против топ-1 не работало.
     // Запрет на занятые флаги живёт там, где он и нужен: пара и курьер не идут на клетку под его телом
     groupSafe = getTicks() >= GROUP_WINDOW && groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (groupSafe || splitNow)
-    if (groupSafe) groupSafeTicks++
-    flagSitOcc = sitOcc; flagSitAll = sitHis
+    if (groupSafe) groupSafeTicks.n++
+    flagSitOcc.n = sitOcc; flagSitAll.n = sitHis
     val enemyNear = armedNow.any { e -> bw.ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
     noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
     // фермер — не только «не стреляет», но и «держится дальше броска»: стоящий в 3–6 экран стенда тоже не стрелял, пока
@@ -1121,8 +1121,8 @@ internal fun PainAndGain.buildWorld(): BuildWorldOut {
     // скауты врага: сколько их и сколько крипо-тиков они провели в дальности наших стволов. Знаменатель
     // большой при нулевом числителе — это и есть «мы их пропускаем», сказанное числом
     for (e in enemyCreeps) if (scoutFoe(e)) {
-        scoutTicks++
-        if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) scoutReach++
+        scoutTicks.n++
+        if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) scoutReach.n++
     }
     // остовы: считаются ПОСЛЕ построения полей, чтобы потенциал тела уже был известен
     for (e in enemyCreeps) {
@@ -1132,11 +1132,11 @@ internal fun PainAndGain.buildWorld(): BuildWorldOut {
         val disarmed = armable && live.melee + live.ranged <= 0.0
         if (disarmed) {
             disarmedFoe.add(e.id)
-            hulkTicks++
-            if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) hulkInReach++
+            hulkTicks.n++
+            if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) hulkInReach.n++
         } else if (e.id in disarmedFoe) {
             disarmedFoe.remove(e.id)
-            if (live.melee + live.ranged > 0.0) hulkRevived++
+            if (live.melee + live.ranged > 0.0) hulkRevived.n++
         }
     }
     cpuMark("fields")
@@ -1237,49 +1237,49 @@ internal var packTicksTick = -1
 // ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
 // Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
 
-internal var groupSafeTicks = 0
+internal val groupSafeTicks = Gauges.counter("gsafe")
 
-internal var flagSitOcc = 0
+internal val flagSitOcc = Gauges.counter("sit")
 
-internal var flagSitAll = 0
+internal val flagSitAll = Gauges.counter("sit", 1)
 
-internal var holdKeptFight = 0
+internal val holdKeptFight = Gauges.counter("hold", 3)
 
-internal var scoutReach = 0
+internal val scoutReach = Gauges.counter("scout", 1)
 
-internal var scoutTicks = 0
+internal val scoutTicks = Gauges.counter("scout", 2)
 
-internal var hulkTicks = 0
+internal val hulkTicks = Gauges.counter("hulkreach", 1)
 
-internal var hulkInReach = 0
+internal val hulkInReach = Gauges.counter("hulkreach")
 
-internal var hulkRevived = 0
+internal val hulkRevived = Gauges.counter("revived")
 
 internal var kiteMassed = false                        // была ли его армия сомкнута в этом тике (v135, диагностика)
 
 /** Пара к USE_MASS_BY_ARRIVAL (v226): тиков сигнала броска только по мере прихода / всех тиков сигнала / тиков, где мера
  *  прихода добавила «сомкнут» к мере формы. */
-internal var rushByArrival = 0
+internal val rushByArrival = Gauges.counter("mrush")
 
-internal var rushSignalAll = 0
+internal val rushSignalAll = Gauges.counter("mrush", 1)
 
-internal var massArrivalAdded = 0
+internal val massArrivalAdded = Gauges.counter("mrush", 2)
 
-internal var zlbZero = 0
+internal val zlbZero = Gauges.counter("zlb", 1)
 
-internal var survLead = 0
+internal val survLead = Gauges.counter("surv", 1)
 
 internal var race100 = ""
 
 internal var race200 = ""
 
-internal var fightTicksNow = 0
+internal val fightTicksNow = Gauges.counter("recall", 1)
 
-internal var warmFight = 0
+internal val warmFight = Gauges.counter("warmfight")
 
-internal var warmFightAll = 0
+internal val warmFightAll = Gauges.counter("warmfight", 1)
 
-internal var kchaseAnn = 0
+internal val kchaseAnn = Gauges.counter("kchase", 1)
 
 // ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
 
