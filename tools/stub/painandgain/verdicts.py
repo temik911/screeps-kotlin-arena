@@ -29,6 +29,7 @@ import sys
 CODE = 'starter/src/jsMain/kotlin/season4/painandgain/PainAndGain.kt'
 OUT = 'docs/pain-and-gain-verdicts.md'
 DOCS_GLOB = 'docs/pain-and-gain*.md'
+DOCS_DIR_GLOB = 'docs/pain-and-gain/*.md'
 VER_RE = re.compile(r'\bv(\d{1,3})\b')
 NUM_RE = re.compile(r'\d[\d ]*[-:/]\d[\d ]*')
 TOGGLE_RE = re.compile(r'^\s*private const val (USE_[A-Z0-9_]+)\s*=\s*(\S+)(.*)$')
@@ -97,7 +98,9 @@ def nearest_fun(lines, idx):
 
 def docs_text(pattern=None):
     parts = []
-    for p in sorted(glob.glob(pattern or DOCS_GLOB)):
+    # с 20.09.2026 история версий лежит по эпохам в docs/pain-and-gain/ (второй шаг архитектуры, этап 7) — вердикт,
+    # переехавший из комментария в абзац версии, ищется и там
+    for p in sorted(glob.glob(pattern or DOCS_GLOB)) + ([] if pattern else sorted(glob.glob(DOCS_DIR_GLOB))):
         parts.append(open(p, encoding='utf-8').read())
     return norm('\n'.join(parts))
 
