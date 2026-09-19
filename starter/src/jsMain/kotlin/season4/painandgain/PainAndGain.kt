@@ -329,6 +329,7 @@ object PainAndGain {
         // хранители флагов — решение стратега; до v446 его звала первой строкой мера мира (ребро World → Strategist). До вызова в
         // armyMeasures не исполнялось ничего, кроме трёх чтений полей ctx, — порядок прежний
         updateKeepers(ctx, ctx.army)
+        Memory.prevPosture = posture      // меры мира читают решение ПРОШЛОГО тика — явно, а не полем, которое стратег перепишет ниже
         val meas = armyMeasures(ctx)
         val strat = armyStrategy(ctx, meas)
         val targ = armyTargets(ctx, meas, strat)

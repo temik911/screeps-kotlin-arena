@@ -753,10 +753,10 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     // любой его выстрел даёт netDamage, и простой гаснет. Прибор считает тики, где погоня идёт в ОДНУ сторону —
     // за окно мы потеряли STALL_DAMAGE, он меньше нас, его центр от нас уходит, его мили не вплотную. Считается ДО
     // простоя и по тем величинам, какими простой читал бы её: постура и история дистанции — прошлого тика
-    val kiteChaseNow = posture == Posture.ANNIHILATE && ourLostWindow >= STALL_DAMAGE && ledgerWindow < 0 && !meleeAdjacent &&
+    val kiteChaseNow = Memory.prevPosture == Posture.ANNIHILATE && ourLostWindow >= STALL_DAMAGE && ledgerWindow < 0 && !meleeAdjacent &&
         Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
     kiteChaseSeen = kiteChaseNow
-    if (posture == Posture.ANNIHILATE) { kchaseAnn++; if (kiteChaseNow) kchaseTicks++ }
+    if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn++; if (kiteChaseNow) kchaseTicks++ }
     // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
     val netDamage = Memory.enemyHitsHist.size == STALL_TICKS &&
         (Memory.enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || Memory.ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
@@ -796,9 +796,9 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     val exchangeRecent = now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && now - lastHurtTick <= STALL_TICKS)
     val fightOn = inContact(armedEnemies, ctx.army) && (exchangeRecent)
     val pauseReach = 2 * ENGAGE_RANGE   // v106: окно сквозь мигание
-    val pausedChase =  posture == Posture.HOLD &&
+    val pausedChase =  Memory.prevPosture == Posture.HOLD &&
         armedEnemies.any { e -> ctx.army.any { getRange(e, it) <= pauseReach } }
-    if ((posture == Posture.ANNIHILATE || pausedChase) && !fightOn && armyDist >= 0) {
+    if ((Memory.prevPosture == Posture.ANNIHILATE || pausedChase) && !fightOn && armyDist >= 0) {
         Memory.armyDistHist.addLast(armyDist)
         // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
         // отряд на 566-м при his_moved=0 по реплею (матч 133, одиннадцатый проигрыш фермеру-лагерю 8346:22771)
@@ -872,7 +872,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     // множители окна (v114): его мощь сейчас → его сильнейшая и слабейшая за окно; при нулевой мере — 1
     val theirsUp = if (theirs > 0.0) (Memory.theirsHist.maxOrNull() ?: theirs) / theirs else 1.0
     val theirsDown = if (theirs > 0.0) (Memory.theirsHist.minOrNull() ?: theirs) / theirs else 1.0
-    val nearRange = if (posture == Posture.RETREAT) NEAR_RANGE + NEAR_RELEASE else NEAR_RANGE
+    val nearRange = if (Memory.prevPosture == Posture.RETREAT) NEAR_RANGE + NEAR_RELEASE else NEAR_RANGE
     // ОТВЕРГНУТО стендом: «враг рядом — рядом с МАССОЙ армии, а не с любым нашим крипом» (хранители стоят по
     // одному на разных концах карты, и висящий у хранителя враг россыпи отменяет цель-флаг у всей армии).
     // Целевой сценарий m22 spread не сдвинулся вовсе (16622:24323), а m20 spread перешёл из победы в проигрыш
