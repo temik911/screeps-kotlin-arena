@@ -45,8 +45,28 @@ RULES = [
     ('скан тела', r'\.body\.(any|all|none)\b', {'Facts.kt', 'InfluenceMap.kt'}, 'факт Unit: bornMelee / bornArmed / bornCombatant / live*'),
 ]
 
+SELECTION = re.compile(r'(?<![\w.])((?:\w+\.)*\w+)\.(filter|filterNot)\s*\{([^{}]*)\}')
+
+
+def repeated_selection(files):
+    """Этап 1, выборки: `список.filter { … }`, выписанная ДОСЛОВНО второй раз где угодно в пакете. Список тика с неизменным
+    за тик предикатом — поле `Ctx` (side, threats, armedArmy…); свой список или предикат по памяти, меняющейся посреди
+    тика, — функция-выборка в World.kt (living, armedOf, notDetached…): определение одно, точка вычисления прежняя."""
+    seen, out = {}, []
+    for f, rows in files.items():
+        for n, code in rows:
+            for m in SELECTION.finditer(code):
+                k = re.sub(r'\s+', ' ', m.group(0))
+                if k in seen:
+                    out.append((f, n, '%s — дословно та же выборка, что в %s:%d' % ((k,) + seen[k])))
+                else:
+                    seen[k] = (f, n)
+    return out
+
+
 # Проверки, которым мало одной строки: функция (исходники: {файл: [(номер, код)]}) -> [(файл, номер, текст)]
 CHECKS = [
+    repeated_selection,
 ]
 
 
