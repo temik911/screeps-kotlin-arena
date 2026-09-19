@@ -4,11 +4,16 @@
 # скомпилированным модулям, то есть после инлайна; Rules и Tuning — одни `const val`, модулей у них нет.
 0: Rules Tuning Tables                          # Tables — строка, счётчики и обходчик таблиц решений: ни от чего не зависит
 1: Memory DistanceMap InfluenceMap Facts     # Facts — словарь фактов (Unit, key): зависит только от API
+# ПЕРЕСМОТР ЭТАПА 5 (19.09.2026, находка оператору): Executor, Arbiter, TrafficManager стояли на уровнях 6 / 5 / 5 — по ПОРЯДКУ
+# КОНВЕЙЕРА (исполнитель и арбитр работают последними). Но уровень — это направление ЗАВИСИМОСТИ, а по графу они ПРИЁМНИКИ:
+# сами не импортируют ни одной стадии (Executor — никого, Arbiter — только Executor, TrafficManager — только Arbiter), а стадии
+# в них ПИШУТ: World / Missions / Fight кладут интенты в слоты Executor, Missions / Tactician подают ходы в TrafficManager,
+# Tactician — предложения в Arbiter. Приёмник, в который пишут все, — нижний слой; «кто зовёт run() последним» видно в
+# оркестровке, а не в уровне файла. Семь рёбер стартовой таблицы были рёбрами вверх только из-за этой расстановки.
+1: Executor Arbiter TrafficManager
 2: World
 3: Forecast Strategist Missions
 4: Tactician Fight Formation
-5: Arbiter TrafficManager
-6: Executor
 7: PainAndGain AbortRepair
 # вне уровней: читает всех, импортировать его может только оркестратор
 outside: Instruments <- PainAndGain
@@ -25,16 +30,9 @@ known: World>Forecast           # этап 5: модель мощи — отде
 known: World>Missions           # этап 5: heldFlag / guardFlag — факты о флагах, в World
 known: World>Strategist         # этап 5: updateKeepers в runArmy; Posture — тип уровня 0, чтение через Memory.prevPosture
 # — рёбра вверх, которых раздел 2.5 не называет (находка этапа 0, решаются на этапе 5 вместе с пересмотром таблицы):
-known: Arbiter>Executor
-known: Fight>Executor
-known: Missions>Executor
-known: Missions>TrafficManager
 known: Strategist>Fight
 known: Strategist>Formation
 known: Strategist>Tactician
-known: Tactician>Arbiter
-known: Tactician>TrafficManager
-known: World>Executor
 # — стадии импортируют Instruments (этап 6: счётчик живёт у того, кто считает):
 known: Fight>Instruments
 known: Formation>Instruments
