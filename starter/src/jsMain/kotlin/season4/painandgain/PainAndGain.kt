@@ -95,7 +95,6 @@ object PainAndGain {
 
 
 
-    internal val PUSH_DWELL = CHASE_WINDOW
     /** Адресный урон этого тика по нашим (v229/v233): кто из его стрелков и мили в кого целится по модели его выбора. */
     internal val addressedDmg = HashMap<String, Double>()
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
@@ -126,8 +125,6 @@ object PainAndGain {
 
 
 
-    /** Окно размена для признака отхода — существующий срок «размен был недавно», а не новое число (v216). */
-    internal val LEDGER_WINDOW = STALL_TICKS
 
 
     internal val capBlocked = HashMap<String, Int>()
@@ -138,29 +135,13 @@ object PainAndGain {
     internal val gateLevels = IntArray(8)
 
 
-    internal var goalField: IntArray? = null
-    internal var goalSeeds: IntArray = IntArray(0)
-    internal var goalCx = -1
-    internal var goalCy = -1
 
-    internal val DIRECTIONS = listOf(
-        0 to 0, -1 to -1, 0 to -1, 1 to -1, -1 to 0, 1 to 0, -1 to 1, 0 to 1, 1 to 1,
-    )
-    /** Те же направления в зеркальной системе координат (v286, см. mirrorTL). */
-    internal val DIRECTIONS_MIRROR = DIRECTIONS.map { (dx, dy) -> -dx to -dy }
 
 
     internal var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
-    internal var posture = Posture.HOLD
-    internal var objectiveFlagId: String? = null
 
 
     internal val arrivalById = HashMap<String, Int>()
-    internal var huntingThreat = false
-    /** ДОБИТЬ по перевесу (не по контакту) — только к нему применяется гистерезис PUSH_RELEASE_RATIO. */
-    internal var pushing = false
-    /** Точка отхода — одна на весь отход (см. retreatPoint). */
-    internal var retreatTarget: Position? = null
     internal val whyLines = ArrayList<String>()             // трасса решений мили за тик (см. TRACE_WHY)
     internal val whySum = HashMap<String, Int>()             // причины за сто тиков
     internal val escapeFlows = HashMap<Int, IntArray>()
@@ -179,16 +160,11 @@ object PainAndGain {
     internal var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
     internal var approachingNow = false                    // та же, но по его подходу, без безфлагового броска (v284, см. captureBlock)
-    internal var rushStartDist = 0                         // расстояние между центрами на начало броска (v215)
-    internal var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
-    internal var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
     internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     internal var enemyMassedSignal = false
     /** Он держит свои флаги ТЕЛОМ (v370, см. readSignals): режим пар это больше не выключает, но на занятый флаг
      *  пара не идёт — отбить его нечем. */
     internal var enemySitsSignal = false                 // его вооружённые сомкнуты по форме или по прибытию (v281, readSignals)
-    internal var firstFightTick = 0                        // тик первого размена (exchangeLive); 0 — первый бой впереди (v281)
-    internal var fightMassedSeen = false                   // он хоть раз дрался с нами СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER)
     /** Предсказанный урон его стволов по нашим на этот тик — по модели его выбора цели, что чаще попадает (v292, см.
      *  rotateByFocus); null, пока сверок меньше окна. Читает лечение вместо неадресного damageAt. */
     internal var focusPredDmg: Map<String, Double>? = null
@@ -196,13 +172,8 @@ object PainAndGain {
      *  см. rotateByFocus): тогда раненые уходят к лекарям позади, а лекари стоят вне его досягаемости. */
     internal var huntsWounded = false
     internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
-    internal var lastDistanceKeptTick = -1000              // последний тик, когда погоня не сближала (см. USE_DETACH, v57)
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
-    internal var lastHurtTick = 0                          // последний тик, когда враг снял с нас хиты (см. farmer в runArmy)
-    internal var lastFireTick = -1000                      // последний тик, когда кто-то из наших бил или стрелял (см. USE_COLD_CONTACT)
     internal var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
-    internal var firstNearTick = -1                        // первый тик с его вооружённым в ENGAGE_RANGE + RANGED_RANGE (v72: признаки фермера — от него)
-    internal var ourDamageTaken = 0                        // снято с нас за матч (см. USE_PUSH_LEDGER)
     internal var ledgerWindow = 0
     internal var ourLostWindow = 0
     internal var hisLostWindow = 0
@@ -213,23 +184,17 @@ object PainAndGain {
     internal val objNone = HashMap<String, Int>()
     /** ...и разложение САМОГО выбора: какой фильтр снял флаг-кандидата (v216). */
     internal val objDrop = HashMap<String, Int>()
-    internal var enemyDamageTaken = 0                      // снято с него за матч
     internal val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
     internal val ghostLogged = HashMap<String, Int>()
     internal var prevShooters: List<Shooter> = emptyList()
 
     // ---------- счёт ----------
-    internal var ourScore = 0.0
-    internal var enemyScore = 0.0
     internal var ourRate = 0
     internal var enemyRate = 0
     /** По прогнозу (счёт + темп × остаток) мы проигрываем: очки важнее силы (см. captureAllowed). */
     internal var behindOnScore = false
-    /** Сколько тиков подряд отстаём по прогнозу (см. BEHIND_PATIENCE). */
-    internal var behindTicks = 0
 
     internal val flowFull = HashMap<Int, Boolean>()   // поле посчитано целиком (не ограничено NEAR_FLOW), см. flowTo/v131b
-    internal var flowSig = 0                            // подпись препятствий, при которой считан кэш
     internal var bfsMaxCost = 0.0
     internal var bfsMaxTick = 0
 
@@ -291,14 +256,11 @@ object PainAndGain {
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
      *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
     internal val plannedCaptures = HashSet<String>()
-    internal val NO_FLOW = IntArray(10000) { -1 }
     internal var stalledNow = false                        // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
     internal var stalemateNow = false                      // отставание с меньшим темпом дольше BEHIND_PATIENCE (см. PARITY_FLOOR_LOST)
     internal var hisTouchShare = 1.0
     internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
     internal var touchMin = 1.0                            // минимум за матч — прибор
-    internal var touchShareLast = 1.0                      // последняя доля за ПОЛНОЕ окно — для меры мощи (v433, USE_TOUCH_SHARE_LAST)
-    internal var hisTouchShareLast = 1.0
     internal val rungCount = HashMap<String, Int>()        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
     internal val stepCount = HashMap<String, Int>()        // ...и какая ветка ШАГА
     internal val tacCount = HashMap<String, Int>()         // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
@@ -399,7 +361,6 @@ object PainAndGain {
     internal var groupDmgWindow = 0
     /** Пара «крипов отозвано в кулак / тиков боя» (v215). */
     internal var recalled = 0
-    internal var outmatchedTicks = 0                // сколько тиков подряд наша мощь ниже BREAK_OFF_RATIO от его (v185)
     internal val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     private var commandFocus: Creep? = null              // цель фокуса, выбранная симуляцией вместе с планом (v138)
     internal var focusBreakableNow = false            // дотягивающиеся стволы пробивают лечение фокуса (v218, см. USE_FAN_KEEPS_FOCUS)
@@ -438,7 +399,6 @@ object PainAndGain {
     internal val annEmpty = HashMap<String, Int>()
     internal var annEmptyAll = 0
 
-    internal val NO_MODS = HypoMods()
 
 }
 

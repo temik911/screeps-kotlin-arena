@@ -925,7 +925,7 @@ internal fun PainAndGain.buildStride(turn: Turn, aim: Aim): Stride {
 }
 
 /** Свободный шаг (строка `free` цепочки шага): прежнее тело ветки дословно. Имена: локальная → [Stride] → [Turn] → [ArmyTick]. */
-internal fun PainAndGain.freeStep(s: Stride): Position? {
+internal fun freeStep(s: Stride): Position? {
     with(s.turn.t) { with(s.turn) { with(s) {
         val target = aim.target
         val standoff = aim.standoff
@@ -1120,7 +1120,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
 
 /** Шаг к слоту строя без поля потока: соседняя проходимая клетка, ближайшая к слоту (при равенстве — под меньшим
  *  огнём); занятая своим — через трафик, если только она ближе; клетки banned (досягаемость для лекаря) закрыты. */
-internal fun PainAndGain.slotStep(creep: Creep, slot: Position, blockedSet: Set<Int>, enemyPositions: Set<Int>, occupantAt: Map<Int, Creep>, enemies: List<Creep>, banned: Set<Int>): Position? {
+internal fun slotStep(creep: Creep, slot: Position, blockedSet: Set<Int>, enemyPositions: Set<Int>, occupantAt: Map<Int, Creep>, enemies: List<Creep>, banned: Set<Int>): Position? {
     val here = getRange(creep, slot)
     if (here == 0) return null
     var best: Position? = null
@@ -1141,7 +1141,7 @@ internal fun PainAndGain.slotStep(creep: Creep, slot: Position, blockedSet: Set<
     return best ?: push
 }
 
-internal fun PainAndGain.bestSingleMove(
+internal fun bestSingleMove(
     creep: Creep,
     target: Position,
     flow: IntArray,
@@ -2008,3 +2008,7 @@ internal var guardTicks = 0
 internal var mpackAll = 0
 
 internal var packTicks = 0
+
+// ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
+
+internal val NO_FLOW = IntArray(10000) { -1 }

@@ -951,7 +951,7 @@ internal fun postPoint(ctx: Ctx): Position {
  *  чья клетка не ближе EVADE_RANGE к краю (у края направлений вдвое меньше, в углу — вчетверо: матчи 78, 80). Точки
  *  выхода (флаги, дом, углы) при равной скорости преследователя все «за ним» или без выхода, и армия шла в наименее
  *  плохую — в угол. */
-internal fun PainAndGain.fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
+internal fun fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
     val ec = centroidOf(armed) ?: return null
     val oc = ctx.ourCentroid
     // отступ от края — не больше нынешнего: у края все направления вдоль края запрещались, оставались только внутрь, и
@@ -2916,3 +2916,13 @@ internal var kvetoAll = 0
 internal var gatherAnn = 0
 
 internal var gatherAnnAll = 0
+
+// ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
+
+internal var posture = Posture.HOLD
+
+internal var objectiveFlagId: String? = null
+
+internal var huntingThreat = false
+
+internal val PUSH_DWELL = CHASE_WINDOW

@@ -219,3 +219,13 @@ internal class Shooter(val cell: Int, val ranged: Double, val melee: Double)
 
 /** Гипотетические множители стороны сверх текущих эффектов (маргинальная цена флага, см. powerAfter). */
 internal class HypoMods(val ranged: Double = 1.0, val melee: Double = 1.0, val heal: Double = 1.0, val hits: Double = 1.0)
+
+// ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
+
+internal val NO_MODS = HypoMods()
+
+// ДОЛЯ КАСАНИЯ ЗА ПОЛНОЕ ОКНО — ВХОД МОДЕЛИ МОЩИ (v454): пишет стратег (`armyStance`, уровень 3), читает `powerOf` здесь, на
+// уровне 1. Объявление стоит у читателя нижнего уровня: на верху файла-писателя модель мощи импортировала бы стратега.
+internal var touchShareLast = 1.0                      // последняя доля за ПОЛНОЕ окно — для меры мощи (v433, USE_TOUCH_SHARE_LAST)
+
+internal var hisTouchShareLast = 1.0

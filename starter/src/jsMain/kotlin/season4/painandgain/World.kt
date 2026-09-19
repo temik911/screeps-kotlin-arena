@@ -330,7 +330,7 @@ internal fun catchable(e: Creep, armed: List<Creep>): Boolean {
 }
 
 /** Клетка после ticks шагов спуска по полю от start (враг идёт за нами к цели поля). */
-internal fun PainAndGain.projectAlong(flow: IntArray, start: Int, ticks: Int): Int {
+internal fun projectAlong(flow: IntArray, start: Int, ticks: Int): Int {
     var cell = start
     var left = ticks
     while (left > 0 && flow[cell] > 0) {
@@ -350,7 +350,7 @@ internal fun PainAndGain.projectAlong(flow: IntArray, start: Int, ticks: Int): I
 
 /** Значение поля в клетке или, если она закрыта (чужой флаг — препятствие в полях потока), в лучшей соседней плюс
  *  шаг: запас выхода читался в клетке чужого флага и был «нет пути» для всякого флага-цели (стенд m1 scouts). */
-internal fun PainAndGain.flowNear(flow: IntArray, p: Position): Int {
+internal fun flowNear(flow: IntArray, p: Position): Int {
     val here = flow[p.key]
     if (here >= 0) return here
     var best = -1
@@ -496,7 +496,7 @@ internal fun crowdMatrixOf(ctx: Ctx, allowCell: Int): CostMatrix {
 
 /** Жадный шаг бегства: свободная соседняя клетка (не стена, не чужой флаг, не занята) с наибольшей
  *  дальностью до ближайшего врага, при равной — под меньшим огнём; null — некуда. */
-internal fun PainAndGain.greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>, force: Boolean = false): Position? {
+internal fun greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>, force: Boolean = false): Position? {
     val occupied = (ctx.myCreeps + ctx.enemyCreeps).filter { !it.spawning }.mapTo(HashSet()) { it.key }
     var best: Position? = null
     // force: лучшая из соседних, даже если она не лучше своей клетки (см. SCOUT_FLEE_TRIGGER)
@@ -550,7 +550,7 @@ internal fun clusterCentroid(cs: List<Creep>): Position? {
 
 
 /** Восемь направлений и стояние в своей системе координат (см. mirrorTL). */
-internal fun PainAndGain.dirsNow(): List<Pair<Int, Int>> = if (mirrorTL) DIRECTIONS_MIRROR else DIRECTIONS
+internal fun dirsNow(): List<Pair<Int, Int>> = if (mirrorTL) DIRECTIONS_MIRROR else DIRECTIONS
 
 internal class ArmyMeasuresOut(
     val allies: List<Creep>,
@@ -1284,3 +1284,58 @@ internal var warmFight = 0
 internal var warmFightAll = 0
 
 internal var kchaseAnn = 0
+
+// ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
+
+internal var rushStartDist = 0                         // расстояние между центрами на начало броска (v215)
+
+internal var fightImminentTicks = 0                    // тиков подряд «бой близко» (см. USE_RUSH_VETO_SUSTAINED)
+
+internal var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
+
+internal var firstFightTick = 0                        // тик первого размена (exchangeLive); 0 — первый бой впереди (v281)
+
+internal var fightMassedSeen = false                   // он хоть раз дрался с нами СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER)
+
+internal var lastDistanceKeptTick = -1000              // последний тик, когда погоня не сближала (см. USE_DETACH, v57)
+
+internal var lastHurtTick = 0                          // последний тик, когда враг снял с нас хиты (см. farmer в runArmy)
+
+internal var firstNearTick = -1                        // первый тик с его вооружённым в ENGAGE_RANGE + RANGED_RANGE (v72: признаки фермера — от него)
+
+internal var ourDamageTaken = 0                        // снято с нас за матч (см. USE_PUSH_LEDGER)
+
+internal var enemyDamageTaken = 0                      // снято с него за матч
+
+internal var ourScore = 0.0
+
+internal var enemyScore = 0.0
+
+/** Сколько тиков подряд отстаём по прогнозу (см. BEHIND_PATIENCE). */
+internal var behindTicks = 0
+
+internal var outmatchedTicks = 0                // сколько тиков подряд наша мощь ниже BREAK_OFF_RATIO от его (v185)
+
+internal var flowSig = 0                            // подпись препятствий, при которой считан кэш
+
+/** Окно размена для признака отхода — существующий срок «размен был недавно», а не новое число (v216). */
+internal val LEDGER_WINDOW = STALL_TICKS
+
+internal val DIRECTIONS = listOf(
+    0 to 0, -1 to -1, 0 to -1, 1 to -1, -1 to 0, 1 to 0, -1 to 1, 0 to 1, 1 to 1,
+)
+
+/** Те же направления в зеркальной системе координат (v286, см. mirrorTL). */
+internal val DIRECTIONS_MIRROR = DIRECTIONS.map { (dx, dy) -> -dx to -dy }
+
+// ТРИ ВЕЛИЧИНЫ, КОТОРЫЕ ПИШЕТ СТАДИЯ ВЫШЕ МИРА, А ОБЪЯВЛЕНЫ ЗДЕСЬ (v454): `pushing` и `retreatTarget` пишет стратег, `lastFireTick` —
+// бой, но читают их и меры мира (`armyMeasures`: застой марша, «у точки отхода», «размен был недавно») — РАНЬШЕ записи этого
+// тика, то есть значение ПРОШЛОГО тика. Объявление стоит не выше нижнего читателя: на верху файла-писателя мир импортировал
+// бы стратега и бой — ребро вверх, которое гейт графа не пропустит (levels.txt). Запись направлена вниз, это разрешено.
+/** ДОБИТЬ по перевесу (не по контакту) — только к нему применяется гистерезис PUSH_RELEASE_RATIO. */
+internal var pushing = false
+
+/** Точка отхода — одна на весь отход (см. retreatPoint). */
+internal var retreatTarget: Position? = null
+
+internal var lastFireTick = -1000                      // последний тик, когда кто-то из наших бил или стрелял (см. USE_COLD_CONTACT)

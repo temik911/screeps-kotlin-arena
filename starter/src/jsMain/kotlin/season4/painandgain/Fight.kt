@@ -367,7 +367,7 @@ internal fun PainAndGain.commandHeal(army: List<Creep>, enemies: List<Creep>, ou
  * соседей по строю в разные бои. Затравок при этом много, и армия растекается по ФРОНТУ, приходя к
  * ближайшему его участку, а не толпясь в одной точке.
  */
-internal fun PainAndGain.ensureGoalField(fighters: List<Creep>, combatEnemies: List<Creep>): IntArray? {
+internal fun ensureGoalField(fighters: List<Creep>, combatEnemies: List<Creep>): IntArray? {
     if (goalTick == getTicks()) return goalField
     goalTick = getTicks()
     if (fighters.isEmpty() || combatEnemies.isEmpty()) { goalField = null; goalSeeds = IntArray(0); return null }
@@ -1551,3 +1551,13 @@ internal var fanShots = 0
 internal var fireShots = 0
 
 internal var mconcTicks = 0
+
+// ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
+
+internal var goalCx = -1
+
+internal var goalCy = -1
+
+internal var goalField: IntArray? = null
+
+internal var goalSeeds: IntArray = IntArray(0)
