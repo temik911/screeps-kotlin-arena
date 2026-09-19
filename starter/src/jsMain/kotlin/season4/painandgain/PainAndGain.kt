@@ -330,6 +330,8 @@ object PainAndGain {
     internal var hisTouchShare = 1.0
     internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
     internal var touchMin = 1.0                            // минимум за матч — прибор
+    internal var touchShareLast = 1.0                      // последняя доля за ПОЛНОЕ окно — для меры мощи (v433, USE_TOUCH_SHARE_LAST)
+    internal var hisTouchShareLast = 1.0
     internal val rungCount = HashMap<String, Int>()        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
     internal val stepCount = HashMap<String, Int>()        // ...и какая ветка ШАГА
     internal val tacCount = HashMap<String, Int>()         // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)

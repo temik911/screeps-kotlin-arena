@@ -399,7 +399,12 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     // ...и ПУСТО ЗНАЧИТ ПУСТО (v216, см. USE_EMPTY_OPP_MEANS_FREE): откат `.ifEmpty { ctx.combatEnemies }`
     // выключал локализацию ровно там, где она нужнее всего, — боя нет и флаг не охраняется
     val oppLocal = ctx.combatEnemies.filter { it.id in fightPackIds || f.guards.any { g -> g.id == it.id } }
-    val opp = oppLocal
+    // ...НО СОМКНУТАЯ НЕПАССИВНАЯ АРМИЯ ПЛАТИТ ВСЯ (v433, см. USE_GATE_VS_MASSED): дебафф флага не снимается до конца матча,
+    // и цену платит бой, который СЛУЧИТСЯ. Вне контакта локальный противник пуст или почти пуст (0,10–0,30 его крипа на
+    // флаг при 10–11 боевых на карте), powerOf(пусто) даёт ноль, и пол вырождается в «ours >= 0»: так прошли 4 захвата
+    // из 21 в поздних поражениях от Coldkimchi#1. Фермер и спящий сюда не попадают — они не сомкнуты или пассивны
+    val massedFoe = USE_GATE_VS_MASSED && enemyMassedSignal && !ctx.passiveEnemy
+    val opp = if (massedFoe) ctx.combatEnemies else oppLocal
     capOppSum += opp.size
     capAllSum += ctx.combatEnemies.size
     val (ours, theirs) = powerAfterFor(ctx,
@@ -432,7 +437,10 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     // основе запрет виден числом: ворота отказывают по паритету 3 134 раза за матч из 4 411 отказов, и бегуны 52 %
     // времени сидят без флага (RESERVE 2 273 из 4 405 меток). Доктрина паритета бережёт армию перед боем, которого с
     // фермером не будет вовсе: за матч у нас kills=0 и fire=0, его крипы ни разу не входят в нашу досягаемость
-    if (groupSafe) return null
+    // ...и НЕ ПРОТИВ СОМКНУТОЙ АРМИИ, КОТОРАЯ ВЕРНЁТСЯ (v433, см. USE_GATE_VS_MASSED): признак отвечает о ПРОШЛОМ уроне, а
+    // цена флага — величина будущая и невозвратная; у Coldkimchi#1 «не бьёт» — это пауза между боями (8 захватов из 21,
+    // в 6aae34db признак держался 750 тиков подряд и пропустил флаг при 879 против пола 2 672)
+    if (groupSafe && !massedFoe) return null
     // ФЛАГОВ БОЛЬШЕ ЦЕНОЙ НЕБОЛЬШОГО МИНУСА (v222, решение оператора, см. USE_FLAG_MAJORITY): армии СЕЙЧАС на паритете,
     // перевеса по флагам у нас нет, а этот флаг его даёт — минус ровно дебафф этого флага
     run {
@@ -1627,6 +1635,10 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     touchShare = if (Memory.touchHist.size >= TOUCH_WINDOW) Memory.touchHist.sum() / (100.0 * Memory.touchHist.size) else 1.0
     hisTouchShare = if (Memory.hisTouchHist.size >= TOUCH_WINDOW) Memory.hisTouchHist.sum() / (100.0 * Memory.hisTouchHist.size) else 1.0
     if (touchShare < touchMin) touchMin = touchShare
+    // ...и ПОСЛЕДНЯЯ ИЗМЕРЕННАЯ доля живёт дальше окна (v433, см. USE_TOUCH_SHARE_LAST): мера мощи берёт её, а не единицу,
+    // которую окно показывает вне контакта — ровно в те тики, когда ворота захвата и срабатывают
+    if (Memory.touchHist.size >= TOUCH_WINDOW) touchShareLast = touchShare
+    if (Memory.hisTouchHist.size >= TOUCH_WINDOW) hisTouchShareLast = hisTouchShare
     val stalemateOurNow = combatArmy.sumOf { it.hits }
     val stalemateHisNow = combatEnemies.sumOf { it.hits }
     // ОКНО ПАТА ПЕРЕЖИВАЕТ МИГАНИЕ КОНТАКТА (v198). Окно очищалось на КАЖДОМ тике без контакта, а `contact` в

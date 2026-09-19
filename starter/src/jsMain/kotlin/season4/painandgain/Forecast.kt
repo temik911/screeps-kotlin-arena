@@ -458,7 +458,10 @@ internal fun PainAndGain.hypoMods(type: String, k: Double) = HypoMods(
  *  гипотетические множители, oppMods — множитель лечения противника. */
 internal fun PainAndGain.powerOf(side: List<Creep>, opp: List<Creep>, mods: HypoMods, oppMods: HypoMods): Double {
     // удар мили — с долей смежности (v103, USE_MELEE_ADJACENCY_SHARE); хиты (weightedHits) без неё
-    val share = if (side.firstOrNull()?.my == false) hisTouchShare else touchShare
+    val his = side.firstOrNull()?.my == false
+    // доля касаний — последняя ИЗМЕРЕННАЯ за полное окно (v433, USE_TOUCH_SHARE_LAST), а не единица, которую окно
+    // показывает вне контакта: ATTACK бьёт на 1, и разрыв контакта не делает мили досягающим
+    val share = if (USE_TOUCH_SHARE_LAST) (if (his) hisTouchShareLast else touchShareLast) else (if (his) hisTouchShare else touchShare)
     val meleeK = mods.melee * share
     val dps = side.sumOf { effectiveDps(it, opp, mods.ranged, meleeK) }
     val heal = opp.sumOf { InfluenceMap.profileOf(it).heal } * oppMods.heal
