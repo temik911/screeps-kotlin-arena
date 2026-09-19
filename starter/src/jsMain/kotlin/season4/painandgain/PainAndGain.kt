@@ -292,12 +292,7 @@ object PainAndGain {
         cpuSummary()
         // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
         if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
-        val rememberTickSeg = rememberTick(ctx, RememberTickIn(
-            myCreeps = myCreeps,
-            enemyCreeps = enemyCreeps,
-            army = army,
-            ourCentroid = ourCentroid,
-        ))
+        val rememberTickSeg = rememberTick(ctx, buildWorldSeg)
         val armedCentroid = rememberTickSeg.armedCentroid
         val printTickSeg = printTick(ctx, PrintTickIn(
             myCreeps = myCreeps,
