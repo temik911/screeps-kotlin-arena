@@ -116,7 +116,7 @@ def effect_in_initializer(files):
 # Этап 3: классы фактов, которые читают строки таблиц решений. Строка таблицы — лямбда с получателем такого класса, внутри
 # `with(PainAndGain)`; величины тика она берёт через `t.`. Поле, совпавшее по имени с полем другого класса фактов, с полем
 # ArmyTick / Ctx или с членом объекта PainAndGain, МОЛЧА меняет смысл условия: компилятор возьмёт ближайшего получателя.
-FACT_CLASSES = ['Turn', 'Stride', 'ArmyTick', 'Ctx']
+FACT_CLASSES = ['Turn', 'Stride', 'CaptureCase', 'ArmyTick', 'Ctx']
 
 
 def _ctor_fields(files, cls):
@@ -149,7 +149,7 @@ def _object_members(files, obj):
 def shadowed_fact_names(files):
     """Этап 3: множества имён классов фактов и членов PainAndGain попарно не пересекаются (кроме `creep`, `ctx`, `t` — это
     один и тот же объект, откуда ни читай; `army`, `combatEnemies`, `enemyCreeps` у ArmyTick и Ctx — один и тот же список)."""
-    same = {'creep', 'ctx', 't', 'army', 'combatEnemies', 'enemyCreeps'}
+    same = {'creep', 'ctx', 't', 'f', 'army', 'combatEnemies', 'enemyCreeps'}
     sets = {}
     where = {}
     for cls in FACT_CLASSES:
