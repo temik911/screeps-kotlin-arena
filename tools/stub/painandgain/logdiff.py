@@ -26,6 +26,7 @@ MASK = [
     (re.compile(r' evt=\S+'), ''),
     (re.compile(r' lead=\S+'), ''),
     (re.compile(r' srch=\S+'), ''),
+    (re.compile(r' deals=\S+ srchd=\S+'), ''),      # v449, пункт В: раздач ушло в мир / сыграно; перебор с победителем ≠ последнему
 ]
 
 
