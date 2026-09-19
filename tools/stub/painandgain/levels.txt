@@ -3,7 +3,7 @@
 # Зависимость направлена ВНИЗ или внутри уровня. Проверяет `tools/depgraph.py --gate` из regress.sh — по
 # скомпилированным модулям, то есть после инлайна; Rules и Tuning — одни `const val`, модулей у них нет.
 0: Rules Tuning
-1: Memory DistanceMap InfluenceMap
+1: Memory DistanceMap InfluenceMap Facts     # Facts — словарь фактов (Unit, key): зависит только от API
 2: World
 3: Forecast Strategist Missions
 4: Tactician Fight Formation
