@@ -678,7 +678,6 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     val allies = ctx.myCreeps
     val enemyCreeps = ctx.enemyCreeps
     val combatEnemies = ctx.combatEnemies
-    updateKeepers(ctx, ctx.army)
 
     val strikers = ctx.army.filter { fullSpeed(it) && hasWeapon(it) && it.id !in Memory.keeperIds }
     // враги, с которыми есть бой: с уроном — и лекари, у которых рядом (в дальности лечения плюс шаг) есть свой с

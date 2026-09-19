@@ -326,6 +326,9 @@ object PainAndGain {
 
     private fun runArmy(ctx: Ctx) {
         if (ctx.army.isEmpty()) return
+        // хранители флагов — решение стратега; до v446 его звала первой строкой мера мира (ребро World → Strategist). До вызова в
+        // armyMeasures не исполнялось ничего, кроме трёх чтений полей ctx, — порядок прежний
+        updateKeepers(ctx, ctx.army)
         val meas = armyMeasures(ctx)
         val strat = armyStrategy(ctx, meas)
         val targ = armyTargets(ctx, meas, strat)
