@@ -28,6 +28,17 @@ RULES = [
     ('чистый мили А', r'isMelee\(%s\) && !hasRanged\(\1\)' % A, {'Facts.kt'}, 'meleeOnlyBorn(x)'),
     ('чистый мили ¬А', r'!isMelee\(%s\) \|\| hasRanged\(\1\)' % A, {'Facts.kt'}, '!meleeOnlyBorn(x)'),
     ('чистый мили Б/В', r'hasMelee\(%s\) && !hasRanged\(\1\)' % A, {'Facts.kt'}, 'meleeOnlyLive(x)'),
+    # этап 1, роли: лекарь, раздетый (у тактика звался wounded, у командира stripped), в строю
+    ('лекарь', r'!(PainAndGain\.)?hasWeapon\(%s\) && (PainAndGain\.)?hasHeal\(\2\)' % A, {'Facts.kt'}, 'healerOnly(x)'),
+    ('лекарь', r'hasHeal\(%s\) && !hasWeapon\(\1\)' % A, {'Facts.kt'}, 'healerOnly(x)'),
+    ('не лекарь', r'hasWeapon\(%s\) \|\| !hasHeal\(\1\)|!hasHeal\(%s\) \|\| hasWeapon\(\2\)' % (A, A), {'Facts.kt'}, '!healerOnly(x)'),
+    ('раздетый', r'!hasWeapon\(%s\) && !hasHeal\(\1\)' % A, {'Facts.kt'}, 'stripped(x)'),
+    ('в строю', r'hasWeapon\(%s\) \|\| hasHeal\(\1\)' % A, {'Facts.kt'}, 'combatant(x)'),
+    ('стрелок', r'hasWeapon\(%s\) && hasRanged\(\1\)|!hasRanged\(%s\) \|\| !hasWeapon\(\2\)' % (A, A), {'Facts.kt'},
+     'hasRanged(x): живая RANGED_ATTACK уже значит «вооружён»'),
+    # ролевой тест сканом тела: определение факта одно, в Unit. InfluenceMap — объект уровня 1, таблицы фактов тика не
+    # видит (она у оркестратора), его `armed` остаётся сканом до этапа 5
+    ('скан тела', r'\.body\.(any|all|none)\b', {'Facts.kt', 'InfluenceMap.kt'}, 'факт Unit: bornMelee / bornArmed / bornCombatant / live*'),
 ]
 
 # Проверки, которым мало одной строки: функция (исходники: {файл: [(номер, код)]}) -> [(файл, номер, текст)]
