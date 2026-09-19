@@ -1003,9 +1003,9 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
             if (!onFlag) keepOffLeft++ else if (groupSafe && !coreHolds(core)) keepOffCore++ else keepOffPack++
             // ПОЧЕМУ СНЯТ (v309, прибор): «сошёл с клетки» — это три разных случая, и порог чинить можно, только зная, какой
             val why = when {
-                c == null -> { keepOffGone++; "gone" }
-                f == null || !f.ours -> { keepOffFlag++; "flag" }
-                c.x != f.pos.x || c.y != f.pos.y -> { keepOffMoved++; "moved" }
+                c == null -> "gone"
+                f == null || !f.ours -> "flag"
+                c.x != f.pos.x || c.y != f.pos.y -> "moved"
                 // ...И ХРАНИТЕЛЬ УХОДИТ ПО ТОМУ ЖЕ ПРАВИЛУ, ЧТО ГАРНИЗОННЫЙ БЕГУН (v353, правило оператора
                 // 16.09.2026 «уходить только тогда, когда его потенциальный урон превышает наш фактический хил»).
                 // Разбор 4 матчей v348 по реплеям: за четыре матча мы потеряли 12 крипов, он — 1, и 9 из 12 умерших
@@ -1021,9 +1021,11 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
                 // ...И СМОТРИТ НА ДВА ТИКА ВПЕРЁД (v354, см. damageSoonAt): мера «кто достаёт сейчас» дала 14
                 // снятий за матч при 74 эпизодах «под огнём у флага» — угроза видна ровно тогда, когда уходить уже
                 // поздно, потому что полная скорость держится всего 3,0 тика после первого удара
-                keeperLeaves -> { keepOffHurt++; "hurt" }
+                keeperLeaves -> "hurt"
                 else -> "core"
             }
+            // счётчик причины — оператором после выбора, а не внутри выражения (v448, линт чистых инициализаторов)
+            when (why) { "gone" -> keepOffGone++; "flag" -> keepOffFlag++; "moved" -> keepOffMoved++; "hurt" -> keepOffHurt++ }
             if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value} ($why)")
             iter.remove()
             if (c != null) core = core + c
