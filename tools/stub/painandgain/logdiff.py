@@ -27,6 +27,7 @@ MASK = [
     (re.compile(r' lead=\S+'), ''),
     (re.compile(r' srch=\S+'), ''),
     (re.compile(r' deals=\S+ srchd=\S+'), ''),      # v449, пункт В: раздач ушло в мир / сыграно; перебор с победителем ≠ последнему
+    (re.compile(r' capq=\S+ capqu=\S+ capu=\S* capeval=\S+ capidle=\S+ mstrip=\S+'), ''),   # v451, пункты Г и Д: ворота с одним писателем; мили без ATTACK
 ]
 
 
