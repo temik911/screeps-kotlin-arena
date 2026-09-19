@@ -32,6 +32,17 @@ truth, and nothing to keep in sync by hand. What it adds is the join that was be
         store, so the gate and the live series answer the same question in the same words. Rare is not dead:
         the list is where to LOOK, the proof that a row is unreachable is an argument, not a count.
 
+    tools/series.py cpu --arena pain-and-gain --all --control 438 439 --final 447
+        the bot's own `cpu t=` lines of a final version against the SPREAD a control shows between its own matches:
+        per match the late maximum, slow ticks, `guard:` lines and timeouts; per hundred-tick window `max=` and
+        `slow=`; the phase breakdown on the periodic sample, on ticks 1-3 (the one sample where every match stands
+        the same) and per living army creep - two series against different opponents differ by the opponent before
+        they differ by the code, and the raw sums show exactly that.
+    tools/series.py shares --arena pain-and-gain --all --control 438 439 --final 447 [--every]
+        the labelled cumulative counters (`rung`, `step`, `pass`, `prio`, `cmdwhy`, `runner`, `cap`, `objnone`) as
+        shares of their cut, and the postures as shares of ticks (rebuilt from the `posture:` line), per opponent BOT;
+        a bot only one side has met is skipped unless `--every`.
+
 Why it exists: three versions in a row were designed off numbers read by eye out of ONE match's log
 (the focus share that produced v42 among them). One match is an anecdote; the instrument was already
 printing, nothing was aggregating it.
