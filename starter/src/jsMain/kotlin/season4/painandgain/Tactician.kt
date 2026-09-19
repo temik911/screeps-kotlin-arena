@@ -163,12 +163,12 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     for (e in combatEnemies) {
         val q = InfluenceMap.profileOf(e)
         if (q.ranged > 0.0) {
-            Forecast.fracTargetOf(e, all, RANGED_RANGE)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
-            Forecast.wallTargetOf(e, all, RANGED_RANGE)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
+            Forecast.fracTargetOf(unitsNow, e, all, RANGED_RANGE)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
+            Forecast.wallTargetOf(unitsNow, e, all, RANGED_RANGE)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.ranged * InfluenceMap.takenOf(t) }
         }
         if (q.melee > 0.0) {
-            Forecast.fracTargetOf(e, all, 1)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
-            Forecast.wallTargetOf(e, all, 1)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
+            Forecast.fracTargetOf(unitsNow, e, all, 1)?.let { t -> byFrac[t.id] = (byFrac[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
+            Forecast.wallTargetOf(unitsNow, e, all, 1)?.let { t -> byAddr[t.id] = (byAddr[t.id] ?: 0.0) + q.melee * InfluenceMap.takenOf(t) }
         }
     }
     Memory.fracPrev = byFrac.maxByOrNull { it.value }?.key

@@ -1,5 +1,7 @@
 package season4.painandgain
 
+import screeps.api.Position
+
 // ГЕОМЕТРИЯ КАРТЫ В СВОЕЙ СИСТЕМЕ КООРДИНАТ (v446, план архитектуры, этап 5) — уровень 1: ни от чего в пакете не зависит. До
 // этапа 5 `sym` и `mirrorTL` жили в World.kt, а читали их DistanceMap и InfluenceMap — службы уровнем НИЖЕ мира (два ребра вверх).
 // Сторону по-прежнему ставит `buildWorld` на первом тике.
@@ -19,3 +21,15 @@ internal var mirrorTL = false
 
 /** Обход −r..r в своей системе координат (см. mirrorTL): из (85,88) как был, из (12,9) — зеркально. */
 internal fun sym(r: Int): IntProgression = if (mirrorTL) r downTo -r else -r..r
+
+/** Знак числа: −1, 0, 1. */
+internal fun sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0
+
+/** Центр точек; округление — в своей системе координат (см. mirrorTL). До v446 — расширение `PainAndGain`, хотя объекта не читало. */
+internal fun centroidOf(points: List<Position>): Position? {
+    if (points.isEmpty()) return null
+    val n = points.size
+    val sx = points.sumOf { it.x }
+    val sy = points.sumOf { it.y }
+    return if (mirrorTL) InfluenceMap.cell((sx + n - 1) / n, (sy + n - 1) / n) else InfluenceMap.cell(sx / n, sy / n)
+}

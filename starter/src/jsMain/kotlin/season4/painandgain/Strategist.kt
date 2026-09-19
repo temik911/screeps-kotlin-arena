@@ -1569,7 +1569,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
         // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
         commandRace(ctx, meas.commandArmy, meas.armedEnemies, ctx.flags, commandOf)
         val runners = HashMap(commandOf)
-        Formation.brace(meas.commandArmy.filter { it.id !in Memory.cmdDetach }, meas.armedEnemies, commandOf)
+        Formation.brace(unitsNow, meas.commandArmy.filter { it.id !in Memory.cmdDetach }, meas.armedEnemies, commandOf)
         commandOf.putAll(runners)
     } else if (raceCommandNow) {
         cmdTicks++

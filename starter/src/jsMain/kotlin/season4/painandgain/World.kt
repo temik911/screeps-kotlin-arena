@@ -400,7 +400,6 @@ internal fun PainAndGain.enemyArrivalTicks(ctx: Ctx) {
     }
 }
 
-internal fun PainAndGain.sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0
 
 /** Хранители флагов (см. KEEP_RANGE): снятие, потом назначение. */
 internal fun PainAndGain.enemyCreeps(ctx: Ctx): List<Creep> = ctx.enemyCreeps
@@ -549,13 +548,6 @@ internal fun PainAndGain.clusterCentroid(cs: List<Creep>): Position? {
     return centroidOf(cs.filter { getRange(seed, it) <= MASS_RANGE })
 }
 
-internal fun PainAndGain.centroidOf(points: List<Position>): Position? {
-    if (points.isEmpty()) return null
-    val n = points.size
-    val sx = points.sumOf { it.x }
-    val sy = points.sumOf { it.y }
-    return if (mirrorTL) InfluenceMap.cell((sx + n - 1) / n, (sy + n - 1) / n) else InfluenceMap.cell(sx / n, sy / n)
-}
 
 /** Восемь направлений и стояние в своей системе координат (см. mirrorTL). */
 internal fun PainAndGain.dirsNow(): List<Pair<Int, Int>> = if (mirrorTL) DIRECTIONS_MIRROR else DIRECTIONS

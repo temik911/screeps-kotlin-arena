@@ -297,13 +297,13 @@ internal object Forecast {
     /** ЕГО ПРАВИЛО «НАИМЕНЬШАЯ ДОЛЯ ХИТОВ» (v275, модель ●ω<♥♪#6 по 97 играм): ствол бьёт нашего крипа с наименьшей
      *  долей хитов в досягаемости — 100 % из 24 903 выстрелов с выбором; при равенстве долей — лекарь, затем ближайший.
      *  Какое из двух правил у текущего соперника, решает сверка с фактом (см. rotateByFocus). */
-    internal fun fracTargetOf(shooter: Creep, live: List<Creep>, reach: Int): Creep? {
+    internal fun fracTargetOf(units: Units, shooter: Creep, live: List<Creep>, reach: Int): Creep? {
         var best: Creep? = null; var bestFrac = 2.0; var bestHealer = false; var bestD = 99
         for (f in live) {
             val d = getRange(shooter, f)
             if (d > reach) continue
             val frac = f.hits.toDouble() / maxOf(1, f.hitsMax)
-            val healer = PainAndGain.healerOnly(f)
+            val healer = units.of(f).healerOnly
             val tie = kotlin.math.abs(frac - bestFrac) <= 1e-9
             if (frac < bestFrac - 1e-9 || (tie && ((healer && !bestHealer) || (healer == bestHealer && d < bestD)))) {
                 best = f; bestFrac = frac; bestHealer = healer; bestD = d
@@ -312,12 +312,12 @@ internal object Forecast {
         return best
     }
 
-    internal fun wallTargetOf(shooter: Creep, live: List<Creep>, reach: Int): Creep? {
+    internal fun wallTargetOf(units: Units, shooter: Creep, live: List<Creep>, reach: Int): Creep? {
         var best: Creep? = null; var bestKey = Double.MAX_VALUE; var bestHealer = false
         for (f in live) {
             val d = getRange(shooter, f)
             if (d > reach) continue
-            val healer = PainAndGain.healerOnly(f)
+            val healer = units.of(f).healerOnly
             if (bestHealer && !healer) continue
             val key = d * 100000.0 + f.hits
             if ((healer && !bestHealer) || key < bestKey) { best = f; bestKey = key; bestHealer = healer }

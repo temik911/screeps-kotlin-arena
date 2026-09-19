@@ -157,9 +157,9 @@ internal object Formation {
      *  ИДЁТ, но контакта ещё нет, командир строит фронт: ось — направление на его центр, мили на ближней к нему линии,
      *  стрелки за ними, лекари в тылу. Это не отвергнутый USE_COMMANDER_APPROACH: тот вёл армию ВПЛОТНУЮ к врагу
      *  раздачей клеток по его строю, а здесь никто не сближается — строй ставится вокруг своего же якоря. */
-    fun brace(army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, Position>) {
+    fun brace(units: Units, army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, Position>) {
         out.clear()
-        val core = army.filter { PainAndGain.canMove(it) && !it.spawning }
+        val core = army.filter { units.of(it).liveMove && !it.spawning }
         if (core.size < 3 || enemies.isEmpty()) return
         val (ax, ay) = median(core)
         val ex = enemies.sumOf { it.x } / enemies.size; val ey = enemies.sumOf { it.y } / enemies.size
@@ -167,8 +167,8 @@ internal object Formation {
         if (dx == 0 && dy == 0) return
         // ряд крипа по роли: мили +1 к врагу, стрелки на якоре, лекари −1 (в тыл)
         fun rowOf(c: Creep) = when {
-            PainAndGain.hasWeapon(c) && PainAndGain.hasMelee(c) && !PainAndGain.hasRanged(c) -> 1
-            PainAndGain.hasWeapon(c) -> 0
+            units.of(c).meleeOnlyLive -> 1
+            units.of(c).armed -> 0
             else -> -1
         }
         val taken = HashSet<Int>()          // занятые МЕСТА в строю
@@ -207,7 +207,7 @@ internal object Formation {
 
     /** КОЛОННА МАРША: от якоря (ax, ay) по направлению (sx, sy), которое вызывающий берёт из поля потока; крип дальше
      *  FIST_RADIUS от якоря идёт к якорю, остальные — на два шага по оси; шаг выбирается из восьми соседей. */
-    fun marchColumn(core: List<Creep>, ax: Int, ay: Int, sx: Int, sy: Int, out: MutableMap<String, Position>) {
+    fun marchColumn(units: Units, core: List<Creep>, ax: Int, ay: Int, sx: Int, sy: Int, out: MutableMap<String, Position>) {
         val taken = HashSet<Int>()
         // ...и марш даёт те же гарантии, что бой (v173): клетка не занята своим, крип способен шагнуть, одна клетка —
         // одному. Прежде колонна раздавала клетки своим кодом без этих проверок, и приказы выходили неисполнимыми
@@ -215,7 +215,7 @@ internal object Formation {
         for (a in core) occupied.add(a.key)
         for (c in core.sortedBy { maxOf(abs(it.x - ax), abs(it.y - ay)) }) {
             // лекарь идёт за подопечным, а не в строю: его место задаёт лечение, и приказ марша только уводил его
-            if (PainAndGain.hasHeal(c) && !PainAndGain.hasWeapon(c)) continue
+            if (units.of(c).healerOnly) continue
             if (c.fatigue > 0) continue
             val far = maxOf(abs(c.x - ax), abs(c.y - ay)) > FIST_RADIUS
             val tx = if (far) ax else c.x + sx * 2
@@ -306,8 +306,8 @@ internal object Formation {
         val anchor = InfluenceMap.cell(pair.first.x, pair.first.y)
         val nearest = pair.second
         val group = threats.filter { getRange(nearest, it) <= ENGAGE_RANGE }
-        val ec = PainAndGain.centroidOf(group.map { InfluenceMap.cell(it.x, it.y) }) ?: return
-        val dx0 = PainAndGain.sgn(ec.x - anchor.x); val dy = PainAndGain.sgn(ec.y - anchor.y)
+        val ec = centroidOf(group.map { InfluenceMap.cell(it.x, it.y) }) ?: return
+        val dx0 = sgn(ec.x - anchor.x); val dy = sgn(ec.y - anchor.y)
         val dx = if (dx0 == 0 && dy == 0) 1 else dx0
         val px = -dy; val py = dx
         val taken = HashSet<Int>()
@@ -380,7 +380,7 @@ internal fun PainAndGain.commandMarch(ctx: Ctx, army: List<Creep>, goal: Positio
     if ((sx != 0 || sy != 0) && sx == -marchPrevSx && sy == -marchPrevSy) marchFlip++
     marchPrevSx = sx; marchPrevSy = sy
     if (sx == 0 && sy == 0) return
-    Formation.marchColumn(core, ax, ay, sx, sy, out)
+    Formation.marchColumn(unitsNow, core, ax, ay, sx, sy, out)
 }
 
 /** Шаг колонны по полю потока к цели (v232, см. USE_MARCH_FLOW_DIRECTION): сосед клетки якоря с наименьшим расстоянием
@@ -628,8 +628,8 @@ internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasuresOut): HealerWall
     val live = livingCombatants(ctx.army)
     for (e in ctx.combatEnemies) {
         val q = InfluenceMap.profileOf(e)
-        if (q.ranged > 0.0) Forecast.wallTargetOf(e, live, RANGED_RANGE)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.ranged }
-        if (q.melee > 0.0) Forecast.wallTargetOf(e, live, MELEE_STEP_REACH)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.melee }
+        if (q.ranged > 0.0) Forecast.wallTargetOf(unitsNow, e, live, RANGED_RANGE)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.ranged }
+        if (q.melee > 0.0) Forecast.wallTargetOf(unitsNow, e, live, MELEE_STEP_REACH)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.melee }
     }
     val byAddress = addressed.entries.maxByOrNull { it.value }
     val lostV = ctx.army.filter { (combatant(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
