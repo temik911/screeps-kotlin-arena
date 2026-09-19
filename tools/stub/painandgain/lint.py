@@ -116,7 +116,12 @@ def effect_in_initializer(files):
 # Этап 3: классы фактов, которые читают строки таблиц решений. Строка таблицы — лямбда с получателем такого класса, внутри
 # `with(PainAndGain)`; величины тика она берёт через `t.`. Поле, совпавшее по имени с полем другого класса фактов, с полем
 # ArmyTick / Ctx или с членом объекта PainAndGain, МОЛЧА меняет смысл условия: компилятор возьмёт ближайшего получателя.
-FACT_CLASSES = ['Turn', 'Stride', 'CaptureCase', 'ArmyTick', 'Ctx']
+# Группы получателей, которые бывают в области видимости ОДНОЙ строки таблицы одновременно (последним — объект PainAndGain)
+FACT_SCOPES = [
+    ['Turn', 'Stride', 'ArmyTick', 'Ctx', 'PainAndGain'],      # лестница цели и цепочка шага (Tactician.kt)
+    ['CaptureCase', 'PainAndGain'],                            # ворота захвата (Strategist.kt)
+    ['PushCase', 'PainAndGain'],                               # решение о наступлении (Strategist.kt)
+]
 
 
 def _ctor_fields(files, cls):
@@ -150,17 +155,19 @@ def shadowed_fact_names(files):
     """Этап 3: множества имён классов фактов и членов PainAndGain попарно не пересекаются (кроме `creep`, `ctx`, `t` — это
     один и тот же объект, откуда ни читай; `army`, `combatEnemies`, `enemyCreeps` у ArmyTick и Ctx — один и тот же список)."""
     same = {'creep', 'ctx', 't', 'f', 'army', 'combatEnemies', 'enemyCreeps'}
-    sets = {}
-    where = {}
-    for cls in FACT_CLASSES:
-        where[cls], sets[cls] = _ctor_fields(files, cls)
-    sets['PainAndGain'] = _object_members(files, 'PainAndGain')
-    names = list(sets)
+    members = _object_members(files, 'PainAndGain')
     out = []
-    for i, a in enumerate(names):
-        for b in names[i + 1:]:
-            for n in sorted((sets[a] & sets[b]) - same):
-                out.append((where.get(a) or 'PainAndGain.kt', 0, 'имя `%s` есть и у %s, и у %s — строка таблицы прочтёт ближайшего получателя' % (n, a, b)))
+    for scope in FACT_SCOPES:
+        sets, where = {}, {}
+        for cls in scope:
+            if cls == 'PainAndGain':
+                sets[cls], where[cls] = members, 'PainAndGain.kt'
+            else:
+                where[cls], sets[cls] = _ctor_fields(files, cls)
+        for i, a in enumerate(scope):
+            for b in scope[i + 1:]:
+                for n in sorted((sets[a] & sets[b]) - same):
+                    out.append((where.get(a) or 'PainAndGain.kt', 0, 'имя `%s` есть и у %s, и у %s — строка таблицы прочтёт ближайшего получателя' % (n, a, b)))
     return out
 
 
