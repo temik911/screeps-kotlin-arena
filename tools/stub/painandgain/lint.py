@@ -44,7 +44,7 @@ RULES = [
     # этап 2, защёлка руками: гистерезис идёт через Latch (Memory.kt) — множество остаётся полем Memory, Latch — вид
     ('защёлка руками', r'if \(.*\) Memory\.\w+\.add\(.*\) else Memory\.\w+\.remove\(', {'Memory.kt'},
      'Memory.<имя>Latch.set(id, условие) / .update(id, enter, exit) — оператором на том же месте'),
-    ('скан тела', r'\.body\.(any|all|none)\b', {'Facts.kt', 'InfluenceMap.kt'}, 'факт Unit: bornMelee / bornArmed / bornCombatant / live*'),
+    ('скан тела', r'\.body\.(any|all|none)\b', {'Facts.kt', 'InfluenceMap.kt'}, 'факт CreepFacts: bornMelee / bornArmed / bornCombatant / live*'),
 ]
 
 SELECTION = re.compile(r'(?<![\w.])((?:\w+\.)*\w+)\.(filter|filterNot)\s*\{([^{}]*)\}')
