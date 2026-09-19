@@ -127,8 +127,8 @@ internal object Forecast {
         val them = his.map { mk(it, false) }
         // цель фокуса внутри симуляции: наши бьют её, пока достают, — так план и цель выбираются вместе (v138)
         val focusIdx = focus?.let { f -> his.indexOfFirst { it.id == f.id } } ?: -1
-        var strikeAll: () -> Unit = {}
-        var healAll: () -> Unit = {}
+        var strikeAll: () -> kotlin.Unit = {}
+        var healAll: () -> kotlin.Unit = {}
         val goal = HashMap<Int, Position>()
         mine.forEachIndexed { i, c -> plan[c.id]?.let { goal[i] = it } }
         fun d(a: SimC, b: SimC) = maxOf(abs(a.x - b.x), abs(a.y - b.y))

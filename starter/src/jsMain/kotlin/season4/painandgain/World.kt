@@ -84,6 +84,8 @@ internal class Ctx(
     val passiveEnemy: Boolean,
     val ourCentroid: Position,
     val enemyCentroid: Position?,
+    /** Факты крипов тика (Facts.kt): строятся заново каждый тик, живут вместе с `Ctx`. */
+    val units: Units,
 )
 
 // ==================== флаги и эффекты ====================
@@ -388,17 +390,20 @@ internal fun PainAndGain.enemyCreeps(ctx: Ctx): List<Creep> = ctx.enemyCreeps
 
 // ==================== тело, скорость, мощь ====================
 
-internal fun PainAndGain.canMove(creep: Creep) = creep.body.any { it.type == MOVE && it.hits > 0 }
+/** Факты крипа в этом тике (см. Facts.kt). Обёртки ниже — тонкие: определение каждого факта одно, в `Unit`. */
+internal fun PainAndGain.unitOf(creep: Creep): Unit = unitsNow.of(creep)
 
-internal fun PainAndGain.hasMelee(creep: Creep) = creep.body.any { it.type == ATTACK && it.hits > 0 }
+internal fun PainAndGain.canMove(creep: Creep) = unitOf(creep).liveMove
 
-internal fun PainAndGain.isMelee(creep: Creep) = creep.body.any { it.type == ATTACK }
+internal fun PainAndGain.hasMelee(creep: Creep) = unitOf(creep).liveMelee
 
-internal fun PainAndGain.hasRanged(creep: Creep) = creep.body.any { it.type == RANGED_ATTACK && it.hits > 0 }
+internal fun PainAndGain.isMelee(creep: Creep) = unitOf(creep).bornMelee
 
-internal fun PainAndGain.hasHeal(creep: Creep) = creep.body.any { it.type == HEAL && it.hits > 0 }
+internal fun PainAndGain.hasRanged(creep: Creep) = unitOf(creep).liveRanged
 
-internal fun PainAndGain.hasWeapon(creep: Creep) = hasRanged(creep) || hasMelee(creep)
+internal fun PainAndGain.hasHeal(creep: Creep) = unitOf(creep).liveHeal
+
+internal fun PainAndGain.hasWeapon(creep: Creep) = unitOf(creep).armed
 
 /** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)
  *  плюс гружёные CARRY. */
@@ -1126,6 +1131,9 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
 
     val myCreeps = getObjectsByPrototype(Creep::class).filter { it.my && it.exists }
     val enemyCreeps = getObjectsByPrototype(Creep::class).filter { !it.my && it.exists && !it.spawning }
+    // словарь фактов тика (Facts.kt) — до первого ролевого теста: всё ниже читает его через unitOf
+    val units = Units(myCreeps + enemyCreeps)
+    unitsNow = units
     val active = myCreeps.filter { !it.spawning }
     val combatEnemies = enemyCreeps.filter { val p = InfluenceMap.profileOf(it); p.melee + p.ranged + p.heal > 0.0 }
 
@@ -1218,7 +1226,7 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     cpuMark("prep")
     val ourCentroid = centroidOf(army.ifEmpty { active }) ?: home
     val enemyCentroid = centroidOf(combatEnemies.ifEmpty { enemyCreeps })
-    val ctx = Ctx(home, enemyHome, myCreeps, active, army, runners, enemyCreeps, combatEnemies, blocked, rawDanger, dangerMatrix, flags, flagCells, flagBlocked, passiveEnemy, ourCentroid, enemyCentroid)
+    val ctx = Ctx(home, enemyHome, myCreeps, active, army, runners, enemyCreeps, combatEnemies, blocked, rawDanger, dangerMatrix, flags, flagCells, flagBlocked, passiveEnemy, ourCentroid, enemyCentroid, units)
 
     enemyArrivalTicks(ctx)
     // предзагрузка (v131b): потоки ко всем флагам считаются на первом тике, чей лимит 1000 мс, — второй тик (лимит 100 мс,
