@@ -106,6 +106,9 @@ internal object Forecast {
         var hitsMaxTail: Int = 0
     }
 
+    /** Живые участники проката. Функция, а не значение: хиты SimC меняются от тика к тику проката. */
+    private fun alive(side: List<SimC>) = side.filter { it.hits > 0 }
+
     /** СИМУЛЯЦИЯ РАЗМЕНА НА НЕСКОЛЬКО ТИКОВ (v138, см. USE_SIMULATION): обе стороны ходят — мы по предложенному плану,
      *  он по модели, снятой с его же записей и с формы `brawl` стенда (мили идут к нашему ближайшему МЯГКОМУ крипу,
      *  стрелки держат три, лекари при самом раненом), — после чего считается урон и лечение по арифметике арены.
@@ -147,7 +150,7 @@ internal object Forecast {
             // четыре тика оценивал несуществующий бой: враг маневрирует, а мы шли в клетку, которая уже ничего не значит
             val liveThem0 = them.filter { it.hits > 0 }
             // якорь прогноза — та же медиана живых наших, что и у командира в бою (v159, см. USE_SIM_FIST)
-            val liveUs0 = us.filter { it.hits > 0 }
+            val liveUs0 = alive(us)
             us.forEachIndexed { i, c ->
                 if (c.hits <= 0) return@forEachIndexed
                 val g = goal[i]
@@ -200,7 +203,7 @@ internal object Forecast {
                 }
             }
             // его ход: мили к нашему ближайшему мягкому, стрелки держат три, лекари к самому раненому своему
-            val liveUs = us.filter { it.hits > 0 }
+            val liveUs = alive(us)
             if (liveUs.isEmpty()) break
             for (e in them) {
                 if (e.hits <= 0) continue
@@ -278,8 +281,8 @@ internal object Forecast {
         // принимает. Прежняя линейная сумма профилей давала почти одинаковые числа для планов, расходящихся на четыре
         // тика, и выбор тонул в шуме; произведение разводит их, потому что маленький перевес в размене возводится в
         // квадрат — ровно то, чем блоб нас и бьёт
-        fun dps(side: List<SimC>) = side.filter { it.hits > 0 }.sumOf { it.melee + it.ranged + it.heal / 3.0 }
-        fun body(side: List<SimC>) = side.filter { it.hits > 0 }.sumOf { it.hits.toDouble() }
+        fun dps(side: List<SimC>) = alive(side).sumOf { it.melee + it.ranged + it.heal / 3.0 }
+        fun body(side: List<SimC>) = alive(side).sumOf { it.hits.toDouble() }
         fun power(side: List<SimC>) = dps(side) * body(side) / SIM_POWER_SCALE
         return (power(us) - power(them))
     }

@@ -86,7 +86,22 @@ internal class Ctx(
     val enemyCentroid: Position?,
     /** Факты крипов тика (Facts.kt): строятся заново каждый тик, живут вместе с `Ctx`. */
     val units: Units,
-)
+    /** Его бойцы, которые грозят (см. threatening): сами с оружием либо с чужим стволом в досягаемости лечения. */
+    val threats: List<Creep>,
+) {
+    // ИМЕНОВАННЫЕ ВЫБОРКИ ТИКА (v442, план архитектуры, этап 1). Каждая была выписана дословно в двух–пяти местах разных
+    // стадий; списки и предикаты за тик не меняются, поэтому считаются один раз. Порядок элементов — как у filter.
+    /** Бегуны с живым оружием или лечением: бойцы, посланные за флагом (detach, cmdDetach). */
+    val combatRunners: List<Creep> = runners.filter { units.of(it).combatant }
+    /** Наша сторона в бою: армия и бегуны-бойцы. */
+    val side: List<Creep> = army + combatRunners
+    /** Армия с живым оружием. */
+    val armedArmy: List<Creep> = army.filter { units.of(it).armed }
+    /** Армия с живой HEAL — лекари и вооружённые с лечением. */
+    val armyWithHeal: List<Creep> = army.filter { units.of(it).liveHeal }
+    val ourFlags: List<FlagInfo> = oursOf(flags)
+    val flagsNotTheirs: List<FlagInfo> = flags.filter { !it.theirs }
+}
 
 // ==================== флаги и эффекты ====================
 
@@ -156,7 +171,7 @@ internal fun PainAndGain.applyEffects(flags: List<FlagInfo>, myCreeps: List<Cree
 
 internal fun PainAndGain.accountScore(flags: List<FlagInfo>) {
     val cap = num(MAX_SCORE_PER_TICK.asDynamic(), Double.MAX_VALUE)
-    ourRate = minOf(cap, flags.filter { it.ours }.sumOf { it.score }.toDouble()).toInt()
+    ourRate = minOf(cap, oursOf(flags).sumOf { it.score }.toDouble()).toInt()
     enemyRate = minOf(cap, flags.filter { it.theirs }.sumOf { it.score }.toDouble()).toInt()
     ourScore += ourRate
     enemyScore += enemyRate
@@ -418,6 +433,35 @@ internal fun PainAndGain.combatant(creep: Creep) = unitOf(creep).combatant
 internal fun PainAndGain.bornArmed(creep: Creep) = unitOf(creep).bornArmed
 internal fun PainAndGain.bornCombatant(creep: Creep) = unitOf(creep).bornCombatant
 
+// ИМЕНОВАННЫЕ ВЫБОРКИ (v442, план архитектуры, этап 1). Выборка, выписанная дословно в нескольких функциях, у которых
+// СВОЙ список или предикат по памяти, меняющейся за тик, полем `Ctx` стать не может: она обязана считаться там же и
+// тогда же, где считалась. Поэтому это функции — определение одно, точки вычисления прежние. Выборки по спискам тика с
+// неизменным за тик предикатом — поля `Ctx` (side, threats, armedArmy…).
+internal fun PainAndGain.living(creeps: List<Creep>) = creeps.filter { it.hits > 0 }
+internal fun PainAndGain.livingCombatants(creeps: List<Creep>) = creeps.filter { it.hits > 0 && (combatant(it)) }
+internal fun PainAndGain.armedOf(creeps: List<Creep>) = creeps.filter { hasWeapon(it) }
+internal fun PainAndGain.armedMatesOf(creeps: List<Creep>, self: Creep) = creeps.filter { it.id != self.id && hasWeapon(it) }
+internal fun PainAndGain.rangedOf(creeps: List<Creep>) = creeps.filter { hasRanged(it) }
+internal fun PainAndGain.withHeal(creeps: List<Creep>) = creeps.filter { hasHeal(it) }
+internal fun PainAndGain.pureMeleeOf(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) }
+/** Ходячие и уже родившиеся: те, кому командир и строй вообще могут дать клетку. */
+internal fun PainAndGain.mobileOf(creeps: List<Creep>) = creeps.filter { canMove(it) && !it.spawning }
+/** Бойцы линии: чистые мили / стрелки, не ушедшие в ротацию (читает память — считается в момент вызова). */
+internal fun PainAndGain.lineMelees(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
+internal fun PainAndGain.lineRangeds(creeps: List<Creep>) = creeps.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
+/** Состав гонки за флагом: вооружённый, на полной скорости, не хранитель и не в ротации (память — в момент вызова). */
+internal fun PainAndGain.raceCapable(creeps: List<Creep>) = creeps.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Memory.keeperIds && it.id !in Memory.rotatingIds }
+/** Отряд за флагами и остальные — по памяти В МОМЕНТ ВЫЗОВА: стратег правит detachedIds и cmdDetach посреди тика. */
+internal fun PainAndGain.detachedRunners(ctx: Ctx) = ctx.runners.filter { it.id in Memory.detachedIds }
+internal fun PainAndGain.notDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.detachedIds }
+internal fun PainAndGain.notCmdDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.cmdDetach }
+/** Его вооружённые в досягаемости боя от точки (флага). */
+internal fun PainAndGain.foesInEngage(foes: List<Creep>, pos: Position) = foes.filter { getRange(it, pos) <= ENGAGE_RANGE }
+/** Наши флаги из списка (до `Ctx` — в счёте очков; в `Ctx` это поле ourFlags). */
+internal fun oursOf(flags: List<FlagInfo>) = flags.filter { it.ours }
+/** Список без этого крипа. */
+internal fun List<Creep>.without(c: Creep) = filter { it.id != c.id }
+
 /** «Чистый мили», написание А — рождён мили: истинно и с выбитым оружием (см. Unit.meleeOnlyBorn). */
 internal fun PainAndGain.meleeOnlyBorn(creep: Creep) = unitOf(creep).meleeOnlyBorn
 
@@ -644,7 +688,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // флагами от лекарей с обломками, и через сто тиков те вернулись в полном теле). Стая из одних лекарей при
     // скаутах (сила 0) не повод для боя: два уцелевших лекаря врага кайтили в четырёх клетках 1700 тиков, армия
     // в ДОБИТЬ то гналась, то сбивалась в кучу и не шла за флагами, пока скауты врага брали пять (m7 rush)
-    val armedEnemies = combatEnemies.filter { threatening(it, enemyCreeps) }
+    val armedEnemies = ctx.threats
     // сомкнутая масса врага — та же мера, что в postureOf (см. enemyMassed): шесть и больше вооружённых, две трети
     // которых в MASS_RANGE от их центроида. Считается раз на тик, а не на крипа (v135)
     val enemyMassedNow = armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
@@ -740,7 +784,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // двигать центр вооружённой массы: за MARCH_STALL_TICKS тиков он не сдвинулся НИ НА КЛЕТКУ — это не марш.
     // Матч 25: добыча стояла в 11 клетках, ближе никого, армия 990 тиков дёргалась на месте у (46,34); за весь
     // матч ни одного урона ни с одной стороны, и проигрыш по очкам 19927:24205 при 12 против 13 в тик
-    val marchCell = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })?.let { it.key } ?: -1
+    val marchCell = centroidOf(ctx.armedArmy.ifEmpty { army })?.let { it.key } ?: -1
     Memory.marchHist.addLast(marchCell)
     // ТРЕТИЙ вид простоя — враг, который держит дистанцию: в добивании без контакта дистанция между центрами армий за
     // CHASE_WINDOW тиков не сократилась, и враг дальше броска. Матч 48 (けろびー v5, фермер): он взял шесть флагов к 80-му
@@ -748,7 +792,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // пикет не срабатывал (враг дальше ENGAGE_RANGE), марш не «стоял» (армия за ним ходила), и ANNIHILATE держал армию
     // лицом к нему на двух-трёх флагах против его пяти: 8 в тик против 17, проигрыш 15652:22950 при 16000/16000 у обоих
     // застой по ближайшей группе (v132, USE_STALL_NEAREST_GROUP): центр его группы, ближайшей к нашему вооружённому центру
-    val ourArmedCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })
+    val ourArmedCentroid = centroidOf(ctx.armedArmy.ifEmpty { army })
     val stallCentroid: Position? = ctx.enemyCentroid
     val armyDist = stallCentroid?.let { getRange(ourArmedCentroid ?: it, it) } ?: -1
     // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
@@ -844,7 +888,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // каждый тик, а обездвиженные остаются врагу (стенд rush: отход при 1250 против 1619 отдал ещё
     // шестерых). Иначе в контакте — бой всем составом, даже слабее: рубка с фокусом лучше разгрома
     // контакт армии — контакт её МАССЫ (см. MASS_RANGE): один оторвавшийся не переводит армию в бой
-    val massCentroid = clusterCentroid(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ctx.ourCentroid
+    val massCentroid = clusterCentroid(ctx.armedArmy.ifEmpty { army }) ?: ctx.ourCentroid
     val massArmy = army.filter { getRange(it, massCentroid) <= MASS_RANGE }.ifEmpty { army }
     val contact = inContact(armedEnemies, massArmy)
     // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): назначение и тыльная клетка считаются здесь — до командира и ступеней
@@ -960,7 +1004,7 @@ internal fun PainAndGain.rememberTick(ctx: Ctx, seg: RememberTickIn): RememberTi
     Memory.enemyPrevCell.clear()
     for (e in enemyCreeps) Memory.enemyPrevCell[e.id] = e.key
     // история движения — для ловимости (см. evasive)
-    val armedCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ourCentroid
+    val armedCentroid = centroidOf(ctx.armedArmy.ifEmpty { army }) ?: ourCentroid
     Memory.ourCentroidHist.addLast(armedCentroid.key)
     while (Memory.ourCentroidHist.size > CHASE_WINDOW) Memory.ourCentroidHist.removeFirst()
     for (e in enemyCreeps) {
@@ -994,7 +1038,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     plannedCaptures.clear()
     // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
     // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
-    val armedNow = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+    val armedNow = ctx.threats
     val massedByShape = armedNow.size >= 6 && centroidOf(armedNow)?.let { c -> armedNow.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedNow.size * 2 } == true
     // СОМКНУТ ТОТ, КТО ПРИХОДИТ ВМЕСТЕ (v226, см. USE_MASS_BY_ARRIVAL): колонна на марше двумя эшелонами (пять впереди,
     // четверо в пятнадцати клетках позади) по форме не сомкнута — центр масс лежит в зазоре, и «в MASS_RANGE от центра»
@@ -1229,8 +1273,9 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     // флаг берётся тем, кто на него ВСТАЛ, — и любой шаг армии через чужой флаг был захватом: в матче 3 армия
     // на марше взяла D5 и второй A3 (occupant=none в журнале) и дралась при A×0.6 D×1.1 против врага, с
     // которого сама же сняла дебаффы. Не наш флаг — стена для всех, кроме назначенного на него
-    val flagCells = flags.filter { !it.ours }.mapTo(HashSet()) { it.pos.key }
-    val flagBlocked = flags.filter { !it.ours }.map { it.pos }
+    val notOurs = flags.filter { !it.ours }
+    val flagCells = notOurs.mapTo(HashSet()) { it.pos.key }
+    val flagBlocked = notOurs.map { it.pos }
     val blockSig = blocked.sumOf { it.key + 1 } * 31 + flagBlocked.sumOf { it.key + 1 }
     // смена препятствий: поля не удаляются, а помечаются устаревшими — сверх бюджета (см. BFS_BUDGET) идут как есть
     if (blockSig != flowSig) { for (k in Memory.flowCacheTick.keys.toList()) Memory.flowCacheTick[k] = -1000; flowSig = blockSig }
@@ -1245,7 +1290,8 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     cpuMark("prep")
     val ourCentroid = centroidOf(army.ifEmpty { active }) ?: home
     val enemyCentroid = centroidOf(combatEnemies.ifEmpty { enemyCreeps })
-    val ctx = Ctx(home, enemyHome, myCreeps, active, army, runners, enemyCreeps, combatEnemies, blocked, rawDanger, dangerMatrix, flags, flagCells, flagBlocked, passiveEnemy, ourCentroid, enemyCentroid, units)
+    val ctx = Ctx(home, enemyHome, myCreeps, active, army, runners, enemyCreeps, combatEnemies, blocked, rawDanger, dangerMatrix, flags, flagCells, flagBlocked, passiveEnemy, ourCentroid, enemyCentroid, units,
+        threats = combatEnemies.filter { threatening(it, enemyCreeps) })
 
     enemyArrivalTicks(ctx)
     // предзагрузка (v131b): потоки ко всем флагам считаются на первом тике, чей лимит 1000 мс, — второй тик (лимит 100 мс,

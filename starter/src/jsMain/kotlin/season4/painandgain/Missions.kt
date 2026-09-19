@@ -155,7 +155,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
             // угрожающий крип дальше от флага, чем путь бегуна плюс порог его бегства (SCOUT_FLEE_TRIGGER): бегун дойдёт раньше,
             // чем угроза войдёт в его порог. Матч 407: армия 530 тиков в EVADE при его армии в 47 клетках, бегун scout_1 всё
             // время RESERVE — у каждого флага запас выхода отрицателен или неизвестен; бегун — M1 на 100 хитов, армию не тянет
-            val hisNearestToFlag = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }.minOfOrNull { getRange(it, f.pos) } ?: Int.MAX_VALUE / 4
+            val hisNearestToFlag = ctx.threats.minOfOrNull { getRange(it, f.pos) } ?: Int.MAX_VALUE / 4
             if (escapeFlows.isNotEmpty() && exitMargin(ctx, f.pos, ticks) < 0) continue
             // свой пустой флаг стоит половину — но СИДЯЩИЙ на нём закрывает клетку от чужих бегунов (матч 2:
             // центральный D5 забрал вражеский M1, пока армия уходила за соседним флагом, и вернуть его было
@@ -234,7 +234,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         // (v339) считает головы, а решает размен. Обе величины уже есть в поле влияния: damageAt — сумма его стволов,
         // достающих клетку (с его дебаффами), healAt — лечение наших лекарей в дальности (с нашими)
         val incoming = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies)
-        val healing = InfluenceMap.healAt(s.x, s.y, ctx.army.filter { hasHeal(it) })
+        val healing = InfluenceMap.healAt(s.x, s.y, ctx.armyWithHeal)
         val garrisonStays = groupSafe && Memory.garrisonOf[s.id] != null && holds.containsKey(s.id) &&
             s.hits * 2 >= s.hitsMax && incoming <= healing
         if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay++

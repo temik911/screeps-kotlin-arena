@@ -361,7 +361,7 @@ internal object Formation {
 internal fun PainAndGain.commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: MutableMap<String, Position>) {
     out.clear()
     if (goal == null) return
-    val core = army.filter { canMove(it) && !it.spawning }
+    val core = mobileOf(army)
     if (core.size < 2) return
     val (ax, ay) = Formation.median(core)
     // ...и направление задаёт ПУТЬ, а не прямая на цель: жадный шаг упирался в стену и строй застревал целиком —
@@ -425,8 +425,8 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
 /** Мини-состояние для симуляции (v138): позиция, хиты и профиль крипа. */
 
 internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
-    val melees = army.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
-    val rangeds = army.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
+    val melees = lineMelees(army)
+    val rangeds = lineRangeds(army)
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
     val armed = melees + rangeds
     if (armed.isEmpty()) return
@@ -458,8 +458,8 @@ internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>
  *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
  *  клетка занята. */
 internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, enemyCreeps: List<Creep>, slotOf: MutableMap<String, Position>, focusTarget: Creep?) {
-    val melees = army.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
-    val rangeds = army.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
+    val melees = lineMelees(army)
+    val rangeds = lineRangeds(army)
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
     if (melees.isEmpty() && rangeds.isEmpty()) return
     val threats = armedEnemies.ifEmpty { combatEnemies }
@@ -478,7 +478,7 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     // ярусы «цель в трёх → нет его мили вплотную → нет его мили в двух» выбрали стрелкам клетки (76–80, 15–16) — ЗА его
     // линией, где его мили не стоят, — и одиннадцать крипов пошли к ним сквозь его строй по одному (so=0 flow=−1 у всех на
     // 370–380-м): reach 1/3, наш огонь 1,2 в тик против его 4,2
-    val ourC = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })
+    val ourC = centroidOf(armedOf(army).ifEmpty { army })
     val theirC = centroidOf(threats)
     val cells = HashMap<Int, FightCell>()
     for (c in army) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
@@ -631,7 +631,7 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
     // текущим клеткам — лекарь в досягаемости первым, иначе ближайший, при равенстве с меньшими хитами
     // ...и карта адресного урона живёт тик (v233, см. USE_HEAL_BY_DEFICIT): её читает выбор пациента
     val addressed = addressedDmg
-    val live = army.filter { it.hits > 0 && (combatant(it)) }
+    val live = livingCombatants(army)
     for (e in ctx.combatEnemies) {
         val q = InfluenceMap.profileOf(e)
         if (q.ranged > 0.0) Forecast.wallTargetOf(e, live, RANGED_RANGE)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.ranged }

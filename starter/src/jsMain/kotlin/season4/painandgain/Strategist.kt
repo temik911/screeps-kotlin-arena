@@ -326,7 +326,7 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     // ⚠️ Это НЕ отвергнутая правка про `enemyNear` (см. комментарий там же): та меняла постуру, из-за чего
     // висящий у хранителя враг переставал отменять цель-флаг, и m20 spread перешёл из победы в поражение.
     // Здесь меняется потребитель — гейт захвата, — а постура не трогается вовсе.
-    val foes = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+    val foes = ctx.threats
     val mass = centroidOf(ctx.army)
     val contactArmy = if (mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
     if (!losingRace && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy)) {
@@ -413,7 +413,7 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     capOppSum += opp.size
     capAllSum += ctx.combatEnemies.size
     val (ours, theirs) = powerAfterFor(ctx,
-        ctx.army + ctx.runners.filter { combatant(it) },
+        ctx.side,
         opp, f)
     // ИНВЕРСИЯ СНЯТА (v214). Здесь стояло `needed = ourScore <= enemyScore || ourRate <= enemyRate`, и когда
     // мы ВЕДЁМ по счёту и по темпу, пол становился CAPTURE_FLOOR = 1.0 — СТРОЖЕ, чем PARITY_FLOOR = 0.97 при
@@ -449,7 +449,7 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? {
     // ФЛАГОВ БОЛЬШЕ ЦЕНОЙ НЕБОЛЬШОГО МИНУСА (v222, решение оператора, см. USE_FLAG_MAJORITY): армии СЕЙЧАС на паритете,
     // перевеса по флагам у нас нет, а этот флаг его даёт — минус ровно дебафф этого флага
     run {
-        val side = ctx.army + ctx.runners.filter { combatant(it) }
+        val side = ctx.side
         val oursNow = ourPowerOf(side, opp)
         val theirsNow = enemyPowerOf(opp, side)
         if (oursNow >= theirsNow * floor) {
@@ -512,7 +512,7 @@ internal fun PainAndGain.planCapture(ctx: Ctx, step: Position?) {
 /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
  *  вражья — без них, если флаги были его. */
 internal fun PainAndGain.powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double> =
-    powerAfterFor(ctx, ctx.army + ctx.runners.filter { combatant(it) }, ctx.combatEnemies, f)
+    powerAfterFor(ctx, ctx.side, ctx.combatEnemies, f)
 
 /** То же для заданной стороны и группы врага (v95: пул проверяет ядро без крипа с дебаффом его флага-цели). */
 internal fun PainAndGain.powerAfterFor(ctx: Ctx, side: List<Creep>, opp: List<Creep>, f: FlagInfo): Pair<Double, Double> {
@@ -544,7 +544,7 @@ internal fun PainAndGain.captureCost(ctx: Ctx, f: FlagInfo): Double {
     if (f.ours || ctx.combatEnemies.isEmpty()) return 1.0
     // ОДИН СОСТАВ ПО ОБЕ СТОРОНЫ ДРОБИ (v216, см. USE_CAPTURE_COST_ONE_SIDE): знаменатель обязан считаться по
     // той же стороне, что и числитель в powerAfter, иначе отношение выходит больше единицы и обрезается в 1,0
-    val side = ctx.army + ctx.runners.filter { combatant(it) }
+    val side = ctx.side
     val now = ourPowerOf(side, ctx.combatEnemies)
     if (now <= 0.0) return 1.0
     return (powerAfter(ctx, f).first / now).coerceIn(0.0, 1.0)
@@ -808,7 +808,7 @@ internal fun PainAndGain.postPoint(ctx: Ctx): Position {
     val midway = DistanceMap.midpoint(MARCH_SAFE)
     // центральный флаг наш — пост на нём (v102, USE_POST_ON_CENTRE)
     val centre = ctx.flags.firstOrNull { it.ours && it.type == EFF_DAMAGE_TAKEN_MODIFIER }?.pos
-    val c = centre ?: centroidOf(ctx.flags.filter { it.ours }.map { it.pos }) ?: midway ?: ctx.home
+    val c = centre ?: centroidOf(ctx.ourFlags.map { it.pos }) ?: midway ?: ctx.home
     return passableNear(c)
 }
 
@@ -854,7 +854,7 @@ internal fun PainAndGain.fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
 }
 
 internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
-    val armedEnemies = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+    val armedEnemies = ctx.threats
     // упреждение ухода — только против СОМКНУТОГО и только ОДИНОКОМУ (v357, см. KEEP_LEAD): обе проверки нужны, и
     // каждая отвергла свою отдельную редакцию живым замером
     fun keepLeadFor(c: Creep) = if (!groupSafe && enemyMassedSignal &&
@@ -901,7 +901,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // клетки рушит строй и отдаёт флаг. Вне режима пар порог остаётся прежним — половина хитов
         val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax || (groupSafe &&
             InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
-            InfluenceMap.healAt(c.x, c.y, ctx.army.filter { hasHeal(it) })))
+            InfluenceMap.healAt(c.x, c.y, ctx.armyWithHeal)))
         val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && !keeperLeaves
         val stay = onFlag && (if (groupSafe) coreHolds(core)
             else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
@@ -952,13 +952,13 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // выше без этой была бы отменена каждым тиком заново
         if (cand.hits * 2 < cand.hitsMax ||
             InfluenceMap.damageSoonAt(cand.x, cand.y, ctx.combatEnemies, keepLeadFor(cand)) >
-            InfluenceMap.healAt(cand.x, cand.y, ctx.army.filter { hasHeal(it) })) { keepOffHurt++; continue }
+            InfluenceMap.healAt(cand.x, cand.y, ctx.armyWithHeal)) { keepOffHurt++; continue }
         if (groupSafe) {
-            if (!coreHolds(core.filter { it.id != occ.id })) continue
+            if (!coreHolds(core.without(occ))) continue
         } else if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
         Memory.keeperIds[occ.id] = f.id
         keepOn++
-        if (groupSafe) core = core.filter { it.id != occ.id }
+        if (groupSafe) core = core.without(occ)
         if (DEBUG_LOG) println("keeper t=${getTicks()}: ${occ.id} keeps ${f.id} at (${f.pos.x},${f.pos.y})")
     }
 }
@@ -1276,7 +1276,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             }
             if (budget <= 0) break
             val c = free.filter { it.id !in Memory.garrisonOf }.minByOrNull { getRange(it, f.pos) } ?: break
-            val without = free.filter { it.id != c.id }
+            val without = free.without(c)
             if (!coreHolds(without)) break
             Memory.garrisonOf[c.id] = f.id
         }
@@ -1308,7 +1308,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             // отходит (см. GROUP_SAFE_DMG). Второй стоит рядом охраной (см. guardFlag) и не даёт бить первого даром
             val c = free.filter { hasRanged(it) }.minByOrNull { getRange(it, f.pos) }
                 ?: free.minByOrNull { getRange(it, f.pos) } ?: break
-            val without = free.filter { it.id != c.id }
+            val without = free.without(c)
             if (!coreHolds(without)) break
             Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); budget--
             manned++
@@ -1337,7 +1337,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         } else free.sortedBy { getRange(it, f.pos) }.take(need)
         if (party.size < need) continue
         if (safe) {
-            val pack = armedEnemies.filter { getRange(it, f.pos) <= ENGAGE_RANGE }
+            val pack = foesInEngage(armedEnemies, f.pos)
             if (pack.isNotEmpty() && enemyPowerOf(pack, party) >= ourPowerOf(party, pack)) continue
         }
         // ...и ЯДРО ОБЯЗАНО ОСТАТЬСЯ СИЛЬНЕЕ ЕГО АРМИИ — та же проверка, которой держится отряд (см. USE_DETACH):
@@ -1374,7 +1374,7 @@ internal class ArmyCommandOut(
 )
 
 internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandOut = with(seg) {
-    val ourFlagCells = ctx.flags.filter { it.ours }.mapTo(HashSet()) { it.pos.key }
+    val ourFlagCells = ctx.ourFlags.mapTo(HashSet()) { it.pos.key }
     val commanderNow =  cmdMode == CmdMode.FIGHT
     // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
     // он перестаёт молчать там, где раньше просто уступал место старым правилам
@@ -1506,14 +1506,14 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         // ...и только пока враг ДАЛЕКО: рядом с ним решают тактические ветки — экран, добыча, перехват, — а строй,
         // ведущий ядро на флаг мимо них, ронял screen и scatter (гейт 131 из 135)
         // ЗАГОН ВМЕСТО МАРША (v331): ядро, оставшееся после раздачи флагов, ловит его одиночку двумя группами
-        val restCore = mobileArmy.filter { it.id !in Memory.cmdDetach }
+        val restCore = notCmdDetached(mobileArmy)
         val hunting = commandHunt(ctx, restCore, armedEnemies, commandOf)
         if (!hunting && armedEnemies.none { e -> mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
             val goal = commandGoal(ctx, mobileArmy, armedEnemies)
             cpuMark("p.goal")
             val steps = HashMap<String, Position>()
-            commandMarch(ctx, mobileArmy.filter { it.id !in Memory.cmdDetach }, goal, steps)
+            commandMarch(ctx, notCmdDetached(mobileArmy), goal, steps)
             commandOf.putAll(steps)
             cpuMark("p.march")
         }
@@ -1605,7 +1605,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     lastAim = aimNow
     // «их мили идут» (см. PRESS_CLOSING): дистанция их мили до наших вооружённых за окно терпения
     val theirMeleeDist = combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
-        .minOfOrNull { e -> combatArmy.filter { hasWeapon(it) }.minOfOrNull { getRange(e, it) } ?: 99 } ?: 99
+        .minOfOrNull { e -> armedOf(combatArmy).minOfOrNull { getRange(e, it) } ?: 99 } ?: 99
     if (contact) Memory.meleeDistHist.addLast(theirMeleeDist) else Memory.meleeDistHist.clear()
     while (Memory.meleeDistHist.size > PRESS_PATIENCE + 1) Memory.meleeDistHist.removeFirst()
     val theirMeleeClosing = Memory.meleeDistHist.size > PRESS_PATIENCE && Memory.meleeDistHist.first() - Memory.meleeDistHist.last() >= PRESS_CLOSING
@@ -1613,7 +1613,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // армий за окно терпения сократилась не меньше PRESS_CLOSING — атака; стоит — стоячий бой (см. standingNow). Признак
     // «его мили не вплотную» выключал расстановку ровно в боях с Coldkimchi (его мили лезут вплотную к стрелкам), а
     // «его мили не идут» (v43f) брал и остановившуюся атаку — центры армий отличают одно от другого
-    val ourArmedC = centroidOf(combatArmy.filter { hasWeapon(it) }.map { InfluenceMap.cell(it.x, it.y) })
+    val ourArmedC = centroidOf(armedOf(combatArmy).map { InfluenceMap.cell(it.x, it.y) })
     val theirArmedC = centroidOf(armedEnemies.map { InfluenceMap.cell(it.x, it.y) })
     if (contact && ourArmedC != null && theirArmedC != null) Memory.centreDistHist.addLast(getRange(ourArmedC, theirArmedC)) else Memory.centreDistHist.clear()
     while (Memory.centreDistHist.size > PRESS_PATIENCE + 1) Memory.centreDistHist.removeFirst()
@@ -1697,14 +1697,14 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // либо у неё (Kero v2, Coldkimchi: в 2–3 и не бьют), либо далеко; подходящих строй ждёт — они входят в его фокус сами
     val theirMeleeMid = combatEnemies.any { e ->
         InfluenceMap.profileOf(e).melee > 0.0 &&
-            (combatArmy.filter { hasWeapon(it) }.minOfOrNull { getRange(e, it) } ?: 99).let { it > MELEE_HOLD_RANGE + 2 && it <= ENGAGE_RANGE }
+            (armedOf(combatArmy).minOfOrNull { getRange(e, it) } ?: 99).let { it > MELEE_HOLD_RANGE + 2 && it <= ENGAGE_RANGE }
     }
     standoffTicks = if (contact && underTheirFire && !theirMeleeIn && !theirMeleeClosing && !theirMeleeMid) standoffTicks + 1 else 0
     pressing =  blockOn && contact && !leadHolds && (standoffTicks >= PRESS_PATIENCE || pressing)
     val pressOn = pressing
     // «цель уходит» (см. PRESS_GIVEUP): за два тика прижима дистанция от наших мили до неё не сократилась
     if (blockOn) {
-        val ourMelee = combatArmy.filter { meleeOnlyLive(it) }
+        val ourMelee = pureMeleeOf(combatArmy)
         for (e in combatEnemies) {
             val near = ourMelee.minByOrNull { getRange(e, it) } ?: continue
             val d = getRange(e, near)
@@ -1820,7 +1820,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // Мал числитель — основание верно, трогать сбор незачем
     if (posture == Posture.HOLD) {
         gatherHold++
-        val shooters = combatArmy.filter { hasRanged(it) }
+        val shooters = rangedOf(combatArmy)
         if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread++
     }
     // ...И ТА ЖЕ ПАРА В ПОСТУРЕ БОЯ (v221, только прибор). Разбор v220, матч #11: ведём +1077, на 1400-м армия
@@ -1829,7 +1829,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     // огонь по своим. Прибор отдельный, чтобы прежний `gather=` по HOLD остался сравним с логами v218–v220
     if (posture == Posture.ANNIHILATE) {
         gatherAnnAll++
-        val sh = combatArmy.filter { hasRanged(it) }
+        val sh = rangedOf(combatArmy)
         if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn++
     }
     if (posture.withdrawing) {
@@ -1982,7 +1982,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         val group = strikers.ifEmpty { mobileArmy }
         // липкий: выбранный держим, пока он не его
         interceptFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id && !it.theirs } }
-            ?: ctx.flags.filter { !it.theirs }.sortedBy { getRange(it.pos, ec) }.firstOrNull { f ->
+            ?: ctx.flagsNotTheirs.sortedBy { getRange(it.pos, ec) }.firstOrNull { f ->
                 val flow = flowTo(ctx, f.pos)
                 val ours = group.maxOfOrNull { pathTicks(it, flow, it.key) } ?: 0
                 ours < Int.MAX_VALUE / 4 && ours + INTERCEPT_MARGIN <= getRange(f.pos, ec)
@@ -2031,16 +2031,16 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // «мы ближе» — всей силой, с уже выпущенными бегунами (v120): бегун, выпущенный к свободному флагу, и был тем, кем мы
     // были ближе; без него гонка кончалась, его отзывали, а следующим тиком выпускали снова — 1260 строк detach за
     // матч (split m31), постура мигала с ним ДОБИТЬ↔ДЕРЖАТЬ через тик (наша мощь 4179↔3502)
-    val raceForce = army + ctx.runners.filter { it.id in Memory.detachedIds }
+    val raceForce = army + detachedRunners(ctx)
     // цель гонки — и флаг под стаей, которую бьёт ПАРА наших слабейших бегунов (v125, USE_RACE_PAIR_TARGETS): быстрый
     // гастролёр (けろびー#4, серия 327–346) оставляет на каждом взятом флаге одного хранителя, тот уходит от наших в шести и
     // возвращается — «свободных» флагов нет, гонка v91 молчала (targets=0), армия толкала его пятёрку 200 тиков, а его
     // хранители держали шесть флагов (стенд blitz: 4-4 при 1:6 к 200-му)
-    val racePair = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Memory.keeperIds && it.id !in Memory.rotatingIds }
+    val racePair = raceCapable(army)
         .sortedBy { ourPowerOf(listOf(it), emptyList()) }.take(2)
     fun pairBeats(f: FlagInfo): Boolean {
         if (racePair.size < 2) return false
-        val pack = armedEnemies.filter { getRange(it, f.pos) <= ENGAGE_RANGE }
+        val pack = foesInEngage(armedEnemies, f.pos)
         return pack.isNotEmpty() && ourPowerOf(racePair, pack) >= enemyPowerOf(pack, racePair) * PUSH_RATIO
     }
     val raceFree = ctx.flags.filter { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
@@ -2118,13 +2118,13 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // одна мера ядра (v94): порог держится каждый тик — просело, сильнейший отделённый возвращается
     if (farmer && Memory.detachedIds.isNotEmpty()) {
         val floorNow = recallFloor
-        var core = army.filter { it.id !in Memory.detachedIds }
+        var core = notDetached(army)
         var recalled = 0
         val short = core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * theirsDown * floorNow
         coreShortTicks = if (short) coreShortTicks + 1 else 0
         while (Memory.detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * theirsDown * floorNow) {
             // держатель флага (v297, см. HOLD_WATCH) возвращается последним
-            val back = ctx.runners.filter { it.id in Memory.detachedIds }
+            val back = detachedRunners(ctx)
                 .maxWithOrNull(compareBy({ heldFlag(ctx, it) == null }, { ourPowerOf(listOf(it), emptyList()) })) ?: break
             Memory.detachedIds.remove(back.id); core = core + back; recalled++
         }
@@ -2145,12 +2145,12 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     else if ((!fightOnNow &&
                   ((!contact || (!exchangeRecent)) || meleeIdle)) &&
         (now - detachRecallTick >= DETACH_WINDOW)) {
-        val armed = army.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Memory.keeperIds && it.id !in Memory.rotatingIds }
+        val armed = raceCapable(army)
 
         val unmanned = ctx.flags.sumOf { f -> if (f.occupant?.my == true) 0 else if (armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }) 2 else 1 }
         val pool = if ((viaDryHunt || viaRace || meleeIdle)) armed.sortedWith(compareBy({ InfluenceMap.profileOf(it).ranged }, { ourPowerOf(listOf(it), emptyList()) }))
             else armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
-        var remaining = army.filter { it.id !in Memory.detachedIds }
+        var remaining = notDetached(army)
         // держатели (v297) стоят на своих флагах, которые в `unmanned` уже не считаются: выпуск меряется без них
         val holdingDet = ctx.runners.count { it.id in Memory.detachedIds && heldFlag(ctx, it) != null }
         for (c in pool) {
@@ -2572,7 +2572,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // рейдер: чужой безоружный на нашей половине — тот, что ближе к нашему флагу (захватчик идёт к нему); гонимся,
     // только если стрелки бьют стаю вокруг него: без этой проверки армия гналась за безоружным остовом к
     // стоявшей за ним армии врага и вошла в бой при 0.77 (матч 3, t=100)
-    val raider = ourHalfSoft.minByOrNull { r -> minOf(getRange(r, centroid), ctx.flags.filter { !it.theirs }.minOfOrNull { getRange(r, it.pos) } ?: 99) }
+    val raider = ourHalfSoft.minByOrNull { r -> minOf(getRange(r, centroid), ctx.flagsNotTheirs.minOfOrNull { getRange(r, it.pos) } ?: 99) }
         ?.takeIf { r ->
             // стая рейдера — и те, кто дойдёт до него не позже нас: скаут в 12 клетках впереди своей армии был
             // «без охраны», и армия вышла из дома ему навстречу — прямо под удар всей армии врага (матч 6, t=50)

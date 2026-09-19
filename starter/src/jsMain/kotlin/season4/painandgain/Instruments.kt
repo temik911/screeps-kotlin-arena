@@ -509,7 +509,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
             // Тело лекаря — h6m6, лечащие части СПЕРЕДИ, поэтому урон уничтожает именно их и первыми; замер
             // разгрома 3d97c4 говорит, что его лекари сохраняют 100 % лечащих частей, наши 8 %. hcov — доля
             // нужды, покрытая назначенными клетками: прибор раздачи, а не исхода
-            "hparts=${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${myCreeps.filter { hasHeal(it) }.sumOf { c -> c.body.count { it.type == HEAL } }} " +
+            "hparts=${withHeal(myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }} " +
             "ehparts=${enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }} " +
             "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
             "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +

@@ -166,14 +166,14 @@ internal class ArmyTick(
  * фокусу снимается, прежняя (ROTATE_OUT) остаётся. Новых чисел нет: дальности — движка, окна — существующие.
  */
 internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
-    val live = army.filter { it.hits > 0 && (combatant(it)) }
+    val live = livingCombatants(army)
     // ПРЕДСКАЗАТЕЛЬ ТОЧНЕЕ (v276, разбор v275 по реплеям: предсказатель угадывал 64,8 % против 100 % его правила). Три
     // причины и три поправки: кандидаты его стволов — ВСЕ наши, и раздетые тоже (он их бьёт, а они выпадали из «живых»);
     // мили бьёт только вплотную — дальность удара движок сверяет по клеткам начала тика, и шаг перед ударом этого тика не
     // даёт (было MELEE_STEP_REACH = 2); истина — полученный УРОН, а не чистая потеря (жертву, которую подлечили, чистая
     // потеря не называла): урон = потеря за тик плюс наше лечение, назначенное ей прошлым тиком (Memory.healGiven). По
     // реплеям трёх поправок хватает на 92 % против урона, и правило перестаёт мигать (было выключено 30 % тиков контакта)
-    val all = army.filter { it.hits > 0 }
+    val all = living(army)
     var mostLost: Creep? = null
     var mostLoss = 0
     for (c in all) {
@@ -266,7 +266,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
 internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enemyRetreating: Boolean) {
     fun lost(c: Creep) = c.body.count { it.hits <= 0 }
     fun need(c: Creep) = if (isMelee(c)) 2 else 1
-    val live = army.filter { it.hits > 0 }
+    val live = living(army)
     // ...И НЕ ПРОТИВ ОТХОДЯЩЕГО (v290): против кайтера раненые уходили и не возвращались, и боя не было; когда его армия
     // отходит (`enemyRetreating`), добивать некому — выведенные возвращаются, новые не выходят
     val back = Memory.stepOutIds.filter { id -> enemyRetreating || live.none { it.id == id && lost(it) >= need(it) } }
@@ -815,7 +815,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         val grouped = !support && (posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && threat != null && target === threat))
         // напарники строя — ходячие ВООРУЖЁННЫЕ: у лекаря своя цель (подопечный), и взаимное ожидание «лекарь
         // отстал от флага — боец отстал от подопечного лекаря» запирало группу навсегда (стенд greedy)
-        val mates = if (grouped) mobileArmy.filter { it.id != creep.id && hasWeapon(it) } else emptyList()
+        val mates = if (grouped) armedMatesOf(mobileArmy, creep) else emptyList()
         val mateFighting = mates.any { m -> combatEnemies.any { m.getRangeTo(it) <= RANGED_RANGE + 2 } }
         val gap = if (localEnemies.isEmpty()) COHESION_GAP else ENGAGE_COHESION_TICKS
         // идущий к авангарду (rallyTo) не ждёт никого: четверо шли к авангарду и «ждали» одиночку в 14 клетках,
@@ -840,7 +840,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         }
         // отход строем (см. RETREAT_GAP): передняя половина ждёт отставшего от тела армии, пока сама вне огня
         val retreatHold = (posture.withdrawing) && !support && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
-            val flows = mobileArmy.filter { hasWeapon(it) }.map { flow[it.key] }.filter { it >= 0 }.sorted()
+            val flows = armedOf(mobileArmy).map { flow[it.key] }.filter { it >= 0 }.sorted()
             if (flows.isEmpty()) return@run false
             val rear = flows.last()
             val median = flows[flows.size / 2]
@@ -901,7 +901,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
                 // матча 8 в 4–5 клетках от строя
                 if (!stripped && localThreats.isNotEmpty() && !posture.withdrawing && canMove(creep)) {
-                    val armedMates = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }
+                    val armedMates = armedMatesOf(mobileArmy, creep)
                     val myRange = getRange(creep, armedCentroid)
                     val loose = HashSet<Int>()
                     for ((dx, dy) in dirsNow()) {
@@ -1508,7 +1508,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
             }
         }
     }
-    val packMelee = combatArmy.filter { meleeOnlyLive(it) }
+    val packMelee = pureMeleeOf(combatArmy)
     if (packMelee.isNotEmpty() && combatEnemies.isNotEmpty()) packTicks++
     // ВЕЕР НЕ РАСФОКУСИРУЕТ СОШЕДШИЕСЯ СТВОЛЫ (v218, см. USE_FAN_KEEPS_FOCUS). Признак снимается ЗДЕСЬ,
     // потому что `killTicks` живёт только в этой области видимости, а нужен он в `shoot` — на 1500 строк ниже
@@ -1553,10 +1553,10 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         pushing -> nearestPrey(huntable)
         else -> nearestPrey(contactPack.filter { catchable(it, chasers) })
     }
-    val armedCentroid = clusterCentroid(mobileArmy.filter { hasWeapon(it) }.ifEmpty { army }) ?: centroid
+    val armedCentroid = clusterCentroid(armedOf(mobileArmy).ifEmpty { army }) ?: centroid
     // захватчик флага-цели — ближайший к флагу ВООРУЖЁННЫЙ член группы (одной клетки на всех не хватит; лекарь
     // ходит за подопечным, и назначенный захватчиком лекарь тысячу тиков стоял рядом с флагом — стенд greedy)
-    val objectiveCapturer = objective?.let { o -> mobileArmy.filter { hasWeapon(it) }.ifEmpty { mobileArmy }.minByOrNull { getRange(it, o.flag.pos) }?.id }
+    val objectiveCapturer = objective?.let { o -> armedOf(mobileArmy).ifEmpty { mobileArmy }.minByOrNull { getRange(it, o.flag.pos) }?.id }
     // флаг рядом (не наш, свободный, без врага в дальности, разрешён) — на него шагает ближайший из наших
     val grabberOf = HashMap<String, String>()
     for (f in ctx.flags) {
@@ -1574,7 +1574,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     // враг здесь — С БОЕМ (см. threatening): построение собирается перед огнём, а у одинокого лекаря огня нет. Уцелевший
     // лекарь врага шёл за армией в семи клетках, «авангардом» становился ЗАДНИЙ боец, и построение тянуло армию назад,
     // а цель — вперёд: шаг туда, шаг обратно 140 тиков у (20,21) при флаге-цели в 30 (стенд m13 rush, v30)
-    val formers = mobileArmy.filter { hasWeapon(it) }
+    val formers = armedOf(mobileArmy)
     // авангард — только из массы (см. MASS_RANGE): оторвавшийся крип не точка сбора
     val formMass = formers.filter { getRange(it, armedCentroid) <= MASS_RANGE }.ifEmpty { formers }
     // авангард есть, только пока враг с боем в досягаемости броска от кого-то из строя: авангард «против врага где-то на

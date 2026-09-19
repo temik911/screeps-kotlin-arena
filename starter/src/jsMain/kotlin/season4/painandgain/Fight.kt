@@ -432,7 +432,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
                          ourFlagCells: Set<Int> = emptySet(), healersOnly: Boolean = false) {
     out.clear()
-    val fighters = army.filter { canMove(it) && !it.spawning }
+    val fighters = mobileOf(army)
     if (fighters.isEmpty() || armedEnemies.isEmpty()) return
     val enemyAt = HashSet<Int>()
     for (e in combatEnemies) enemyAt.add(e.key)
@@ -476,7 +476,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         val q = InfluenceMap.profileOf(e)
         if (q.ranged > 0.0 || q.melee > 0.0) addrShooters.add(AddrShooter(e.x, e.y, q.ranged, q.melee))
     }
-    val addrLive = army.filter { it.hits > 0 }
+    val addrLive = living(army)
     var addrFor: String? = null
     val addrRH = DoubleArray(addrShooters.size); val addrRA = DoubleArray(addrShooters.size)
     val addrMH = DoubleArray(addrShooters.size); val addrMA = DoubleArray(addrShooters.size)
@@ -758,7 +758,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // дальность выстрела, отбор пустел, и крип падал в общий добор, который про дальность не знает вовсе.
     // Запрет здесь ровно один и он о жизни: клетка, где крип не переживёт хода.
     InfluenceMap.clearClaim()
-    InfluenceMap.stampHealNeed(army.filter { it.hits > 0 })
+    InfluenceMap.stampHealNeed(living(army))
     var maxV = 0.0
     for ((k, _) in cells) {
         val v = InfluenceMap.vulnerabilityOf(k)
@@ -1044,17 +1044,17 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 medicked.add(medicFor.key)
                 rotfMeet++
                 met = true
-                out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
+                out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, living(army)) }
             }
         }
         // лекаря, поставленного проходом отхода, оценка по-прежнему переставляет — не встреча, не трогается (первая
         // редакция v276 это переразмещение снимала попутно, и гейт переменил 89 строк и уронил match30:camp)
         // ПРИБОР РЕЖИМА «В ЗОНЕ ОГНЯ» (v438, `hfire=`): лекарей, у которых доставка считалась по подопечным под огнём / всех /
         // из первых — поставленных вплотную к теряющему хиты; снимается ДО раздачи — насыщение меняет режим следующему
-        val fireMode = !met && InfluenceMap.deliveryFireMode(c, army.filter { a -> a.hits > 0 })
+        val fireMode = !met && InfluenceMap.deliveryFireMode(c, living(army))
         hfireAll++; if (fireMode) hfireN++
         val ok = met || placeScored(c, 2, intentOf(c)).also { placed ->
-            if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
+            if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, living(army)) }
         }
         // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
         if (c.id !in out) place(c, { true }, { p -> danOf(c, p.key) })
@@ -1215,7 +1215,7 @@ internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, seg: ArmyFireAndHealIn): Army
     commandFire(army + ctx.runners.filter { hasWeapon(it) }, enemyCreeps, focusTarget, focusOrder, fireOf)
     commandHeal(army, enemyCreeps, healOf)
     // ...и отряжённый лекарь без оружия лечит (v240): до этого healAndShoot получал бегунов только с оружием
-    healAndShoot(army + ctx.runners.filter { combatant(it) }, allies, enemyCreeps, focusTarget, focusOrder)
+    healAndShoot(army + ctx.combatRunners, allies, enemyCreeps, focusTarget, focusOrder)
     cpuMark("shoot")
     ArmyFireAndHealOut(
     )
