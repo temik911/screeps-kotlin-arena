@@ -142,7 +142,7 @@ internal object Strategist {
         // взят из того же живого замера, которым правило и обосновано: в победах в момент боя у нас 12 560 хитов
         // против его 5 719 — мы впереди вдвое и добиваем, в поражениях 8 133 против 9 935 — мы уже позади, и строй
         // проигранный размен не выправляет. Поэтому запрет действует только позади по хитам: впереди — бьём строем
-        val fightNow = !i.pushing && i.underFire && !i.fewFoes && pre != Posture.RETREAT && pre != Posture.EVADE &&
+        val fightNow = !i.pushing && i.underFire && !i.fewFoes && !pre.withdrawing &&
             !(i.enemyMassed && USE_NO_FIST_FIGHT)
         val mode = when {
             i.marchNow -> CmdMode.MARCH
@@ -1832,7 +1832,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
         val sh = combatArmy.filter { hasRanged(it) }
         if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn++
     }
-    if (posture == Posture.RETREAT || posture == Posture.EVADE) {
+    if (posture.withdrawing) {
         retrTicks++
         // ...и точка спрашивается ПО СВОЕЙ постуре: у отхода — `retreatTo`, у уклонения — `evadeTo`.
         // Смешивать их нельзя ровно потому, что дефект живёт в отходе: `evadeTo` почти всегда есть, и
@@ -2582,7 +2582,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
             catchable(r, chasers) && (pack.isEmpty() || (strikers.isNotEmpty() && ourPowerOf(strikers, pack) >= enemyPowerOf(pack, strikers) * PUSH_RATIO))
         }
     // охота на угрозу на нашей половине — решение группы с гистерезисом: стрелки против всей стаи у угрозы
-    huntingThreat = posture != Posture.RETREAT && posture != Posture.EVADE && threat != null && strikers.isNotEmpty() && run {
+    huntingThreat = !posture.withdrawing && threat != null && strikers.isNotEmpty() && run {
         val field = flowTo(ctx, threat)
         val ourTravel = strikers.map { pathTicks(it, field, it.key) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: Int.MAX_VALUE / 4
         val pack = combatEnemies.filter { getRange(it, threat) <= ENGAGE_RANGE + RANGED_RANGE || (!stationary(it) && pathTicks(it, field, it.key) <= ourTravel) }
@@ -2822,7 +2822,13 @@ internal var stalemateGap = 0                          // тиков подря�
 
 internal var lastAim = ""
 
-internal enum class Posture { HOLD, RETREAT, ANNIHILATE, FLAG, EVADE }
+internal enum class Posture {
+    HOLD, RETREAT, ANNIHILATE, FLAG, EVADE;
+
+    /** Отход: армия уходит от врага — к дому (RETREAT) или от его массы (EVADE). Одно множество вместо двух полярностей
+     *  `== RETREAT || == EVADE` / `!= RETREAT && != EVADE`, выписанных в девяти местах. */
+    val withdrawing: Boolean get() = this == RETREAT || this == EVADE
+}
 
 internal class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: Double, val travel: Int)
 

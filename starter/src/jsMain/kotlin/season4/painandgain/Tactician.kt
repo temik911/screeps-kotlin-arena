@@ -341,7 +341,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // локальный перевес: бойцы, способные стрелять по той же цели через тик-другой, против врагов в их
         // досягаемости; цена боя — по ГРУППЕ (самый большой запас хода), в контакте цена больше не гейт
         val localAggressive = when {
-            posture == Posture.RETREAT || posture == Posture.EVADE -> inContact(localEnemies, localAllies) && ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio
+            posture.withdrawing -> inContact(localEnemies, localAllies) && ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio
             // добивание: армия в целом сильнее (или в контакте без отхода), но ЯВНО слабейшая на месте группа
             // отходит к массе — «всегда агрессивен» посылал четверых на двенадцать (матч 2 на стенде). Вход в
             // бой при 0.9 (при равных силах никто не вступал в бой — рывок врага кончался ничьёй), выход — только
@@ -510,7 +510,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // разъезжаются именно лекари (26 % их крипо-тиков дальше восьми клеток, медиана отрыва 23 клетки).
         // ⚠️ Это НЕ повторение v202 целиком (0:3): там поводок включался ВЕЗДЕ и для всех, здесь снимается
         // ровно одна оговорка и ровно для лекаря
-        val leashHolds = (healer) || (posture != Posture.RETREAT && posture != Posture.EVADE)
+        val leashHolds = (healer) || (!posture.withdrawing)
         val leashed = !stripped && canMove(creep) && leashHolds &&
             (localEnemies.isNotEmpty() || (contact)) && getRange(creep, armedCentroid) > LEASH_RANGE
         // СТРЕЛОК НЕ ВСТАЁТ НА ДВЕ, ПОКА У ВРАГА ЖИВ МИЛИ (v220, решение оператора: «мы принимаем бой,
@@ -674,7 +674,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // построение: вне огня и без готовности авангард и собравшиеся у него стоят, остальные идут к нему
         // в контакте построение окончено: авангард — тот, кто уже дерётся, и «собраться у авангарда с дистанцией 1»
         // тянуло стрелков за ним внутрь строя врага, а стреляли они с 4–5 клеток впустую (матч 15, t=68–100)
-        val forming = formVan != null && !formationReady && !support && canMove(creep) && posture != Posture.RETREAT && posture != Posture.EVADE &&
+        val forming = formVan != null && !formationReady && !support && canMove(creep) && !posture.withdrawing &&
             localEnemies.any { threatening(it, enemyCreeps) } && nearestEnemyRange > RANGED_RANGE && !contact &&
             !(stalled)
         val formHold = forming && (formVan!!.id == creep.id || getRange(creep, formVan) <= FORM_RANGE)
@@ -839,7 +839,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             lagging
         }
         // отход строем (см. RETREAT_GAP): передняя половина ждёт отставшего от тела армии, пока сама вне огня
-        val retreatHold = (posture == Posture.RETREAT || posture == Posture.EVADE) && !support && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
+        val retreatHold = (posture.withdrawing) && !support && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
             val flows = mobileArmy.filter { hasWeapon(it) }.map { flow[it.key] }.filter { it >= 0 }.sorted()
             if (flows.isEmpty()) return@run false
             val rear = flows.last()
@@ -900,7 +900,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
                 // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
                 // матча 8 в 4–5 клетках от строя
-                if (!stripped && localThreats.isNotEmpty() && posture != Posture.RETREAT && posture != Posture.EVADE && canMove(creep)) {
+                if (!stripped && localThreats.isNotEmpty() && !posture.withdrawing && canMove(creep)) {
                     val armedMates = mobileArmy.filter { it.id != creep.id && hasWeapon(it) }
                     val myRange = getRange(creep, armedCentroid)
                     val loose = HashSet<Int>()
@@ -967,7 +967,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 if (!inCombat) dangerBlindFar++ else if (localAggressive || spotNow) dangerBlind++
             }
         }
-        if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && posture != Posture.RETREAT && posture != Posture.EVADE) {
+        if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && !posture.withdrawing) {
             // только враг «с боем» (см. threatening): праздность при небоевых остатках после выигранного боя — не находка
             val near = combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && threatening(it, enemyCreeps) }.minByOrNull { getRange(creep, it) }
             if (near != null) {
