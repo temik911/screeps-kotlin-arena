@@ -750,9 +750,11 @@ object InfluenceMap {
     fun stampHealNeed(allies: List<Creep>) {
         attHeal.fill(0)
         needLeft.clear()
+        inFire.clear()
         var total = 0.0
         for (a in allies) {
             val key = a.x * 100 + a.y
+            if (eFire[key] > 0) inFire.add(a.id)
             val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
             // НУЖДА — ТО, ЧТО ЛЕЧЕНИЕ МОЖЕТ ВЕРНУТЬ (v435, см. USE_HEAL_NEED_ACTUAL): недобор хитов плюс потеря за прошлый
             // тик; целый крип во втором ряду нужды не имеет, как бы ни было опасно его поле
@@ -797,8 +799,17 @@ object InfluenceMap {
         val h = profileOf(healer).heal
         if (h <= 0.0) return 0.0
         val k = if (USE_HEAL_STEP_KERNEL) K_HEAL_STEP else K_ATT_HEAL
+        val fireMode = deliveryFireMode(healer, allies)
+        // ...И ТОЛЬКО ИЗ КЛЕТКИ ВНЕ ЕГО ОГНЯ (сужение v438 по гейту match4:kite 8 802 : 14 502 — hparts 18 → 0 к t=110 при его
+        // ehparts 0/18, hfire=127/185/36): его стрелок в досягаемости лекаря бьёт ЛЕКАРЯ, а не тела перед ним (модель
+        // wallTargetOf, 85–91 % совпадений; стуб-кайтер — наименьшие хиты, лекарь 1 200 против 1 600 у мили), поэтому экран
+        // тел лекарю не скидка, и 72 доставки из клетки под двумя стволами покупали клетку, где он раздевался за пять тиков.
+        // Клетка вплотную к подопечному под огнём, но вне огня сама (сзади него) есть в 63 % таких тиков (разбор v437) — она
+        // и есть предмет правки; из клетки под огнём доставки нет, там действуют влияние и опасность, как у v437
+        if (fireMode && eFire[x * 100 + y] > 0) return 0.0
         var best = 0.0
         for (a in allies) {
+            if (fireMode && a.id !in inFire) continue
             val d = maxOf(abs(a.x - x), abs(a.y - y))
             if (d >= k.size) continue
             val left = needLeft[a.id] ?: continue
@@ -808,6 +819,29 @@ object InfluenceMap {
         }
         return best
     }
+    /** Свои в зоне его огня этим тиком (v438, см. USE_HEAL_DELIVERY_IN_FIRE): поле eFire в клетке подопечного больше нуля —
+     *  его мили вплотную или стрелок в ≤ 3, без шага сближения. Заполняется вместе с нуждой. */
+    private val inFire = HashSet<String>()
+
+    /** РЕЖИМ «В ЗОНЕ ОГНЯ» (v438, см. USE_HEAL_DELIVERY_IN_FIRE): у лекаря в досягаемости шага (d ≤ размер ядра) есть
+     *  подопечный под его огнём с непокрытой нуждой — тогда доставка в цене клетки считается по одним таким: лечение ему
+     *  скоропортящееся, остальным отложимо. Решается на лекаря за тик, а не на клетку — иначе соседние клетки считались бы
+     *  в разных режимах, и лекарь уходил бы от огня к большему числу. Насыщение снимает нужду — покрытый подопечный режим
+     *  не держит, и следующий лекарь считает по-старому. */
+    fun deliveryFireMode(healer: Creep, allies: List<Creep>): Boolean {
+        if (!USE_HEAL_DELIVERY_IN_FIRE) return false
+        val reach = (if (USE_HEAL_STEP_KERNEL) K_HEAL_STEP else K_ATT_HEAL).size
+        for (a in allies) {
+            // сам лекарь режим не включает (сужение v438 по гейту match33:camp 18 354 : 23 667): доставка себе одинакова
+            // из любой клетки (d = 0), режим же — про перестановку к ДРУГОМУ; единственный раненый в танце перед боем
+            // был лекарь с −52, режим гасил ему клей, и танец разошёлся в отряжение семерых бегунами и отход
+            if (a.id == healer.id || a.id !in inFire) continue
+            if ((needLeft[a.id] ?: 0.0) <= 0.0) continue
+            if (maxOf(abs(a.x - healer.x), abs(a.y - healer.y)) <= reach) return true
+        }
+        return false
+    }
+
     /** ШАГОВОЕ ЯДРО ЦЕНЫ ДОСТАВКИ (v437, см. USE_HEAL_STEP_KERNEL): клетка стоит лучшее из «лечу отсюда сейчас»
      *  (12/часть на ≤ 1, 4/часть на ≤ 3) и «шагну и вылечу со следующего тика» со скидкой GAMMA — той же, что у ядер
      *  мили и стрелка. Ядро healRate плоское на 2…3 (обе клетки — треть), и из трёх в два лекарь не шёл: платил

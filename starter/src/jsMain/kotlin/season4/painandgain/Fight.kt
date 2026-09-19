@@ -880,7 +880,11 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // когда рядом никто не теряет хитов, притяжение равно нулю везде, и без влияния лекарей ничто не держит при
         // армии — пятеро бойцов ушли в лагерь и погибли нелечеными (hadj=0/347, hlost=0). Влияние — клей строя, и оно
         // остаётся там, где доставки нет; там, где она есть, цена клетки считается в хитах
-        val line = if (USE_HEAL_NO_LINE && pull > 0.0) 0.0 else W_LINE * InfluenceMap.influenceOf(key)
+        // ...И В РЕЖИМЕ ОГНЯ ВЛИЯНИЯ НЕТ НИГДЕ (сужение v438 по гейту match4:kite 792 : 22 718): клетки под его огнём
+        // получили доставку 0, клей включился в них — а влияние (наш залп − его опасность) у мили-кулака в сотни, и dh показал
+        // −178 в пользу клетки в кулаке против безопасной вплотную. Якорь лекарю в этом режиме — доставка у безопасных клеток
+        // при подопечном под огнём, он есть по построению режима; в клетках под огнём остаются опасность, притязание и стой
+        val line = if (USE_HEAL_NO_LINE && (pull > 0.0 || InfluenceMap.deliveryFireMode(c, army))) 0.0 else W_LINE * InfluenceMap.influenceOf(key)
         return -W_ATT * att * pull + W_DAN * dan * fire -
             line - W_SCREEN * shielded +
             CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
@@ -1030,6 +1034,10 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         }
         // лекаря, поставленного проходом отхода, оценка по-прежнему переставляет — не встреча, не трогается (первая
         // редакция v276 это переразмещение снимала попутно, и гейт переменил 89 строк и уронил match30:camp)
+        // ПРИБОР РЕЖИМА «В ЗОНЕ ОГНЯ» (v438, `hfire=`): лекарей, у которых доставка считалась по подопечным под огнём / всех /
+        // из первых — поставленных вплотную к теряющему хиты; снимается ДО раздачи — насыщение меняет режим следующему
+        val fireMode = !met && InfluenceMap.deliveryFireMode(c, army.filter { a -> a.hits > 0 })
+        hfireAll++; if (fireMode) hfireN++
         val ok = met || placeScored(c, 2, intentOf(c)).also { placed ->
             if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, army.filter { a -> a.hits > 0 }) }
         }
@@ -1039,8 +1047,14 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // все назначения лекарей — та величина, по которой разбор E делил стороны (26 % лечений вплотную против 75 %)
         out[c.id]?.let { b ->
             hadjAll++
-            if (army.any { a -> a.id != c.id && a.hits > 0 && (Memory.lastHits[a.id] ?: a.hits) > a.hits &&
-                    maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) hadjN++
+            val losing = army.filter { a -> a.id != c.id && a.hits > 0 && (Memory.lastHits[a.id] ?: a.hits) > a.hits }
+            if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) { hadjN++; if (fireMode) hfireAdj++ }
+            // ...и НОРМИРОВАННЫЙ прибор (`hadjn=`): среди назначений, при которых кто-то из своих в дальности шага и
+            // лечения (HEAL_RANGE + 1) терял хиты, — доля клеток вплотную к такому; без него hadj делится и на тихие тики
+            if (losing.any { a -> getRange(a, c) <= HEAL_RANGE + 1 }) {
+                hadjnAll++
+                if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) hadjnN++
+            }
         }
         // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
         // огнём 37 % лекаре-тиков, наши — 10 %, и в FIGHT свободная клетка вплотную к бойцу не опаснее своей есть в
@@ -1066,7 +1080,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                     else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
                 val self = p.x == c.x && p.y == c.y
                 val tenant = if (self) null else allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
-                return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEAL_NO_LINE && pull > 0.0) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
+                return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEAL_NO_LINE && (pull > 0.0 || InfluenceMap.deliveryFireMode(c, army))) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
                     -W_SCREEN * shielded, CLAIM_COST * InfluenceMap.claimAt(key), -stayBonus(c, p),
                     if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
             }
