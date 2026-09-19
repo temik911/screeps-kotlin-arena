@@ -442,21 +442,7 @@ object PainAndGain {
         val enemyApproaching = armyStanceSeg.enemyApproaching
         val ourYielding = armyStanceSeg.ourYielding
         val pressOn = armyStanceSeg.pressOn
-        val armyBlockSeg = armyBlock(ctx, ArmyBlockIn(
-            enemyCreeps = enemyCreeps,
-            combatEnemies = combatEnemies,
-            armedEnemies = armedEnemies,
-            mobileArmy = mobileArmy,
-            contact = contact,
-            theirMeleeIn = theirMeleeIn,
-            enemyRetreating = enemyRetreating,
-            focusTarget = focusTarget,
-            slotOf = slotOf,
-            blockOn = blockOn,
-            armiesClosing = armiesClosing,
-            ourYielding = ourYielding,
-            pressOn = pressOn,
-        ))
+        val armyBlockSeg = armyBlock(ctx, armyMeasuresSeg, armyStrategySeg, armyTargetsSeg, armyStanceSeg)
         cpuMark("block")
         rotateByFocus(army, combatEnemies)
         // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)

@@ -695,33 +695,17 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
     )
 }
 
-/** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
-internal class ArmyBlockIn(
-    val enemyCreeps: List<Creep>,
-    val combatEnemies: List<Creep>,
-    val armedEnemies: List<Creep>,
-    val mobileArmy: List<Creep>,
-    val contact: Boolean,
-    val theirMeleeIn: Boolean,
-    val enemyRetreating: Boolean,
-    val focusTarget: Creep?,
-    val slotOf: HashMap<String, Position>,
-    val blockOn: Boolean,
-    val armiesClosing: Boolean,
-    val ourYielding: Boolean,
-    val pressOn: Boolean,
-)
-
 internal class ArmyBlockOut(
 )
 
-internal fun PainAndGain.armyBlock(ctx: Ctx, seg: ArmyBlockIn): ArmyBlockOut = with(seg) {
-    if (blockOn) {
+/** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
+internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargetsOut, stanceOut: ArmyStanceOut): ArmyBlockOut {
+    if (stanceOut.blockOn) {
         // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
         // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
         // атакующего уходил, а кайтер добивался позже (гейт v43c: block/nine/rush «уничтожение → лидерство» ×10, кайтеры
         // медленнее ×7 при wing ×4, block+flagless ×2 и farm+weak m33 +7561 лучше)
-        val standoffNow = pressOn && !enemyRetreating
+        val standoffNow = stanceOut.pressOn && !strat.enemyRetreating
         // ОТВЕРГНУТО: расстановка и в контакте, пока его мили не идут на нас (!theirMeleeClosing) — ради матча 73 (Coldkimchi:
         // его мили подходили к нашим стрелкам и лекарям вплотную, били по 240 и отходили — 46 ударов против наших 7, а
         // прижим требует «его мили не вплотную», и расстановка была выключена ровно в этом бою): едва атака врага встаёт,
@@ -738,10 +722,10 @@ internal fun PainAndGain.armyBlock(ctx: Ctx, seg: ArmyBlockIn): ArmyBlockOut = w
         // поражение: 2:699 и 3:1431 крип-тиков его мили, 61 удар за 700 тиков боя) — по «в трёх» v62 расстановка была выключена
         // весь бой, ряды planBlock ставили стрелков за передним мили, и наш огонь (1611 выстрелов против его 1428) шёл по
         // разным целям: 4+ в одну цель 9 тиков против его 44 при 216 лечения в тик на цели с обеих сторон
-        val meleeBrawl = theirMeleeIn
-        val standingNow = contact && Memory.centreDistHist.size > PRESS_PATIENCE && !armiesClosing && !enemyRetreating && !meleeBrawl && !ourYielding
-        if (DEBUG_LOG && ourYielding && contact && !armiesClosing && !enemyRetreating && !meleeBrawl && yieldingTick != getTicks() - 1) println("plan t=${getTicks()}: our line has yielded ${PRESS_CLOSING}+ cells over $PRESS_PATIENCE ticks — rows behind the front melee, not the plan")
-        if (ourYielding) yieldingTick = getTicks()
+        val meleeBrawl = strat.theirMeleeIn
+        val standingNow = meas.contact && Memory.centreDistHist.size > PRESS_PATIENCE && !stanceOut.armiesClosing && !strat.enemyRetreating && !meleeBrawl && !stanceOut.ourYielding
+        if (DEBUG_LOG && stanceOut.ourYielding && meas.contact && !stanceOut.armiesClosing && !strat.enemyRetreating && !meleeBrawl && yieldingTick != getTicks() - 1) println("plan t=${getTicks()}: our line has yielded ${PRESS_CLOSING}+ cells over $PRESS_PATIENCE ticks — rows behind the front melee, not the plan")
+        if (stanceOut.ourYielding) yieldingTick = getTicks()
         val planNow =  (standoffNow || standingNow)
         // командир (v137): в бою с сомкнутым блобом решение одно на армию, и оно вытесняет оба планировщика
         // ...и НЕ против того, кто уходит (v139): в сценарии kite враг держит дистанцию, боя нет, и командир держал
@@ -764,10 +748,10 @@ internal fun PainAndGain.armyBlock(ctx: Ctx, seg: ArmyBlockIn): ArmyBlockOut = w
         // РАССТАНОВКА МОЛЧИТ ПРИ КОМАНДИРЕ (v165, оператор: продолжать переносить логику в командира). Слоты и
         // командирские клетки — два ответа на один вопрос «кто где стоит»; пока командир ведёт бой, спрашивать
         // второй раз незачем, и крип, которому клетки не досталось, шёл в слот прежней расстановки
-        if (planNow) planFight(mobileArmy, combatEnemies, armedEnemies, enemyCreeps, slotOf, focusTarget)
-        else planBlock(mobileArmy, combatEnemies, armedEnemies, slotOf)
+        if (planNow) planFight(meas.mobileArmy, meas.combatEnemies, meas.armedEnemies, meas.enemyCreeps, targ.slotOf, targ.focusTarget)
+        else planBlock(meas.mobileArmy, meas.combatEnemies, meas.armedEnemies, targ.slotOf)
     }
-    ArmyBlockOut(
+    return ArmyBlockOut(
     )
 }
 
