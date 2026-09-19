@@ -47,6 +47,7 @@ RULES = [
     ('скан тела', r'\.body\.(any|all|none)\b', {'Facts.kt', 'InfluenceMap.kt'}, 'факт CreepFacts: bornMelee / bornArmed / bornCombatant / live*'),
 ]
 
+STRING = re.compile(r'"(\\.|[^"\\])*"')
 SELECTION = re.compile(r'(?<![\w.])((?:\w+\.)*\w+)\.(filter|filterNot)\s*\{([^{}]*)\}')
 
 
@@ -125,12 +126,35 @@ FACT_SCOPES = [
 
 
 def _ctor_fields(files, cls):
+    """Поля класса: `val` / `var` заголовка и объявления первого уровня тела. Скобки считаются, а не угадываются по переводу
+    строки: до 20.09.2026 выражение ждало заголовок, закрытый на отдельной строке (`\n)`), и у `CaptureCase` — заголовок в одну
+    строку, поля тела без типов — видело 5 полей из 15; остальные десять от затенения не были защищены (план 2, п. 2.8.4)."""
     for f, rows in files.items():
         text = '\n'.join(code for _, code in rows)
-        m = re.search(r'\bclass %s\((.*?)\n\)' % cls, text, re.S)
-        if m:
-            body = text[m.end():].split('\n}\n')[0] if text[m.end():].lstrip().startswith('{') else ''
-            return f, set(re.findall(r'\bva[lr] (\w+)\s*:', m.group(1))) | set(re.findall(r'\n    va[lr] (\w+)\b', body))
+        m = re.search(r'\bclass %s\b[^({\n]*\(' % cls, text)
+        if not m:
+            continue
+        i, d = m.end(), 1
+        while i < len(text) and d:
+            d += (text[i] == '(') - (text[i] == ')')
+            i += 1
+        head = text[m.end():i - 1]
+        fields = set(re.findall(r'\bva[lr] (\w+)\s*:', head))
+        j = i
+        while j < len(text) and text[j] in ' \t':
+            j += 1
+        if text[j:j + 1] == ':':                        # супертипы до тела
+            j = text.find('{', j) if '{' in text[j:text.find('\n', j) + 1] else j
+        if text[j:j + 1] == '{':
+            k, d = j + 1, 1
+            while k < len(text) and d:
+                if d == 1:
+                    mm = re.match(r'[ \t]*(?:private |internal |override |lateinit )*va[lr] (\w+)\b', text[k:]) if text[k - 1] == '\n' else None
+                    if mm:
+                        fields.add(mm.group(1))
+                d += (text[k] == '{') - (text[k] == '}')
+                k += 1
+        return f, fields
     return None, set()
 
 
@@ -179,6 +203,316 @@ CHECKS = [
 ]
 
 
+# ====================================================================================================================
+# ВТОРОЙ ШАГ АРХИТЕКТУРЫ (20.09.2026, docs/pain-and-gain-architecture-2.md, этап 0): правила «одного места». У каждого —
+# СПИСОК ИЗВЕСТНЫХ НАРУШЕНИЙ (lint-known.txt), который может только УБЫВАТЬ, — та же механика, что у known-рёбер в
+# levels.txt: нарушение, которого нет в списке, — FAIL (новое); строка списка, нарушения по которой больше нет, — FAIL
+# (сними строку: список пустеет вместе с нарушениями); строка, которой нет в версии списка из `main`, — FAIL (список
+# вырос). Нарушение записывается АТОМОМ — строкой `правило ключ`, устойчивой к сдвигу номеров строк.
+# Проверка: функция (исходники) -> [(файл, номер строки, текст для человека, атом)].
+# ====================================================================================================================
+KNOWN = os.path.join(HERE, 'lint-known.txt')
+ORDER = os.path.join(HERE, 'order.txt')
+
+
+def _numbered(atoms):
+    """Одинаковые ключи в одном файле различаются порядковым номером: `Tactician.kt:creep~2` (не `#` — это комментарий списка)."""
+    seen, out = {}, []
+    for f, n, text, key in atoms:
+        seen[key] = seen.get(key, 0) + 1
+        out.append((f, n, text, key if seen[key] == 1 else '%s~%d' % (key, seen[key])))
+    return out
+
+
+PLUMB = re.compile(r'(?<![\w.])(\w+) = \1(?=\s*(?:[,)]|$))')
+
+
+def plumbing(files):
+    """САНТЕХНИКА: аргумент `x = x` — имя поля, написанное третий раз (заголовок класса, локальная построителя, аргумент).
+    Носитель, у которого поле объявлено там, где вычислено (план, 4.1), такого аргумента не имеет вовсе."""
+    out = []
+    for f, rows in files.items():
+        for n, code in rows:
+            if re.match(r'\s*(?:va[lr]\s|return\b)', code) and '(' not in code:
+                continue
+            for m in PLUMB.finditer(code):
+                out.append((f, n, 'аргумент `%s = %s` — поле объявляется там, где вычислено' % (m.group(1), m.group(1)), '%s:%s' % (f, m.group(1))))
+    return [(f, n, t, 'plumbing ' + k) for f, n, t, k in _numbered(out)]
+
+
+def _fun_end(L, a):
+    """Номер последней строки функции, объявленной в строке a (строки — код без комментариев и с пустыми литералами).
+    Скобки считаются ВСЕ — `(`, `[`, `{`: у функции-выражения тело `= rows ?: listOf(\n Row(…) { … },\n …)` кончается там,
+    где закрылась круглая скобка, а не первая фигурная (прототип из приложения В плана резал такую функцию после первой
+    строки таблицы и объявлял `ladder()`, `captureGates()`, `pushRules()` не нуждающимися в приёмнике)."""
+    depth, b, body_seen = 0, a, False
+    while b < len(L):
+        line = L[b]
+        for ch in line:
+            if ch in '([{':
+                depth += 1
+            elif ch in ')]}':
+                depth -= 1
+        if '{' in line or re.search(r'\)\s*(?::[^=]+)?=', line) or body_seen:
+            body_seen = True
+        if body_seen and depth <= 0:
+            nxt = L[b + 1].strip() if b + 1 < len(L) else ''
+            if not (line.rstrip().endswith(('=', '&&', '||', '+', '-', '?:', ',', '(')) or nxt.startswith(('.', '?.', '?:', '&&', '||', '+ ', '- '))):
+                return b
+        b += 1
+    return len(L) - 1
+
+
+def _extension_bodies(files):
+    """{имя расширения PainAndGain: [(файл, строка, тело)]} — перегрузки вместе."""
+    funs = {}
+    for f, rows in files.items():
+        L = [STRING.sub('""', code) for _, code in rows]
+        for a, l in enumerate(L):
+            mm = re.match(r'^\s*(?:internal |private )?(?:inline )?fun\s+(?:<[^>]*>\s*)?PainAndGain\.(\w+)\s*\(', l)
+            if not mm:
+                continue
+            b = _fun_end(L, a)
+            funs.setdefault(mm.group(1), []).append((f, rows[a][0], '\n'.join(L[a:b + 1])))
+    return funs
+
+
+def _needs_receiver(funs, members):
+    info = {}
+    for n, bodies in funs.items():
+        um, ue = set(), set()
+        for _, _, body in bodies:
+            locs = set(re.findall(r'\bva[lr]\s+(\w+)', body))
+            for w in re.finditer(r'(?<![\w.])([a-zA-Z_]\w*)\b', body):
+                k = w.group(1)
+                if k in locs:
+                    continue
+                if k in members:
+                    um.add(k)
+                elif k in funs and k != n and body[w.end():w.end() + 1] == '(':
+                    ue.add(k)
+            if re.search(r'(?<![\w.])this\b', body):
+                um.add('this')
+        info[n] = (um, ue)
+    need = {n for n, (um, ue) in info.items() if um}
+    while True:
+        more = {n for n, (um, ue) in info.items() if n not in need and ue & need}
+        if not more:
+            return need
+        need |= more
+
+
+def needless_receiver(files):
+    """ЛИШНИЙ ПРИЁМНИК: функция объявлена расширением `PainAndGain`, но ни сама, ни через вызываемых состояние объекта не
+    трогает. Расширение — только там, где приёмник нужен (план, 4.2): иначе имя в её теле разрешается по четырём областям
+    вместо двух, и по тексту не видно, какая сработала."""
+    funs = _extension_bodies(files)
+    members = _object_members(files, 'PainAndGain')
+    need = _needs_receiver(funs, members)
+    out = []
+    for n in sorted(set(funs) - need):
+        f, line, _ = funs[n][0]
+        out.append((f, line, 'fun PainAndGain.%s — приёмник не нужен ни ей, ни тем, кого она зовёт: обычная функция' % n, 'receiver ' + n))
+    return out
+
+
+def table_tags(files):
+    """{имя таблицы в приборе reach: [теги по порядку]} — из исходника: блок `… = … listOf…(` со строками Row / Gate / Pass;
+    имя таблицы — имя её счётчика `Tally("имя")`, с которым её обходят (`walk(ladder(), …, ladderTally)`)."""
+    tally, walks, blocks = {}, {}, {}
+    for f, rows in files.items():
+        cur, ind = None, 0
+        for n, code in rows:
+            for m in re.finditer(r'\b(\w+) = Tally\("([\w.]+)"', code):
+                tally[m.group(1)] = m.group(2)
+            for m in re.finditer(r'\b(?:walk|pass)\((\w+)(?:\(\))?, .*, ([\w.]+)\)', code):
+                walks[m.group(1)] = m.group(2).split('.')[-1]
+            for m in re.finditer(r'\brunPasses\((\w+), ([\w.]+)\)', code):
+                walks[m.group(1)] = m.group(2).split('.')[-1]
+            m = re.match(r'(\s*).*\b(?:val|fun) (?:PainAndGain\.)?(\w+)\b.*\blistOf(?:<[^(]*>)?\($', code)
+            if m:
+                cur, ind = m.group(2), len(m.group(1)); blocks[cur] = []
+                continue
+            if cur:
+                mm = re.match(r'\s{%d}(?:Row|Gate|Pass)\("([^"]+)"' % (ind + 4), code)
+                if mm:
+                    blocks[cur].append((mm.group(1), f, n))
+                elif re.match(r'\s{0,%d}\)' % ind, code):
+                    if not blocks[cur]:
+                        del blocks[cur]
+                    cur = None
+    out = {}
+    for ident, rows in blocks.items():
+        name = tally.get(walks.get(ident, ''), None)
+        if name:
+            out[name] = rows
+    return out
+
+
+def tag_outside_table(files):
+    """ТЕГ ВНЕ ТАБЛИЦЫ: строковый литерал, совпадающий с тегом строки таблицы, в сравнении `==` / `!=` / `in`. Переименовал
+    строку — сравнение молча перестало срабатывать; свойство строки (приоритет, признак «приказ») живёт в строке (план, 4.5)."""
+    tags = {t for rows in table_tags(files).values() for t, _, _ in rows}
+    out = []
+    for f, rows in files.items():
+        if f == 'Tables.kt':
+            continue
+        for n, code in rows:
+            if re.match(r'\s*(?:Row|Gate|Pass)\("', code):
+                continue
+            hits = [m.group(1) or m.group(2) for m in re.finditer(r'[!=]= "([^"]+)"|"([^"]+)" [!=]=', code)]
+            for m in re.finditer(r'\bin (?:setOf|listOf|arrayOf)\(([^)]*)\)', code):
+                hits += re.findall(r'"([^"]+)"', m.group(1))
+            for t in hits:
+                if t in tags:
+                    out.append((f, n, 'тег строки таблицы "%s" сравнивается как строка вне таблицы' % t, '%s:%s' % (f, t)))
+    return [(f, n, t, 'tag ' + k) for f, n, t, k in _numbered(out)]
+
+
+WRITE = r'\s*(?:=(?!=)|\+=|-=|\*=|/=|\+\+|--|\[[^\]]*\]\s*(?:=(?!=)|\+=|-=)|\.(?:add|addAll|addLast|addFirst|remove|removeAll|removeFirst|removeLast|retainAll|clear|put|putAll|getOrPut|set|update|fill)\b)'
+
+
+def single_writer(files):
+    """ОДИН ПИСАТЕЛЬ: поле `Memory` или член `PainAndGain` пишется более чем из одного файла. По тексту: запись — присваивание,
+    `++`, запись по индексу, изменяющий метод коллекции; одноимённая локальная или параметр функции запись не считает."""
+    owners = {'Memory': _object_vars(files, 'Memory'), 'PainAndGain': _object_vars(files, 'PainAndGain')}
+    writers = {}
+    for f, rows in files.items():
+        text = [STRING.sub('""', code) for _, code in rows]     # `posture=` в тексте строки лога — не запись
+        local = _local_names(text)
+        for i, code in enumerate(text):
+            for m in re.finditer(r'(?<![\w.])(?:(Memory|PainAndGain)\.)?(\w+)(?=%s)' % WRITE, code):
+                obj, name = m.group(1), m.group(2)
+                if obj is None:
+                    if name not in owners['PainAndGain'] or name in local[i] or re.search(r'\bva[lr] %s\b' % name, code):
+                        continue
+                    obj = 'PainAndGain'
+                elif name not in owners[obj]:
+                    continue
+                writers.setdefault('%s.%s' % (obj, name), {}).setdefault(f, rows[i][0])
+    out = []
+    for field in sorted(writers):
+        if len(writers[field]) > 1:
+            for f in sorted(writers[field]):
+                out.append((f, writers[field][f], '%s пишется из %d файлов: %s' % (field, len(writers[field]), ', '.join(sorted(writers[field]))),
+                            'writer %s<-%s' % (field, f)))
+    return out
+
+
+def _object_vars(files, obj):
+    out = set()
+    for f, rows in files.items():
+        depth, inside, base = 0, False, 0
+        for _, code in rows:
+            if re.search(r'\bobject %s\b' % obj, code):
+                inside, base = True, depth
+            if inside and depth == base + 1:
+                for m in re.finditer(r'(?:^|;)\s*(?:internal |private |override |lateinit )*(?:val|var) (\w+)', code):
+                    out.add(m.group(1))
+            depth += code.count('{') - code.count('}')
+            if inside and depth <= base and '}' in code:
+                inside = False
+    return out
+
+
+def _local_names(text):
+    """По строке — имена, объявленные локально (`val` / `var` / параметр) в функции верхнего уровня, которой строка принадлежит."""
+    out, cur, depth, fun_depth = [], set(), 0, None
+    for code in text:
+        if fun_depth is None and re.match(r'^\s{0,4}(?:internal |private |override |inline )*fun\b', code):
+            fun_depth, cur = depth, set(re.findall(r'(\w+)\s*:', code.split(')')[0] if ')' in code else code))
+        if fun_depth is not None:
+            cur |= set(re.findall(r'\bva[lr]\s+(\w+)', code))
+            cur |= set(n for grp in re.findall(r'\bva[lr]\s+\(([^)]*)\)', code) for n in re.findall(r'\w+', grp))
+        out.append(set(cur) if fun_depth is not None else set())
+        depth += code.count('{') - code.count('}')
+        if fun_depth is not None and depth <= fun_depth and ('}' in code or '{' not in code and '=' in code):
+            fun_depth, cur = None, set()
+    return out
+
+
+def table_order(files):
+    """ПОРЯДОК: `order.txt` — записи вида `rung: kite > slot   # v135: почему`. Порядок строк таблицы — приоритет, и причина,
+    по которой одна строка стоит выше другой, до сих пор жила комментарием между строками: его не проверяет ничто. Запись
+    проверяется: обе строки в таблице есть, первая стоит ВЫШЕ второй. Известных нарушений у правила нет — оно обязано быть
+    пустым."""
+    if not os.path.exists(ORDER):
+        return [('order.txt', 0, 'нет файла order.txt', 'order missing')]
+    tables = table_tags(files)
+    out = []
+    for n, raw in enumerate(open(ORDER, encoding='utf-8').read().split('\n'), 1):
+        line = raw.split('#')[0].strip()
+        if not line:
+            continue
+        m = re.match(r'([\w.]+):\s*(\S+)\s*>\s*(\S+)$', line)
+        if not m:
+            out.append(('order.txt', n, 'не разобрать: %s' % raw.strip(), 'order syntax:%d' % n)); continue
+        if '#' not in raw or not raw.split('#', 1)[1].strip():
+            out.append(('order.txt', n, 'запись без причины: %s' % raw.strip(), 'order reason:%d' % n)); continue
+        tbl, hi, lo = m.groups()
+        tags = [t for t, _, _ in tables.get(tbl, [])]
+        if not tags:
+            out.append(('order.txt', n, 'таблицы `%s` в пакете нет (есть: %s)' % (tbl, ', '.join(sorted(tables))), 'order table:%s' % tbl)); continue
+        for t in (hi, lo):
+            if t not in tags:
+                out.append(('order.txt', n, 'в таблице `%s` нет строки `%s` — строка переименована или снята, а причина её места осталась' % (tbl, t), 'order row:%s.%s' % (tbl, t)))
+        if hi in tags and lo in tags and tags.index(hi) > tags.index(lo):
+            where = [(f, ln) for t, f, ln in tables[tbl] if t == hi][0]
+            out.append((where[0], where[1], '%s: `%s` обязана стоять ВЫШЕ `%s` — %s' % (tbl, hi, lo, raw.split('#', 1)[1].strip()), 'order %s:%s>%s' % (tbl, hi, lo)))
+    return out
+
+
+# (проверка, есть ли у неё список известных нарушений)
+KNOWN_CHECKS = [(plumbing, True), (needless_receiver, True), (tag_outside_table, True), (single_writer, True), (table_order, False)]
+
+
+def read_known(text):
+    return [l.split('#')[0].strip() for l in text.split('\n') if l.split('#')[0].strip()]
+
+
+def main_known():
+    """Список известных из `main` — чтобы он мог только убывать. None, если сверять не с чем (файла в main ещё нет)."""
+    import subprocess
+    try:
+        top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, cwd=HERE).stdout.strip()
+        rel = os.path.relpath(KNOWN, top)
+        r = subprocess.run(['git', 'show', 'main:' + rel], capture_output=True, text=True, cwd=top)
+        return read_known(r.stdout) if r.returncode == 0 else None
+    except OSError:
+        return None
+
+
+def known_checks(files, write=False):
+    """-> ([(файл, строка, правило, текст)] — то, что валит линт; {правило: (нарушений, известных)})."""
+    found, stat = [], {}
+    for check, has_known in KNOWN_CHECKS:
+        found.append((check.__name__, has_known, check(files)))
+    atoms_now = [a for _, has_known, hits in found if has_known for _, _, _, a in hits]
+    if write:
+        rules = sorted({a.split(' ', 1)[0] for a in atoms_now})
+        with open(KNOWN, 'w', encoding='utf-8') as fh:
+            fh.write('# Известные нарушения правил «одного места» (lint.py, второй шаг архитектуры). Список может только УБЫВАТЬ:\n'
+                     '# новое нарушение — FAIL, строка без нарушения — FAIL (сними её), строка, которой нет в версии из main, — FAIL.\n'
+                     '# Пишется `python3 tools/stub/painandgain/lint.py --write-known`; строка — `правило ключ`.\n')
+            for r in rules:
+                fh.write('\n'.join(sorted(a for a in atoms_now if a.split(' ', 1)[0] == r)) + '\n')
+    known = read_known(open(KNOWN, encoding='utf-8').read()) if os.path.exists(KNOWN) else []
+    base = main_known()
+    bad = []
+    for name, has_known, hits in found:
+        new = [h for h in hits if not has_known or h[3] not in known]
+        stat[name] = (len(hits), len(hits) - len(new))
+        for f, n, text, atom in new:
+            bad.append((f, n, name, ('НОВОЕ: ' if has_known else '') + text))
+    now = set(atoms_now)
+    for k in known:
+        if k not in now:
+            bad.append(('lint-known.txt', 0, 'known', '`%s` — нарушения больше нет: сними строку (список пустеет вместе с нарушениями)' % k))
+        elif base is not None and k not in base:
+            bad.append(('lint-known.txt', 0, 'known', '`%s` — строки нет в версии списка из main: список может только убывать' % k))
+    return bad, stat
+
+
 def code_lines(text):
     """[(номер строки, код без комментариев)] — строковые литералы целы, `//` внутри них комментарием не считается."""
     out, block, n = [], 0, 0
@@ -224,6 +558,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--gate', action='store_true', help='одна строка PASS/FAIL для tools/land.sh, подробности в stderr')
     ap.add_argument('--src', default=SRC, help='каталог пакета (по умолчанию — пакет этого ворктри)')
+    ap.add_argument('--write-known', action='store_true', help='переписать lint-known.txt нынешними нарушениями (расти списку не даст сверка с main)')
+    ap.add_argument('--known', action='store_true', help='показать и известные нарушения правил «одного места» — список работы этапов 1–6')
     a = ap.parse_args()
     files = load(a.src)
     hits = []
@@ -238,14 +574,24 @@ def main():
     for check in CHECKS:
         for f, n, text in check(files):
             hits.append((f, n, check.__name__, '', text))
+    bad, stat = known_checks(files, write=a.write_known)
+    for f, n, name, text in bad:
+        hits.append((f, n, name, '', text))
+    if a.known:
+        for check, has_known in KNOWN_CHECKS:
+            for f, n, text, atom in check(files):
+                print('%s:%d: [известное: %s] %s' % (f, n, check.__name__, text))
     out = sys.stderr if a.gate else sys.stdout
     for f, n, name, instead, code in hits:
         print('%s:%d: [%s] %s%s' % (f, n, name, code[:140], ('   -> ' + instead) if instead else ''), file=out)
+    n_rules = len(RULES) + len(CHECKS) + len(KNOWN_CHECKS)
+    n_known = sum(k for _, k in stat.values())
     if a.gate:
-        what = 'rules %d files %d hits %d' % (len(RULES) + len(CHECKS), len(files), len(hits))
+        what = 'rules %d files %d hits %d known %d' % (n_rules, len(files), len(hits), n_known)
         print('%-4s %-22s %-40s | errors: %d ' % ('FAIL' if hits else 'PASS', 'lint', what, len(hits)))
     else:
-        print('правил %d, файлов %d, нарушений %d' % (len(RULES) + len(CHECKS), len(files), len(hits)))
+        print('правил %d, файлов %d, нарушений %d; известных нарушений «одного места» %d: %s' % (
+            n_rules, len(files), len(hits), n_known, ', '.join('%s %d' % (k, v[1]) for k, v in stat.items())))
     return 1 if hits else 0
 
 
