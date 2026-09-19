@@ -245,7 +245,7 @@ def _fun_end(L, a):
     Скобки считаются ВСЕ — `(`, `[`, `{`: у функции-выражения тело `= rows ?: listOf(\n Row(…) { … },\n …)` кончается там,
     где закрылась круглая скобка, а не первая фигурная (прототип из приложения В плана резал такую функцию после первой
     строки таблицы и объявлял `ladder()`, `captureGates()`, `pushRules()` не нуждающимися в приёмнике)."""
-    depth, b, body_seen = 0, a, False
+    depth, b, body_seen, last = 0, a, False, ''
     while b < len(L):
         line = L[b]
         for ch in line:
@@ -255,9 +255,14 @@ def _fun_end(L, a):
                 depth -= 1
         if '{' in line or re.search(r'\)\s*(?::[^=]+)?=', line) or body_seen:
             body_seen = True
-        if body_seen and depth <= 0:
-            nxt = L[b + 1].strip() if b + 1 < len(L) else ''
-            if not (line.rstrip().endswith(('=', '&&', '||', '+', '-', '?:', ',', '(')) or nxt.startswith(('.', '?.', '?:', '&&', '||', '+ ', '- '))):
+        if line.strip():
+            last = line.rstrip()                        # строка-комментарий посреди выражения вырезана в пустую: конец судим по последней НЕпустой
+        if body_seen and depth <= 0 and line.strip():
+            k = b + 1
+            while k < len(L) and not L[k].strip():
+                k += 1
+            nxt = L[k].strip() if k < len(L) else ''
+            if not (last.endswith(('=', '&&', '||', '+', '-', '?:', ',', '(')) or nxt.startswith(('.', '?.', '?:', '&&', '||', '+ ', '- '))):
                 return b
         b += 1
     return len(L) - 1
@@ -462,8 +467,23 @@ def table_order(files):
     return out
 
 
+def member_vs_toplevel(files):
+    """МОЛЧАЛИВОЕ ПЕРЕРАЗРЕШЕНИЕ: имя члена `object PainAndGain` совпало с именем верхнего уровня пакета. В функции-расширении
+    голое имя найдёт ЧЛЕН, в обычной функции и в носителе — ВЕРХ ПАКЕТА, и компилятор не скажет ничего. Пока члены переезжают
+    из объекта на верх файлов-владельцев (этапы 1–6 второго шага), пересечение обязано оставаться пустым."""
+    members = _object_members(files, 'PainAndGain')
+    out = []
+    for f, rows in files.items():
+        for n, code in rows:
+            m = re.match(r'(?:internal |private |const |inline |lateinit )*(?:val|var|fun)\s+(?:<[^>]*>\s*)?(\w+)\b(?!\.)', code)
+            if m and m.group(1) in members:
+                out.append((f, n, 'имя `%s` есть и у object PainAndGain, и на верхнем уровне пакета' % m.group(1), 'collision ' + m.group(1)))
+    return out
+
+
 # (проверка, есть ли у неё список известных нарушений)
-KNOWN_CHECKS = [(plumbing, True), (needless_receiver, True), (tag_outside_table, True), (single_writer, True), (table_order, False)]
+KNOWN_CHECKS = [(plumbing, True), (needless_receiver, True), (tag_outside_table, True), (single_writer, True), (table_order, False),
+                (member_vs_toplevel, False)]
 
 
 def read_known(text):
