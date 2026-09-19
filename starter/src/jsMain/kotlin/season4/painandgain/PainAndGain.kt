@@ -294,20 +294,7 @@ object PainAndGain {
         if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
         val rememberTickSeg = rememberTick(ctx, buildWorldSeg)
         val armedCentroid = rememberTickSeg.armedCentroid
-        val printTickSeg = printTick(ctx, PrintTickIn(
-            myCreeps = myCreeps,
-            enemyCreeps = enemyCreeps,
-            active = active,
-            combatEnemies = combatEnemies,
-            flags = flags,
-            wounded = wounded,
-            army = army,
-            runners = runners,
-            passiveEnemy = passiveEnemy,
-            ourCentroid = ourCentroid,
-            enemyCentroid = enemyCentroid,
-            armedCentroid = armedCentroid,
-        ))
+        val printTickSeg = printTick(ctx, buildWorldSeg, rememberTickSeg)
     }
 
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4

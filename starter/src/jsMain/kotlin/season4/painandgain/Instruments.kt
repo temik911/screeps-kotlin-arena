@@ -460,51 +460,36 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
     )
 }
 
-/** ПЕЧАТЬ ТИКА (v257, этап 10; хвост tickBody): строка застрявших, строка t= со всеми приборами раз в LOG_EVERY тиков, перепись rung / tac, поля fld. Перенесено дословно. */
-internal class PrintTickIn(
-    val myCreeps: List<Creep>,
-    val enemyCreeps: List<Creep>,
-    val active: List<Creep>,
-    val combatEnemies: List<Creep>,
-    val flags: List<FlagInfo>,
-    val wounded: (Creep) -> Boolean,
-    val army: List<Creep>,
-    val runners: List<Creep>,
-    val passiveEnemy: Boolean,
-    val ourCentroid: Position,
-    val enemyCentroid: Position?,
-    val armedCentroid: Position,
-)
-
 internal class PrintTickOut(
 )
 
-internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = with(seg) {
+/** ПЕЧАТЬ ТИКА (v257, этап 10; хвост tickBody): строка застрявших, строка t= со всеми приборами раз в LOG_EVERY тиков, перепись rung / tac, поля fld. Перенесено дословно. */
+internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTickOut): PrintTickOut {
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
         bfsMaxTick = 0
         bfsMaxCost = 0.0
     }
-    if (DEBUG_LOG) logStuck(active, enemyCreeps)
-    if (DEBUG_VISUALS) InfluenceMap.drawDebug(army, myCreeps, enemyCreeps)
+    if (DEBUG_LOG) logStuck(bw.active, bw.enemyCreeps)
+    if (DEBUG_VISUALS) InfluenceMap.drawDebug(bw.army, bw.myCreeps, bw.enemyCreeps)
 
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-        val ours = ourPowerOf(army, combatEnemies)
-        val theirs = enemyPowerOf(combatEnemies, army)
+        val ours = ourPowerOf(bw.army, bw.combatEnemies)
+        val theirs = enemyPowerOf(bw.combatEnemies, bw.army)
         println(
-            "t=${getTicks()} army=${army.size} runners=${runners.size}(${Memory.detachedIds.size} detached) enemies=${enemyCreeps.size}/${combatEnemies.size} " +
-            "reach=${army.count { hasRanged(it) && combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${army.count { hasRanged(it) }} " +
+            "t=${getTicks()} army=${bw.army.size} runners=${bw.runners.size}(${Memory.detachedIds.size} detached) enemies=${bw.enemyCreeps.size}/${bw.combatEnemies.size} " +
+            "reach=${bw.army.count { hasRanged(it) && bw.combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${bw.army.count { hasRanged(it) }} " +
             // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
             // центра. Реплеи говорят, что стирание приходит на диаметре 21, а пат — на диаметре 3
-            "spread=${army.filter { hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${army.count { hasWeapon(it) && getRange(it, armedCentroid) > LEASH_RANGE }} " +
+            "spread=${bw.army.filter { hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${bw.army.count { hasWeapon(it) && getRange(it, rem.armedCentroid) > LEASH_RANGE }} " +
             // ...и отдельно ЛЕКАРИ за поводком (v202): именно они разъезжались, а прибор их не считал вовсе
-            "hfar=${army.count { healerOnly(it) && getRange(it, armedCentroid) > LEASH_RANGE }}/${army.count { healerOnly(it) }} " +
+            "hfar=${bw.army.count { healerOnly(it) && getRange(it, rem.armedCentroid) > LEASH_RANGE }}/${bw.army.count { healerOnly(it) }} " +
             // ЛЕКАРИ СУДЯТСЯ ВЫЖИВАНИЕМ, А НЕ ДОСТАВЛЕННЫМ ЛЕЧЕНИЕМ (этап 7): v202 поднял лечение и дал 0:3.
             // Тело лекаря — h6m6, лечащие части СПЕРЕДИ, поэтому урон уничтожает именно их и первыми; замер
             // разгрома 3d97c4 говорит, что его лекари сохраняют 100 % лечащих частей, наши 8 %. hcov — доля
             // нужды, покрытая назначенными клетками: прибор раздачи, а не исхода
-            "hparts=${withHeal(myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }} " +
-            "ehparts=${enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }} " +
+            "hparts=${withHeal(bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }} " +
+            "ehparts=${bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }} " +
             "hcov=${InfluenceMap.healCoverage().let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
             "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +
             "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
@@ -523,12 +508,12 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
             "warm=$warmTicks/$warmContact warmann=$warmAnn/$warmAnnAll warmhold=$warmHold/$warmAnn warmcmd=$warmCmd/$warmCmdAll warmfight=$warmFight/$warmFightAll warmcap=$warmCap/$warmCapAll " +
             "mconc=$mconcAll/$mconcTicks mconcmax=$mconcMax mpack=$mpackHit/$mpackAll pack=$packHeld/$packTicks mpackon=$mpackOnHit/$mpackOn kchase=$kchaseTicks/$kchaseAnn kveto=$kvetoHit/$kvetoAll gathera=$gatherAnn/$gatherAnnAll " +
             "annempty=${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll " +
-            "shooters=${army.count { hasRanged(it) }}/${combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries srch=$srchCut/$srchTicks/${cmdTailMax.toInt()} pin=$pinOrd/$pinOpp/$pinHeld/$pinChk fself=$fselfFlip/$fselfAll rotf=$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN rotfm=$rotfMeet meet=$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk fsw=$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare ffoc=$ffocBefore/$ffocAfter/$ffocAll ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame rad=${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide simd=${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hwallx=$hwallYield/$hwallFar hpick=$hpN/$hpAdj/$hpAvail/$hpGate hadj=$hadjN/$hadjAll hadjn=$hadjnN/$hadjnAll hfire=$hfireN/$hfireAll/$hfireAdj hstill=${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged} cmdheal=$cmdHealGiven/$cmdHealTicks dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
+            "shooters=${bw.army.count { hasRanged(it) }}/${bw.combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries srch=$srchCut/$srchTicks/${cmdTailMax.toInt()} pin=$pinOrd/$pinOpp/$pinHeld/$pinChk fself=$fselfFlip/$fselfAll rotf=$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN rotfm=$rotfMeet meet=$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk fsw=$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare ffoc=$ffocBefore/$ffocAfter/$ffocAll ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame rad=${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide simd=${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hwallx=$hwallYield/$hwallFar hpick=$hpN/$hpAdj/$hpAvail/$hpGate hadj=$hadjN/$hadjAll hadjn=$hadjnN/$hadjnAll hfire=$hfireN/$hfireAll/$hfireAdj hstill=${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged} cmdheal=$cmdHealGiven/$cmdHealTicks dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
             "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
-                "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=$passiveEnemy flags=${flagsSummary(flags)} " +
-                "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
-                "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} touchl=${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll fall=$fallReach/$fallAny our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${army.count { stripped(it) }} hits=${army.sumOf { it.hits }}/${army.sumOf { it.hitsMax }} enemyHits=${combatEnemies.sumOf { it.hits }}/${combatEnemies.sumOf { it.hitsMax }} " +
-                "centroid=(${ourCentroid.x},${ourCentroid.y}) enemyCentroid=${enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
+                "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=${bw.passiveEnemy} flags=${flagsSummary(bw.flags)} " +
+                "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> bw.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} touchl=${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll fall=$fallReach/$fallAny our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${bw.army.count { stripped(it) }} hits=${bw.army.sumOf { it.hits }}/${bw.army.sumOf { it.hitsMax }} enemyHits=${bw.combatEnemies.sumOf { it.hits }}/${bw.combatEnemies.sumOf { it.hitsMax }} " +
+                "centroid=(${bw.ourCentroid.x},${bw.ourCentroid.y}) enemyCentroid=${bw.enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
         )
         // ПЕРЕПИСЬ (v203): только ненулевые ветки, накопительно за матч. Сумма stepCount обязана равняться
         // размеру армии, умноженному на число тиков, — если не равна, перепись врёт, и всё на ней построенное тоже
@@ -563,7 +548,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, seg: PrintTickIn): PrintTickOut = w
         concSum = 0; concTicks = 0
         if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
     }
-    PrintTickOut(
+    return PrintTickOut(
     )
 }
 
