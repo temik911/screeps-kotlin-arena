@@ -53,17 +53,6 @@ import kotlin.reflect.*
  * `PainAndGain` дословно расширениями; счётчики, которые они печатают, пока живут в объекте.
  */
 
-internal fun PainAndGain.cpuMs(): Double = try { getCpuTime() / 1_000_000.0 } catch (e: Throwable) { 0.0 }
-
-internal fun PainAndGain.cpuMark(phase: String) { cpuPhases.add(phase to cpuMs()) }
-
-/** Перебор замыслов под бюджетом (v262, см. Strategist.armyCommand): тиков с перебором, из них обрезанных, наибольший
- *  хвост тика после командира в мс — прибор srch= и запас бюджета. */
-internal var srchTicks = 0
-internal var srchCut = 0
-internal var cmdTailMax = 0.0
-internal var cmdEndMs = 0.0
-internal var cmdSearched = false
 /** «Зажатого бьём» (v264, pin=взято/возможностей/удержано/сверено): мили под приказом с клеткой вплотную к зажатому
  *  врагу в шаге; приказ, поставивший его туда; и был ли зажатый вплотную к нему на следующем тике. */
 internal var pinOpp = 0
@@ -820,12 +809,7 @@ internal var stripTicks = 0                            // тиков, в кот�
 
 internal var stateEventTicks = 0
 
-/** Постановка этого тика, как её задают старые решатели (v241, см. Strategist.snapshot): прибор `disp=`. */
-internal var dispNow = "-"
-
 internal var lostEnemy = 0      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
-
-internal var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
 
 internal var cmdWhyN = 0
 
