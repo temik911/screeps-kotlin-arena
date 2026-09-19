@@ -11,6 +11,7 @@
 # Tactician — предложения в Arbiter. Приёмник, в который пишут все, — нижний слой; «кто зовёт run() последним» видно в
 # оркестровке, а не в уровне файла. Семь рёбер стартовой таблицы были рёбрами вверх только из-за этой расстановки.
 1: Executor Arbiter TrafficManager
+1: Geometry                                      # sym, mirrorTL — обход и сторона карты в своей системе координат
 2: World
 3: Forecast Strategist Missions
 4: Tactician Fight Formation
@@ -22,10 +23,8 @@ outside: Instruments <- PainAndGain
 # унести свою строку, строка, которой нет в версии этого файла из main, — FAIL. Пустеет на этапах 5 (рёбра вверх) и 6
 # (импорты Instruments стадиями).
 # — рёбра вверх, названные планом (раздел 2.5):
-known: DistanceMap>World        # этап 5: sym / mirrorTL — к геометрии карты (уровень 1)
 known: Forecast>PainAndGain     # этап 5: нужная величина приходит параметром
 known: Formation>PainAndGain    # этап 5: нужная величина приходит параметром
-known: InfluenceMap>World       # этап 5: sym — туда же
 known: World>Forecast           # этап 5: модель мощи — отдельный файл уровня 1
 # — рёбра вверх, которых раздел 2.5 не называет (находка этапа 0, решаются на этапе 5 вместе с пересмотром таблицы):
 known: Strategist>Fight
