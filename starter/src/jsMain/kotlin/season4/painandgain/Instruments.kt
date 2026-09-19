@@ -210,7 +210,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
     val seen = HashMap<Int, Int>()
     commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
     val dup = seen.values.count { it > 1 }
-    orderClash += dup
+    orderClash.n += dup
     // ГАРАНТИЯ, А НЕ НАБЛЮДЕНИЕ (v176, оператор: «не должно быть такого, что по приказам командира в одну
     // клетку собрались двое»). Раздача держит своё множество занятых, но источников приказа несколько — бой,
     // гонка, марш, хранители, отход, — и на стыке коллизия всё же случалась (одна на 431 приказ, режим боя).
@@ -308,7 +308,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
         // считать его ослушником было бы неверно (v173)
         if (id in Memory.cmdDetach) return@forEach
         val c = meas.commandArmy.firstOrNull { it.id == id } ?: return@forEach
-        orderAuditN++
+        orderAuditN.n++
         // ...и ПРИКАЗ В ДВУХ ШАГАХ ИСПОЛНЕН, ЕСЛИ КРИП СТАЛ БЛИЖЕ (v184). Прибор сверял клетку крипа с
         // НАЗНАЧЕННОЙ и только с ней, а строй (`commandBrace`) назначает место в строю за несколько клеток —
         // такой приказ не мог быть засчитан НИКОГДА, и едва строй заработал, исполнение упало со 99 % до 62 %
@@ -317,19 +317,19 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
         // 2 022 случая из 39 245 — почти все они этой природы
         val far = 
             (orderDist[id] ?: 0) > 1 && maxOf(abs(c.x - cell.x), abs(c.y - cell.y)) < (orderDist[id] ?: 0)
-        if ((c.x == cell.x && c.y == cell.y) || far) orderAuditOk++
+        if ((c.x == cell.x && c.y == cell.y) || far) orderAuditOk.n++
         else {
             // ...и КУДА делись остальные (v170): приказ был «стой», а крип ушёл; крип не двинулся
             // вовсе; двинулся, но в другую клетку; или не мог двигаться от усталости
             val here = orderWas[id]
             when {
-                cell.x == here?.first && cell.y == here.second -> lostStay++
+                cell.x == here?.first && cell.y == here.second -> lostStay.n++
                 // ...клетку мог занять ВРАГ: он ходит одновременно с нами, и его шаг делает приказ
                 // неисполнимым задним числом — это неустранимо в принципе, и считать надо отдельно (v175)
                 ctx.enemyCreeps.any { e -> e.x == cell.x && e.y == cell.y } -> lostEnemy.n++
-                c.x == here?.first && c.y == here.second -> lostStuck++
-                (orderFatigue[id] ?: 0) > 0 -> lostFatigue++
-                else -> lostElsewhere++
+                c.x == here?.first && c.y == here.second -> lostStuck.n++
+                (orderFatigue[id] ?: 0) > 0 -> lostFatigue.n++
+                else -> lostElsewhere.n++
             }
         }
         // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
@@ -486,23 +486,15 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
     Gauges.computed("gsafe", 1) { "$groupDmgWindow" }
-    Gauges.computed("recall", 0) { "$recalled" }
     Gauges.computed("ledgerw") { "$ledgerWindow/$ourLostWindow/$hisLostWindow" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
     Gauges.computed("objnone") { "${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll" }
     Gauges.computed("objdrop") { "${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN" }
     Gauges.computed("runner") { "${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN" }
     Gauges.computed("cmdwhy") { "${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN" }
-    Gauges.computed("concmax") { "$concMax" }
-    Gauges.computed("lostrace", 0) { "$lostRaceOpened" }
-    Gauges.computed("gather", 0) { "$gatherSpread" }
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
     // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
     // консоль не показывала (имя `guns=` занято прибором v200)
-    Gauges.computed("mconc", 0) { "$mconcAll" }
-    Gauges.computed("mconcmax") { "$mconcMax" }
-    Gauges.computed("mpack", 0) { "$mpackHit" }
-    Gauges.computed("kchase", 0) { "$kchaseTicks" }
     Gauges.computed("annempty") { "${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll" }
     Gauges.computed("shooters") { "${tickView.bw.army.count { hasRanged(it) }}/${tickView.bw.combatEnemies.count { hasRanged(it) }}" }
     Gauges.computed("srch") { "$srchCut/$srchTicks/${cmdTailMax.toInt()}" }
@@ -518,21 +510,12 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("hadjn") { "$hadjnN/$hadjnAll" }
     Gauges.computed("hfire") { "$hfireN/$hfireAll/$hfireAdj" }
     Gauges.computed("hstill") { "${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged}" }
-    Gauges.computed("cmdheal") { "$cmdHealGiven/$cmdHealTicks" }
     Gauges.computed("dh") { "${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }}" }
     Gauges.computed("score") { "${ourScore.toInt()}/${enemyScore.toInt()}" }
     Gauges.computed("rate") { "$ourRate/$enemyRate" }
     Gauges.computed("behind") { "$behindOnScore" }
     Gauges.computed("passive") { "${tickView.bw.passiveEnemy}" }
     Gauges.computed("flags") { "${flagsSummary(tickView.bw.flags)}" }
-    Gauges.computed("obey") { "$orderAuditOk/$orderAuditN" }
-    Gauges.computed("branch") { "$orderBranch" }
-    Gauges.computed("fled") { "$orderFled" }
-    Gauges.computed("clash") { "$orderClash" }
-    Gauges.computed("lost", 0, label = "stay") { "$lostStay" }
-    Gauges.computed("lost", 1, label = "stuck") { "$lostStuck" }
-    Gauges.computed("lost", 3, label = "fat") { "$lostFatigue" }
-    Gauges.computed("lost", 4, label = "else") { "$lostElsewhere" }
     Gauges.computed("kite") { "${kiteNow - kiteSeen}" }
     Gauges.computed("massed") { "$kiteMassed" }
     Gauges.computed("plan") { "${planStrict - planStrictSeen}/${planLoose - planLooseSeen}" }
@@ -545,7 +528,6 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("hunt@2") { "$huntingThreat" }
     Gauges.computed("rush") { "$unflaggedRushNow" }
     Gauges.computed("weak") { "$outmatchedTicks" }
-    Gauges.computed("pat") { "$stalemateTicks/$patMax" }
     Gauges.computed("touch") { "${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()}" }
     Gauges.computed("touchl") { "${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()}" }
     Gauges.computed("guns") { "$planGunsIn/$planGunsAll" }
@@ -647,3 +629,5 @@ internal val packHeld = Gauges.counter("pack")
 internal val mpackOnHit = Gauges.counter("mpackon")
 
 internal val mpackOn = Gauges.counter("mpackon", 1)
+
+// ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================

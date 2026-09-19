@@ -596,7 +596,7 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
             c.minByOrNull { getRange(creep, it) } } else null
         Memory.engagingLatch.set(creep.id, engage != null)
         // пара к общей цели мили (v221, см. mpackHit): как часто ноги мили и так идут к цели фокуса
-        if (meleeOnly && engage != null) { mpackAll.n++; if (engage.id == targ.focusTarget?.id) mpackHit++ }
+        if (meleeOnly && engage != null) { mpackAll.n++; if (engage.id == targ.focusTarget?.id) mpackHit.n++ }
         // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру.
         // ПОВОДОК НЕ ТЯНУЛ ИМЕННО ТОГО, КТО УБЕЖАЛ (v191, USE_LEASH_IN_CONTACT): условие требовало врага РЯДОМ С
         // КРИПОМ, а у крипа, отставшего от боя, врагов рядом уже нет — и он оставался стоять там, где остановился.
@@ -1012,7 +1012,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
     // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
     Row("flee", { mustFlee }) {
-        if (commandOf.containsKey(creep.id)) orderFled++
+        if (commandOf.containsKey(creep.id)) orderFled.n++
         fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (turn.support || turn.stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, t.strat.retreatTo ?: t.strat.post, 1, ctx.dangerMatrix)
     },
     // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
@@ -1028,7 +1028,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // ...и во ВСЕХ режимах, а не только в бою (v172, оператор): «все крипы должны двигаться ТОЛЬКО по
     // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
     Row("order", { commandOf.containsKey(creep.id) }) {
-        orderBranch++          // сколько приказов реально дошло до ветки исполнения (v173)
+        orderBranch.n++          // сколько приказов реально дошло до ветки исполнения (v173)
         val cell = commandOf[creep.id]!!
         if (cell.x == creep.x && cell.y == creep.y) null else cell
     },
@@ -2009,3 +2009,12 @@ internal val packTicks = Gauges.counter("pack", 1)
 // ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
 
 internal val NO_FLOW = IntArray(10000) { -1 }
+
+// ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
+
+/** Пара «крипо-тиков мили, чья цель ног — цель фокуса / крипо-тиков мили с целью ног» (v221). */
+internal val mpackHit = Gauges.counter("mpack")
+
+internal val orderBranch = Gauges.counter("branch")
+
+internal val orderFled = Gauges.counter("fled")

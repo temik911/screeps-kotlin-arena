@@ -556,7 +556,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // признак истинен», а «изменил ли он хоть один отказ»
         if (lostRace) {
             lostRaceOffers.n++
-            if (ours >= theirs * floor && ours < theirs * PARITY_FLOOR) lostRaceOpened++
+            if (ours >= theirs * floor && ours < theirs * PARITY_FLOOR) lostRaceOpened.n++
         }
         // ...и в ПАТУ паритетный пол тоже молчит: он сравнивает мощь, а в бою, где никто никого не убивает, мощь
         // обеих сторон ланчестером считается около нуля, и сравнивать нечего (v189)
@@ -1596,8 +1596,8 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
         val hisDrop = Memory.stalemateHisHist.first() - Memory.stalemateHisHist.last()
         ourDrop < Memory.stalemateOurHist.first() * STALEMATE_LOSS && hisDrop < Memory.stalemateHisHist.first() * STALEMATE_LOSS
     }
-    stalemateTicks = if (stalemateNow) stalemateTicks + 1 else 0
-    if (stalemateTicks > patMax) patMax = stalemateTicks
+    stalemateTicks.n = if (stalemateNow) stalemateTicks.n + 1 else 0
+    if (stalemateTicks.n > patMax.n) patMax.n = stalemateTicks.n
     // наша линия отступает (v96, USE_STANDING_LINE_HOLDS): центр наших вооружённых за окно терпения отдалился от его
     // НЫНЕШНЕГО центра на PRESS_CLOSING и больше — бой не стоячий, это отход под огнём, и расстановке в нём места нет
     if (meas.contact && ourArmedC != null) Memory.ourCentreHist.addLast(ourArmedC.key) else Memory.ourCentreHist.clear()
@@ -1736,7 +1736,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     if (posture == Posture.HOLD) {
         gatherHold.n++
         val shooters = rangedOf(strat.combatArmy)
-        if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread++
+        if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread.n++
     }
     // ...И ТА ЖЕ ПАРА В ПОСТУРЕ БОЯ (v221, только прибор). Разбор v220, матч #11: ведём +1077, на 1400-м армия
     // растянута по флагам, его шестеро бьют ближайшую часть, и десять целых крипов ложатся за 80 тиков. Сбор
@@ -2925,3 +2925,25 @@ internal var objectiveFlagId: String? = null
 internal var huntingThreat = false
 
 internal val PUSH_DWELL = CHASE_WINDOW
+
+// ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
+
+/** Пара «предъявлений, где послабление проигранной гонки решило исход / всех предъявлений с этим признаком»
+ *  (v218, см. lostRaceNow). Числитель — флаг, прошедший по PARITY_FLOOR_LOST и НЕ прошедший бы по
+ *  PARITY_FLOOR. До починки клапана он обязан быть около нуля в забегах: разбор v217 дал 582/1753/2407
+ *  отказа по паритету в трёх проигранных забегах при 40 в среднем по победам. */
+internal val lostRaceOpened = Gauges.counter("lostrace")
+
+/** Пара «тиков в HOLD с растянутым строем стрелков / всех тиков в HOLD» (v218). Проверяет записанное в коде
+ *  основание, по которому сбор (см. rallyTo) работает ТОЛЬКО в постуре FLAG: «в HOLD цель — точка, к ней
+ *  сходятся и так». Если числитель мал — основание верно и трогать сбор незачем. Растяжка считается тем же
+ *  порогом, каким сбор и включается (RALLY_RANGE). */
+internal val gatherSpread = Gauges.counter("gather")
+
+internal val stalemateTicks = Gauges.counter("pat")                        // сколько тиков подряд бой не двигается ни в чью пользу
+
+internal val patMax = Gauges.counter("pat", 1)                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
+
+internal var annEmptyAll = 0
+
+internal var touchMin = 1.0                            // минимум за матч — прибор

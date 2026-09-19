@@ -191,7 +191,7 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     if (most > 0) {
         concSum.n += most; concTicks.n++
         concAll.n += most; concAllTicks.n++
-        if (most > concMax) concMax = most
+        if (most > concMax.n) concMax.n = most
     }
     // ПЕРЕКРЫТИЕ (v391, прибор ovl=). `conc` считает, сколько выстрелов ЛЕГЛО в одну цель, то есть выбор; этот прибор
     // считает, сколько их МОГЛО лечь — сколько наших стрелков физически достаёт лучшую его цель. Разница и есть
@@ -211,8 +211,8 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     // слеп — сложены ли четыре удара в одну цель, не измерял ни один прибор
     val mostStrikes = strikesAt.values.maxOrNull() ?: 0
     if (mostStrikes > 0) {
-        mconcAll += mostStrikes; mconcTicks.n++
-        if (mostStrikes > mconcMax) mconcMax = mostStrikes
+        mconcAll.n += mostStrikes; mconcTicks.n++
+        if (mostStrikes > mconcMax.n) mconcMax.n = mostStrikes
     }
 }
 
@@ -1561,3 +1561,14 @@ internal var goalCy = -1
 internal var goalField: IntArray? = null
 
 internal var goalSeeds: IntArray = IntArray(0)
+
+// ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
+
+/** Пара «сумма наибольшего числа ударов мили в одну цель за тик / тиков с ударами» и максимум (v221).
+ *  Разбор блоб-поражений двух серий: во всех через 40 тиков после контакта он не потерял ни одного стрелка
+ *  и ни одного мили, мы — стрелков и мили; его четыре мили кладут 960 в одну нашу цель в 1200 хитов. */
+internal val mconcAll = Gauges.counter("mconc")
+
+internal val mconcMax = Gauges.counter("mconcmax")
+
+internal val concMax = Gauges.counter("concmax")

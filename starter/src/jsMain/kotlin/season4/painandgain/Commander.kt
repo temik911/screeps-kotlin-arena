@@ -222,7 +222,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
         publishDeal(commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true), tried = 1)
         var given = 0
         for (h in meas.commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
-        cmdHealTicks++; cmdHealGiven += given
+        cmdHealTicks.n++; cmdHealGiven.n += given
     }
 
         // ИСПОЛНЕНИЕ ПРИКАЗА (v167): прогноз считает, что крип встанет туда, куда назначено, а между приказом и
@@ -269,3 +269,39 @@ internal var cmdSearched = false
 internal var dispNow = "-"
 
 internal var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
+
+// ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
+
+internal val cmdHealTicks = Gauges.counter("cmdheal", 1)   // тики «только лекари» и выданных приказов (v436, прибор cmdheal=)
+
+internal val cmdHealGiven = Gauges.counter("cmdheal")
+
+/** Почему командир не правил — в ПОСЛЕДНИЙ тик, когда не правил. ⚠️ В строке `t=` (поле `cmd=…:причина`)
+ *  это значение УСТАРЕВШЕЕ: оно пишется только на тиках без командира, поэтому `cmd=0/200:outmatched
+ *  mode=FIGHT` значит «сейчас бой, а в последний тик без командира причиной был outmatched». Разбор серии
+ *  v220 прочёл его как причину текущего тика и приписал разгромам «отход»; честная картина по тикам —
+ *  гистограмма `cmdwhy` (v221). */
+internal var cmdBlocked = "-"
+
+// счётчики аудита приказов: считает `orderAudit` (пока в Instruments.kt; этап 4 второго шага переносит его сюда — он снимает приказы, то
+// есть стадия, а не прибор), читает строка `sim` командира — объявление у читателя-стадии: стадия не импортирует Instruments
+
+internal val orderAuditOk = Gauges.counter("obey")
+
+internal val orderAuditN = Gauges.counter("obey", 1)
+
+internal var orderAuditCloser = 0
+
+internal var orderAuditSame = 0
+
+internal var orderFar = 0
+
+internal val orderClash = Gauges.counter("clash")
+
+internal val lostStay = Gauges.counter("lost", label = "stay")        // приказ был «стой», а крип ушёл
+
+internal val lostStuck = Gauges.counter("lost", 1, label = "stuck")       // крип остался на месте, хотя приказ был другой
+
+internal val lostFatigue = Gauges.counter("lost", 3, label = "fat")     // не мог двигаться от усталости
+
+internal val lostElsewhere = Gauges.counter("lost", 4, label = "else")   // двинулся, но в другую клетку

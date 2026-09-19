@@ -664,7 +664,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     val kiteChaseNow = Memory.prevPosture == Posture.ANNIHILATE && ourLostWindow >= STALL_DAMAGE && ledgerWindow < 0 && !meleeAdjacent &&
         Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
     kiteChaseSeen = kiteChaseNow
-    if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn.n++; if (kiteChaseNow) kchaseTicks++ }
+    if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn.n++; if (kiteChaseNow) kchaseTicks.n++ }
     // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
     val netDamage = Memory.enemyHitsHist.size == STALL_TICKS &&
         (Memory.enemyHitsHist.first() - enemyHitsNow >= STALL_DAMAGE || Memory.ourHitsHist.first() - ourHitsNow >= STALL_DAMAGE)
@@ -836,7 +836,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
         Memory.detachedIds.retainAll(keep)
         val kept = Memory.cmdDetach.size + Memory.detachedIds.size
         holdKeptFight.n += kept
-        recalled += before - kept
+        recalled.n += before - kept
     }
     val ourPeriod = mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1
     val theirPeriod = combatEnemies.filter { canMove(it) }.minOfOrNull { plainPeriod(it) } ?: Int.MAX_VALUE / 4
@@ -1335,3 +1335,14 @@ internal var pushing = false
 internal var retreatTarget: Position? = null
 
 internal var lastFireTick = -1000                      // последний тик, когда кто-то из наших бил или стрелял (см. USE_COLD_CONTACT)
+
+// ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
+
+/** Пара «крипов отозвано в кулак / тиков боя» (v215). */
+internal val recalled = Gauges.counter("recall")
+
+internal val kchaseTicks = Gauges.counter("kchase")
+
+/** Погоня за кайтером (v221, только прибор, см. kiteChaseNow): тиков односторонней погони в ANNIHILATE /
+ *  тиков ANNIHILATE; отказов безфлагового броска в такой погоне / всех отказов безфлагового броска. */
+internal var kiteChaseSeen = false
