@@ -351,6 +351,7 @@ object PainAndGain {
     internal var hpN = 0; internal var hpAdj = 0; internal var hpAvail = 0; internal var hpGate = 0
     internal val hpDelta = DoubleArray(8)
     internal var hadjN = 0; internal var hadjAll = 0        // прилегание лекаря к теряющему хиты (v435, прибор hadj=)
+    internal var cmdHealTicks = 0; internal var cmdHealGiven = 0   // тики «только лекари» и выданных приказов (v436, прибор cmdheal=)
     internal var stalemateTicks = 0                        // сколько тиков подряд бой не двигается ни в чью пользу
     internal var patMax = 0                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
     internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)

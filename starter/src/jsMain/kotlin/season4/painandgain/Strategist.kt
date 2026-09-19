@@ -1518,6 +1518,18 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandO
         // ...и задания на захват снимаются вместе с режимом: без этого крип, отпущенный командиром за флагом,
         // оставался захватчиком НАВСЕГДА — армия таяла тик за тиком, и сценарий kite давал 0 очков (v160)
         else { commandOf.clear(); Memory.cmdDetach.clear() }
+    // ЛЕКАРИ — ПОД ПРИКАЗОМ ВО ВСЯКОМ КОНТАКТЕ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT). Режим боя против Coldkimchi
+    // включён в 25–40 % тиков контакта (остальное — outmatched, retreat, posture, nofire), и в молчании командира клетку
+    // лекаря выбирают ветки тактика: healMate ведёт к самому раненому в четырёх (уже отведённому из огня; совпадает с
+    // теряющим хиты в 38,7 %), и цена доставки v435 действовала на ≤ 20 % лекаре-тиков (Opus, 32 реплея). Здесь командир
+    // раздаёт ОДНИХ лекарей той же ценой клетки; бойцов не трогает — «командир на любой контакт» ронял roost и scatter
+    if (USE_COMMANDER_HEALERS_IN_CONTACT && !commanderNow && contact && armedEnemies.isNotEmpty()) {
+        val only = HashMap<String, Position>()
+        commandFight(commandArmy, combatEnemies, armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true)
+        var given = 0
+        for (h in commandArmy) if (!hasWeapon(h) && hasHeal(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
+        cmdHealTicks++; cmdHealGiven += given
+    }
 
         // ИСПОЛНЕНИЕ ПРИКАЗА (v167): прогноз считает, что крип встанет туда, куда назначено, а между приказом и
     // клеткой стоят трафик, свопы и фатиг. Здесь считается доля тех, кто на следующем тике оказался ровно

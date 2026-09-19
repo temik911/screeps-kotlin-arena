@@ -694,7 +694,10 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             keeper -> { whyTag = "keeper"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
             slotHold -> { whyTag = "slotHold"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
             // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
-            commandOf[creep.id] != null && (commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) ->
+            // ...и ЛЕКАРЮ ПРИКАЗ «СТОЯТЬ» — ТОЖЕ ПРИКАЗ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT): раздача разрешает свою
+            // клетку («стой»), но здесь такой приказ молча проваливался ниже, к healMate, и лекарь уходил с клетки, которую
+            // командир оценил лучшей; у бойцов условие не тронуто
+            commandOf[creep.id] != null && ((USE_COMMANDER_HEALERS_IN_CONTACT && healer) || commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) ->
                 { whyTag = "order"; target = commandOf[creep.id]!!; standoff = 0 }
             // ПОГОНЯ ЗА ОСТОВОМ (v212) — сразу под приказом командира: пока он правит, клетку даёт он (и тоже
             // знает про погоню, см. chaseTarget в placeScored); когда молчит, преследователь идёт сюда. Ниже

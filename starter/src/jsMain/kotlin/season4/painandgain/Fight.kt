@@ -430,7 +430,7 @@ internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int
 
 internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
-                         ourFlagCells: Set<Int> = emptySet()) {
+                         ourFlagCells: Set<Int> = emptySet(), healersOnly: Boolean = false) {
     out.clear()
     val fighters = army.filter { canMove(it) && !it.spawning }
     if (fighters.isEmpty() || armedEnemies.isEmpty()) return
@@ -665,6 +665,15 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     // ОТХОД — ТОЖЕ ПРИКАЗ (v174, оператор: «не должно быть ничего, что идёт мимо него»): бегство было веткой ВЫШЕ
     // командира. Теперь он сам уводит того, кому грозит гибель, — потерявшего за тик больше половины остатка или
     // стоящего под огнём без лечения рядом
+    // ТОЛЬКО ЛЕКАРИ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT): в тики контакта, когда режим боя молчит, командир
+    // ставит одних лекарей — по той же цене клетки (доставленное лечение минус входящий), а бойцы стоят там, где
+    // стоят, и идут по веткам тактика. Их нынешние клетки заняты как «стой»: это препятствия для раздачи и тела для
+    // экрана. Разбор v435 (Opus, 32 реплея): 79,8 % лекаре-тиков окна боя лекаря ставили ветки healMate/wall, а не
+    // приказ, потому что режим боя против Coldkimchi включён в 25–40 % тиков (outmatched, retreat, posture, nofire)
+    if (healersOnly) for (f in fighters) if (hasWeapon(f) || !hasHeal(f)) {
+        val key = f.x * 100 + f.y
+        out[f.id] = InfluenceMap.cell(f.x, f.y); taken.add(key)
+    }
     passTag = "retreat"
     // уходящие по его фокусу и их клетки — для встречи с лекарём (v276, см. проход лекарей)
     val rotatingMeet = HashMap<String, Position>()
@@ -923,7 +932,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     passTag = "melee"
     // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
     // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
-    for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
+    for (c in (if (healersOnly) emptyList() else melees).sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
         val ok = placeScored(c, 0, intentOf(c))
         // ДОБОР МИЛИ ПОМЕНЯЛ СМЫСЛ ВМЕСТЕ С ВОРОТАМИ (v208). Прежде `ok = false` значило «нет клетки вплотную
         // к его вооружённому, куда дотягивается лекарь», и шаг к врагу был верным ответом. С воротами
@@ -933,7 +942,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     }
     passTag = "ranged"
     // стрелки: цель в дальности, меньше всего входящего на следующий тик; при равенстве — дальше от его мили
-    for (c in rangeds.sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
+    for (c in (if (healersOnly) emptyList() else rangeds).sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
         val ok = placeScored(c, 1, intentOf(c))
         // ...и КОГДА ВЫБОРА НЕТ, СТРЕЛОК ВЫХОДИТ ИЗ-ПОД МИЛИ, А НЕ ОСТАЁТСЯ СТРЕЛЯТЬ (v183, оператор: «рэнжи не
         // должны быть рядом с его мили»). Все замыслы требуют разом двух вещей — быть вне досягаемости его мили и
@@ -1082,7 +1091,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     }
     // раздетые: прочь из огня — в бою от них пользы нет, а его выстрелы они на себя собирают исправно
     passTag = "stripped"
-    for (c in stripped)
+    for (c in (if (healersOnly) emptyList() else stripped))
         place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) * 100 -
             (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
     // ...и ВООРУЖЁННЫЙ не остаётся без места (v165): расстановка при командире молчит, и тот, кому клетки не
@@ -1110,7 +1119,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
     val pinFoes = combatEnemies.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } }
     val hisStuck = HashSet<Int>()
     for (e in combatEnemies) if (e.fatigue > 0) hisStuck.add(e.x * 100 + e.y)
-    for (c in melees.sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
+    for (c in (if (healersOnly) emptyList() else melees).sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
         val near = pinFoes.filter { getRange(c, it) <= COMMAND_REACH + 1 }
         if (near.isEmpty()) continue
         val ours = HashSet<Int>()
