@@ -265,6 +265,16 @@ object PainAndGain {
     private fun tickBody() {
         val bw = buildWorld()
         val ctx = bw.ctx
+        // ПРИБОРЫ ПЕРВЫХ ТИКОВ (v447, этап 6): зонд, дамп карты и печать составов до этапа 6 звал сам `buildWorld` — мир
+        // импортировал файл приборов. Зовёт их оркестровка, сразу после мира; порядок строк лога прежний (проверен оракулом)
+        if (!greeted) {
+            greeted = true
+            probe(ctx.flags, ctx.myCreeps, ctx.enemyCreeps, ctx.home, ctx.enemyHome)
+        }
+        // дамп карты — четырьмя частями по 25 строк на тиках 3–6 (см. logMap)
+        if (DEBUG_MAP && mapMarks == null) captureMapMarks(ctx.flags, ctx.myCreeps, ctx.enemyCreeps)
+        if (DEBUG_MAP && getTicks() in 3..6) logMap((getTicks() - 3) * 25)
+        logBodies(ctx.myCreeps, ctx.enemyCreeps)
         readSignals(ctx, bw)
         runRunners(ctx)
         cpuMark("runners")
@@ -437,3 +447,10 @@ object PainAndGain {
     internal val NO_MODS = HypoMods()
 
 }
+
+// ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
+// Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
+
+internal var abortTicks = 0
+
+internal var abortEntries = 0

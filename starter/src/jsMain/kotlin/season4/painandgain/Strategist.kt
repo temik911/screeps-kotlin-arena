@@ -2679,3 +2679,203 @@ internal var lastAim = ""
 
 internal class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: Double, val travel: Int)
 
+// ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
+// Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
+
+/** Отряды командира, сохранившие задание на пути к флагу (v299, route=бегуно-тиков). */
+internal var routeKept = 0
+
+/** Свои пустые флаги, на которые командир посадил бойца (v316, man=). */
+internal var manned = 0
+
+/** Покрытие гарнизона лечением (v361, прибор): гарнизонных крипов, у которых наш лекарь в дальности лечения / всего.
+ *  Разбор 12 смертей против けろびー#19 сказал, что помощь не приходит никогда — ближайший лекарь в медиане 24 клетках
+ *  при агонии 5,8 тика, — но своего числа у этого не было. */
+/** Тиков с назначенным курьером на дорогой флаг (v367, прибор courier=). */
+internal var courierTicks = 0
+
+internal var garCovered = 0
+
+internal var garAll = 0
+
+/** Загон (v331, hunt=тиков с целью/крипо-тиков в загоне). */
+internal var huntTicks = 0
+
+internal var huntCreepTicks = 0
+
+/** Тики, где наступление удержано «остатком без мили» (v300, toothless=). */
+internal var pushToothless = 0
+
+internal var keepOn = 0
+
+internal var keepTicks = 0
+
+internal var keepOff = 0
+
+internal var keepOffCore = 0
+
+internal var keepOffPack = 0
+
+internal var keepOffLeft = 0
+
+internal var keepOffGone = 0
+
+internal var keepOffFlag = 0
+
+internal var keepOffMoved = 0
+
+internal var keepOffHurt = 0
+
+internal var holdKeptRace = 0
+
+/** Пара: сколько оставлено в ядре против сколько было свободных. */
+internal var symCore = 0
+
+internal var symFree = 0
+
+/** Вето «сперва туши очаг»: тиков с очагом и из них тех, где вето ИЗМЕНИЛО решение о постуре. */
+internal var spotHoldAll = 0
+
+internal var postAll = 0
+
+internal var spotHoldNew = 0
+
+internal var chaseTicks = 0
+
+internal var chaseKills = 0
+
+/** Прибор локализации: |opp| против |combatEnemies| — если держится единицей, локализация ничего не меняет. */
+internal var capOppSum = 0
+
+internal var capAllSum = 0
+
+internal var capOffered = 0
+
+/** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
+internal var pushHeldTicks = 0
+
+internal var pushTicks = 0
+
+/** Прибор к USE_RETREAT_BY_HIS_STEP: тиков, где старый признак говорил «отходит», из них тех, где его шаг — нет, и
+ *  тиков, где новый говорит «отходит», а старый — нет (мы наступали быстрее, чем он пятился). */
+internal var rtrOld = 0
+
+internal var rtrRemoved = 0
+
+internal var rtrAdded = 0
+
+/** Пара к USE_GUARD_IS_CATCHABLE: крипо-проверок, где враг «уходит», и из них тех, где он страж своего флага. */
+/** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
+internal var majOffers = 0
+
+internal var majOpened = 0
+
+/** Пара к USE_FOCUS_ANY_HEALER (v224): тиков с его лекарем в досягаемости наших стволов и из них тех, где фокус — лекарь. */
+/** Дельта прогноза в решении о бое с кулаком (v397, прибор): сумма×100, тиков, тиков с положительной дельтой,
+ *  тиков, где знак дельты РАСХОДИТСЯ с действующим решением по мощи. Поведение не меняется — мера только меряется. */
+internal var simdSum = 0.0
+
+internal var simdTicks = 0
+
+internal var simdPos = 0
+
+internal var simdDisagree = 0
+
+internal var radSum = 0.0
+
+internal var radTicks = 0
+
+internal var radMax = 0
+
+internal var radWide = 0
+
+/** Пара «тиков, где ланчестерова мощь и фактический размен расходятся / тиков с признаком» (v216). */
+internal var breakOffSplit = 0
+
+internal var breakOffN = 0
+
+/** Бюджет командирской гонки: сколько отпущено, каким ядром и из скольких свободных. */
+internal var budgetSum = 0
+
+internal var budgetTicks = 0
+
+internal var objAll = 0
+
+internal var objDropN = 0
+
+internal var stateEventTicks = 0
+
+internal var cmdWhyN = 0
+
+/** Пара «отпущено во время боя / отпущено всего» (v215, наблюдение оператора «отряд распадается»). */
+internal var splitFight = 0
+
+internal var splitAll = 0
+
+/** Пара «крипо-тиков боя без своего лекаря в дальности лечения / крипо-тиков боя» (v215). */
+internal var healGap = 0
+
+/** ...и крипо-тики боя, где своего лекаря нет и в MASS_RANGE — «в бою ни одного хиллера» (v215). */
+internal var noMedic = 0
+
+internal var healGapN = 0
+
+/** Пара «смен направления армии / тиков» (v215, наблюдение «разворачиваемся много раз»). */
+internal var aimFlips = 0
+
+internal var aimTicks = 0
+
+internal var lostRaceOffers = 0
+
+internal var gatherHold = 0
+
+/** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
+ *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
+internal var retrTicks = 0
+
+internal var retrWithPoint = 0
+
+internal var retrUnderFire = 0
+
+/** Пара «крипо-тиков в отходе, где крип стрелял или бил / всех крипо-тиков в отходе» (v217). */
+internal var standFire = 0
+
+internal var standTicks = 0
+
+/** Пара «тиков признака outmatched / из них с постурой отхода» (v217, решение оператора). */
+internal var outmTicks = 0
+
+internal var outmRetreat = 0
+
+/** ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, см. warmNow):
+ *  `warm` — тиков контакта без размена / тиков контакта; `warmann` — тиков ANNIHILATE, державшихся только таким
+ *  контактом / тиков ANNIHILATE; `warmhold` — из них тиков, где флаг-цель подхватила бы «держим линию»;
+ *  `warmcmd` — тиков режима боя при тёплом контакте / тиков режима боя (там постуру вернёт командир);
+ *  `warmfight` — тиков «бой идёт» без размена / тиков «бой идёт» (отзыв бегунов, USE_NO_SPLIT_IN_FIGHT);
+ *  `warmcap` — отказов захвата `contact.mass` без размена / отказов `contact.mass`. */
+internal var warmTicks = 0
+
+internal var warmContact = 0
+
+internal var warmAnn = 0
+
+internal var warmAnnAll = 0
+
+internal var warmHold = 0
+
+internal var warmCmd = 0
+
+internal var warmCmdAll = 0
+
+internal var warmCap = 0
+
+internal var warmCapAll = 0
+
+internal var kvetoHit = 0
+
+internal var kvetoAll = 0
+
+/** Пара «тиков ANNIHILATE со строем стрелков шире RALLY_RANGE / тиков ANNIHILATE» (v221, см. gatherSpread). */
+internal var gatherAnn = 0
+
+internal var gatherAnnAll = 0

@@ -1870,3 +1870,118 @@ internal var formWaitSince = -1
 
 internal var focusId: String? = null              // липкая цель фокуса (v45, см. focusTarget)
 
+// ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
+// Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
+
+/** Ротация по его фокусу (v275, rotf=выходов/возвратов/крипо-тиков в ней/тиков правила/попаданий «доля»/попаданий «лекарь,
+ *  ближайший»/сверок). */
+internal var rotfOut = 0
+
+internal var rotfBack = 0
+
+internal var rotfTicks = 0
+
+internal var rotfOn = 0
+
+internal var rotfF = 0
+
+internal var rotfA = 0
+
+internal var rotfN = 0
+
+/** Самолечение в добиваемости (v266, fself=сменилось/всего): его лекарь в досягаемости наших стволов, пробиваемый без
+ *  своего лечения и непробиваемый с ним. */
+internal var fselfFlip = 0
+
+internal var fselfAll = 0
+
+/** Смены фокуса (v267, fsw=смен/тиков:ушла/далеко/стрелок/стволы/добиваем/раздета): на тиках с целью в досягаемости —
+ *  сколько раз фокус сменился и почему: прежней цели нет среди живых боевых, она дальше шага от наших стрелков, лучшая
+ *  добивается за тик, лучшая — стрелок (v60), у лучшей больше стволов (v70), прежняя без оружия и лечения. */
+internal var fswTicks = 0
+
+internal var fswN = 0
+
+internal var fswLost = 0
+
+internal var fswFar = 0
+
+internal var fswKill = 0
+
+internal var fswRanged = 0
+
+internal var fswGuns = 0
+
+internal var fswBare = 0
+
+/** Выход раненого из его зоны (v285, sout=вышло/вернулось/крип-тиков вне): см. stepOutWounded. */
+internal var soutOut = 0
+
+internal var soutBack = 0
+
+internal var soutTicks = 0
+
+/** Шаг бойца на клетку чужого флага при закрытых воротах захвата (v282, stray=): столько раз крип остался стоять. */
+internal var strayCapRefused = 0
+
+/** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
+internal var spotMeleeTicks = 0
+
+internal var rotOut = 0
+
+/** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
+internal var hexpN = 0
+
+internal var hexpAll = 0
+
+internal var hlostSum = 0
+
+internal var scoutShots = 0
+
+/** Очаг: тиков-мили с врагом в ENGAGE_RANGE (знаменатель) и из них тех, где МЕСТНАЯ арифметика даёт перевес,
+ *  а армейская мера при этом говорит «не наступать». Ненулевой числитель — отпечаток расхождения масштабов. */
+internal var edgeSpot = 0
+
+internal var edgeAll = 0
+
+/** Пары к USE_MELEE_QUIET_CELL: шагов мили, где выбранная клетка оставляла удар, и из них тех, где правка увела в клетку
+ *  тише; сумма снятой опасности (урон/тик). */
+internal var mquietAll = 0
+
+internal var mquietMoved = 0
+
+internal var mquietGain = 0.0
+
+internal var fhlAvail = 0
+
+internal var fhlChosen = 0
+
+/** Пара «шагов в клетку под уроном при выключенном слагаемом опасности / всех шагов» (v215). */
+internal var dangerBlind = 0
+
+/** ...и отдельно — та же слепота ВНЕ боя. Ноль здесь не дефект прибора, а арифметика: поле урона достаёт
+ *  на 4 клетки, а `inCombat` стоит на 5 (см. USE_DANGER_SCALED_BY_AGGRO). */
+internal var dangerBlindFar = 0
+
+/** Пара «клеток, отвергнутых как смертельные / оценённых клеток» (v215, см. USE_LETHAL_CELL_VETO). */
+internal var lethalHits = 0
+
+internal var lethalCells = 0
+
+internal var dangerMoves = 0
+
+/** Пара «крипо-тиков, где стрелку не дали сблизиться до двух из-за живого мили врага / всех крипо-тиков
+ *  стрелка в местной агрессии» (v220, см. closeIn). Числитель — сколько раз оговорка вообще сработала. */
+internal var closeHeld = 0
+
+internal var closeTicks = 0
+
+/** Пара «крипо-тиков, где ворота броска открыла защита своего / всех крипо-тиков мили при враге рядом»
+ *  (v220, см. USE_MELEE_GUARDS_LINE). */
+internal var guardFired = 0
+
+internal var guardTicks = 0
+
+internal var mpackAll = 0
+
+internal var packTicks = 0

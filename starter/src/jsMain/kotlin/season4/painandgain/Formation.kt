@@ -765,3 +765,25 @@ internal var yieldingTick = -1                        // последний ти
 
 internal class FightCell(val pos: Position, val key: Int, val dmg: Double, val targets: Int, val focusIn: Boolean,
                         val meleeAdj: Int, val meleeNear: Int, val dist: Int)
+
+// ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
+// Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
+
+/** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
+internal var marchFlow = 0
+
+internal var marchAll = 0
+
+internal var marchFlip = 0
+
+internal var hwallTicks = 0
+
+internal var hwallVictimTicks = 0
+
+internal var hwallAddr = 0
+
+internal var hwallPredA = 0
+
+internal var hwallPredL = 0
+
+internal var hwallPredN = 0

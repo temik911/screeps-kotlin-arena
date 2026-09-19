@@ -1099,14 +1099,6 @@ internal fun PainAndGain.buildWorld(): BuildWorldOut {
     applyEffects(flags, myCreeps, enemyCreeps)
     accountScore(flags)
 
-    if (!greeted) {
-        greeted = true
-        probe(flags, myCreeps, enemyCreeps, home, enemyHome)
-    }
-    // дамп карты — четырьмя частями по 25 строк на тиках 3–6 (см. logMap)
-    if (DEBUG_MAP && mapMarks == null) captureMapMarks(flags, myCreeps, enemyCreeps)
-    if (DEBUG_MAP && getTicks() in 3..6) logMap((getTicks() - 3) * 25)
-    logBodies(myCreeps, enemyCreeps)
 
     // раненый (см. wounded): боец, потерявший всё оружие, остаётся в армии, пока жив хоть один ходячий лекарь —
     // лечение возвращает части (движок: части живы по сумме хитов, лечение идёт с хвоста тела: в матче 8 melee_1
@@ -1249,3 +1241,59 @@ internal var stallUntil = 0
 internal var avoidCellsCache: List<Position>? = null
 
 internal var packTicksTick = -1
+
+// ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
+// Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
+
+internal var groupSafeTicks = 0
+
+internal var flagSitOcc = 0
+
+internal var flagSitAll = 0
+
+internal var holdKeptFight = 0
+
+internal var scoutReach = 0
+
+internal var scoutTicks = 0
+
+internal var hulkTicks = 0
+
+internal var hulkInReach = 0
+
+internal var hulkRevived = 0
+
+internal var kiteMassed = false                        // была ли его армия сомкнута в этом тике (v135, диагностика)
+
+/** Пара к USE_MASS_BY_ARRIVAL (v226): тиков сигнала броска только по мере прихода / всех тиков сигнала / тиков, где мера
+ *  прихода добавила «сомкнут» к мере формы. */
+internal var rushByArrival = 0
+
+internal var rushSignalAll = 0
+
+internal var massArrivalAdded = 0
+
+internal var zlbZero = 0
+
+internal var survLead = 0
+
+internal var race100 = ""
+
+internal var race200 = ""
+
+internal var fightTicksNow = 0
+
+internal var warmFight = 0
+
+internal var warmFightAll = 0
+
+internal var kchaseAnn = 0
+
+// ==================== счётчики тика с ДВУМЯ писателями (v447, этап 6 — находка оператору) ====================
+// Сбрасывает их мир в начале тика (`readSignals`), а считает стадия уровнем выше: `kiteNow` — строка `kite` лестницы тактика,
+// `planStrict` / `planLoose` — `Formation.planFight`. Объявление обязано стоять не выше обоих писателей, поэтому оно здесь,
+// а не у того, кто считает: иначе мир импортировал бы тактика и строй — ребро вверх.
+
+internal var kiteNow = 0                               // сколько крипов кайтят в этом тике (v135, диагностика)
+internal var planStrict = 0                            // стрелков, вставших в клетку без его мили в двух (v135)
+internal var planLoose = 0                             // ...и вставших куда придётся
