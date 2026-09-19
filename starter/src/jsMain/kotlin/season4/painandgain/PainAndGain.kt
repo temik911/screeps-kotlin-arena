@@ -449,11 +449,7 @@ object PainAndGain {
         stepOutWounded(army, reachCells, enemyRetreating || !huntsWounded)
         val armyCommandSeg = armyCommand(ctx, armyMeasuresSeg, armyStrategySeg, armyTargetsSeg, armyStanceSeg)
         cpuMark("command")
-        val orderAuditSeg = orderAudit(ctx, OrderAuditIn(
-            enemyCreeps = enemyCreeps,
-            commandArmy = commandArmy,
-            focusTarget = focusTarget,
-        ))
+        val orderAuditSeg = orderAudit(ctx, armyMeasuresSeg, armyTargetsSeg)
         val healerWallSeg = healerWall(ctx, HealerWallIn(
             army = army,
             enemyCreeps = enemyCreeps,

@@ -303,17 +303,11 @@ internal fun PainAndGain.logMap(fromRow: Int) {
     }
 }
 
-/** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
-internal class OrderAuditIn(
-    val enemyCreeps: List<Creep>,
-    val commandArmy: List<Creep>,
-    val focusTarget: Creep?,
-)
-
 internal class OrderAuditOut(
 )
 
-internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut = with(seg) {
+/** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
+internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyTargetsOut): OrderAuditOut {
     val seen = HashMap<Int, Int>()
     commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
     val dup = seen.values.count { it > 1 }
@@ -336,7 +330,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
     // ЗАЖАТОГО БЬЁМ — ПРИБОР (v264): считается по итоговым приказам, а не внутри раздачи — та идёт по разу на
     // замысел перебора и насчитала бы пробные планы. Сначала сверка вчерашних постановок, потом сегодняшние
     for ((id, foeId) in Memory.pinWatch) {
-        val c = commandArmy.firstOrNull { it.id == id } ?: continue
+        val c = meas.commandArmy.firstOrNull { it.id == id } ?: continue
         val e = ctx.enemyCreeps.firstOrNull { it.id == foeId } ?: continue
         pinChk++
         if (getRange(c, e) <= 1) pinHeld++
@@ -347,17 +341,17 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
     // до правки. Здесь — по итоговым приказам: у уходящего по фокусу с приказом был ли лекарь в двух клетках от его
     // клетки, получил ли лекарь клетку вплотную к ней, и стояли ли они вплотную на следующем тике
     for ((rid, hid) in Memory.meetWatch) {
-        val r = commandArmy.firstOrNull { it.id == rid } ?: continue
-        val h = commandArmy.firstOrNull { it.id == hid } ?: continue
+        val r = meas.commandArmy.firstOrNull { it.id == rid } ?: continue
+        val h = meas.commandArmy.firstOrNull { it.id == hid } ?: continue
         meetChk++
         if (getRange(r, h) <= 1) meetDone++
     }
     Memory.meetWatch.clear()
     for (rid in Memory.rotByFocus) {
-        val r = commandArmy.firstOrNull { it.id == rid } ?: continue
+        val r = meas.commandArmy.firstOrNull { it.id == rid } ?: continue
         val dest = commandOf[rid] ?: continue
         meetRot++
-        val medics = commandArmy.filter { it.id != rid && healerOnly(it) }
+        val medics = meas.commandArmy.filter { it.id != rid && healerOnly(it) }
         if (medics.any { getRange(it, dest) <= 2 }) meetNear++
         val m = medics.firstOrNull { h -> commandOf[h.id]?.let { getRange(it, dest) <= 1 } == true } ?: continue
         meetPlan++
@@ -365,8 +359,8 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
     }
     // НОГИ ЗА ФОКУСОМ — ПРИБОР (v268, ffoc=до/после/стрелков): стрелки под приказом командира при живом фокусе — у скольких
     // фокус в досягаемости с нынешней клетки и с клетки приказа. Реплеи до правки: 25–32 % до шага, 14–20 % после
-    focusTarget?.takeIf { it.hits > 0 }?.let { f ->
-        for (c in commandArmy) {
+    targ.focusTarget?.takeIf { it.hits > 0 }?.let { f ->
+        for (c in meas.commandArmy) {
             if (!hasRanged(c)) continue
             val cell = commandOf[c.id] ?: continue
             ffocAll++
@@ -382,8 +376,8 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
         val foeAt = HashSet<Int>()
         for (e in ctx.enemyCreeps) foeAt.add(e.key)
         val plan = HashMap<String, Int>()
-        for (f in commandArmy) if (f.hits > 0) plan[f.id] = (commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.key }
-        for (c in commandArmy) {
+        for (f in meas.commandArmy) if (f.hits > 0) plan[f.id] = (commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.key }
+        for (c in meas.commandArmy) {
             if (!(meleeOnlyLive(c))) continue
             val mine = commandOf[c.id] ?: continue
             val near = foes.filter { getRange(c, it) <= 2 }
@@ -414,7 +408,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
         // ...и захватчик из аудита исключается: его приказ — ФЛАГ, а не клетка, и ведёт его свой цикл;
         // считать его ослушником было бы неверно (v173)
         if (id in Memory.cmdDetach) return@forEach
-        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
+        val c = meas.commandArmy.firstOrNull { it.id == id } ?: return@forEach
         orderAuditN++
         // ...и ПРИКАЗ В ДВУХ ШАГАХ ИСПОЛНЕН, ЕСЛИ КРИП СТАЛ БЛИЖЕ (v184). Прибор сверял клетку крипа с
         // НАЗНАЧЕННОЙ и только с ней, а строй (`commandBrace`) назначает место в строю за несколько клеток —
@@ -449,20 +443,20 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
     // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
     // и доля исполнения ограничена этим по построению (v170)
     commandOf.forEach { (id, p) ->
-        val c = commandArmy.firstOrNull { it.id == id } ?: return@forEach
+        val c = meas.commandArmy.firstOrNull { it.id == id } ?: return@forEach
         if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
     }
     orderWas.clear(); orderFatigue.clear()
-    commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
+    meas.commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
     orderDist.clear()
     commandOf.forEach { (id, p) ->
-        val c = commandArmy.firstOrNull { it.id == id }
+        val c = meas.commandArmy.firstOrNull { it.id == id }
         if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
     }
     Memory.orderPrev.clear()
     commandOf.forEach { (id, p) -> Memory.orderPrev[id] = p }
     // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
-    OrderAuditOut(
+    return OrderAuditOut(
     )
 }
 
