@@ -2,7 +2,7 @@
 # оператором 19.09.2026 (решение 6); пересмотр — на этапе 5, отличия возвращаются оператору, а не правятся молча.
 # Зависимость направлена ВНИЗ или внутри уровня. Проверяет `tools/depgraph.py --gate` из regress.sh — по
 # скомпилированным модулям, то есть после инлайна; Rules и Tuning — одни `const val`, модулей у них нет.
-0: Rules Tuning
+0: Rules Tuning Tables                          # Tables — строка, счётчики и обходчик таблиц решений: ни от чего не зависит
 1: Memory DistanceMap InfluenceMap Facts     # Facts — словарь фактов (Unit, key): зависит только от API
 2: World
 3: Forecast Strategist Missions
