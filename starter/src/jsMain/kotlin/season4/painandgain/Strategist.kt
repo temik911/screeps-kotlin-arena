@@ -1081,13 +1081,6 @@ internal fun PainAndGain.commandGoal(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // и отвергнута замером: по близости 131 из 135 (camp дважды, screen, brawl+heals), по ценности на шаг 132,
     // с квадратичным штрафом расстояния снова 131. Решение остаётся командирским — он спрашивает и решает
     return chooseFlagObjective(ctx, army, PUSH_RATIO)?.flag?.pos
-    val best = ctx.flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) }
-        .maxByOrNull { f ->
-            val near = army.minOf { getRange(it, f.pos) }
-            val guards = armedEnemies.count { getRange(it, f.pos) <= ENGAGE_RANGE }
-            f.score.toDouble() / (near + 1 + guards * GOAL_GUARD_COST)
-        }
-    return best?.pos
 }
 
 /**
@@ -1764,7 +1757,6 @@ internal fun PainAndGain.pushRules(): List<Row<PushCase, Boolean>> = pushRuleRow
 
 internal class ArmyStrategyOut(
     val sweep: Boolean,
-    val gathered: Boolean,
     val leadHolds: Boolean,
     val hisStill: Boolean,
     val warmNow: Boolean,
@@ -2456,7 +2448,6 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
 
     return ArmyStrategyOut(
         sweep = sweep,
-        gathered = gathered,
         leadHolds = leadHolds,
         hisStill = hisStill,
         warmNow = warmNow,

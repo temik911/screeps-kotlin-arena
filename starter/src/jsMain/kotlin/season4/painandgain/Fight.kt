@@ -539,8 +539,8 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         val taken = HashSet<Int>()
         // клетки, где стоят СВОИ: назначать их нельзя — приказ туда неисполним, пока сосед не ушёл, а прибор показал,
         // что до назначенной клетки доходят 7 % (v167). Своя собственная клетка при этом разрешена: это «стой»
-        val allyAt = HashSet<Int>()
-        init { for (a in army) if (a.hits > 0) allyAt.add(a.key) }
+        // (множество `allyAt`, которое описывал комментарий выше, наполнялось и НЕ ЧИТАЛОСЬ нигде — снято в v447 как мёртвое;
+        // занятость своих клеток решает карта жильцов `allyOf` в `place`)
         // кто стоит в клетке (для цепочек): ключ клетки → крип
         val allyOf = HashMap<Int, Creep>()
         init { for (a in army) if (a.hits > 0) allyOf[a.key] = a }
