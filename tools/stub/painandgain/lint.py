@@ -48,6 +48,41 @@ RULES = [
 ]
 
 STRING = re.compile(r'"(\\.|[^"\\])*"')
+
+
+def code_of_strings(code):
+    """Строка кода, где от строковых литералов оставлен только КОД их шаблонов: `"a=${x.y} b=$z"` -> `"" x.y  z`. Текст литерала
+    — не код (`posture=` в строке лога — не запись), а выражение шаблона — код: член объекта, прочитанный только внутри
+    `"${…}"`, всё равно требует приёмника (так `declareLine` со 176 шаблонами выглядела не нуждающейся в нём)."""
+    out, i, n = [], 0, len(code)
+    while i < n:
+        if code[i] != '"':
+            out.append(code[i]); i += 1; continue
+        out.append('""'); i += 1
+        while i < n and code[i] != '"':
+            if code[i] == '\\': i += 2; continue
+            if code.startswith('${', i):
+                d, j = 1, i + 2
+                while j < n and d:
+                    if code[j] == '"':                  # вложенный литерал: рекурсивно
+                        k = j + 1
+                        dd = 0
+                        while k < n and (code[k] != '"' or dd):
+                            if code[k] == '\\': k += 1
+                            elif code.startswith('${', k): dd += 1; k += 1
+                            elif code[k] == '}' and dd: dd -= 1
+                            k += 1
+                        out.append(' ' + code_of_strings(code[j:k + 1]) + ' '); j = k + 1; continue
+                    d += (code[j] == '{') - (code[j] == '}')
+                    if d: out.append(code[j])
+                    j += 1
+                out.append(' '); i = j; continue
+            m = re.match(r'\$([A-Za-z_]\w*)', code[i:])
+            if m:
+                out.append(' ' + m.group(1) + ' '); i += len(m.group(0)); continue
+            i += 1
+        i += 1
+    return ''.join(out)
 SELECTION = re.compile(r'(?<![\w.])((?:\w+\.)*\w+)\.(filter|filterNot)\s*\{([^{}]*)\}')
 
 
@@ -272,7 +307,7 @@ def _extension_bodies(files):
     """{имя расширения PainAndGain: [(файл, строка, тело)]} — перегрузки вместе."""
     funs = {}
     for f, rows in files.items():
-        L = [STRING.sub('""', code) for _, code in rows]
+        L = [code_of_strings(code) for _, code in rows]
         for a, l in enumerate(L):
             mm = re.match(r'^\s*(?:internal |private )?(?:inline )?fun\s+(?:<[^>]*>\s*)?PainAndGain\.(\w+)\s*\(', l)
             if not mm:
