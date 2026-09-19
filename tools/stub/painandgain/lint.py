@@ -70,7 +70,7 @@ def repeated_selection(files):
 # Этап 2: в этих функциях запись в память и счётчик прибора — ОПЕРАТОРЫ, а не часть выражения `val … = …`. Условие,
 # спрятавшее запись внутрь `val x = … run { … Memory.X.add(id) … }`, нельзя ни посчитать отдельно от записи, ни вычислить
 # дважды (а полный обход таблиц этапа 3 вычисляет условия всех строк). Список пополняется этапами 3 и 4.
-PURE_INITIALIZERS = {'creepTurn', 'buildTurn', 'commandFight'}
+PURE_INITIALIZERS = {'creepTurn', 'buildTurn', 'buildStride', 'freeStep', 'commandFight'}
 EFFECT = re.compile(r'(?<![+\w])(\w+)(?:\.\w+)*\+\+|\+\+\w|Memory\.\w+(\[[^\]]*\]\s*=(?!=)|\.(add|remove|clear|put|addAll|retainAll|removeAll|getOrPut)\b)')
 DECL = re.compile(r'^\s*(?:private |internal )?va[lr] [\w<>?:, ()]+?=(?!=)')
 FUN = re.compile(r'\bfun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?(\w+)\s*\(')
