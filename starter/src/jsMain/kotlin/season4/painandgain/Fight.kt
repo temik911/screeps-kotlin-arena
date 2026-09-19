@@ -851,7 +851,10 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // подопечному» (USE_HEAL_PULL_DELIVERED) и «без слагаемого влияния» (USE_HEALER_NO_LINE). Действуют насыщенная сумма
         // здесь и влияние W_LINE ниже; зонд `hpick` называет влияние решающим (разбор v270: −5…−7 в пользу выбранной клетки
         // против свободной клетки вплотную к бойцу первой линии). Комментарий до v270 описывал обе редакции как действующие
-        val pull = if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+        // ЦЕНА КЛЕТКИ — ЛУЧШАЯ ОДНА ДОСТАВКА ТОМУ, КТО ТЕРЯЕТ ХИТЫ (v435, см. USE_HEAL_NEED_ACTUAL): 72 вплотную к бьющемуся,
+        // 24 в двух-трёх клетках, 0 у целого — в тех же единицах, что входящий урон, как у стены v228, но для всех
+        val pull = if (USE_HEAL_NEED_ACTUAL) InfluenceMap.bestDeliveryAt(c, p.x, p.y, army)
+            else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
         // ...И ПРИ УДЕРЖИМОЙ ЖЕРТВЕ ЦЕНА КЛЕТКИ — ДОСТАВЛЕННОЕ В НЕЁ ЛЕЧЕНИЕ (v228, см. USE_HEAL_WALL): вплотную полное, в трёх
         // треть, без насыщенной суммы и без слагаемого влияния — клетка вплотную к жертве получает положительную цену, которой
         // обе редакции v224 ей дать не смогли (72 против 24)
@@ -1015,6 +1018,13 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         }
         // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
         if (c.id !in out) place(c, { true }, { p -> danOf(c, p.x * 100 + p.y) })
+        // ПРИБОР ПРИЛЕГАНИЯ (v435, `hadj=`): назначенная клетка лекаря вплотную к своему, терявшему хиты за прошлый тик, /
+        // все назначения лекарей — та величина, по которой разбор E делил стороны (26 % лечений вплотную против 75 %)
+        out[c.id]?.let { b ->
+            hadjAll++
+            if (army.any { a -> a.id != c.id && a.hits > 0 && (Memory.lastHits[a.id] ?: a.hits) > a.hits &&
+                    maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) hadjN++
+        }
         // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
         // огнём 37 % лекаре-тиков, наши — 10 %, и в FIGHT свободная клетка вплотную к бойцу не опаснее своей есть в
         // 30–51 % лекаре-тиков. Зонд отвечает, какое слагаемое оценки увело лекаря от такой клетки: считает те же
@@ -1035,7 +1045,8 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
                 val deliver = InfluenceMap.healOf(c)
                 val raw = InfluenceMap.attHealAt(key)
-                val pull = if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+                val pull = if (USE_HEAL_NEED_ACTUAL) InfluenceMap.bestDeliveryAt(c, p.x, p.y, army)
+                    else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
                 val self = p.x == c.x && p.y == c.y
                 val tenant = if (self) null else allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
                 return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, -W_LINE * InfluenceMap.influenceOf(key),

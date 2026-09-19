@@ -754,7 +754,13 @@ object InfluenceMap {
         for (a in allies) {
             val key = a.x * 100 + a.y
             val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
-            val need = minOf(dangerAt(key), a.hits.toDouble()) * (if (armed) 1.0 else NEED_DISARMED)
+            // НУЖДА — ТО, ЧТО ЛЕЧЕНИЕ МОЖЕТ ВЕРНУТЬ (v435, см. USE_HEAL_NEED_ACTUAL): недобор хитов плюс потеря за прошлый
+            // тик; целый крип во втором ряду нужды не имеет, как бы ни было опасно его поле
+            val base = if (USE_HEAL_NEED_ACTUAL) {
+                val lost = ((Memory.lastHits[a.id] ?: a.hits) - a.hits).coerceAtLeast(0)
+                minOf((a.hitsMax - a.hits + lost).toDouble(), a.hitsMax.toDouble())
+            } else minOf(dangerAt(key), a.hits.toDouble())
+            val need = base * (if (armed) 1.0 else NEED_DISARMED)
             needLeft[a.id] = need
             total += need
             stamp(attHeal, a.x, a.y, K_ATT_HEAL, need, false)
@@ -782,6 +788,24 @@ object InfluenceMap {
             needLeft[a.id] = left - covered
             stamp(attHeal, a.x, a.y, K_ATT_HEAL, -covered, false)
         }
+    }
+
+    /** ЛУЧШАЯ ОДНА ДОСТАВКА ИЗ КЛЕТКИ (v435, см. USE_HEAL_NEED_ACTUAL): лекарь лечит одного за тик, поэтому цена клетки —
+     *  не сумма нужд вокруг, а наибольшее из min(непокрытая нужда подопечного, лечение × ядро по дистанции). Вплотную к
+     *  теряющему хиты — полное лечение (72 у h6), в двух-трёх клетках — треть, у целого — ноль. Себя лекарь тоже считает. */
+    fun bestDeliveryAt(healer: Creep, x: Int, y: Int, allies: List<Creep>): Double {
+        val h = profileOf(healer).heal
+        if (h <= 0.0) return 0.0
+        var best = 0.0
+        for (a in allies) {
+            val d = maxOf(abs(a.x - x), abs(a.y - y))
+            if (d >= K_ATT_HEAL.size) continue
+            val left = needLeft[a.id] ?: continue
+            if (left <= 0.0) continue
+            val v = minOf(left, h * K_ATT_HEAL[d])
+            if (v > best) best = v
+        }
+        return best
     }
 
     /** Доля нужды, покрытая назначенными лекарями: 0 — никто никого не прикрывает, 1 — покрыты все. */
