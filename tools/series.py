@@ -490,11 +490,15 @@ def match_cpu(r):
     """One match's CPU as the bot printed it: the hundred-tick windows, the guards that spoke, the timeouts and the
     phase breakdowns (ticks 1-3, every slow tick, every hundredth tick - only the last kind is an unbiased sample)."""
     ticks = matchlog.log_ticks(r["game"], {r["game"]: r["logs"]})
-    out = {"windows": {}, "guards": Counter(), "timeouts": 0, "phases": {}, "last": max(ticks, default=0)}
+    out = {"windows": {}, "guards": Counter(), "timeouts": 0, "phases": {}, "army": {}, "last": max(ticks, default=0)}
     for t in sorted(ticks):
         for line in ticks[t].split("\n"):
             if "timed out" in line:
                 out["timeouts"] += 1
+            if line.startswith("t="):
+                m = re.match(r"t=(\d+) army=(\d+)", line)
+                if m:
+                    out["army"][int(m.group(1))] = int(m.group(2))
             if not line.startswith("cpu t="):
                 continue
             m = CPU_WINDOW.match(line)
@@ -592,6 +596,104 @@ def cmd_cpu(args):
                       key=lambda k: -max(means["control"].get(k, 0), means["final"].get(k, 0)))
         print(f"  {label}: " + "  ".join(
             f"{k}={means['control'].get(k, 0):.1f}>{means['final'].get(k, 0):.1f}" for k in keys[:14]))
+    # what a phase costs depends on how many creeps it serves and on whether there is a fight at all, and two series
+    # against different opponents differ in both; per living army creep, and `command` only where it ran, the cut is
+    # the same question asked of both groups
+    print("\nphases per living army creep, periodic sample — ms: mean median p90 (ticks sampled)")
+    for name, pick in (("moves / army creep", lambda ph, n: ph.get("moves", 0.0) / n),
+                       ("posture", lambda ph, n: ph.get("posture", 0.0)),
+                       ("command / army creep, where it ran", lambda ph, n: ph["command"] / n
+                        if ph.get("command", 0.0) >= 1.0 else None),
+                       ("fields + built", lambda ph, n: ph.get("fields", 0.0) + ph.get("built", 0.0))):
+        cells = []
+        for side, ms in groups.items():
+            xs = []
+            for _, c in ms:
+                for t, (_, ph) in c["phases"].items():
+                    n = c["army"].get(t, 0)
+                    if t >= 100 and t % 100 == 0 and n > 0:
+                        x = pick(ph, n)
+                        if x is not None:
+                            xs.append(x)
+            xs.sort()
+            cells.append(f"{side} {statistics.fmean(xs):5.2f} {statistics.median(xs):5.2f} "
+                         f"{xs[int(0.9 * (len(xs) - 1))]:5.2f} ({len(xs)})" if xs else f"{side} -")
+        print(f"  {name:<36} " + "   ".join(cells))
+
+
+# ---------------------------------------------------------------- shares
+
+# cumulative labelled counters the bot prints (`why=healMateOut:4865,keeper:2533,...`): the LAST line of a match is the
+# match's distribution. The tuple is (line prefix, field, the name the cut is printed under)
+SHARE_FIELDS = [("rung t=", "why", "rung"), ("rung t=", "step", "step"), ("rung t=", "pass", "pass"),
+                ("tac t=", "prio", "prio"), ("t=", "cmdwhy", "cmdwhy"), ("t=", "runner", "runner"),
+                ("t=", "cap", "cap"), ("t=", "objnone", "objnone")]
+LABELLED_COUNT = re.compile(r"([A-Za-z_][\w.]*):(\d+)")
+POSTURE_LINE = re.compile(r"^posture: ([A-Z_]+) t=(\d+)")
+
+
+def match_shares(r):
+    """{cut: {label: share of the cut's total}} for one match; postures are TICK shares, rebuilt from the `posture:`
+    line, which the bot prints on every change of posture or objective - so a posture holds until the next line."""
+    ticks = matchlog.log_ticks(r["game"], {r["game"]: r["logs"]})
+    last, postures = {}, []
+    for t in sorted(ticks):
+        for line in ticks[t].split("\n"):
+            m = POSTURE_LINE.match(line)
+            if m:
+                postures.append((int(m.group(2)), m.group(1)))
+                continue
+            for prefix, field, name in SHARE_FIELDS:
+                if line.startswith(prefix):
+                    m = re.search(rf"(?:^| ){field}=(\S+)", line)
+                    if m:
+                        last[name] = m.group(1)
+    out = {}
+    for name, body in last.items():
+        counts = {k: int(v) for k, v in LABELLED_COUNT.findall(body)}
+        total = sum(counts.values())
+        if total:
+            out[name] = {k: v / total for k, v in counts.items()}
+    if postures:
+        end, held = max(ticks), Counter()
+        for (t, p), (t2, _) in zip(postures, postures[1:] + [(end + 1, "")]):
+            held[p] += max(t2 - t, 0)
+        total = sum(held.values())
+        if total:
+            out["posture"] = {k: v / total for k, v in held.items()}
+    return out
+
+
+def cmd_shares(args):
+    groups = defaultdict(lambda: {"control": [], "final": []})
+    for r in rows(args):
+        side = "control" if r["version"] in args.control else "final" if r["version"] in args.final else None
+        if side:
+            got = match_shares(r)
+            groups["all opponents pooled"][side].append(got)
+            groups[bot(r)][side].append(got)
+    for group in sorted(groups, key=lambda g: (g != "all opponents pooled", g)):
+        ctl, fin = groups[group]["control"], groups[group]["final"]
+        if group != "all opponents pooled" and (not ctl or not fin) and not args.every:
+            continue                      # a bot only one side has met compares nothing
+        print(f"\n{group}: control {len(ctl)} matches, final {len(fin)} — share of the cut, % : mean (min..max across "
+              f"matches); `<<` marks a final mean outside the control's min..max")
+        for cut in [name for _, _, name in SHARE_FIELDS] + ["posture"]:
+            labels = Counter()
+            for m in ctl + fin:
+                for k, v in m.get(cut, {}).items():
+                    labels[k] += v
+            shown = [k for k, _ in labels.most_common() if labels[k] / max(len(ctl) + len(fin), 1) >= args.floor / 100]
+            if not shown:
+                continue
+            print(f"  {cut}")
+            for k in shown:
+                a = [100 * m.get(cut, {}).get(k, 0.0) for m in ctl if cut in m]
+                b = [100 * m.get(cut, {}).get(k, 0.0) for m in fin if cut in m]
+                def cell(xs):
+                    return f"{statistics.fmean(xs):5.1f} ({min(xs):5.1f}..{max(xs):5.1f})" if xs else f"{'-':>20}"
+                mark = "  <<" if a and b and not (min(a) <= statistics.fmean(b) <= max(a)) else ""
+                print(f"    {k:<22} {cell(a)}   {cell(b)}{mark}")
 
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -648,8 +750,18 @@ p.add_argument("--final", type=int, nargs="+", required=True, help="the versions
 p.add_argument("--opponent", help="only matches against this opponent (substring)")
 p.set_defaults(func=cmd_cpu, version=None)
 
+p = sub.add_parser("shares", parents=[common],
+                   help="the bot's labelled counters (rung, step, pass, cmdwhy, postures...) as shares, two groups of "
+                        "versions per opponent bot")
+p.add_argument("--control", type=int, nargs="+", required=True, help="the versions whose spread is the yardstick")
+p.add_argument("--final", type=int, nargs="+", required=True, help="the versions measured against it")
+p.add_argument("--opponent", help="only matches against this opponent (substring)")
+p.add_argument("--every", action="store_true", help="also print the bots only one side has met")
+p.add_argument("--floor", type=float, default=0.5, help="hide labels whose mean share is below this many percent")
+p.set_defaults(func=cmd_shares, version=None)
+
 args = ap.parse_args()
-if args.cmd == "cpu":
+if args.cmd in ("cpu", "shares"):
     args.version = args.control + args.final
 elif args.cmd not in ("metrics", "field", "reach"):
     args.version = None
