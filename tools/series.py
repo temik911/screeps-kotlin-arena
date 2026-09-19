@@ -479,6 +479,121 @@ def cmd_reach(args):
                   f"lost {100.0 * (on - won) / max(on, 1):5.1f}%{note}")
 
 
+# ---------------------------------------------------------------- cpu
+
+CPU_WINDOW = re.compile(r"^cpu t=(\d+): max=([\d.]+)ms at t=(\d+) slow\(>(\d+)ms\)=(\d+)")
+CPU_PHASES = re.compile(r"^cpu t=(\d+) total=([\d.]+)ms: (.+)$")
+CPU_GUARD = re.compile(r"^cpu t=(\d+) guard: (.+?)(?: \([\d.]+ms\))?$")
+
+
+def match_cpu(r):
+    """One match's CPU as the bot printed it: the hundred-tick windows, the guards that spoke, the timeouts and the
+    phase breakdowns (ticks 1-3, every slow tick, every hundredth tick - only the last kind is an unbiased sample)."""
+    ticks = matchlog.log_ticks(r["game"], {r["game"]: r["logs"]})
+    out = {"windows": {}, "guards": Counter(), "timeouts": 0, "phases": {}, "last": max(ticks, default=0)}
+    for t in sorted(ticks):
+        for line in ticks[t].split("\n"):
+            if "timed out" in line:
+                out["timeouts"] += 1
+            if not line.startswith("cpu t="):
+                continue
+            m = CPU_WINDOW.match(line)
+            if m:
+                out["windows"][int(m.group(1))] = (float(m.group(2)), int(m.group(3)), int(m.group(5)))
+                continue
+            m = CPU_GUARD.match(line)
+            if m:
+                out["guards"][m.group(2)] += 1
+                continue
+            m = CPU_PHASES.match(line)
+            if m:
+                out["phases"][int(m.group(1))] = (float(m.group(2)),
+                                                  {k: float(v) for k, v in re.findall(r"([\w.]+)=([\d.]+)", m.group(3))})
+    return out
+
+
+def spread(xs):
+    xs = sorted(xs)
+    return f"{xs[0]:6.1f} {statistics.median(xs):6.1f} {xs[-1]:6.1f}" if xs else f"{'-':>6} {'-':>6} {'-':>6}"
+
+
+def cmd_cpu(args):
+    groups = {"control": [], "final": []}
+    for r in rows(args):
+        side = "control" if r["version"] in args.control else "final" if r["version"] in args.final else None
+        if side:
+            groups[side].append((r, match_cpu(r)))
+    for side, ms in groups.items():
+        print(f"\n{side}: {len(ms)} matches — per match: max after tick 3 (at tick), slow ticks, slow per 100 ticks, "
+              f"guard lines, timeouts")
+        for r, c in ms:
+            late = [(mx, at) for mx, at, _ in c["windows"].values() if at > 3]
+            # a window whose max sits on ticks 1-3 says nothing about the rest of it; the breakdown lines of the slow
+            # ticks do, so the late maximum is read from both
+            late += [(tot, t) for t, (tot, _) in c["phases"].items() if t > 3]
+            mx, at = max(late, default=(0.0, 0))
+            slow = sum(s for _, _, s in c["windows"].values())
+            guards = ",".join(f"{k.split(' (')[0]}:{n}" for k, n in c["guards"].most_common()) or "-"
+            print(f"  {r['game'][-6:]} v{r['version']} {bot(r):<16} {r['result']:<5} {c['last']:>5}t  "
+                  f"max {mx:6.1f} at {at:<5} slow {slow:>3} ({100.0 * slow / max(c['last'], 1):4.1f}/100t)  "
+                  f"guard {sum(c['guards'].values()):>2} [{guards}]  timeouts {c['timeouts']}")
+    ctl, fin = groups["control"], groups["final"]
+    if not ctl or not fin:
+        return
+    print("\nper match — min median max across matches; the final version is inside the control's spread when its "
+          "numbers do not leave the control's min..max")
+    def per_match(ms, f):
+        return [f(c) for _, c in ms]
+    cuts = [
+        ("max after tick 3, ms", lambda c: max([mx for mx, at, _ in c["windows"].values() if at > 3]
+                                               + [tot for t, (tot, _) in c["phases"].items() if t > 3], default=0.0)),
+        ("max of ticks 2-35, ms", lambda c: max([tot for t, (tot, _) in c["phases"].items() if 2 <= t <= 35],
+                                                default=0.0)),
+        ("tick 1, ms", lambda c: c["phases"].get(1, (0.0,))[0]),
+        ("slow per 100 ticks", lambda c: 100.0 * sum(s for _, _, s in c["windows"].values()) / max(c["last"], 1)),
+        ("guard lines per match", lambda c: float(sum(c["guards"].values()))),
+        ("guard per 100 ticks", lambda c: 100.0 * sum(c["guards"].values()) / max(c["last"], 1)),
+        ("timeouts", lambda c: float(c["timeouts"])),
+    ]
+    print(f"  {'':<24} {'control min med max':>22}   {'final min med max':>22}   final above control's max")
+    for name, f in cuts:
+        a, b = per_match(ctl, f), per_match(fin, f)
+        over = sum(1 for x in b if x > max(a))
+        print(f"  {name:<24} {spread(a):>22}   {spread(b):>22}   {over}/{len(b)}")
+    print("\nper window (the bot's `cpu t=N: max= slow=` line) — max= and slow= across matches that reached it")
+    print(f"  {'window':>6} {'n':>3} {'control max= min med max':>26} {'slow med max':>13} | {'n':>3} "
+          f"{'final max= min med max':>26} {'slow med max':>13}  above")
+    for w in sorted({w for _, c in ctl + fin for w in c["windows"]}):
+        if w == 100:
+            continue                     # tick 1 owns the first window's maximum in every match of every version
+        a = [c["windows"][w] for _, c in ctl if w in c["windows"]]
+        b = [c["windows"][w] for _, c in fin if w in c["windows"]]
+        if not a or not b:
+            continue
+        sa, sb = sorted(s for _, _, s in a), sorted(s for _, _, s in b)
+        over = sum(1 for mx, _, _ in b if mx > max(m for m, _, _ in a))
+        print(f"  {w:>6} {len(a):>3} {spread([m for m, _, _ in a]):>26} {statistics.median(sa):>6.1f} {sa[-1]:>6} | "
+              f"{len(b):>3} {spread([m for m, _, _ in b]):>26} {statistics.median(sb):>6.1f} {sb[-1]:>6}  "
+              f"{over}/{len(b)}")
+    print("\nphases — mean ms on the periodic sample (every hundredth tick; slow ticks are a biased sample and are "
+          "left out), and on ticks 1-3")
+    for label, keep in (("every 100th", lambda t: t >= 100 and t % 100 == 0), ("ticks 1-3", lambda t: t <= 3)):
+        means = {}
+        for side, ms in groups.items():
+            acc = defaultdict(list)
+            for _, c in ms:
+                for t, (tot, ph) in c["phases"].items():
+                    if keep(t):
+                        acc["total"].append(tot)
+                        for k, v in ph.items():
+                            acc[k].append(v)
+            means[side] = {k: statistics.fmean(v) for k, v in acc.items()}
+        keys = sorted(set(means["control"]) | set(means["final"]),
+                      key=lambda k: -max(means["control"].get(k, 0), means["final"].get(k, 0)))
+        print(f"  {label}: " + "  ".join(
+            f"{k}={means['control'].get(k, 0):.1f}>{means['final'].get(k, 0):.1f}" for k in keys[:14]))
+
+
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -526,8 +641,17 @@ p.add_argument("--min", type=int, default=2, help="skip groups and fields with f
 p.add_argument("--top", type=int, default=30)
 p.set_defaults(func=cmd_metrics)
 
+p = sub.add_parser("cpu", parents=[common],
+                   help="the bot's own CPU lines of two groups of versions: windows, slow ticks, guards, phases")
+p.add_argument("--control", type=int, nargs="+", required=True, help="the versions whose spread is the yardstick")
+p.add_argument("--final", type=int, nargs="+", required=True, help="the versions measured against it")
+p.add_argument("--opponent", help="only matches against this opponent (substring)")
+p.set_defaults(func=cmd_cpu, version=None)
+
 args = ap.parse_args()
-if args.cmd not in ("metrics", "field", "reach"):
+if args.cmd == "cpu":
+    args.version = args.control + args.final
+elif args.cmd not in ("metrics", "field", "reach"):
     args.version = None
     args.opponent = None
 args.func(args)
