@@ -10,6 +10,27 @@ import screeps.api.Position
  * `Memory.commit` после исполнения (раздел 2 docs/pain-and-gain-rework.md); пока записи остаются там, где были.
  * Объект в списке починки после оборванного тика (см. AbortRepair).
  */
+/**
+ * ЗАЩЁЛКА (v443, план архитектуры, 4.2 и этап 2): гистерезис «вошёл по одному условию, вышел по другому». До этого он был
+ * выписан руками пять раз, и запись в память пряталась внутри выражения `val x = … run { … Memory.X.add(id) … }`.
+ * Это ВИД поверх множества, а не владелец: множество остаётся полем `Memory`, потому что `AbortRepair.repairFields` чинит
+ * только таблицы и множества среди собственных полей объекта-владельца — коллекция, спрятанная внутрь `Latch`, выпала бы
+ * из починки после оборванного тика. Починка идёт на месте, так что ссылка вида остаётся верной.
+ */
+internal class Latch(private val ids: MutableSet<String>) {
+    /** Состояние ПОСЛЕ обновления. Внутри: выходит по [exit], иначе остаётся; снаружи: входит по [enter]. Вышедший в этом же
+     *  обновлении не входит обратно, даже если [enter] истинно. */
+    fun update(id: String, enter: Boolean, exit: Boolean): Boolean =
+        if (id in ids) { if (exit) { ids.remove(id); false } else true }
+        else if (enter) { ids.add(id); true }
+        else false
+
+    /** Без гистерезиса в самой защёлке: состояние равно условию (гистерезис — в пороге, который условие читает). */
+    fun set(id: String, on: Boolean): Boolean = update(id, enter = on, exit = !on)
+
+    operator fun contains(id: String) = id in ids
+}
+
 internal object Memory {
     /** Кто из наших назначен добить какой остов: id нашего -> id остова. Считается РАЗ в тик, до перебора
      *  замыслов, иначе пять прогонов раздачи дали бы пять разных отрядов. */
@@ -37,10 +58,13 @@ internal object Memory {
     val enemyCellHist = HashMap<String, ArrayDeque<Int>>()
     /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
     val rallyingIds = HashSet<String>()
+    val rallyingLatch = Latch(rallyingIds)
     /** Кто на прошлом тике шёл на личную цель (engage): такого не ждут по сплочению. */
     val engagingIds = HashSet<String>()
+    val engagingLatch = Latch(engagingIds)
     val holdSince = HashMap<String, Int>()
     val impatientIds = HashSet<String>()
+    val impatientLatch = Latch(impatientIds)
     /** Дистанция центра боевых врагов до нашего за последние тики — темп сближения для запаса выхода. */
     val enemyDistHist = ArrayDeque<Int>()
     val hisCentHist = ArrayDeque<Int>()   // клетка центра его вооружённых за APPROACH_WINDOW (v113: ПОДХОДИТ ОН, не мы)
@@ -57,6 +81,7 @@ internal object Memory {
     val ourLostHist = ArrayDeque<Int>()
     val hisLostHist = ArrayDeque<Int>()
     val aggressiveIds = HashSet<String>()
+    val aggressiveLatch = Latch(aggressiveIds)
     val lastHits = HashMap<String, Int>()
     val theirsHist = ArrayDeque<Double>()   // его мощь против армии за MEASURE_WINDOW тиков (см. USE_CORE_MEASURE_WINDOW)
     val lastCell = HashMap<String, Int>()
@@ -67,6 +92,7 @@ internal object Memory {
     val flowCache = HashMap<Int, IntArray>()
     val flowCacheTick = HashMap<Int, Int>()   // тик расчёта поля (см. FLOW_TTL)
     val rotatingIds = HashSet<String>()   // бойцы в ротации (см. ROTATE_OUT)
+    val rotatingLatch = Latch(rotatingIds)
     val rotateSince = HashMap<String, Int>()   // тик выхода в ротацию (замер длительности, см. USE_ROTATE_OVER_SLOT)
     val keeperIds = HashMap<String, String>()   // хранитель флага → id флага (см. KEEP_RANGE)
     val enemyHitsHist = ArrayDeque<Int>()         // сумма хитов врага за STALL_TICKS тиков (чистый урон)

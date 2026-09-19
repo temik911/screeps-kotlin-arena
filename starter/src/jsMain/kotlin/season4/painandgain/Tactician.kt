@@ -300,7 +300,10 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
         // ...и ротация по его фокусу (v275, см. rotateByFocus) решена до командира и старым порогом не снимается
         val stepOut = creep.id in Memory.stepOutIds
-        val rotating = creep.id in Memory.rotByFocus || stepOut || !healer && hasWeapon(creep) && healersAlive && run {
+        // защёлка ротации по оружию обновляется ОПЕРАТОРОМ (v443, этап 2) — и только у того, до кого дошла бы прежняя цепочка
+        // `||` / `&&`: не в ротации по фокусу, не выходит из строя, вооружённый не-лекарь при живых лекарях
+        val rotGate = creep.id !in Memory.rotByFocus && !stepOut && !healer && hasWeapon(creep) && healersAlive
+        if (rotGate) {
             val weapons = creep.body.count { it.type == ATTACK || it.type == RANGED_ATTACK }
             val live = creep.body.count { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
             val frac = if (weapons == 0) 1.0 else live.toDouble() / weapons
@@ -308,11 +311,12 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // полное лечение блока; под огнём у фронта оно не наступает, и мили висит в ротации 50–97 тиков при 1050–1250 хитах
             // (матч 506, melee_4 116–212; 602, melee_3 314–372) — ноль ударов. Его мили (матч 14) вернулся при 5 из 8
             val backIn = live >= kotlin.math.ceil(weapons * ROTATE_OUT).toInt() + 1
-            if (creep.id in Memory.rotatingIds) { if (backIn) { Memory.rotatingIds.remove(creep.id); if (DEBUG_LOG) println("rot t=$now in ${creep.id} frac=$frac took=${now - (Memory.rotateSince[creep.id] ?: now)}"); false } else true }
-            else if (frac < ROTATE_OUT) {
-                Memory.rotatingIds.add(creep.id); Memory.rotateSince[creep.id] = now; rotOut++; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}"); true
-            } else false
+            val wasOut = creep.id in Memory.rotatingLatch
+            val isOut = Memory.rotatingLatch.update(creep.id, enter = frac < ROTATE_OUT, exit = backIn)
+            if (wasOut && !isOut && DEBUG_LOG) println("rot t=$now in ${creep.id} frac=$frac took=${now - (Memory.rotateSince[creep.id] ?: now)}")
+            if (!wasOut && isOut) { Memory.rotateSince[creep.id] = now; rotOut++; if (DEBUG_LOG) println("rot t=$now out ${creep.id} frac=$frac hits=${creep.hits}") }
         }
+        val rotating = creep.id in Memory.rotByFocus || stepOut || (rotGate && creep.id in Memory.rotatingLatch)
         val support = healer || stripped
         val nearestEnemyRange = combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
         val localAllies = combatArmy.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
@@ -359,7 +363,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             else -> ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio &&
                 (fightCost(localEnemies, localAllies) <= (localAllies.maxOfOrNull { speedSlack(it) } ?: 0) || inContact(localEnemies, localAllies))
         }
-        if (localAggressive) Memory.aggressiveIds.add(creep.id) else Memory.aggressiveIds.remove(creep.id)
+        Memory.aggressiveLatch.set(creep.id, localAggressive)
         // ОТПЕЧАТОК РАСХОЖДЕНИЯ МАСШТАБОВ (этап 0): знаменатель — мили с боевым врагом в ENGAGE_RANGE,
         // числитель — из них те, где МЕСТНАЯ арифметика в клетке врага даёт перевес не ниже PUSH_RATIO, а
         // армейская мера при этом говорит «не наступать». Ненулевой числитель и есть наблюдение оператора
@@ -485,7 +489,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // ОДНА ЦЕЛЬ НА ВСЕХ МИЛИ (v221, см. USE_MELEE_PACK): цель пачки, если она среди допустимых этому мили,
             // иначе прежний ближайший — пачка ничего не запрещает, она только выбирает
             c.minByOrNull { getRange(creep, it) } } else null
-        if (engage != null) Memory.engagingIds.add(creep.id) else Memory.engagingIds.remove(creep.id)
+        Memory.engagingLatch.set(creep.id, engage != null)
         // пара к общей цели мили (v221, см. mpackHit): как часто ноги мили и так идут к цели фокуса
         if (meleeOnly && engage != null) { mpackAll++; if (engage.id == focusTarget?.id) mpackHit++ }
         // поводок (см. LEASH_RANGE): при враге рядом дальше поводка от центра армии — к центру.
@@ -668,9 +672,10 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             // с гистерезисом: с клетки «13 от авангарда» крип шёл к нему, со следующей («12») — снова к цели,
             // и два шага туда-обратно длились до конца матча, а авангард ждал (стенд rush)
             val rallyRange = if (creep.id in Memory.rallyingIds) RALLY_RANGE / 2 else RALLY_RANGE
-            if (van != null && getRange(creep, van) > rallyRange) { rallyTo = InfluenceMap.cell(van.x, van.y); Memory.rallyingIds.add(creep.id) }
-            else Memory.rallyingIds.remove(creep.id)
-        } else Memory.rallyingIds.remove(creep.id)
+            val rallyNow = van != null && getRange(creep, van) > rallyRange
+            if (rallyNow) rallyTo = InfluenceMap.cell(van!!.x, van.y)
+            Memory.rallyingLatch.set(creep.id, rallyNow)
+        } else Memory.rallyingLatch.set(creep.id, false)
         // построение: вне огня и без готовности авангард и собравшиеся у него стоят, остальные идут к нему
         // в контакте построение окончено: авангард — тот, кто уже дерётся, и «собраться у авангарда с дистанцией 1»
         // тянуло стрелков за ним внутрь строя врага, а стреляли они с 4–5 клеток впустую (матч 15, t=68–100)
@@ -847,15 +852,16 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             rear - median > RETREAT_GAP && myFlow <= median
         }
         // терпение (см. COHESION_PATIENCE): затянувшееся ожидание снимается до конца отставания
-        if (cohesionHold) {
-            val since = Memory.holdSince.getOrPut(creep.id) { getTicks() }
-            if (getTicks() - since >= COHESION_PATIENCE) Memory.impatientIds.add(creep.id)
-        } else { Memory.holdSince.remove(creep.id); Memory.impatientIds.remove(creep.id) }
+        if (!cohesionHold) Memory.holdSince.remove(creep.id)
+        else if (creep.id !in Memory.holdSince) Memory.holdSince[creep.id] = getTicks()
+        val waitedOut = cohesionHold && getTicks() - (Memory.holdSince[creep.id] ?: getTicks()) >= COHESION_PATIENCE
+        Memory.impatientLatch.update(creep.id, enter = waitedOut, exit = !cohesionHold)
         val hold = (cohesionHold && creep.id !in Memory.impatientIds) || formHold || retreatHold
 
         var stepTag = "?"
-        val step: Position? = when {
-            !canMove(creep) -> { stepTag = "immobile"; null }
+        val step: Position?
+        when {
+            !canMove(creep) -> { stepTag = "immobile"; step = null }
             // ВЫЖИВАНИЕ ВЫШЕ ЗАДАНИЯ (v240, этап 5 переработки, решение оператора 13.09.2026): крип под смертельным
             // огнём бежит, даже если у него приказ командира или пост хранителя. До v240 приказ стоял выше бегства
             // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
@@ -863,14 +869,16 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             mustFlee -> {
                 stepTag = "flee"
                 if (commandOf.containsKey(creep.id)) orderFled++
-                fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support || stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
+                step = fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (support || stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, retreatTo ?: post, 1, ctx.dangerMatrix)
             }
             // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
             // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
             // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
-             keeper && commandOf.containsKey(creep.id) -> commandOf[creep.id]!!
-                .takeIf { it.x != creep.x || it.y != creep.y }.also { stepTag = "keeperOrder" }
-            keeper -> { stepTag = "keeperStay"; TrafficManager.pin(creep.id); null }
+             keeper && commandOf.containsKey(creep.id) -> {
+                stepTag = "keeperOrder"
+                step = commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y }
+            }
+            keeper -> { stepTag = "keeperStay"; TrafficManager.pin(creep.id); step = null }
             // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
             // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
             // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
@@ -882,15 +890,14 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 orderBranch++          // сколько приказов реально дошло до ветки исполнения (v173)
                 stepTag = "order"
                 val cell = commandOf[creep.id]!!
-                if (cell.x == creep.x && cell.y == creep.y) null
-                else cell
+                step = if (cell.x == creep.x && cell.y == creep.y) null else cell
             }
-            slot != null -> { stepTag = if (slotHold) "slotHold" else "slotStep"; if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet()) }
+            slot != null -> { stepTag = if (slotHold) "slotHold" else "slotStep"; step = if (slotHold) null else slotStep(creep, slot, blockedSet, enemyPositions, occupantAt, combatEnemies, if (support && !inReach) reachMine else emptySet()) }
             // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
             // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
             // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
             // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
-            hold -> { stepTag = "hold"; null }
+            hold -> { stepTag = "hold"; step = null }
             else -> {
                 stepTag = "free"
                 // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
@@ -953,7 +960,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 // при этом считает, что армия встанет по плану: он опирался на фикцию. Клетка в ОДНОМ шаге теперь
                 // запрашивается напрямую, как это делают захватчики
                 val chosen = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, enemyCreeps, allies, meleeEnemies, myBlocked, enemyPositions, occupantAt, healerFireW, focusTarget)
-                chosen
+                step = chosen
             }
         }
         // СЛЕПОТА К ОПАСНОСТИ НА ШАГЕ (v215, оператор: «линия фронта должна работать ВСЕГДА на
