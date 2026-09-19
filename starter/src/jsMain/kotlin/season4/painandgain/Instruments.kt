@@ -410,7 +410,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
             "shooters=${bw.army.count { hasRanged(it) }}/${bw.combatEnemies.count { hasRanged(it) }} abort=$abortTicks/$abortEntries srch=$srchCut/$srchTicks/${cmdTailMax.toInt()} pin=$pinOrd/$pinOpp/$pinHeld/$pinChk fself=$fselfFlip/$fselfAll rotf=$rotfOut/$rotfBack/$rotfTicks/$rotfOn/$rotfF/$rotfA/$rotfN rotfm=$rotfMeet meet=$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk fsw=$fswN/$fswTicks:$fswLost/$fswFar/$fswRanged/$fswGuns/$fswKill/$fswBare ffoc=$ffocBefore/$ffocAfter/$ffocAll ovw=${Executor.ovwContact}/${Executor.ovwRanged} conf=${Arbiter.confReach}/${Arbiter.confFatigue} rtr=$rtrRemoved/$rtrOld/$rtrAdded mquiet=$mquietMoved/$mquietAll/${mquietGain.toInt()} mquietc=$cmdQuietMoved/$cmdQuietAll maj=$majOpened/$majOffers surv=$survTicks/$survLead/$survContact/$survFights adr=$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame rad=${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide simd=${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree fhl=$fhlChosen/$fhlAvail mrush=$rushByArrival/$rushSignalAll/$massArrivalAdded zlb=$zlbTicks/$zlbZero hwall=$hwallTicks/$hwallVictimTicks hwallh=$hwallHeals/$hwallHealsAll hwalla=$hwallAddr/$hwallVictimTicks hwallp=$hwallPredA/$hwallPredL/$hwallPredN postc=$postContest/$postAll rot=$rotOut mdir=$marchFlow/$marchAll/$marchFlip hfull=$hfullN/$hfullAll hover=$hoverSum/$hdelivSum hswap=$hswapN hexp=$hexpN/$hexpAll hlost=$hlostSum hwallx=$hwallYield/$hwallFar hpick=$hpN/$hpAdj/$hpAvail/$hpGate hadj=$hadjN/$hadjAll hadjn=$hadjnN/$hadjnAll hfire=$hfireN/$hfireAll/$hfireAdj hstill=${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged} cmdheal=$cmdHealGiven/$cmdHealTicks dh=${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }} " +
             "retr=$retrTicks/$retrWithPoint/$retrUnderFire standfire=$standFire/$standTicks outmw=$outmTicks/$outmRetreat " +
                 "score=${ourScore.toInt()}/${enemyScore.toInt()} rate=$ourRate/$enemyRate behind=$behindOnScore passive=${bw.passiveEnemy} flags=${flagsSummary(bw.flags)} " +
-                "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=$kiteNow massed=$kiteMassed plan=$planStrict/$planLoose cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> bw.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
+                "obey=$orderAuditOk/$orderAuditN branch=$orderBranch fled=$orderFled clash=$orderClash lost=stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere kite=${kiteNow - kiteSeen} massed=$kiteMassed plan=${planStrict - planStrictSeen}/${planLoose - planLooseSeen} cmd=${commandOf.size}/$cmdTicks:$cmdBlocked mode=$cmdMode disp=$dispNow evt=$stateEventTicks fire=${fireOf.size} posture=$posture obj=${objectiveFlagId?.let { id -> bw.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"} hunt=$huntingThreat rush=$unflaggedRushNow " +
                 "weak=$outmatchedTicks pat=$stalemateTicks/$patMax strip=$stripTicks touch=${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()} touchl=${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()} out=$outOfFireTicks back=$meleeBackTicks guns=$planGunsIn/$planGunsAll mheal=$planMeleeHealed/$planMeleeAll hline=$planHealBehind/$planHealAll fall=$fallReach/$fallAny our=${ours.toInt()} enemy=${theirs.toInt()} ledger=${enemyDamageTaken - ourDamageTaken} wounded=${bw.army.count { stripped(it) }} hits=${bw.army.sumOf { it.hits }}/${bw.army.sumOf { it.hitsMax }} enemyHits=${bw.combatEnemies.sumOf { it.hits }}/${bw.combatEnemies.sumOf { it.hitsMax }} " +
                 "centroid=(${bw.ourCentroid.x},${bw.ourCentroid.y}) enemyCentroid=${bw.enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}"
         )
@@ -447,9 +447,18 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
         concSum = 0; concTicks = 0
         if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
     }
+    // снимок накопительных счётчиков тактика и строя — КАЖДЫЙ тик, в конце: следующая печать отдаст разницу за свой тик
+    kiteSeen = kiteNow; planStrictSeen = planStrict; planLooseSeen = planLoose
     return PrintTickOut(
     )
 }
+
+/** Снимки накопительных счётчиков `kiteNow` (тактик) и `planStrict` / `planLoose` (строй) в конце прошлого тика (v448):
+ *  печать `kite=` и `plan=` отдаёт разницу — то же «за этот тик», что до v448 давал сброс в `readSignals`. Печатает
+ *  прибор, поэтому и снимок его; после оборванного тика в разницу войдёт и оборванный — прежний сброс его терял. */
+private var kiteSeen = 0
+private var planStrictSeen = 0
+private var planLooseSeen = 0
 
 /** Раненый уступает дорогу всем: его место — за лекарями, а не между ними и строем. */
 

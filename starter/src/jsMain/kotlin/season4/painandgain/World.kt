@@ -601,9 +601,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx): ArmyMeasuresOut {
     // которых в MASS_RANGE от их центроида. Считается раз на тик, а не на крипа (v135)
     val enemyMassedNow = armedEnemies.size >= 6 && centroidOf(armedEnemies)?.let { c ->
         armedEnemies.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedEnemies.size * 2 } == true
-    kiteNow = 0
     kiteMassed = enemyMassedNow
-    planStrict = 0; planLoose = 0
     // чистый урон врагу за окно: сумма его хитов ниже, чем STALL_TICKS тиков назад (попадание с полным лечением в тот же
     // тик — не прогресс: стрелок россыпи с трёх клеток попадал, лечился, и «обмен уронами» сбрасывал простой);
     // простой — только когда добыча в досягаемости броска, а прогресса нет (на марше к врагу за 20+ клеток простоя
@@ -1286,12 +1284,3 @@ internal var warmFight = 0
 internal var warmFightAll = 0
 
 internal var kchaseAnn = 0
-
-// ==================== счётчики тика с ДВУМЯ писателями (v447, этап 6 — находка оператору) ====================
-// Сбрасывает их мир в начале тика (`readSignals`), а считает стадия уровнем выше: `kiteNow` — строка `kite` лестницы тактика,
-// `planStrict` / `planLoose` — `Formation.planFight`. Объявление обязано стоять не выше обоих писателей, поэтому оно здесь,
-// а не у того, кто считает: иначе мир импортировал бы тактика и строй — ребро вверх.
-
-internal var kiteNow = 0                               // сколько крипов кайтят в этом тике (v135, диагностика)
-internal var planStrict = 0                            // стрелков, вставших в клетку без его мили в двух (v135)
-internal var planLoose = 0                             // ...и вставших куда придётся
