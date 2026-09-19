@@ -150,7 +150,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
             val gain = (if (f.ours) 0.5 * f.score else f.swing) * captureCost(ctx, f)
             val horizon = if (farmerQuietNow) maxOf(1, arenaInfo.ticksLimit - getTicks() - ticks).toDouble() else 1.0 / (ticks + 5)
             val value = gain * horizon *
-                (if (f.id == currentId) 1.25 else 1.0) * (if (!f.ours && !captureAllowed(ctx, f)) 0.2 else 1.0)
+                (if (f.id == currentId) 1.25 else 1.0) * (if (!f.ours && !captureAllowed(ctx, f, serious = false)) 0.2 else 1.0)   // оценка, не ворота (v451, capeval=)
             cands.add(Cand(s, f, value))
         }
     }

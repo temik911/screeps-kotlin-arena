@@ -392,6 +392,9 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
             "hcov=${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }} " +
             "hulk=${disarmedFoe.size} hulkreach=$hulkInReach/$hulkTicks revived=$hulkRevived chase=${Memory.chaseOf.size}/$chaseTicks kills=$chaseKills " +
             "capgate=${capBlocked.values.sum()}/$capOffered cap=" + capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+            // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
+            " capq=$capqVeto/$capqAsked capqu=$capquVeto/$capquAsked capu=" + capquWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+            " capeval=$capqEval capidle=$capIdleRush/$capIdleEdge mstrip=$mstripTicks/$mstripAny/$mstripReach" +
             " poised=$poisedTicks/$poisedAll edge=$edgeSpot/$edgeAll capopp=$capOppSum/$capAllSum ffight=$firstFightTick fmassed=${if (fightMassedSeen) 1 else 0}stray=$strayCapRefused sout=$soutOut/$soutBack/$soutTicks hold=$holdPinned/$holdArmedStay/$holdKeptRace/$holdKeptFight gsafe=$groupSafeTicks/$groupDmgWindow fguard=$flagGuardTicks route=$routeKept man=$manned gcov=$garCovered/$garAll courier=$courierTicks hunt=$huntTicks/$huntCreepTicks toothless=$pushToothless sit=$flagSitOcc/$flagSitAll keep2=$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft keep3=$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" +
             " scout=$scoutShots/$scoutReach/$scoutTicks spotm=$spotMeleeTicks spothold=$spotHoldNew/$spotHoldAll sym=$symCore/$symFree " +
             "split=$splitFight/$splitAll recall=$recalled/$fightTicksNow healgap=$healGap/$healGapN nomedic=$noMedic/$healGapN flip=$aimFlips/$aimTicks aggro=$dangerBlind/$dangerBlindFar/$dangerMoves pushheld=$pushHeldTicks/$pushTicks lethal=$lethalHits/$lethalCells ledgerw=$ledgerWindow/$ourLostWindow/$hisLostWindow breakoff=$breakOffSplit/$breakOffN " +
@@ -449,6 +452,14 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
     }
     // снимок накопительных счётчиков тактика и строя — КАЖДЫЙ тик, в конце: следующая печать отдаст разницу за свой тик
     kiteSeen = kiteNow; planStrictSeen = planStrict; planLooseSeen = planLoose
+    // МИЛИ БЕЗ ЖИВОЙ ATTACK (счётчик к пункту Д оператора, v451): крипо-тиков, где рождённый мили стоит без живой ATTACK (написание
+    // А истинно, Б ложно), тиков с хотя бы одним таким, и крипо-тиков таких в трёх клетках от его вооружённого — редкое
+    // состояние, которое обязано быть посчитано до правки мест, где оно решает про урон
+    val strippedMelee = bw.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) }
+    if (strippedMelee > 0) {
+        mstripTicks += strippedMelee; mstripAny++
+        mstripReach += bw.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) && ctx.threats.any { e -> getRange(it, e) <= RANGED_RANGE } }
+    }
     return PrintTickOut(
     )
 }
@@ -460,11 +471,17 @@ private var kiteSeen = 0
 private var planStrictSeen = 0
 private var planLooseSeen = 0
 
+/** Мили без живой ATTACK (v451, счётчик к пункту Д): крипо-тиков / тиков с хотя бы одним / крипо-тиков в досягаемости его
+ *  стволов — прибор `mstrip=`; считает и печатает сам прибор. */
+private var mstripTicks = 0
+private var mstripAny = 0
+private var mstripReach = 0
+
 /** Раненый уступает дорогу всем: его место — за лекарями, а не между ними и строем. */
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v450"
+internal const val BOT_VERSION = "v451"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и

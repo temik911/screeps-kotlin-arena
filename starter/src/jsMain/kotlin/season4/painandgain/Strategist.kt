@@ -255,13 +255,54 @@ internal object Strategist {
 /** ⚠️ Параметр `runner` снят в v216: он был объявлен у обеих функций и НИ РАЗУ не читался в теле
  *  `captureBlock`. `runRunners` передавал `runner = true`, и это не меняло ничего — у бегуна те же ворота, что
  *  у армии. Дифф отчёта по 135 сценариям пуст побайтово, как и обязан быть у мёртвого. */
-internal fun PainAndGain.captureAllowed(ctx: Ctx, f: FlagInfo): Boolean = captureBlock(ctx, f) == null
+internal fun PainAndGain.captureAllowed(ctx: Ctx, f: FlagInfo, serious: Boolean = true): Boolean = captureBlock(ctx, f, serious) == null
 
 /** Какие ворота держат захват — null, если разрешено (v135, прибор к разрезу `tools/flagcut.py`): пять ворот отказывали
  *  молча, и в логе стояло только POISED, поэтому нельзя было сказать, ЧТО именно держит бегуна в клетке от свободного
- *  флага. Условия и их порядок те же, что были в captureAllowed. */
-internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo): String? =
-    when (val v = pass(captureGates(), CaptureCase(ctx, f), captureTally)) { is Verdict.Veto -> v.reason; else -> null }
+ *  флага. Условия и их порядок те же, что были в captureAllowed.
+ *  ОДИН ПИСАТЕЛЬ ПРИБОРА ВОРОТ (v451, пункт Г оператора): вердикт считается ЗДЕСЬ, где он возвращён, — а не замком `capSeen`
+ *  внутри ворот. Прежние приборы `capgate=` / `cap=` врали трояко: `capCount` — мутатор замка, и первый вызов на пару «тик ×
+ *  флаг» запирал остальные; холостые вызовы в головах ворот `contact.mass` (`rush.approach.expired`) и `first.fight`
+ *  (`contact.edge.lifted`) — без выхода — забирали учёт у настоящего запрета ниже в том же тике (недосчитаны `parity`, `enough`,
+ *  `first.fight`); `capOffered` рос на каждый вызов, включая ОЦЕНОЧНЫЕ из `Missions.kt` (множитель ценности флага), так что
+ *  знаменатель зависел от числа спрашивающих. «Всерьёз» и «оценка» различаются параметром [serious], а не замком: оценка
+ *  считается отдельно (`capeval=`), холостые приборы — своими счётчиками (`capidle=`), замка не касаясь. Старые поля печатаются
+ *  как прежде до ближайшей пересъёмки эталона (правило: существующие поля приборов не маскируются). */
+internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo, serious: Boolean = true): String? {
+    val v = pass(captureGates(), CaptureCase(ctx, f), captureTally)
+    val reason = (v as? Verdict.Veto)?.reason
+    if (!serious) capqEval++
+    else {
+        capqAsked++
+        // причина `parity(ours/floor)` вычисляемая — считается под одним именем, как и у прежнего `capCount(f, "parity")`
+        val why = reason?.let { if (it.startsWith("parity(")) "parity" else it }
+        if (why != null) { capqVeto++; capqWhy[why] = (capqWhy[why] ?: 0) + 1 }
+        // ...и по одному на пару «тик × флаг» — первый вопрос всерьёз решает (сравнимо с прежним `capgate=` / `cap=`, где
+        // первым мог быть и холостой вызов); множество трогают только вопросы всерьёз
+        if (capquTick != getTicks()) { capquTick = getTicks(); capquSeen.clear() }
+        if (capquSeen.add(f.id)) {
+            capquAsked++
+            if (why != null) { capquVeto++; capquWhy[why] = (capquWhy[why] ?: 0) + 1 }
+        }
+    }
+    return reason
+}
+
+// ==================== прибор ворот захвата с одним писателем (v451, пункт Г) ====================
+/** Вопросов всерьёз / из них запретов; по причинам; то же по одному на пару «тик × флаг»; оценочных вопросов; холостых
+ *  приборов в головах ворот (`rush.approach.expired`, `contact.edge.lifted`) — печать `capq=`, `capu=`, `capqu=`, `capeval=`,
+ *  `capidle=`. */
+internal var capqAsked = 0
+internal var capqVeto = 0
+internal val capqWhy = HashMap<String, Int>()
+internal var capquAsked = 0
+internal var capquVeto = 0
+internal val capquWhy = HashMap<String, Int>()
+internal var capquTick = -1
+internal val capquSeen = HashSet<String>()
+internal var capqEval = 0
+internal var capIdleRush = 0
+internal var capIdleEdge = 0
 
 /**
  * ОДИН ВОПРОС О ЗАХВАТЕ (v445, носитель вместо цепочки локальных): флаг и то, что ворота успели о нём узнать. Величину пишут
@@ -365,7 +406,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         Verdict.Next
     },
     Gate("contact.mass") {
-        if (fightImminentNow && rushStale) capCount(f, "rush.approach.expired")
+        if (fightImminentNow && rushStale) { capCount(f, "rush.approach.expired"); capIdleRush++ }   // холостой прибор: своим счётчиком тоже (v451)
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -411,8 +452,9 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
     },
     Gate("first.fight") {
         // ...и отдельно считаем то, что этой правкой снято: стычка одиночки вне массы
-        if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army))
-            capCount(f, "contact.edge.lifted")
+        if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army)) {
+            capCount(f, "contact.edge.lifted"); capIdleEdge++   // холостой прибор: своим счётчиком тоже (v451)
+        }
         // ПЕРВЫЙ БОЙ — БЕЗ ЛИШНЕГО ДЕБАФФА (v281). Пока его сомкнутая армия цела и размена ещё не было, флаг, после которого
         // флагов у нас станет больше, чем у него, не берётся: дебафф ложится на ВЛАДЕЛЬЦА, и платит его первый бой двух целых
         // армий, который решает аннигиляцию, а очки после выигранного боя берутся даром. Разбор 148 игр против ●ω<♥♪#6
