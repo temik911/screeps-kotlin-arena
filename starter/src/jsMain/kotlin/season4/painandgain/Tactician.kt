@@ -231,7 +231,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
  * ступень выживания в лестнице (как бегство, v240: выше приказа) и проход отхода командира; вышедший — в `rotatingIds`
  * (слот строя и пары гонки его не берут), возвращается, когда потерянных частей меньше порога.
  */
-internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enemyRetreating: Boolean) {
+internal fun stepOutWounded(army: List<Creep>, reach: Set<Int>, enemyRetreating: Boolean) {
     fun lost(c: Creep) = c.body.count { it.hits <= 0 }
     fun need(c: Creep) = if (isMelee(c)) 2 else 1
     val live = living(army)
@@ -1324,7 +1324,7 @@ internal fun PainAndGain.scoreCell(creep: Creep, x: Int, y: Int, target: Positio
         (outgoing + focusPull) * PAIR_W_OUTGOING - meleeThreat - separation - swampPenalty - pinned - lethalTerm
 }
 
-internal fun PainAndGain.outgoingValue(x: Int, y: Int, enemyCreeps: List<Creep>): Double {
+internal fun outgoingValue(x: Int, y: Int, enemyCreeps: List<Creep>): Double {
     var massValue = 0.0
     var anyInRange = false
     for (enemy in enemyCreeps) {
@@ -1335,7 +1335,7 @@ internal fun PainAndGain.outgoingValue(x: Int, y: Int, enemyCreeps: List<Creep>)
     return maxOf(massValue, 1.0)
 }
 
-internal fun PainAndGain.passable(x: Int, y: Int, blockedSet: Set<Int>, enemyPositions: Set<Int>): Boolean {
+internal fun passable(x: Int, y: Int, blockedSet: Set<Int>, enemyPositions: Set<Int>): Boolean {
     if (x < 0 || y < 0 || x > 99 || y > 99) return false
     val key = key(x, y)
     if (key in blockedSet || key in enemyPositions) return false

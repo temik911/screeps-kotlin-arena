@@ -98,41 +98,47 @@ internal inline fun key(x: Int, y: Int): Int = x * 100 + y
 /** Ключ клетки, на которой стоит объект (крип, флаг, точка пути). */
 internal inline val Position.key: Int get() = x * 100 + y
 
-// ==================== обёртки над фактами тика (до v446 жили в World.kt; читают таблицу тика `unitsNow` у получателя) ====================
+/** Факты крипов ЭТОГО тика (Facts.kt) — та же таблица, что `Ctx.units`; ссылка, а не таблица: `buildWorld` первым делом
+ *  ставит сюда новый объект, прошлый тик (в том числе оборванный) в нём не живёт. Читают обёртки `hasMelee` и родня.
+ *  До v454 — член `PainAndGain`: 27 функций были расширениями синглтона лишь затем, чтобы до неё дотянуться
+ *  (docs/pain-and-gain-architecture-2.md, этап 1). Пишет `buildWorld` (World.kt, уровень 2), объявление — здесь, на уровне 1. */
+internal var unitsNow: TickFacts = TickFacts(emptyList())
+
+// ==================== обёртки над фактами тика (до v446 жили в World.kt; читают таблицу тика `unitsNow`) ====================
 
 /** Факты крипа в этом тике (см. Facts.kt). Обёртки ниже — тонкие: определение каждого факта одно, в `CreepFacts`. */
-internal fun PainAndGain.unitOf(creep: Creep): CreepFacts = unitsNow.of(creep)
+internal fun unitOf(creep: Creep): CreepFacts = unitsNow.of(creep)
 
-internal fun PainAndGain.canMove(creep: Creep) = unitOf(creep).liveMove
+internal fun canMove(creep: Creep) = unitOf(creep).liveMove
 
-internal fun PainAndGain.hasMelee(creep: Creep) = unitOf(creep).liveMelee
+internal fun hasMelee(creep: Creep) = unitOf(creep).liveMelee
 
-internal fun PainAndGain.isMelee(creep: Creep) = unitOf(creep).bornMelee
+internal fun isMelee(creep: Creep) = unitOf(creep).bornMelee
 
-internal fun PainAndGain.hasRanged(creep: Creep) = unitOf(creep).liveRanged
+internal fun hasRanged(creep: Creep) = unitOf(creep).liveRanged
 
-internal fun PainAndGain.hasHeal(creep: Creep) = unitOf(creep).liveHeal
+internal fun hasHeal(creep: Creep) = unitOf(creep).liveHeal
 
-internal fun PainAndGain.hasWeapon(creep: Creep) = unitOf(creep).armed
+internal fun hasWeapon(creep: Creep) = unitOf(creep).armed
 
 /** Лекарь: без живого оружия, с живой HEAL. */
-internal fun PainAndGain.healerOnly(creep: Creep) = unitOf(creep).healerOnly
+internal fun healerOnly(creep: Creep) = unitOf(creep).healerOnly
 
 /** Раздет: ни живого оружия, ни живой HEAL (у тактика это звалось `wounded`, у командира `stripped`). */
-internal fun PainAndGain.stripped(creep: Creep) = unitOf(creep).stripped
+internal fun stripped(creep: Creep) = unitOf(creep).stripped
 
 /** В строю: живое оружие или живая HEAL. */
-internal fun PainAndGain.combatant(creep: Creep) = unitOf(creep).combatant
+internal fun combatant(creep: Creep) = unitOf(creep).combatant
 
 /** Рождён с оружием / рождён бойцом: часть в теле есть, живая или нет. */
-internal fun PainAndGain.bornArmed(creep: Creep) = unitOf(creep).bornArmed
-internal fun PainAndGain.bornCombatant(creep: Creep) = unitOf(creep).bornCombatant
+internal fun bornArmed(creep: Creep) = unitOf(creep).bornArmed
+internal fun bornCombatant(creep: Creep) = unitOf(creep).bornCombatant
 
 /** «Чистый мили», написание А — рождён мили: истинно и с выбитым оружием (см. CreepFacts.meleeOnlyBorn). */
-internal fun PainAndGain.meleeOnlyBorn(creep: Creep) = unitOf(creep).meleeOnlyBorn
+internal fun meleeOnlyBorn(creep: Creep) = unitOf(creep).meleeOnlyBorn
 
 /** «Чистый мили», написания Б и В — с живой ATTACK (см. CreepFacts.meleeOnlyLive). */
-internal fun PainAndGain.meleeOnlyLive(creep: Creep) = unitOf(creep).meleeOnlyLive
+internal fun meleeOnlyLive(creep: Creep) = unitOf(creep).meleeOnlyLive
 
 // ==================== тело и скорость (до v446 жили в World.kt; модель мощи уровнем ниже мира читала отсюда swampPeriod) ====================
 
@@ -156,7 +162,7 @@ internal fun PainAndGain.liveMoves(creep: Creep): Int {
 
 /** Период хода (тиков на клетку): после шага fatigue = вес × цена местности − 2 × живые MOVE, дальше
  *  −2×MOVE в тик, следующий ход при нуле (tick.js:105, movement.js:237). */
-internal fun PainAndGain.periodOn(weight: Int, moves: Int, rate: Int): Int {
+internal fun periodOn(weight: Int, moves: Int, rate: Int): Int {
     if (moves <= 0) return Int.MAX_VALUE / 4
     val left = weight * rate - 2 * moves
     return if (left <= 0) 1 else 1 + (left + 2 * moves - 1) / (2 * moves)

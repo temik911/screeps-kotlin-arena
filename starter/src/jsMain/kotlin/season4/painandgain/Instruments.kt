@@ -96,7 +96,7 @@ internal fun PainAndGain.cpuSummary() {
 
 // ==================== зонд ====================
 
-internal fun PainAndGain.probe(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>, home: Position, enemyHome: Position) {
+internal fun probe(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>, home: Position, enemyHome: Position) {
     println(
         "hello season4 pain-and-gain $BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick}"
@@ -126,15 +126,15 @@ internal fun PainAndGain.probe(flags: List<FlagInfo>, myCreeps: List<Creep>, ene
     for (c in enemyCreeps) println("enemy body ${c.id}: " + c.body.joinToString("") { partChar(it.type).toString() })
 }
 
-internal fun PainAndGain.partChar(type: BodyPartType): Char = when (type) {
+internal fun partChar(type: BodyPartType): Char = when (type) {
     TOUGH -> 'T'; MOVE -> 'M'; RANGED_ATTACK -> 'R'; ATTACK -> 'A'; HEAL -> 'H'; CARRY -> 'C'; WORK -> 'W'
 }
 
-internal fun PainAndGain.flagsSummary(flags: List<FlagInfo>): String =
+internal fun flagsSummary(flags: List<FlagInfo>): String =
     flags.joinToString(",") { "${typeChar(it.type)}${it.score}${if (it.ours) "+" else if (it.theirs) "-" else "0"}${if (it.occupant != null) (if (it.occupant.my) "s" else "e") else ""}${if (it.guards.isNotEmpty()) "g${it.guards.size}" else ""}" }
 
 /** Состав армий (живые части) — при каждом изменении: видно потери и покалеченных. */
-internal fun PainAndGain.logBodies(myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
+internal fun logBodies(myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
     if (!DEBUG_LOG) return
     val key = myCreeps.joinToString(",") { bodySummary(it) } + "|" + enemyCreeps.joinToString(",") { bodySummary(it) }
     if (key == lastBodiesKey) return
@@ -145,7 +145,7 @@ internal fun PainAndGain.logBodies(myCreeps: List<Creep>, enemyCreeps: List<Cree
 
 // ==================== диагностика ====================
 
-internal fun PainAndGain.logStuck(active: List<Creep>, enemyCreeps: List<Creep>) {
+internal fun logStuck(active: List<Creep>, enemyCreeps: List<Creep>) {
     for (c in active) {
         if (TrafficManager.stuckFor(c.id) != TrafficManager.STUCK_TICKS) continue
         val want = TrafficManager.lastDesiredOf(c.id)

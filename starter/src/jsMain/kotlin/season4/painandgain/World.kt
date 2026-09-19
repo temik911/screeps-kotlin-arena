@@ -128,11 +128,11 @@ internal fun PainAndGain.collectFlags(myCreeps: List<Creep>, enemyCreeps: List<C
     return result
 }
 
-internal fun PainAndGain.ownerName(code: Int) = when (code) { 1 -> "us"; -1 -> "enemy"; else -> "none" }
+internal fun ownerName(code: Int) = when (code) { 1 -> "us"; -1 -> "enemy"; else -> "none" }
 
 /** Множитель стека по таблице арены: удар/стрельба 0.8 → 0.6, лечение 0.75 → 0.5, входящий 1.1 (флаг один);
  *  дальше — тем же шагом (в матче сверяется с effects крипов). */
-internal fun PainAndGain.stackMul(type: String, count: Int): Double {
+internal fun stackMul(type: String, count: Int): Double {
     if (count <= 0) return 1.0
     return when (type) {
         EFF_ATTACK_MODIFIER, EFF_RANGED_ATTACK_MODIFIER -> 1.0 - 0.2 * count
@@ -142,7 +142,7 @@ internal fun PainAndGain.stackMul(type: String, count: Int): Double {
     }.coerceAtLeast(0.0)
 }
 
-internal fun PainAndGain.sideModsOf(flags: List<FlagInfo>, mine: Boolean): InfluenceMap.SideMods {
+internal fun sideModsOf(flags: List<FlagInfo>, mine: Boolean): InfluenceMap.SideMods {
     fun n(type: String) = flags.count { it.mine == mine && it.type == type }
     return InfluenceMap.SideMods(
         attack = stackMul(EFF_ATTACK_MODIFIER, n(EFF_ATTACK_MODIFIER)),
@@ -154,7 +154,7 @@ internal fun PainAndGain.sideModsOf(flags: List<FlagInfo>, mine: Boolean): Influ
 
 /** Эффекты сторон: по массиву effects крипов, если API его отдаёт, иначе по подсчёту флагов (таблица
  *  арены). Печатает то и другое при изменении — в матче они обязаны совпасть. */
-internal fun PainAndGain.applyEffects(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
+internal fun applyEffects(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
     val ours = sideModsOf(flags, true)
     val theirs = sideModsOf(flags, false)
     InfluenceMap.setSideMods(ours, theirs)
@@ -217,7 +217,7 @@ internal fun PainAndGain.flowTo(ctx: Ctx, target: Position, avoid: Boolean = fal
     return f
 }
 
-internal fun PainAndGain.avoidCells(ctx: Ctx): List<Position> = avoidCellsCache ?: run {
+internal fun avoidCells(ctx: Ctx): List<Position> = avoidCellsCache ?: run {
     val seen = HashSet<Int>()
     val out = ArrayList<Position>()
     for (e in ctx.combatEnemies) for (dx in sym(AVOID_RANGE)) for (dy in sym(AVOID_RANGE)) {
@@ -255,10 +255,10 @@ internal fun PainAndGain.packAt(ctx: Ctx, pos: Position, flow: IntArray, ourTrav
 }
 
 /** Сколько тиков враг не двигался (новый враг считается идущим). */
-internal fun PainAndGain.stationaryFor(e: Creep): Int = getTicks() - (Memory.enemyLastMove[e.id] ?: getTicks())
+internal fun stationaryFor(e: Creep): Int = getTicks() - (Memory.enemyLastMove[e.id] ?: getTicks())
 
 /** Враг не двигался последние STILL_TICKS тиков. */
-internal fun PainAndGain.stationary(e: Creep): Boolean = stationaryFor(e) >= STILL_TICKS
+internal fun stationary(e: Creep): Boolean = stationaryFor(e) >= STILL_TICKS
 
 /**
  * Флаг-цель армии: не наш, разрешённый к захвату; со стаей — по перевесу Ланчестера (ratio) и цене боя в
@@ -284,16 +284,16 @@ internal fun PainAndGain.stationary(e: Creep): Boolean = stationaryFor(e) >= STI
  * потенциал есть, а у скаута нулевой. Значит распоряжение v178 («разоружённый — не цель») не ослабляется
  * ни на йоту: оно про того, у кого оружие БЫЛО, а у скаута его не было никогда.
  */
-internal fun PainAndGain.scoutFoe(e: Creep): Boolean =
+internal fun scoutFoe(e: Creep): Boolean =
     InfluenceMap.potentialOf(e).let { it.melee + it.ranged + it.heal <= 0.0 } && canMove(e)
 
-internal fun PainAndGain.spotEdgeAt(e: Creep): Double {
+internal fun spotEdgeAt(e: Creep): Double {
     val k = e.key
     val d = InfluenceMap.dangerAt(k)
     return if (d <= 0.0) Double.MAX_VALUE else InfluenceMap.ourBurstAt(k) / d
 }
 
-internal fun PainAndGain.threatening(e: Creep, enemyCreeps: List<Creep>): Boolean {
+internal fun threatening(e: Creep, enemyCreeps: List<Creep>): Boolean {
     val q = InfluenceMap.profileOf(e)
     return q.melee + q.ranged > 0.0 || enemyCreeps.any { w -> w.id != e.id && getRange(w, e) <= HEAL_RANGE + 1 && bornArmed(w) }
 }
@@ -308,7 +308,7 @@ internal fun PainAndGain.threatening(e: Creep, enemyCreeps: List<Creep>): Boolea
  *  дольше), россыпи m12/m19/m24/m29/m30 spread и m29/m30 farm из победы в проигрыш; гистерезис в самом наступлении —
  *  тоже (см. pushing). Открытая находка. */
 
-internal fun PainAndGain.evasive(e: Creep): Boolean {
+internal fun evasive(e: Creep): Boolean {
     val h = Memory.enemyCellHist[e.id] ?: return false
     if (h.size < CHASE_WINDOW || Memory.ourCentroidHist.size < CHASE_WINDOW) return false
     val c0 = Memory.ourCentroidHist.first()
@@ -366,7 +366,7 @@ internal fun PainAndGain.flowNear(flow: IntArray, p: Position): Int {
 
 /** Ближайшая проходимая клетка: центр наших флагов попал в стенной блок, поле к нему было пустым (flow=-1), и
  *  армия стояла на месте, пока враг подходил (матч 11, t=90–103). */
-internal fun PainAndGain.passableNear(p: Position): Position {
+internal fun passableNear(p: Position): Position {
     if (!DistanceMap.isTerrainWall(p.x, p.y)) return p
     for (r in 1..30) for (dx in sym(r)) for (dy in sym(r)) {
         if (maxOf(abs(dx), abs(dy)) != r) continue
@@ -402,7 +402,7 @@ internal fun PainAndGain.enemyArrivalTicks(ctx: Ctx) {
 
 
 /** Хранители флагов (см. KEEP_RANGE): снятие, потом назначение. */
-internal fun PainAndGain.enemyCreeps(ctx: Ctx): List<Creep> = ctx.enemyCreeps
+internal fun enemyCreeps(ctx: Ctx): List<Creep> = ctx.enemyCreeps
 
 // ==================== факты о флагах (v446: до этапа 5 жили у заданий бегунов, а читал их и мир — ребро вверх) ====================
 
@@ -427,26 +427,26 @@ internal fun PainAndGain.guardFlag(ctx: Ctx, c: Creep): FlagInfo? {
 // СВОЙ список или предикат по памяти, меняющейся за тик, полем `Ctx` стать не может: она обязана считаться там же и
 // тогда же, где считалась. Поэтому это функции — определение одно, точки вычисления прежние. Выборки по спискам тика с
 // неизменным за тик предикатом — поля `Ctx` (side, threats, armedArmy…).
-internal fun PainAndGain.living(creeps: List<Creep>) = creeps.filter { it.hits > 0 }
-internal fun PainAndGain.livingCombatants(creeps: List<Creep>) = creeps.filter { it.hits > 0 && (combatant(it)) }
-internal fun PainAndGain.armedOf(creeps: List<Creep>) = creeps.filter { hasWeapon(it) }
-internal fun PainAndGain.armedMatesOf(creeps: List<Creep>, self: Creep) = creeps.filter { it.id != self.id && hasWeapon(it) }
-internal fun PainAndGain.rangedOf(creeps: List<Creep>) = creeps.filter { hasRanged(it) }
-internal fun PainAndGain.withHeal(creeps: List<Creep>) = creeps.filter { hasHeal(it) }
-internal fun PainAndGain.pureMeleeOf(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) }
+internal fun living(creeps: List<Creep>) = creeps.filter { it.hits > 0 }
+internal fun livingCombatants(creeps: List<Creep>) = creeps.filter { it.hits > 0 && (combatant(it)) }
+internal fun armedOf(creeps: List<Creep>) = creeps.filter { hasWeapon(it) }
+internal fun armedMatesOf(creeps: List<Creep>, self: Creep) = creeps.filter { it.id != self.id && hasWeapon(it) }
+internal fun rangedOf(creeps: List<Creep>) = creeps.filter { hasRanged(it) }
+internal fun withHeal(creeps: List<Creep>) = creeps.filter { hasHeal(it) }
+internal fun pureMeleeOf(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) }
 /** Ходячие и уже родившиеся: те, кому командир и строй вообще могут дать клетку. */
-internal fun PainAndGain.mobileOf(creeps: List<Creep>) = creeps.filter { canMove(it) && !it.spawning }
+internal fun mobileOf(creeps: List<Creep>) = creeps.filter { canMove(it) && !it.spawning }
 /** Бойцы линии: чистые мили / стрелки, не ушедшие в ротацию (читает память — считается в момент вызова). */
-internal fun PainAndGain.lineMelees(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
-internal fun PainAndGain.lineRangeds(creeps: List<Creep>) = creeps.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
+internal fun lineMelees(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
+internal fun lineRangeds(creeps: List<Creep>) = creeps.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
 /** Состав гонки за флагом: вооружённый, на полной скорости, не хранитель и не в ротации (память — в момент вызова). */
 internal fun PainAndGain.raceCapable(creeps: List<Creep>) = creeps.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Memory.keeperIds && it.id !in Memory.rotatingIds }
 /** Отряд за флагами и остальные — по памяти В МОМЕНТ ВЫЗОВА: стратег правит detachedIds и cmdDetach посреди тика. */
-internal fun PainAndGain.detachedRunners(ctx: Ctx) = ctx.runners.filter { it.id in Memory.detachedIds }
-internal fun PainAndGain.notDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.detachedIds }
-internal fun PainAndGain.notCmdDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.cmdDetach }
+internal fun detachedRunners(ctx: Ctx) = ctx.runners.filter { it.id in Memory.detachedIds }
+internal fun notDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.detachedIds }
+internal fun notCmdDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.cmdDetach }
 /** Его вооружённые в досягаемости боя от точки (флага). */
-internal fun PainAndGain.foesInEngage(foes: List<Creep>, pos: Position) = foes.filter { getRange(it, pos) <= ENGAGE_RANGE }
+internal fun foesInEngage(foes: List<Creep>, pos: Position) = foes.filter { getRange(it, pos) <= ENGAGE_RANGE }
 /** Наши флаги из списка (до `Ctx` — в счёте очков; в `Ctx` это поле ourFlags). */
 internal fun oursOf(flags: List<FlagInfo>) = flags.filter { it.ours }
 /** Список без этого крипа. */
@@ -480,11 +480,11 @@ internal fun PainAndGain.pathTicks(creep: Creep, flow: IntArray, startCell: Int)
     return ticks
 }
 
-internal fun PainAndGain.inContact(enemies: List<Creep>, ours: List<Creep>): Boolean =
+internal fun inContact(enemies: List<Creep>, ours: List<Creep>): Boolean =
     enemies.any { e -> ours.any { getRange(e, it) <= RANGED_RANGE + 1 } }
 
 /** Матрица пути захватчика: опасность + свои крипы дороже + не наши флаги стены, кроме allowCell (его флаг). */
-internal fun PainAndGain.crowdMatrixOf(ctx: Ctx, allowCell: Int): CostMatrix {
+internal fun crowdMatrixOf(ctx: Ctx, allowCell: Int): CostMatrix {
     val crowdMatrix = ctx.rawDanger.clone()
     for (ally in ctx.active) {
         val current = crowdMatrix.get(ally.x, ally.y)
@@ -527,13 +527,13 @@ internal fun PainAndGain.greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>
     return best
 }
 
-internal fun PainAndGain.pathStep(creep: Creep, target: Position, range: Int, dangerMatrix: CostMatrix): Position? {
+internal fun pathStep(creep: Creep, target: Position, range: Int, dangerMatrix: CostMatrix): Position? {
     val goal = SearchGoal(pos = target, range = range)
     val result = searchPath(creep, goal, SearchPathOptions(costMatrix = dangerMatrix))
     return result.path.firstOrNull()
 }
 
-internal fun PainAndGain.fleeStep(creep: Creep, enemies: List<Creep>, dangerMatrix: CostMatrix, range: Int = RANGED_RANGE): Position? {
+internal fun fleeStep(creep: Creep, enemies: List<Creep>, dangerMatrix: CostMatrix, range: Int = RANGED_RANGE): Position? {
     if (enemies.isEmpty()) return null
     val goals = enemies.map { e -> SearchGoal(pos = InfluenceMap.cell(e.x, e.y), range = range) }.toTypedArray()
     val result = searchPath(creep, goals, SearchPathOptions(flee = true, costMatrix = dangerMatrix))
@@ -542,7 +542,7 @@ internal fun PainAndGain.fleeStep(creep: Creep, enemies: List<Creep>, dangerMatr
 
 /** Центр крупнейшей группы (v120, см. USE_MASS_CLUSTER_CENTROID): сид — крип с наибольшим числом своих из списка в MASS_RANGE
  *  (при равенстве — больший id), центр — по его группе; без переключателя — среднее по всем. */
-internal fun PainAndGain.clusterCentroid(cs: List<Creep>): Position? {
+internal fun clusterCentroid(cs: List<Creep>): Position? {
     if (cs.size <= 2) return centroidOf(cs)
     val seed = cs.maxWithOrNull(compareBy<Creep>({ c -> cs.count { getRange(c, it) <= MASS_RANGE } }, { it.id })) ?: return null
     return centroidOf(cs.filter { getRange(seed, it) <= MASS_RANGE })
@@ -892,7 +892,7 @@ internal class RememberTickOut(
 )
 
 /** ПАМЯТЬ ТИКА (v257, этап 10; сегмент tickBody после исполнения): стойки полей, его прошлые клетки и ходы, история центра наших вооружённых и его клеток. Перенесено дословно. */
-internal fun PainAndGain.rememberTick(ctx: Ctx, bw: BuildWorldOut): RememberTickOut {
+internal fun rememberTick(ctx: Ctx, bw: BuildWorldOut): RememberTickOut {
     InfluenceMap.pruneStances(bw.myCreeps.mapTo(HashSet()) { it.id })
     // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
     for (e in bw.enemyCreeps) {

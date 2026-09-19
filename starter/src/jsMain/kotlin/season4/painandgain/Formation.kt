@@ -457,7 +457,7 @@ internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>
 /** Расстановка боя (см. USE_PLAN): клетки с признаками, роли по порядку признаков, жадное назначение. Выход — slotOf,
  *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
  *  клетка занята. */
-internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, enemyCreeps: List<Creep>, slotOf: MutableMap<String, Position>, focusTarget: Creep?) {
+internal fun planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, enemyCreeps: List<Creep>, slotOf: MutableMap<String, Position>, focusTarget: Creep?) {
     val melees = lineMelees(army)
     val rangeds = lineRangeds(army)
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }

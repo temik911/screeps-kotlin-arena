@@ -55,7 +55,7 @@ import kotlin.math.sqrt
 // ==================== захватчики ====================
 
 /** Флаг, за которым стоит идти захватчику: не наш и без врага на клетке, или наш пустой (охрана клеткой). */
-internal fun PainAndGain.wantsRunner(f: FlagInfo): Boolean {
+internal fun wantsRunner(f: FlagInfo): Boolean {
     val occ = f.occupant
     if (occ != null && !occ.my) return false
     return !f.ours || occ == null

@@ -101,7 +101,7 @@ internal fun PainAndGain.fightTicks(enemies: List<Creep>, ours: List<Creep>): In
  * пробить». ⚠️ Разрыв контакта как лечение симптома ОТВЕРГНУТ живым замером (v415/v416: подключение записанной, но
  * мёртвой ветки KITE дало 6-26 против базы 5-27 на `Coldkimchi#1`) — предмет в самой мере, а не в реакции на неё.
  */
-internal fun PainAndGain.lanchester(dps: Double, enemyHeal: Double, hits: Double): Double {
+internal fun lanchester(dps: Double, enemyHeal: Double, hits: Double): Double {
     val net = dps - enemyHeal
     val body = maxOf(0.0, hits)
     return if (net >= 0.0) sqrt(net * body) else -sqrt(-net * body)
@@ -175,7 +175,7 @@ internal fun PainAndGain.weightedHits(unit: Creep, opponents: List<Creep>, hitsK
     return fightingHits(unit) * share * hitsK / taken
 }
 
-internal fun PainAndGain.hypoMods(type: String, k: Double) = HypoMods(
+internal fun hypoMods(type: String, k: Double) = HypoMods(
     ranged = if (type == EFF_RANGED_ATTACK_MODIFIER) k else 1.0,
     melee = if (type == EFF_ATTACK_MODIFIER) k else 1.0,
     heal = if (type == EFF_HEAL_MODIFIER) k else 1.0,

@@ -18,9 +18,9 @@ import screeps.api.WORK
 // ради трёх функций форматирования. Перенесены дословно.
 
 /** Число из константы арены (внешнее объявление может оказаться undefined — тогда запасное). */
-internal fun PainAndGain.num(v: dynamic, fallback: Double): Double = if (jsTypeOf(v) == "number") v.unsafeCast<Double>() else fallback
+internal fun num(v: dynamic, fallback: Double): Double = if (jsTypeOf(v) == "number") v.unsafeCast<Double>() else fallback
 
-internal fun PainAndGain.typeChar(type: String): Char = when (type) {
+internal fun typeChar(type: String): Char = when (type) {
     EFF_ATTACK_MODIFIER -> 'A'
     EFF_RANGED_ATTACK_MODIFIER -> 'R'
     EFF_HEAL_MODIFIER -> 'H'
@@ -29,7 +29,7 @@ internal fun PainAndGain.typeChar(type: String): Char = when (type) {
 }
 
 /** Сводка тела: T10M4R3H1 (только живые части). */
-internal fun PainAndGain.bodySummary(creep: Creep): String {
+internal fun bodySummary(creep: Creep): String {
     val order = listOf(TOUGH to 'T', MOVE to 'M', RANGED_ATTACK to 'R', ATTACK to 'A', HEAL to 'H', CARRY to 'C', WORK to 'W')
     val sb = StringBuilder()
     for ((type, ch) in order) {
