@@ -88,7 +88,18 @@ grind() { if [[ "$TAG" == land || "$TAG" == gate ]]; then return; fi; run "$@"; 
 # on the five maps where it actually parks (29, 30, 31, 33, 34); on 28, 32 and 35 our army leaves flags unoccupied, the
 # blob keeps walking back onto them and the line is the farm race again, so those three are not listed twice
 # mode (`zsh regress.sh <tag>`), never by the landing gate. `zsh regress.sh gate` runs the gate only (~1.5 min).
+# БЫСТРЫЙ ЦИКЛ (20.09.2026, docs/pain-and-gain-architecture-2.md, этап 0): ONLY=<файл с метками сценариев, по одной на строку>
+# оставляет в прогоне только их — метка та же, что во втором столбце отчёта (`match5:rush`, `ghost:<id>:ghost`). Список даёт
+# `gategap.py --rows <строки таблиц> --list`, зовёт это `identity.sh --rows`. Полный гейт остаётся обязательным перед посадкой:
+# tools/land.sh переменную ONLY не ставит.
+typeset -A ONLY_SET
+if [[ -n "${ONLY:-}" ]]; then while IFS= read -r l; do [[ -n "$l" ]] && ONLY_SET[$l]=1; done < "$ONLY"; fi
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario — collected here, executed in parallel below
+  if [[ -n "${ONLY:-}" ]]; then
+    local lb
+    if [[ "$1" == replay:* ]]; then lb="${1#replay:}"; lb="ghost:${lb%%.*}:$3"; else lb="${1#map-}"; lb="${lb%.txt}:$3"; fi
+    [[ -n "${ONLY_SET[$lb]:-}" ]] || return 0
+  fi
   N=$((N + 1)); print -r -- "$N $1 $2 $3 $TAG $PLANDIR" >> "$PLANDIR/plan"
 }
 run map-match1.txt -      grab
@@ -477,6 +488,9 @@ if [[ -x "$(command -v python3)" ]]; then
 else
   printf '%-4s %-22s %-40s | errors: %s \n' FAIL "lint+graph" "python3 not found" 1
 fi
+
+# прогон быстрого цикла — не посадочный: строка без PASS останавливает tools/land.sh, если ONLY утёк в его окружение
+[[ -n "${ONLY:-}" ]] && printf '%-4s %-22s %-40s | errors: %s \n' PART "only" "$N scenarios of the gate (ONLY) - not a landing run" 0
 
 # ЭКСПОНИРОВАННОСТЬ ПРОГОНА (11.09.2026). Пустой дифф отчёта значит одно из двух — «правка мертва» или «стенд не
 # экспонирован к тому, что она трогает», — и по самому отчёту их не различить. Цена этого различия измерена: командир
