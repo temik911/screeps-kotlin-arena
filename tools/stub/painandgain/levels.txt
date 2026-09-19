@@ -27,7 +27,6 @@ known: Forecast>PainAndGain     # этап 5: нужная величина пр
 known: Formation>PainAndGain    # этап 5: нужная величина приходит параметром
 known: InfluenceMap>World       # этап 5: sym — туда же
 known: World>Forecast           # этап 5: модель мощи — отдельный файл уровня 1
-known: World>Missions           # этап 5: heldFlag / guardFlag — факты о флагах, в World
 # — рёбра вверх, которых раздел 2.5 не называет (находка этапа 0, решаются на этапе 5 вместе с пересмотром таблицы):
 known: Strategist>Fight
 known: Strategist>Formation
