@@ -15,9 +15,10 @@ import base64, json, os, socket, struct, urllib.error, urllib.request
 PORT = 9222
 APP = ("/Users/zakharchukart/Library/Application Support/Steam/steamapps/common/ScreepsArena/"
        "screeps_arena.app/Contents")
-# The executable by its ABSOLUTE path: arukuka/screeps-arena-tools (replays with both sides' attacks and heals, see
-# docs/pain-and-gain-research.md) finds the client with `ps … | grep screeps_arena.app/Contents/MacOS/screeps_arena`,
-# and a client started as `./MacOS/screeps_arena` is invisible to it ("Screeps: Arena is not running", 05.09.2026).
+# The executable by its ABSOLUTE path: the restart scripts find (and stop) the client with
+# `pkill -f screeps_arena.app/Contents/MacOS/screeps_arena`, and a client started as `./MacOS/screeps_arena` is
+# invisible to that pattern. (Until 19.09.2026 arukuka's replay fetcher relied on the same `ps` lookup; replays now
+# come through the API — `tools/match-log.py replay` — and nothing here calls that tool any more.)
 LAUNCH_HINT = (f"start the client with remote debugging:\n"
                f'    cd "{APP}" && SteamAppId=1137320 nohup "{APP}/MacOS/screeps_arena" '
                f"--remote-debugging-port={PORT} >/tmp/arena_client.log 2>&1 &")

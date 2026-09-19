@@ -2,7 +2,7 @@
 // match log) + a scripted enemy. Usage (see README.md and docs/pain-and-gain.md):
 //   node --import ./register.mjs run.mjs <ticks> none|scouts|grab|rush|brawl|greedy|army|hunter|kite|sleeper|nine|roost|farm|scatter|camp|tour|split (+shy: the parked blob steps aside from our armed creeps and comes back)|screen (+focus: the line keeps three from our most forward creep; +flagless: the enemy's runners idle; +weak: a remnant of eight; +fast: the screen without its formation gate; +poke, +wall, +blob: the line's forms, see README)
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> SLEEP=<tick> BOT=<bundle url>; logs go to ./out/
-//   REPLAY=<id>.replay.json.gz + scenario `ghost`: the map, flags, bodies and start cells come from a live replay (arukuka's tool,
+//   REPLAY=<id>.replay.json.gz + scenario `ghost`: the map, flags, bodies and start cells come from a live replay (`tools/match-log.py replay`,
 //   see tools/replay.py) and the enemy's creeps walk the cells the replay recorded, tick for tick, while our bot plays live —
 //   the only stand where the opponent's formation, tempo and entry points are the real ones (tool 3 of the analysis set)
 import { writeFileSync, mkdirSync } from 'node:fs';
