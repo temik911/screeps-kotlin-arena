@@ -276,13 +276,13 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo, serious: Boolean = 
         capqAsked.n++
         // причина `parity(ours/floor)` вычисляемая — считается под одним именем, как и у прежнего `capCount(f, "parity")`
         val why = reason?.let { if (it.startsWith("parity(")) "parity" else it }
-        if (why != null) { capqVeto.n++; capqWhy[why] = (capqWhy[why] ?: 0) + 1 }
+        if (why != null) { capqVeto.n++; capqWhy.bump(why) }
         // ...и по одному на пару «тик × флаг» — первый вопрос всерьёз решает (сравнимо с прежним `capgate=` / `cap=`, где
         // первым мог быть и холостой вызов); множество трогают только вопросы всерьёз
         if (capquTick != getTicks()) { capquTick = getTicks(); capquSeen.clear() }
         if (capquSeen.add(f.id)) {
             capquAsked.n++
-            if (why != null) { capquVeto.n++; capquWhy[why] = (capquWhy[why] ?: 0) + 1 }
+            if (why != null) { capquVeto.n++; capquWhy.bump(why) }
         }
     }
     return reason
@@ -294,12 +294,12 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo, serious: Boolean = 
  *  `capidle=`. */
 internal val capqAsked = Gauges.counter("capq", 1)
 internal val capqVeto = Gauges.counter("capq")
-internal val capqWhy = HashMap<String, Int>()
+internal val capqWhy = Gauges.labelledOnly("capqWhy")
 internal val capquAsked = Gauges.counter("capqu", 1)
 internal val capquVeto = Gauges.counter("capqu")
-internal val capquWhy = HashMap<String, Int>()
+internal val capquWhy = Gauges.labelled("capu")
 internal var capquTick = -1
-internal val capquSeen = HashSet<String>()
+internal val capquSeen = Gauges.marks("capqu")
 internal val capqEval = Gauges.counter("capeval")
 internal val capIdleRush = Gauges.counter("capidle")
 internal val capIdleEdge = Gauges.counter("capidle", 1)
@@ -344,7 +344,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
     },
     Gate("noFoe") {
         if (capTick != getTicks()) { capTick = getTicks(); capSeen.clear() }
-        if (f.id !in capSeen) capOffered++
+        if (f.id !in capSeen) capOffered.n++
         if (ctx.combatEnemies.isEmpty()) return@Gate Verdict.Allow
         Verdict.Next
     },
@@ -603,9 +603,9 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
 ).also { captureGateRows = it }
 
 /** Считает отказ один раз на пару «тик × флаг» и возвращает причину как есть. */
-internal fun PainAndGain.capCount(f: FlagInfo, why: String): String {
+internal fun capCount(f: FlagInfo, why: String): String {
     if (capTick != getTicks()) { capTick = getTicks(); capSeen.clear() }
-    if (capSeen.add(f.id)) { capBlocked[why] = (capBlocked[why] ?: 0) + 1 }
+    if (capSeen.add(f.id)) { capBlocked.bump(why) }
     return why
 }
 
@@ -688,17 +688,17 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
     if (group.isEmpty()) return null
     var best: Objective? = null
     for (f in ctx.flags) {
-        objDropN++
-        if (f.ours) { objDrop["ours"] = (objDrop["ours"] ?: 0) + 1; continue }
-        if (onlyFlagId != null && f.id != onlyFlagId) { objDrop["cpu"] = (objDrop["cpu"] ?: 0) + 1; continue }   // страховка CPU (v131c)
-        if (!captureAllowed(ctx, f)) { objDrop["gate"] = (objDrop["gate"] ?: 0) + 1; continue }
+        objDropN.n++
+        if (f.ours) { objDrop.bump("ours"); continue }
+        if (onlyFlagId != null && f.id != onlyFlagId) { objDrop.bump("cpu"); continue }   // страховка CPU (v131c)
+        if (!captureAllowed(ctx, f)) { objDrop.bump("gate"); continue }
         // СВОЯ ПОЛОВИНА (v312, см. GROUP_SAFE_DMG): против фермера гонка решается не числом захватов, а числом
         // УДЕРЖАННЫХ флагов, а удержать можно те, до которых ему дальше, чем нам. Свои R3, A3, H4 и центральный D5 — это
         // 15 очков в тик против его 10; контрфакт разбора (гарнизоны на своих R3, A3 и обоих H4) давал 30,4 тыс. : 18,1 тыс.
         // и 20 побед из 21. Флаг его половины берётся, только когда своя уже наша
         if (groupSafe && getRange(f.pos, ctx.home) > getRange(f.pos, ctx.enemyHome) &&
             ctx.flags.any { !it.ours && getRange(it.pos, ctx.home) <= getRange(it.pos, ctx.enemyHome) }) {
-            objDrop["far"] = (objDrop["far"] ?: 0) + 1; continue
+            objDrop.bump("far"); continue
         }
         // ЦЕЛЬ АРМИИ НЕ ДУБЛИРУЕТ ФЛАГ БЕГУНА (v216). Обе соседние раздачи это уже проверяют — `commandRace`
         // («флаг, взятый бегуном, не дублируем») и `grabberOf` (исключает флаг-цель), — а самая дорогая, цель
@@ -711,16 +711,16 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
         // без права встать, — армия теряла цель, до которой бегун не дойдёт никогда
         val flow = flowTo(ctx, f.pos)
         val travel = group.maxOf { pathTicks(it, flow, it.key) }
-        if (travel >= Int.MAX_VALUE / 4) { objDrop["nopath"] = (objDrop["nopath"] ?: 0) + 1; continue }
+        if (travel >= Int.MAX_VALUE / 4) { objDrop.bump("nopath"); continue }
         if (escapeNeeded) {
             // покинутую точку уклонения армия не идёт «захватывать»: у R3 (13,49) счёт места упал, точка покинута — и
             // тут же выбрана целью в шести тиках, навстречу врагу (матч 12, t=188)
             val left = evadeLeft
-            if (left != null && left.x == f.pos.x && left.y == f.pos.y) { objDrop["evadeLeft"] = (objDrop["evadeLeft"] ?: 0) + 1; continue }
+            if (left != null && left.x == f.pos.x && left.y == f.pos.y) { objDrop.bump("evadeLeft"); continue }
             // только флаг с выходом (см. ESCAPE_MARGIN, REACTION_LAG): за H4 в угол (8,90) армия шла 52 тика, пока
             // враг шёл на неё с 80 клеток (матч 11); за R3 (13,49) — 41 тик вдоль западного края при спящем враге,
             // и тот пошёл на полпути (матч 12)
-            if (exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) { objDrop["exit"] = (objDrop["exit"] ?: 0) + 1; continue }
+            if (exitMargin(ctx, f.pos, travel) < ESCAPE_MARGIN) { objDrop.bump("exit"); continue }
         }
         // ⚠️ ПРОБОВАНО И ОТВЕРГНУТО (матч 23): запрет марша длиннее, чем врагу дойти до нашей армии, когда мы впереди
         // с растущим отрывом. Ни одного проигрыша стенда он не предотвращает, а бот становится пассивен всякий раз,
@@ -739,8 +739,8 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
         // оставалась без цели три четверти матча, и мы держали 1,9 флага против его 4,8
         val ok = pack.isEmpty() || (farmerQuietNow) || groupSafe ||
             (ourPowerOf(group, pack) >= enemyPowerOf(pack, group) * ratio && fightCost(pack, group) <= group.maxOf { speedSlack(it) })
-        if (!ok) { objDrop["pack"] = (objDrop["pack"] ?: 0) + 1; continue }
-        objDrop["taken"] = (objDrop["taken"] ?: 0) + 1
+        if (!ok) { objDrop.bump("pack"); continue }
+        objDrop.bump("taken")
         // гистерезис: текущая цель ценнее на четверть, чтобы не прыгать между равными; дорогой по силе — позже
         val value = f.swing * captureCost(ctx, f) / (travel + 10) * (if (current) 1.25 else 1.0)
         if (best == null || value > best.value) best = Objective(f, pack, value, travel)
@@ -1685,8 +1685,8 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // признак для режима боя при наступлении (см. ниже): мы позади по размену хитов, то есть его лечение
     // перекрывает наш урон — ровно тот случай, ради которого концентрация и нужна
     val healingWins = enemyDamageTaken < ourDamageTaken
-    cmdWhy[strat.cmdWhyNow] = (cmdWhy[strat.cmdWhyNow] ?: 0) + 1
-    cmdWhyN++
+    cmdWhy.bump(strat.cmdWhyNow)
+    cmdWhyN.n++
     // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
     // (контакт, сомкнутость или шесть рядом, постура, огонь, отсутствие отхода и затора) целиком перешли в
     // выбор режима выше — это то же самое, сказанное один раз, и дальше режимы можно наполнять по одному
@@ -1716,7 +1716,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // 0,45 до 0,27. Значит, пустую постуру держит другой источник, и его надо назвать числом, а не гадать. Порядок
     // проверки — порядок власти над постурой: командир перезаписывает её последним
     if (posture == Posture.ANNIHILATE && !meas.exchangeLive) {
-        annEmptyAll++
+        annEmptyAll.n++
         val src = when {
             cmdMode == CmdMode.FIGHT -> "cmd"
             pushing -> "push"
@@ -1727,7 +1727,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
             meas.contact -> "warm"
             else -> "held"
         }
-        annEmpty[src] = (annEmpty[src] ?: 0) + 1
+        annEmpty.bump(src)
     }
     // ПАРА К СБОРУ (v218, см. gatherSpread). Сбор (rallyTo) и сплочение (cohesionHold) намеренно молчат в
     // HOLD, и основание записано рядом с ними: «в HOLD цель — точка, к ней сходятся и так». Прибор проверяет
@@ -2268,9 +2268,9 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
             holdLine -> "holdLine"
             else -> "gate"
         }
-        objNone[why] = (objNone[why] ?: 0) + 1
+        objNone.bump(why)
     }
-    objAll++
+    objAll.n++
     cpuMark("a.obj")
     // дебют без угла (v100, USE_OPENING_AT_POST): бросок далеко — не уклонение, а пост. И «далеко» значит ДАЛЕКО
     // (v135, см. USE_RUSH_FAR_NEEDS_RANGE): условие правила было только про силу, поэтому при паритете оно гасило
@@ -2785,7 +2785,7 @@ internal val capOppSum = Gauges.counter("capopp")
 
 internal val capAllSum = Gauges.counter("capopp", 1)
 
-internal var capOffered = 0
+internal val capOffered = Gauges.counter("capgate", 1)
 
 /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
 internal val pushHeldTicks = Gauges.counter("pushheld")
@@ -2835,13 +2835,13 @@ internal val budgetSum = Gauges.counter("budget")
 
 internal val budgetTicks = Gauges.counter("budget", 1)
 
-internal var objAll = 0
+internal val objAll = Gauges.counter("objnone", 1)
 
-internal var objDropN = 0
+internal val objDropN = Gauges.counter("objdrop", 1)
 
 internal val stateEventTicks = Gauges.counter("evt")
 
-internal var cmdWhyN = 0
+internal val cmdWhyN = Gauges.counter("cmdwhy", 1)
 
 /** Пара «отпущено во время боя / отпущено всего» (v215, наблюдение оператора «отряд распадается»). */
 internal val splitFight = Gauges.counter("split")
@@ -2944,6 +2944,32 @@ internal val stalemateTicks = Gauges.counter("pat")                        // с
 
 internal val patMax = Gauges.counter("pat", 1)                                // самый длинный пат за матч — прибор, чтобы правило не мерили вслепую
 
-internal var annEmptyAll = 0
+internal val annEmptyAll = Gauges.counter("annempty", 1)
 
 internal var touchMin = 1.0                            // минимум за матч — прибор
+
+internal val capBlocked = Gauges.labelled("cap")
+
+/** Почему у армии нет флаг-цели: пара по причинам против всех тиков (v216). */
+internal val objNone = Gauges.labelled("objnone")
+
+/** ...и разложение САМОГО выбора: какой фильтр снял флаг-кандидата (v216). */
+internal val objDrop = Gauges.labelled("objdrop")
+
+/** РАЗЛОЖЕНИЕ НЕВХОДА В РЕЖИМ БОЯ (v215). Прежний `cmdBlocked` НАЗЫВАЛ причину, не проверив её: он писал
+ *  «posture», если постура не ANNIHILATE, — а условие боя постуры ANNIHILATE не требует вовсе, оно требует
+ *  `!pushing && underTheirFire && (сомкнут || шесть рядом) && постура не отход`. По логам рейтинговой серии
+ *  из-за этого выходило, будто виновата постура. Прибор, называющий не тот множитель, отправляет чинить не
+ *  то место, поэтому причина берётся из ТОЙ ЖЕ цепочки веток, что и сам режим. */
+internal val cmdWhy = Gauges.labelled("cmdwhy")
+
+/** Разложение тиков ANNIHILATE без размена по источнику (v221, см. annEmptyAll): cmd — режим боя командира,
+ *  push — толчок, spot — очаг, melee — его мили вплотную, corner — загнанная группа, still — контакт со стоящим
+ *  (USE_WARM_NEEDS_HIS_MOVE), warm — тёплый контакт (с правкой обязан быть нулём), held — постура удержана
+ *  гистерезисом без контакта. */
+internal val annEmpty = Gauges.labelled("annempty")
+
+internal val capSeen = Gauges.marks("cap")      // (тик, флаг) считается один раз, а не по разу на вызывающего
+
+/** `capgate=запретов/предъявлений`: числитель — сумма словаря причин `cap=`. */
+private val capgateDeclared = Gauges.computed("capgate") { capBlocked.sum().toString() }

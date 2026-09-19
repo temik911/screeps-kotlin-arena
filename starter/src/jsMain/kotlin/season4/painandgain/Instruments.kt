@@ -380,17 +380,17 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
         println(Gauges.line(T_LINE))
         // ПЕРЕПИСЬ (v203): только ненулевые ветки, накопительно за матч. Сумма stepCount обязана равняться
         // размеру армии, умноженному на число тиков, — если не равна, перепись врёт, и всё на ней построенное тоже
-        println("rung t=${getTicks()}: why=" + rungCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " step=" + stepCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
+        println("rung t=${getTicks()}: why=" + rungCount.shown() +
+            " step=" + stepCount.shown() +
             " pass=" + Gauges.labelledAt("pass").shown() +
-            " sum=${stepCount.values.sum()}")
+            " sum=${stepCount.sum()}")
         // ...и ТА ЖЕ ПЕРЕПИСЬ ПО ПРЕДЛОЖЕНИЯМ (v252, этап 9): «задание отряда . терм» и приоритет; сумма обязана совпасть с
         // суммой rung — оба счёта растут один раз на крипа армии за тик
         // ДОСТИЖИМОСТЬ ПО СТРОКАМ ТАБЛИЦ (v444, прибор `reach t=`, см. Tables.kt): тег:выиграла/условие истинно/перекрыта порядком
         println("reach t=${getTicks()}: ${ladderTally.print()} ${stepsTally.print()} ${captureTally.print()} ${fightTally.print()} ${Strategist.postureTally.print()} ${Strategist.modeTally.print()} ${Strategist.whyTally.print()} ${pushTally.print()} err=${ladderTally.err + stepsTally.err + Strategist.postureTally.err + Strategist.modeTally.err + Strategist.whyTally.err + pushTally.err}")
-        println("tac t=${getTicks()}: mt=" + tacCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " prio=" + prioCount.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" } +
-            " sum=${prioCount.values.sum()}")
+        println("tac t=${getTicks()}: mt=" + tacCount.shown() +
+            " prio=" + prioCount.shown() +
+            " sum=${prioCount.sum()}")
         // ПОЛЯ: пики печатаются, чтобы обнулившееся поле было ВИДНО — прибор, умеющий сказать только
         // «поле построено», прибором не является
         if (FIELD_LOG) println("fld t=${getTicks()}: hdbf=${InfluenceMap.healDebuffStats()}" +
@@ -479,23 +479,15 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("hcov") { "${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }}" }
     Gauges.computed("hulk") { "${disarmedFoe.size}" }
     Gauges.computed("chase") { "${Memory.chaseOf.size}/$chaseTicks" }
-    Gauges.computed("capgate") { "${capBlocked.values.sum()}/$capOffered" }
     // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
-    Gauges.computed("cap") { "${capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}" }
-    Gauges.computed("capu") { "${capquWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}" }
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
     Gauges.computed("gsafe", 1) { "$groupDmgWindow" }
     Gauges.computed("ledgerw") { "$ledgerWindow/$ourLostWindow/$hisLostWindow" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
-    Gauges.computed("objnone") { "${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll" }
-    Gauges.computed("objdrop") { "${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN" }
-    Gauges.computed("runner") { "${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN" }
-    Gauges.computed("cmdwhy") { "${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN" }
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
     // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
     // консоль не показывала (имя `guns=` занято прибором v200)
-    Gauges.computed("annempty") { "${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll" }
     Gauges.computed("shooters") { "${tickView.bw.army.count { hasRanged(it) }}/${tickView.bw.combatEnemies.count { hasRanged(it) }}" }
     Gauges.computed("srch") { "$srchCut/$srchTicks/${cmdTailMax.toInt()}" }
     Gauges.computed("ovw") { "${Executor.ovwContact}/${Executor.ovwRanged}" }

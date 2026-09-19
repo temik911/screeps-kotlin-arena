@@ -79,6 +79,8 @@ internal object Gauges {
     val fields = HashMap<String, GaugeField>()
     /** Словари-счётчики по имени поля — прямое поле объекта из списка починки (см. заголовок файла). */
     val hist = HashMap<String, HashMap<String, Int>>()
+    /** Множества-отметки приборов («эту пару тик × флаг уже сочли») по имени — тоже значения прямого поля: чинятся. */
+    val seen = HashMap<String, HashSet<String>>()
     /** Счётчики и накопители матча по ключу `поле#часть` — близнецы одноимённых счётчиков записи ([GaugeSet]). */
     val twins = HashMap<String, Any>()
     private val counters = ArrayList<Counter>()
@@ -120,6 +122,9 @@ internal object Gauges {
 
     /** Словарь-счётчик, который печатает НЕ строка `t=` (перепись `rung t=`, `tac t=`): только владение и вливание. */
     fun labelledOnly(key: String): Labelled = Labelled(hist.getOrPut(key) { HashMap() }).also { twins["$key#0"] = it }
+
+    /** Множество-отметка прибора: «уже сочтено» — чтобы счётчик рос раз на пару, а не на каждого спрашивающего. */
+    fun marks(key: String): HashSet<String> = seen.getOrPut(key) { HashSet() }
 
     /** Часть поля, которую считают на месте печати: величина состояния, снимок мира, отношение двух накопителей. */
     fun computed(field: String, at: Int = 0, sep: String = "/", label: String = "", text: () -> String) {

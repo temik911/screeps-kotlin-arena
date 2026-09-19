@@ -127,8 +127,6 @@ object PainAndGain {
 
 
 
-    internal val capBlocked = HashMap<String, Int>()
-    internal val capSeen = HashSet<String>()      // (тик, флаг) считается один раз, а не по разу на вызывающего
     internal val disarmedFoe = HashSet<String>()
 
 
@@ -169,13 +167,7 @@ object PainAndGain {
     internal var ledgerWindow = 0
     internal var ourLostWindow = 0
     internal var hisLostWindow = 0
-    /** Чем заняты бегуны: пары по режимам (`dbg` — единственная точка, через которую проходят все ветки). */
-    internal val runnerMode = HashMap<String, Int>()
     /** Темп очков на сотом и двухсотом тике — снимок дебюта, которого не снимал ни один прибор. */
-    /** Почему у армии нет флаг-цели: пара по причинам против всех тиков (v216). */
-    internal val objNone = HashMap<String, Int>()
-    /** ...и разложение САМОГО выбора: какой фильтр снял флаг-кандидата (v216). */
-    internal val objDrop = HashMap<String, Int>()
     internal val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
     internal val ghostLogged = HashMap<String, Int>()
     internal var prevShooters: List<Shooter> = emptyList()
@@ -250,10 +242,6 @@ object PainAndGain {
     internal var stalledNow = false                        // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
     internal var hisTouchShare = 1.0
     internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
-    internal val rungCount = HashMap<String, Int>()        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
-    internal val stepCount = HashMap<String, Int>()        // ...и какая ветка ШАГА
-    internal val tacCount = HashMap<String, Int>()         // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
-    internal val prioCount = HashMap<String, Int>()        // ...и с каким приоритетом (SURVIVE / MISSION / OPPORTUNITY)
     internal val missionOf = HashMap<String, Char>()      // крип → буква задания его отряда этим тиком (v252, из Strategist.snapshot)
     internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
     internal val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
@@ -301,12 +289,6 @@ object PainAndGain {
     internal val orderFatigue = HashMap<String, Int>()
     internal val orderDist = HashMap<String, Int>()
     internal val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
-    /** РАЗЛОЖЕНИЕ НЕВХОДА В РЕЖИМ БОЯ (v215). Прежний `cmdBlocked` НАЗЫВАЛ причину, не проверив её: он писал
-     *  «posture», если постура не ANNIHILATE, — а условие боя постуры ANNIHILATE не требует вовсе, оно требует
-     *  `!pushing && underTheirFire && (сомкнут || шесть рядом) && постура не отход`. По логам рейтинговой серии
-     *  из-за этого выходило, будто виновата постура. Прибор, называющий не тот множитель, отправляет чинить не
-     *  то место, поэтому причина берётся из ТОЙ ЖЕ цепочки веток, что и сам режим. */
-    internal val cmdWhy = HashMap<String, Int>()
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     internal var fightOnNow = false
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
@@ -319,11 +301,6 @@ object PainAndGain {
     internal var exchangeLiveNow = false
     /** Удары мили по цели за тик (v221) — как `shotsAt`, но из `strike`; чистится там же. */
     internal val strikesAt = HashMap<String, Int>()
-    /** Разложение тиков ANNIHILATE без размена по источнику (v221, см. annEmptyAll): cmd — режим боя командира,
-     *  push — толчок, spot — очаг, melee — его мили вплотную, corner — загнанная группа, still — контакт со стоящим
-     *  (USE_WARM_NEEDS_HIS_MOVE), warm — тёплый контакт (с правкой обязан быть нулём), held — постура удержана
-     *  гистерезисом без контакта. */
-    internal val annEmpty = HashMap<String, Int>()
 
 
 }

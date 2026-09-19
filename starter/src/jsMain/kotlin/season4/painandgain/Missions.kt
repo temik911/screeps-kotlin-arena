@@ -72,8 +72,8 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         // в каждой из них. Считается ВСЕГДА, независимо от DEBUG_LOG: прибор, который виден только в логе с
         // подробностями, нельзя сложить по серии
         val tag = mode.substringBefore(':')
-        runnerMode[tag] = (runnerMode[tag] ?: 0) + 1
-        runnerModeN++
+        runnerMode.bump(tag)
+        runnerModeN.n++
         // ...и цена простоя В ОЧКАХ, а не в тиках: тик у флага, который нельзя взять, стоит его score.
         // Разбор v214 считал эту величину вручную («166 тиков x 3 очка ~ 500, матч проигран с разрывом 292»)
         if (tag == "POISED" && f != null) poisedCost.n += f.score
@@ -307,7 +307,10 @@ internal val poisedTicks = Gauges.counter("poised")
 
 internal val poisedAll = Gauges.counter("poised", 1)
 
-internal var runnerModeN = 0
+internal val runnerModeN = Gauges.counter("runner", 1)
 
 /** Цена простоя бегуна В ОЧКАХ: тик у флага, который нельзя взять, стоит `f.score` очков. */
 internal val poisedCost = Gauges.counter("poisedcost")
+
+/** Чем заняты бегуны: пары по режимам (`dbg` — единственная точка, через которую проходят все ветки). */
+internal val runnerMode = Gauges.labelled("runner")

@@ -90,10 +90,10 @@ internal fun priorityOf(stepTag: String, rung: String): Priority = when {
 
 /** Отдать предложение арбитру: перепись (прежняя и новая) и запрос хода — в прежнем порядке побочных действий. */
 internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
-    rungCount[p.rung] = (rungCount[p.rung] ?: 0) + 1
-    stepCount[p.stepTag] = (stepCount[p.stepTag] ?: 0) + 1
-    tacCount[p.why] = (tacCount[p.why] ?: 0) + 1
-    prioCount[p.priority.name] = (prioCount[p.priority.name] ?: 0) + 1
+    rungCount.bump(p.rung)
+    stepCount.bump(p.stepTag)
+    tacCount.bump(p.why)
+    prioCount.bump(p.priority.name)
     // ЗАХВАТ — ТОЛЬКО ЧЕРЕЗ ВОРОТА (v282). Флаг берёт всякий, кто встал на его клетку, а ворота захвата (`captureBlock`)
     // спрашивали бегун и цели армии (objective, grab), но не шаг бойца: поле потока всегда открывает клетку ЦЕЛИ
     // (`DistanceMap.flowFieldTo`, «цель всегда достижима»), и когда цель — пост на клетке чужого флага, боец встаёт на
@@ -2018,3 +2018,11 @@ internal val mpackHit = Gauges.counter("mpack")
 internal val orderBranch = Gauges.counter("branch")
 
 internal val orderFled = Gauges.counter("fled")
+
+internal val rungCount = Gauges.labelledOnly("rung")        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
+
+internal val stepCount = Gauges.labelledOnly("step")        // ...и какая ветка ШАГА
+
+internal val tacCount = Gauges.labelledOnly("tac")        // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
+
+internal val prioCount = Gauges.labelledOnly("prio")        // ...и с каким приоритетом (SURVIVE / MISSION / OPPORTUNITY)
