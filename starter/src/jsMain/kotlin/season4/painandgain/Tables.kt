@@ -86,7 +86,7 @@ internal class Gate<F>(val tag: String, val verdict: F.() -> Verdict)
 /** Проход по воротам: первые ворота, сказавшие не `Next`, решают. В счётчиках `on[i]` — до ворот ДОШЛИ, `won[i]` — они решили;
  *  `on − won` — прошли насквозь. Последние ворота обязаны решать. */
 internal fun <F> pass(gates: List<Gate<F>>, facts: F, tally: Tally): Verdict {
-    tally.fitTags(gates.map { it.tag })
+    if (tally.on.size != gates.size) tally.fitTags(gates.map { it.tag })     // горячий путь: список имён строится один раз
     for (i in gates.indices) {
         tally.on[i]++
         val v = gates[i].verdict(facts)
@@ -102,7 +102,7 @@ internal class Pass(val tag: String, val run: () -> kotlin.Unit)
  *  `won[i]` ведёт сам владелец таблицы (у раздачи — клеток выдано), `idle[i]` — исполнен и не выдал ничего: у последовательности
  *  третье число прибора — оно, а не `on − won`. */
 internal inline fun runPasses(passes: List<Pass>, tally: Tally, before: (Int, String) -> kotlin.Unit) {
-    tally.fitTags(passes.map { it.tag })
+    if (tally.on.size != passes.size) tally.fitTags(passes.map { it.tag })
     for (i in passes.indices) {
         before(i, passes[i].tag); tally.on[i]++
         val had = tally.won[i]

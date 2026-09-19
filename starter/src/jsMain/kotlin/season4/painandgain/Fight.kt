@@ -679,7 +679,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // поля, которые пишет один проход, а читает другой (до v445 — локальные посреди тела функции)
         val rotatingMeet = HashMap<String, Position>()
         val medicked = HashSet<String>()
-        var maxV = 0.0
+        var maxV = 0.0          // считает проход `fields`; читает `sagAt` — только из прохода `melee`, стоящего в списке НИЖЕ: порядок списка держит это, не область видимости
         var passIndex = 0
         val weakestMelee = armedEnemies.minByOrNull { it.hits }
         // МЁРТВЫЙ meleeCommit УДАЛЁН (v214). Правило v143 обещало: мили идёт вплотную, только когда цель
@@ -1258,9 +1258,10 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             Pass("audit") { passAudit() },
         )
 
-        fun run() = runPasses(passes, fightTally) { i, tag -> passIndex = i; passTag = tag }
+        // не `run`: внутри носителя зовётся stdlib-`run { … }` (зонд hpick), и одноимённый член когда-нибудь перехватил бы его молча
+        fun distribute() = runPasses(passes, fightTally) { i, tag -> passIndex = i; passTag = tag }
     }
-    Deal().run()
+    Deal().distribute()
 }
 
 /** ОГОНЬ И ЛЕЧЕНИЕ АРМИИ ЗА ТИК (v256, этап 10): хвост runArmy после покрипного цикла — перепись «почему» (why t=, why-sum), стрелки врага на прошлом тике для прогноза (prevShooters), назначение огня и лечения и исполнение. Перенесено дословно. */
