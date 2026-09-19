@@ -22,7 +22,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.normpath(os.path.join(HERE, '../../../starter/src/jsMain/kotlin/season4/painandgain'))
 
 # (имя правила, выражение, {файлы, где разрешено}, что писать вместо)
+A = r'([\w.]+)'          # аргумент ролевого теста: `it`, `creep`, `m.creep`
 RULES = [
+    # этап 1, «чистый мили»: два разных факта — А (рождён мили) и Б/В (живая ATTACK); не сводить, см. Facts.kt
+    ('чистый мили А', r'isMelee\(%s\) && !hasRanged\(\1\)' % A, {'Facts.kt'}, 'meleeOnlyBorn(x)'),
+    ('чистый мили ¬А', r'!isMelee\(%s\) \|\| hasRanged\(\1\)' % A, {'Facts.kt'}, '!meleeOnlyBorn(x)'),
+    ('чистый мили Б/В', r'hasMelee\(%s\) && !hasRanged\(\1\)' % A, {'Facts.kt'}, 'meleeOnlyLive(x)'),
 ]
 
 # Проверки, которым мало одной строки: функция (исходники: {файл: [(номер, код)]}) -> [(файл, номер, текст)]
