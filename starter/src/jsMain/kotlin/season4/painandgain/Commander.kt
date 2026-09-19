@@ -90,7 +90,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
         val cpuTight =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
         if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
         // ...и при разрыве контакта (v227, см. USE_ZERO_LEAD_BREAK) замысел не выбирается прогоном — он задан: KITE
-        if (cpuTight) commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, commandOf, Intent.PRESS, ourFlagCells = ourFlagCells)
+        if (cpuTight) publishDeal(commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, commandOf, Intent.PRESS, ourFlagCells = ourFlagCells), tried = 1)
         else {
             // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через Forecast.SIM_TICKS (v138)
             var bestScore = -Double.MAX_VALUE
@@ -113,17 +113,25 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
             // Потеря целого тика на входе в бой хуже, чем два оценённых замысла вместо пяти. Хвост (cmdTailMax) остался прибором
             var lastCost = 0.0
             srchTicks++
+            // ЗАПИСЬ ВЫБРАННОЙ РАЗДАЧИ (v449, пункт В): каждая проба несёт своё поле нужды и свои пробы; в мир и в приборы
+            // уходит запись победителя, а не последнего оценённого (см. DealRecord)
+            var bestRec: DealRecord? = null
+            var lastIntent: Intent? = null
+            var tried = 0
             for (intent in Intent.values()) {
                 if (bestPlan != null && cpuMs() + lastCost > CPU_GUARD_MS) { srchCut++; break }
                 val t0 = cpuMs()
                 val trial = HashMap<String, Position>()
-                commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
+                val rec = commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, trial, intent, ourFlagCells = ourFlagCells)
+                tried++; lastIntent = intent
                 // прогноз считает ТОТ бой, который случится: наши в симуляции бьют ту же липкую цель фокуса,
                 // что и бот на самом деле, а не «самого раненого» (v140) — прежде прогноз и поведение расходились
                 val sc = Forecast.simulate(meas.mobileArmy, meas.armedEnemies, trial, Forecast.SIM_TICKS, targ.focusTarget, intent)   // состав без хранителей: «тот же, что у плана» (v242) отвергнут A/B вместе с применением постуры один раз
-                if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent }
+                if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent; bestRec = rec }
                 lastCost = cpuMs() - t0
             }
+            publishDeal(bestRec, tried)
+            if (bestPlan != null && bestIntent != lastIntent) srchDiff++
             cmdEndMs = cpuMs(); cmdSearched = true
             // ГИСТОГРАММА ЗАМЫСЛА (этап 8): перебор из пяти стоит пяти раздач за тик, и окупается ли он —
             // вопрос к числу, а не к мнению. Счётчик стоит ЗДЕСЬ, где замысел действительно выбирается:
@@ -211,7 +219,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // раздаёт ОДНИХ лекарей той же ценой клетки; бойцов не трогает — «командир на любой контакт» ронял roost и scatter
     if (USE_COMMANDER_HEALERS_IN_CONTACT && !commanderNow && meas.contact && meas.armedEnemies.isNotEmpty()) {
         val only = HashMap<String, Position>()
-        commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true)
+        publishDeal(commandFight(meas.commandArmy, meas.combatEnemies, meas.armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true), tried = 1)
         var given = 0
         for (h in meas.commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
         cmdHealTicks++; cmdHealGiven += given
@@ -227,8 +235,27 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     )
 }
 
+/** ПУБЛИКАЦИЯ ВЫБРАННОЙ РАЗДАЧИ (v449, пункт В оператора): поле нужды выбранной раздачи уходит в мир (`InfluenceMap.published`),
+ *  её пробы вливаются в приборы (DealRecord.mergeInto); пробы всех раздач тика считаются отдельно — прибор `deals=выбрано/сыграно`.
+ *  Зовётся из трёх мест, где командир раздаёт клетки: перебор замыслов (победитель), раздача при нехватке CPU, раздача одних
+ *  лекарей. */
+internal fun PainAndGain.publishDeal(rec: DealRecord?, tried: Int) {
+    dealsTried += tried
+    if (rec == null) return
+    dealsChosen++
+    InfluenceMap.published = rec.need
+    mergeDeal(rec)
+}
+
 // ==================== приборы стадии: счётчик живёт у того, кто считает (v446, план архитектуры, 4.7) ====================
 // Перенесены из Instruments.kt дословно; Instruments их читает и печатает. `cmdSearched` сбрасывает оркестровка в конце тика.
+
+/** Раздач, ушедших в мир (по одной на тик раздачи) / раздач сыграно, включая пробы замыслов (v449, прибор `deals=`). */
+internal var dealsChosen = 0
+internal var dealsTried = 0
+/** Тиков перебора, где выбранный замысел — не последний оценённый (v449, прибор `srchd=`): столько раз до v449 после командира
+ *  в мире оставалось поле нужды чужого замысла (97 % выборок гейта и 89 % живых по строкам `sim t=` v447). */
+internal var srchDiff = 0
 
 /** Перебор замыслов под бюджетом (v262, см. Strategist.armyCommand): тиков с перебором, из них обрезанных, наибольший
  *  хвост тика после командира в мс — прибор srch= и запас бюджета. */

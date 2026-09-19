@@ -431,12 +431,60 @@ internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int
     return true
 }
 
+/**
+ * ЗАПИСЬ ОДНОЙ РАЗДАЧИ (v449, пункт В оператора). Раздача идёт до шести раз за тик — по разу на замысел перебора командира и раз
+ * для одних лекарей, — а её поле нужды, притязания и пробы были ОБЩИМИ: после перебора в мире оставалось поле ПОСЛЕДНЕГО
+ * оценённого замысла, не выбранного (выбранный ≠ последний в 97 % выборок гейта и 89 % живых, v447), а приборы `pass=`,
+ * `gate=`, `hpick=`, `hadj=`, `hfire=`, `adr=`, `fall=` считали каждую пробу. Теперь носитель считает в СВОЮ запись, а в мир
+ * (`InfluenceMap.published`) и в приборы командир вливает запись выбранной раздачи ([mergeInto]); пробы считаются отдельно —
+ * `deals=выбрано/сыграно`. Имена полей те же, что у приборов, в которые они вливаются.
+ */
+internal class DealRecord {
+    val need = InfluenceMap.HealNeed()
+    val tally = Tally("pass", sequence = true)
+    val passCount = HashMap<String, Int>()
+    var hpN = 0; var hpAdj = 0; var hpAvail = 0; var hpGate = 0
+    val hpDelta = DoubleArray(8)
+    var hadjN = 0; var hadjAll = 0; var hadjnN = 0; var hadjnAll = 0
+    var hfireN = 0; var hfireAll = 0; var hfireAdj = 0
+    val gateLevels = IntArray(8)
+    var gateFell = 0
+    var goalDecisions = 0; var goalFlips = 0
+    var adrN = 0; var adrE = 0.0; var adrT = 0.0; var adrSame = 0
+    var fallReach = 0; var fallAny = 0
+    var rotfMeet = 0
+    var planGunsAll = 0; var planGunsIn = 0; var planMeleeAll = 0; var planMeleeHealed = 0; var planHealAll = 0; var planHealBehind = 0
+
+}
+
+/** Вливает пробы раздачи [rec] в приборы матча — зовётся для ВЫБРАННОЙ раздачи тика (Commander.publishDeal). Расширение
+ *  оркестратора, а не метод записи: приборы — члены `PainAndGain`, и объект уровня 4, читающий синглтон уровня 7, был бы
+ *  ребром вверх (гейт `graph` это поймал в первой редакции). */
+internal fun PainAndGain.mergeDeal(rec: DealRecord) {
+    hpN += rec.hpN; hpAdj += rec.hpAdj; hpAvail += rec.hpAvail; hpGate += rec.hpGate
+    for (i in rec.hpDelta.indices) hpDelta[i] += rec.hpDelta[i]
+    hadjN += rec.hadjN; hadjAll += rec.hadjAll; hadjnN += rec.hadjnN; hadjnAll += rec.hadjnAll
+    hfireN += rec.hfireN; hfireAll += rec.hfireAll; hfireAdj += rec.hfireAdj
+    for (i in rec.gateLevels.indices) gateLevels[i] += rec.gateLevels[i]
+    gateFell += rec.gateFell
+    goalDecisions += rec.goalDecisions; goalFlips += rec.goalFlips
+    adrN += rec.adrN; adrE += rec.adrE; adrT += rec.adrT; adrSame += rec.adrSame
+    fallReach += rec.fallReach; fallAny += rec.fallAny
+    rotfMeet += rec.rotfMeet
+    for ((k, v) in rec.passCount) passCount[k] = (passCount[k] ?: 0) + v
+    planGunsAll = rec.planGunsAll; planGunsIn = rec.planGunsIn
+    planMeleeAll = rec.planMeleeAll; planMeleeHealed = rec.planMeleeHealed
+    planHealAll = rec.planHealAll; planHealBehind = rec.planHealBehind
+    fightTally.fitTags(rec.tally.tags)
+    for (i in rec.tally.on.indices) { fightTally.on[i] += rec.tally.on[i]; fightTally.won[i] += rec.tally.won[i]; fightTally.idle[i] += rec.tally.idle[i] }
+}
+
 internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
-                         ourFlagCells: Set<Int> = emptySet(), healersOnly: Boolean = false) {
+                         ourFlagCells: Set<Int> = emptySet(), healersOnly: Boolean = false): DealRecord? {
     out.clear()
     val fighters = mobileOf(army)
-    if (fighters.isEmpty() || armedEnemies.isEmpty()) return
+    if (fighters.isEmpty() || armedEnemies.isEmpty()) return null
     val enemyAt = HashSet<Int>()
     for (e in combatEnemies) enemyAt.add(e.key)
     // кандидаты: всё проходимое в двух клетках от любого нашего бойца
@@ -448,7 +496,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         if (DistanceMap.isTerrainWall(x, y) || key in enemyAt) continue
         cells[key] = InfluenceMap.cell(x, y)
     }
-    if (cells.isEmpty()) return
+    if (cells.isEmpty()) return null
     class AddrShooter(val x: Int, val y: Int, val ranged: Double, val melee: Double)
     /**
      * НОСИТЕЛЬ ОДНОЙ РАЗДАЧИ (v445, план архитектуры, 4.4 и этап 4): прежде это были ~30 общих локальных функции-замыкания и 22
@@ -537,6 +585,28 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             return if (d < 0) GOAL_UNREACHABLE else d.toDouble()
         }
         val taken = HashSet<Int>()
+        /** ЗАПИСЬ ЭТОЙ РАЗДАЧИ (v449, пункт В оператора): поле нужды и пробы — свои у каждой пробы замысла; в мир и в приборы
+         *  уходит запись ВЫБРАННОЙ (см. DealRecord и Commander.publishDeal). */
+        val rec = DealRecord()
+        // ПРИТЯЗАНИЯ — ПОЛЕ ЭТОЙ РАЗДАЧИ (v449, пункт В). До v449 `place` штамповал притязание на клетку и её соседей в поле
+        // `InfluenceMap.claim`, общее для всех проб тика; теперь поле у каждой раздачи своё, семантика прежняя — в том числе
+        // притязание СНЯТОГО приказа (спасение в `place`, проход `pinned`) остаётся стоять, «притязание без крипа». Снять его
+        // значит поменять раздачу с первого контакта: притязания, считанные из окончательных приказов, разошлись с эталоном в
+        // 114 логах гейта из 139 (замер v449), — это отдельная поведенческая версия, не тождество. Прежний текст поля, дословно:
+        // «Занятость клеток уже розданными приказами: раздача идёт пять раз за тик, по разу на замысел, и
+        // притязания одного замысла не должны просачиваться в следующий (Hagelbäck: временное отталкивание
+        // в выбранной клетке — то, что не даёт крипам слипаться в одну точку).
+        // Ставит притязание на клетку и её соседей: следующий крип видит её как занятую.»
+        val claim = IntArray(100 * 100)
+        fun claimAt(key: Int): Double = claim[key].toDouble()
+        fun addClaim(x: Int, y: Int) {
+            for (dx in sym(1)) for (dy in sym(1)) {
+                val nx = x + dx
+                val ny = y + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                claim[key(nx, ny)]++
+            }
+        }
         // клетки, где стоят СВОИ: назначать их нельзя — приказ туда неисполним, пока сосед не ушёл, а прибор показал,
         // что до назначенной клетки доходят 7 % (v167). Своя собственная клетка при этом разрешена: это «стой»
         // (множество `allyAt`, которое описывал комментарий выше, наполнялось и НЕ ЧИТАЛОСЬ нигде — снято в v447 как мёртвое;
@@ -544,6 +614,12 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         // кто стоит в клетке (для цепочек): ключ клетки → крип
         val allyOf = HashMap<Int, Creep>()
         init { for (a in army) if (a.hits > 0) allyOf[a.key] = a }
+        /** ЖИЛЕЦ КЛЕТКИ (v449, пункт В): свой, стоящий в ней с начала тика и не уведённый приказом — в `out` его нет или приказ
+         *  «стой»; просителю сам он не жилец. До v449 карта `allyOf` ещё и ПРАВИЛАСЬ при назначении (жилец, уведённый в другую
+         *  клетку, вычёркивался), а снятый приказ его не возвращал — та же несимметрия, что у притязаний; теперь карта неизменна,
+         *  а «ушёл ли» читается из `out`. */
+        fun tenantOf(key: Int, c: Creep): Creep? =
+            allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
         // ПЛАН СТРОИТСЯ ВГЛУБЬ (v168, оператор): «если крипу необходимо уйти на клетку, на которой сейчас стоит крип,
         // зачем этому крипу необходимо сдвинуться на другую, и если там стоит крип, то сдвинуть и его, и так далее».
         // Раздача рекурсивна: занятая клетка не отвергается и не просто дорожает — её жилец получает приказ уйти,
@@ -604,9 +680,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 // приказ, считался уходящим — а приказ «стой» (хранитель флага, крип на своём месте) никуда его не
                 // уводит, и назначенная поверх него клетка оказывалась неисполнимой. Это и есть весь оставшийся
                 // процент неисполнения: 17 случаев на 5 294 приказа, все вида «крип остался на месте»
-                val tenant = if (self) null else allyOf[key]?.takeIf { t ->
-                    t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true)
-                }
+                val tenant = if (self) null else tenantOf(key, c)
 
                 // клетка под своим дороже: приказ туда исполним, только если жильца удастся сдвинуть
                 // СМЕРТЕЛЬНАЯ КЛЕТКА НЕ ПРЕДЛАГАЕТСЯ (v178, оператор: «наш мили крип шагнул сразу под 2 мили крипов
@@ -634,9 +708,9 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 if (sc0 < bareScore) { bareScore = sc0; bare = p }
             }
             val b = best ?: return false
-            goalDecisions++
+            rec.goalDecisions++
             val bs = bare
-            if (bs == null || bs.x != b.x || bs.y != b.y) goalFlips++
+            if (bs == null || bs.x != b.x || bs.y != b.y) rec.goalFlips++
             val tenant = bestTenant
             if (tenant != null) {
                 if (depth >= CHAIN_DEPTH) return false
@@ -665,15 +739,14 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             if (depth == 0) {
                 val e = InfluenceMap.dangerAt(b.key)
                 val t = addressedAt(c, b.x, b.y)
-                adrN++; adrE += e; adrT += t
-                if (t >= e) adrSame++
+                rec.adrN++; rec.adrE += e; rec.adrT += t
+                if (t >= e) rec.adrSame++
             }
             // временное отталкивание в занятой клетке (Hagelbäck & Johansson): следующий крип видит её как
             // тесную. Без этого двое выбирают одну клетку, третий загораживает четвёртого — записанная причина
             // провала USE_FORWARD_SEARCH: «каждый крип считает за себя»
-            InfluenceMap.addClaim(b.x, b.y)
-            if (b.x != c.x || b.y != c.y) allyOf.remove(c.key)
-            if (depth == 0) { passCount[passTag] = (passCount[passTag] ?: 0) + 1; fightTally.won[passIndex]++ }
+            addClaim(b.x, b.y)
+            if (depth == 0) { rec.passCount[passTag] = (rec.passCount[passTag] ?: 0) + 1; rec.tally.won[passIndex]++ }
             return true
         }
         // поля, которые пишет один проход, а читает другой (до v445 — локальные посреди тела функции)
@@ -756,7 +829,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             return -W_ATT * att * pull - strike + W_DAN * dan * danOf(c, key) -
                 W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
                 W_HEALCOVER * InfluenceMap.healReachAt(key) +
-                CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+                CLAIM_COST * claimAt(key) - stayBonus(c, p)
         }
         // СТРЕЛОК: притяжение с пиком на дальности 3 (он останавливается сам, вместо запрета «не ближе мили»),
         // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
@@ -778,7 +851,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             }
             return -W_ATT * att * pull - shot + W_DAN * dan * danOf(c, key) -
                 W_LINE * InfluenceMap.influenceOf(key) +
-                CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+                CLAIM_COST * claimAt(key) - stayBonus(c, p)
         }
         // ЛЕКАРЬ: тянется туда, где помощь ВЕРОЯТНЕЕ ВСЕГО ПОНАДОБИТСЯ (нужда = опасность в клетке подопечного,
         // а не его нынешняя рана — прежнее правило брало раненых, то есть по определению тех, кто уже на фронте,
@@ -796,14 +869,14 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             // единицах, что и урон. Тогда оценка лекаря честно читается как «доставленное лечение минус
             // полученный урон», и клетка под огнём в 500 ради 72 лечения проигрывает сама, без запрета
             val deliver = InfluenceMap.healOf(c)
-            val raw = InfluenceMap.attHealAt(key)
+            val raw = rec.need.attHealAt(key)
             // Две замены этого притяжения ОТВЕРГНУТЫ живьём (v224, по 0-4): «доставленное из клетки лечение лучшему
             // подопечному» (USE_HEAL_PULL_DELIVERED) и «без слагаемого влияния» (USE_HEALER_NO_LINE). Действуют насыщенная сумма
             // здесь и влияние W_LINE ниже; зонд `hpick` называет влияние решающим (разбор v270: −5…−7 в пользу выбранной клетки
             // против свободной клетки вплотную к бойцу первой линии). Комментарий до v270 описывал обе редакции как действующие
             // ЦЕНА КЛЕТКИ — ЛУЧШАЯ ОДНА ДОСТАВКА ТОМУ, КТО ТЕРЯЕТ ХИТЫ (v435, см. USE_HEAL_NEED_ACTUAL): 72 вплотную к бьющемуся,
             // 24 в двух-трёх клетках, 0 у целого — в тех же единицах, что входящий урон, как у стены v228, но для всех
-            val pull = if (USE_HEAL_NEED_ACTUAL) InfluenceMap.bestDeliveryAt(c, p.x, p.y, army)
+            val pull = if (USE_HEAL_NEED_ACTUAL) rec.need.bestDeliveryAt(c, p.x, p.y, army)
                 else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
             // ...И ПРИ УДЕРЖИМОЙ ЖЕРТВЕ ЦЕНА КЛЕТКИ — ДОСТАВЛЕННОЕ В НЕЁ ЛЕЧЕНИЕ (v228, см. USE_HEAL_WALL): вплотную полное, в трёх
             // треть, без насыщенной суммы и без слагаемого влияния — клетка вплотную к жертве получает положительную цену, которой
@@ -812,7 +885,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             if (victimSaveable && victim != null) {
                 val d = getRange(p, victim)
                 val wall = if (d <= 1 && wallCells.any { it.x == p.x && it.y == p.y }) deliver else if (d <= HEAL_RANGE) deliver / 3.0 else 0.0
-                return -W_ATT * att * wall + W_DAN * dan * fire - W_SCREEN * shielded + CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+                return -W_ATT * att * wall + W_DAN * dan * fire - W_SCREEN * shielded + CLAIM_COST * claimAt(key) - stayBonus(c, p)
             }
             // ...И ВЛИЯНИЕ ЛИНИИ НЕ ВЫТЕСНЯЕТ ДОСТАВКУ (v437, см. USE_HEAL_NO_LINE): у лекаря все прочие слагаемые — в хитах
             // (доставка, огонь, экран), а влияние безразмерно и ни на что в арене не опирается; зонд dh в трёх сборках подряд
@@ -825,10 +898,10 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             // получили доставку 0, клей включился в них — а влияние (наш залп − его опасность) у мили-кулака в сотни, и dh показал
             // −178 в пользу клетки в кулаке против безопасной вплотную. Якорь лекарю в этом режиме — доставка у безопасных клеток
             // при подопечном под огнём, он есть по построению режима; в клетках под огнём остаются опасность, притязание и стой
-            val line = if (USE_HEAL_NO_LINE && (pull > 0.0 || InfluenceMap.deliveryFireMode(c, army))) 0.0 else W_LINE * InfluenceMap.influenceOf(key)
+            val line = if (USE_HEAL_NO_LINE && (pull > 0.0 || rec.need.deliveryFireMode(c, army))) 0.0 else W_LINE * InfluenceMap.influenceOf(key)
             return -W_ATT * att * pull + W_DAN * dan * fire -
                 line - W_SCREEN * shielded +
-                CLAIM_COST * InfluenceMap.claimAt(key) - stayBonus(c, p)
+                CLAIM_COST * claimAt(key) - stayBonus(c, p)
         }
         /**
          * ЗАМЫСЕЛ = ВЕКТОР ВЕСОВ над одной оценкой: множитель притяжения, множитель опасности, порог выживания.
@@ -877,9 +950,9 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                     (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
                         ttlAt(c, p.key, p) >= lvl
                 }, rank)
-                if (ok) { gateLevels[minOf(lvl, gateLevels.size - 1)]++; return true }
+                if (ok) { rec.gateLevels[minOf(lvl, rec.gateLevels.size - 1)]++; return true }
             }
-            gateFell++
+            rec.gateFell++
             return false
         }
 
@@ -962,8 +1035,12 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             // v200 нашёл круг, где «стрелок не впереди мили» и «мили стоит позади» вместе выталкивали стрелка за
             // дальность выстрела, отбор пустел, и крип падал в общий добор, который про дальность не знает вовсе.
             // Запрет здесь ровно один и он о жизни: клетка, где крип не переживёт хода.
-            InfluenceMap.clearClaim()
-            InfluenceMap.stampHealNeed(living(army))
+            // ПРИТЯЗАНИЯ ПРОХОДОВ ДО ЭТОГО (retreat, straggler) СБРАСЫВАЮТСЯ — как сбрасывало общее поле `clearClaim` до v449: их
+            // приказы и клетки остаются в `out` / `taken`, а отталкивания вокруг них раздача мили, стрелков и лекарей не видит.
+            // Первая редакция v449 их считала, и гейт разошёлся в 115 логах из 139 с первого контакта — это часть меры, а не
+            // утечки. Поле нужды — своё у этой раздачи (v449, см. DealRecord)
+            claim.fill(0)
+            rec.need.stampHealNeed(living(army))
             for ((k, _) in cells) {
                 val v = InfluenceMap.vulnerabilityOf(k)
                 if (v > maxV) maxV = v
@@ -1008,7 +1085,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                 if (c.id !in out) {
                     val keptReach = USE_RANGED_FALLBACK_KEEPS_REACH &&
                         place(c, { p -> armedEnemies.any { getRange(p, it) <= RANGED_RANGE } }, { p -> danOf(c, p.key) })
-                    if (keptReach) fallReach++ else { fallAny++; place(c, { true }, { p -> danOf(c, p.key) }) }
+                    if (keptReach) rec.fallReach++ else { rec.fallAny++; place(c, { true }, { p -> danOf(c, p.key) }) }
                 }
             }
         }
@@ -1017,19 +1094,20 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         fun passAdvancing() {
             // лекари: в лечебной дальности от раненого бойца, вне огня следующего тика
             // ИДУЩИЙ ВПЕРЁД БОЕЦ В РЕЖИМ ТОЧНОЙ ЦЕНЫ НЕ ВХОДИТ (сужение v439, см. InfluenceMap.advancingWards): его назначенная клетка —
+            // (с v449 множество живёт в записи раздачи — `rec.need.advancingWards`, класс `InfluenceMap.HealNeed`)
             // или, когда бойцов ведёт тактик (раздача одних лекарей), его ход прошлого тика — ближе к его стволам, чем нынешняя
-            InfluenceMap.advancingWards.clear()
+            rec.need.advancingWards.clear()
             if (USE_HEAL_EXACT_IN_FIRE && armedEnemies.isNotEmpty()) for (f in fighters) {
                 if (!hasWeapon(f)) continue
                 val planned = out[f.id]
                 val nowD = armedEnemies.minOf { getRange(f, it) }
                 if (planned != null && !(planned.x == f.x && planned.y == f.y)) {
-                    if (armedEnemies.minOf { maxOf(abs(planned.x - it.x), abs(planned.y - it.y)) } < nowD) InfluenceMap.advancingWards.add(f.id)
+                    if (armedEnemies.minOf { maxOf(abs(planned.x - it.x), abs(planned.y - it.y)) } < nowD) rec.need.advancingWards.add(f.id)
                 } else {
                     val prev = Memory.lastCell[f.id] ?: continue
                     val px = prev / 100; val py = prev % 100
                     if (px == f.x && py == f.y) continue
-                    if (armedEnemies.minOf { maxOf(abs(px - it.x), abs(py - it.y)) } > nowD) InfluenceMap.advancingWards.add(f.id)
+                    if (armedEnemies.minOf { maxOf(abs(px - it.x), abs(py - it.y)) } > nowD) rec.need.advancingWards.add(f.id)
                 }
             }
         }
@@ -1080,33 +1158,33 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                     val (_, _, ttlMin) = weightsOf(intentOf(c))
                     if (place(c, { p -> getRange(p, dest) <= 1 && ttlAt(c, p.key, p) >= ttlMin }, { p -> danOf(c, p.key) })) {
                         medicked.add(medicFor.key)
-                        rotfMeet++
+                        rec.rotfMeet++
                         met = true
-                        out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, living(army)) }
+                        out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
                     }
                 }
                 // лекаря, поставленного проходом отхода, оценка по-прежнему переставляет — не встреча, не трогается (первая
                 // редакция v276 это переразмещение снимала попутно, и гейт переменил 89 строк и уронил match30:camp)
                 // ПРИБОР РЕЖИМА «В ЗОНЕ ОГНЯ» (v438, `hfire=`): лекарей, у которых доставка считалась по подопечным под огнём / всех /
                 // из первых — поставленных вплотную к теряющему хиты; снимается ДО раздачи — насыщение меняет режим следующему
-                val fireMode = !met && InfluenceMap.deliveryFireMode(c, living(army))
-                hfireAll++; if (fireMode) hfireN++
+                val fireMode = !met && rec.need.deliveryFireMode(c, living(army))
+                rec.hfireAll++; if (fireMode) rec.hfireN++
                 val ok = met || placeScored(c, 2, intentOf(c)).also { placed ->
-                    if (placed) out[c.id]?.let { InfluenceMap.saturateHeal(c, it.x, it.y, living(army)) }
+                    if (placed) out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
                 }
                 // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
                 if (c.id !in out) place(c, { true }, { p -> danOf(c, p.key) })
                 // ПРИБОР ПРИЛЕГАНИЯ (v435, `hadj=`): назначенная клетка лекаря вплотную к своему, терявшему хиты за прошлый тик, /
                 // все назначения лекарей — та величина, по которой разбор E делил стороны (26 % лечений вплотную против 75 %)
                 out[c.id]?.let { b ->
-                    hadjAll++
+                    rec.hadjAll++
                     val losing = army.filter { a -> a.id != c.id && a.hits > 0 && (Memory.lastHits[a.id] ?: a.hits) > a.hits }
-                    if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) { hadjN++; if (fireMode) hfireAdj++ }
+                    if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) { rec.hadjN++; if (fireMode) rec.hfireAdj++ }
                     // ...и НОРМИРОВАННЫЙ прибор (`hadjn=`): среди назначений, при которых кто-то из своих в дальности шага и
                     // лечения (HEAL_RANGE + 1) терял хиты, — доля клеток вплотную к такому; без него hadj делится и на тихие тики
                     if (losing.any { a -> getRange(a, c) <= HEAL_RANGE + 1 }) {
-                        hadjnAll++
-                        if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) hadjnN++
+                        rec.hadjnAll++
+                        if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) rec.hadjnN++
                     }
                 }
                 // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
@@ -1128,31 +1206,31 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
                         val fire = InfluenceMap.fireFieldAt(key)
                         val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
                         val deliver = InfluenceMap.healOf(c)
-                        val raw = InfluenceMap.attHealAt(key)
-                        val pull = if (USE_HEAL_NEED_ACTUAL) InfluenceMap.bestDeliveryAt(c, p.x, p.y, army)
+                        val raw = rec.need.attHealAt(key)
+                        val pull = if (USE_HEAL_NEED_ACTUAL) rec.need.bestDeliveryAt(c, p.x, p.y, army)
                             else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
                         val self = p.x == c.x && p.y == c.y
-                        val tenant = if (self) null else allyOf[key]?.takeIf { t -> t.id != c.id && (t.id !in out || out[t.id]?.let { it.x == t.x && it.y == t.y } == true) }
-                        return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEAL_NO_LINE && (pull > 0.0 || InfluenceMap.deliveryFireMode(c, army))) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
-                            -W_SCREEN * shielded, CLAIM_COST * InfluenceMap.claimAt(key), -stayBonus(c, p),
+                        val tenant = if (self) null else tenantOf(key, c)
+                        return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEAL_NO_LINE && (pull > 0.0 || rec.need.deliveryFireMode(c, army))) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
+                            -W_SCREEN * shielded, CLAIM_COST * claimAt(key), -stayBonus(c, p),
                             if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
                     }
-                    hpN++
-                    if (adjSafe(b)) { hpAdj++; return@run }
+                    rec.hpN++
+                    if (adjSafe(b)) { rec.hpAdj++; return@run }
                     var best: Position? = null; var bestSc = Double.MAX_VALUE; var gated = 0
                     for ((key, p) in nearCells(c)) {
                         if (p.x == b.x && p.y == b.y) continue
                         if (key in taken || !adjSafe(p)) continue
-                        if (allyOf[key] != null && !(p.x == c.x && p.y == c.y)) continue
+                        if (!(p.x == c.x && p.y == c.y) && tenantOf(key, c) != null) continue
                         if (ttlAt(c, key, p) < ttlMin) { gated++; continue }
                         val sc = terms(p).sum()
                         if (sc < bestSc) { bestSc = sc; best = p }
                     }
                     val a = best
-                    if (a == null) { if (gated > 0) hpGate++; return@run }
-                    hpAvail++
+                    if (a == null) { if (gated > 0) rec.hpGate++; return@run }
+                    rec.hpAvail++
                     val tb = terms(b); val ta = terms(a)
-                    for (i in tb.indices) hpDelta[i] += tb[i] - ta[i]
+                    for (i in tb.indices) rec.hpDelta[i] += tb[i] - ta[i]
                 }
             }
         }
@@ -1228,12 +1306,12 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
             // ПРИБОР СОГЛАСОВАННОСТИ (v200): меряется РЕЗУЛЬТАТ раздачи, а не факт вызова правила — сколько стрелков
             // получили клетку с целью в дальности, сколько мили остались в дальности лечения, сколько лекарей стоят за
             // линией. Три числа отвечают ровно на три замечания оператора и видны в строке `t=` каждым тиком
-            planGunsAll = rangeds.size
-            planGunsIn = rangeds.count { c -> out[c.id]?.let { p -> armedEnemies.any { e -> getRange(p, e) <= RANGED_RANGE } } == true }
-            planMeleeAll = melees.size
-            planMeleeHealed = melees.count { c -> out[c.id]?.let { p -> healerCells.any { h -> maxOf(abs(p.x - h.x), abs(p.y - h.y)) <= HEAL_RANGE } } == true }
-            planHealAll = healers.size
-            planHealBehind = healers.count { c ->
+            rec.planGunsAll = rangeds.size
+            rec.planGunsIn = rangeds.count { c -> out[c.id]?.let { p -> armedEnemies.any { e -> getRange(p, e) <= RANGED_RANGE } } == true }
+            rec.planMeleeAll = melees.size
+            rec.planMeleeHealed = melees.count { c -> out[c.id]?.let { p -> healerCells.any { h -> maxOf(abs(p.x - h.x), abs(p.y - h.y)) <= HEAL_RANGE } } == true }
+            rec.planHealAll = healers.size
+            rec.planHealBehind = healers.count { c ->
                 val p = out[c.id] ?: return@count false
                 val dp = foeDist(p.x, p.y)
                 fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp }
@@ -1259,9 +1337,11 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         )
 
         // не `run`: внутри носителя зовётся stdlib-`run { … }` (зонд hpick), и одноимённый член когда-нибудь перехватил бы его молча
-        fun distribute() = runPasses(passes, fightTally) { i, tag -> passIndex = i; passTag = tag }
+        fun distribute() = runPasses(passes, rec.tally) { i, tag -> passIndex = i; passTag = tag }
     }
-    Deal().distribute()
+    val deal = Deal()
+    deal.distribute()
+    return deal.rec
 }
 
 internal class ArmyFireAndHealOut(

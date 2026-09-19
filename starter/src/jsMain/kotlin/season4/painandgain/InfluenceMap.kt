@@ -617,8 +617,6 @@ object InfluenceMap {
     val eFire = IntArray(FIELD_CELLS)
     val attMelee = IntArray(FIELD_CELLS)
     val attRanged = IntArray(FIELD_CELLS)
-    val attHeal = IntArray(FIELD_CELLS)
-    val claim = IntArray(FIELD_CELLS)
 
     /** Его СТОЯЩИЕ стрелки (v439, см. USE_HEAL_EXACT_IN_FIRE): огонь тех, кто за APPROACH_WINDOW не сближается быстрее
      *  RANGED_ADVANCE_RATE, — угроза, равная себе и в следующий тик; только у подопечного под таким огнём клетка лекаря
@@ -626,7 +624,7 @@ object InfluenceMap {
     val eRangedStill = IntArray(FIELD_CELLS)
     var wardsUnderRanged = 0; var wardsUnderStill = 0     // прибор hstill=: подопечных под его стрелками / из них под стоящими
     private val allFields = arrayOf(eMelee, eRanged, eHeal, aMelee, aRanged, aHeal, eFire, eRangedStill,
-        attMelee, attRanged, attHeal, claim)
+        attMelee, attRanged)
 
     /** Наступает ли его крип: темп сближения с нашим домом по истории enemyArrivalTicks (см. Memory.approachHistory) не
      *  ниже RANGED_ADVANCE_RATE клетки в тик за окно; короткая история — не наступает (первые тики — не бой). */
@@ -754,130 +752,159 @@ object InfluenceMap {
         // рана. Полный мили, которому сейчас прилетит 560, важнее полураненого в чистом поле. Сегодняшнее
         // правило берёт раненых, то есть по определению тех, кто уже на фронте, и тянет лекарей вперёд —
         // это ровно механизм жалобы оператора «хилеры выбегают вперёд под прямой урон».
-        stampHealNeed(allies)
-    }
-
-    /** Непокрытая нужда каждого своего по id — уменьшается по мере назначения лекарей (см. saturateHeal). */
-    private val needLeft = HashMap<String, Double>()
-
-    /**
-     * Поле нужды строится заново перед каждой раздачей: она идёт ПЯТЬ раз за тик, по разу на замысел, и
-     * насыщение одного замысла не должно просачиваться в следующий — ровно та же причина, что у clearClaim.
-     */
-    fun stampHealNeed(allies: List<Creep>) {
-        attHeal.fill(0)
-        needLeft.clear()
-        inFire.clear()
-        var total = 0.0
-        for (a in allies) {
-            val key = a.key
-            // ПОДОПЕЧНЫЙ В РЕЖИМЕ — ТОТ, КОГО ДОСТАЁТ ЕГО СТОЯЩИЙ СТРЕЛОК (сужение v439 по гейту match20:brawl+heals 14 632 :
-            // 15 192, затем 5 103 : 5 737): цена «ровно этот тик» верна против угрозы, равной себе и в следующий тик, — стрелок,
-            // держащий три; мили ходит клетку в тик и бьёт лекаря первым на 240, наступающий стрелок через тик стреляет с трёх
-            // туда, где сейчас безопасно. Боец под таким огнём лечится по-старому: с look-ahead шагового ядра и клеем
-            if (eRanged[key] > 0) wardsUnderRanged++
-            if (eRangedStill[key] > 0) wardsUnderStill++
-            // при выключенном точном ядре (v440) зона огня — как у v438: его мили вплотную или стрелок в ≤ 3 (eFire)
-            if (if (USE_HEAL_EXACT_IN_FIRE) eRangedStill[key] > 0 else eFire[key] > 0) inFire.add(a.id)
-            val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
-            // НУЖДА — ТО, ЧТО ЛЕЧЕНИЕ МОЖЕТ ВЕРНУТЬ (v435, см. USE_HEAL_NEED_ACTUAL): недобор хитов плюс потеря за прошлый
-            // тик; целый крип во втором ряду нужды не имеет, как бы ни было опасно его поле
-            val base = if (USE_HEAL_NEED_ACTUAL) {
-                val lost = ((Memory.lastHits[a.id] ?: a.hits) - a.hits).coerceAtLeast(0)
-                minOf((a.hitsMax - a.hits + lost).toDouble(), a.hitsMax.toDouble())
-            } else minOf(dangerAt(key), a.hits.toDouble())
-            val need = base * (if (armed) 1.0 else NEED_DISARMED)
-            needLeft[a.id] = need
-            total += need
-            stamp(attHeal, a.x, a.y, K_ATT_HEAL, need, false)
-        }
-        totalNeed = total
+        // ...поле тика (v449): до v449 нужда штамповалась здесь в общее поле, и в тик без раздачи командира именно её читали
+        // приборы `hcov=` / `atH=`; теперь это поле тика публикуется как есть, а раздача командира публикует поверх своё
+        published = HealNeed().also { it.stampHealNeed(allies) }
     }
 
     /**
-     * НАСЫЩЕНИЕ (этап 7): назначенный лекарь снимает с подопечных ту нужду, которую покроет собой, — иначе трое
-     * лекарей встанут на одного раненого, а второй очаг останется без помощи вовсе. Снимается ровно покрытое:
-     * подопечный, чья нужда больше одного лекаря, продолжает тянуть второго.
+     * ПОЛЕ НУЖДЫ ОДНОЙ РАЗДАЧИ (v449, пункт В оператора). До v449 нужда (`attHeal`, `needLeft`, `inFire`, `advancingWards`) и
+     * притязания (`claim`) были полями этого объекта, общими для всех раздач тика: раздача идёт до шести раз за тик — по разу
+     * на замысел перебора и раз для одних лекарей, — и после перебора здесь оставалось поле ПОСЛЕДНЕГО оценённого замысла, а
+     * не выбранного (выбранный отличается от последнего в 97 % выборок гейта и 89 % живых, v447). Теперь поле принадлежит
+     * носителю раздачи (`DealRecord` в `commandFight`): каждая проба строит своё, а в мир публикуется поле ВЫБРАННОЙ раздачи
+     * ([published]) — его читают приборы после командира (`hcov=`, `atH=`). Притязания у носителя не поле вовсе: они
+     * считаются из его окончательных приказов (`Deal.claimAt`). Ядра, поля этого тика и профили — общие, у объекта.
      */
+    class HealNeed {
+        /** Нужда своих в лечении, покрываемая из клетки (ядро K_ATT_HEAL), за вычетом покрытого назначенными лекарями. */
+        val attHeal = IntArray(FIELD_CELLS)
 
-    fun saturateHeal(healer: Creep, x: Int, y: Int, allies: List<Creep>) {
-        val h = profileOf(healer).heal
-        if (h <= 0.0) return
-        for (a in allies) {
-            if (a.id == healer.id) continue
-            val d = maxOf(abs(a.x - x), abs(a.y - y))
-            if (d >= K_ATT_HEAL.size) continue
-            val left = needLeft[a.id] ?: continue
-            if (left <= 0.0) continue
-            val covered = minOf(left, h * K_ATT_HEAL[d])
-            if (covered <= 0.0) continue
-            needLeft[a.id] = left - covered
-            stamp(attHeal, a.x, a.y, K_ATT_HEAL, -covered, false)
+        /** Непокрытая нужда каждого своего по id — уменьшается по мере назначения лекарей (см. saturateHeal). */
+        private val needLeft = HashMap<String, Double>()
+
+        /**
+         * Поле нужды строится заново перед каждой раздачей: она идёт ПЯТЬ раз за тик, по разу на замысел, и
+         * насыщение одного замысла не должно просачиваться в следующий — ровно та же причина, что у clearClaim.
+         * (С v449 поле у каждой раздачи своё — см. заголовок класса; текст оставлен как вердикт.)
+         */
+        fun stampHealNeed(allies: List<Creep>) {
+            attHeal.fill(0)
+            needLeft.clear()
+            inFire.clear()
+            var total = 0.0
+            for (a in allies) {
+                val key = a.key
+                // ПОДОПЕЧНЫЙ В РЕЖИМЕ — ТОТ, КОГО ДОСТАЁТ ЕГО СТОЯЩИЙ СТРЕЛОК (сужение v439 по гейту match20:brawl+heals 14 632 :
+                // 15 192, затем 5 103 : 5 737): цена «ровно этот тик» верна против угрозы, равной себе и в следующий тик, — стрелок,
+                // держащий три; мили ходит клетку в тик и бьёт лекаря первым на 240, наступающий стрелок через тик стреляет с трёх
+                // туда, где сейчас безопасно. Боец под таким огнём лечится по-старому: с look-ahead шагового ядра и клеем
+                if (eRanged[key] > 0) wardsUnderRanged++
+                if (eRangedStill[key] > 0) wardsUnderStill++
+                // при выключенном точном ядре (v440) зона огня — как у v438: его мили вплотную или стрелок в ≤ 3 (eFire)
+                if (if (USE_HEAL_EXACT_IN_FIRE) eRangedStill[key] > 0 else eFire[key] > 0) inFire.add(a.id)
+                val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
+                // НУЖДА — ТО, ЧТО ЛЕЧЕНИЕ МОЖЕТ ВЕРНУТЬ (v435, см. USE_HEAL_NEED_ACTUAL): недобор хитов плюс потеря за прошлый
+                // тик; целый крип во втором ряду нужды не имеет, как бы ни было опасно его поле
+                val base = if (USE_HEAL_NEED_ACTUAL) {
+                    val lost = ((Memory.lastHits[a.id] ?: a.hits) - a.hits).coerceAtLeast(0)
+                    minOf((a.hitsMax - a.hits + lost).toDouble(), a.hitsMax.toDouble())
+                } else minOf(dangerAt(key), a.hits.toDouble())
+                val need = base * (if (armed) 1.0 else NEED_DISARMED)
+                needLeft[a.id] = need
+                total += need
+                stamp(attHeal, a.x, a.y, K_ATT_HEAL, need, false)
+            }
+            totalNeed = total
         }
-    }
 
-    /** ЛУЧШАЯ ОДНА ДОСТАВКА ИЗ КЛЕТКИ (v435, см. USE_HEAL_NEED_ACTUAL): лекарь лечит одного за тик, поэтому цена клетки —
-     *  не сумма нужд вокруг, а наибольшее из min(непокрытая нужда подопечного, лечение × ядро по дистанции). Вплотную к
-     *  теряющему хиты — полное лечение (72 у h6), в двух-трёх клетках — треть, у целого — ноль. Себя лекарь тоже считает. */
-    fun bestDeliveryAt(healer: Creep, x: Int, y: Int, allies: List<Creep>): Double {
-        val h = profileOf(healer).heal
-        if (h <= 0.0) return 0.0
-        val fireMode = deliveryFireMode(healer, allies)
-        // У ПОДОПЕЧНОГО ПОД ОГНЁМ КЛЕТКА СТОИТ ТО, ЧТО ДОСТАВЛЯЕТСЯ В ЭТОТ ТИК (v439, см. USE_HEAL_EXACT_IN_FIRE): шаговое ядро
-        // оценивало клетку в двух в γ·72 = 50 при настоящих 24, и последний шаг к бойцу под огнём стоил в цене 22 при 48 в
-        // хитах — лекарь лечил того же бойца с двух клеток. Скидка «вылечу со следующего тика» верна для отложимого лечения
-        // и ложна для скоропортящегося; вне огня она остаётся (иначе поле — ноль вдали от боя, match29:camp)
-        val k = if (USE_HEAL_STEP_KERNEL && !(USE_HEAL_EXACT_IN_FIRE && fireMode)) K_HEAL_STEP else K_ATT_HEAL
-        // ...И ТОЛЬКО ИЗ КЛЕТКИ ВНЕ ЕГО ОГНЯ (сужение v438 по гейту match4:kite 8 802 : 14 502 — hparts 18 → 0 к t=110 при его
-        // ehparts 0/18, hfire=127/185/36): его стрелок в досягаемости лекаря бьёт ЛЕКАРЯ, а не тела перед ним (модель
-        // wallTargetOf, 85–91 % совпадений; стуб-кайтер — наименьшие хиты, лекарь 1 200 против 1 600 у мили), поэтому экран
-        // тел лекарю не скидка, и 72 доставки из клетки под двумя стволами покупали клетку, где он раздевался за пять тиков.
-        // Клетка вплотную к подопечному под огнём, но вне огня сама (сзади него) есть в 63 % таких тиков (разбор v437) — она
-        // и есть предмет правки; из клетки под огнём доставки нет, там действуют влияние и опасность, как у v437
-        // ...И НЕ ИЗ КЛЕТКИ, КУДА ЕГО МИЛИ ДОСТАЁТ ШАГОМ (сужение v439 по гейту match20:brawl+heals 14 632 : 15 192): цена «ровно
-        // этот тик» верна, пока угроза следующего тика равна нынешней — стрелок держит три и стоит, мили ходит клетку в тик и
-        // бьёт лекаря первым на 240; клетка в двух от него вне огня сейчас и под топором через тик. Поле eMelee (K_MELEE,
-        // радиус 2 — «шаг + удар») и есть эта досягаемость
-        if (fireMode && (eFire[key(x, y)] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[key(x, y)] > 0))) return 0.0
-        var best = 0.0
-        for (a in allies) {
-            if (fireMode && (a.id !in inFire || a.id in advancingWards)) continue
-            val d = maxOf(abs(a.x - x), abs(a.y - y))
-            if (d >= k.size) continue
-            val left = needLeft[a.id] ?: continue
-            if (left <= 0.0) continue
-            val v = minOf(left, h * k[d])
-            if (v > best) best = v
+        /**
+         * НАСЫЩЕНИЕ (этап 7): назначенный лекарь снимает с подопечных ту нужду, которую покроет собой, — иначе трое
+         * лекарей встанут на одного раненого, а второй очаг останется без помощи вовсе. Снимается ровно покрытое:
+         * подопечный, чья нужда больше одного лекаря, продолжает тянуть второго.
+         */
+
+        fun saturateHeal(healer: Creep, x: Int, y: Int, allies: List<Creep>) {
+            val h = profileOf(healer).heal
+            if (h <= 0.0) return
+            for (a in allies) {
+                if (a.id == healer.id) continue
+                val d = maxOf(abs(a.x - x), abs(a.y - y))
+                if (d >= K_ATT_HEAL.size) continue
+                val left = needLeft[a.id] ?: continue
+                if (left <= 0.0) continue
+                val covered = minOf(left, h * K_ATT_HEAL[d])
+                if (covered <= 0.0) continue
+                needLeft[a.id] = left - covered
+                stamp(attHeal, a.x, a.y, K_ATT_HEAL, -covered, false)
+            }
         }
-        return best
-    }
-    /** Свои в зоне его огня этим тиком (v438, см. USE_HEAL_DELIVERY_IN_FIRE): поле eFire в клетке подопечного больше нуля —
-     *  его мили вплотную или стрелок в ≤ 3, без шага сближения. Заполняется вместе с нуждой. */
-    private val inFire = HashSet<String>()
 
-    /** РЕЖИМ «В ЗОНЕ ОГНЯ» (v438, см. USE_HEAL_DELIVERY_IN_FIRE): у лекаря в досягаемости шага (d ≤ размер ядра) есть
-     *  подопечный под его огнём с непокрытой нуждой — тогда доставка в цене клетки считается по одним таким: лечение ему
-     *  скоропортящееся, остальным отложимо. Решается на лекаря за тик, а не на клетку — иначе соседние клетки считались бы
-     *  в разных режимах, и лекарь уходил бы от огня к большему числу. Насыщение снимает нужду — покрытый подопечный режим
-     *  не держит, и следующий лекарь считает по-старому. */
-    /** Бойцы, идущие ВПЕРЁД этим тиком (v439, заполняет commandFight перед проходом лекарей): их назначенная клетка — или,
-     *  когда план бойцов не наш (раздача одних лекарей), ход прошлого тика — ближе к его стволам, чем нынешняя. Такой боец в
-     *  режим точной цены не входит: лекарь, приклеенный к нему вплотную, идёт за ним в огонь (match20:brawl+heals — к t=100
-     *  все три лекаря внутри его группы стрелков); у него клетка ценится по-старому, с look-ahead шагового ядра. */
-    val advancingWards = HashSet<String>()
-
-    fun deliveryFireMode(healer: Creep, allies: List<Creep>): Boolean {
-        if (!USE_HEAL_DELIVERY_IN_FIRE) return false
-        val reach = (if (USE_HEAL_STEP_KERNEL) K_HEAL_STEP else K_ATT_HEAL).size
-        for (a in allies) {
-            // сам лекарь режим не включает (сужение v438 по гейту match33:camp 18 354 : 23 667): доставка себе одинакова
-            // из любой клетки (d = 0), режим же — про перестановку к ДРУГОМУ; единственный раненый в танце перед боем
-            // был лекарь с −52, режим гасил ему клей, и танец разошёлся в отряжение семерых бегунами и отход
-            if (a.id == healer.id || a.id !in inFire || a.id in advancingWards) continue
-            if ((needLeft[a.id] ?: 0.0) <= 0.0) continue
-            if (maxOf(abs(a.x - healer.x), abs(a.y - healer.y)) <= reach) return true
+        /** ЛУЧШАЯ ОДНА ДОСТАВКА ИЗ КЛЕТКИ (v435, см. USE_HEAL_NEED_ACTUAL): лекарь лечит одного за тик, поэтому цена клетки —
+         *  не сумма нужд вокруг, а наибольшее из min(непокрытая нужда подопечного, лечение × ядро по дистанции). Вплотную к
+         *  теряющему хиты — полное лечение (72 у h6), в двух-трёх клетках — треть, у целого — ноль. Себя лекарь тоже считает. */
+        fun bestDeliveryAt(healer: Creep, x: Int, y: Int, allies: List<Creep>): Double {
+            val h = profileOf(healer).heal
+            if (h <= 0.0) return 0.0
+            val fireMode = deliveryFireMode(healer, allies)
+            // У ПОДОПЕЧНОГО ПОД ОГНЁМ КЛЕТКА СТОИТ ТО, ЧТО ДОСТАВЛЯЕТСЯ В ЭТОТ ТИК (v439, см. USE_HEAL_EXACT_IN_FIRE): шаговое ядро
+            // оценивало клетку в двух в γ·72 = 50 при настоящих 24, и последний шаг к бойцу под огнём стоил в цене 22 при 48 в
+            // хитах — лекарь лечил того же бойца с двух клеток. Скидка «вылечу со следующего тика» верна для отложимого лечения
+            // и ложна для скоропортящегося; вне огня она остаётся (иначе поле — ноль вдали от боя, match29:camp)
+            val k = if (USE_HEAL_STEP_KERNEL && !(USE_HEAL_EXACT_IN_FIRE && fireMode)) K_HEAL_STEP else K_ATT_HEAL
+            // ...И ТОЛЬКО ИЗ КЛЕТКИ ВНЕ ЕГО ОГНЯ (сужение v438 по гейту match4:kite 8 802 : 14 502 — hparts 18 → 0 к t=110 при его
+            // ehparts 0/18, hfire=127/185/36): его стрелок в досягаемости лекаря бьёт ЛЕКАРЯ, а не тела перед ним (модель
+            // wallTargetOf, 85–91 % совпадений; стуб-кайтер — наименьшие хиты, лекарь 1 200 против 1 600 у мили), поэтому экран
+            // тел лекарю не скидка, и 72 доставки из клетки под двумя стволами покупали клетку, где он раздевался за пять тиков.
+            // Клетка вплотную к подопечному под огнём, но вне огня сама (сзади него) есть в 63 % таких тиков (разбор v437) — она
+            // и есть предмет правки; из клетки под огнём доставки нет, там действуют влияние и опасность, как у v437
+            // ...И НЕ ИЗ КЛЕТКИ, КУДА ЕГО МИЛИ ДОСТАЁТ ШАГОМ (сужение v439 по гейту match20:brawl+heals 14 632 : 15 192): цена «ровно
+            // этот тик» верна, пока угроза следующего тика равна нынешней — стрелок держит три и стоит, мили ходит клетку в тик и
+            // бьёт лекаря первым на 240; клетка в двух от него вне огня сейчас и под топором через тик. Поле eMelee (K_MELEE,
+            // радиус 2 — «шаг + удар») и есть эта досягаемость
+            if (fireMode && (eFire[key(x, y)] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[key(x, y)] > 0))) return 0.0
+            var best = 0.0
+            for (a in allies) {
+                if (fireMode && (a.id !in inFire || a.id in advancingWards)) continue
+                val d = maxOf(abs(a.x - x), abs(a.y - y))
+                if (d >= k.size) continue
+                val left = needLeft[a.id] ?: continue
+                if (left <= 0.0) continue
+                val v = minOf(left, h * k[d])
+                if (v > best) best = v
+            }
+            return best
         }
-        return false
+        /** Свои в зоне его огня этим тиком (v438, см. USE_HEAL_DELIVERY_IN_FIRE): поле eFire в клетке подопечного больше нуля —
+         *  его мили вплотную или стрелок в ≤ 3, без шага сближения. Заполняется вместе с нуждой. */
+        private val inFire = HashSet<String>()
+
+        /** РЕЖИМ «В ЗОНЕ ОГНЯ» (v438, см. USE_HEAL_DELIVERY_IN_FIRE): у лекаря в досягаемости шага (d ≤ размер ядра) есть
+         *  подопечный под его огнём с непокрытой нуждой — тогда доставка в цене клетки считается по одним таким: лечение ему
+         *  скоропортящееся, остальным отложимо. Решается на лекаря за тик, а не на клетку — иначе соседние клетки считались бы
+         *  в разных режимах, и лекарь уходил бы от огня к большему числу. Насыщение снимает нужду — покрытый подопечный режим
+         *  не держит, и следующий лекарь считает по-старому. */
+        /** Бойцы, идущие ВПЕРЁД этим тиком (v439, заполняет commandFight перед проходом лекарей): их назначенная клетка — или,
+         *  когда план бойцов не наш (раздача одних лекарей), ход прошлого тика — ближе к его стволам, чем нынешняя. Такой боец в
+         *  режим точной цены не входит: лекарь, приклеенный к нему вплотную, идёт за ним в огонь (match20:brawl+heals — к t=100
+         *  все три лекаря внутри его группы стрелков); у него клетка ценится по-старому, с look-ahead шагового ядра. */
+        val advancingWards = HashSet<String>()
+
+        fun deliveryFireMode(healer: Creep, allies: List<Creep>): Boolean {
+            if (!USE_HEAL_DELIVERY_IN_FIRE) return false
+            val reach = (if (USE_HEAL_STEP_KERNEL) K_HEAL_STEP else K_ATT_HEAL).size
+            for (a in allies) {
+                // сам лекарь режим не включает (сужение v438 по гейту match33:camp 18 354 : 23 667): доставка себе одинакова
+                // из любой клетки (d = 0), режим же — про перестановку к ДРУГОМУ; единственный раненый в танце перед боем
+                // был лекарь с −52, режим гасил ему клей, и танец разошёлся в отряжение семерых бегунами и отход
+                if (a.id == healer.id || a.id !in inFire || a.id in advancingWards) continue
+                if ((needLeft[a.id] ?: 0.0) <= 0.0) continue
+                if (maxOf(abs(a.x - healer.x), abs(a.y - healer.y)) <= reach) return true
+            }
+            return false
+        }
+
+        /** Доля нужды, покрытая назначенными лекарями: 0 — никто никого не прикрывает, 1 — покрыты все. */
+        fun healCoverage(): Pair<Double, Double> {
+            var left = 0.0
+            for (v in needLeft.values) left += v
+            return left to totalNeed
+        }
+
+        private var totalNeed = 0.0
+
+        /** Нужда своих в лечении, покрываемая из клетки. */
+        fun attHealAt(key: Int): Double = attHeal[key].toDouble() / FP
     }
 
     /** ШАГОВОЕ ЯДРО ЦЕНЫ ДОСТАВКИ (v437, см. USE_HEAL_STEP_KERNEL): клетка стоит лучшее из «лечу отсюда сейчас»
@@ -886,31 +913,10 @@ object InfluenceMap {
      *  только последний шаг. Насыщение (saturateHeal) считает по настоящему healRate — там нужна доставка, а не цена. */
     private val K_HEAL_STEP = doubleArrayOf(1.0, 1.0, maxOf(HEAL_FALLOFF, GAMMA), maxOf(HEAL_FALLOFF, GAMMA * HEAL_FALLOFF), GAMMA * HEAL_FALLOFF)
 
-    /** Доля нужды, покрытая назначенными лекарями: 0 — никто никого не прикрывает, 1 — покрыты все. */
-    fun healCoverage(): Pair<Double, Double> {
-        var left = 0.0
-        for (v in needLeft.values) left += v
-        return left to totalNeed
-    }
-
-    private var totalNeed = 0.0
-
-    /** Занятость клеток уже розданными приказами: раздача идёт пять раз за тик, по разу на замысел, и
-     *  притязания одного замысла не должны просачиваться в следующий (Hagelbäck: временное отталкивание
-     *  в выбранной клетке — то, что не даёт крипам слипаться в одну точку). */
-    fun clearClaim() {
-        claim.fill(0)
-    }
-
-    /** Ставит притязание на клетку и её соседей: следующий крип видит её как занятую. */
-    fun addClaim(x: Int, y: Int) {
-        for (dx in sym(1)) for (dy in sym(1)) {
-            val nx = x + dx
-            val ny = y + dy
-            if (nx < 0 || ny < 0 || nx > FIELD_MAX || ny > FIELD_MAX) continue
-            claim[key(nx, ny)]++
-        }
-    }
+    /** Поле нужды ВЫБРАННОЙ раздачи этого тика (v449, пункт В): ставит командир после перебора замыслов (и после раздачи одних
+     *  лекарей); читают приборы после командира — `hcov=` и `atH=`. До первой раздачи матча — null; в тик без раздачи остаётся
+     *  от прошлой, как прежде оставалось само поле. */
+    var published: HealNeed? = null
 
     /** Цена цели — боевые части, умноженные на нашу способность их выбить (см. buildFields). */
     /** Цена цели за тик: поля строятся раз в тик, значит и она постоянна — а зовут её из внутреннего цикла
@@ -980,11 +986,6 @@ object InfluenceMap {
     fun attMeleeAt(key: Int): Double = attMelee[key].toDouble() / FP
 
     fun attRangedAt(key: Int): Double = attRanged[key].toDouble() / FP
-
-    /** Нужда своих в лечении, покрываемая из клетки. */
-    fun attHealAt(key: Int): Double = attHeal[key].toDouble() / FP
-
-    fun claimAt(key: Int): Double = claim[key].toDouble()
 
     /** Максимум поля — «поле живое»: обнулившееся поле обязано быть видно, а не тихо давать нули. */
     fun fieldPeak(field: IntArray): Double {
