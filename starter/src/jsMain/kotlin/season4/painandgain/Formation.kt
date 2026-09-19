@@ -368,16 +368,16 @@ internal fun commandMarch(ctx: Ctx, army: List<Creep>, goal: Position?, out: Mut
     // сценарий screen шёл в режиме марша все 185 строк лога и проигрывал счёт 10 782:14 471. Ведущий — тот, кто
     // ближе всех к якорю; его шаг по полю потока и есть направление колонны (v163)
     val lead = core.minByOrNull { maxOf(abs(it.x - ax), abs(it.y - ay)) }!!
-    marchAll++
+    marchAll.n++
     val sx: Int; val sy: Int
     val descent = flowDescent(ctx, goal, ax, ay, lead)
-    if (descent != null) { marchFlow++; sx = descent.first; sy = descent.second }
+    if (descent != null) { marchFlow.n++; sx = descent.first; sy = descent.second }
     else {
         val step = pathStep(lead, goal, 1, crowdMatrixOf(ctx, goal.key))
         sx = if (step != null) (step.x - lead.x).coerceIn(-1, 1) else (goal.x - ax).coerceIn(-1, 1)
         sy = if (step != null) (step.y - lead.y).coerceIn(-1, 1) else (goal.y - ay).coerceIn(-1, 1)
     }
-    if ((sx != 0 || sy != 0) && sx == -marchPrevSx && sy == -marchPrevSy) marchFlip++
+    if ((sx != 0 || sy != 0) && sx == -marchPrevSx && sy == -marchPrevSy) marchFlip.n++
     marchPrevSx = sx; marchPrevSy = sy
     if (sx == 0 && sy == 0) return
     Formation.marchColumn(unitsNow, core, ax, ay, sx, sy, out)
@@ -642,14 +642,14 @@ internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasuresOut): HealerWall
         wallAddrHits.addLast(wallAddrPrev == lostV.id); wallLostHits.addLast(wallLostPrev == lostV.id)
         while (wallAddrHits.size > TOUCH_WINDOW) wallAddrHits.removeFirst()
         while (wallLostHits.size > TOUCH_WINDOW) wallLostHits.removeFirst()
-        hwallPredN++; if (wallAddrPrev == lostV.id) hwallPredA++; if (wallLostPrev == lostV.id) hwallPredL++
+        hwallPredN.n++; if (wallAddrPrev == lostV.id) hwallPredA.n++; if (wallLostPrev == lostV.id) hwallPredL.n++
     }
     wallAddrPrev = byAddress?.key; wallLostPrev = lostV?.id
     val addrWins = wallAddrHits.size >= STALL_TICKS && wallAddrHits.count { it } > wallLostHits.count { it }
     val v = if (byAddress != null && addrWins) ctx.army.firstOrNull { it.id == byAddress.key } ?: lostV else lostV
     if (v != null) {
         val useAddr = byAddress != null && addrWins && v.id == byAddress.key
-        if (useAddr) hwallAddr++
+        if (useAddr) hwallAddr.n++
         val loss = if (useAddr) byAddress!!.value else (lostTick[v.id] ?: 0).toDouble()
         val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
         val hisRanged = ctx.combatEnemies.filter { hasRanged(it) }
@@ -682,8 +682,8 @@ internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasuresOut): HealerWall
         victimNow = v
         victimSaveable = cells.isNotEmpty() && loss <= potential
         if (!victimSaveable) wallCellOf.clear()
-        hwallVictimTicks++
-        if (victimSaveable) hwallTicks++
+        hwallVictimTicks.n++
+        if (victimSaveable) hwallTicks.n++
     }
     return HealerWallOut(
     )
@@ -777,20 +777,20 @@ internal var planStrict = 0
 internal var planLoose = 0
 
 /** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
-internal var marchFlow = 0
+internal val marchFlow = Gauges.counter("mdir")
 
-internal var marchAll = 0
+internal val marchAll = Gauges.counter("mdir", 1)
 
-internal var marchFlip = 0
+internal val marchFlip = Gauges.counter("mdir", 2)
 
-internal var hwallTicks = 0
+internal val hwallTicks = Gauges.counter("hwall")
 
-internal var hwallVictimTicks = 0
+internal val hwallVictimTicks = Gauges.also(Gauges.counter("hwall", 1), "hwalla", 1)
 
-internal var hwallAddr = 0
+internal val hwallAddr = Gauges.counter("hwalla")
 
-internal var hwallPredA = 0
+internal val hwallPredA = Gauges.counter("hwallp")
 
-internal var hwallPredL = 0
+internal val hwallPredL = Gauges.counter("hwallp", 1)
 
-internal var hwallPredN = 0
+internal val hwallPredN = Gauges.counter("hwallp", 2)

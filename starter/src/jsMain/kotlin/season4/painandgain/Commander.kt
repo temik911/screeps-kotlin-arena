@@ -131,7 +131,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
                 lastCost = cpuMs() - t0
             }
             publishDeal(bestRec, tried)
-            if (bestPlan != null && bestIntent != lastIntent) srchDiff++
+            if (bestPlan != null && bestIntent != lastIntent) srchDiff.n++
             cmdEndMs = cpuMs(); cmdSearched = true
             // ГИСТОГРАММА ЗАМЫСЛА (этап 8): перебор из пяти стоит пяти раздач за тик, и окупается ли он —
             // вопрос к числу, а не к мнению. Счётчик стоит ЗДЕСЬ, где замысел действительно выбирается:
@@ -240,9 +240,9 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
  *  Зовётся из трёх мест, где командир раздаёт клетки: перебор замыслов (победитель), раздача при нехватке CPU, раздача одних
  *  лекарей. */
 internal fun PainAndGain.publishDeal(rec: DealRecord?, tried: Int) {
-    dealsTried += tried
+    dealsTried.n += tried
     if (rec == null) return
-    dealsChosen++
+    dealsChosen.n++
     InfluenceMap.published = rec.need
     mergeDeal(rec)
 }
@@ -251,11 +251,11 @@ internal fun PainAndGain.publishDeal(rec: DealRecord?, tried: Int) {
 // Перенесены из Instruments.kt дословно; Instruments их читает и печатает. `cmdSearched` сбрасывает оркестровка в конце тика.
 
 /** Раздач, ушедших в мир (по одной на тик раздачи) / раздач сыграно, включая пробы замыслов (v449, прибор `deals=`). */
-internal var dealsChosen = 0
-internal var dealsTried = 0
+internal val dealsChosen = Gauges.counter("deals")
+internal val dealsTried = Gauges.counter("deals", 1)
 /** Тиков перебора, где выбранный замысел — не последний оценённый (v449, прибор `srchd=`): столько раз до v449 после командира
  *  в мире оставалось поле нужды чужого замысла (97 % выборок гейта и 89 % живых по строкам `sim t=` v447). */
-internal var srchDiff = 0
+internal val srchDiff = Gauges.counter("srchd")
 
 /** Перебор замыслов под бюджетом (v262, см. Strategist.armyCommand): тиков с перебором, из них обрезанных, наибольший
  *  хвост тика после командира в мс — прибор srch= и запас бюджета. */

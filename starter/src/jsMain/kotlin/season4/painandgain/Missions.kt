@@ -76,7 +76,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         runnerModeN++
         // ...и цена простоя В ОЧКАХ, а не в тиках: тик у флага, который нельзя взять, стоит его score.
         // Разбор v214 считал эту величину вручную («166 тиков x 3 очка ~ 500, матч проигран с разрывом 292»)
-        if (tag == "POISED" && f != null) poisedCost += f.score
+        if (tag == "POISED" && f != null) poisedCost.n += f.score
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
             println("  r${s.id} (${s.x},${s.y}) ${bodySummary(s)} hits=${s.hits} $mode flag=${f?.let { "(${it.pos.x},${it.pos.y})${typeChar(it.type)}${it.score}my=${it.mine}" } ?: "-"} fatigue=${s.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(s.id)) " STUCK" else ""}")
         }
@@ -158,8 +158,8 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
     cands.sortByDescending { it.value }
     val assigned = HashSet<String>()
     val taken = HashSet<String>()
-    for ((id, f) in holds) { assigned.add(id); taken.add(f.id); Memory.runnerFlag[id] = f.id; holdPinned++ }
-    for ((id, f) in guards) { assigned.add(id); Memory.runnerFlag[id] = f.id; flagGuardTicks++ }
+    for ((id, f) in holds) { assigned.add(id); taken.add(f.id); Memory.runnerFlag[id] = f.id; holdPinned.n++ }
+    for ((id, f) in guards) { assigned.add(id); Memory.runnerFlag[id] = f.id; flagGuardTicks.n++ }
     for ((id, f) in orders) { assigned.add(id); taken.add(f.id); Memory.runnerFlag[id] = f.id }
     if (cpuGuard) for (s in runners) Memory.runnerFlag[s.id]?.let { id -> if (flagById[id] != null) { assigned.add(s.id); taken.add(id) } }
     for (c in cands) {
@@ -222,8 +222,8 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         val healing = InfluenceMap.healAt(s.x, s.y, ctx.armyWithHeal)
         val garrisonStays = groupSafe && Memory.garrisonOf[s.id] != null && holds.containsKey(s.id) &&
             s.hits * 2 >= s.hitsMax && incoming <= healing
-        if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay++
-        if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay++
+        if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay.n++
+        if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay.n++
         if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned && !garrisonStays) {
             // поиск пути бегства может не дать шага (скаут в матче 3 «бежал» на месте три тика и погиб) —
             // тогда жадно: соседняя клетка подальше от врагов и под меньшим огнём; в опасности шаг делается ВСЕГДА,
@@ -282,8 +282,8 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.key else -1)) else null
         if (step != null) { TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY); planCapture(ctx, step) }
         // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
-        poisedAll++
-        if (!allowed && step == null) poisedTicks++
+        poisedAll.n++
+        if (!allowed && step == null) poisedTicks.n++
         dbg(s, if (allowed) "TO_FLAG" else "POISED:$block", f, step)
     }
 }
@@ -296,18 +296,18 @@ internal const val SCOUT_FLEE_RANGE = 12
 /** Удержание флага (v297, hold=закреплено/осталось/гонка/бой): бегуно-тики, закреплённые за своим флагом правилом
  *  HOLD_WATCH; вооружённый бегун, который прежде бежал бы, а сила врага рядом его не перевешивает; держатели, оставленные
  *  командирской гонкой; держатели, не отозванные боем вне контакта ядра. */
-internal var holdPinned = 0
+internal val holdPinned = Gauges.counter("hold")
 
-internal var flagGuardTicks = 0
+internal val flagGuardTicks = Gauges.counter("fguard")
 
-internal var holdArmedStay = 0
+internal val holdArmedStay = Gauges.counter("hold", 1)
 
 /** Тиков, когда бегун стоял вплотную к назначенному флагу и не брал его, и тиков с назначенным флагом. */
-internal var poisedTicks = 0
+internal val poisedTicks = Gauges.counter("poised")
 
-internal var poisedAll = 0
+internal val poisedAll = Gauges.counter("poised", 1)
 
 internal var runnerModeN = 0
 
 /** Цена простоя бегуна В ОЧКАХ: тик у флага, который нельзя взять, стоит `f.score` очков. */
-internal var poisedCost = 0
+internal val poisedCost = Gauges.counter("poisedcost")
