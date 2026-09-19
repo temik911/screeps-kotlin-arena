@@ -288,6 +288,95 @@ internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enem
     soutTicks += Memory.stepOutIds.size
 }
 
+/** Цель хода: куда идти, на каком расстоянии встать, обходить ли стоящих врагов, брать ли поле «вблизи» (см. NEAR_FLOW). */
+internal class Aim(val target: Position, val standoff: Int, val avoid: Boolean = false, val nearFlow: Boolean = false)
+
+/**
+ * СТРОКА ТАБЛИЦЫ РЕШЕНИЙ (v444, план архитектуры, 4.3): имя, условие, действие. Имя — тег, который печатает лог: по нему
+ * `grep` находит строку таблицы, и условие с действием стоят в ней же. Условие — ЧИСТОЕ чтение фактов [F]: его можно вычислить
+ * у каждой строки, а не только до первой истинной, — так считаются перекрытые порядком. Действие исполняется только у
+ * выигравшей строки; счётчик или запись, которые раньше стояли в теле ветки `when`, живут в нём.
+ */
+internal class Row<F, R>(val tag: String, val guard: F.() -> Boolean, val act: F.() -> R)
+
+/** Обходчик, один на все таблицы: первая строка с истинным условием выигрывает — семантика прежнего `when`. Порядок списка —
+ *  приоритет, другого описания приоритета нет; последняя строка таблицы замыкающая (`{ true }`). */
+internal fun <F, R> walk(table: List<Row<F, R>>, facts: F): Row<F, R> {
+    for (row in table) if (row.guard(facts)) return row
+    throw IllegalStateException("decision table without a closing row")
+}
+
+private var ladderRows: List<Row<Turn, Aim>>? = null
+
+/**
+ * ЛЕСТНИЦА ЦЕЛИ: 27 ступеней, порядок списка = приоритет. Строка — лямбды с получателем [Turn]: голое имя — факт хода, `t.` —
+ * величина тика ([ArmyTick]), остальное — член `PainAndGain` или верх пакета. Собирается один раз, внутри функции-расширения:
+ * инициализатор верхнего уровня с `with(PainAndGain)` дал бы модулю тактика импорт объекта-оркестратора (ребро вверх), а
+ * взаимные инициализаторы верхнего уровня в Kotlin/JS дают `undefined`.
+ * ПЕРЕПИСЬ РЕШЕНИЙ (v203, этап 1): каждая ветка обеих цепочек называет себя, и счётчик копится за матч.
+ */
+internal fun PainAndGain.ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<Row<Turn, Aim>>(
+    Row("keeper", { keeper }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
+    Row("slotHold", { slotHold }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
+    // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
+    // ...и ЛЕКАРЮ ПРИКАЗ «СТОЯТЬ» — ТОЖЕ ПРИКАЗ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT): раздача разрешает свою
+    // клетку («стой»), но здесь такой приказ молча проваливался ниже, к healMate, и лекарь уходил с клетки, которую
+    // командир оценил лучшей; у бойцов условие не тронуто
+    Row("order", { commandOf[creep.id] != null && ((USE_COMMANDER_HEALERS_IN_CONTACT && healer) || commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) }) { Aim(commandOf[creep.id]!!, 0) },
+    // ПОГОНЯ ЗА ОСТОВОМ (v212) — сразу под приказом командира: пока он правит, клетку даёт он (и тоже
+    // знает про погоню, см. chaseTarget в placeScored); когда молчит, преследователь идёт сюда. Ниже
+    // кайта и строя стоять нельзя: обе ветки увели бы его обратно в кулак, а весь смысл отряда в том,
+    // чтобы из кулака выйти
+    Row("chase", { Memory.chaseTarget[creep.id]?.let { it.hits > 0 } == true }) { Aim(InfluenceMap.cell(Memory.chaseTarget[creep.id]!!.x, Memory.chaseTarget[creep.id]!!.y), if (hasRanged(creep)) RANGED_RANGE - 1 else 0, avoid = true) },
+    // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
+    // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
+    // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
+    // где наш собственный огонь плотнее. MetalicaX#11 даёт 63 веера за матч против 37 у #10 и наших 12 (v135)
+    // пока стволы не подтянулись — держим на клетку дальше и в бой не входим (v135, USE_KITE_UNTIL_READY)
+    Row("kite", { massKite != null }) { kiteNow++; Aim(massKite!!, KITE_STANDOFF, avoid = true, nearFlow = true) },
+    // ЛЕКАРЬ ВЫШЕ СТРОЯ В БОЮ (v147): замер по записи (6aa078c0, обе стороны по три лекаря) — у него в
+    // дальности лечения стоят ВСЕ ТРИ каждый тик, у нас 1,8 из трёх, и лечение выходит 1584 против 9624.
+    // Причина в порядке цепочки: слот стоял выше подопечного, а расстановка не знает, кого лечить, и уводила
+    // лекаря в строй за пределы дальности. Лекарь вне HEAL_RANGE не лечит вовсе — в бою подопечный главнее
+    // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): назначенная клетка стены — как слот, вплотную к удержимой жертве
+    Row("wall", { healer && victimSaveable && wallCellOf[creep.id] != null }) { Aim(wallCellOf[creep.id]!!, 0) },
+    // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): клетка при своём фронтовом мили с тыла — как слот
+    Row("healMate", { healer && healMate != null && t.contact }) { Aim(healMate!!, 1, nearFlow = true) },
+    Row("slot", { slot != null }) { Aim(slot!!, 0) },
+    // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
+    // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
+    Row("healMateOut", { healer && healMate != null }) { Aim(healMate!!, 1, nearFlow = true) },
+    // отход — по обычному полю: поле «в обход» стоящих врагов (а дерущиеся стоят) увело пару в обход
+    // стенного блока на другой край карты (матч 4)
+    Row("evade", { posture == Posture.EVADE && t.evadeTo != null }) { Aim(t.evadeTo!!, 1) },
+    Row("retreat", { posture == Posture.RETREAT && t.retreatTo != null }) { Aim(t.retreatTo!!, 1) },
+    Row("formGo", { formGo }) { Aim(InfluenceMap.cell(t.formVan!!.x, t.formVan!!.y), 1) },
+    Row("wounded", { stripped && healerNear != null }) { Aim(healerNear!!, 1, avoid = true, nearFlow = true) },
+    Row("rotate", { rotating && healerNear != null }) { Aim(healerNear!!, 1, avoid = true, nearFlow = true) },
+    // сбор пачки (см. USE_REGROUP, REGROUP_TICKS): одинокий мили под смертельным огнём — к ближайшему мили-напарнику
+    Row("regroup", { aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, t.combatEnemies) * REGROUP_TICKS >= creep.hits }) { Aim(meleeMate!!, 1, avoid = true, nearFlow = true) },
+    Row("alone", { aloneInFire }) { Aim(t.armedCentroid, CLOSE_STANDOFF, avoid = true, nearFlow = true) },
+    Row("leash", { leashed }) { Aim(t.armedCentroid, CLOSE_STANDOFF, avoid = true, nearFlow = true) },
+    Row("engage", { engage != null }) { Aim(engage!!, if (melee) 1 else closeIn, nearFlow = true) },
+    // мили держит линию (см. MELEE_HOLD_RANGE): что подошло на две клетки — рубит, за экраном не гонится
+    Row("holdMelee", { holdMelee }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
+    Row("grab", { grab != null }) { Aim(grab!!.pos, 0, avoid = true) },
+    // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»; без
+    // ловимой добычи (кайтеры) — тоже к массе: стоим строем и стреляем в то, что подойдёт
+    Row("toCentroid", { posture == Posture.ANNIHILATE && !support && (!localAggressive || t.prey == null) }) { Aim(t.armedCentroid, CLOSE_STANDOFF, avoid = true) },
+    Row("prey", { t.prey != null }) { Aim(t.prey!!, if (melee) 1 else closeIn, nearFlow = true) },
+    Row("rally", { rallyTo != null }) { Aim(rallyTo!!, CLOSE_STANDOFF, avoid = true) },
+    Row("objective", { t.objective != null }) { Aim(t.objective!!.flag.pos, if (t.objectiveCapturer == creep.id) 0 else CLOSE_STANDOFF, avoid = true) },
+    Row("threat", { t.threat != null && huntingThreat && mobile }) { Aim(t.threat!!, if (melee) 1 else closeIn) },
+    Row("raider", { t.raider != null && mobile && !support }) { Aim(t.raider!!, if (melee) 1 else RANGED_RANGE) },
+    // ОТВЕРГНУТО стендом (v42): «держать линию там, где она стоит» (holdLine → armedCentroid вместо поста) — в матче 70
+    // пост при враге рядом был точкой в 35 клетках позади, и каждый тик ДЕРЖАТЬ между тиками ДОБИТЬ разворачивал
+    // армию к нему. Но возврат к посту делает работу в десятках сценариев (после отбитого рывка остаток добивается у
+    // поста): 58 строк хуже / 48 лучше, гейтовая m33 farm+weak и m29 farm красные. Мигание лечится у корня — см.
+    // chaseVeto и evasive
+    Row("post", { true }) { Aim(t.post, POST_STANDOFF, avoid = true) },
+).also { ladderRows = it }
+
 /**
  * ФАКТЫ ОДНОГО ХОДА (v444, план архитектуры, 4.3 и этап 3): то, что крип знает о себе и о соседях ДО выбора цели. Каждая
  * величина определена один раз — в [buildTurn], рядом со своим комментарием-вердиктом, в прежнем порядке вычислений; здесь —
@@ -755,95 +844,17 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
 internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
     val turn = buildTurn(creep, ctx, t)
     with(t) { with(turn) {
-        val target: Position
-        val standoff: Int
-        var avoid = false
-        var nearFlow = false   // цель-крип рядом: поле «вблизи» (см. NEAR_FLOW)
         // ПЕРЕПИСЬ РЕШЕНИЙ (v203, этап 1): каждая ветка обеих цепочек называет себя, и счётчик копится за матч.
         // Повод — пять правил за сутки, которые прошли гейт и не исполнились ни разу: по коду нельзя было
         // сказать, какая ветка живая. Перепись отвечает на это числом, а не чтением. Она же заменяет ручной
         // дубль цепочки в TRACE_WHY, который успел рассинхронизироваться и рассказывал о боте неправду
-        var whyTag = "?"
-        when {
-            keeper -> { whyTag = "keeper"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
-            slotHold -> { whyTag = "slotHold"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
-            // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
-            // ...и ЛЕКАРЮ ПРИКАЗ «СТОЯТЬ» — ТОЖЕ ПРИКАЗ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT): раздача разрешает свою
-            // клетку («стой»), но здесь такой приказ молча проваливался ниже, к healMate, и лекарь уходил с клетки, которую
-            // командир оценил лучшей; у бойцов условие не тронуто
-            commandOf[creep.id] != null && ((USE_COMMANDER_HEALERS_IN_CONTACT && healer) || commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) ->
-                { whyTag = "order"; target = commandOf[creep.id]!!; standoff = 0 }
-            // ПОГОНЯ ЗА ОСТОВОМ (v212) — сразу под приказом командира: пока он правит, клетку даёт он (и тоже
-            // знает про погоню, см. chaseTarget в placeScored); когда молчит, преследователь идёт сюда. Ниже
-            // кайта и строя стоять нельзя: обе ветки увели бы его обратно в кулак, а весь смысл отряда в том,
-            // чтобы из кулака выйти
-            Memory.chaseTarget[creep.id]?.let { it.hits > 0 } == true -> {
-                whyTag = "chase"
-                target = InfluenceMap.cell(Memory.chaseTarget[creep.id]!!.x, Memory.chaseTarget[creep.id]!!.y)
-                standoff = if (hasRanged(creep)) RANGED_RANGE - 1 else 0
-                avoid = true
-            }
-            // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
-            // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
-            // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
-            // где наш собственный огонь плотнее. MetalicaX#11 даёт 63 веера за матч против 37 у #10 и наших 12 (v135)
-            massKite != null -> {
-                whyTag = "kite"; kiteNow++
-                // пока стволы не подтянулись — держим на клетку дальше и в бой не входим (v135, USE_KITE_UNTIL_READY)
-                target = massKite
-                standoff = KITE_STANDOFF
-                avoid = true; nearFlow = true
-            }
-            // ЛЕКАРЬ ВЫШЕ СТРОЯ В БОЮ (v147): замер по записи (6aa078c0, обе стороны по три лекаря) — у него в
-            // дальности лечения стоят ВСЕ ТРИ каждый тик, у нас 1,8 из трёх, и лечение выходит 1584 против 9624.
-            // Причина в порядке цепочки: слот стоял выше подопечного, а расстановка не знает, кого лечить, и уводила
-            // лекаря в строй за пределы дальности. Лекарь вне HEAL_RANGE не лечит вовсе — в бою подопечный главнее
-            // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): назначенная клетка стены — как слот, вплотную к удержимой жертве
-             healer && victimSaveable && wallCellOf[creep.id] != null ->
-                { whyTag = "wall"; target = wallCellOf[creep.id]!!; standoff = 0 }
-            // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): клетка при своём фронтовом мили с тыла — как слот
-             healer && healMate != null && contact ->
-                { whyTag = "healMate"; target = healMate; standoff = 1; nearFlow = true }
-            slot != null -> { whyTag = "slot"; target = slot; standoff = 0 }
-            // лекарь и в отходе идёт за подопечным (лечение — в тот же тик, что и шаг, 216 в тик восстанавливают
-            // обломок за шесть тиков): прежде лекари шли к точке отхода сами, а раненые — врассыпную
-            healer && healMate != null -> { whyTag = "healMateOut"; target = healMate; standoff = 1; nearFlow = true }
-            // отход — по обычному полю: поле «в обход» стоящих врагов (а дерущиеся стоят) увело пару в обход
-            // стенного блока на другой край карты (матч 4)
-            posture == Posture.EVADE && evadeTo != null -> { whyTag = "evade"; target = evadeTo; standoff = 1 }
-            posture == Posture.RETREAT && retreatTo != null -> { whyTag = "retreat"; target = retreatTo; standoff = 1 }
-            formGo -> { whyTag = "formGo"; target = InfluenceMap.cell(formVan!!.x, formVan.y); standoff = 1 }
-            stripped && healerNear != null -> { whyTag = "wounded"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
-            rotating && healerNear != null -> { whyTag = "rotate"; target = healerNear; standoff = 1; avoid = true; nearFlow = true }
-            // сбор пачки (см. USE_REGROUP, REGROUP_TICKS): одинокий мили под смертельным огнём — к ближайшему мили-напарнику
-             aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, combatEnemies) * REGROUP_TICKS >= creep.hits -> { whyTag = "regroup"; target = meleeMate; standoff = 1; avoid = true; nearFlow = true }
-            aloneInFire -> { whyTag = "alone"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
-            leashed -> { whyTag = "leash"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true; nearFlow = true }
-            engage != null -> { whyTag = "engage"; target = engage; standoff = if (melee) 1 else closeIn; nearFlow = true }
-            // мили держит линию (см. MELEE_HOLD_RANGE): что подошло на две клетки — рубит, за экраном не гонится
-            holdMelee -> { whyTag = "holdMelee"; target = InfluenceMap.cell(creep.x, creep.y); standoff = 0 }
-            grab != null -> { whyTag = "grab"; target = grab.pos; standoff = 0; avoid = true }
-            // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»; без
-            // ловимой добычи (кайтеры) — тоже к массе: стоим строем и стреляем в то, что подойдёт
-            posture == Posture.ANNIHILATE && !support && (!localAggressive || prey == null) -> { whyTag = "toCentroid"; target = armedCentroid; standoff = CLOSE_STANDOFF; avoid = true }
-            prey != null -> { whyTag = "prey"; target = prey; standoff = if (melee) 1 else closeIn; nearFlow = true }
-            rallyTo != null -> { whyTag = "rally"; target = rallyTo; standoff = CLOSE_STANDOFF; avoid = true }
-            objective != null -> {
-                whyTag = "objective"
-                val capturer = objectiveCapturer == creep.id
-                target = objective.flag.pos
-                standoff = if (capturer) 0 else CLOSE_STANDOFF
-                avoid = true
-            }
-            threat != null && huntingThreat && mobile -> { whyTag = "threat"; target = threat; standoff = if (melee) 1 else closeIn }
-            raider != null && mobile && !support -> { whyTag = "raider"; target = raider; standoff = if (melee) 1 else RANGED_RANGE }
-            // ОТВЕРГНУТО стендом (v42): «держать линию там, где она стоит» (holdLine → armedCentroid вместо поста) — в матче 70
-            // пост при враге рядом был точкой в 35 клетках позади, и каждый тик ДЕРЖАТЬ между тиками ДОБИТЬ разворачивал
-            // армию к нему. Но возврат к посту делает работу в десятках сценариев (после отбитого рывка остаток добивается у
-            // поста): 58 строк хуже / 48 лучше, гейтовая m33 farm+weak и m29 farm красные. Мигание лечится у корня — см.
-            // chaseVeto и evasive
-            else -> { whyTag = "post"; target = post; standoff = POST_STANDOFF; avoid = true }
-        }
+        val rung = walk(ladder(), turn)
+        val whyTag = rung.tag
+        val aim = rung.act(turn)
+        val target = aim.target
+        val standoff = aim.standoff
+        val avoid = aim.avoid
+        val nearFlow = aim.nearFlow   // цель-крип рядом: поле «вблизи» (см. NEAR_FLOW)
         val flow0 = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep, nearFlow) else flowTo(ctx, target, near = nearFlow)
         // за пределом поля «вблизи» — полное поле
         val flow = if (nearFlow && slot == null && !keeper && flow0[creep.key] < 0)
