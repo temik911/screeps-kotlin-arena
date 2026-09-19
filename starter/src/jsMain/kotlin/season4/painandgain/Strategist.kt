@@ -1946,6 +1946,12 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     )
 }
 
+/** Стрелковая масса списка: сумма дальнего урона по профилям (до v445 — локальная функция `armyStrategy`). */
+private fun rangedMass(cs: List<Creep>) = cs.sumOf { InfluenceMap.profileOf(it).ranged }
+
+/** Тиков до прихода его крипа к нашей массе по мере этого тика; неизвестный — «очень далеко» (до v445 — локальная функция). */
+private fun PainAndGain.arrivalOf(c: Creep) = arrivalById[c.id] ?: Int.MAX_VALUE / 2
+
 /** Один вопрос «идём ли в наступление»: то, что `armyStrategy` уже посчитал к этому месту. `pushing` и `pushSince` строки читают
  *  у `PainAndGain` — СТАРЫМИ: условия всех строк вычисляются до действия выигравшей; `fightOnNow` — тоже его член. */
 internal class PushCase(val breakOffNow: Boolean, val pushRaw: Boolean, val toothless: Boolean, val stalled: Boolean,
@@ -2154,23 +2160,11 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // гастролёр (けろびー#4, серия 327–346) оставляет на каждом взятом флаге одного хранителя, тот уходит от наших в шести и
     // возвращается — «свободных» флагов нет, гонка v91 молчала (targets=0), армия толкала его пятёрку 200 тиков, а его
     // хранители держали шесть флагов (стенд blitz: 4-4 при 1:6 к 200-му)
-    val racePair = raceCapable(army)
-        .sortedBy { ourPowerOf(listOf(it), emptyList()) }.take(2)
-    fun pairBeats(f: FlagInfo): Boolean {
-        if (racePair.size < 2) return false
-        val pack = foesInEngage(armedEnemies, f.pos)
-        return pack.isNotEmpty() && ourPowerOf(racePair, pack) >= enemyPowerOf(pack, racePair) * PUSH_RATIO
-    }
     val raceFree = ctx.flags.filter { f -> !f.ours && armedEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
         (armedEnemies.minOfOrNull { getRange(it, f.pos) } ?: 999) > (raceForce.minOfOrNull { getRange(it, f.pos) } ?: 999) }
     // флаги под стаей для пары бегунов (USE_RUNNER_PAIRS, USE_RACE_PAIR_TARGETS) отвергнуты — список всегда был пуст, снят в v261
     val raceTargets = raceFree.size
     val raceSlots = raceFree.size
-    // расколот (v119): ВТОРАЯ группа его вооружённых (вне крупнейшей, в ENGAGE_RANGE друг от друга) не меньше SPLIT_MIN —
-    // две группы фермера, а не отставшие от колонны на марше: первый срез «двое вне крупнейшей» стартовал гонку на
-    // двадцатом тике по хвосту колонны spread, и spread m19/m31/m33 из побед в 20403:24313, 14392:24330, 14990:24318
-    val rest = armedEnemies.filter { e -> largestMembers.none { it.id == e.id } }
-    val secondGroup = rest.maxOfOrNull { e -> rest.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val raceNow =  (scattered) && armedEnemies.size >= 4 && raceTargets > 0
     if (posture == Posture.FLAG || posture == Posture.EVADE || posture == Posture.RETREAT) lastNonHuntTick = now
     // рассыпанный остаток — вход v75 как был; блоб-остаток — под стрелковой защитой пула и только после PASSIVE_TICKS
@@ -2178,7 +2172,6 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     val dryHunt =  behindOnScore && lastFireTick >= 0 &&
         now - lastFireTick >= PASSIVE_TICKS && now - lastHurtTick >= PASSIVE_TICKS &&
         (scattered || (now - lastNonHuntTick >= PASSIVE_TICKS))
-    fun rangedMass(cs: List<Creep>) = cs.sumOf { InfluenceMap.profileOf(it).ranged }
     val theirRangedMass = rangedMass(combatEnemies)
     val quietChain = quiet && (chaseDry || Memory.detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
     // МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, — НЕ АРМИЯ, А ОТРЯД (v194, USE_IDLE_MELEE_RUNS). Отряд набирается только против
@@ -2313,7 +2306,6 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     // пересчитываются; тёплые тики (6–9 мс на стенде) сюда не доходят
     val cpuGuardArmy =  now > 1 && cpuMs() > CPU_GUARD_MS
     if (cpuGuardArmy && DEBUG_LOG) println("cpu t=$now guard: posture keeps the objective (${(cpuMs() * 10).toInt() / 10.0}ms)")
-    val dryNow = (lastFireTick < 0 || now - lastFireTick >= PASSIVE_TICKS) && now - lastHurtTick >= PASSIVE_TICKS
     cpuMark("a.sweep")
     val chaseVeto = enemyNotFightingNow && (interceptDenies || !behindOnScore)   // USE_SWEEP_OVER_CHASE снят (v214), вместе с ним и слагаемое цели зачистки (v261)
     // ОТКРЫТАЯ НАХОДКА (матч 70): второй источник мигания — «ловимых нет»: блоб, шагнувший назад на две клетки, делает
@@ -2678,7 +2670,6 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     val centroid = ctx.ourCentroid
     val ourHalfCombat = armedEnemies.filter { DistanceMap.inOurHalf(it.x, it.y) }
     val ourHalfSoft = enemyCreeps.filter { c -> combatEnemies.none { it.id == c.id } && DistanceMap.inOurHalf(c.x, c.y) }
-    fun arrivalOf(c: Creep) = arrivalById[c.id] ?: Int.MAX_VALUE / 2
     val threat = ourHalfCombat.filter { catchable(it, chasers) }.minWithOrNull(compareBy<Creep>({ arrivalOf(it) }, { getRange(it, centroid) }))
     // рейдер: чужой безоружный на нашей половине — тот, что ближе к нашему флагу (захватчик идёт к нему); гонимся,
     // только если стрелки бьют стаю вокруг него: без этой проверки армия гналась за безоружным остовом к
