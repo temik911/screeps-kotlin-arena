@@ -981,6 +981,22 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         }
     }
     // лекари: в лечебной дальности от раненого бойца, вне огня следующего тика
+    // ИДУЩИЙ ВПЕРЁД БОЕЦ В РЕЖИМ ТОЧНОЙ ЦЕНЫ НЕ ВХОДИТ (сужение v439, см. InfluenceMap.advancingWards): его назначенная клетка —
+    // или, когда бойцов ведёт тактик (раздача одних лекарей), его ход прошлого тика — ближе к его стволам, чем нынешняя
+    InfluenceMap.advancingWards.clear()
+    if (USE_HEAL_EXACT_IN_FIRE && armedEnemies.isNotEmpty()) for (f in fighters) {
+        if (!hasWeapon(f)) continue
+        val planned = out[f.id]
+        val nowD = armedEnemies.minOf { getRange(f, it) }
+        if (planned != null && !(planned.x == f.x && planned.y == f.y)) {
+            if (armedEnemies.minOf { maxOf(abs(planned.x - it.x), abs(planned.y - it.y)) } < nowD) InfluenceMap.advancingWards.add(f.id)
+        } else {
+            val prev = Memory.lastCell[f.id] ?: continue
+            val px = prev / 100; val py = prev % 100
+            if (px == f.x && py == f.y) continue
+            if (armedEnemies.minOf { maxOf(abs(px - it.x), abs(py - it.y)) } > nowD) InfluenceMap.advancingWards.add(f.id)
+        }
+    }
     passTag = "healer"
     for (c in healers) {
         // ЛЕКАРЬ ПРИ БОЙЦЕ (v142): близость главная, опасность лишь тай-брейк — прежний порядок весил опасность

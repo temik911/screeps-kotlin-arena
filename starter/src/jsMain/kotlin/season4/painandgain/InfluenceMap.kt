@@ -620,8 +620,24 @@ object InfluenceMap {
     val attHeal = IntArray(FIELD_CELLS)
     val claim = IntArray(FIELD_CELLS)
 
-    private val allFields = arrayOf(eMelee, eRanged, eHeal, aMelee, aRanged, aHeal, eFire,
+    /** Его СТОЯЩИЕ стрелки (v439, см. USE_HEAL_EXACT_IN_FIRE): огонь тех, кто за APPROACH_WINDOW не сближается быстрее
+     *  RANGED_ADVANCE_RATE, — угроза, равная себе и в следующий тик; только у подопечного под таким огнём клетка лекаря
+     *  стоит ровно доставляемое сейчас. Радиус K_RANGED, вес — части. */
+    val eRangedStill = IntArray(FIELD_CELLS)
+    var wardsUnderRanged = 0; var wardsUnderStill = 0     // прибор hstill=: подопечных под его стрелками / из них под стоящими
+    private val allFields = arrayOf(eMelee, eRanged, eHeal, aMelee, aRanged, aHeal, eFire, eRangedStill,
         attMelee, attRanged, attHeal, claim)
+
+    /** Наступает ли его крип: темп сближения с нашим домом по истории enemyArrivalTicks (см. Memory.approachHistory) не
+     *  ниже RANGED_ADVANCE_RATE клетки в тик за окно; короткая история — не наступает (первые тики — не бой). */
+    private fun advancing(e: Creep): Boolean {
+        val h = Memory.approachHistory[e.id] ?: return false
+        if (h.size < 2) return false
+        val (t0, a0) = h.first()
+        val (t1, a1) = h.last()
+        if (t1 - t0 < APPROACH_WINDOW / 2) return false
+        return (a0 - a1).toDouble() / (t1 - t0) >= RANGED_ADVANCE_RATE
+    }
 
     /** Тик, на котором поля построены: чтение с другого тика — баг, и он должен быть виден, а не тих. */
     private var fieldTick = -1
@@ -688,6 +704,7 @@ object InfluenceMap {
             stamp(eHeal, e.x, e.y, K_HEAL, p.heal, false)
             stamp(eFire, e.x, e.y, K_FIRE_MELEE, p.melee, false)
             stamp(eFire, e.x, e.y, K_FIRE_RANGED, p.ranged, false)
+            if (p.ranged > 0.0 && !advancing(e)) stamp(eRangedStill, e.x, e.y, K_RANGED, p.ranged, false)
         }
         for (a in allies) {
             val p = profileOf(a)
@@ -754,7 +771,12 @@ object InfluenceMap {
         var total = 0.0
         for (a in allies) {
             val key = a.x * 100 + a.y
-            if (eFire[key] > 0) inFire.add(a.id)
+            // ПОДОПЕЧНЫЙ В РЕЖИМЕ — ТОТ, КОГО ДОСТАЁТ ЕГО СТОЯЩИЙ СТРЕЛОК (сужение v439 по гейту match20:brawl+heals 14 632 :
+            // 15 192, затем 5 103 : 5 737): цена «ровно этот тик» верна против угрозы, равной себе и в следующий тик, — стрелок,
+            // держащий три; мили ходит клетку в тик и бьёт лекаря первым на 240, наступающий стрелок через тик стреляет с трёх
+            // туда, где сейчас безопасно. Боец под таким огнём лечится по-старому: с look-ahead шагового ядра и клеем
+            if (eRanged[key] > 0) wardsUnderRanged++
+            if (eRangedStill[key] > 0) { inFire.add(a.id); wardsUnderStill++ }
             val armed = a.body.any { it.hits > 0 && (it.type == ATTACK || it.type == RANGED_ATTACK) }
             // НУЖДА — ТО, ЧТО ЛЕЧЕНИЕ МОЖЕТ ВЕРНУТЬ (v435, см. USE_HEAL_NEED_ACTUAL): недобор хитов плюс потеря за прошлый
             // тик; целый крип во втором ряду нужды не имеет, как бы ни было опасно его поле
@@ -798,18 +820,26 @@ object InfluenceMap {
     fun bestDeliveryAt(healer: Creep, x: Int, y: Int, allies: List<Creep>): Double {
         val h = profileOf(healer).heal
         if (h <= 0.0) return 0.0
-        val k = if (USE_HEAL_STEP_KERNEL) K_HEAL_STEP else K_ATT_HEAL
         val fireMode = deliveryFireMode(healer, allies)
+        // У ПОДОПЕЧНОГО ПОД ОГНЁМ КЛЕТКА СТОИТ ТО, ЧТО ДОСТАВЛЯЕТСЯ В ЭТОТ ТИК (v439, см. USE_HEAL_EXACT_IN_FIRE): шаговое ядро
+        // оценивало клетку в двух в γ·72 = 50 при настоящих 24, и последний шаг к бойцу под огнём стоил в цене 22 при 48 в
+        // хитах — лекарь лечил того же бойца с двух клеток. Скидка «вылечу со следующего тика» верна для отложимого лечения
+        // и ложна для скоропортящегося; вне огня она остаётся (иначе поле — ноль вдали от боя, match29:camp)
+        val k = if (USE_HEAL_STEP_KERNEL && !(USE_HEAL_EXACT_IN_FIRE && fireMode)) K_HEAL_STEP else K_ATT_HEAL
         // ...И ТОЛЬКО ИЗ КЛЕТКИ ВНЕ ЕГО ОГНЯ (сужение v438 по гейту match4:kite 8 802 : 14 502 — hparts 18 → 0 к t=110 при его
         // ehparts 0/18, hfire=127/185/36): его стрелок в досягаемости лекаря бьёт ЛЕКАРЯ, а не тела перед ним (модель
         // wallTargetOf, 85–91 % совпадений; стуб-кайтер — наименьшие хиты, лекарь 1 200 против 1 600 у мили), поэтому экран
         // тел лекарю не скидка, и 72 доставки из клетки под двумя стволами покупали клетку, где он раздевался за пять тиков.
         // Клетка вплотную к подопечному под огнём, но вне огня сама (сзади него) есть в 63 % таких тиков (разбор v437) — она
         // и есть предмет правки; из клетки под огнём доставки нет, там действуют влияние и опасность, как у v437
-        if (fireMode && eFire[x * 100 + y] > 0) return 0.0
+        // ...И НЕ ИЗ КЛЕТКИ, КУДА ЕГО МИЛИ ДОСТАЁТ ШАГОМ (сужение v439 по гейту match20:brawl+heals 14 632 : 15 192): цена «ровно
+        // этот тик» верна, пока угроза следующего тика равна нынешней — стрелок держит три и стоит, мили ходит клетку в тик и
+        // бьёт лекаря первым на 240; клетка в двух от него вне огня сейчас и под топором через тик. Поле eMelee (K_MELEE,
+        // радиус 2 — «шаг + удар») и есть эта досягаемость
+        if (fireMode && (eFire[x * 100 + y] > 0 || eMelee[x * 100 + y] > 0)) return 0.0
         var best = 0.0
         for (a in allies) {
-            if (fireMode && a.id !in inFire) continue
+            if (fireMode && (a.id !in inFire || a.id in advancingWards)) continue
             val d = maxOf(abs(a.x - x), abs(a.y - y))
             if (d >= k.size) continue
             val left = needLeft[a.id] ?: continue
@@ -828,6 +858,12 @@ object InfluenceMap {
      *  скоропортящееся, остальным отложимо. Решается на лекаря за тик, а не на клетку — иначе соседние клетки считались бы
      *  в разных режимах, и лекарь уходил бы от огня к большему числу. Насыщение снимает нужду — покрытый подопечный режим
      *  не держит, и следующий лекарь считает по-старому. */
+    /** Бойцы, идущие ВПЕРЁД этим тиком (v439, заполняет commandFight перед проходом лекарей): их назначенная клетка — или,
+     *  когда план бойцов не наш (раздача одних лекарей), ход прошлого тика — ближе к его стволам, чем нынешняя. Такой боец в
+     *  режим точной цены не входит: лекарь, приклеенный к нему вплотную, идёт за ним в огонь (match20:brawl+heals — к t=100
+     *  все три лекаря внутри его группы стрелков); у него клетка ценится по-старому, с look-ahead шагового ядра. */
+    val advancingWards = HashSet<String>()
+
     fun deliveryFireMode(healer: Creep, allies: List<Creep>): Boolean {
         if (!USE_HEAL_DELIVERY_IN_FIRE) return false
         val reach = (if (USE_HEAL_STEP_KERNEL) K_HEAL_STEP else K_ATT_HEAL).size
@@ -835,7 +871,7 @@ object InfluenceMap {
             // сам лекарь режим не включает (сужение v438 по гейту match33:camp 18 354 : 23 667): доставка себе одинакова
             // из любой клетки (d = 0), режим же — про перестановку к ДРУГОМУ; единственный раненый в танце перед боем
             // был лекарь с −52, режим гасил ему клей, и танец разошёлся в отряжение семерых бегунами и отход
-            if (a.id == healer.id || a.id !in inFire) continue
+            if (a.id == healer.id || a.id !in inFire || a.id in advancingWards) continue
             if ((needLeft[a.id] ?: 0.0) <= 0.0) continue
             if (maxOf(abs(a.x - healer.x), abs(a.y - healer.y)) <= reach) return true
         }
