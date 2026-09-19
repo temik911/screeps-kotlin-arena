@@ -2,6 +2,10 @@ package season4.painandgain
 
 import screeps.api.ATTACK
 import screeps.api.Creep
+import screeps.api.get
+import screeps.api.RESOURCE_ENERGY
+import screeps.api.CARRY_CAPACITY
+import screeps.api.CARRY
 import screeps.api.HEAL
 import screeps.api.MOVE
 import screeps.api.Position
@@ -93,3 +97,91 @@ internal inline fun key(x: Int, y: Int): Int = x * 100 + y
 
 /** Ключ клетки, на которой стоит объект (крип, флаг, точка пути). */
 internal inline val Position.key: Int get() = x * 100 + y
+
+// ==================== обёртки над фактами тика (до v446 жили в World.kt; читают таблицу тика `unitsNow` у получателя) ====================
+
+/** Факты крипа в этом тике (см. Facts.kt). Обёртки ниже — тонкие: определение каждого факта одно, в `Unit`. */
+internal fun PainAndGain.unitOf(creep: Creep): Unit = unitsNow.of(creep)
+
+internal fun PainAndGain.canMove(creep: Creep) = unitOf(creep).liveMove
+
+internal fun PainAndGain.hasMelee(creep: Creep) = unitOf(creep).liveMelee
+
+internal fun PainAndGain.isMelee(creep: Creep) = unitOf(creep).bornMelee
+
+internal fun PainAndGain.hasRanged(creep: Creep) = unitOf(creep).liveRanged
+
+internal fun PainAndGain.hasHeal(creep: Creep) = unitOf(creep).liveHeal
+
+internal fun PainAndGain.hasWeapon(creep: Creep) = unitOf(creep).armed
+
+/** Лекарь: без живого оружия, с живой HEAL. */
+internal fun PainAndGain.healerOnly(creep: Creep) = unitOf(creep).healerOnly
+
+/** Раздет: ни живого оружия, ни живой HEAL (у тактика это звалось `wounded`, у командира `stripped`). */
+internal fun PainAndGain.stripped(creep: Creep) = unitOf(creep).stripped
+
+/** В строю: живое оружие или живая HEAL. */
+internal fun PainAndGain.combatant(creep: Creep) = unitOf(creep).combatant
+
+/** Рождён с оружием / рождён бойцом: часть в теле есть, живая или нет. */
+internal fun PainAndGain.bornArmed(creep: Creep) = unitOf(creep).bornArmed
+internal fun PainAndGain.bornCombatant(creep: Creep) = unitOf(creep).bornCombatant
+
+/** «Чистый мили», написание А — рождён мили: истинно и с выбитым оружием (см. Unit.meleeOnlyBorn). */
+internal fun PainAndGain.meleeOnlyBorn(creep: Creep) = unitOf(creep).meleeOnlyBorn
+
+/** «Чистый мили», написания Б и В — с живой ATTACK (см. Unit.meleeOnlyLive). */
+internal fun PainAndGain.meleeOnlyLive(creep: Creep) = unitOf(creep).meleeOnlyLive
+
+// ==================== тело и скорость (до v446 жили в World.kt; модель мощи уровнем ниже мира читала отсюда swampPeriod) ====================
+
+/** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)
+ *  плюс гружёные CARRY. */
+internal fun PainAndGain.bodyWeight(creep: Creep): Int {
+    bodyWeightNow[creep.id]?.let { return it }
+    val parts = creep.body.count { it.type != MOVE && it.type != CARRY }
+    val carried = creep.store[RESOURCE_ENERGY] ?: 0
+    val w = parts + (carried + CARRY_CAPACITY - 1) / CARRY_CAPACITY
+    bodyWeightNow[creep.id] = w
+    return w
+}
+
+internal fun PainAndGain.liveMoves(creep: Creep): Int {
+    liveMovesNow[creep.id]?.let { return it }
+    val m = creep.body.count { it.type == MOVE && it.hits > 0 }
+    liveMovesNow[creep.id] = m
+    return m
+}
+
+/** Период хода (тиков на клетку): после шага fatigue = вес × цена местности − 2 × живые MOVE, дальше
+ *  −2×MOVE в тик, следующий ход при нуле (tick.js:105, movement.js:237). */
+internal fun PainAndGain.periodOn(weight: Int, moves: Int, rate: Int): Int {
+    if (moves <= 0) return Int.MAX_VALUE / 4
+    val left = weight * rate - 2 * moves
+    return if (left <= 0) 1 else 1 + (left + 2 * moves - 1) / (2 * moves)
+}
+
+internal fun PainAndGain.plainPeriod(creep: Creep) = periodOn(bodyWeight(creep), liveMoves(creep), 2)
+
+internal fun PainAndGain.periodAt(creep: Creep, x: Int, y: Int) =
+    periodOn(bodyWeight(creep), liveMoves(creep), if (DistanceMap.isSwamp(x, y)) 10 else 2)
+
+internal fun PainAndGain.swampPeriod(creep: Creep) = periodOn(bodyWeight(creep), liveMoves(creep), 10)
+
+internal fun PainAndGain.fullSpeed(creep: Creep) = plainPeriod(creep) == 1
+
+/** Сколько урона крип ещё выдержит, не теряя скорости (части умирают спереди). */
+internal fun PainAndGain.speedSlack(creep: Creep): Int {
+    val weight = bodyWeight(creep)
+    if (weight == 0) return creep.hits // тела без веса (чистый MOVE) скорости не теряют
+    var moves = liveMoves(creep)
+    var slack = 0
+    for (part in creep.body) {
+        if (part.hits <= 0) continue
+        if (moves < weight) break
+        slack += part.hits
+        if (part.type == MOVE) moves--
+    }
+    return slack
+}
