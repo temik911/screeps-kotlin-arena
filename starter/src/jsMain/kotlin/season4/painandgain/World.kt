@@ -174,7 +174,7 @@ internal fun PainAndGain.accountScore(flags: List<FlagInfo>) {
 
 /** Поле к цели; не наши флаги — стены (кроме самой цели: flowFieldTo всегда открывает целевую клетку). */
 internal fun PainAndGain.flowTo(ctx: Ctx, target: Position, avoid: Boolean = false, near: Boolean = false): IntArray {
-    val key = target.x * 100 + target.y + (if (avoid) 10000 else 0) + (if (near) 20000 else 0)
+    val key = target.key + (if (avoid) 10000 else 0) + (if (near) 20000 else 0)
     val now = getTicks()
     val hit = Memory.flowCache[key]
     val at = Memory.flowCacheTick[key]
@@ -207,7 +207,7 @@ internal fun PainAndGain.avoidCells(ctx: Ctx): List<Position> = avoidCellsCache 
         if (!stationary(e)) continue
         val x = e.x + dx; val y = e.y + dy
         if (x < 0 || y < 0 || x > 99 || y > 99) continue
-        if (seen.add(x * 100 + y)) out.add(InfluenceMap.cell(x, y))
+        if (seen.add(key(x, y))) out.add(InfluenceMap.cell(x, y))
     }
     avoidCellsCache = out
     out
@@ -217,7 +217,7 @@ internal fun PainAndGain.avoidCells(ctx: Ctx): List<Position> = avoidCellsCache 
  *  путь есть, иначе обычное (матч 2 на стенде: маршрут к дальнему флагу вёл через стоящий отряд врага). */
 internal fun PainAndGain.flowAvoiding(ctx: Ctx, target: Position, creep: Creep, near: Boolean = false): IntArray {
     val f = flowTo(ctx, target, true, near)
-    return if (f[creep.x * 100 + creep.y] >= 0) f else flowTo(ctx, target, near = near)
+    return if (f[creep.key] >= 0) f else flowTo(ctx, target, near = near)
 }
 
 /** Стая у цели: боевые враги рядом с ней и те, кто дойдёт до неё (своим телом по полю) не позже нас —
@@ -228,10 +228,10 @@ internal fun PainAndGain.packAt(ctx: Ctx, pos: Position, flow: IntArray, ourTrav
     // бегунов × семь флагов × одиннадцать его крипов давали ~150 000 шагов по полю за тик (фаза r.cands 52–73 мс из 80–99 мс боевого
     // тика, восемь таймаутов в матче с Coldkimchi 07.09). Результат тот же
     if (packTicksTick != getTicks()) { Memory.packTicksCache.clear(); packTicksTick = getTicks() }
-    val key = pos.x * 100 + pos.y
+    val key = pos.key
     val cached = Memory.packTicksCache[key]?.takeIf { it.first === flow }
     val ticksOf = cached?.second ?: HashMap<String, Int>().also { m ->
-        for (e in ctx.combatEnemies) if (!stationary(e)) m[e.id] = pathTicks(e, flow, e.x * 100 + e.y)
+        for (e in ctx.combatEnemies) if (!stationary(e)) m[e.id] = pathTicks(e, flow, e.key)
         Memory.packTicksCache[key] = flow to m
     }
     return ctx.combatEnemies.filter { getRange(it, pos) <= FLAG_GUARD_RANGE || (ticksOf[it.id]?.let { t -> t <= ourTravel } == true) }
@@ -271,7 +271,7 @@ internal fun PainAndGain.scoutFoe(e: Creep): Boolean =
     InfluenceMap.potentialOf(e).let { it.melee + it.ranged + it.heal <= 0.0 } && canMove(e)
 
 internal fun PainAndGain.spotEdgeAt(e: Creep): Double {
-    val k = e.x * 100 + e.y
+    val k = e.key
     val d = InfluenceMap.dangerAt(k)
     return if (d <= 0.0) Double.MAX_VALUE else InfluenceMap.ourBurstAt(k) / d
 }
@@ -322,8 +322,8 @@ internal fun PainAndGain.projectAlong(flow: IntArray, start: Int, ticks: Int): I
         for ((dx, dy) in dirsNow()) {
             val x = cx + dx; val y = cy + dy
             if (x < 0 || y < 0 || x > 99 || y > 99) continue
-            val v = flow[x * 100 + y]
-            if (v in 0 until nv) { nv = v; next = x * 100 + y }
+            val v = flow[key(x, y)]
+            if (v in 0 until nv) { nv = v; next = key(x, y) }
         }
         if (next < 0) break
         cell = next; left--
@@ -334,14 +334,14 @@ internal fun PainAndGain.projectAlong(flow: IntArray, start: Int, ticks: Int): I
 /** Значение поля в клетке или, если она закрыта (чужой флаг — препятствие в полях потока), в лучшей соседней плюс
  *  шаг: запас выхода читался в клетке чужого флага и был «нет пути» для всякого флага-цели (стенд m1 scouts). */
 internal fun PainAndGain.flowNear(flow: IntArray, p: Position): Int {
-    val here = flow[p.x * 100 + p.y]
+    val here = flow[p.key]
     if (here >= 0) return here
     var best = -1
     for ((dx, dy) in dirsNow()) {
         if (dx == 0 && dy == 0) continue
         val x = p.x + dx; val y = p.y + dy
         if (x < 0 || y < 0 || x > 99 || y > 99) continue
-        val v = flow[x * 100 + y]
+        val v = flow[key(x, y)]
         if (v >= 0 && (best < 0 || v + 1 < best)) best = v + 1
     }
     return best
@@ -368,13 +368,13 @@ internal fun PainAndGain.enemyArrivalTicks(ctx: Ctx) {
     arrivalById.clear()
     val enemyApproach = flowTo(ctx, ctx.home)
     for (e in ctx.combatEnemies) {
-        val approach = enemyApproach[e.x * 100 + e.y]
+        val approach = enemyApproach[e.key]
         if (approach < 0) continue
         val h = Memory.approachHistory.getOrPut(e.id) { ArrayDeque() }
         h.addLast(now to approach)
         while (h.isNotEmpty() && h.first().first < now - APPROACH_WINDOW) h.removeFirst()
         val (t0, a0) = h.first()
-        val arrival = if (now - t0 < APPROACH_WINDOW / 2) pathTicks(e, enemyApproach, e.x * 100 + e.y) else {
+        val arrival = if (now - t0 < APPROACH_WINDOW / 2) pathTicks(e, enemyApproach, e.key) else {
             val rate = (a0 - approach).toDouble() / (now - t0)
             if (rate > 0.0) (approach / rate).toInt() else Int.MAX_VALUE / 2
         }
@@ -489,8 +489,8 @@ internal fun PainAndGain.pathTicks(creep: Creep, flow: IntArray, startCell: Int)
             val nx = cx + dx
             val ny = cy + dy
             if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
-            val f = flow[nx * 100 + ny]
-            if (f in 0 until bestFlow) { bestFlow = f; best = nx * 100 + ny }
+            val f = flow[key(nx, ny)]
+            if (f in 0 until bestFlow) { bestFlow = f; best = key(nx, ny) }
         }
         if (best < 0) break
         cell = best
@@ -517,7 +517,7 @@ internal fun PainAndGain.crowdMatrixOf(ctx: Ctx, allowCell: Int): CostMatrix {
 /** Жадный шаг бегства: свободная соседняя клетка (не стена, не чужой флаг, не занята) с наибольшей
  *  дальностью до ближайшего врага, при равной — под меньшим огнём; null — некуда. */
 internal fun PainAndGain.greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>, force: Boolean = false): Position? {
-    val occupied = (ctx.myCreeps + ctx.enemyCreeps).filter { !it.spawning }.mapTo(HashSet()) { it.x * 100 + it.y }
+    val occupied = (ctx.myCreeps + ctx.enemyCreeps).filter { !it.spawning }.mapTo(HashSet()) { it.key }
     var best: Position? = null
     // force: лучшая из соседних, даже если она не лучше своей клетки (см. SCOUT_FLEE_TRIGGER)
     var bestRange = if (force) -1 else (enemies.minOfOrNull { getRange(creep, it) } ?: 0)
@@ -533,7 +533,7 @@ internal fun PainAndGain.greedyFlee(ctx: Ctx, creep: Creep, enemies: List<Creep>
         if (dx == 0 && dy == 0) continue
         val x = creep.x + dx; val y = creep.y + dy
         if (x < 0 || y < 0 || x > 99 || y > 99) continue
-        val key = x * 100 + y
+        val key = key(x, y)
         if (key in occupied || key in ctx.flagCells || DistanceMap.isWall(x, y) || ctx.blocked.any { it.x == x && it.y == y }) continue
         val pos = InfluenceMap.cell(x, y)
         val range = enemies.minOfOrNull { getRange(pos, it) } ?: 0
@@ -740,7 +740,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
     // двигать центр вооружённой массы: за MARCH_STALL_TICKS тиков он не сдвинулся НИ НА КЛЕТКУ — это не марш.
     // Матч 25: добыча стояла в 11 клетках, ближе никого, армия 990 тиков дёргалась на месте у (46,34); за весь
     // матч ни одного урона ни с одной стороны, и проигрыш по очкам 19927:24205 при 12 против 13 в тик
-    val marchCell = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })?.let { it.x * 100 + it.y } ?: -1
+    val marchCell = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army })?.let { it.key } ?: -1
     Memory.marchHist.addLast(marchCell)
     // ТРЕТИЙ вид простоя — враг, который держит дистанцию: в добивании без контакта дистанция между центрами армий за
     // CHASE_WINDOW тиков не сократилась, и враг дальше броска. Матч 48 (けろびー v5, фермер): он взял шесть флагов к 80-му
@@ -761,7 +761,7 @@ internal fun PainAndGain.armyMeasures(ctx: Ctx, seg: ArmyMeasuresIn): ArmyMeasur
         Memory.armyDistHist.addLast(armyDist)
         // центр ВООРУЖЁННЫХ (v58): центр всех его крипов двигали два бегающих скаута, и стоящий на D5 лагерь «уходил» —
         // отряд на 566-м при his_moved=0 по реплею (матч 133, одиннадцатый проигрыш фермеру-лагерю 8346:22771)
-        Memory.enemyCentHist.addLast((centroidOf(armedEnemies))?.let { it.x * 100 + it.y } ?: -1)
+        Memory.enemyCentHist.addLast((centroidOf(armedEnemies))?.let { it.key } ?: -1)
     } else { Memory.armyDistHist.clear(); Memory.enemyCentHist.clear() }
     while (Memory.armyDistHist.size > DETACH_WINDOW + 1) Memory.armyDistHist.removeFirst()
     while (Memory.enemyCentHist.size > DETACH_WINDOW + 1) Memory.enemyCentHist.removeFirst()
@@ -953,19 +953,19 @@ internal fun PainAndGain.rememberTick(ctx: Ctx, seg: RememberTickIn): RememberTi
     InfluenceMap.pruneStances(myCreeps.mapTo(HashSet()) { it.id })
     // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
     for (e in enemyCreeps) {
-        val cell = e.x * 100 + e.y
+        val cell = e.key
         if (Memory.enemyPrevCell[e.id] != cell) Memory.enemyLastMove[e.id] = getTicks()
     }
     Memory.enemyLastMove.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
     Memory.enemyPrevCell.clear()
-    for (e in enemyCreeps) Memory.enemyPrevCell[e.id] = e.x * 100 + e.y
+    for (e in enemyCreeps) Memory.enemyPrevCell[e.id] = e.key
     // история движения — для ловимости (см. evasive)
     val armedCentroid = centroidOf(army.filter { hasWeapon(it) }.ifEmpty { army }) ?: ourCentroid
-    Memory.ourCentroidHist.addLast(armedCentroid.x * 100 + armedCentroid.y)
+    Memory.ourCentroidHist.addLast(armedCentroid.key)
     while (Memory.ourCentroidHist.size > CHASE_WINDOW) Memory.ourCentroidHist.removeFirst()
     for (e in enemyCreeps) {
         val h = Memory.enemyCellHist.getOrPut(e.id) { ArrayDeque() }
-        h.addLast(e.x * 100 + e.y)
+        h.addLast(e.key)
         while (h.size > CHASE_WINDOW) h.removeFirst()
     }
     Memory.enemyCellHist.keys.retainAll { id -> enemyCreeps.any { it.id == id } }
@@ -1197,8 +1197,8 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     val blocked: List<Position> = walls + ramparts.filter { it.my != true } + spawns + immobile
     val blockedForEnemy: List<Position> = walls + ramparts.filter { it.my != false } + spawns
 
-    InfluenceMap.setProtectedCells(ramparts.filter { it.my == true }.mapTo(HashSet()) { it.x * 100 + it.y })
-    InfluenceMap.setEnemyBlocked(blockedForEnemy.mapTo(HashSet()) { it.x * 100 + it.y })
+    InfluenceMap.setProtectedCells(ramparts.filter { it.my == true }.mapTo(HashSet()) { it.key })
+    InfluenceMap.setEnemyBlocked(blockedForEnemy.mapTo(HashSet()) { it.key })
     // ПОЛЯ ВЛИЯНИЯ (v204): строятся ОДИН раз за тик над одним множеством крипов — прежде commandFight
     // пересобирал ту же опасность пять раз за тик, по разу на замысел, и звал profileOf внутри цикла
     // по клеткам. Опасность клетки в раздаче читается отсюда (см. inc в commandFight).
@@ -1229,9 +1229,9 @@ internal fun PainAndGain.buildWorld(seg: BuildWorldIn): BuildWorldOut = with(seg
     // флаг берётся тем, кто на него ВСТАЛ, — и любой шаг армии через чужой флаг был захватом: в матче 3 армия
     // на марше взяла D5 и второй A3 (occupant=none в журнале) и дралась при A×0.6 D×1.1 против врага, с
     // которого сама же сняла дебаффы. Не наш флаг — стена для всех, кроме назначенного на него
-    val flagCells = flags.filter { !it.ours }.mapTo(HashSet()) { it.pos.x * 100 + it.pos.y }
+    val flagCells = flags.filter { !it.ours }.mapTo(HashSet()) { it.pos.key }
     val flagBlocked = flags.filter { !it.ours }.map { it.pos }
-    val blockSig = blocked.sumOf { it.x * 100 + it.y + 1 } * 31 + flagBlocked.sumOf { it.x * 100 + it.y + 1 }
+    val blockSig = blocked.sumOf { it.key + 1 } * 31 + flagBlocked.sumOf { it.key + 1 }
     // смена препятствий: поля не удаляются, а помечаются устаревшими — сверх бюджета (см. BFS_BUDGET) идут как есть
     if (blockSig != flowSig) { for (k in Memory.flowCacheTick.keys.toList()) Memory.flowCacheTick[k] = -1000; flowSig = blockSig }
     val dangerMatrix = rawDanger.clone()

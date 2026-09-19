@@ -57,7 +57,7 @@ object TrafficManager {
     private val okCount = IntArray(3)
     private val failCount = IntArray(3)
 
-    private fun pack(x: Int, y: Int) = x * 100 + y
+    private fun pack(x: Int, y: Int) = key(x, y)
 
     /** Зарегистрировать желание бойца шагнуть на клетку target (соседнюю). priority — кто кого толкает.
      *  Уставший крип (fatigue > 0) в этот тик не сдвинется — его желание игнорируем, иначе цепочки

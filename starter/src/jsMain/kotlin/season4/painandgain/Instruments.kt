@@ -250,7 +250,7 @@ internal fun PainAndGain.logStuck(active: List<Creep>, enemyCreeps: List<Creep>)
     for (c in active) {
         if (TrafficManager.stuckFor(c.id) != TrafficManager.STUCK_TICKS) continue
         val want = TrafficManager.lastDesiredOf(c.id)
-        val occ = want?.let { w -> (active + enemyCreeps).firstOrNull { it.x * 100 + it.y == w } }
+        val occ = want?.let { w -> (active + enemyCreeps).firstOrNull { it.key == w } }
         val occWant = occ?.let { TrafficManager.lastDesiredOf(it.id) }
         println("stuck ${c.id} at (${c.x},${c.y}) fatigue=${c.fatigue} wants=${want?.let { "(${it / 100},${it % 100})" }} " +
             "occ=${occ?.let { "${it.id} my=${it.my} fatigue=${it.fatigue} ${bodySummary(it)} wants=${occWant?.let { w -> "(${w / 100},${w % 100})" } ?: "-"}" } ?: "free"}")
@@ -260,7 +260,7 @@ internal fun PainAndGain.logStuck(active: List<Creep>, enemyCreeps: List<Creep>)
 /** ASCII-карта один раз: '#' стена, '~' болото, '.' равнина, 'F' флаг, 'm' наш крип, 'e' вражеский. */
 internal fun PainAndGain.captureMapMarks(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
     val m = HashMap<Int, Char>()
-    fun mark(x: Int, y: Int, c: Char) { m[x * 100 + y] = c }
+    fun mark(x: Int, y: Int, c: Char) { m[key(x, y)] = c }
     getObjectsByPrototype(StructureWall::class).forEach { mark(it.x, it.y, '#') }
     getObjectsByPrototype(StructureRampart::class).forEach { mark(it.x, it.y, 'R') }
     getObjectsByPrototype(StructureSpawn::class).forEach { mark(it.x, it.y, if (it.my == true) 'M' else 'E') }
@@ -281,7 +281,7 @@ internal fun PainAndGain.logMap(fromRow: Int) {
         for (x in 0..99) {
             val isWall = DistanceMap.isTerrainWall(x, y)
             val isSwamp = !isWall && DistanceMap.isSwamp(x, y)
-            val structure = marks[x * 100 + y]
+            val structure = marks[key(x, y)]
             row.append(
                 when {
                     structure != null -> structure
@@ -315,7 +315,7 @@ internal class OrderAuditOut(
 
 internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut = with(seg) {
     val seen = HashMap<Int, Int>()
-    commandOf.values.forEach { p -> seen[p.x * 100 + p.y] = (seen[p.x * 100 + p.y] ?: 0) + 1 }
+    commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
     val dup = seen.values.count { it > 1 }
     orderClash += dup
     // ГАРАНТИЯ, А НЕ НАБЛЮДЕНИЕ (v176, оператор: «не должно быть такого, что по приказам командира в одну
@@ -325,12 +325,12 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
     if (dup > 0) {
         val used = HashSet<Int>()
         val drop = ArrayList<String>()
-        for ((id, p) in commandOf) { val k = p.x * 100 + p.y; if (!used.add(k)) drop.add(id) }
+        for ((id, p) in commandOf) { val k = p.key; if (!used.add(k)) drop.add(id) }
         drop.forEach { commandOf.remove(it) }
     }
     if (dup > 0 && DEBUG_LOG) {
         val where = seen.entries.firstOrNull { it.value > 1 }?.key ?: 0
-        val who = commandOf.filterValues { it.x * 100 + it.y == where }.keys.joinToString(",")
+        val who = commandOf.filterValues { it.key == where }.keys.joinToString(",")
         println("clash t=${getTicks()}: mode=$cmdMode cell=(${where / 100},${where % 100}) who=$who")
     }
     // ЗАЖАТОГО БЬЁМ — ПРИБОР (v264): считается по итоговым приказам, а не внутри раздачи — та идёт по разу на
@@ -378,11 +378,11 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
         val foes = ctx.combatEnemies.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } }
         if (foes.isEmpty() || commandOf.isEmpty()) return@run
         val stuck = HashSet<Int>()
-        for (e in ctx.enemyCreeps) if (e.fatigue > 0) stuck.add(e.x * 100 + e.y)
+        for (e in ctx.enemyCreeps) if (e.fatigue > 0) stuck.add(e.key)
         val foeAt = HashSet<Int>()
-        for (e in ctx.enemyCreeps) foeAt.add(e.x * 100 + e.y)
+        for (e in ctx.enemyCreeps) foeAt.add(e.key)
         val plan = HashMap<String, Int>()
-        for (f in commandArmy) if (f.hits > 0) plan[f.id] = (commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.x * 100 + it.y }
+        for (f in commandArmy) if (f.hits > 0) plan[f.id] = (commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.key }
         for (c in commandArmy) {
             if (!(meleeOnlyLive(c))) continue
             val mine = commandOf[c.id] ?: continue
@@ -398,7 +398,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, seg: OrderAuditIn): OrderAuditOut 
                 val x = c.x + dx
                 val y = c.y + dy
                 if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
-                val key = x * 100 + y
+                val key = key(x, y)
                 if (key in foeAt || key in ours) continue
                 val p = InfluenceMap.cell(x, y)
                 if (near.any { e -> getRange(p, e) <= 1 && pinnedAt(p, e, ours, stuck) }) opp = true

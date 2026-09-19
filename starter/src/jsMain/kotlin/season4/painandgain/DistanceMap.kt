@@ -57,7 +57,7 @@ object DistanceMap {
         val ramparts = getObjectsByPrototype(StructureRampart::class).filter { it.exists }
         // подпись чувствительна к ПОЗИЦИЯМ и владельцу каждого рампарта: простые счётчики
         // не замечали обмен владением двух рампартов в один тик (count не менялся)
-        val signature = ramparts.sumOf { (it.x * 100 + it.y) * if (it.my == true) 3 else if (it.my == false) 5 else 7 }
+        val signature = ramparts.sumOf { (it.key) * if (it.my == true) 3 else if (it.my == false) 5 else 7 }
         if (distFromMy != null && signature == rampartSignature) return
         rampartSignature = signature
 

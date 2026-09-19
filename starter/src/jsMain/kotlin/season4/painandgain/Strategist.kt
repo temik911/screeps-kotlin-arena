@@ -576,7 +576,7 @@ internal fun PainAndGain.chooseFlagObjective(ctx: Ctx, group: List<Creep>, pushR
         // без изменений. Причина: назначение `runnerFlag` держится и за убегающим, и за тем, кто стоит у флага
         // без права встать, — армия теряла цель, до которой бегун не дойдёт никогда
         val flow = flowTo(ctx, f.pos)
-        val travel = group.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
+        val travel = group.maxOf { pathTicks(it, flow, it.key) }
         if (travel >= Int.MAX_VALUE / 4) { objDrop["nopath"] = (objDrop["nopath"] ?: 0) + 1; continue }
         if (escapeNeeded) {
             // покинутую точку уклонения армия не идёт «захватывать»: у R3 (13,49) счёт места упал, точка покинута — и
@@ -628,7 +628,7 @@ internal fun PainAndGain.retreatPoint(ctx: Ctx): Position {
     var bestScore = Int.MIN_VALUE
     for (c in candidates) {
         val flow = flowTo(ctx, c)
-        val reach = ctx.army.count { flow[it.x * 100 + it.y] >= 0 }
+        val reach = ctx.army.count { flow[it.key] >= 0 }
         if (reach == 0) continue
         // выигрыш дистанции от врага НА КЛЕТКУ ПУТИ: «самая дальняя от врага» точка (3,96) лежала за его
         // флангом — 66 клеток пути ради 62 дистанции, мимо его строя; дом в 17 клетках даёт 22
@@ -656,14 +656,14 @@ internal fun PainAndGain.refreshEscape(ctx: Ctx, armed: List<Creep>) {
     escapeAt = now
     escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear()
     for (c in escapeCandidates(ctx)) {
-        val key = c.x * 100 + c.y
+        val key = c.key
         val flow = flowTo(ctx, c)
         escapeFlows[key] = flow
         var bestTicks = Int.MAX_VALUE / 4
         var bestCell = -1
         for (e in armed) {
-            val t = pathTicks(e, flow, e.x * 100 + e.y)
-            if (t < bestTicks) { bestTicks = t; bestCell = e.x * 100 + e.y }
+            val t = pathTicks(e, flow, e.key)
+            if (t < bestTicks) { bestTicks = t; bestCell = e.key }
         }
         escapeTheirs[key] = bestTicks
         escapeNearest[key] = bestCell
@@ -676,7 +676,7 @@ internal fun PainAndGain.refreshEscape(ctx: Ctx, armed: List<Creep>) {
  *  мгновенно» браковала всякую цель при идущем на нас враге, и армия сидела дома до боя в кармане (стенд m10
  *  hunter, m8 army); без выхода точка — карман (матч 11). */
 internal fun PainAndGain.exitMargin(ctx: Ctx, c: Position, arrive: Int): Int {
-    val ckey = c.x * 100 + c.y
+    val ckey = c.key
     val flowC = escapeFlows[ckey] ?: return Int.MIN_VALUE / 2
     val start = escapeNearest[ckey] ?: return Int.MIN_VALUE / 2
     val theirsC = escapeTheirs[ckey] ?: return Int.MIN_VALUE / 2
@@ -688,7 +688,7 @@ internal fun PainAndGain.exitMargin(ctx: Ctx, c: Position, arrive: Int): Int {
     var best = Int.MIN_VALUE / 2
     for (d in escapeCandidates(ctx)) {
         if (d.x == c.x && d.y == c.y) continue
-        val flow = escapeFlows[d.x * 100 + d.y] ?: continue
+        val flow = escapeFlows[d.key] ?: continue
         val step = flowNear(flow, c)
         if (step < 0) continue
         val theirs = if (pursuer < 0) Int.MAX_VALUE / 4 else flowNear(flow, InfluenceMap.cell(pursuer / 100, pursuer % 100)).let { if (it < 0) Int.MAX_VALUE / 4 else it }
@@ -707,10 +707,10 @@ internal fun PainAndGain.runnerEscape(ctx: Ctx, s: Creep): Position? {
     var bestScore = Int.MIN_VALUE
     for (c in escapeCandidates(ctx)) {
         if (getRange(c, s) <= 2) continue
-        val key = c.x * 100 + c.y
+        val key = c.key
         val flow = escapeFlows[key] ?: continue
         val theirs = escapeTheirs[key] ?: continue
-        val ticks = pathTicks(s, flow, s.x * 100 + s.y)
+        val ticks = pathTicks(s, flow, s.key)
         if (ticks >= Int.MAX_VALUE / 4) continue
         val score = minOf(theirs - ticks, exitMargin(ctx, c, ticks))
         if (best == null || score > bestScore) { bestScore = score; best = c }
@@ -738,14 +738,14 @@ internal fun PainAndGain.evadePoint(ctx: Ctx, armed: List<Creep>, strikers: List
     for (c in escapeCandidates(ctx)) {
         if (left != null && c.x == left.x && c.y == left.y) continue
         if (enemyCentre != null && getRange(c, enemyCentre) <= getRange(ctx.ourCentroid, enemyCentre)) continue
-        val key = c.x * 100 + c.y
+        val key = c.key
         val flow = escapeFlows[key] ?: continue
         val theirs = escapeTheirs[key] ?: continue
         // «ему не дойти» — это НЕИЗВЕСТНОСТЬ, не безопасность (v54): поле за бюджетом BFS даёт Int.MAX_VALUE / 4, и точка
         // получала запас 536870903 — армия ушла в угол (96,3) при его армии в 75 клетках к югу и была там стёрта (матч 114,
         // Coldkimchi, t=333); бегство вбок (v53) не включилось, потому что «лучшая точка» была положительной
         if (theirs >= Int.MAX_VALUE / 4) continue
-        val ourTicks = strikers.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: continue
+        val ourTicks = strikers.maxOfOrNull { pathTicks(it, flow, it.key) } ?: continue
         if (ourTicks >= Int.MAX_VALUE / 4) continue
         val exit = exitMargin(ctx, c, ourTicks)
         // он там раньше нас — это марш в него (v79); выход нулевой — это карман (v87)
@@ -1024,7 +1024,7 @@ internal fun PainAndGain.assignChase(army: List<Creep>, enemyCreeps: List<Creep>
     var budget = minOf(CHASE_MAX, (free.size - 1) / 2)
     for (h in hulks.sortedBy { e -> free.minOfOrNull { getRange(it, e) } ?: 99 }) {
         if (budget <= 0) break
-        val key = h.x * 100 + h.y
+        val key = h.key
         val danger = InfluenceMap.dangerAt(key)
         // преследователь выбирается ближайший, стрелок вперёд мили: он добивает с трёх и не лезет под ответ
         // ТРИ СУЖЕНИЯ ОТРЯДА ЗАМЕРЕНЫ И ОТВЕРГНУТЫ (v213). Базовая линия стенда — 137 восстановлений при 65
@@ -1374,7 +1374,7 @@ internal class ArmyCommandOut(
 )
 
 internal fun PainAndGain.armyCommand(ctx: Ctx, seg: ArmyCommandIn): ArmyCommandOut = with(seg) {
-    val ourFlagCells = ctx.flags.filter { it.ours }.mapTo(HashSet()) { it.pos.x * 100 + it.pos.y }
+    val ourFlagCells = ctx.flags.filter { it.ours }.mapTo(HashSet()) { it.pos.key }
     val commanderNow =  cmdMode == CmdMode.FIGHT
     // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
     // он перестаёт молчать там, где раньше просто уступал место старым правилам
@@ -1685,7 +1685,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
     if (stalemateTicks > patMax) patMax = stalemateTicks
     // наша линия отступает (v96, USE_STANDING_LINE_HOLDS): центр наших вооружённых за окно терпения отдалился от его
     // НЫНЕШНЕГО центра на PRESS_CLOSING и больше — бой не стоячий, это отход под огнём, и расстановке в нём места нет
-    if (contact && ourArmedC != null) Memory.ourCentreHist.addLast(ourArmedC.x * 100 + ourArmedC.y) else Memory.ourCentreHist.clear()
+    if (contact && ourArmedC != null) Memory.ourCentreHist.addLast(ourArmedC.key) else Memory.ourCentreHist.clear()
     while (Memory.ourCentreHist.size > PRESS_PATIENCE + 1) Memory.ourCentreHist.removeFirst()
     val ourYielding =  theirArmedC != null && Memory.ourCentreHist.size > PRESS_PATIENCE && run {
         val was = Memory.ourCentreHist.first(); val now0 = Memory.ourCentreHist.last()
@@ -1710,7 +1710,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, seg: ArmyStanceIn): ArmyStanceOut 
             val d = getRange(e, near)
             if (d > PRESS_RANGE + 1) { pressChase.remove(e.id); continue }
             val h = pressChase.getOrPut(e.id) { ArrayDeque() }
-            h.addLast(ChaseSample(d, e.x * 100 + e.y, near.x * 100 + near.y))
+            h.addLast(ChaseSample(d, e.key, near.key))
             while (h.size > 3) h.removeFirst()
             // цель ушла (v96, USE_GIVEUP_HE_LEAVES): САМА отдалилась от места, где стоял наш ближайший мили в начале окна, —
             // а не «мы к ней не приблизились»: идущий за нашим отходом к тому месту приближается
@@ -1915,7 +1915,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         // центр массы в стене даёт пустое поле (см. passableNear): все приходы MAX, стая — вся армия, и уклонение в угол
         // на 199-м тике split m28 при его шестёрке в шести клетках
         val flow = flowTo(ctx, passableNear(massCentroid))
-        val arrival = combatEnemies.map { e -> e to pathTicks(e, flow, e.x * 100 + e.y) }.sortedBy { it.second }
+        val arrival = combatEnemies.map { e -> e to pathTicks(e, flow, e.key) }.sortedBy { it.second }
         val pack = ArrayList<Creep>()
         val t0 = arrival.first().second
         var limit = t0
@@ -1939,8 +1939,8 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     val pushPack = if (combatEnemies.size <= 1 || strikers.isEmpty()) fightPack else run {
         val head = combatEnemies.minByOrNull { e -> massArmy.minOf { getRange(e, it) } } ?: return@run fightPack
         val toHead = flowTo(ctx, head)
-        val ourTravel = strikers.map { pathTicks(it, toHead, it.x * 100 + it.y) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: return@run fightPack
-        val arrival = combatEnemies.map { e -> e to (if (e.id == head.id) 0 else pathTicks(e, toHead, e.x * 100 + e.y)) }.sortedBy { it.second }
+        val ourTravel = strikers.map { pathTicks(it, toHead, it.key) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: return@run fightPack
+        val arrival = combatEnemies.map { e -> e to (if (e.id == head.id) 0 else pathTicks(e, toHead, e.key)) }.sortedBy { it.second }
         val pack = ArrayList<Creep>()
         var limit = ourTravel
         for ((e, t) in arrival) {
@@ -1984,7 +1984,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         interceptFlagId?.let { id -> ctx.flags.firstOrNull { it.id == id && !it.theirs } }
             ?: ctx.flags.filter { !it.theirs }.sortedBy { getRange(it.pos, ec) }.firstOrNull { f ->
                 val flow = flowTo(ctx, f.pos)
-                val ours = group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0
+                val ours = group.maxOfOrNull { pathTicks(it, flow, it.key) } ?: 0
                 ours < Int.MAX_VALUE / 4 && ours + INTERCEPT_MARGIN <= getRange(f.pos, ec)
             }
     }
@@ -2340,8 +2340,8 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
         val ec = centroidOf(armedEnemies)
         if (ec != null) { Memory.enemyDistHist.addLast(getRange(ec, ctx.ourCentroid)); while (Memory.enemyDistHist.size > APPROACH_WINDOW) Memory.enemyDistHist.removeFirst() } else Memory.enemyDistHist.clear()
         val ac = centroidOf(armedEnemies)
-        if (ac != null) { Memory.hisCentHist.addLast(ac.x * 100 + ac.y); while (Memory.hisCentHist.size > APPROACH_WINDOW) Memory.hisCentHist.removeFirst() } else Memory.hisCentHist.clear()
-        if (ac != null) { Memory.ourCentHist.addLast(ctx.ourCentroid.x * 100 + ctx.ourCentroid.y); while (Memory.ourCentHist.size > APPROACH_WINDOW) Memory.ourCentHist.removeFirst() } else Memory.ourCentHist.clear()
+        if (ac != null) { Memory.hisCentHist.addLast(ac.key); while (Memory.hisCentHist.size > APPROACH_WINDOW) Memory.hisCentHist.removeFirst() } else Memory.hisCentHist.clear()
+        if (ac != null) { Memory.ourCentHist.addLast(ctx.ourCentroid.key); while (Memory.ourCentHist.size > APPROACH_WINDOW) Memory.ourCentHist.removeFirst() } else Memory.ourCentHist.clear()
         approachRate = if (Memory.enemyDistHist.size >= 2) ((Memory.enemyDistHist.first() - Memory.enemyDistHist.last()).toDouble() / (Memory.enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
     }
     if (escapeNeeded && !(cpuGuardArmy && escapeFlows.isNotEmpty())) refreshEscape(ctx, armedEnemies) else if (!escapeNeeded) { escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear(); evadeLeft = null }
@@ -2360,7 +2360,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
     val interceptObjective: Objective? = interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it) }?.let { f ->
         val group = strikers.ifEmpty { mobileArmy }
         val flow = flowTo(ctx, f.pos)
-        Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.x * 100 + it.y) } ?: 0)
+        Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.key) } ?: 0)
     }
     val objective = if (annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, strikers.ifEmpty { mobileArmy }, pushRatio, hunted , if (cpuGuardArmy) objectiveFlagId else null)
     // ПОЧЕМУ У АРМИИ НЕТ ФЛАГ-ЦЕЛИ (v216). Постура HOLD занимает 43–58 % матча, и в ней армия стоит в точке,
@@ -2577,15 +2577,15 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, seg: ArmyStrategyIn): ArmyStrate
             // стая рейдера — и те, кто дойдёт до него не позже нас: скаут в 12 клетках впереди своей армии был
             // «без охраны», и армия вышла из дома ему навстречу — прямо под удар всей армии врага (матч 6, t=50)
             val field = flowTo(ctx, r)
-            val ourTravel = chasers.map { pathTicks(it, field, it.x * 100 + it.y) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: Int.MAX_VALUE / 4
+            val ourTravel = chasers.map { pathTicks(it, field, it.key) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: Int.MAX_VALUE / 4
             val pack = packAt(ctx, r, field, ourTravel)
             catchable(r, chasers) && (pack.isEmpty() || (strikers.isNotEmpty() && ourPowerOf(strikers, pack) >= enemyPowerOf(pack, strikers) * PUSH_RATIO))
         }
     // охота на угрозу на нашей половине — решение группы с гистерезисом: стрелки против всей стаи у угрозы
     huntingThreat = posture != Posture.RETREAT && posture != Posture.EVADE && threat != null && strikers.isNotEmpty() && run {
         val field = flowTo(ctx, threat)
-        val ourTravel = strikers.map { pathTicks(it, field, it.x * 100 + it.y) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: Int.MAX_VALUE / 4
-        val pack = combatEnemies.filter { getRange(it, threat) <= ENGAGE_RANGE + RANGED_RANGE || (!stationary(it) && pathTicks(it, field, it.x * 100 + it.y) <= ourTravel) }
+        val ourTravel = strikers.map { pathTicks(it, field, it.key) }.filter { it < Int.MAX_VALUE / 4 }.maxOrNull() ?: Int.MAX_VALUE / 4
+        val pack = combatEnemies.filter { getRange(it, threat) <= ENGAGE_RANGE + RANGED_RANGE || (!stationary(it) && pathTicks(it, field, it.key) <= ourTravel) }
         val o = ourPowerOf(strikers, pack)
         val t = enemyPowerOf(pack, strikers)
         o >= t * (if (huntingThreat) PUSH_RELEASE_RATIO else PUSH_RATIO) &&

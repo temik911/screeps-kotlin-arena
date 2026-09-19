@@ -302,7 +302,7 @@ object InfluenceMap {
      */
     private fun enemyOrigins(enemy: Creep): IntArray = originsCache.getOrPut(enemy.id) {
         val origins = ArrayList<Int>(9)
-        origins.add(enemy.x * 100 + enemy.y)
+        origins.add(enemy.key)
         // с усталостью шага нет (v48): крип с fatigue > 0 в этот тик не двинется — мили достаёт только вплотную. Матч 90
         // (けろびー, фермер): четыре его мили и лекарь стояли в болоте с усталостью 16–48 в 4–7 клетках от нашей армии
         // пятьдесят тиков (t=1120–1170), а армия кралась на 1–2 клетки за 20 тиков — клетки в 2–3 от них считались под
@@ -314,7 +314,7 @@ object InfluenceMap {
                 val nx = enemy.x + dx
                 val ny = enemy.y + dy
                 if (nx < 0 || ny < 0 || nx > FIELD_MAX || ny > FIELD_MAX) continue
-                val key = nx * 100 + ny
+                val key = key(nx, ny)
                 if (key in enemyBlocked) continue
                 if (getTerrainAt(cell(nx, ny)) == TERRAIN_WALL) continue
                 origins.add(key)
@@ -415,7 +415,7 @@ object InfluenceMap {
     /** Чистое вражеское давление в клетке (>= 0): насколько эта позиция под огнём врага.
      *  На своём рампарте давления нет — урон уходит в рампарт. */
     fun enemyPressureAt(x: Int, y: Int, enemies: List<Creep>): Double {
-        if (x * 100 + y in protectedCells) return 0.0
+        if (key(x, y) in protectedCells) return 0.0
         var sum = 0.0
         for (enemy in enemies) {
             if (wallBetween(enemy.x, enemy.y, x, y)) continue
@@ -433,7 +433,7 @@ object InfluenceMap {
      * На своём рампарте крип защищён — урон уходит в рампарт.
      */
     fun damageAt(x: Int, y: Int, enemies: List<Creep>): Double {
-        if (x * 100 + y in protectedCells) return 0.0
+        if (key(x, y) in protectedCells) return 0.0
         var damage = 0.0
         for (enemy in enemies) {
             val distance = getRange(enemy, cell(x, y))
@@ -459,7 +459,7 @@ object InfluenceMap {
      * 700). Мера «кто достаёт сейчас» видит угрозу ровно тогда, когда уходить поздно.
      */
     fun damageSoonAt(x: Int, y: Int, enemies: List<Creep>, lead: Int): Double {
-        if (x * 100 + y in protectedCells) return 0.0
+        if (key(x, y) in protectedCells) return 0.0
         var damage = 0.0
         for (enemy in enemies) {
             val distance = getRange(enemy, cell(x, y))
@@ -480,7 +480,7 @@ object InfluenceMap {
      * тиков» — цены болотного шага под огнём; карты опасности и влияния остаются на damageAt.
      */
     fun fireAt(x: Int, y: Int, enemies: List<Creep>): Double {
-        if (x * 100 + y in protectedCells) return 0.0
+        if (key(x, y) in protectedCells) return 0.0
         var damage = 0.0
         for (enemy in enemies) {
             val distance = getRange(enemy, cell(x, y))
@@ -729,7 +729,7 @@ object InfluenceMap {
         // опасных частях и переходить к следующему очагу» — это выбор СРЕДИ целей, а не решение, драться ли вообще.
         var bestPressure = 0.0
         for (e in enemies) {
-            val key = e.x * 100 + e.y
+            val key = e.key
             val burst = ourBurstAt(key)
             val q = burst / (burst + eHeal[key].toDouble() / FP + 1.0)
             if (q > bestPressure) bestPressure = q
@@ -739,7 +739,7 @@ object InfluenceMap {
             val p = profileOf(e)
             val value = p.melee + p.ranged + HEAL_VALUE * p.heal
             if (value <= 0.0) continue
-            val key = e.x * 100 + e.y
+            val key = e.key
             val burst = ourBurstAt(key)
             val raw = burst / (burst + eHeal[key].toDouble() / FP + 1.0)
             val pressure = if (bestPressure <= 0.0) 1.0 else (raw / bestPressure).coerceIn(PRESSURE_MIN, 1.0)
@@ -770,7 +770,7 @@ object InfluenceMap {
         inFire.clear()
         var total = 0.0
         for (a in allies) {
-            val key = a.x * 100 + a.y
+            val key = a.key
             // ПОДОПЕЧНЫЙ В РЕЖИМЕ — ТОТ, КОГО ДОСТАЁТ ЕГО СТОЯЩИЙ СТРЕЛОК (сужение v439 по гейту match20:brawl+heals 14 632 :
             // 15 192, затем 5 103 : 5 737): цена «ровно этот тик» верна против угрозы, равной себе и в следующий тик, — стрелок,
             // держащий три; мили ходит клетку в тик и бьёт лекаря первым на 240, наступающий стрелок через тик стреляет с трёх
@@ -838,7 +838,7 @@ object InfluenceMap {
         // этот тик» верна, пока угроза следующего тика равна нынешней — стрелок держит три и стоит, мили ходит клетку в тик и
         // бьёт лекаря первым на 240; клетка в двух от него вне огня сейчас и под топором через тик. Поле eMelee (K_MELEE,
         // радиус 2 — «шаг + удар») и есть эта досягаемость
-        if (fireMode && (eFire[x * 100 + y] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[x * 100 + y] > 0))) return 0.0
+        if (fireMode && (eFire[key(x, y)] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[key(x, y)] > 0))) return 0.0
         var best = 0.0
         for (a in allies) {
             if (fireMode && (a.id !in inFire || a.id in advancingWards)) continue
@@ -908,7 +908,7 @@ object InfluenceMap {
             val nx = x + dx
             val ny = y + dy
             if (nx < 0 || ny < 0 || nx > FIELD_MAX || ny > FIELD_MAX) continue
-            claim[nx * 100 + ny]++
+            claim[key(nx, ny)]++
         }
     }
 
@@ -939,7 +939,7 @@ object InfluenceMap {
         val p = profileOf(e)
         val value = p.melee + p.ranged + HEAL_VALUE * p.heal
         if (value <= 0.0) return 0.0
-        val key = e.x * 100 + e.y
+        val key = e.key
         val burst = ourBurstAt(key)
         val raw = burst / (burst + eHeal[key].toDouble() / FP + 1.0)
         val pressure = if (lastBestPressure <= 0.0) 1.0 else (raw / lastBestPressure).coerceIn(PRESSURE_MIN, 1.0)
@@ -1080,7 +1080,7 @@ object InfluenceMap {
                     val x = ranger.x + dx
                     val y = ranger.y + dy
                     if (x < 0 || y < 0 || x > FIELD_MAX || y > FIELD_MAX) continue
-                    if (!drawn.add(x * 100 + y)) continue // клетка уже нарисована другим бойцом
+                    if (!drawn.add(key(x, y))) continue // клетка уже нарисована другим бойцом
 
                     val balance = influenceAt(x, y, allies, enemies)
                     if (abs(balance) < MIN_DRAW) continue
@@ -1130,7 +1130,7 @@ object InfluenceMap {
                     val x = ranger.x + dx
                     val y = ranger.y + dy
                     if (x < 0 || y < 0 || x > FIELD_MAX || y > FIELD_MAX) continue
-                    if (!drawn.add(x * 100 + y)) continue
+                    if (!drawn.add(key(x, y))) continue
 
                     val damage = damageAt(x, y, enemies)
                     if (damage < MIN_DRAW) continue

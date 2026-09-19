@@ -185,7 +185,7 @@ internal object Formation {
             while (slots.size < mine.size && abs(side) <= BRACE_WIDTH + 2) {
                 val px = ax + dx * row - dy * side
                 val py = ay + dy * row + dx * side
-                val key = px * 100 + py
+                val key = key(px, py)
                 // ...и место в строю не ставится в болото: изготовка нужна затем, чтобы к первому выстрелу армия могла
                 // двигаться, а крип, шагнувший в трясину, стоит там четыре тика (v183)
                 if (px in 0..99 && py in 0..99 && !DistanceMap.isTerrainWall(px, py) && key !in taken &&
@@ -212,7 +212,7 @@ internal object Formation {
         // ...и марш даёт те же гарантии, что бой (v173): клетка не занята своим, крип способен шагнуть, одна клетка —
         // одному. Прежде колонна раздавала клетки своим кодом без этих проверок, и приказы выходили неисполнимыми
         val occupied = HashSet<Int>()
-        for (a in core) occupied.add(a.x * 100 + a.y)
+        for (a in core) occupied.add(a.key)
         for (c in core.sortedBy { maxOf(abs(it.x - ax), abs(it.y - ay)) }) {
             // лекарь идёт за подопечным, а не в строю: его место задаёт лечение, и приказ марша только уводил его
             if (PainAndGain.hasHeal(c) && !PainAndGain.hasWeapon(c)) continue
@@ -228,19 +228,19 @@ internal object Formation {
                 val nx = c.x + dx; val ny = c.y + dy
                 if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
                 if (DistanceMap.isTerrainWall(nx, ny)) continue
-                if (nx * 100 + ny in taken) continue
+                if (key(nx, ny) in taken) continue
                 // под своим — не запрет, а цена: запрет останавливал колонну целиком (гейт 133 из 135,
                 // army и camp), ровно как в бою, где полный запрет тоже пришлось заменить штрафом
                 if (maxOf(abs(nx - ax), abs(ny - ay)) > FIST_RADIUS + 1) continue
                 // ...и болото в колонне стоит дороже крюка: крип, шагнувший в трясину, встаёт на четыре тика, а
                 // колонна уходит без него — это и есть «армия вязнет и растягивается» (v183)
-                val d = maxOf(abs(nx - tx), abs(ny - ty)) * 2 + (if (nx * 100 + ny in occupied) 3 else 0) +
+                val d = maxOf(abs(nx - tx), abs(ny - ty)) * 2 + (if (key(nx, ny) in occupied) 3 else 0) +
                     (if (DistanceMap.isSwamp(nx, ny)) MARCH_SWAMP_COST else 0)
                 if (d < bestD) { bestD = d; best = InfluenceMap.cell(nx, ny) }
             }
             val b = best ?: continue
-            taken.add(b.x * 100 + b.y); out[c.id] = b
-            occupied.remove(c.x * 100 + c.y)               // покинутая клетка освобождается для следующего в колонне
+            taken.add(b.key); out[c.id] = b
+            occupied.remove(c.key)               // покинутая клетка освобождается для следующего в колонне
         }
     }
 
@@ -311,19 +311,19 @@ internal object Formation {
         val dx = if (dx0 == 0 && dy == 0) 1 else dx0
         val px = -dy; val py = dx
         val taken = HashSet<Int>()
-        for (m in melees) if (!standoffLine) taken.add(m.x * 100 + m.y)
+        for (m in melees) if (!standoffLine) taken.add(m.key)
         fun rowCells(back: Int, n: Int): List<Position> {
             val out = ArrayList<Position>()
             for (k in SLOT_ORDER) {
                 if (out.size >= n) break
                 val x = anchor.x - back * dx + k * px; val y = anchor.y - back * dy + k * py
-                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in taken) continue
+                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (key(x, y)) in taken) continue
                 out.add(InfluenceMap.cell(x, y))
             }
             return out
         }
         fun assign(creeps: List<Creep>, cells: List<Position>) {
-            for ((c, best) in assignPlaces(creeps, cells)) { slotOf[c.id] = best; taken.add(best.x * 100 + best.y) }
+            for ((c, best) in assignPlaces(creeps, cells)) { slotOf[c.id] = best; taken.add(best.key) }
         }
         val d = pair.third
         if (standoffLine) {
@@ -373,7 +373,7 @@ internal fun PainAndGain.commandMarch(ctx: Ctx, army: List<Creep>, goal: Positio
     val descent = flowDescent(ctx, goal, ax, ay, lead)
     if (descent != null) { marchFlow++; sx = descent.first; sy = descent.second }
     else {
-        val step = pathStep(lead, goal, 1, crowdMatrixOf(ctx, goal.x * 100 + goal.y))
+        val step = pathStep(lead, goal, 1, crowdMatrixOf(ctx, goal.key))
         sx = if (step != null) (step.x - lead.x).coerceIn(-1, 1) else (goal.x - ax).coerceIn(-1, 1)
         sy = if (step != null) (step.y - lead.y).coerceIn(-1, 1) else (goal.y - ay).coerceIn(-1, 1)
     }
@@ -388,8 +388,8 @@ internal fun PainAndGain.commandMarch(ctx: Ctx, army: List<Creep>, goal: Positio
 internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int, lead: Creep): Pair<Int, Int>? {
     val field = flowTo(ctx, goal)
     val fx: Int; val fy: Int
-    if (field[ax * 100 + ay] >= 0) { fx = ax; fy = ay }
-    else if (field[lead.x * 100 + lead.y] >= 0) { fx = lead.x; fy = lead.y }
+    if (field[key(ax, ay)] >= 0) { fx = ax; fy = ay }
+    else if (field[lead.key] >= 0) { fx = lead.x; fy = lead.y }
     else return null
     // НИЧЬЯ СПУСКА — ПРЕЖНЕЕ НАПРАВЛЕНИЕ, ЗАТЕМ САМОЕ ПРЯМОЕ К ЦЕЛИ (v283). Сосед с наименьшим расстоянием брался ПЕРВЫЙ по
     // порядку обхода, а на открытой земле равных соседей два-три (восемь направлений при чебышёвском шаге). Якорь —
@@ -399,13 +399,13 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
     // центр армии на месте, счёт отдан 10 791:14 495. Прибор разворотов `mdir` этого не видел: направления не
     // противоположны, а перпендикулярны. Выбор среди равных теперь не зависит от порядка обхода: прежнее направление, если
     // оно среди лучших, иначе ближайшее к прямой на цель
-    val here = field[fx * 100 + fy]
+    val here = field[key(fx, fy)]
     var bestD = here
     for (dx in sym(1)) for (dy in sym(1)) {
         if (dx == 0 && dy == 0) continue
         val nx = fx + dx; val ny = fy + dy
         if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
-        val d = field[nx * 100 + ny]
+        val d = field[key(nx, ny)]
         if (d >= 0 && d < bestD) bestD = d
     }
     if (bestD >= here) return Pair(0, 0)
@@ -414,7 +414,7 @@ internal fun PainAndGain.flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int,
         if (dx == 0 && dy == 0) continue
         val nx = fx + dx; val ny = fy + dy
         if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
-        if (field[nx * 100 + ny] != bestD) continue
+        if (field[key(nx, ny)] != bestD) continue
         if (dx == marchPrevSx && dy == marchPrevSy) return Pair(dx, dy)
         val dot = dx * (goal.x - fx) + dy * (goal.y - fy)
         if (dot > bestDot) { bestDot = dot; bx = dx; by = dy }
@@ -471,7 +471,7 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     // 3:198 и 4:213 крип-тиков; его 341 выстрел против наших 199, армия стёрта при его 16000/16000). Мили — цель клетки,
     // только когда стрелков у него нет
     val shootAt = threats.filter { InfluenceMap.profileOf(it).ranged > 0.0 }.ifEmpty { threats }
-    val enemyAt = enemyCreeps.mapTo(HashSet()) { it.x * 100 + it.y }
+    val enemyAt = enemyCreeps.mapTo(HashSet()) { it.key }
     // клетки-кандидаты: в RANGED_RANGE от любого нашего (дальше — марш, не расстановка), проходимые, не под врагом, и НА
     // НАШЕЙ СТОРОНЕ (v61): не дальше от центра наших вооружённых, чем от центра его угроз. Матч 145 (Coldkimchi, седьмое
     // поражение, армия стёрта за сорок тиков при его 16000/16000): его линия стояла в (73–76, 9–13), наш центр в (79,8), и
@@ -483,7 +483,7 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     val cells = HashMap<Int, FightCell>()
     for (c in army) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
         val x = c.x + dx; val y = c.y + dy
-        val key = x * 100 + y
+        val key = key(x, y)
         if (key in cells || x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || key in enemyAt) continue
         val p = InfluenceMap.cell(x, y)
         if (ourC != null && theirC != null && getRange(p, ourC) > getRange(p, theirC)) continue
@@ -495,11 +495,11 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     if (cells.isEmpty()) return
     val taken = HashSet<Int>()
     val meleeFree = melees.filter { m -> combatEnemies.none { getRange(m, it) <= 1 } }
-    for (m in melees) if (meleeFree.none { it.id == m.id }) taken.add(m.x * 100 + m.y)
+    for (m in melees) if (meleeFree.none { it.id == m.id }) taken.add(m.key)
     // клетка под своим — только его: без этого стрелкам назначались клетки друг друга (матч 73, t=120: ranged_1 → клетка
     // ranged_3, ranged_3 → клетка ranged_1, ranged_2 → клетка ranged_3), и строй крутился на месте под огнём
     val ownAt = HashMap<Int, String>()
-    for (c in army) ownAt[c.x * 100 + c.y] = c.id
+    for (c in army) ownAt[c.key] = c.id
     // память расстановки: клетка прошлого тика остаётся, пока держит верхние ярусы своей роли (keep) — без памяти «лучшая»
     // клетка менялась каждый тик (урон, фланги), стрелки блуждали вбок вместо шага за фронтом, и кайтер стенда бил идущих
     // за ним мили при reach=0/5 (m28 kite, армия потеряна); ряд строя двигался вместе с передним мили и потому успевал
@@ -566,8 +566,8 @@ internal fun PainAndGain.planFight(army: List<Creep>, combatEnemies: List<Creep>
     }
     // лекари: вплотную к бойцу с наибольшим входящим уроном на ЕГО клетке; сам не в двух от его мили; под меньшим огнём
     val fighterCells = ArrayList(rangedCells.values)
-    for (m in meleeFree) slotOf[m.id]?.let { p -> cells[p.x * 100 + p.y]?.let { fighterCells.add(it) } }
-    for (m in melees) if (meleeFree.none { it.id == m.id }) cells[m.x * 100 + m.y]?.let { fighterCells.add(it) }
+    for (m in meleeFree) slotOf[m.id]?.let { p -> cells[p.key]?.let { fighterCells.add(it) } }
+    for (m in melees) if (meleeFree.none { it.id == m.id }) cells[m.key]?.let { fighterCells.add(it) }
     val healers = rear.filter { hasHeal(it) }
     val wounded = rear.filter { !hasHeal(it) }
     fun needAt(cell: FightCell): Double = fighterCells.filter { getRange(cell.pos, it.pos) <= 1 }.maxOfOrNull { it.dmg } ?: -1.0
@@ -660,13 +660,13 @@ internal fun PainAndGain.healerWall(ctx: Ctx, seg: HealerWallIn): HealerWallOut 
         val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
         val hisRanged = ctx.combatEnemies.filter { hasRanged(it) }
         val occupied = HashSet<Int>()
-        for (c in army) if (!healerOnly(c)) occupied.add(c.x * 100 + c.y)
-        for (e in ctx.enemyCreeps) occupied.add(e.x * 100 + e.y)
+        for (c in army) if (!healerOnly(c)) occupied.add(c.key)
+        for (e in ctx.enemyCreeps) occupied.add(e.key)
         val cells = ArrayList<Position>()
         for (dx in sym(1)) for (dy in sym(1)) {
             if (dx == 0 && dy == 0) continue
             val x = v.x + dx; val y = v.y + dy
-            if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (x * 100 + y) in occupied) continue
+            if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (key(x, y)) in occupied) continue
             val cell = InfluenceMap.cell(x, y)
             if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
         }

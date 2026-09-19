@@ -241,7 +241,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     for (c in live) {
         if (!hasWeapon(c) || c.id in Memory.rotByFocus || !canMove(c) || c.hits >= c.hitsMax) continue
         val inc = byFrac[c.id] ?: continue
-        if (inc <= InfluenceMap.healReachAt(c.x * 100 + c.y)) continue
+        if (inc <= InfluenceMap.healReachAt(c.key)) continue
         Memory.rotByFocus.add(c.id)
         Memory.rotatingIds.add(c.id)
         Memory.rotateSince[c.id] = getTicks()
@@ -279,7 +279,7 @@ internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enem
         if (enemyRetreating) break
         if (c.id in Memory.stepOutIds || !canMove(c)) continue
         if (stripped(c)) continue   // раздетый — своя ветка (support: бегство из досягаемости, v123)
-        if (lost(c) < need(c) || (c.x * 100 + c.y) !in reach) continue
+        if (lost(c) < need(c) || (c.key) !in reach) continue
         Memory.stepOutIds.add(c.id)
         Memory.rotatingIds.add(c.id)
         Memory.rotateSince[c.id] = getTicks()
@@ -653,7 +653,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         var rallyTo: Position? = null
         if (groupedPre && marchTarget != null) {
             val mf = flowAvoiding(ctx, marchTarget, creep)
-            val my = mf[creep.x * 100 + creep.y]
+            val my = mf[creep.key]
             var van: Creep? = null
             var vanFlow = my
             var vanId = creep.id
@@ -661,7 +661,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             val rallyPool = mobileArmy.filter { hasWeapon(it) && getRange(it, armedCentroid) <= MASS_RANGE }.ifEmpty { mobileArmy }
             for (m in rallyPool) {
                 if (m.id == creep.id || !hasWeapon(m)) continue
-                val d = mf[m.x * 100 + m.y]
+                val d = mf[m.key]
                 if (d < 0) continue
                 if (vanFlow < 0 || d < vanFlow || (d == vanFlow && m.id < vanId)) { vanFlow = d; vanId = m.id; van = m }
             }
@@ -772,7 +772,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         }
         val flow0 = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep, nearFlow) else flowTo(ctx, target, near = nearFlow)
         // за пределом поля «вблизи» — полное поле
-        val flow = if (nearFlow && slot == null && !keeper && flow0[creep.x * 100 + creep.y] < 0)
+        val flow = if (nearFlow && slot == null && !keeper && flow0[creep.key] < 0)
             (if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)) else flow0
 
         val nearbyEnemies = combatEnemies.filter { getRange(creep, it) <= 12 }
@@ -798,20 +798,20 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // вооружённых половину своего времени (131 из 258, 264 из 552 крип-тиков), его — десятую (26 из 79, 7 из 11);
         // правило «обезоруженные в досягаемости» — 3 из 6 поражений и 0 из 18 побед
         val reachMine = reachNow
-        val inReach = (creep.x * 100 + creep.y) in reachMine
+        val inReach = (creep.key) in reachMine
         // ...и для лекаря закрытые для шага клетки — полная досягаемость (v234, вторая редакция), бегство — по прежней
         val avoidCells = reachMine
         // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
-        if (healer && inCombat) { hexpAll++; if ((creep.x * 100 + creep.y) in reachCells) hexpN++; hlostSum += (lostTick[creep.id] ?: 0) }
+        if (healer && inCombat) { hexpAll++; if ((creep.key) in reachCells) hexpN++; hlostSum += (lostTick[creep.id] ?: 0) }
         val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
             (support && inReach) ||
-            (stepOut && (creep.x * 100 + creep.y) in reachCells) ||
+            (stepOut && (creep.key) in reachCells) ||
             (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
             (ghost > 0 && creep.hits <= ghost)
 
         // сплочение: авангард ждёт отставших группы (в тиках ИХ хода), пока сам не под огнём и напарник
         // не в бою; при враге в досягаемости зазор тесный — собираемся ДО входа под огонь
-        val myFlow = flow[creep.x * 100 + creep.y]
+        val myFlow = flow[creep.key]
         val grouped = !support && (posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && threat != null && target === threat))
         // напарники строя — ходячие ВООРУЖЁННЫЕ: у лекаря своя цель (подопечный), и взаимное ожидание «лекарь
         // отстал от флага — боец отстал от подопечного лекаря» запирало группу навсегда (стенд greedy)
@@ -828,7 +828,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             for (m in mates) {
                 if (getRange(creep, m) <= RANGED_RANGE) continue
                 if (grabberOf.containsKey(m.id) || m.id in Memory.engagingIds) continue
-                val d = flow[m.x * 100 + m.y]
+                val d = flow[m.key]
                 if (d < 0) continue
                 // напарник на другом обходе (только на марше к флагу): далеко и не впереди — ждём его, он идёт
                 // к нам (см. rallyTo)
@@ -840,7 +840,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         }
         // отход строем (см. RETREAT_GAP): передняя половина ждёт отставшего от тела армии, пока сама вне огня
         val retreatHold = (posture == Posture.RETREAT || posture == Posture.EVADE) && !support && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
-            val flows = mobileArmy.filter { hasWeapon(it) }.map { flow[it.x * 100 + it.y] }.filter { it >= 0 }.sorted()
+            val flows = mobileArmy.filter { hasWeapon(it) }.map { flow[it.key] }.filter { it >= 0 }.sorted()
             if (flows.isEmpty()) return@run false
             val rear = flows.last()
             val median = flows[flows.size / 2]
@@ -895,7 +895,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 stepTag = "free"
                 // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
                 val designated = grab?.pos ?: objective?.flag?.pos?.takeIf { objectiveCapturer == creep.id }
-                var myBlocked = if (designated != null) blockedSet - (designated.x * 100 + designated.y) else blockedSet
+                var myBlocked = if (designated != null) blockedSet - (designated.key) else blockedSet
                 // плотность (см. COMPACT_RANGE): при враге в досягаемости — только на клетки строя
                 // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
                 // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
@@ -913,10 +913,10 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                         // выйти из зоны, а центр не сдвигался, пока никто не выходил, — блоб 1200 тиков стоял в
                         // четырёх клетках от последнего лекаря врага и проиграл по очкам (стенд m5 kite); линия
                         // ползёт гусеницей — впереди не дальше трёх от центра, остальные подтягиваются
-                        val fd = flow[x * 100 + y]
+                        val fd = flow[key(x, y)]
                         val advancing = myFlow >= 0 && fd in 0 until myFlow
                         val compact = r <= COMPACT_RANGE || (advancing && r <= COMPACT_RANGE + 1) || armedMates.count { getRange(c, it) <= 1 } >= 2 || (r < myRange)
-                        if (!compact) loose.add(x * 100 + y)
+                        if (!compact) loose.add(key(x, y))
                     }
                     if (loose.isNotEmpty()) myBlocked = myBlocked + loose
                 }
@@ -943,7 +943,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                         val c = InfluenceMap.cell(x, y)
                         val byMelee = meleeEnemies.any { getRange(c, it) <= 1 }
                         val byPatient = healingNow && getRange(c, healMate!!) <= 1
-                        if (localEnemies.any { getRange(c, it) <= 1 } && (byMelee || !byPatient)) front.add(x * 100 + y)
+                        if (localEnemies.any { getRange(c, it) <= 1 } && (byMelee || !byPatient)) front.add(key(x, y))
                     }
                     if (front.isNotEmpty()) myBlocked = myBlocked + front
                 }
@@ -963,7 +963,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // по полям (см. scoreMelee/scoreRanged/scoreHeal)
         if (step != null) {
             dangerMoves++
-            if (stepTag != "order" && InfluenceMap.dangerAt(step.x * 100 + step.y) > 0.0) {
+            if (stepTag != "order" && InfluenceMap.dangerAt(step.key) > 0.0) {
                 if (!inCombat) dangerBlindFar++ else if (localAggressive || spotNow) dangerBlind++
             }
         }
@@ -1009,7 +1009,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         submit(Proposal(creep, step, priorityOf(stepTag, whyTag), prio, missionOf[creep.id] ?: '?',
             if (stepTag == "free") whyTag else stepTag, whyTag, stepTag), ctx)
         Memory.lastHits[creep.id] = creep.hits
-        Memory.lastCell[creep.id] = creep.x * 100 + creep.y
+        Memory.lastCell[creep.id] = creep.key
     }
 }
 
@@ -1026,10 +1026,10 @@ internal fun PainAndGain.slotStep(creep: Creep, slot: Position, blockedSet: Set<
     for ((dx, dy) in dirsNow()) {
         if (dx == 0 && dy == 0) continue
         val x = creep.x + dx; val y = creep.y + dy
-        if (!passable(x, y, blockedSet, enemyPositions) || (x * 100 + y) in banned) continue
+        if (!passable(x, y, blockedSet, enemyPositions) || (key(x, y)) in banned) continue
         val c = InfluenceMap.cell(x, y)
         val d = getRange(c, slot)
-        if (occupantAt[x * 100 + y] != null) { if (d < pushD) { pushD = d; push = c }; continue }
+        if (occupantAt[key(x, y)] != null) { if (d < pushD) { pushD = d; push = c }; continue }
         val fire = InfluenceMap.damageAt(x, y, enemies)
         if (d < bestD || (d == bestD && fire < bestFire)) { bestD = d; bestFire = fire; best = c }
     }
@@ -1052,7 +1052,7 @@ internal fun PainAndGain.bestSingleMove(
     healerFireW: Double = HEALER_W_DAMAGE,
     focus: Creep? = null,
 ): Position? {
-    val hereDist = flow[creep.x * 100 + creep.y]
+    val hereDist = flow[creep.key]
     // своя клетка с форой — только ПРИБЫВ (в зазоре standoff): вне боя не дёргаемся ради мелочи (см.
     // STAY_BIAS); на марше форы нет — вместе со штрафом за соседей она съедала выигрыш шага (матч 2)
     val settled = !inCombat && hereDist in 0..(standoff + ARRIVED_SLACK)
@@ -1066,9 +1066,9 @@ internal fun PainAndGain.bestSingleMove(
         if (dx == 0 && dy == 0) continue
         val x = creep.x + dx; val y = creep.y + dy
         if (!passable(x, y, blockedSet, enemyPositions)) continue
-        val occ = occupantAt[x * 100 + y]
+        val occ = occupantAt[key(x, y)]
         if (occ != null) {
-            val fd = flow[x * 100 + y]
+            val fd = flow[key(x, y)]
             val static = TrafficManager.wasStatic(occ.id) || !canMove(occ)
             // лекарь и раненый уступают и в бою (TrafficManager: заявитель приоритетнее стоящего — swap): раненый,
             // «прибывший» к лекарю, стоял на единственной клетке между тремя лекарями в кармане у стены и их
@@ -1086,14 +1086,14 @@ internal fun PainAndGain.bestSingleMove(
     // из клеток, где он так же бьёт ту же цель (своя и свободные соседние), берётся та, куда приходит меньше чистого
     // урона. Прибор считает и при выключенном тумблере: сколько раз правка увела бы и сколько опасности сняла бы
     if (inCombat && aggressive && meleeOnlyLive(creep) &&
-        (target.x * 100 + target.y) in enemyPositions && maxOf(abs(bx - target.x), abs(by - target.y)) <= 1) {
+        (target.key) in enemyPositions && maxOf(abs(bx - target.x), abs(by - target.y)) <= 1) {
         mquietAll++
         val chosen = InfluenceMap.netDamageAt(bx, by, enemyCreeps, allies)
         var qx = bx; var qy = by; var qd = chosen
         for ((dx, dy) in dirsNow()) {
             val x = creep.x + dx; val y = creep.y + dy
             if ((x == bx && y == by) || maxOf(abs(x - target.x), abs(y - target.y)) > 1) continue
-            if ((dx != 0 || dy != 0) && (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(x * 100 + y))) continue
+            if ((dx != 0 || dy != 0) && (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(key(x, y)))) continue
             val d = InfluenceMap.netDamageAt(x, y, enemyCreeps, allies)
             if (d < qd) { qd = d; qx = x; qy = y }
         }
@@ -1111,9 +1111,9 @@ internal fun PainAndGain.bestSingleMove(
         for ((dx, dy) in dirsNow()) {
             if (dx == 0 && dy == 0) continue
             val x = creep.x + dx; val y = creep.y + dy
-            if (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(x * 100 + y)) continue
-            val fd = flow[x * 100 + y]
-            val dan = InfluenceMap.dangerAt(x * 100 + y)
+            if (!passable(x, y, blockedSet, enemyPositions) || occupantAt.containsKey(key(x, y))) continue
+            val fd = flow[key(x, y)]
+            val dan = InfluenceMap.dangerAt(key(x, y))
             if (fd in 0..best && (dx0 == 0 && dy0 == 0 || fd < best || (fd == best && dan < bestDan))) {
                 best = fd; bestDan = dan; dx0 = dx; dy0 = dy
             }
@@ -1126,7 +1126,7 @@ internal fun PainAndGain.bestSingleMove(
 /** Оценка клетки: приблизиться на standoff к цели по реальному пути; в бою — исходящий урон, чистый
  *  входящий (с хилом), влияние, штраф за зону мили, за болото (без перевеса) и цена прижатия. */
 internal fun PainAndGain.scoreCell(creep: Creep, x: Int, y: Int, target: Position, flow: IntArray, standoff: Int, aggressive: Boolean, inCombat: Boolean, enemyCreeps: List<Creep>, allies: List<Creep>, meleeEnemies: List<Creep>, healerFireW: Double = HEALER_W_DAMAGE, focus: Creep? = null): Double {
-    val flowDist = flow[x * 100 + y]
+    val flowDist = flow[key(x, y)]
     val cheb = getRange(InfluenceMap.cell(x, y), target)
     val firePenalty = when {
         cheb <= standoff -> (standoff - cheb) * 0.5
@@ -1205,7 +1205,7 @@ internal fun PainAndGain.scoreCell(creep: Creep, x: Int, y: Int, target: Positio
     // его, агрессия остаётся бесплатной и напор цел; где перебивает он, опасность считается даже при агрессии,
     // и «первым же ударом калечит пару наших» становится дорогим шагом. Одно обращение к штампованному массиву
     val damageTerm = if (!aggressive) damage * PAIR_W_DAMAGE
-        else if (InfluenceMap.influenceOf(x * 100 + y) < 0.0)
+        else if (InfluenceMap.influenceOf(key(x, y)) < 0.0)
             damage * PAIR_W_DAMAGE * AGGRO_MELEE_FACTOR
         else 0.0
     val pinned = (periodAt(creep, x, y) - 1) * InfluenceMap.fireAt(x, y, enemyCreeps) * PAIR_W_DAMAGE
@@ -1228,7 +1228,7 @@ internal fun PainAndGain.outgoingValue(x: Int, y: Int, enemyCreeps: List<Creep>)
 
 internal fun PainAndGain.passable(x: Int, y: Int, blockedSet: Set<Int>, enemyPositions: Set<Int>): Boolean {
     if (x < 0 || y < 0 || x > 99 || y > 99) return false
-    val key = x * 100 + y
+    val key = key(x, y)
     if (key in blockedSet || key in enemyPositions) return false
     return !DistanceMap.isTerrainWall(x, y)
 }
@@ -1272,8 +1272,8 @@ internal class ArmyTargetsOut(
 )
 
 internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsOut = with(seg) {
-    val enemyPositions = enemyCreeps.mapTo(HashSet()) { it.x * 100 + it.y }
-    val blockedSet: Set<Int> = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y } + ctx.flagCells
+    val enemyPositions = enemyCreeps.mapTo(HashSet()) { it.key }
+    val blockedSet: Set<Int> = ctx.blocked.mapTo(HashSet()) { it.key } + ctx.flagCells
     val meleeEnemies = enemyCreeps.filter { InfluenceMap.profileOf(it).melee > 0.0 }
 
     // фокус-файр: добиваемые за тик -> наибольшая угроза на хит (урон, который враг СЕЙЧАС наносит нам, плюс
@@ -1517,7 +1517,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
     val focusOrder = focusPool.sortedWith(focusCmp.reversed())
     val occupantAt = HashMap<Int, Creep>()
-    for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
+    for (c in ctx.active) occupantAt[c.key] = c
     // добить: цель армии — ближайший к центру армии боевой враг (по пути); в бою ПО КОНТАКТУ (без перевеса) —
     // только враг, который УЖЕ у нас в руках (в RANGED_RANGE + 2 от своих): стая «в 11 клетках» включала основную
     // массу врага, и контакт с одним забредшим мили увёл армию с дома на неё — бой при 0.97 проигран 12:1 (матч 13)
@@ -1538,7 +1538,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         for (dx in sym(1)) for (dy in sym(1)) {
             val x = e.x + dx; val y = e.y + dy
             if (x !in 0..99 || y !in 0..99) continue
-            val d = preyField[x * 100 + y]
+            val d = preyField[key(x, y)]
             if (d >= 0 && (best < 0 || d < best)) best = d
         }
         return if (best < 0) Int.MAX_VALUE / 2 else best
@@ -1623,7 +1623,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         if (r == 0) continue
         for (dx in sym(r)) for (dy in sym(r)) {
             val x = e.x + dx; val y = e.y + dy
-            if (x in 0..99 && y in 0..99) reachCells.add(x * 100 + y)
+            if (x in 0..99 && y in 0..99) reachCells.add(key(x, y))
         }
     }
     // в контактном бою лекарь избегает только мили (2 клетки): «вне досягаемости стрелков» выкидывало слот тыла из
@@ -1635,7 +1635,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
         if (InfluenceMap.profileOf(e).melee <= 0.0) continue
         for (dx in sym(1)) for (dy in sym(1)) {
             val x = e.x + dx; val y = e.y + dy
-            if (x in 0..99 && y in 0..99) meleeReachCells.add(x * 100 + y)
+            if (x in 0..99 && y in 0..99) meleeReachCells.add(key(x, y))
         }
     }
     // ...И В КОНТАКТЕ ЛЕКАРЬ ТОЖЕ ВНЕ ДОСЯГАЕМОСТИ ЕГО СТРЕЛКОВ (v293) — вместе с выходом раненых к нему (stepOutWounded), то
@@ -1652,7 +1652,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, seg: ArmyTargetsIn): ArmyTargetsO
     val fireCells = HashSet<Int>()
     for (e in combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
         val x = e.x + dx; val y = e.y + dy
-        if (x in 0..99 && y in 0..99) fireCells.add(x * 100 + y)
+        if (x in 0..99 && y in 0..99) fireCells.add(key(x, y))
     }
 
     val healersAlive = army.any { healerOnly(it) && canMove(it) }

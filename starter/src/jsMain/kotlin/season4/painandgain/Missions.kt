@@ -139,7 +139,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
                 if (ourPowerOf(listOf(s), listOf(e)) <= enemyPowerOf(listOf(e), listOf(s))) continue
             }
             val flow = flowTo(ctx, f.pos)
-            val ticks = pathTicks(s, flow, s.x * 100 + s.y)
+            val ticks = pathTicks(s, flow, s.key)
             if (ticks >= Int.MAX_VALUE / 4) continue
             // стая у флага — охрана рядом И те, кто дойдёт до него раньше нас: скаут шёл к дальнему H4, пока
             // армия врага шла туда же, и вошёл в неё (матч 3, t=70–87); охраны в 11 клетках было мало.
@@ -191,7 +191,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
             val free = runners.filter { it.id !in assigned && hasWeapon(it) }.sortedBy { getRange(it, f.pos) }.take(2)
             if (free.size < 2) continue
             val flow = flowTo(ctx, f.pos)
-            val ticks = free.maxOf { pathTicks(it, flow, it.x * 100 + it.y) }
+            val ticks = free.maxOf { pathTicks(it, flow, it.key) }
             if (ticks >= Int.MAX_VALUE / 4) continue
             val occ = ctx.enemyCreeps.filter { it.x == f.pos.x && it.y == f.pos.y }
             val pack = (packAt(ctx, f.pos, flow, ticks) + occ).distinctBy { it.id }
@@ -294,7 +294,7 @@ internal fun PainAndGain.runRunners(ctx: Ctx) {
         // ПАРА ИДЁТ ВМЕСТЕ (v158): на флаг под стаей отправляются двое (см. USE_RUNNER_PAIRS), потому что один не
         // справится, — но шли они каждый своим путём и приходили порознь, то есть по одному против той же стаи.
         // Идущий впереди ждёт отставшего: тот же кулак, только на двоих
-        val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.x * 100 + f.pos.y else -1)) else null
+        val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.key else -1)) else null
         if (step != null) { TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY); planCapture(ctx, step) }
         // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
         poisedAll++
