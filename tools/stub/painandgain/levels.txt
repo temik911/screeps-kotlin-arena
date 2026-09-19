@@ -2,7 +2,7 @@
 # оператором 19.09.2026 (решение 6); пересмотр — на этапе 5, отличия возвращаются оператору, а не правятся молча.
 # Зависимость направлена ВНИЗ или внутри уровня. Проверяет `tools/depgraph.py --gate` из regress.sh — по
 # скомпилированным модулям, то есть после инлайна; Rules и Tuning — одни `const val`, модулей у них нет.
-0: Rules Tuning Tables                          # Tables — строка, счётчики и обходчик таблиц решений: ни от чего не зависит
+0: Rules Tuning Tables Types                          # Tables — строка, счётчики и обходчик таблиц решений: ни от чего не зависит
 1: Memory DistanceMap InfluenceMap Facts     # Facts — словарь фактов (Unit, key): зависит только от API
 # ПЕРЕСМОТР ЭТАПА 5 (19.09.2026, находка оператору): Executor, Arbiter, TrafficManager стояли на уровнях 6 / 5 / 5 — по ПОРЯДКУ
 # КОНВЕЙЕРА (исполнитель и арбитр работают последними). Но уровень — это направление ЗАВИСИМОСТИ, а по графу они ПРИЁМНИКИ:
@@ -32,7 +32,6 @@ known: World>Strategist         # этап 5: updateKeepers в runArmy; Posture 
 # — рёбра вверх, которых раздел 2.5 не называет (находка этапа 0, решаются на этапе 5 вместе с пересмотром таблицы):
 known: Strategist>Fight
 known: Strategist>Formation
-known: Strategist>Tactician
 # — стадии импортируют Instruments (этап 6: счётчик живёт у того, кто считает):
 known: Fight>Instruments
 known: Formation>Instruments
