@@ -271,18 +271,18 @@ internal fun PainAndGain.captureAllowed(ctx: Ctx, f: FlagInfo, serious: Boolean 
 internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo, serious: Boolean = true): String? {
     val v = pass(captureGates(), CaptureCase(ctx, f), captureTally)
     val reason = (v as? Verdict.Veto)?.reason
-    if (!serious) capqEval++
+    if (!serious) capqEval.n++
     else {
-        capqAsked++
+        capqAsked.n++
         // причина `parity(ours/floor)` вычисляемая — считается под одним именем, как и у прежнего `capCount(f, "parity")`
         val why = reason?.let { if (it.startsWith("parity(")) "parity" else it }
-        if (why != null) { capqVeto++; capqWhy[why] = (capqWhy[why] ?: 0) + 1 }
+        if (why != null) { capqVeto.n++; capqWhy[why] = (capqWhy[why] ?: 0) + 1 }
         // ...и по одному на пару «тик × флаг» — первый вопрос всерьёз решает (сравнимо с прежним `capgate=` / `cap=`, где
         // первым мог быть и холостой вызов); множество трогают только вопросы всерьёз
         if (capquTick != getTicks()) { capquTick = getTicks(); capquSeen.clear() }
         if (capquSeen.add(f.id)) {
-            capquAsked++
-            if (why != null) { capquVeto++; capquWhy[why] = (capquWhy[why] ?: 0) + 1 }
+            capquAsked.n++
+            if (why != null) { capquVeto.n++; capquWhy[why] = (capquWhy[why] ?: 0) + 1 }
         }
     }
     return reason
@@ -292,17 +292,17 @@ internal fun PainAndGain.captureBlock(ctx: Ctx, f: FlagInfo, serious: Boolean = 
 /** Вопросов всерьёз / из них запретов; по причинам; то же по одному на пару «тик × флаг»; оценочных вопросов; холостых
  *  приборов в головах ворот (`rush.approach.expired`, `contact.edge.lifted`) — печать `capq=`, `capu=`, `capqu=`, `capeval=`,
  *  `capidle=`. */
-internal var capqAsked = 0
-internal var capqVeto = 0
+internal val capqAsked = Gauges.counter("capq", 1)
+internal val capqVeto = Gauges.counter("capq")
 internal val capqWhy = HashMap<String, Int>()
-internal var capquAsked = 0
-internal var capquVeto = 0
+internal val capquAsked = Gauges.counter("capqu", 1)
+internal val capquVeto = Gauges.counter("capqu")
 internal val capquWhy = HashMap<String, Int>()
 internal var capquTick = -1
 internal val capquSeen = HashSet<String>()
-internal var capqEval = 0
-internal var capIdleRush = 0
-internal var capIdleEdge = 0
+internal val capqEval = Gauges.counter("capeval")
+internal val capIdleRush = Gauges.counter("capidle")
+internal val capIdleEdge = Gauges.counter("capidle", 1)
 
 /**
  * ОДИН ВОПРОС О ЗАХВАТЕ (v445, носитель вместо цепочки локальных): флаг и то, что ворота успели о нём узнать. Величину пишут
@@ -400,13 +400,13 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         if (rushNow && !rushStale && !intercept && !(stalledNow)) {
             // пара к погоне за кайтером (v221, см. kiteChaseSeen): сколько отказов доктрины безфлагового броска
             // выдано, пока мы гонимся за отходящим, который бьёт нас сильнее, чем мы его
-            if (unflaggedRushNow) { kvetoAll++; if (kiteChaseSeen) kvetoHit++ }
+            if (unflaggedRushNow) { kvetoAll.n++; if (kiteChaseSeen) kvetoHit.n++ }
             return@Gate Verdict.Veto(capCount(f, if (unflaggedRushNow) "rush.unflagged" else "rush.approach"))
         }
         Verdict.Next
     },
     Gate("contact.mass") {
-        if (fightImminentNow && rushStale) { capCount(f, "rush.approach.expired"); capIdleRush++ }   // холостой прибор: своим счётчиком тоже (v451)
+        if (fightImminentNow && rushStale) { capCount(f, "rush.approach.expired"); capIdleRush.n++ }   // холостой прибор: своим счётчиком тоже (v451)
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -445,7 +445,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         if (!losingRace && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy)) {
             // пара к вето контакта по размену (v221, только прибор): сколько отказов выдано контактом, в котором за
             // окно ни одна сторона не потеряла STALL_DAMAGE. Окно — прошлого тика: runRunners идёт раньше runArmy
-            warmCapAll++; if (!exchangeLiveNow) warmCap++
+            warmCapAll.n++; if (!exchangeLiveNow) warmCap.n++
             return@Gate Verdict.Veto(capCount(f, "contact.mass"))
         }
         Verdict.Next
@@ -453,7 +453,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
     Gate("first.fight") {
         // ...и отдельно считаем то, что этой правкой снято: стычка одиночки вне массы
         if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army)) {
-            capCount(f, "contact.edge.lifted"); capIdleEdge++   // холостой прибор: своим счётчиком тоже (v451)
+            capCount(f, "contact.edge.lifted"); capIdleEdge.n++   // холостой прибор: своим счётчиком тоже (v451)
         }
         // ПЕРВЫЙ БОЙ — БЕЗ ЛИШНЕГО ДЕБАФФА (v281). Пока его сомкнутая армия цела и размена ещё не было, флаг, после которого
         // флагов у нас станет больше, чем у него, не берётся: дебафф ложится на ВЛАДЕЛЬЦА, и платит его первый бой двух целых
@@ -533,8 +533,8 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // и не спит; фермер, который не бьёт вовсе (kills=0, fire=0 за матч), и россыпь сюда не попадают
         foughtFoe = USE_GATE_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy
         opp = if (foughtFoe) ctx.combatEnemies else oppLocal
-        capOppSum += opp.size
-        capAllSum += ctx.combatEnemies.size
+        capOppSum.n += opp.size
+        capAllSum.n += ctx.combatEnemies.size
         val after = powerAfterFor(ctx,
             ctx.side,
             opp, f)
@@ -555,7 +555,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // и НЕ прошёл бы по PARITY_FLOOR. Считается ЗДЕСЬ, а не у признака, потому что вопрос прибора не «был ли
         // признак истинен», а «изменил ли он хоть один отказ»
         if (lostRace) {
-            lostRaceOffers++
+            lostRaceOffers.n++
             if (ours >= theirs * floor && ours < theirs * PARITY_FLOOR) lostRaceOpened++
         }
         // ...и в ПАТУ паритетный пол тоже молчит: он сравнивает мощь, а в бою, где никто никого не убивает, мощь
@@ -583,13 +583,13 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
             val oursNow = ourPowerOf(side, opp)
             val theirsNow = enemyPowerOf(opp, side)
             if (oursNow >= theirsNow * floor) {
-                majOffers++
+                majOffers.n++
                 val ourFlags = ctx.flags.count { it.ours }
                 val hisFlags = ctx.flags.count { it.theirs }
                 val ourAfter = ourFlags + 1
                 val hisAfter = hisFlags - (if (f.theirs) 1 else 0)
                 if (ourFlags <= hisFlags && ourAfter > hisAfter) {
-                    majOpened++
+                    majOpened.n++
                     return@Gate Verdict.Allow
                 }
             }
@@ -1042,7 +1042,7 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
                 armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } <= KEEP_PICKET)
         if (!stay) {
             keepOff++
-            if (!onFlag) keepOffLeft++ else if (groupSafe && !coreHolds(core)) keepOffCore++ else keepOffPack++
+            if (!onFlag) keepOffLeft.n++ else if (groupSafe && !coreHolds(core)) keepOffCore.n++ else keepOffPack.n++
             // ПОЧЕМУ СНЯТ (v309, прибор): «сошёл с клетки» — это три разных случая, и порог чинить можно, только зная, какой
             val why = when {
                 c == null -> "gone"
@@ -1067,11 +1067,11 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
                 else -> "core"
             }
             // счётчик причины — оператором после выбора, а не внутри выражения (v448, линт чистых инициализаторов)
-            when (why) { "gone" -> keepOffGone++; "flag" -> keepOffFlag++; "moved" -> keepOffMoved++; "hurt" -> keepOffHurt++ }
+            when (why) { "gone" -> keepOffGone.n++; "flag" -> keepOffFlag.n++; "moved" -> keepOffMoved.n++; "hurt" -> keepOffHurt.n++ }
             if (DEBUG_LOG) println("keeper t=${getTicks()}: ${e.key} released from ${e.value} ($why)")
             iter.remove()
             if (c != null) core = core + c
-        } else keepTicks++
+        } else keepTicks.n++
     }
     for (f in ctx.flags) {
         if (!f.ours) continue
@@ -1088,12 +1088,12 @@ internal fun PainAndGain.updateKeepers(ctx: Ctx, army: List<Creep>) {
         // выше без этой была бы отменена каждым тиком заново
         if (cand.hits * 2 < cand.hitsMax ||
             InfluenceMap.damageSoonAt(cand.x, cand.y, ctx.combatEnemies, keepLeadFor(cand)) >
-            InfluenceMap.healAt(cand.x, cand.y, ctx.armyWithHeal)) { keepOffHurt++; continue }
+            InfluenceMap.healAt(cand.x, cand.y, ctx.armyWithHeal)) { keepOffHurt.n++; continue }
         if (groupSafe) {
             if (!coreHolds(core.without(occ))) continue
         } else if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
         Memory.keeperIds[occ.id] = f.id
-        keepOn++
+        keepOn.n++
         if (groupSafe) core = core.without(occ)
         if (DEBUG_LOG) println("keeper t=${getTicks()}: ${occ.id} keeps ${f.id} at (${f.pos.x},${f.pos.y})")
     }
@@ -1177,7 +1177,7 @@ internal fun PainAndGain.assignChase(army: List<Creep>, enemyCreeps: List<Creep>
     }
     if (Memory.chaseOf.isNotEmpty()) chaseTicks++
     // прибор: остов, за которым была погоня и который перестал существовать, — это её результат
-    for (id in Memory.chasedIds.toList()) if (enemyCreeps.none { it.id == id }) { chaseKills++; Memory.chasedIds.remove(id) }
+    for (id in Memory.chasedIds.toList()) if (enemyCreeps.none { it.id == id }) { chaseKills.n++; Memory.chasedIds.remove(id) }
     Memory.chasedIds.addAll(Memory.chaseOf.values)
 }
 
@@ -1220,13 +1220,13 @@ internal fun PainAndGain.commandHunt(ctx: Ctx, hunters: List<Creep>, armedEnemie
     val sideB = near.filter { (it.x - quarry.x) * ax + (it.y - quarry.y) * ay < 0 }
     if (sideA.isEmpty() || sideB.isEmpty()) { Memory.huntQuarry = null; return false }
     Memory.huntQuarry = quarry.id
-    huntTicks++
+    huntTicks.n++
     val matrix = crowdMatrixOf(ctx, -1)
     for (c in near) {
         val step = pathStep(c, InfluenceMap.cell(quarry.x, quarry.y), if (hasRanged(c)) RANGED_RANGE - 1 else 1, matrix)
         if (step != null) out[c.id] = step
     }
-    huntCreepTicks += near.size
+    huntCreepTicks.n += near.size
     return true
 }
 
@@ -1294,19 +1294,19 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         val hisRanged = near.count { hasRanged(it) }
         minOf(free.count { meleeOnlyLive(it) }, hisMelee) + minOf(free.count { hasRanged(it) }, hisRanged)
     }
-    if (!fightOnNow) { symCore += core; symFree += free.size }
+    if (!fightOnNow) { symCore.n += core; symFree.n += free.size }
     // ...и В РЕЖИМЕ ПАР БЮДЖЕТ НЕ СИММЕТРИЧЕН (v324): симметрия (v214, решение оператора) держит в ядре столько же, сколько
     // его боевых рядом, и против けろびー это 4–6 крипов независимо от того, что он с ядром не дерётся, — на флагах стоит
     // полтора наших тела из четырнадцати при его пяти флагах. В режиме пар в ядре остаются двое с оружием, остальные идут
     // на флаги; ярлык режима и означает «он не бьёт наших в группе», а начнёт — окно в сто тиков его закроет
     var budget = if (safe) free.size - 2 else free.size - core
-    if (!fightOnNow) { budgetSum += maxOf(0, budget); budgetTicks++ }
+    if (!fightOnNow) { budgetSum.n += maxOf(0, budget); budgetTicks.n++ }
     for (h in holding) {
         if (budget <= 0) break
         val without = free.filter { it.id != h.id }
         if (!coreHolds(without)) break
         val f = heldFlag(ctx, h) ?: guardFlag(ctx, h) ?: continue
-        Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace++
+        Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace.n++
     }
     if (fightBlocks) return
     if (budget <= 0) return
@@ -1341,7 +1341,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             if (!coreHolds(without)) break
             for (c in members) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c) }
             budget -= members.size
-            routeKept += members.size
+            routeKept.n += members.size
         }
     }
     // СВОЙ ПУСТОЙ ФЛАГ — СНАЧАЛА (v316, см. GROUP_SAFE_DMG): держатели заводились только из захвата армией, и на флагах
@@ -1395,7 +1395,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             Memory.cmdDetach.add(id)
             Memory.runnerFlag[id] = fid
             free.removeAll { it.id == c.id }
-            courierTicks++
+            courierTicks.n++
         }
         for (f in homeFlags) {
             if (Memory.garrisonOf.values.contains(f.id)) continue
@@ -1418,13 +1418,13 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         val medics = ctx.armyHealers
         for ((id, _) in Memory.garrisonOf) {
             val c = ctx.runners.firstOrNull { it.id == id } ?: ctx.army.firstOrNull { it.id == id } ?: continue
-            garAll++
-            if (medics.any { getRange(it, c) <= HEAL_RANGE }) garCovered++
+            garAll.n++
+            if (medics.any { getRange(it, c) <= HEAL_RANGE }) garCovered.n++
         }
         for ((id, fid) in Memory.garrisonOf) {
             val c = free.firstOrNull { it.id == id } ?: continue
             if (budget <= 0) break
-            Memory.cmdDetach.add(id); Memory.runnerFlag[id] = fid; free.remove(c); budget--; manned++
+            Memory.cmdDetach.add(id); Memory.runnerFlag[id] = fid; free.remove(c); budget--; manned.n++
         }
         val unmanned = flags.filter { it.ours && it.occupant?.my != true &&
             ctx.runners.none { r -> Memory.runnerFlag[r.id] == it.id } }
@@ -1440,7 +1440,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
             val without = free.without(c)
             if (!coreHolds(without)) break
             Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); budget--
-            manned++
+            manned.n++
         }
     }
     for (f in wanted) {
@@ -1477,7 +1477,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         // ...и ЗАДАНИЕ — это зачисление в захватчики с целью, а не клетка: вооружённый крип, приведённый к флагу
         // как боец, флага НЕ БЕРЁТ (захват делают бегуны), и первая редакция на сценарии kite набрала 0 очков.
         // Командир решает КТО и КУДА, а ведёт и берёт существующий механизм захвата (v160)
-        for (c in party) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); splitAll++; if (fightOnNow) splitFight++ }
+        for (c in party) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); splitAll.n++; if (fightOnNow) splitFight.n++ }
         budget -= need
     }
 }
@@ -1503,18 +1503,18 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     val medsNow = ctx.armyHealers
     for (c in strat.combatArmy) {
         if (!hasWeapon(c) || meas.armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 1 }) continue
-        healGapN++
-        if (medsNow.none { getRange(c, it) <= HEAL_RANGE }) healGap++
+        healGapN.n++
+        if (medsNow.none { getRange(c, it) <= HEAL_RANGE }) healGap.n++
         // ...и ОТДЕЛЬНО — жалоба оператора дословно: «в бою не оказывается НИ ОДНОГО хиллера». Это не «лекарь в
         // четырёх клетках вместо трёх», это «лекаря рядом нет вовсе»: боец дерётся там, куда лекарь не придёт
-        if (medsNow.none { getRange(c, it) <= MASS_RANGE }) noMedic++
+        if (medsNow.none { getRange(c, it) <= MASS_RANGE }) noMedic.n++
     }
     // СМЕНА НАПРАВЛЕНИЯ АРМИИ (v215, оператор: «пару тиков погоня, потом разворот, и так много раз»).
     // Направление — это то, КУДА армия идёт: флаг-цель, добыча или пост. Одна смена за матч — это план,
     // сто — это дрожь, и пара «смен/тиков» отличает одно от другого
     val aimNow = strat.objective?.flag?.id?.let { "F$it" } ?: targ.prey?.id?.let { "E$it" } ?: "P"
-    aimTicks++
-    if (lastAim.isNotEmpty() && aimNow != lastAim) aimFlips++
+    aimTicks.n++
+    if (lastAim.isNotEmpty() && aimNow != lastAim) aimFlips.n++
     lastAim = aimNow
     // «их мили идут» (см. PRESS_CLOSING): дистанция их мили до наших вооружённых за окно терпения
     val theirMeleeDist = meas.combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
@@ -1679,8 +1679,8 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
         ourDamageTaken > 0 && enemyDamageTaken < ourDamageTaken * BREAK_OFF_RATIO
     // ...а САМ признак посчитан выше (v217, см. outmatchedNow): здесь остаётся только прибор расхождения
     if (meas.contact && meas.armedEnemies.isNotEmpty()) {
-        breakOffN++
-        if (outmatchedByPower != outmatchedByLedger) breakOffSplit++
+        breakOffN.n++
+        if (outmatchedByPower != outmatchedByLedger) breakOffSplit.n++
     }
     // признак для режима боя при наступлении (см. ниже): мы позади по размену хитов, то есть его лечение
     // перекрывает наш урон — ровно тот случай, ради которого концентрация и нужна
@@ -1697,7 +1697,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // постуры за 1700 тиков, медиана удержания ОДИН тик, 71–81 % смен живут не дольше трёх тиков
     // ПАРА К КОМАНДИРУ (v221, см. warmNow): сколько тиков режима боя командир держит при тёплом контакте — на
     // этих тиках он вернёт ANNIHILATE сам, что бы ни решила постура
-    if (cmdMode == CmdMode.FIGHT) { warmCmdAll++; if (strat.warmNow) warmCmd++ }
+    if (cmdMode == CmdMode.FIGHT) { warmCmdAll.n++; if (strat.warmNow) warmCmd.n++ }
     posture = strat.decision.postureFinal
     postureSince = strat.decision.postureSinceFinal
     // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
@@ -1708,8 +1708,8 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // ПРИБОРЫ ОТХОДА (v217). Считаются ЗДЕСЬ, после того как постура окончательна: командир перезаписывает
     // её на 600 строк позже, чем она решается, и прибор, снятый раньше, рассказал бы про другую постуру
     if (outmatchedTicks >= BREAK_OFF_TICKS) {
-        outmTicks++
-        if (posture == Posture.RETREAT) outmRetreat++
+        outmTicks.n++
+        if (posture == Posture.RETREAT) outmRetreat.n++
     }
     // РАЗЛОЖЕНИЕ ПУСТОЙ БОЕВОЙ ПОСТУРЫ (v221, прибор). Живой A/B против MetalicaX#2: с USE_FIGHT_BY_LEDGER доля
     // тиков ANNIHILATE без размена НЕ упала (20 % против 16 % в контроле), хотя тёплый контакт в контакте упал с
@@ -1734,7 +1734,7 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // именно это основание — растянут ли строй стрелков в HOLD шире того порога, каким сбор и включается.
     // Мал числитель — основание верно, трогать сбор незачем
     if (posture == Posture.HOLD) {
-        gatherHold++
+        gatherHold.n++
         val shooters = rangedOf(strat.combatArmy)
         if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread++
     }
@@ -1743,21 +1743,21 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // (rallyTo) в ANNIHILATE не работает по построению, а сплочение (cohesionHold) — ожидание, которое гасит
     // огонь по своим. Прибор отдельный, чтобы прежний `gather=` по HOLD остался сравним с логами v218–v220
     if (posture == Posture.ANNIHILATE) {
-        gatherAnnAll++
+        gatherAnnAll.n++
         val sh = rangedOf(strat.combatArmy)
-        if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn++
+        if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn.n++
     }
     if (posture.withdrawing) {
-        retrTicks++
+        retrTicks.n++
         // ...и точка спрашивается ПО СВОЕЙ постуре: у отхода — `retreatTo`, у уклонения — `evadeTo`.
         // Смешивать их нельзя ровно потому, что дефект живёт в отходе: `evadeTo` почти всегда есть, и
         // общий счётчик показал бы 98 % там, где у отхода ноль
-        if (if (posture == Posture.RETREAT) strat.retreatTo != null else strat.evadeTo != null) retrWithPoint++
-        if (strat.underTheirFire) retrUnderFire++
+        if (if (posture == Posture.RETREAT) strat.retreatTo != null else strat.evadeTo != null) retrWithPoint.n++
+        if (strat.underTheirFire) retrUnderFire.n++
         for (c in strat.combatArmy) {
             if (!hasWeapon(c)) continue
-            standTicks++
-            if (meas.combatEnemies.any { getRange(c, it) <= (if (hasRanged(c)) RANGED_RANGE else 1) }) standFire++
+            standTicks.n++
+            if (meas.combatEnemies.any { getRange(c, it) <= (if (hasRanged(c)) RANGED_RANGE else 1) }) standFire.n++
         }
     }
     return ArmyStanceOut(
@@ -1794,9 +1794,9 @@ private var pushRuleRows: List<Row<PushCase, Boolean>>? = null
 internal fun PainAndGain.pushRules(): List<Row<PushCase, Boolean>> = pushRuleRows ?: listOf<Row<PushCase, Boolean>>(
     Row("breakOff", { breakOffNow }) { false },
     Row("raw", { pushRaw }) { if (!pushing) pushSince = now; true },
-    Row("toothless", { pushing && toothless && !stalled }) { pushToothless++; pushHeld = true; true },
+    Row("toothless", { pushing && toothless && !stalled }) { pushToothless.n++; pushHeld = true; true },
     Row("dwell", { pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease }) {
-        pushHeld = true; pushHeldTicks++; true
+        pushHeld = true; pushHeldTicks.n++; true
     },
     Row("none", { true }) { false },
 ).also { pushRuleRows = it }
@@ -2079,7 +2079,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
                 if (oursAfter < theirsAfter * coreFloor) break
             }
             Memory.detachedIds.add(c.id)
-            splitAll++; if (fightOnNow) splitFight++
+            splitAll.n++; if (fightOnNow) splitFight.n++
             remaining = without
         }
     }
@@ -2147,7 +2147,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
     // прибор и ставился
     val pushCase = PushCase(meas.breakOffNow, pushRaw, toothless, meas.stalled, meas.now, oursPush, theirsPush, pushRelease)
     pushing = walk(pushRules(), pushCase, pushTally).act(pushCase)
-    pushTicks++
+    pushTicks.n++
     // бой по контакту — пока отход невозможен: мили врага вплотную. Решение ТИК ЗА ТИКОМ, и это не дрожание, а
     // кайт погони: слабее — отходим, стреляя и рубя на ходу (strike/shoot идут в любой постуре); догнал мили —
     // вся армия разворачивается на него (авангард погони один против всех), отстал — снова отход. На стенде
@@ -2192,8 +2192,8 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
     // то есть очаг у трёх его лекарей этот порог не берёт. В цепочке целей (см. spotNow) killTicks на месте
     val holdingSpot =  meas.contact && spotFoes.isNotEmpty() && oursFight >= theirsFight * PUSH_RATIO
     if (holdingSpot) {
-        spotHoldAll++
-        if (!(pushing || contactFight)) spotHoldNew++     // пара: сколько раз вето ИЗМЕНИЛО постуру
+        spotHoldAll.n++
+        if (!(pushing || contactFight)) spotHoldNew.n++     // пара: сколько раз вето ИЗМЕНИЛО постуру
     }
     // ...и в режиме выживания бой не объявляется, пока есть куда уходить (v223, см. USE_SURVIVAL). Точка уклонения
     // считается здесь, до постуры: вторая редакция — нет точки и он в контакте, значит бой строем, а не стояние в
@@ -2204,10 +2204,10 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
     // называет «не боем». `warm` — доля такого контакта во всём контакте; `warmann` — тики, где боевую постуру
     // держал только он (не толчок и не очаг; с правкой — ноль по построению); `warmhold` — из них тики, где
     // флаг-цель подхватила бы «держим линию»
-    if (meas.contact) { warmContact++; if (warmNow) warmTicks++ }
+    if (meas.contact) { warmContact.n++; if (warmNow) warmTicks.n++ }
     if (annihilate) {
-        warmAnnAll++
-        if (warmNow && !pushing && !holdingSpot) { warmAnn++; if (meas.enemyNear && !meas.stalled) warmHold++ }
+        warmAnnAll.n++
+        if (warmNow && !pushing && !holdingSpot) { warmAnn.n++; if (meas.enemyNear && !meas.stalled) warmHold.n++ }
     }
     // непобедимая армия (см. EVADE_SAFE): с ней не деремся — флаг-цель только с выходом, иначе уклонение на любой
     // дистанции: держимся там, откуда есть выход, и уходим, когда она подходит
@@ -2338,7 +2338,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
         val op = InfluenceMap.cell(o / 100, o % 100)
         getRange(InfluenceMap.cell(b / 100, b % 100), op) > getRange(InfluenceMap.cell(a / 100, a % 100), op)
     }
-    if (retreatByDistance) { rtrOld++; if (!retreatByHisStep) rtrRemoved++ } else if (retreatByHisStep) rtrAdded++
+    if (retreatByDistance) { rtrOld.n++; if (!retreatByHisStep) rtrRemoved.n++ } else if (retreatByHisStep) rtrAdded.n++
     // ...и снимается только ЛОЖНЫЙ ярлык (v222, вторая редакция): «отходит», если расстояние выросло И сдвинулся он.
     // Первая редакция (одно «его шаг») ещё и ДОБАВЛЯЛА ярлык там, где мы теснили его быстрее, чем он пятился, — и
     // командир уходил из FIGHT посреди выигрываемой погони: доля FIGHT в тиках размена 18 % -> 11 % против
@@ -2396,7 +2396,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
     Memory.armyPrev = ctx.myCreeps.size
     Memory.postureCandidate = decision.candidate
     Memory.candidateSince = decision.candidateSince
-    if (decision.event) stateEventTicks++
+    if (decision.event) stateEventTicks.n++
     // ПРИНЯЛА ЛИ ПОСТУРА НОВОЕ ЗНАЧЕНИЕ — считается ЗДЕСЬ, до всех, кто от этого зависит (v215). Прежде
     // решение принималось на сорок строк ниже, а `objectiveFlagId` присваивался выше и безусловно
     val newPosture = decision.newPosture
@@ -2428,7 +2428,7 @@ internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStra
     // перебивать флаги, даже если сильнее»). Когда флаг-цели нет, постура становится HOLD, и цепочка целей
     // отправляет крипа на `post` — центроид наших флагов, стояние на котором не даёт НИ ОДНОГО очка.
     // `standingFlag` уже делает половину работы: при враге рядом постом становится наш флаг под ногами.
-    postAll++
+    postAll.n++
     val post = standingFlag?.pos ?: if (interceptFlag?.ours == true) interceptFlag.pos else postPoint(ctx)
     val postureKey = "$newPosture:${objectiveFlagId ?: ""}"
     if (DEBUG_LOG && (postureKey != postureLogged || getTicks() % (LOG_EVERY * 10) == 0)) {
@@ -2719,92 +2719,92 @@ internal class Objective(val flag: FlagInfo, val pack: List<Creep>, val value: D
 // Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
 
 /** Отряды командира, сохранившие задание на пути к флагу (v299, route=бегуно-тиков). */
-internal var routeKept = 0
+internal val routeKept = Gauges.counter("route")
 
 /** Свои пустые флаги, на которые командир посадил бойца (v316, man=). */
-internal var manned = 0
+internal val manned = Gauges.counter("man")
 
 /** Покрытие гарнизона лечением (v361, прибор): гарнизонных крипов, у которых наш лекарь в дальности лечения / всего.
  *  Разбор 12 смертей против けろびー#19 сказал, что помощь не приходит никогда — ближайший лекарь в медиане 24 клетках
  *  при агонии 5,8 тика, — но своего числа у этого не было. */
 /** Тиков с назначенным курьером на дорогой флаг (v367, прибор courier=). */
-internal var courierTicks = 0
+internal val courierTicks = Gauges.counter("courier")
 
-internal var garCovered = 0
+internal val garCovered = Gauges.counter("gcov")
 
-internal var garAll = 0
+internal val garAll = Gauges.counter("gcov", 1)
 
 /** Загон (v331, hunt=тиков с целью/крипо-тиков в загоне). */
-internal var huntTicks = 0
+internal val huntTicks = Gauges.counter("hunt")
 
-internal var huntCreepTicks = 0
+internal val huntCreepTicks = Gauges.counter("hunt", 1)
 
 /** Тики, где наступление удержано «остатком без мили» (v300, toothless=). */
-internal var pushToothless = 0
+internal val pushToothless = Gauges.counter("toothless")
 
-internal var keepOn = 0
+internal val keepOn = Gauges.counter("keep2")
 
-internal var keepTicks = 0
+internal val keepTicks = Gauges.counter("keep2", 1)
 
 internal var keepOff = 0
 
-internal var keepOffCore = 0
+internal val keepOffCore = Gauges.counter("keep2", 2)
 
-internal var keepOffPack = 0
+internal val keepOffPack = Gauges.counter("keep2", 3, sep = ":")
 
-internal var keepOffLeft = 0
+internal val keepOffLeft = Gauges.counter("keep2", 4, sep = ":")
 
-internal var keepOffGone = 0
+internal val keepOffGone = Gauges.counter("keep3")
 
-internal var keepOffFlag = 0
+internal val keepOffFlag = Gauges.counter("keep3", 1, sep = ":")
 
-internal var keepOffMoved = 0
+internal val keepOffMoved = Gauges.counter("keep3", 2, sep = ":")
 
-internal var keepOffHurt = 0
+internal val keepOffHurt = Gauges.counter("keep3", 3, sep = ":")
 
-internal var holdKeptRace = 0
+internal val holdKeptRace = Gauges.counter("hold", 2)
 
 /** Пара: сколько оставлено в ядре против сколько было свободных. */
-internal var symCore = 0
+internal val symCore = Gauges.counter("sym")
 
-internal var symFree = 0
+internal val symFree = Gauges.counter("sym", 1)
 
 /** Вето «сперва туши очаг»: тиков с очагом и из них тех, где вето ИЗМЕНИЛО решение о постуре. */
-internal var spotHoldAll = 0
+internal val spotHoldAll = Gauges.counter("spothold", 1)
 
-internal var postAll = 0
+internal val postAll = Gauges.counter("postc", 1)
 
-internal var spotHoldNew = 0
+internal val spotHoldNew = Gauges.counter("spothold")
 
 internal var chaseTicks = 0
 
-internal var chaseKills = 0
+internal val chaseKills = Gauges.counter("kills")
 
 /** Прибор локализации: |opp| против |combatEnemies| — если держится единицей, локализация ничего не меняет. */
-internal var capOppSum = 0
+internal val capOppSum = Gauges.counter("capopp")
 
-internal var capAllSum = 0
+internal val capAllSum = Gauges.counter("capopp", 1)
 
 internal var capOffered = 0
 
 /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
-internal var pushHeldTicks = 0
+internal val pushHeldTicks = Gauges.counter("pushheld")
 
-internal var pushTicks = 0
+internal val pushTicks = Gauges.counter("pushheld", 1)
 
 /** Прибор к USE_RETREAT_BY_HIS_STEP: тиков, где старый признак говорил «отходит», из них тех, где его шаг — нет, и
  *  тиков, где новый говорит «отходит», а старый — нет (мы наступали быстрее, чем он пятился). */
-internal var rtrOld = 0
+internal val rtrOld = Gauges.counter("rtr", 1)
 
-internal var rtrRemoved = 0
+internal val rtrRemoved = Gauges.counter("rtr")
 
-internal var rtrAdded = 0
+internal val rtrAdded = Gauges.counter("rtr", 2)
 
 /** Пара к USE_GUARD_IS_CATCHABLE: крипо-проверок, где враг «уходит», и из них тех, где он страж своего флага. */
 /** Пара к USE_FLAG_MAJORITY: отказов по паритету при армиях на паритете и из них тех, где флаг давал перевес по флагам. */
-internal var majOffers = 0
+internal val majOffers = Gauges.counter("maj", 1)
 
-internal var majOpened = 0
+internal val majOpened = Gauges.counter("maj")
 
 /** Пара к USE_FOCUS_ANY_HEALER (v224): тиков с его лекарем в досягаемости наших стволов и из них тех, где фокус — лекарь. */
 /** Дельта прогноза в решении о бое с кулаком (v397, прибор): сумма×100, тиков, тиков с положительной дельтой,
@@ -2826,62 +2826,62 @@ internal var radMax = 0
 internal var radWide = 0
 
 /** Пара «тиков, где ланчестерова мощь и фактический размен расходятся / тиков с признаком» (v216). */
-internal var breakOffSplit = 0
+internal val breakOffSplit = Gauges.counter("breakoff")
 
-internal var breakOffN = 0
+internal val breakOffN = Gauges.counter("breakoff", 1)
 
 /** Бюджет командирской гонки: сколько отпущено, каким ядром и из скольких свободных. */
-internal var budgetSum = 0
+internal val budgetSum = Gauges.counter("budget")
 
-internal var budgetTicks = 0
+internal val budgetTicks = Gauges.counter("budget", 1)
 
 internal var objAll = 0
 
 internal var objDropN = 0
 
-internal var stateEventTicks = 0
+internal val stateEventTicks = Gauges.counter("evt")
 
 internal var cmdWhyN = 0
 
 /** Пара «отпущено во время боя / отпущено всего» (v215, наблюдение оператора «отряд распадается»). */
-internal var splitFight = 0
+internal val splitFight = Gauges.counter("split")
 
-internal var splitAll = 0
+internal val splitAll = Gauges.counter("split", 1)
 
 /** Пара «крипо-тиков боя без своего лекаря в дальности лечения / крипо-тиков боя» (v215). */
-internal var healGap = 0
+internal val healGap = Gauges.counter("healgap")
 
 /** ...и крипо-тики боя, где своего лекаря нет и в MASS_RANGE — «в бою ни одного хиллера» (v215). */
-internal var noMedic = 0
+internal val noMedic = Gauges.counter("nomedic")
 
-internal var healGapN = 0
+internal val healGapN = Gauges.also(Gauges.counter("healgap", 1), "nomedic", 1)
 
 /** Пара «смен направления армии / тиков» (v215, наблюдение «разворачиваемся много раз»). */
-internal var aimFlips = 0
+internal val aimFlips = Gauges.counter("flip")
 
-internal var aimTicks = 0
+internal val aimTicks = Gauges.counter("flip", 1)
 
-internal var lostRaceOffers = 0
+internal val lostRaceOffers = Gauges.counter("lostrace", 1)
 
-internal var gatherHold = 0
+internal val gatherHold = Gauges.counter("gather", 1)
 
 /** Тройка «тиков в отходе / из них с точкой отхода / из них под огнём» (v217). Средний числитель обязан
  *  быть нулём, пока `retreatTo` считается по `newPosture`, а постуру перезаписывает командир. */
-internal var retrTicks = 0
+internal val retrTicks = Gauges.counter("retr")
 
-internal var retrWithPoint = 0
+internal val retrWithPoint = Gauges.counter("retr", 1)
 
-internal var retrUnderFire = 0
+internal val retrUnderFire = Gauges.counter("retr", 2)
 
 /** Пара «крипо-тиков в отходе, где крип стрелял или бил / всех крипо-тиков в отходе» (v217). */
-internal var standFire = 0
+internal val standFire = Gauges.counter("standfire")
 
-internal var standTicks = 0
+internal val standTicks = Gauges.counter("standfire", 1)
 
 /** Пара «тиков признака outmatched / из них с постурой отхода» (v217, решение оператора). */
-internal var outmTicks = 0
+internal val outmTicks = Gauges.counter("outmw")
 
-internal var outmRetreat = 0
+internal val outmRetreat = Gauges.counter("outmw", 1)
 
 /** ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, см. warmNow):
  *  `warm` — тиков контакта без размена / тиков контакта; `warmann` — тиков ANNIHILATE, державшихся только таким
@@ -2889,32 +2889,32 @@ internal var outmRetreat = 0
  *  `warmcmd` — тиков режима боя при тёплом контакте / тиков режима боя (там постуру вернёт командир);
  *  `warmfight` — тиков «бой идёт» без размена / тиков «бой идёт» (отзыв бегунов, USE_NO_SPLIT_IN_FIGHT);
  *  `warmcap` — отказов захвата `contact.mass` без размена / отказов `contact.mass`. */
-internal var warmTicks = 0
+internal val warmTicks = Gauges.counter("warm")
 
-internal var warmContact = 0
+internal val warmContact = Gauges.counter("warm", 1)
 
-internal var warmAnn = 0
+internal val warmAnn = Gauges.also(Gauges.counter("warmann"), "warmhold", 1)
 
-internal var warmAnnAll = 0
+internal val warmAnnAll = Gauges.counter("warmann", 1)
 
-internal var warmHold = 0
+internal val warmHold = Gauges.counter("warmhold")
 
-internal var warmCmd = 0
+internal val warmCmd = Gauges.counter("warmcmd")
 
-internal var warmCmdAll = 0
+internal val warmCmdAll = Gauges.counter("warmcmd", 1)
 
-internal var warmCap = 0
+internal val warmCap = Gauges.counter("warmcap")
 
-internal var warmCapAll = 0
+internal val warmCapAll = Gauges.counter("warmcap", 1)
 
-internal var kvetoHit = 0
+internal val kvetoHit = Gauges.counter("kveto")
 
-internal var kvetoAll = 0
+internal val kvetoAll = Gauges.counter("kveto", 1)
 
 /** Пара «тиков ANNIHILATE со строем стрелков шире RALLY_RANGE / тиков ANNIHILATE» (v221, см. gatherSpread). */
-internal var gatherAnn = 0
+internal val gatherAnn = Gauges.counter("gathera")
 
-internal var gatherAnnAll = 0
+internal val gatherAnnAll = Gauges.counter("gathera", 1)
 
 // ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
 

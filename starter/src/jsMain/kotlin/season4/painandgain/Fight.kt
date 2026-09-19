@@ -100,8 +100,8 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
         return deficit + expected - (healDone[target.id] ?: 0)
     }
     fun book(target: Creep, amount: Int) {
-        hfullAll++; if (target.hits >= target.hitsMax) hfullN++
-        hoverSum += maxOf(0, amount - maxOf(0, needConfirmed(target))); hdelivSum += amount
+        hfullAll.n++; if (target.hits >= target.hitsMax) hfullN.n++
+        hoverSum.n += maxOf(0, amount - maxOf(0, needConfirmed(target))); hdelivSum.n += amount
         healDone[target.id] = (healDone[target.id] ?: 0) + amount
     }
     // под огнём (v109): терявший хиты в прошлый тик — впереди любого дефицита (см. USE_HEAL_UNDER_FIRE), но только пока не покрыт
@@ -121,11 +121,11 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
             // мимо командира»). Прежде назначенный пациент брался, только если он ВПЛОТНУЮ; иначе выбор перехватывал
             // местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит
             // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): удержимую жертву лечит каждый лекарь в дальности, вплотную — полностью
-            if (victimSaveable) hwallHealsAll++
+            if (victimSaveable) hwallHealsAll.n++
             val wallTarget = if (victimSaveable) victimNow?.takeIf { v -> !v.spawning && creep.getRangeTo(v) <= HEAL_RANGE } else null
             if (wallTarget != null) {
                 if (creep.getRangeTo(wallTarget) <= 1) {
-                    hwallHeals++
+                    hwallHeals.n++
                     Executor.heal(creep, wallTarget)
                     book(wallTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
@@ -145,15 +145,15 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
                 val farPower = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble())
                 val mate = candidates.filter { it.id != wallTarget.id && creep.getRangeTo(it) <= 1 && it.hitsMax - it.hits > 0 }
                     .maxByOrNull { minOf(nearPower, need(it).toDouble()) }
-                hwallFar++
+                hwallFar.n++
                 if (mate != null && minOf(nearPower, need(mate).toDouble()) > minOf(farPower, need(wallTarget).toDouble())) {
-                    hwallYield++
+                    hwallYield.n++
                     Executor.heal(creep, mate)
                     book(mate, nearPower.toInt())
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
                 }
-                hwallHeals++
+                hwallHeals.n++
                 Executor.rangedHeal(creep, wallTarget)
                 book(wallTarget, farPower.toInt())
                 continue
@@ -189,8 +189,8 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     damageBooked.clear()
     val most = shotsAt.values.maxOrNull() ?: 0
     if (most > 0) {
-        concSum += most; concTicks++
-        concAll += most; concAllTicks++
+        concSum.n += most; concTicks.n++
+        concAll.n += most; concAllTicks.n++
         if (most > concMax) concMax = most
     }
     // ПЕРЕКРЫТИЕ (v391, прибор ovl=). `conc` считает, сколько выстрелов ЛЕГЛО в одну цель, то есть выбор; этот прибор
@@ -202,16 +202,16 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
         val shooters = allies.filter { hasRanged(it) && !it.spawning }
         val best = enemyCreeps.filter { it.hits > 0 }.maxOfOrNull { e -> shooters.count { it.getRangeTo(e) <= RANGED_RANGE } } ?: 0
         if (shooters.isNotEmpty() && enemyCreeps.isNotEmpty()) {
-            ovlSum += best; ovlTicks++
-            if (best >= 3) ovlThree++
-            if (best >= 4) ovlFour++
+            ovlSum.n += best; ovlTicks.n++
+            if (best >= 3) ovlThree.n++
+            if (best >= 4) ovlFour.n++
         }
     }
     // ...и то же ДЛЯ МИЛИ (v221, см. mconcAll): удар не кладёт ничего в `shotsAt`, поэтому `conc` про мили
     // слеп — сложены ли четыре удара в одну цель, не измерял ни один прибор
     val mostStrikes = strikesAt.values.maxOrNull() ?: 0
     if (mostStrikes > 0) {
-        mconcAll += mostStrikes; mconcTicks++
+        mconcAll += mostStrikes; mconcTicks.n++
         if (mostStrikes > mconcMax) mconcMax = mostStrikes
     }
 }
@@ -234,7 +234,7 @@ internal fun PainAndGain.shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarg
     // веер развёл бы их обратно и отдал бы цель его лекарям. Побочно ветка чинит и ПРИБОР: веерный выстрел
     // не кладёт ничего в `shotsAt`, поэтому такие тики не входили в `conc` даже знаменателем (см. concfan)
     if (massValue > (if (enemyHeals) 2.5 else 1.0)) {
-        Executor.rangedMassAttack(creep); lastFireTick = getTicks(); fanShots++; fireShots++
+        Executor.rangedMassAttack(creep); lastFireTick = getTicks(); fanShots.n++; fireShots.n++
     } else {
         // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
         // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
@@ -250,7 +250,7 @@ internal fun PainAndGain.shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarg
                 ?: massPool.minByOrNull { it.hits }
         }
         target?.let {
-            Executor.rangedAttack(creep, it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots++
+            Executor.rangedAttack(creep, it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots.n++
             damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
         }
     }
@@ -1483,13 +1483,13 @@ internal var goalTick = -1
 internal var rotfMeet = 0
 
 /** Лечение по дефициту (v233): лечений в полного / всех, лечения сверх подтверждённой нужды / доставлено, переназначений. */
-internal var hfullN = 0
+internal val hfullN = Gauges.counter("hfull")
 
-internal var hfullAll = 0
+internal val hfullAll = Gauges.counter("hfull", 1)
 
-internal var hoverSum = 0
+internal val hoverSum = Gauges.counter("hover")
 
-internal var hdelivSum = 0
+internal val hdelivSum = Gauges.counter("hover", 1)
 
 internal var gateFell = 0
 
@@ -1513,44 +1513,44 @@ internal var adrSame = 0
 
 /** Стена лечения (v270, hwallx=уступлено/дальних): дальних лечений жертвы стены, и сколько из них уступило лечению
  *  вплотную раненого соседа, которое доставляет больше. */
-internal var hwallFar = 0
+internal val hwallFar = Gauges.counter("hwallx", 1)
 
-internal var hwallYield = 0
+internal val hwallYield = Gauges.counter("hwallx")
 
-internal var hwallHeals = 0
+internal val hwallHeals = Gauges.counter("hwallh")
 
-internal var hwallHealsAll = 0
+internal val hwallHealsAll = Gauges.counter("hwallh", 1)
 
 /** Перекрытие (v391, прибор ovl=): сколько наших стрелков ДОСТАЁТ лучшую его цель — против `conc`, который считает,
  *  сколько выстрелов в неё легло. Разница между «могло» и «легло» и есть предмет боя с кулаком. */
-internal var ovlSum = 0
+internal val ovlSum = Gauges.counter("ovl")
 
-internal var ovlTicks = 0
+internal val ovlTicks = Gauges.counter("ovl", 1)
 
-internal var ovlThree = 0
+internal val ovlThree = Gauges.counter("ovl", 2)
 
-internal var ovlFour = 0
+internal val ovlFour = Gauges.counter("ovl", 3)
 
-internal var concSum = 0                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
+internal val concSum = Gauges.counter("conc", perWindow = true)                          // сумма «наибольшее число выстрелов в одну цель за тик» с прошлой строки t=
 
-internal var concTicks = 0                        // тиков с выстрелами с прошлой строки t=
+internal val concTicks = Gauges.counter("conc", 1, perWindow = true)                        // тиков с выстрелами с прошлой строки t=
 
 /** ...и то же НАКОПЛЕННОЕ за матч (v217). Прежняя пара чистится после каждой строки `t=` (см. LOG_EVERY),
  *  поэтому в разгроме, где последнее окно прошло без единого выстрела, прибор показывал ноль замеров —
  *  и по серии его было не сложить. Порог, ради которого он существует, записан в файле пятикратно:
  *  при 216 лечения в тик цель пробивают четыре-пять стволов. */
-internal var concAll = 0
+internal val concAll = Gauges.counter("concall")
 
-internal var concAllTicks = 0
+internal val concAllTicks = Gauges.counter("concall", 1)
 
 /** Пара «крипо-тиков веером / всех крипо-тиков огня» (v218). Веер (`rangedMassAttack`) не кладёт ничего в
  *  `shotsAt`, поэтому тик, где все стрелки ушли в веер, НЕ ПОПАДАЕТ ДАЖЕ В ЗНАМЕНАТЕЛЬ `conc` — измеренные
  *  1,67–1,94 ствола на цель сняты по подмножеству тиков, и без этой пары их нельзя читать. */
-internal var fanShots = 0
+internal val fanShots = Gauges.counter("concfan")
 
-internal var fireShots = 0
+internal val fireShots = Gauges.counter("concfan", 1)
 
-internal var mconcTicks = 0
+internal val mconcTicks = Gauges.counter("mconc", 1)
 
 // ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
 

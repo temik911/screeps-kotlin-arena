@@ -55,28 +55,28 @@ import kotlin.reflect.*
 
 /** «Зажатого бьём» (v264, pin=взято/возможностей/удержано/сверено): мили под приказом с клеткой вплотную к зажатому
  *  врагу в шаге; приказ, поставивший его туда; и был ли зажатый вплотную к нему на следующем тике. */
-internal var pinOpp = 0
-internal var pinOrd = 0
-internal var pinChk = 0
-internal var pinHeld = 0
+internal val pinOpp = Gauges.counter("pin", 1)
+internal val pinOrd = Gauges.counter("pin")
+internal val pinChk = Gauges.counter("pin", 3)
+internal val pinHeld = Gauges.counter("pin", 2)
 /** Знаменатель ehparts= (v265): наибольшее число частей HEAL у его живой армии за матч, то есть его исходные — армия без
  *  спавна. Прежде знаменатель брал только крипов с ЖИВЫМ лечением, и лекарь, раздетый целиком, выпадал из дроби вместе
  *  со своими частями: разбор стены лечения видел в логе 12/12 там, где его лечение потеряло треть. */
 internal var ehpartsAll = 0
 /** Встречи уходящего раненого с лекарём в раздаче командира (v276, rotfm=). */
-internal var meetRot = 0
-internal var meetNear = 0
-internal var meetPlan = 0
-internal var meetDone = 0
-internal var meetChk = 0
+internal val meetRot = Gauges.counter("meet", 2)
+internal val meetNear = Gauges.counter("meet", 1)
+internal val meetPlan = Gauges.counter("meet")
+internal val meetDone = Gauges.counter("meet", 3)
+internal val meetChk = Gauges.counter("meet", 4)
 /** Режим пар (v298, gsafe=тиков в режиме/урон по группе за окно, fguard=бегуно-тиков охраны при флаге). */
 /** Его флаги за окно и из них занятые его крипом (v302, sit=): режим пар против сидящего на флагах не включается. */
 /** Хранители (v305, keep2=назначено/крип-тиков/снято: ядро/стая/сошёл). */
 /** Ноги за фокусом (v268, ffoc=до/после/стрелков): стрелки под приказом при живом фокусе, у которых фокус в досягаемости с
  *  нынешней клетки и с клетки приказа. */
-internal var ffocAll = 0
-internal var ffocBefore = 0
-internal var ffocAfter = 0
+internal val ffocAll = Gauges.counter("ffoc", 2)
+internal val ffocBefore = Gauges.counter("ffoc")
+internal val ffocAfter = Gauges.counter("ffoc", 1)
 
 internal fun PainAndGain.cpuSummary() {
     val ms = cpuMs()
@@ -231,8 +231,8 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
     for ((id, foeId) in Memory.pinWatch) {
         val c = meas.commandArmy.firstOrNull { it.id == id } ?: continue
         val e = ctx.enemyCreeps.firstOrNull { it.id == foeId } ?: continue
-        pinChk++
-        if (getRange(c, e) <= 1) pinHeld++
+        pinChk.n++
+        if (getRange(c, e) <= 1) pinHeld.n++
     }
     Memory.pinWatch.clear()
     // ВСТРЕЧА РАНЕНОГО С ЛЕКАРЁМ — ПРИБОР ПО ИСПОЛНЕНИЮ (v276, meet=план/лекарь рядом/уходящих с приказом/исполнено/сверено):
@@ -242,18 +242,18 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
     for ((rid, hid) in Memory.meetWatch) {
         val r = meas.commandArmy.firstOrNull { it.id == rid } ?: continue
         val h = meas.commandArmy.firstOrNull { it.id == hid } ?: continue
-        meetChk++
-        if (getRange(r, h) <= 1) meetDone++
+        meetChk.n++
+        if (getRange(r, h) <= 1) meetDone.n++
     }
     Memory.meetWatch.clear()
     for (rid in Memory.rotByFocus) {
         val r = meas.commandArmy.firstOrNull { it.id == rid } ?: continue
         val dest = commandOf[rid] ?: continue
-        meetRot++
+        meetRot.n++
         val medics = meas.commandArmy.filter { it.id != rid && healerOnly(it) }
-        if (medics.any { getRange(it, dest) <= 2 }) meetNear++
+        if (medics.any { getRange(it, dest) <= 2 }) meetNear.n++
         val m = medics.firstOrNull { h -> commandOf[h.id]?.let { getRange(it, dest) <= 1 } == true } ?: continue
-        meetPlan++
+        meetPlan.n++
         Memory.meetWatch[rid] = m.id
     }
     // НОГИ ЗА ФОКУСОМ — ПРИБОР (v268, ffoc=до/после/стрелков): стрелки под приказом командира при живом фокусе — у скольких
@@ -262,9 +262,9 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
         for (c in meas.commandArmy) {
             if (!hasRanged(c)) continue
             val cell = commandOf[c.id] ?: continue
-            ffocAll++
-            if (getRange(c, f) <= RANGED_RANGE) ffocBefore++
-            if (getRange(cell, f) <= RANGED_RANGE) ffocAfter++
+            ffocAll.n++
+            if (getRange(c, f) <= RANGED_RANGE) ffocBefore.n++
+            if (getRange(cell, f) <= RANGED_RANGE) ffocAfter.n++
         }
     }
     run {
@@ -297,9 +297,9 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
                 if (near.any { e -> getRange(p, e) <= 1 && pinnedAt(p, e, ours, stuck) }) opp = true
             }
             if (!opp) continue
-            pinOpp++
+            pinOpp.n++
             val hit = near.firstOrNull { e -> getRange(mine, e) <= 1 && pinnedAt(mine, e, ours, stuck) } ?: continue
-            pinOrd++
+            pinOrd.n++
             Memory.pinWatch[c.id] = hit.id
         }
     }
@@ -326,7 +326,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyT
                 cell.x == here?.first && cell.y == here.second -> lostStay++
                 // ...клетку мог занять ВРАГ: он ходит одновременно с нами, и его шаг делает приказ
                 // неисполнимым задним числом — это неустранимо в принципе, и считать надо отдельно (v175)
-                ctx.enemyCreeps.any { e -> e.x == cell.x && e.y == cell.y } -> lostEnemy++
+                ctx.enemyCreeps.any { e -> e.x == cell.x && e.y == cell.y } -> lostEnemy.n++
                 c.x == here?.first && c.y == here.second -> lostStuck++
                 (orderFatigue[id] ?: 0) > 0 -> lostFatigue++
                 else -> lostElsewhere++
@@ -408,7 +408,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
             // посчитанная версия прежнего МОЛЧАЛИВОГО провала требования
             " gate=${gateLevels.drop(1).take(5).joinToString("/")} fell=$gateFell" +
             " intent=" + Memory.intentHist.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" })
-        concSum = 0; concTicks = 0
+        concSum.n = 0; concTicks.n = 0
         if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
     }
     // снимок накопительных счётчиков тактика и строя — КАЖДЫЙ тик, в конце: следующая печать отдаст разницу за свой тик
@@ -418,8 +418,8 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
     // состояние, которое обязано быть посчитано до правки мест, где оно решает про урон
     val strippedMelee = bw.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) }
     if (strippedMelee > 0) {
-        mstripTicks += strippedMelee; mstripAny++
-        mstripReach += bw.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) && ctx.threats.any { e -> getRange(it, e) <= RANGED_RANGE } }
+        mstripTicks.n += strippedMelee; mstripAny.n++
+        mstripReach.n += bw.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) && ctx.threats.any { e -> getRange(it, e) <= RANGED_RANGE } }
     }
     return PrintTickOut(
     )
@@ -479,95 +479,40 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("hcov") { "${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }}" }
     Gauges.computed("hulk") { "${disarmedFoe.size}" }
     Gauges.computed("chase") { "${Memory.chaseOf.size}/$chaseTicks" }
-    Gauges.computed("kills") { "$chaseKills" }
     Gauges.computed("capgate") { "${capBlocked.values.sum()}/$capOffered" }
     // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
     Gauges.computed("cap") { "${capBlocked.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}" }
-    Gauges.computed("capq") { "$capqVeto/$capqAsked" }
-    Gauges.computed("capqu") { "$capquVeto/$capquAsked" }
     Gauges.computed("capu") { "${capquWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}" }
-    Gauges.computed("capeval") { "$capqEval" }
-    Gauges.computed("capidle") { "$capIdleRush/$capIdleEdge" }
-    Gauges.computed("mstrip") { "$mstripTicks/$mstripAny/$mstripReach" }
-    Gauges.computed("capopp") { "$capOppSum/$capAllSum" }
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
-    Gauges.computed("hold", 2) { "$holdKeptRace" }
     Gauges.computed("gsafe", 1) { "$groupDmgWindow" }
-    Gauges.computed("route") { "$routeKept" }
-    Gauges.computed("man") { "$manned" }
-    Gauges.computed("gcov") { "$garCovered/$garAll" }
-    Gauges.computed("courier") { "$courierTicks" }
-    Gauges.computed("hunt") { "$huntTicks/$huntCreepTicks" }
-    Gauges.computed("toothless") { "$pushToothless" }
-    Gauges.computed("keep2") { "$keepOn/$keepTicks/$keepOffCore:$keepOffPack:$keepOffLeft" }
-    Gauges.computed("keep3") { "$keepOffGone:$keepOffFlag:$keepOffMoved:$keepOffHurt" }
-    Gauges.computed("spothold") { "$spotHoldNew/$spotHoldAll" }
-    Gauges.computed("sym") { "$symCore/$symFree" }
-    Gauges.computed("split") { "$splitFight/$splitAll" }
     Gauges.computed("recall", 0) { "$recalled" }
-    Gauges.computed("healgap") { "$healGap/$healGapN" }
-    Gauges.computed("nomedic") { "$noMedic/$healGapN" }
-    Gauges.computed("flip") { "$aimFlips/$aimTicks" }
-    Gauges.computed("pushheld") { "$pushHeldTicks/$pushTicks" }
     Gauges.computed("ledgerw") { "$ledgerWindow/$ourLostWindow/$hisLostWindow" }
-    Gauges.computed("breakoff") { "$breakOffSplit/$breakOffN" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
     Gauges.computed("objnone") { "${objNone.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objAll" }
     Gauges.computed("objdrop") { "${objDrop.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$objDropN" }
-    Gauges.computed("budget") { "$budgetSum/$budgetTicks" }
     Gauges.computed("runner") { "${runnerMode.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$runnerModeN" }
     Gauges.computed("cmdwhy") { "${cmdWhy.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$cmdWhyN" }
-    Gauges.computed("ovl") { "$ovlSum/$ovlTicks/$ovlThree/$ovlFour" }
-    Gauges.computed("conc") { "$concSum/$concTicks" }
-    Gauges.computed("concall") { "$concAll/$concAllTicks" }
     Gauges.computed("concmax") { "$concMax" }
-    Gauges.computed("concfan") { "$fanShots/$fireShots" }
-    Gauges.computed("lostrace") { "$lostRaceOpened/$lostRaceOffers" }
-    Gauges.computed("gather") { "$gatherSpread/$gatherHold" }
+    Gauges.computed("lostrace", 0) { "$lostRaceOpened" }
+    Gauges.computed("gather", 0) { "$gatherSpread" }
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
     // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
     // консоль не показывала (имя `guns=` занято прибором v200)
-    Gauges.computed("warm") { "$warmTicks/$warmContact" }
-    Gauges.computed("warmann") { "$warmAnn/$warmAnnAll" }
-    Gauges.computed("warmhold") { "$warmHold/$warmAnn" }
-    Gauges.computed("warmcmd") { "$warmCmd/$warmCmdAll" }
-    Gauges.computed("warmcap") { "$warmCap/$warmCapAll" }
-    Gauges.computed("mconc") { "$mconcAll/$mconcTicks" }
+    Gauges.computed("mconc", 0) { "$mconcAll" }
     Gauges.computed("mconcmax") { "$mconcMax" }
     Gauges.computed("mpack", 0) { "$mpackHit" }
-    Gauges.computed("pack", 0) { "$packHeld" }
-    Gauges.computed("mpackon") { "$mpackOnHit/$mpackOn" }
     Gauges.computed("kchase", 0) { "$kchaseTicks" }
-    Gauges.computed("kveto") { "$kvetoHit/$kvetoAll" }
-    Gauges.computed("gathera") { "$gatherAnn/$gatherAnnAll" }
     Gauges.computed("annempty") { "${annEmpty.entries.sortedByDescending { it.value }.joinToString(",") { "${it.key}:${it.value}" }}/$annEmptyAll" }
     Gauges.computed("shooters") { "${tickView.bw.army.count { hasRanged(it) }}/${tickView.bw.combatEnemies.count { hasRanged(it) }}" }
-    Gauges.computed("abort") { "$abortTicks/$abortEntries" }
     Gauges.computed("srch") { "$srchCut/$srchTicks/${cmdTailMax.toInt()}" }
-    Gauges.computed("pin") { "$pinOrd/$pinOpp/$pinHeld/$pinChk" }
     Gauges.computed("rotfm") { "$rotfMeet" }
-    Gauges.computed("meet") { "$meetPlan/$meetNear/$meetRot/$meetDone/$meetChk" }
-    Gauges.computed("ffoc") { "$ffocBefore/$ffocAfter/$ffocAll" }
     Gauges.computed("ovw") { "${Executor.ovwContact}/${Executor.ovwRanged}" }
     Gauges.computed("conf") { "${Arbiter.confReach}/${Arbiter.confFatigue}" }
-    Gauges.computed("rtr") { "$rtrRemoved/$rtrOld/$rtrAdded" }
     Gauges.computed("mquiet") { "$mquietMoved/$mquietAll/${mquietGain.toInt()}" }
-    Gauges.computed("mquietc") { "$cmdQuietMoved/$cmdQuietAll" }
-    Gauges.computed("maj") { "$majOpened/$majOffers" }
-    Gauges.computed("surv", 0) { "$survTicks" }
-    Gauges.computed("surv", 2) { "$survContact" }
-    Gauges.computed("surv", 3) { "$survFights" }
     Gauges.computed("adr") { "$adrN/${(adrE / maxOf(adrN, 1)).toInt()}/${(adrT / maxOf(adrN, 1)).toInt()}/$adrSame" }
     Gauges.computed("rad") { "${(radSum * 10).toInt()}/$radTicks/$radMax/$radWide" }
     Gauges.computed("simd") { "${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree" }
-    Gauges.computed("zlb", 0) { "$zlbTicks" }
-    Gauges.computed("hwallh") { "$hwallHeals/$hwallHealsAll" }
-    Gauges.computed("postc") { "$postContest/$postAll" }
-    Gauges.computed("hfull") { "$hfullN/$hfullAll" }
-    Gauges.computed("hover") { "$hoverSum/$hdelivSum" }
-    Gauges.computed("hswap") { "$hswapN" }
-    Gauges.computed("hwallx") { "$hwallYield/$hwallFar" }
     Gauges.computed("hpick") { "$hpN/$hpAdj/$hpAvail/$hpGate" }
     Gauges.computed("hadj") { "$hadjN/$hadjAll" }
     Gauges.computed("hadjn") { "$hadjnN/$hadjnAll" }
@@ -575,9 +520,6 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("hstill") { "${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged}" }
     Gauges.computed("cmdheal") { "$cmdHealGiven/$cmdHealTicks" }
     Gauges.computed("dh") { "${hpDelta.joinToString(",") { (it / maxOf(hpAvail, 1)).toInt().toString() }}" }
-    Gauges.computed("retr") { "$retrTicks/$retrWithPoint/$retrUnderFire" }
-    Gauges.computed("standfire") { "$standFire/$standTicks" }
-    Gauges.computed("outmw") { "$outmTicks/$outmRetreat" }
     Gauges.computed("score") { "${ourScore.toInt()}/${enemyScore.toInt()}" }
     Gauges.computed("rate") { "$ourRate/$enemyRate" }
     Gauges.computed("behind") { "$behindOnScore" }
@@ -587,14 +529,16 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("branch") { "$orderBranch" }
     Gauges.computed("fled") { "$orderFled" }
     Gauges.computed("clash") { "$orderClash" }
-    Gauges.computed("lost") { "stay$lostStay/stuck$lostStuck/foe$lostEnemy/fat$lostFatigue/else$lostElsewhere" }
+    Gauges.computed("lost", 0, label = "stay") { "$lostStay" }
+    Gauges.computed("lost", 1, label = "stuck") { "$lostStuck" }
+    Gauges.computed("lost", 3, label = "fat") { "$lostFatigue" }
+    Gauges.computed("lost", 4, label = "else") { "$lostElsewhere" }
     Gauges.computed("kite") { "${kiteNow - kiteSeen}" }
     Gauges.computed("massed") { "$kiteMassed" }
     Gauges.computed("plan") { "${planStrict - planStrictSeen}/${planLoose - planLooseSeen}" }
     Gauges.computed("cmd") { "${commandOf.size}/$cmdTicks:$cmdBlocked" }
     Gauges.computed("mode") { "$cmdMode" }
     Gauges.computed("disp") { "$dispNow" }
-    Gauges.computed("evt") { "$stateEventTicks" }
     Gauges.computed("fire") { "${fireOf.size}" }
     Gauges.computed("posture") { "$posture" }
     Gauges.computed("obj") { "${objectiveFlagId?.let { id -> tickView.bw.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"}" }
@@ -602,11 +546,8 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("rush") { "$unflaggedRushNow" }
     Gauges.computed("weak") { "$outmatchedTicks" }
     Gauges.computed("pat") { "$stalemateTicks/$patMax" }
-    Gauges.computed("strip") { "$stripTicks" }
     Gauges.computed("touch") { "${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()}" }
     Gauges.computed("touchl") { "${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()}" }
-    Gauges.computed("out") { "$outOfFireTicks" }
-    Gauges.computed("back") { "$meleeBackTicks" }
     Gauges.computed("guns") { "$planGunsIn/$planGunsAll" }
     Gauges.computed("mheal") { "$planMeleeHealed/$planMeleeAll" }
     Gauges.computed("hline") { "$planHealBehind/$planHealAll" }
@@ -630,9 +571,9 @@ private var planLooseSeen = 0
 
 /** Мили без живой ATTACK (v451, счётчик к пункту Д): крипо-тиков / тиков с хотя бы одним / крипо-тиков в досягаемости его
  *  стволов — прибор `mstrip=`; считает и печатает сам прибор. */
-private var mstripTicks = 0
-private var mstripAny = 0
-private var mstripReach = 0
+private val mstripTicks = Gauges.counter("mstrip")
+private val mstripAny = Gauges.counter("mstrip", 1)
+private val mstripReach = Gauges.counter("mstrip", 2)
 
 /** Раненый уступает дорогу всем: его место — за лекарями, а не между ними и строем. */
 
@@ -652,28 +593,28 @@ internal const val DEBUG_VISUALS = false
 
 internal const val CPU_SLOW_MS = 60.0   // a tick over this prints its phases (the limit is 100 ms; the first tick 1 000)
 
-internal var postContest = 0
+internal val postContest = Gauges.counter("postc")
 
-internal var hswapN = 0
+internal val hswapN = Gauges.counter("hswap")
 
 /** ...и то же в раздаче командира (вторая редакция): приказов мили, где выбранная клетка — удар, и из них уведённых. */
-internal var cmdQuietAll = 0
+internal val cmdQuietAll = Gauges.counter("mquietc", 1)
 
-internal var cmdQuietMoved = 0
+internal val cmdQuietMoved = Gauges.counter("mquietc")
 
 /** РАЗЛЁТ АРМИИ ПОД УРОНОМ (v409, прибор; проект «армия не рассыпается»): сумма радиуса (наибольшее расстояние
  *  от центра боевых до нашего боевого) ×10, тиков замера, наибольший радиус за матч и тиков с радиусом больше пяти.
  *  Мера взята из замера тел: в поражении армия расползается с пяти клеток на четырнадцать за двадцать тиков, в
  *  победе держится в пяти и отрастает (см. v407). Считается только под уроном — там, где связность и решает. */
 
-internal var zlbTicks = 0
+internal val zlbTicks = Gauges.counter("zlb")
 
-internal var survTicks = 0
+internal val survTicks = Gauges.counter("surv")
 
-internal var survContact = 0
+internal val survContact = Gauges.counter("surv", 2)
 
 /** ...и тиков режима, где уходить некуда и он в контакте — бой строем (вторая редакция). */
-internal var survFights = 0
+internal val survFights = Gauges.counter("surv", 3)
 
 internal var lastBodiesKey = ""
 
@@ -690,19 +631,19 @@ internal var cpuMaxTick = 0
 
 internal var cpuSlowTicks = 0
 
-internal var meleeBackTicks = 0                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
+internal val meleeBackTicks = Gauges.counter("back")                        // прибор: тиков, в которые мили ставился ПОЗАДИ строя (v195)
 
-internal var outOfFireTicks = 0                        // крипо-тиков, в которые мили уводился из его кольца
+internal val outOfFireTicks = Gauges.counter("out")                        // крипо-тиков, в которые мили уводился из его кольца
 
-internal var stripTicks = 0                            // тиков, в которые залп сводился на ОДНОГО его лекаря
+internal val stripTicks = Gauges.counter("strip")                            // тиков, в которые залп сводился на ОДНОГО его лекаря
 
-internal var lostEnemy = 0      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
+internal val lostEnemy = Gauges.counter("lost", 2, label = "foe")      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
 
 /** Цель пачки мили (v221, см. USE_MELEE_PACK): липкий id и значение этого тика — для командира. */
 /** Пары пачки (v221): «тиков с целью пачки / тиков, где у нас есть мили и у него боевые»; «крипо-тиков мили, чьи
  *  ноги идут к цели пачки / крипо-тиков мили с целью ног, пока цель пачки есть». */
-internal var packHeld = 0
+internal val packHeld = Gauges.counter("pack")
 
-internal var mpackOnHit = 0
+internal val mpackOnHit = Gauges.counter("mpackon")
 
-internal var mpackOn = 0
+internal val mpackOn = Gauges.counter("mpackon", 1)

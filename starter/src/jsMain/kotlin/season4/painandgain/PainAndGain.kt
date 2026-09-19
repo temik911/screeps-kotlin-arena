@@ -204,13 +204,13 @@ object PainAndGain {
     }
 
     private fun repairAfterAbort() {
-        abortTicks++
+        abortTicks.n++
         var maps = 0; var sets = 0; var entries = 0
         for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges)) {
             val r = AbortRepair.repairFields(owner)
             maps += r.maps; sets += r.sets; entries += r.entries
         }
-        abortEntries += entries
+        abortEntries.n += entries
         println("abort t=${getTicks()}: the previous tick did not finish — $maps maps and $sets sets rebuilt in place ($entries entries)")
     }
 
@@ -395,6 +395,6 @@ object PainAndGain {
 // ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
 // Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
 
-internal var abortTicks = 0
+internal val abortTicks = Gauges.counter("abort")
 
-internal var abortEntries = 0
+internal val abortEntries = Gauges.counter("abort", 1)
