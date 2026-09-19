@@ -277,17 +277,7 @@ object PainAndGain {
         val ourCentroid = buildWorldSeg.ourCentroid
         val enemyCentroid = buildWorldSeg.enemyCentroid
         val ctx = buildWorldSeg.ctx
-        val readSignalsSeg = readSignals(ctx, ReadSignalsIn(
-            myCreeps = myCreeps,
-            enemyCreeps = enemyCreeps,
-            combatEnemies = combatEnemies,
-            flags = flags,
-            army = army,
-            passiveEnemy = passiveEnemy,
-            ourCentroid = ourCentroid,
-            enemyCentroid = enemyCentroid,
-            ctx = ctx,
-        ))
+        val readSignalsSeg = readSignals(ctx, buildWorldSeg)
         runRunners(ctx)
         cpuMark("runners")
         runArmy(ctx)

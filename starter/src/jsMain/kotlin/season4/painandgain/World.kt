@@ -1016,34 +1016,22 @@ internal fun PainAndGain.rememberTick(ctx: Ctx, seg: RememberTickIn): RememberTi
     )
 }
 
-/** СИГНАЛЫ ТИКА (v257, этап 10; сегмент tickBody до бегунов и армии): сомкнутость по форме и по прибытию, бросок безфлаговой армии (unflaggedRushNow), «бой близко» (fightImminentNow), полученный урон, тишина огня, «он не дерётся» (enemyNotFightingNow). Перенесено дословно. */
-internal class ReadSignalsIn(
-    val myCreeps: List<Creep>,
-    val enemyCreeps: List<Creep>,
-    val combatEnemies: List<Creep>,
-    val flags: List<FlagInfo>,
-    val army: List<Creep>,
-    val passiveEnemy: Boolean,
-    val ourCentroid: Position,
-    val enemyCentroid: Position?,
-    val ctx: Ctx,
-)
-
 internal class ReadSignalsOut(
 )
 
-internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsOut = with(seg) {
+/** СИГНАЛЫ ТИКА (v257, этап 10; сегмент tickBody до бегунов и армии): сомкнутость по форме и по прибытию, бросок безфлаговой армии (unflaggedRushNow), «бой близко» (fightImminentNow), полученный урон, тишина огня, «он не дерётся» (enemyNotFightingNow). Перенесено дословно. */
+internal fun PainAndGain.readSignals(ctx: Ctx, bw: BuildWorldOut): ReadSignalsOut {
     plannedCaptures.clear()
     // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
     // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
-    val armedNow = ctx.threats
+    val armedNow = bw.ctx.threats
     val massedByShape = armedNow.size >= 6 && centroidOf(armedNow)?.let { c -> armedNow.count { getRange(it, c) <= MASS_RANGE } * 3 >= armedNow.size * 2 } == true
     // СОМКНУТ ТОТ, КТО ПРИХОДИТ ВМЕСТЕ (v226, см. USE_MASS_BY_ARRIVAL): колонна на марше двумя эшелонами (пять впереди,
     // четверо в пятнадцати клетках позади) по форме не сомкнута — центр масс лежит в зазоре, и «в MASS_RANGE от центра»
     // даёт ноль, — а к нам она приходит целиком за шесть тиков. Мера прихода: две трети его вооружённых не дальше
     // MASS_RANGE от ближайшего к нашей массе по расстоянию до неё
     val massedByArrival =  armedNow.size >= 6 && run {
-        val d = armedNow.map { getRange(it, ctx.ourCentroid) }
+        val d = armedNow.map { getRange(it, bw.ctx.ourCentroid) }
         val near = d.minOrNull() ?: return@run false
         d.count { it - near <= MASS_RANGE } * 3 >= armedNow.size * 2
     }
@@ -1057,15 +1045,15 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     // замедляется), и без него уклонение сменялось стоянием каждые десять-тридцать тиков, пока враг шёл — матч 32:
     // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.
     // Начатый бросок кончается, когда враг взял флаг, замер, разошёлся или ушёл дальше EVADE_RANGE и не приближается
-    val noEnemyFlag = ctx.flags.none { it.theirs }
+    val noEnemyFlag = bw.ctx.flags.none { it.theirs }
     // блоб, идущий к СВОБОДНОМУ ФЛАГУ, а не на нас (v127, USE_RUSH_NOT_FLAG_BOUND): ближайший к его центру свободный флаг
     // не дальше нашего центра, и его темп к этому флагу не ниже темпа к нам — он на туре. Матч 5 серии 367–386 (MetalicaX#3):
     // с 10-го по 41-й rush=true, армия на посту, захваты под вето; он взял D5 на 41-м, R3 на 45-м, оба A3 на 60-м, наш
     // первый флаг — на 54-м. Бросок сквозь центр без захвата снова читается броском, когда его темп к флагу падает
-    val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed  
+    val rushSignal = !bw.ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed  
     if (rushSignal) { rushSignalAll++; if (!massedByShape) rushByArrival++ }
-    val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
-        (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
+    val rushHold = unflaggedRushNow && !bw.ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
+        (approachRate > 0.0 || armedNow.any { getRange(it, bw.ctx.ourCentroid) <= EVADE_RANGE })
     unflaggedRushNow = rushSignal || rushHold
     // бой близко — для ЗАХВАТОВ флаг врага не в счёт: «безфлаговый» бросок кончился на 39-м тике, когда его армия по пути
     // взяла D5, и скаут взял R3 на 42-м (матч 47, пятый бой с けろびー подряд с R×0.8); уклонение по-прежнему только от
@@ -1076,7 +1064,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
         val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
         maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= APPROACH_WINDOW / 4
     })
-    approachingNow = !ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
+    approachingNow = !bw.ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
     fightImminentNow = unflaggedRushNow || approachingNow
     // ...и ЗАПОМИНАЕМ РАССТОЯНИЕ НА НАЧАЛО ПОДХОДА (v215, см. USE_RUSH_VETO_EXPIRES). Первая редакция срока
     // сравнивала с ТЕКУЩИМ расстоянием между центрами — а оно по мере подхода сокращается, то есть срок
@@ -1084,7 +1072,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     // match20:brawl+heals перестала проходить гейт (7 674:2 503 -> 12 310:18 500). Время, которое ему нужно,
     // чтобы дойти, задаётся расстоянием НА СТАРТЕ броска, и оно не меняется, пока бросок идёт
     if (fightImminentNow && fightImminentTicks == 0)
-        rushStartDist = ctx.enemyCentroid?.let { getRange(ctx.ourCentroid, it) } ?: 0
+        rushStartDist = bw.ctx.enemyCentroid?.let { getRange(bw.ctx.ourCentroid, it) } ?: 0
     fightImminentTicks = if (fightImminentNow) fightImminentTicks + 1 else 0
     // враг рядом, но не воюет: армия с боем в досягаемости броска, и наши хиты не падали STALL_TICKS тиков подряд — фермер
     // (けろびー v5, матчи 51 и 57: шесть флагов к 82-му, 1400 тиков рядом без единого выстрела, 10804:22779 при 12 наших
@@ -1092,7 +1080,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     // применяется. Атакующий стреляет через несколько тиков после контакта, и счётчик не доходит до STALL_TICKS
     // по ВСЕМ нашим (v56): сумма по армии падала на хиты только что отряжённых в бегуны, «нас ударили» — и отряд распускался
     // на следующий же тик (стенд m28 farm+weak: 6 detached на 100-м, 0 на 101-м с hurt=0, трижды за матч)
-    val ourHitsSum = ctx.myCreeps.sumOf { it.hits }
+    val ourHitsSum = bw.ctx.myCreeps.sumOf { it.hits }
     val hurt = lastOurHits >= 0 && ourHitsSum < lastOurHits
     if (hurt) ourDamageTaken += lastOurHits - ourHitsSum
     lastOurHits = ourHitsSum
@@ -1100,8 +1088,8 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     // включается, когда его армия не одним кулаком (крупнейшая группа с оружием в ENGAGE_RANGE — не больше двух третей
     // его вооружённых), и держится, пока он не бьёт группу: кулак, притихший на время, режима не открывает
     var groupDmg = 0
-    val oursArmed = ctx.myCreeps.filter { hasWeapon(it) }
-    for (c in ctx.myCreeps) {
+    val oursArmed = bw.ctx.myCreeps.filter { hasWeapon(it) }
+    for (c in bw.ctx.myCreeps) {
         val prev = Memory.groupHitsPrev[c.id]
         if (prev != null && c.hits < prev && oursArmed.any { it.id != c.id && getRange(it, c) <= 2 }) groupDmg += prev - c.hits
         Memory.groupHitsPrev[c.id] = c.hits
@@ -1109,7 +1097,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     Memory.groupDmgHist.addLast(groupDmg)
     while (Memory.groupDmgHist.size > GROUP_WINDOW) Memory.groupDmgHist.removeFirst()
     groupDmgWindow = Memory.groupDmgHist.sum()
-    val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
+    val hisW = bw.ctx.combatEnemies.filter { hasWeapon(it) }
     val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
     // ...И НЕ ПРОТИВ ТОГО, КТО ДЕРЖИТ СВОИ ФЛАГИ ТЕЛОМ (v302): на занятую клетку пара не встанет, такой флаг отбирает
@@ -1117,8 +1105,8 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     // けろびー 4 %, Coldkimchi#2 и MetalicaX по 1 %, а System и 恒哥吊 66 %; стендовые фермеры (scatter, camp, farm+weak)
     // сажают крипа на каждый свой флаг — там пары ходили впустую, а ядру не хватало силы отбить занятый H4
     // (match33:scatter 22 377:24 235, FAIL гейта)
-    val hisFlagsNow = ctx.flags.count { it.theirs }
-    val hisSitNow = ctx.flags.count { it.theirs && it.occupant != null && it.occupant?.my != true }
+    val hisFlagsNow = bw.ctx.flags.count { it.theirs }
+    val hisSitNow = bw.ctx.flags.count { it.theirs && it.occupant != null && it.occupant?.my != true }
     Memory.flagSitHist.addLast(hisFlagsNow * 8 + hisSitNow)
     while (Memory.flagSitHist.size > GROUP_WINDOW) Memory.flagSitHist.removeFirst()
     val sitHis = Memory.flagSitHist.sumOf { it / 8 }
@@ -1140,12 +1128,12 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     groupSafe = getTicks() >= GROUP_WINDOW && groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (groupSafe || splitNow)
     if (groupSafe) groupSafeTicks++
     flagSitOcc = sitOcc; flagSitAll = sitHis
-    val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
+    val enemyNear = armedNow.any { e -> bw.ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
     noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
     // фермер — не только «не стреляет», но и «держится дальше броска»: стоящий в 3–6 экран стенда тоже не стрелял, пока
     // мы стояли на своём флаге, и перехват превратил бой, который v38 выигрывала на 439-м, в стояние до конца матча
     // (m31 screen: 16000/16000 у обоих 800 тиков, проигрыш по очкам); враг в ENGAGE_RANGE — это бой, не перехват
-    val enemyWithinReach = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
+    val enemyWithinReach = armedNow.any { e -> bw.ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
     enemyNotFightingNow =  noFireTicks >= STALL_TICKS && !enemyWithinReach
     if (hurt) lastHurtTick = getTicks()
     if (enemyWithinReach) lastReachTick = getTicks()
@@ -1153,7 +1141,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx, seg: ReadSignalsIn): ReadSignalsO
     // восемь не входит никогда — вся цепочка фермера (отряды, порог гонки, стая не преграда) молчала 800 тиков при
     // pushing=true в девяти клетках от него (m30, 9615:23822)
     if (enemyNear && firstNearTick < 0) firstNearTick = getTicks()
-    ReadSignalsOut(
+    return ReadSignalsOut(
     )
 }
 
