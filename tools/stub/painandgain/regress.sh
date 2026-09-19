@@ -445,6 +445,12 @@ run replay:6aaed35be761baf61d030b80.replay.json.gz - ghost
 run replay:6aaed288e761baee71030b6b.replay.json.gz - ghost
 run replay:6aaed1d2e761baded0030b64.replay.json.gz - ghost
 run replay:6aaed110e761baf25a030b5c.replay.json.gz - ghost
+# ДВЕ СТРОКИ РАЗДАЧИ, КОТОРЫЕ РАБОТАЛИ ТОЛЬКО ЖИВЬЁМ (20.09.2026, docs/pain-and-gain-architecture-2.md, этап 0). По прибору
+# `reach` (gategap.py) проходы `catchall` и `pinned` выдавали клетки в 4 и 6 живых матчах из 52 (v447–v452) и НИ В ОДНОМ из
+# 139 сценариев гейта — перенос их кода тождеством не проверялся вовсе. Запись выбрана по reach своего GHOST-лога, а не
+# живого: …030b6e, которую называл план (живьём catchall 3, pinned 8), на стенде не даёт ни одной — призрак гибнет на t=93;
+# из 600 новейших записей хранилища обе строки разом закрывает одна — v282 против ●ω<♥♪#6 (catchall 1, pinned 2; 1,7 с, 302 КБ).
+run replay:6aa857af41cd282325e3224f.replay.json.gz - ghost
 
 
 SKIPPED=0
