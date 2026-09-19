@@ -291,20 +291,9 @@ internal fun PainAndGain.stepOutWounded(army: List<Creep>, reach: Set<Int>, enem
 /** Цель хода: куда идти, на каком расстоянии встать, обходить ли стоящих врагов, брать ли поле «вблизи» (см. NEAR_FLOW). */
 internal class Aim(val target: Position, val standoff: Int, val avoid: Boolean = false, val nearFlow: Boolean = false)
 
-/**
- * СТРОКА ТАБЛИЦЫ РЕШЕНИЙ (v444, план архитектуры, 4.3): имя, условие, действие. Имя — тег, который печатает лог: по нему
- * `grep` находит строку таблицы, и условие с действием стоят в ней же. Условие — ЧИСТОЕ чтение фактов [F]: его можно вычислить
- * у каждой строки, а не только до первой истинной, — так считаются перекрытые порядком. Действие исполняется только у
- * выигравшей строки; счётчик или запись, которые раньше стояли в теле ветки `when`, живут в нём.
- */
-internal class Row<F, R>(val tag: String, val guard: F.() -> Boolean, val act: F.() -> R)
-
-/** Обходчик, один на все таблицы: первая строка с истинным условием выигрывает — семантика прежнего `when`. Порядок списка —
- *  приоритет, другого описания приоритета нет; последняя строка таблицы замыкающая (`{ true }`). */
-internal fun <F, R> walk(table: List<Row<F, R>>, facts: F): Row<F, R> {
-    for (row in table) if (row.guard(facts)) return row
-    throw IllegalStateException("decision table without a closing row")
-}
+/** Счётчики лестницы цели и цепочки шага (прибор `reach t=`): считает тот, кто решает, печатает `Instruments`. */
+internal val ladderTally = Tally("rung")
+internal val stepsTally = Tally("step")
 
 private var ladderRows: List<Row<Turn, Aim>>? = null
 
@@ -1081,11 +1070,11 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
     // Повод — пять правил за сутки, которые прошли гейт и не исполнились ни разу: по коду нельзя было
     // сказать, какая ветка живая. Перепись отвечает на это числом, а не чтением. Она же заменяет ручной
     // дубль цепочки в TRACE_WHY, который успел рассинхронизироваться и рассказывал о боте неправду
-    val rung = walk(ladder(), turn)
+    val rung = walk(ladder(), turn, ladderTally)
     val whyTag = rung.tag
     val aim = rung.act(turn)
     val stride = buildStride(turn, aim)
-    val pace = walk(steps(), stride)
+    val pace = walk(steps(), stride, stepsTally)
     val stepTag = pace.tag
     val step = pace.act(stride)
     with(t) { with(turn) { with(stride) {
