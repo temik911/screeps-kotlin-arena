@@ -61,7 +61,9 @@ bad=$(grep -v '^PART ' runs/gate_new.txt | grep -vcE 'PASS.*errors: 0 ')
 grep -q '^PASS lint ' runs/gate_new.txt && grep -q '^PASS graph ' runs/gate_new.txt || fail "в отчёте гейта нет строк lint / graph"
 
 # условие детерминизма — первым
-guards=$(cat "$HERE"/out/run-land-*.log | grep -c 'guard:')
+# строка предохранителя — `cpu t=<тик> guard: …`, и ищется она ПО НАЧАЛУ строки: простой `grep guard:` однажды насчитал 12 706
+# «срабатываний» на имени конъюнкта `guard` в строке `whynot` (v457) при молчащих предохранителях
+guards=$(cat "$HERE"/out/run-land-*.log | grep -cE '^cpu t=[0-9]+ guard:')
 cuts=$(for f in "$HERE"/out/run-land-*.log; do grep -o ' srch=[0-9]*/' "$f" | tail -1; done | grep -vc ' srch=0/')
 echo "identity: строк guard: $guards, логов с обрезкой перебора srch: $cuts"
 (( guards == 0 && cuts == 0 )) || fail "предохранители CPU говорили — это не ошибка переноса, а загрузка машины или находка о CPU (раздел 6.1); повтори с NOCLOCK=1"
