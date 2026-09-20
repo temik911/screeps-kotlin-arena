@@ -1038,11 +1038,12 @@ internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stri
     Row("order", { Orders.commandOf.containsKey(creep.id) }, RowMark.ORDER) {
         orderBranch.n++          // сколько приказов реально дошло до ветки исполнения (v173)
         ruleCount.bump(Orders.source)   // ...и ОТ КОГО он (v486, см. rule=): метка ветки командира этого тика
+        if (turn.slot != null) dualOrder.n++   // ...и был ли у крипа ОДНОВРЕМЕННО слой строя (v487, см. dual=)
         val cell = Orders.commandOf[creep.id]!!
         if (cell.x == creep.x && cell.y == creep.y) null else cell
     },
-    Row("slotHold", { turn.slot != null && turn.slotHold }) { null },
-    Row("slotStep", { turn.slot != null }) { slotStep(creep, turn.slot!!, t.targ.pool.blockedSet, t.targ.pool.enemyPositions, t.targ.focus.occupantAt, t.meas.forces.combatEnemies, if (turn.support && !inReach) reachMine else emptySet()) },
+    Row("slotHold", { turn.slot != null && turn.slotHold }) { dualSlot.n++; null },
+    Row("slotStep", { turn.slot != null }) { dualSlot.n++; slotStep(creep, turn.slot!!, t.targ.pool.blockedSet, t.targ.pool.enemyPositions, t.targ.focus.occupantAt, t.meas.forces.combatEnemies, if (turn.support && !inReach) reachMine else emptySet()) },
     // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
     // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
     // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
@@ -2037,6 +2038,17 @@ internal val stepCount = Gauges.labelledOnly("step")        // ...и какая 
  *  управляющему»: пока источников несколько, их доли надо знать числом, иначе сведение выкинет то, что держит бой
  *  (см. отказы USE_COMMANDER_EVERY_FIGHT / _ALWAYS / _APPROACH, каждый измерен). */
 internal val ruleCount = Gauges.labelled("rule")
+
+/** ДВОЙНОЕ УПРАВЛЕНИЕ (v487, `dual=приказ при живом слоте/слот прочитан`). Планировщик строя и раздача командира
+ *  пишут в РАЗНЫЕ карты (`slotOf` и `Orders.commandOf`) и друг друга не чистят, а спор между ними решается только
+ *  внутри покрипного хода — и решается ДВАЖДЫ независимо: на лестнице цели `slotHold` стоит ВЫШЕ приказа, в цепочке
+ *  шага приказ стоит ВЫШЕ слота. Комментарий `Formation.kt:754` при этом утверждает, что расстановка при командире
+ *  молчит, тогда как условия командира в `armyBlock` нет вовсе. Первая часть поля и есть цена этого: крипо-тики, где
+ *  строй уже назначил крипу клетку, а пошёл он по приказу. Прибор стоит ПЕРЕД правкой, потому что без него неизвестно,
+ *  сколько стоит её устранение (проект docs/pain-and-gain-one-controller.md, шаг 1). */
+internal val dualOrder = Gauges.counter("dual")
+
+internal val dualSlot = Gauges.counter("dual", 1)
 
 internal val tacCount = Gauges.labelledOnly("tac")        // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
 
