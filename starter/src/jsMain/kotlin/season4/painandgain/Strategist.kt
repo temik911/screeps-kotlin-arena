@@ -240,7 +240,13 @@ internal object Strategist {
 /** ⚠️ Параметр `runner` снят в v216: он был объявлен у обеих функций и НИ РАЗУ не читался в теле
  *  `captureBlock`. `runRunners` передавал `runner = true`, и это не меняло ничего — у бегуна те же ворота, что
  *  у армии. Дифф отчёта по 135 сценариям пуст побайтово, как и обязан быть у мёртвого. */
-internal fun captureAllowed(ctx: Ctx, f: FlagInfo, view: ExchangeView, serious: Boolean = true): Boolean = captureBlock(ctx, f, view, serious) == null
+internal fun captureAllowed(ctx: Ctx, f: FlagInfo, view: ExchangeView, asker: CapAsker, serious: Boolean = true): Boolean = captureBlock(ctx, f, view, asker, serious) == null
+
+/** КТО СПРАШИВАЕТ ВОРОТА (v467, дефект 6 постановки): бегуны идут ДО стадий армии и спрашивают по вчерашним данным (`Prev.exchange`,
+ *  `interceptFlagId`, `fightPackIds`, `objectiveFlagId`, `firstFightTick`, `kiteChaseSeen` прошлого тика); армия, гонка и тактик — по
+ *  сегодняшним (`meas.view` и те же величины, переписанные стадиями армии этого тика). Параметр — явный: место вызова называет
+ *  своё время, и прибор `capdis=` считает пары «тик × флаг», где два времени дали РАЗНЫЙ ответ про один флаг. */
+internal enum class CapAsker { RUNNER, ARMY }
 
 /** Какие ворота держат захват — null, если разрешено (v135, прибор к разрезу `tools/flagcut.py`): пять ворот отказывали
  *  молча, и в логе стояло только POISED, поэтому нельзя было сказать, ЧТО именно держит бегуна в клетке от свободного
@@ -253,7 +259,7 @@ internal fun captureAllowed(ctx: Ctx, f: FlagInfo, view: ExchangeView, serious: 
  *  знаменатель зависел от числа спрашивающих. «Всерьёз» и «оценка» различаются параметром [serious], а не замком: оценка
  *  считается отдельно (`capeval=`), холостые приборы — своими счётчиками (`capidle=`), замка не касаясь. Старые поля печатаются
  *  как прежде до ближайшей пересъёмки эталона (правило: существующие поля приборов не маскируются). */
-internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, serious: Boolean = true): String? {
+internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, asker: CapAsker, serious: Boolean = true): String? {
     val v = pass(captureGates(), CaptureCase(ctx, f, view), captureTally)
     val reason = (v as? Verdict.Veto)?.reason
     if (!serious) capqEval.n++
@@ -264,10 +270,26 @@ internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, serious: Bo
         if (why != null) capqVeto.n++
         // ...и по одному на пару «тик × флаг» — первый вопрос всерьёз решает (сравнимо с прежним `capgate=` / `cap=`, где
         // первым мог быть и холостой вызов); множество трогают только вопросы всерьёз
-        if (capquTick != getTicks()) { capquTick = getTicks(); capquSeen.clear() }
+        if (capquTick != getTicks()) { capquTick = getTicks(); capquSeen.clear(); capRunnerSaid.clear(); capquaSeen.clear() }
         if (capquSeen.add(f.id)) {
             capquAsked.n++
             if (why != null) { capquVeto.n++; capquWhy.bump(why) }
+        }
+        // ...И ОТВЕТ АРМИИ ОТДЕЛЬНО ОТ ОТВЕТА БЕГУНУ (v467, дефект 6): `capqu=` / `capu=` описывают ответ ПЕРВОМУ спросившему
+        // всерьёз, то есть бегуну (он идёт до армии) — там, где бегун о флаге не спрашивал, первым оказывается кто-то из армии.
+        // `capqua=` / `capua=` — ответ армии по одному на пару «тик × флаг»; третья часть `capqua=` — пары, о которых спросили ОБА;
+        // `capdis=` — те из них, где ответы разошлись, меткой `ворота бегуна>ворота армии` (`ok` — разрешено)
+        when (asker) {
+            CapAsker.RUNNER -> if (f.id !in capRunnerSaid) capRunnerSaid[f.id] = why ?: "ok"
+            CapAsker.ARMY -> if (capquaSeen.add(f.id)) {
+                capquaAsked.n++
+                if (why != null) { capquaVeto.n++; capquaWhy.bump(why) }
+                val said = capRunnerSaid[f.id]
+                if (said != null) {
+                    capquaBoth.n++
+                    if ((said == "ok") != (why == null)) capDisagree.bump("$said>${why ?: "ok"}")
+                }
+            }
         }
     }
     return reason
@@ -287,6 +309,16 @@ internal val capquSeen = Gauges.marks("capqu")
 internal val capqEval = Gauges.counter("capeval")
 internal val capIdleRush = Gauges.counter("capidle")
 internal val capIdleEdge = Gauges.counter("capidle", 1)
+/** Ответ ворот АРМИИ (v467, дефект 6): запретов / вопросов по одному на тик × флаг / из них пар, о которых спросил и бегун; причины;
+ *  расхождения с ответом бегуну (`бегун>армия`). Ответ бегуна на пару держится до конца тика — словарь чинится (см. Gauges). */
+internal val capquaVeto = Gauges.counter("capqua")
+internal val capquaAsked = Gauges.counter("capqua", 1)
+internal val capquaBoth = Gauges.counter("capqua", 2)
+internal val capquaWhy = Gauges.labelled("capua")
+internal val capDisagree = Gauges.labelled("capdis")
+internal val capquaSeen = Gauges.marks("capqua")
+/** Ответ бегуну по флагу в этом тике (причина или `ok`) — поле StrategistState: чинится после оборванного тика, как и словари Gauges. */
+internal val capRunnerSaid: HashMap<String, String> get() = StrategistState.capRunnerSaid
 
 /**
  * ОДИН ВОПРОС О ЗАХВАТЕ (v445, носитель вместо цепочки локальных): флаг и то, что ворота успели о нём узнать. Величину пишут
@@ -693,7 +725,7 @@ internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Dou
         objDropN.n++
         if (f.ours) { objDrop.bump("ours"); continue }
         if (onlyFlagId != null && f.id != onlyFlagId) { objDrop.bump("cpu"); continue }   // страховка CPU (v131c)
-        if (!captureAllowed(ctx, f, view)) { objDrop.bump("gate"); continue }
+        if (!captureAllowed(ctx, f, view, CapAsker.ARMY)) { objDrop.bump("gate"); continue }
         // СВОЯ ПОЛОВИНА (v312, см. GROUP_SAFE_DMG): против фермера гонка решается не числом захватов, а числом
         // УДЕРЖАННЫХ флагов, а удержать можно те, до которых ему дальше, чем нам. Свои R3, A3, H4 и центральный D5 — это
         // 15 очков в тик против его 10; контрфакт разбора (гарнизоны на своих R3, A3 и обоих H4) давал 30,4 тыс. : 18,1 тыс.
@@ -1358,7 +1390,7 @@ internal class RaceRoutes(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // ...а пара (v298) — только на свободную клетку: флаг, на котором сидит его крип, берёт армия силой. Первая редакция
     // слала пары и на занятые — стендовый фермер scatter держит на каждом своём флаге по крипу, пары весь матч ходили к ним и
     // бежали, ядро из шести флагов не брало, и match28/19:scatter проиграны по очкам (18 873:24 312, 14 925:24 322)
-    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it, meas.view) && !(roster.safe && it.occupant != null) &&
+    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it, meas.view, CapAsker.ARMY) && !(roster.safe && it.occupant != null) &&
         !(roster.safe && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
             flags.any { o -> !o.ours && getRange(o.pos, ctx.home) <= getRange(o.pos, ctx.enemyHome) }) }
 
@@ -2364,7 +2396,7 @@ internal class StrategyObjective(private val ctx: Ctx, private val meas: ArmyMea
     // тишины и гаснет от одного подстреленного скаута, а けろびー стреляет по одиночкам весь матч — линия против него
     // стоила армии флаг-цели 584 тика из 1400 (ещё 496 снимало «добить»), и матч кончался 10 тыс. против 23 тыс.
     private val holdLine = HOLD_LINE.c("enemyNear", meas.fight.enemyNear) && HOLD_LINE.c("notPushing", !pushing) && HOLD_LINE.c("notAnnihilate", !contact.annihilate) && HOLD_LINE.c("notStalled", !meas.chase.stalled) && HOLD_LINE.c("notFarmerNorPairs", !(detach.farmerQuietNow || Signals.groupSafe))
-    private val interceptObjective: Objective? = thr.interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it, meas.view) }?.let { f ->
+    private val interceptObjective: Objective? = thr.interceptFlag?.takeIf { !it.ours && captureAllowed(ctx, it, meas.view, CapAsker.ARMY) }?.let { f ->
         val group = meas.forces.strikers.ifEmpty { meas.chase.mobileArmy }
         val flow = flowTo(ctx, f.pos)
         Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.key) } ?: 0)
@@ -3151,4 +3183,5 @@ internal object StrategistState {
     internal val escapeFlows = HashMap<Int, IntArray>()
     internal val escapeTheirs = HashMap<Int, Int>()
     internal val escapeNearest = HashMap<Int, Int>()   // клетка врага, ближайшего к точке
+    internal val capRunnerSaid = HashMap<String, String>()   // флаг → ответ ворот бегуну в этом тике (v467, прибор `capdis=`)
 }

@@ -103,7 +103,7 @@ internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView) {
     // рождается интент шага армии, поэтому проверка одна на все ветки: разрешённый захват проходит как прежде
     // (planCapture), запрещённый — крип стоит, как POISED-бегун
     val flagAt = p.step?.let { s -> ctx.flags.firstOrNull { !it.ours && it.pos.x == s.x && it.pos.y == s.y } }
-    val step = if (flagAt != null && captureBlock(ctx, flagAt, view) != null) { strayCapRefused.n++; null } else p.step
+    val step = if (flagAt != null && captureBlock(ctx, flagAt, view, CapAsker.ARMY) != null) { strayCapRefused.n++; null } else p.step
     if (step != null) { TrafficManager.request(p.creep, step, p.rank); planCapture(ctx, step) }
 }
 
@@ -1632,7 +1632,7 @@ internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasure
         for (f in ctx.flags) {
             if (f.ours || f.occupant != null || f.id == objectiveFlagId) continue
             if (meas.forces.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
-            if (!captureAllowed(ctx, f, meas.view)) continue
+            if (!captureAllowed(ctx, f, meas.view, CapAsker.ARMY)) continue
             // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
             val near = meas.chase.mobileArmy.filter { getRange(it, f.pos) <= 3 && (hasWeapon(it)) }
                 .minByOrNull { getRange(it, f.pos) } ?: continue

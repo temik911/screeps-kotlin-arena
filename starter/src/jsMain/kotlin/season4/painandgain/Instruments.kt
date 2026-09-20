@@ -295,7 +295,7 @@ private var lineDeclared = false
  */
 internal val T_LINE = listOf(
     "t", "army", "runners", "enemies", "reach", "spread", "hfar", "hparts", "ehparts", "hcov", "hulk", "hulkreach",
-    "revived", "chase", "kills", "capgate", "cap", "capq", "capqu", "capu", "capeval", "capidle", "mstrip", "poised", "edge",
+    "revived", "chase", "kills", "capgate", "cap", "capq", "capqu", "capu", "capqua", "capua", "capdis", "capeval", "capidle", "mstrip", "poised", "edge",
     "capopp", "ffight", "fmassed", "stray", "sout", "hold", "gsafe", "fguard", "route", "man", "gcov", "garscout", "courier", "hunt",
     "toothless", "sit", "keep2", "keep3", "scout", "spotm", "spothold", "sym", "split", "recall", "healgap", "nomedic",
     "flip", "aggro", "pushheld", "lethal", "ledgerw", "breakoff", "race", "poisedcost", "objnone", "objdrop", "objns", "budget",
@@ -393,7 +393,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v466"
+internal const val BOT_VERSION = "v467"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
