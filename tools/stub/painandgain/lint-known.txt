@@ -33,7 +33,6 @@ plumbing Strategist.kt:threat
 plumbing Strategist.kt:underTheirFire
 plumbing Strategist.kt:warmNow
 plumbing Tactician.kt:stripped
-plumbing World.kt:armedCentroid
 plumbing World.kt:near
 plumbing World.kt:range
 plumbing World.kt:range~2

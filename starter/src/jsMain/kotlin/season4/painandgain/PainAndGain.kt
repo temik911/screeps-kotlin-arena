@@ -227,7 +227,7 @@ object PainAndGain {
         cpuSummary()
         // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
         if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
-        val rem = rememberTick(ctx)
+        val rem = RememberTick(ctx)
         printTick(ctx, rem)
     }
 

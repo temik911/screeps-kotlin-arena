@@ -363,7 +363,7 @@ internal class PrintTickOut(
 )
 
 /** ПЕЧАТЬ ТИКА (v257, этап 10; хвост tickBody): строка застрявших, строка t= со всеми приборами раз в LOG_EVERY тиков, перепись rung / tac, поля fld. Перенесено дословно. */
-internal fun PainAndGain.printTick(ctx: Ctx, rem: RememberTickOut): PrintTickOut {
+internal fun PainAndGain.printTick(ctx: Ctx, rem: RememberTick): PrintTickOut {
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
         bfsMaxTick = 0
@@ -431,7 +431,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, rem: RememberTickOut): PrintTickOut
 internal val REACH_LINE = listOf("rung", "step", "gate", "pass", "posture", "mode", "cmdwhy", "push")
 
 /** То, что вычисляемым полям строки `t=` нужно от тика: мир, память тика и мощь сторон. Ставится перед печатью строки. */
-internal class TickView(val ctx: Ctx, val rem: RememberTickOut, val ours: Double, val theirs: Double)
+internal class TickView(val ctx: Ctx, val rem: RememberTick, val ours: Double, val theirs: Double)
 
 private lateinit var tickView: TickView
 private var lineDeclared = false

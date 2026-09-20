@@ -929,34 +929,32 @@ internal class ArmyMeasures(private val ctx: Ctx, private val pag: PainAndGain) 
     init { cpuMark("a.retreat") }
 }
 
-internal class RememberTickOut(
-    val armedCentroid: Position,
-)
 
 /** ПАМЯТЬ ТИКА (v257, этап 10; сегмент tickBody после исполнения): стойки полей, его прошлые клетки и ходы, история центра наших вооружённых и его клеток. Перенесено дословно. */
-internal fun rememberTick(ctx: Ctx): RememberTickOut {
-    InfluenceMap.pruneStances(ctx.myCreeps.mapTo(HashSet()) { it.id })
+internal class RememberTick(private val ctx: Ctx) {
+    init { InfluenceMap.pruneStances(ctx.myCreeps.mapTo(HashSet()) { it.id }) }
     // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
-    for (e in ctx.enemyCreeps) {
-        val cell = e.key
-        if (Memory.enemyPrevCell[e.id] != cell) Memory.enemyLastMove[e.id] = getTicks()
+    init {
+        for (e in ctx.enemyCreeps) {
+            val cell = e.key
+            if (Memory.enemyPrevCell[e.id] != cell) Memory.enemyLastMove[e.id] = getTicks()
+        }
     }
-    Memory.enemyLastMove.keys.retainAll { id -> ctx.enemyCreeps.any { it.id == id } }
-    Memory.enemyPrevCell.clear()
-    for (e in ctx.enemyCreeps) Memory.enemyPrevCell[e.id] = e.key
+    init { Memory.enemyLastMove.keys.retainAll { id -> ctx.enemyCreeps.any { it.id == id } } }
+    init { Memory.enemyPrevCell.clear() }
+    init { for (e in ctx.enemyCreeps) Memory.enemyPrevCell[e.id] = e.key }
     // история движения — для ловимости (см. evasive)
     val armedCentroid = centroidOf(ctx.armedArmy.ifEmpty { ctx.army }) ?: ctx.ourCentroid
-    Memory.ourCentroidHist.addLast(armedCentroid.key)
-    while (Memory.ourCentroidHist.size > CHASE_WINDOW) Memory.ourCentroidHist.removeFirst()
-    for (e in ctx.enemyCreeps) {
-        val h = Memory.enemyCellHist.getOrPut(e.id) { ArrayDeque() }
-        h.addLast(e.key)
-        while (h.size > CHASE_WINDOW) h.removeFirst()
+    init { Memory.ourCentroidHist.addLast(armedCentroid.key) }
+    init { while (Memory.ourCentroidHist.size > CHASE_WINDOW) Memory.ourCentroidHist.removeFirst() }
+    init {
+        for (e in ctx.enemyCreeps) {
+            val h = Memory.enemyCellHist.getOrPut(e.id) { ArrayDeque() }
+            h.addLast(e.key)
+            while (h.size > CHASE_WINDOW) h.removeFirst()
+        }
     }
-    Memory.enemyCellHist.keys.retainAll { id -> ctx.enemyCreeps.any { it.id == id } }
-    return RememberTickOut(
-        armedCentroid = armedCentroid,
-    )
+    init { Memory.enemyCellHist.keys.retainAll { id -> ctx.enemyCreeps.any { it.id == id } } }
 }
 
 internal class ReadSignalsOut(
