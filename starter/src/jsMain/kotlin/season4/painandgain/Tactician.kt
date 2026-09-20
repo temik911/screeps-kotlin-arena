@@ -1843,7 +1843,18 @@ internal class TargetsZones(private val ctx: Ctx, private val meas: ArmyMeasures
     // 15-33, у v292 8-24) и 2-14 против Coldkimchi#1 (у v289 10-6, p ≈ 0,01): против бьющего наименьшую долю раненому надо
     // уходить к лекарям позади, против бьющего «лекаря, иначе ближайшего» уведённый из боя раненый — огонь, потерянный даром.
     // Правило его стволов бот мерит сам (сверка двух моделей с фактом), это не подгонка под имя
-    val reachNow = if (!meas.fight.contact || TacticianState.huntsWounded) reachCells else meleeReachCells
+    // ...И БЕЗ ПЕРВОГО РЯДА ДОСЯГАЕМОСТЬ СНОВА ПОЛНАЯ (v515, см. USE_REACH_FULL_WITHOUT_FRONT). Сужение до мили
+    // (v293/v294) стоит ради того, чтобы лекарь не бросал фронт: пока свои мили дерутся, лечить их надо вплотную.
+    // Но когда у армии не осталось НИ ОДНОЙ живой части ATTACK, фронта нет вовсе — бросать нечего, а лекарь стоит
+    // под его стрелками без всякого прикрытия. Ступень бегства для этого уже есть (`supportInReach` в `mustFlee`),
+    // закрыт был только вход в неё: `inReach` считается по этому набору, а тот в контакте не знает о его стрелках.
+    // Замер восьми реплеев (21.09.2026, проверка оператора по эшелонам): из 566 событий «он выстрелил в нашего
+    // лекаря» он стоял >= 2 клеток от нашего ближайшего живого мили в 100 %, с дистанции 1 — НОЛЬ; а разделяет
+    // исходы наличие первого ряда вообще — «живого мили нет ни одного» 36/79/35/50 % тиков в поражениях против
+    // 0/20/0/0 % в победах, и на эти тики приходится 61-93 % всех выстрелов по нашим лекарям
+    val noFront = meas.forces.allies.none { hasMelee(it) }
+    init { nofrontAll.n++; if (noFront) nofrontN.n++ }
+    val reachNow = if (!meas.fight.contact || TacticianState.huntsWounded || (USE_REACH_FULL_WITHOUT_FRONT && noFront)) reachCells else meleeReachCells
     private val fireCells = HashSet<Int>()
     init {
         for (e in meas.forces.combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
@@ -2054,6 +2065,12 @@ internal val madjN = Gauges.counter("madj")
 internal val madjStep = Gauges.counter("madj", 1)
 
 internal val madjAll = Gauges.counter("madj", 2)
+
+/** НЕТ ПЕРВОГО РЯДА (v515, `nofront=` тиков без единой живой части ATTACK / тиков со стадией армии): состояние, на
+ *  которое приходится 61-93 % всех его выстрелов по нашим лекарям (замер восьми реплеев 21.09.2026). */
+internal val nofrontN = Gauges.counter("nofront")
+
+internal val nofrontAll = Gauges.counter("nofront", 1)
 
 /** ИЗЪЯТИЕ ЛЕКАРЯ БЕЗ ПЕРВОГО РЯДА (v513, `hfront=` отказано / раз, когда изъятие было бы взято): сколько раз
  *  лекарь НЕ получил права войти в досягаемость, потому что живых частей ATTACK у армии не осталось. */
