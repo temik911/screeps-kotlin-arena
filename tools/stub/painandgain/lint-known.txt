@@ -17,15 +17,6 @@ plumbing Tactician.kt:stripped
 plumbing World.kt:near
 plumbing World.kt:range
 plumbing World.kt:range~2
-tag Tactician.kt:engage
-tag Tactician.kt:flee
-tag Tactician.kt:free
-tag Tactician.kt:free~2
-tag Tactician.kt:holdMelee
-tag Tactician.kt:order
-tag Tactician.kt:prey
-tag Tactician.kt:raider
-tag Tactician.kt:threat
 writer bodyWeightNow<-Facts.kt
 writer bodyWeightNow<-World.kt
 writer cmdDetach<-Commander.kt

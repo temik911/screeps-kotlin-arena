@@ -1768,6 +1768,15 @@ v441 при 6 542 строках). `reach.py diff`: новых неисполн�
   - Факты хода: прежняя первая секция [creepTurn] дословно и в прежнем порядке — с записями защёлок, счётчиками приборов и
   - печатью на своих местах последовательности.
 
+### v457 — архитектура, второй шаг, этап 4 закрыт; свойства строк (этап 5, пункт 5) (тождество, 20.09.2026)
+
+ЧЕРНОВИК — дописывается. Снятые строки комментариев (дословно, для `verdicts.py`): из KDoc заголовка `Tactician.kt` —
+« * Здесь решается, куда шагнёт каждый боец армии: признаки крипа, лестница цели (27 ступеней: keeper, slotHold, order,»,
+« * chase, kite, wall, healMate, slot, healMateOut, evade, retreat, formGo, wounded, rotate, regroup, alone, leash, engage,»,
+« * holdMelee, grab, toCentroid, prey, rally, objective, threat, raider, post), поле, бегство и сплочение, цепочка шага»,
+« * (immobile, flee, keeperOrder, keeperStay, order, slotHold/slotStep, hold, free) и запрос хода арбитру. Прежде это был»;
+из KDoc `Proposal` — « * свободного шага за добычей (ступени engage, holdMelee, prey, threat, raider), MISSION у остального; [rank] — ранг».
+
 ### v431–v432 — форма поражения от Coldkimchi названа точно, вето снято и возвращено (19.09.2026)
 
 **Третий случай «правило измеряется, но не действует» — найден и проверен.** Прибор `warmcap` заведён в v221 ровно

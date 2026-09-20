@@ -48,10 +48,9 @@ import kotlin.reflect.*
 
 /**
  * ТАКТИК (v251, этап 9 переработки, срез 1 — тождественный перенос; план — docs/pain-and-gain-rework.md, раздел 1).
- * Здесь решается, куда шагнёт каждый боец армии: признаки крипа, лестница цели (27 ступеней: keeper, slotHold, order,
- * chase, kite, wall, healMate, slot, healMateOut, evade, retreat, formGo, wounded, rotate, regroup, alone, leash, engage,
- * holdMelee, grab, toCentroid, prey, rally, objective, threat, raider, post), поле, бегство и сплочение, цепочка шага
- * (immobile, flee, keeperOrder, keeperStay, order, slotHold/slotStep, hold, free) и запрос хода арбитру. Прежде это был
+ * Здесь решается, куда шагнёт каждый боец армии: признаки крипа ([Turn]), лестница цели — строки списка [ladder] (порядок
+ * списка и есть приоритет, другого перечня ступеней нет; причины порядка — `tools/stub/painandgain/order.txt`), поле,
+ * бегство и сплочение, цепочка шага — строки списка [steps] — и запрос хода арбитру. Прежде это был
  * цикл `for (creep in army)` внутри `runArmy` на 675 строк; тело перенесено дословно в [creepTurn], а величины тика,
  * которые цикл читал из `runArmy`, собраны в [ArmyTick]. Разрешение имён сохранено по построению: локальная переменная
  * тела → поле [ArmyTick] (приёмник `with`) → член `PainAndGain` (приёмник расширения) — ровно прежнее «локальная тела →
@@ -66,7 +65,7 @@ internal enum class Priority { SURVIVE, MISSION, OPPORTUNITY }
 /**
  * ПРЕДЛОЖЕНИЕ ХОДА (v252, этап 9): что тактик предлагает арбитру за одного бойца армии. [step] — клетка шага или null
  * («стоять»), [priority] — SURVIVE у бегства (`flee`, единственный смертельный порог — `mustFlee`), OPPORTUNITY у
- * свободного шага за добычей (ступени engage, holdMelee, prey, threat, raider), MISSION у остального; [rank] — ранг
+ * свободного шага за добычей (ступени с меткой [RowMark.OPPORTUNITY] — метка стоит в строке [ladder]), MISSION у остального; [rank] — ранг
  * толкания `Arbiter.pushRank`, по которому арбитр разводит ходы (пока он приоритета не читает — срез тождественный);
  * [mission] — буква задания отряда крипа из постановки стратега (`Strategist.snapshot`: F бой, T захват, G поход, E
  * сопровождение), [term] — ветка шага, а у свободного шага — ступень лестницы, её и печатает прибор `tac t=` как
@@ -81,10 +80,10 @@ internal class Proposal(
 }
 
 /** Приоритет по ветке шага и ступени лестницы — таблица из заголовка [Proposal]. */
-internal fun priorityOf(stepTag: String, rung: String): Priority = when {
-    stepTag == "flee" -> Priority.SURVIVE
-    stepTag != "free" -> Priority.MISSION
-    rung == "engage" || rung == "holdMelee" || rung == "prey" || rung == "threat" || rung == "raider" -> Priority.OPPORTUNITY
+internal fun priorityOf(step: RowMark, rung: RowMark): Priority = when {
+    step == RowMark.SURVIVE -> Priority.SURVIVE
+    step != RowMark.FREE -> Priority.MISSION
+    rung == RowMark.OPPORTUNITY -> Priority.OPPORTUNITY
     else -> Priority.MISSION
 }
 
@@ -319,18 +318,18 @@ internal fun PainAndGain.ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<R
     Row("regroup", { aloneInFire && melee && meleeMate != null && InfluenceMap.damageAt(creep.x, creep.y, t.meas.forces.combatEnemies) * REGROUP_TICKS >= creep.hits }) { Aim(meleeMate!!, 1, avoid = true, nearFlow = true) },
     Row("alone", { aloneInFire }) { Aim(t.targ.takers.armedCentroid, CLOSE_STANDOFF, avoid = true, nearFlow = true) },
     Row("leash", { leashed }) { Aim(t.targ.takers.armedCentroid, CLOSE_STANDOFF, avoid = true, nearFlow = true) },
-    Row("engage", { engage != null }) { Aim(engage!!, if (melee) 1 else closeIn, nearFlow = true) },
+    Row("engage", { engage != null }, RowMark.OPPORTUNITY) { Aim(engage!!, if (melee) 1 else closeIn, nearFlow = true) },
     // мили держит линию (см. MELEE_HOLD_RANGE): что подошло на две клетки — рубит, за экраном не гонится
-    Row("holdMelee", { holdMelee }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
+    Row("holdMelee", { holdMelee }, RowMark.OPPORTUNITY) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
     Row("grab", { grab != null }) { Aim(grab!!.pos, 0, avoid = true) },
     // добивание без местного перевеса — отход к массе армии, а не бросок на «ближайшую добычу»; без
     // ловимой добычи (кайтеры) — тоже к массе: стоим строем и стреляем в то, что подойдёт
     Row("toCentroid", { posture == Posture.ANNIHILATE && !support && (!localAggressive || t.targ.quarry.prey == null) }) { Aim(t.targ.takers.armedCentroid, CLOSE_STANDOFF, avoid = true) },
-    Row("prey", { t.targ.quarry.prey != null }) { Aim(t.targ.quarry.prey!!, if (melee) 1 else closeIn, nearFlow = true) },
+    Row("prey", { t.targ.quarry.prey != null }, RowMark.OPPORTUNITY) { Aim(t.targ.quarry.prey!!, if (melee) 1 else closeIn, nearFlow = true) },
     Row("rally", { rallyTo != null }) { Aim(rallyTo!!, CLOSE_STANDOFF, avoid = true) },
     Row("objective", { t.strat.obj.objective != null }) { Aim(t.strat.obj.objective!!.flag.pos, if (t.targ.takers.objectiveCapturer == creep.id) 0 else CLOSE_STANDOFF, avoid = true) },
-    Row("threat", { t.strat.threats.threat != null && huntingThreat && mobile }) { Aim(t.strat.threats.threat!!, if (melee) 1 else closeIn) },
-    Row("raider", { t.strat.threats.raider != null && mobile && !support }) { Aim(t.strat.threats.raider!!, if (melee) 1 else RANGED_RANGE) },
+    Row("threat", { t.strat.threats.threat != null && huntingThreat && mobile }, RowMark.OPPORTUNITY) { Aim(t.strat.threats.threat!!, if (melee) 1 else closeIn) },
+    Row("raider", { t.strat.threats.raider != null && mobile && !support }, RowMark.OPPORTUNITY) { Aim(t.strat.threats.raider!!, if (melee) 1 else RANGED_RANGE) },
     // ОТВЕРГНУТО стендом (v42): «держать линию там, где она стоит» (holdLine → armedCentroid вместо поста) — в матче 70
     // пост при враге рядом был точкой в 35 клетках позади, и каждый тик ДЕРЖАТЬ между тиками ДОБИТЬ разворачивал
     // армию к нему. Но возврат к посту делает работу в десятках сценариев (после отбитого рывка остаток добивается у
@@ -972,7 +971,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // огнём бежит, даже если у него приказ командира или пост хранителя. До v240 приказ стоял выше бегства
     // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
     // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
-    Row("flee", { mustFlee }) {
+    Row("flee", { mustFlee }, RowMark.SURVIVE) {
         if (commandOf.containsKey(creep.id)) orderFled.n++
         fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (turn.support || turn.stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, t.strat.dec.retreatTo ?: t.strat.dec.post, 1, ctx.dangerMatrix)
     },
@@ -988,7 +987,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // на нём, а не на непослушании
     // ...и во ВСЕХ режимах, а не только в бою (v172, оператор): «все крипы должны двигаться ТОЛЬКО по
     // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
-    Row("order", { commandOf.containsKey(creep.id) }) {
+    Row("order", { commandOf.containsKey(creep.id) }, RowMark.ORDER) {
         orderBranch.n++          // сколько приказов реально дошло до ветки исполнения (v173)
         val cell = commandOf[creep.id]!!
         if (cell.x == creep.x && cell.y == creep.y) null else cell
@@ -1000,7 +999,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
     // ...и только В БОЮ: в гонке очков приказ марша перебивал удержание, и camp падал 4 155:16 209
     Row("hold", { hold }) { null },
-    Row("free", { true }) { freeStep(this) },
+    Row("free", { true }, RowMark.FREE) { freeStep(this) },
 ).also { stepRows = it }
 
 /** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). С v444 оно разложено по швам, в том
@@ -1029,7 +1028,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // по полям (см. scoreMelee/scoreRanged/scoreHeal)
         if (step != null) {
             dangerMoves.n++
-            if (stepTag != "order" && InfluenceMap.dangerAt(step.key) > 0.0) {
+            if (pace.mark != RowMark.ORDER && InfluenceMap.dangerAt(step.key) > 0.0) {
                 if (!inCombat) dangerBlindFar.n++ else if (localAggressive || spotNow) dangerBlind.n++
             }
         }
@@ -1072,8 +1071,8 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
             armed = hasWeapon(creep), healer = hasHeal(creep), stripped = stripped)
         // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
         // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
-        submit(Proposal(creep, step, priorityOf(stepTag, whyTag), prio, missionOf[creep.id] ?: '?',
-            if (stepTag == "free") whyTag else stepTag, whyTag, stepTag), ctx)
+        submit(Proposal(creep, step, priorityOf(pace.mark, rung.mark), prio, missionOf[creep.id] ?: '?',
+            if (pace.mark == RowMark.FREE) whyTag else stepTag, whyTag, stepTag), ctx)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.key
     } } }
