@@ -257,8 +257,8 @@ internal enum class CapAsker { RUNNER, ARMY }
  *  (`contact.edge.lifted`) — без выхода — забирали учёт у настоящего запрета ниже в том же тике (недосчитаны `parity`, `enough`,
  *  `first.fight`); `capOffered` рос на каждый вызов, включая ОЦЕНОЧНЫЕ из `Missions.kt` (множитель ценности флага), так что
  *  знаменатель зависел от числа спрашивающих. «Всерьёз» и «оценка» различаются параметром [serious], а не замком: оценка
- *  считается отдельно (`capeval=`), холостые приборы — своими счётчиками (`capidle=`), замка не касаясь. Старые поля печатаются
- *  как прежде до ближайшей пересъёмки эталона (правило: существующие поля приборов не маскируются). */
+ *  считается отдельно (`capeval=`), холостые приборы — своими счётчиками (`capidle=`), замка не касаясь. Старые поля печатались
+ *  рядом до пересъёмки эталона и сняты в v477 (вопрос 4 оператора) вместе с замком `capSeen` и `capCount`. */
 internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, asker: CapAsker, serious: Boolean = true): String? {
     val v = pass(captureGates(), CaptureCase(ctx, f, view), captureTally)
     val reason = (v as? Verdict.Veto)?.reason
@@ -377,8 +377,6 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         Verdict.Next
     },
     Gate("noFoe") {
-        if (capTick != getTicks()) { capTick = getTicks(); capSeen.clear() }
-        if (f.id !in capSeen) capOffered.n++
         if (ctx.combatEnemies.isEmpty()) return@Gate Verdict.Allow
         Verdict.Next
     },
@@ -435,12 +433,12 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
             // пара к погоне за кайтером (v221, см. kiteChaseSeen): сколько отказов доктрины безфлагового броска
             // выдано, пока мы гонимся за отходящим, который бьёт нас сильнее, чем мы его
             if (Signals.unflaggedRushNow) { kvetoAll.n++; if (kiteChaseSeen) kvetoHit.n++ }
-            return@Gate Verdict.Veto(capCount(f, if (Signals.unflaggedRushNow) "rush.unflagged" else "rush.approach"))
+            return@Gate Verdict.Veto(if (Signals.unflaggedRushNow) "rush.unflagged" else "rush.approach")
         }
         Verdict.Next
     },
     Gate("contact.mass") {
-        if (Signals.fightImminentNow && rushStale) { capCount(f, "rush.approach.expired"); capIdleRush.n++ }   // холостой прибор: своим счётчиком тоже (v451)
+        if (Signals.fightImminentNow && rushStale) capIdleRush.n++   // холостой прибор: своим счётчиком тоже (v451)
         // в контакте флаги не берём, пока есть кому драться: дебафф ложится на идущий бой (матч 9: скаут взял R3 на 125-м
         // тике — −20% стрелкам в решающем размене ради трёх очков в тик); без стрелков защищать нечего, а очки — всё,
         // что осталось (стенд m4 sleeper: запрет при охоте за обломками отдал матч по очкам)
@@ -480,14 +478,14 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
             // пара к вето контакта по размену (v221, только прибор): сколько отказов выдано контактом, в котором за
             // окно ни одна сторона не потеряла STALL_DAMAGE. Окно — прошлого тика: runRunners идёт раньше runArmy
             warmCapAll.n++; if (!view.exchangeLive) warmCap.n++
-            return@Gate Verdict.Veto(capCount(f, "contact.mass"))
+            return@Gate Verdict.Veto("contact.mass")
         }
         Verdict.Next
     },
     Gate("first.fight") {
         // ...и отдельно считаем то, что этой правкой снято: стычка одиночки вне массы
         if (GATE_CONTACT_MASS.c("whole.notLosingRace", !losingRace) && GATE_CONTACT_MASS.c("whole.notStalled", !view.stalled) && GATE_CONTACT_MASS.c("whole.notIntercept", !intercept) && GATE_CONTACT_MASS.c("whole.striker", ctx.army.any { fullSpeed(it) && hasWeapon(it) }) && GATE_CONTACT_MASS.c("whole.inContact", inContact(foes, ctx.army))) {
-            capCount(f, "contact.edge.lifted"); capIdleEdge.n++   // холостой прибор: своим счётчиком тоже (v451)
+            capIdleEdge.n++   // холостой прибор: своим счётчиком тоже (v451)
         }
         // ПЕРВЫЙ БОЙ — БЕЗ ЛИШНЕГО ДЕБАФФА (v281). Пока его сомкнутая армия цела и размена ещё не было, флаг, после которого
         // флагов у нас станет больше, чем у него, не берётся: дебафф ложится на ВЛАДЕЛЬЦА, и платит его первый бой двух целых
@@ -523,7 +521,7 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         if (GATE_FIRST_FIGHT.c("firstFightAhead", firstFightAhead) && GATE_FIRST_FIGHT.c("notBehindOnScore", !WorldState.behindOnScore) && GATE_FIRST_FIGHT.c("notStalled", !view.stalled) && GATE_FIRST_FIGHT.c("notIntercept", !intercept)) {
             val ourAfter = ctx.flags.count { it.ours } + 1
             val hisAfter = ctx.flags.count { it.theirs } - (if (f.theirs) 1 else 0)
-            if (ourAfter > hisAfter) return@Gate Verdict.Veto(capCount(f, "first.fight"))
+            if (ourAfter > hisAfter) return@Gate Verdict.Veto("first.fight")
         }
         Verdict.Next
     },
@@ -538,7 +536,7 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         // брать флаги и проекция перевернётся, правило само откроет следующий. Новых чисел нет: проекция — та же, что у
         // `losingAtTheEnd` выше, «стоит» — тот же признак сомкнутости, что у ворот первого боя
         val raceWon = (ourScore - enemyScore) + (WorldState.ourRate - WorldState.enemyRate) * ticksLeft > 0
-        if (GATE_ENOUGH.c("raceWon", raceWon) && GATE_ENOUGH.c("enemyMassed", Signals.enemyMassedSignal) && GATE_ENOUGH.c("notPassive", !ctx.passiveEnemy) && GATE_ENOUGH.c("notStalled", !view.stalled) && GATE_ENOUGH.c("notIntercept", !intercept)) return@Gate Verdict.Veto(capCount(f, "enough"))
+        if (GATE_ENOUGH.c("raceWon", raceWon) && GATE_ENOUGH.c("enemyMassed", Signals.enemyMassedSignal) && GATE_ENOUGH.c("notPassive", !ctx.passiveEnemy) && GATE_ENOUGH.c("notStalled", !view.stalled) && GATE_ENOUGH.c("notIntercept", !intercept)) return@Gate Verdict.Veto("enough")
         Verdict.Next
     },
     Gate("parityOk") {
@@ -631,17 +629,9 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         Verdict.Next
     },
     Gate("parity") {
-        capCount(f, "parity")
         Verdict.Veto("parity(${ours.toInt()}/${(theirs * floor).toInt()})")
     },
 ).also { captureGateRows = it }
-
-/** Считает отказ один раз на пару «тик × флаг» и возвращает причину как есть. */
-internal fun capCount(f: FlagInfo, why: String): String {
-    if (capTick != getTicks()) { capTick = getTicks(); capSeen.clear() }
-    if (capSeen.add(f.id)) { capBlocked.bump(why) }
-    return why
-}
 
 /** Проигранная гонка (v63/v88): проигрыш по проекции на конец матча при PASSIVE_TICKS без удара по нам (v99: одна и та же
  *  для порога захвата и для стаи у свободного флага, см. USE_LOST_RACE_PACK_PARITY). */
@@ -2829,17 +2819,9 @@ internal const val CHASE_TTL = 4
 /** Меньше этого в армии — не до погони. */
 internal const val CHASE_MIN_ARMY = 6
 
-// ---------- ПРИБОРЫ ГЕЙТА ЗАХВАТА (v214, этап 0) ----------
-// Замер по 12 живым матчам сказал, что матч решают флаги, а не бой: три поражения из шести — при ЖИВОЙ армии
-// с разрывом 603/1628/292 очка из ~18 000, то есть 60–100 тиков ОДНОГО флага. Прибор POISED показывал причину
-// отказа построчно, но накопительного числа не было, и сравнивать версии было нечем.
-// Пара — «блокировано/рассмотрено», причины врозь: `rush` разложен на дебютный бросок и на сближение,
-// `contact` — на бой у МАССЫ армии и на стычку одиночки. Это решает, сколько отказов снимает какая правка.
 /** Состав ИДУЩЕГО боя — его крипы, успевающие прийти к нашей массе (см. fightPack). Считается в runArmy,
  *  читается гейтом захвата на следующем тике: задержка в тик здесь законна, та же, что у stalledNow. */
 internal var fightPackIds: Set<String> = emptySet()
-
-internal var capTick = -1
 
 internal var postureLogged = ""
 
@@ -2957,8 +2939,6 @@ internal val chaseKills = Gauges.counter("kills")
 internal val capOppSum = Gauges.counter("capopp")
 
 internal val capAllSum = Gauges.counter("capopp", 1)
-
-internal val capOffered = Gauges.counter("capgate", 1)
 
 /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
 internal val pushHeldTicks = Gauges.counter("pushheld")
@@ -3151,8 +3131,6 @@ internal val annEmptyAll = Gauges.counter("annempty", 1)
 
 internal var touchMin = 1.0                            // минимум за матч — прибор
 
-internal val capBlocked = Gauges.labelled("cap")
-
 /** Почему у армии нет флаг-цели: пара по причинам против всех тиков (v216). */
 internal val objNone = Gauges.labelled("objnone")
 
@@ -3171,11 +3149,6 @@ internal val cmdWhy = Gauges.labelled("cmdwhy")
  *  (USE_WARM_NEEDS_HIS_MOVE), warm — тёплый контакт (с правкой обязан быть нулём), held — постура удержана
  *  гистерезисом без контакта. */
 internal val annEmpty = Gauges.labelled("annempty")
-
-internal val capSeen = Gauges.marks("cap")      // (тик, флаг) считается один раз, а не по разу на вызывающего
-
-/** `capgate=запретов/предъявлений`: числитель — сумма словаря причин `cap=`. */
-private val capgateDeclared = Gauges.computed("capgate") { capBlocked.sum().toString() }
 
 /** СОСТОЯНИЕ СТРАТЕГА (v459, второй шаг архитектуры, этап 6): словари стратега, жившие членами `object PainAndGain`, — как есть, с чисткой на прежних местах. */
 internal object StrategistState {
