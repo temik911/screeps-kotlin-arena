@@ -517,8 +517,11 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // фермера снимал их и мили танцевали с пикетом): здесь ворота открывает не близость врага к НАМ, а
     // то, что его вооружённый мили УЖЕ дотянулся до нашего небоевого — стрелка, лекаря или раздетого.
     // Пикет одиночки такого не делает, а блоб делает первым же тиком
+    // ...а КОГО защищаем — по живой ATTACK (v472, дефект 11 постановки, он же вопрос 1 после Д): «мягкий» — тот, кто ответить
+    // не может; раздетый мили ответить не может, и его мили, рубящий нашего раздетого, открывает ворота так же, как рубящий
+    // стрелка. До v472 стояло `!meleeOnlyBorn(a)`, и раздетый мили своим мягким не считался (846 крипо-тиков `mstrip=` на гейте)
     private fun guards(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
-        strat.inp.combatArmy.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
+        strat.inp.combatArmy.any { a -> a.id != creep.id && !meleeOnlyLive(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
     // защита своего — работа ТЕЛОМ, остаётся написание А (рождённый мили): встать между его мили и своим мягким может и
     // раздетый (v452, пункт Д — разбиение оператора: тело — А, урон — Б)
     private val guardNow =  GUARD_NOW.c("meleeBorn", meleeOnlyBorn(creep)) && GUARD_NOW.c("combatant", !support) && GUARD_NOW.c("notRotating", !rotating) &&
@@ -570,7 +573,8 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // ударить нечем; сама ротация poker не отменяет (см. выше), отменяет пустое оружие. Написание Б = meleeOnlyLive
     private val poker: Creep? = if (POKER.c("meleeLive", meleeOnlyLive(creep)) && POKER.c("combatant", !support) && POKER.c("notRotating", (!rotating)) && POKER.c("notStalled", !meas.chase.stalled)) meas.forces.combatEnemies.filter { e ->
         POKER.c("foe.melee", InfluenceMap.profileOf(e).melee > 0.0) && POKER.c("foe.inRange", getRange(creep, e) <= ENGAGE_RANGE) && POKER.c("foe.notGivenUp", !givenUp(e)) &&
-            POKER.c("foe.atOurNonMelee", ctx.army.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= 1 })
+            // ...и «наш мягкий» здесь — по живой ATTACK, как у `guards` (v472, дефект 11): раздетого мили, в которого ткнулись, тоже бьём
+            POKER.c("foe.atOurNonMelee", ctx.army.any { a -> a.id != creep.id && !meleeOnlyLive(a) && getRange(e, a) <= 1 })
     }.let { c ->
         // защита своего — тоже одной целью на всех (v221, см. USE_MELEE_PACK): цель пачки, если она среди них
         c.minByOrNull { getRange(creep, it) } } else null
