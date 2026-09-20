@@ -214,8 +214,26 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             val onIt = f != null && s.x == f.pos.x && s.y == f.pos.y
             val nearby = ctx.combatEnemies.filter { getRange(s, it) <= RANGED_RANGE + 2 }
             val underFire = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies) > 0.0
-            // мили-бегун (отряд) рубит вплотную (v57): healAndShoot за бегунов только стреляет, удар мили выдаёт цикл армии
-            if (hasMelee(s)) ctx.enemyCreeps.filter { getRange(s, it) <= 1 }.minByOrNull { it.hits }?.let { Executor.attack(s, it) }
+            // УДАР МИЛИ — ОДИН ПИСАТЕЛЬ (v506, оператор: «убедись, что мили больше нигде не получают приказа атаковать;
+            // такое уже было — внутри командира и внутри строя была разная логика»). Строка стоит с v57 и с тех пор
+            // разошлась со вторым местом: `strike` (Fight.kt) бьёт по полному ранжиру — добиваемый фокус, приказ
+            // командира, фокус, `focusOrder` — и КЛАДЁТ УДАР В КНИГУ (`bookDamage`, `strikesAt`), а здесь выбирался
+            // просто сосед с наименьшими хитами, мимо командира и мимо книги, так что перебой (`okill`) и сходимость
+            // мили (`mconc`) этого удара не видели вовсе. Избыточной строка была уже сейчас: условие `hasMelee`
+            // требует ЖИВОГО мили, а `combatant = armed || liveHeal`, поэтому такой бегун всегда лежит в
+            // `combatRunners`, которых `healAndShoot` обслуживает тем же `strike`; `runRunners` идёт раньше
+            // `runArmy`, значит здешний приказ всё равно перезаписывался — но перезаписью, а не по построению
+            // (прибор `ovw=` их и считал). Остаётся ровно тот случай, где второго писателя НЕТ: `runArmy` выходит
+            // первой строкой при пустой армии, стадия огня не зовётся, и бегун без этой ветки не ударил бы вовсе.
+            // Фокуса и приказа в этот момент не существует — их считает стадия армии, — поэтому здесь прежнее
+            // правило, и прибор `mrun=` показывает, как часто ветка вообще достаётся
+            if (hasMelee(s)) {
+                mrunAll.n++
+                if (ctx.army.isEmpty()) {
+                    mrunStrike.n++
+                    ctx.enemyCreeps.filter { getRange(s, it) <= 1 }.minByOrNull { it.hits }?.let { Executor.attack(s, it) }
+                }
+            }
             // захватчик без замены: от врага «с боем» ближе SCOUT_FLEE_TRIGGER — прочь (пустой MOVE ходит клетку за тик и
             // по болоту, где стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
             val threats = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER && threatening(it, ctx.enemyCreeps) }
@@ -329,6 +347,12 @@ internal val poisedTicks = Gauges.counter("poised")
 internal val poisedAll = Gauges.counter("poised", 1)
 
 internal val runnerModeN = Gauges.counter("runner", 1)
+
+/** ЗАПАСНОЙ УДАР МИЛИ-БЕГУНА (v506, `mrun=` выданных / мили-бегуно-тиков): удар мили пишет один `strike`, и только при
+ *  ПУСТОЙ армии стадия огня не зовётся вовсе — тогда бьёт здешняя ветка. Число показывает, достаётся ли она. */
+internal val mrunStrike = Gauges.counter("mrun")
+
+internal val mrunAll = Gauges.counter("mrun", 1)
 
 /** Цена простоя бегуна В ОЧКАХ: тик у флага, который нельзя взять, стоит `f.score` очков. */
 internal val poisedCost = Gauges.counter("poisedcost")
