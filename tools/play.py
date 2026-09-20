@@ -211,6 +211,19 @@ def ab_worktree(ref, label):
     starter = os.path.join(wt, "build", "js", "packages", "screeps-kotlin-arena-starter")
     if not os.path.isdir(starter):
         raise SystemExit(f"ab: {starter} is missing after the build")
+    # The registry module is written by a task that FINALIZES the compile (`generateSourceMapRegistry`), and the first build
+    # of a fresh worktree has come out without it (CLAUDE.md: the transient ERR_MODULE_NOT_FOUND on SourceMapRegistry.mjs;
+    # 20.09.2026: both A/B payloads two files short, every hand silent). Every arena's loop() imports it through
+    # runWithSourceMapSupport, so a package without it loads nothing. A second build is the documented remedy.
+    registry = os.path.join(starter, "kotlin", "screeps-kotlin-arena-starter", "sourcemaps", "SourceMapRegistry.mjs")
+    if not os.path.isfile(registry):
+        print(f"ab: {ref}: SourceMapRegistry.mjs missing after the build — building again", flush=True)
+        r = subprocess.run(["./gradlew", "build", "-q"], cwd=wt, capture_output=True, text=True)
+        if r.returncode or not os.path.isfile(registry):
+            raise SystemExit(f"ab: build of {ref} leaves no SourceMapRegistry.mjs — the payload would load nothing")
+    exports = [f for _d, _s, fs in os.walk(starter) for f in fs if f.endswith(".export.mjs")]
+    if not exports:
+        raise SystemExit(f"ab: build of {ref} has no *.export.mjs — nothing for a main.mjs to import")
     return wt, starter, sha
 
 
@@ -483,13 +496,18 @@ def save_match(c, gid, path=None):
             if k.isdigit() and isinstance(v, str):
                 data[k] = v
     ticks = sorted(int(k) for k in data)
+    # ...and ZERO when no tick carried output: a payload that failed to load leaves an empty string on every tick, and
+    # "100 ticks stored" read as a played match — sixteen A/B hands on 20.09.2026 were empty that way
+    spoke = 0
     if path:
         with open(path, "w", encoding="utf-8") as f:
             for t in ticks:
                 line = data[str(t)].rstrip("\n")
                 if line:
-                    f.write(line + "\n")
-    return len(ticks)
+                    f.write(line + "\n"); spoke += 1
+    else:
+        spoke = sum(1 for t in ticks if data[str(t)].strip())
+    return len(ticks) if spoke else 0
 
 
 def main():
@@ -572,7 +590,16 @@ def main():
                 games[gid] = 1 if label == "A" else 2
                 path = os.path.join(a.logs, f"{time.strftime('%m%d-%H%M')}-{label}-{res}-{gid[-6:]}.txt") if a.logs else None
                 n = save_match(c, gid, path)
-                print(f"ab {i}/{a.count} {label} ({sides[label][3]}) {gid} {res:<6} | {n} ticks stored", flush=True)
+                print(f"ab {i}/{a.count} {label} ({sides[label][3]}) {gid} {res:<6} | {n} ticks with output", flush=True)
+                if n == 0:
+                    # a hand whose console is empty was not played by the bot: the payload did not load (20.09.2026 — the
+                    # registry module missing from a fresh worktree build, both sides lost every hand at t=100 with nothing
+                    # printed). No measurement comes out of such a hand, so the series stops here rather than burn the rest
+                    c.eval(f"delete window[{json.dumps(SLOT)}]; 1")
+                    c.close()
+                    if not a.keep:
+                        ab_cleanup({v[0] for v in sides.values()})
+                    raise SystemExit(f"ab: hand {i}{label} printed nothing — the payload of {sides[label][3]} did not load; stopped")
         c.eval(f"delete window[{json.dumps(SLOT)}]; 1")
         c.close()
         for label in "AB":
