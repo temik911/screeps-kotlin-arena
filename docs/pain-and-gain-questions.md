@@ -123,6 +123,42 @@
     Рекомендация: не вводить; прибор остаётся в строке. Вернуться, если против другого соперника `okill=` третья
     часть превысит единицы процентов расписанного урона при держащейся премиссе `okkill=`.
 
+15. **Скаляры верхнего уровня после оборванного тика (дефект 13) — перечень.** `AbortRepair.repairFields` чинит
+    словари и множества владельцев из списка; скаляр (`var` верхнего уровня файла или член объекта) оборванный тик не
+    рвёт — он либо уже записан этим тиком, либо остался вчерашним, — но ПАРА скаляров, которую пишут разные стадии,
+    остаётся в двух временах. Ниже — те, что пишутся по ходу тика и читаются следующим как «вчера»; накопители
+    приборов (`srchTicks`, `cmdTicks`, `simErr*`, `mquiet*`, `radSum`…) и локальные `var` функций не в счёт.
+    - **До стадий армии** (`readSignals`, мир — обрываются вместе с миром, то есть почти никогда): `noFireTicks`,
+      `lastHurtTick`, `lastReachTick`, `fightImminentTicks`, `rushStartDist`, `fightMassedSeen`, `firstNearTick`,
+      `kiteMassed`, `zeroLeadTicks`, `behindTicks`, `ourScore` / `enemyScore`, `ourDamageTaken` / `enemyDamageTaken`,
+      `lastOurHits` / `lastEnemyHitsTotal`, `corneredWas`, `stallUntil`, `preyNearTicks`, `Signals.*` (восемь),
+      `WorldState.ourRate` / `enemyRate` / `behindOnScore` / `flagFlipNow` / `flagsNow`.
+    - **Меры армии** (`ArmyMeasures`): `firstFightTick`, `kiteChaseSeen`, `outmatchedTicks`, `lastDistanceKeptTick`.
+    - **Стратег** (`ArmyStrategy`, пишут подстадии по порядку — обрыв между ними оставляет постуру нового тика при
+      цели старого): `posture`, `postureSince`, `pushing`, `pushSince`, `pushHeld`, `leadHoldsWas`, `retreatTarget`,
+      `evadeTarget`, `evadeEvaluatedAt`, `evadeLeft`, `escapeAt`, `idleDetachTicks`, `detachRecallTick`,
+      `lastNonHuntTick`, `interceptFlagId`, `coreShortTicks`, `scatteredLatched`, `scatteredAtRelease`,
+      `farmerOffTicks`, `standoffTicks`, `pressing`, `stalemateGap`, `objectiveFlagId`, `huntingThreat`,
+      `fightPackIds`, `touchMin`, `touchShareLast` / `hisTouchShareLast` (Power.kt, пишет стойка), `Memory.prevPosture`,
+      `Memory.postureCandidate` / `candidateSince`, `Memory.huntQuarry`.
+    - **Тактик, строй, огонь**: `focusId`, `formWaitSince`, `TacticianState.focusPredDmg` / `huntsWounded`,
+      `rangedLevelLatched`, `marchPrevSx` / `marchPrevSy`, `wallAddrPrev` / `wallLostPrev`, `yieldingTick`,
+      `Wall.victimNow` / `victimSaveable` / `wallCells`, `goalTick` / `goalCx` / `goalCy` / `goalField` / `goalSeeds`,
+      `FireBook.prevShooters`, `lastFireTick`, `Executor.ovw*`, `Arbiter.conf*`.
+    - **Конец тика** (`RememberTick`, `Prev.*` — девять; обрыв ДО них оставляет весь `Prev` вчерашним целиком, что и
+      есть согласованное «позавчера»): `Prev.exchange`, `ledgerWindow`, `hisLostWindow`, `approachRate`,
+      `farmerQuietNow`, `cmdMode`, `touchShare`, `hisTouchShare`; `Memory.contactPrev` / `armyPrev` / `fracPrev` /
+      `addrPrev`; `capquTick` / `capTick` (замки приборов — самочинятся сменой тика).
+    Опасны не скаляры, а их ПАРЫ через границу стадий: (а) `posture` нового тика при `objectiveFlagId` и
+    `interceptFlagId` старого (обрыв внутри стратега) — постура FLAG без цели читается тактиком как «цели нет»;
+    (б) `focusId` нового тика при `FireBook.fireOf` старого — исполнитель огня читает приказ прошлого тика на цель,
+    которой фокус уже не держит. Пара `fightMassedSeen` (сигналы) / `firstFightTick` (меры) согласована: первая
+    считается по вчерашнему размену и от второй не зависит. Ни одна из двух пар не чинится списком владельцев: чинить
+    можно только откатом всей группы к «вчера», то есть переносом группы в `Prev` целиком. Нужна ли починка скаляров
+    (одна операция отката на обрыве — группы (а) и (б)), или довольно перечня: за матч обрывов 0–2 (`abort=` в
+    строке), и обе пары самовосстанавливаются следующим тиком?
+    Рекомендация: довольно перечня; вернуться, если `abort=` живьём станет больше единиц за матч.
+
 **Состояние работы (на момент записи).** Сделано и закоммичено на ветке `pain-and-gain` (в `main` не посажено —
 посадка пачкой в конце): v462 (дефект 1, `escapeNeeded`), v463 (дефект 2, защёлка ротации: выход при погибших
 лекарях, обе таблицы под чисткой), v464 (дефект 3, инварианты членства: состав гонки без отряжённых стратегом,
