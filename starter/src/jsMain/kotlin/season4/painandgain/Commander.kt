@@ -501,11 +501,28 @@ internal fun orderAudit(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ:
     // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
 }
 
-/** ПРИКАЗЫ КОМАНДИРА (v459, второй шаг архитектуры, этап 6): словари одного тика, которые живут весь матч и чистятся на своих местах — перенесены из `object PainAndGain` как есть. `commandOf` переживает тик с пустой армией (`runArmy` выходит раньше раздачи), поэтому «новый словарь каждый тик» изменил бы поведение. Владелец — в списке починки после оборванного тика. */
+/** ПРИКАЗЫ КОМАНДИРА (v459, второй шаг архитектуры, этап 6): словари одного тика, которые живут весь матч и чистятся на своих местах — перенесены из `object PainAndGain` как есть. С v469 тик без армии сбрасывает их операцией [dismiss] (до неё `commandOf` переживал такой тик — `runArmy` выходит раньше раздачи). Владелец — в списке починки после оборванного тика. */
 internal object Orders {
     internal val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
     internal val missionOf = HashMap<String, Char>()      // крип → буква задания его отряда этим тиком (v252, из Strategist.snapshot)
     internal val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
     internal val orderFatigue = HashMap<String, Int>()
     internal val orderDist = HashMap<String, Int>()
+
+    /** СБРОС ПРИКАЗОВ В ТИК БЕЗ АРМИИ (v469, дефект 8 постановки). Стадии армии не зовутся, раздачи нет, и приказы прошлого тика
+     *  переживали тик: `markOrdered(commandOf.keys)` отдавал их арбитру движения, где живой крип с застарелым приказом — боец,
+     *  ставший бегуном после раздевания, — получал право приказа (`SWAP_RESPECTS_INTENT`, `orderedDenied`) на клетку, которой
+     *  ему никто в этот тик не назначал; мёртвые id в словарях висели до конца матча. Операция одна на все словари тика;
+     *  прибор `cmdstale=тиков со снятыми приказами/приказов снято/из них у живых крипов` — третья часть и есть число тиков,
+     *  где сброс мог изменить движение. */
+    fun dismiss(living: List<Creep>) {
+        if (commandOf.isNotEmpty()) {
+            staleTicks.n++; staleOrders.n += commandOf.size
+            staleLive.n += commandOf.keys.count { id -> living.any { it.id == id } }
+        }
+        commandOf.clear(); missionOf.clear(); orderWas.clear(); orderFatigue.clear(); orderDist.clear()
+    }
+    internal val staleTicks = Gauges.counter("cmdstale")
+    internal val staleOrders = Gauges.counter("cmdstale", 1)
+    internal val staleLive = Gauges.counter("cmdstale", 2)
 }

@@ -192,7 +192,8 @@ object PainAndGain {
     /** Носители стадий армии этого тика — для `RememberTick` (см. Prev); `null` в тике без армии. */
     private fun runArmy(ctx: Ctx): ArmyTick? {
         // прибор `cmdinert=` часть 1 (v465, дефект 4): армии нет — стадии армии не зовутся, и набор отряжённых командиром остаётся
-        if (ctx.army.isEmpty()) { if (Squads.cmdDetach.isNotEmpty()) cmdInertEmpty.n++; return null }
+        // ...и приказы прошлого тика не переживают тик без армии (v469, дефект 8): см. Orders.dismiss
+        if (ctx.army.isEmpty()) { if (Squads.cmdDetach.isNotEmpty()) cmdInertEmpty.n++; Orders.dismiss(ctx.active); return null }
         // хранители флагов — решение стратега; до v446 его звала первой строкой мера мира (ребро World → Strategist). До вызова в
         // armyMeasures не исполнялось ничего, кроме трёх чтений полей ctx, — порядок прежний
         updateKeepers(ctx, ctx.army)

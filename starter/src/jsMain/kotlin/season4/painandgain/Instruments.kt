@@ -308,7 +308,7 @@ internal val T_LINE = listOf(
     "passive", "flags", "obey", "branch", "fled", "clash", "lost", "kite", "massed", "plan", "cmd", "mode", "disp", "evt",
     "fire", "posture", "obj", "hthreat", "rush", "weak", "pat", "strip", "touch", "touchl", "out", "back", "guns", "mheal",
     "hline", "fall", "our", "enemy", "ledger", "wounded", "hits", "enemyHits", "centroid", "enemyCentroid",
-    "squads", "dbl", "dblf", "sqref", "racex", "raceexit", "cmdinert", "cmddead", "impure",
+    "squads", "dbl", "dblf", "sqref", "racex", "raceexit", "cmdinert", "cmdstale", "cmddead", "impure",
 )
 
 /** Поля строки `t=`, которые считаются НА МЕСТЕ ПЕЧАТИ: снимок мира, величины состояния, отношения накопителей. Объявляются один
@@ -393,7 +393,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v468"
+internal const val BOT_VERSION = "v469"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
