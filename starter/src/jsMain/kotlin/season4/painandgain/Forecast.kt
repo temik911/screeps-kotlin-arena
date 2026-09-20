@@ -324,4 +324,103 @@ internal object Forecast {
         }
         return best
     }
+
+    /** ПОЗИЦИИ ВРАГА НА t+1 (v478, вопрос 7; впервые v246, план: Forecast.predict): та же модель шага, что в прокате [simulate] —
+     *  мили к ближайшему мягкому нашему, стрелок держит RANGED_RANGE, лекарь к самому раненому своему; занятая клетка и стена —
+     *  стоит. Читает только клетки и профили; наши — на НЫНЕШНИХ клетках (его шаг решается по тому, что он видит). */
+    internal fun predictCells(his: List<Creep>, ours: List<Creep>): HashMap<String, Position> {
+        val out = HashMap<String, Position>()
+        val occupied = HashSet<Int>()
+        for (c in ours) occupied.add(c.key)
+        for (e in his) occupied.add(e.key)
+        val liveUs = ours.filter { it.hits > 0 }
+        for (e in his) {
+            if (e.hits <= 0) continue
+            val q = InfluenceMap.profileOf(e)
+            var tx = e.x; var ty = e.y
+            if (liveUs.isNotEmpty()) {
+                if (q.melee > 0.0) {
+                    val soft = liveUs.filter { InfluenceMap.profileOf(it).melee <= 0.0 }.minByOrNull { getRange(e, it) } ?: liveUs.minByOrNull { getRange(e, it) }!!
+                    if (getRange(e, soft) > 1) { tx = e.x + (soft.x - e.x).coerceIn(-1, 1); ty = e.y + (soft.y - e.y).coerceIn(-1, 1) }
+                } else if (q.ranged > 0.0) {
+                    val near = liveUs.minByOrNull { getRange(e, it) }!!
+                    val dist = getRange(e, near)
+                    if (dist < RANGED_RANGE) { tx = e.x - (near.x - e.x).coerceIn(-1, 1); ty = e.y - (near.y - e.y).coerceIn(-1, 1) }
+                    else if (dist > RANGED_RANGE) { tx = e.x + (near.x - e.x).coerceIn(-1, 1); ty = e.y + (near.y - e.y).coerceIn(-1, 1) }
+                } else {
+                    val hurt = his.filter { it.hits > 0 && it.id != e.id }.minByOrNull { it.hits }
+                    if (hurt != null && getRange(e, hurt) > 1) { tx = e.x + (hurt.x - e.x).coerceIn(-1, 1); ty = e.y + (hurt.y - e.y).coerceIn(-1, 1) }
+                }
+            }
+            tx = tx.coerceIn(0, 99); ty = ty.coerceIn(0, 99)
+            val k = key(tx, ty)
+            if (tx != e.x || ty != e.y) {
+                if (k in occupied || DistanceMap.isTerrainWall(tx, ty)) { tx = e.x; ty = e.y }
+                else { occupied.remove(e.key); occupied.add(k) }
+            }
+            out[e.id] = InfluenceMap.cell(tx, ty)
+        }
+        return out
+    }
+
+    /**
+     * АДРЕСНАЯ ОПАСНОСТЬ t+1 (v478, вопрос 7 оператора; код — из отвергнутой v246, где терм стоял у БОЙЦОВ). Урон тех его стволов,
+     * которые, шагнув по модели ([predictCells]), выберут именно крипа c в клетке p: лекарь в досягаемости первым, иначе ближайший,
+     * при равенстве меньшие хиты — та же модель, что у [wallTargetOf] и у прибора `adr=`. Остальные наши стоят на НАЗНАЧЕННЫХ
+     * клетках. Досягаемости — после его шага: стрелок RANGED_RANGE, мили 1. У бойца терм дважды отвергнут живьём (v244 заменой,
+     * v246 добавкой — 0-8 против кайтера: уводит из клетки того, кого ствол выберет целью, и армия стоит под огнём). У ЛЕКАРЯ этой
+     * ловушки нет по построению модели: в досягаемости ствола он — цель почти всегда, и `at` для него — почти сумма стволов,
+     * достающих клетку ПОСЛЕ шага, то есть «огонь следующего тика», которого не хватало точной цене v439 (четыре редакции упали
+     * на том, что мили ходит клетку в тик, а наступающий стрелок через тик стреляет с трёх туда, где сейчас безопасно). Лучший
+     * «другой» кандидат каждого ствола считается один раз на крипа ([prepare]) — терм стоит O(стволов) на клетку.
+     */
+    internal class Threat(his: List<Creep>, pred: Map<String, Position>) {
+        private class Gun(val x: Int, val y: Int, val reach: Int, val dmg: Double)
+        private val guns = ArrayList<Gun>()
+        init {
+            for (e in his) {
+                if (e.hits <= 0) continue
+                val q = InfluenceMap.profileOf(e)
+                val pe = pred[e.id] ?: continue
+                if (q.ranged > 0.0) guns.add(Gun(pe.x, pe.y, RANGED_RANGE, q.ranged))
+                else if (q.melee > 0.0) guns.add(Gun(pe.x, pe.y, 1, q.melee))
+            }
+        }
+        private val otherH = DoubleArray(guns.size)   // лучший ДРУГОЙ чистый лекарь в досягаемости ствола: d·1e5 + хиты
+        private val otherA = DoubleArray(guns.size)   // лучший другой любой
+        /** Достаёт ли клетку хоть один ствол после шага — зона огня t+1 без адресации (для подопечного). */
+        fun reaches(x: Int, y: Int): Boolean = guns.any { g -> maxOf(abs(x - g.x), abs(y - g.y)) <= g.reach }
+        /** Пересчёт «других» для крипа c: остальные наши — на клетках cellOf. */
+        fun prepare(c: Creep, ours: List<Creep>, cellOf: (Creep) -> Position) {
+            for (i in guns.indices) { otherH[i] = Double.MAX_VALUE; otherA[i] = Double.MAX_VALUE }
+            for (f in ours) {
+                if (f.id == c.id || f.hits <= 0) continue
+                val p = cellOf(f)
+                val h = healerOnly(f)
+                for (i in guns.indices) {
+                    val g = guns[i]
+                    val d = maxOf(abs(p.x - g.x), abs(p.y - g.y))
+                    if (d > g.reach) continue
+                    val r = d * 100000.0 + f.hits
+                    if (r < otherA[i]) otherA[i] = r
+                    if (h && r < otherH[i]) otherH[i] = r
+                }
+            }
+        }
+        /** Урон по крипу c в клетке (x, y) от стволов, для которых он — цель; [prepare] уже вызван для c. */
+        fun at(c: Creep, x: Int, y: Int): Double {
+            if (guns.isEmpty()) return 0.0
+            val h = healerOnly(c)
+            var sum = 0.0
+            for (i in guns.indices) {
+                val g = guns[i]
+                val d = maxOf(abs(x - g.x), abs(y - g.y))
+                if (d > g.reach) continue
+                val r = d * 100000.0 + c.hits
+                val mine = if (h) r <= otherH[i] else (otherH[i] == Double.MAX_VALUE && r <= otherA[i])
+                if (mine) sum += g.dmg
+            }
+            return sum   // в тех же единицах, что fireFieldAt / dangerAt — сырой профиль его стволов, без множителя входящего
+        }
+    }
 }

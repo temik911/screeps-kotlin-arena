@@ -167,6 +167,17 @@ internal class Deal(
         for (id in claimed) { val p = out[id] ?: continue; if (maxOf(abs(p.x - x), abs(p.y - y)) <= 1) n++ }
         return n.toDouble()
     }
+    // ПРОГНОЗ СЛЕДУЮЩЕГО ТИКА ДЛЯ ЛЕКАРЯ (v478, вопрос 7 оператора, см. USE_HEAL_THREAT_NEXT): его клетки после шага по модели
+    // проката и адресная угроза «лекарь первым» — то, чего не хватало точной цене v439. Считается на раздачу (O(его × наших)),
+    // читается только ценой клетки лекаря в режиме огня; у бойцов адресная угроза отвергнута дважды (v244, v246) и не читается
+    val nextPred: Map<String, Position> = if (USE_HEAL_THREAT_NEXT) Forecast.predictCells(combatEnemies, living(army)) else emptyMap()
+    val threatNext = Forecast.Threat(armedEnemies, nextPred)
+    init {
+        if (USE_HEAL_THREAT_NEXT) rec.need.next = InfluenceMap.NextTick(
+            underFire = { a -> cellOf(a).let { threatNext.reaches(it.x, it.y) } },
+            threatAt = { c, x, y -> threatNext.at(c, x, y) },
+            wardCell = { a -> cellOf(a) })
+    }
     // клетки, где стоят СВОИ: назначать их нельзя — приказ туда неисполним, пока сосед не ушёл, а прибор показал,
     // что до назначенной клетки доходят 7 % (v167). Своя собственная клетка при этом разрешена: это «стой»
     // (множество `allyAt`, которое описывал комментарий выше, наполнялось и НЕ ЧИТАЛОСЬ нигде — снято в v447 как мёртвое;
@@ -428,8 +439,11 @@ internal class Deal(
     // которого уже рубят, читается как 720 опасности и выталкивает лекаря на три клетки
     fun scoreHeal(c: Creep, key: Int, p: Position, att: Double, dan: Double): Double {
         val scr = screenAt(c, p)
-        val fire = InfluenceMap.fireFieldAt(key)
-        val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))   // урон, который снимут тела своих
+        // ОГОНЬ СЛЕДУЮЩЕГО ТИКА В РЕЖИМЕ ОГНЯ (v478, см. USE_HEAL_THREAT_NEXT): адресная угроза лекарю в клетке после его шага, и
+        // экран тел ему не скидка (его стрелок бьёт лекаря в досягаемости первым — разбор v438); вне режима — поле этого тика
+        val fireModeNow = USE_HEAL_THREAT_NEXT && rec.need.deliveryFireMode(c, army)
+        val fire = if (fireModeNow) threatNext.at(c, p.x, p.y) else InfluenceMap.fireFieldAt(key)
+        val shielded = if (fireModeNow) 0.0 else fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))   // урон, который снимут тела своих
         // ПРИТЯЖЕНИЕ ЛЕКАРЯ НАСЫЩАЕТСЯ ТЕМ, ЧТО ОН МОЖЕТ ДОСТАВИТЬ (v208, замер серии v206: лекарей за линией
         // 0.695 против 0.944 у v205 — они полезли в первую линию). Нужда складывается по всем подопечным в
         // радиусе и не ограничена ничем, поэтому доходила до тысяч против сотен опасности, и лекарь нырял в
@@ -714,6 +728,8 @@ internal class Deal(
             // ЛЕКАРЕЙ +0,32 — они впереди мили, и в 155 тиках из 335 лекари в среднем ближе к врагу, чем мили; на
             // t=63, через три тика после контакта, один лекарь уже без лечащих частей. Условие простое и жёсткое:
             // хотя бы один свой боец стоит к врагу БЛИЖЕ, чем клетка лекаря, — считая по уже назначенным клеткам
+            // «другие» для адресной угрозы t+1 (v478) — остальные наши на назначенных клетках; считается раз на лекаря
+            if (USE_HEAL_THREAT_NEXT) threatNext.prepare(c, living(army)) { f -> cellOf(f) }
             val met = meetWounded(c)
             // лекаря, поставленного проходом отхода, оценка по-прежнему переставляет — не встреча, не трогается (первая
             // редакция v276 это переразмещение снимала попутно, и гейт переменил 89 строк и уронил match30:camp)
@@ -788,8 +804,9 @@ internal class Deal(
         fun terms(p: Position): DoubleArray {
             val key = p.key
             val scr = screenAt(c, p)
-            val fire = InfluenceMap.fireFieldAt(key)
-            val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
+            val fireModeNow = USE_HEAL_THREAT_NEXT && rec.need.deliveryFireMode(c, army)   // те же слагаемые, что у scoreHeal (v478)
+            val fire = if (fireModeNow) threatNext.at(c, p.x, p.y) else InfluenceMap.fireFieldAt(key)
+            val shielded = if (fireModeNow) 0.0 else fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
             val deliver = InfluenceMap.healOf(c)
             val raw = rec.need.attHealAt(key)
             val pull = if (USE_HEAL_NEED_ACTUAL) rec.need.bestDeliveryAt(c, p.x, p.y, army)
@@ -914,6 +931,15 @@ internal class Deal(
         rec.unplacedLine.n += noLineList.size; rec.unplacedReach.n += noReach
         rec.unplacedHeal.n += noHeal; rec.unplacedStrip.n += noStrip
         if (noLineList.size + noHeal + noStrip > 0) rec.unplacedDeals.n++
+        // ПРИБОР ПРОГНОЗА ЛЕКАРЯ (v478, `hnext=`): подопечных под огнём t+1 (в назначенной клетке) / из них не под огнём сейчас /
+        // под огнём сейчас, но не t+1 — где прогноз расходится с настоящим, то есть где правка вообще действует
+        if (USE_HEAL_THREAT_NEXT) for (a in living(army)) {
+            val q = cellOf(a)
+            val nextF = threatNext.reaches(q.x, q.y); val nowF = InfluenceMap.fireFieldAt(a.key) > 0.0
+            if (nextF) rec.hnextWards.n++
+            if (nextF && !nowF) rec.hnextOnlyNext.n++
+            if (!nextF && nowF) rec.hnextOnlyNow.n++
+        }
     }
 
     /** ПРОХОДЫ РАЗДАЧИ: порядок списка = порядок исполнения, другого описания порядка нет. Имя прохода — тег прибора `pass=`

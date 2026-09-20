@@ -516,6 +516,9 @@ internal class DealRecord {
      *  клетки в FIST_RADIUS от медианы) кандидатов не имеет по построению и идёт ветками тактика — вторая часть его не считает. */
     val unplacedLine = g.counter("unplaced"); val unplacedReach = g.counter("unplaced", 1); val unplacedHeal = g.counter("unplaced", 2)
     val unplacedStrip = g.counter("unplaced", 3); val unplacedDeals = g.counter("unplaced", 4)
+    /** Прогноз лекаря (v478, `hnext=`, см. USE_HEAL_THREAT_NEXT): подопечных под огнём t+1 / из них не под огнём сейчас / под огнём
+     *  сейчас, но не t+1 — считает проход `audit` по назначенным клеткам. */
+    val hnextWards = g.counter("hnext"); val hnextOnlyNext = g.counter("hnext", 1); val hnextOnlyNow = g.counter("hnext", 2)
 }
 
 /** Поля записи раздачи обязаны быть объявлены до первой печати строки `t=`, а первая настоящая запись появляется только с первым

@@ -766,7 +766,14 @@ object InfluenceMap {
      * ([published]) — его читают приборы после командира (`hcov=`, `atH=`). Притязания у носителя не поле вовсе: они
      * считаются из его окончательных приказов (`Deal.claimAt`). Ядра, поля этого тика и профили — общие, у объекта.
      */
+    /** ПРОГНОЗ СЛЕДУЮЩЕГО ТИКА ДЛЯ ЦЕНЫ КЛЕТКИ ЛЕКАРЯ (v478, вопрос 7, см. USE_HEAL_THREAT_NEXT): достаёт ли подопечного его ствол
+     *  после шага, адресная угроза лекарю в клетке и НАЗНАЧЕННАЯ клетка подопечного; ставит носитель раздачи (`Deal`), у поля
+     *  тика его нет (null) — тогда зона огня и запреты читаются из полей этого тика, как до v478. */
+    class NextTick(val underFire: (Creep) -> Boolean, val threatAt: (Creep, Int, Int) -> Double, val wardCell: (Creep) -> Position)
+
     class HealNeed {
+        /** Прогноз следующего тика (v478) — только у поля раздачи командира; читается в режиме огня. */
+        var next: NextTick? = null
         /** Нужда своих в лечении, покрываемая из клетки (ядро K_ATT_HEAL), за вычетом покрытого назначенными лекарями. */
         val attHeal = IntArray(FIELD_CELLS)
 
@@ -841,7 +848,10 @@ object InfluenceMap {
             // оценивало клетку в двух в γ·72 = 50 при настоящих 24, и последний шаг к бойцу под огнём стоил в цене 22 при 48 в
             // хитах — лекарь лечил того же бойца с двух клеток. Скидка «вылечу со следующего тика» верна для отложимого лечения
             // и ложна для скоропортящегося; вне огня она остаётся (иначе поле — ноль вдали от боя, match29:camp)
-            val k = if (USE_HEAL_STEP_KERNEL && !(USE_HEAL_EXACT_IN_FIRE && fireMode)) K_HEAL_STEP else K_ATT_HEAL
+            // ...И ЦЕНА ЗНАЕТ ОГОНЬ СЛЕДУЮЩЕГО ТИКА (v478, см. USE_HEAL_THREAT_NEXT): в режиме огня ядро настоящее, доставки нет из
+            // клетки, где его ствол после шага возьмёт лекаря целью, подопечный считается в его назначенной клетке
+            val nx = next
+            val k = if (USE_HEAL_STEP_KERNEL && !((USE_HEAL_EXACT_IN_FIRE || nx != null) && fireMode)) K_HEAL_STEP else K_ATT_HEAL
             // ...И ТОЛЬКО ИЗ КЛЕТКИ ВНЕ ЕГО ОГНЯ (сужение v438 по гейту match4:kite 8 802 : 14 502 — hparts 18 → 0 к t=110 при его
             // ehparts 0/18, hfire=127/185/36): его стрелок в досягаемости лекаря бьёт ЛЕКАРЯ, а не тела перед ним (модель
             // wallTargetOf, 85–91 % совпадений; стуб-кайтер — наименьшие хиты, лекарь 1 200 против 1 600 у мили), поэтому экран
@@ -852,11 +862,12 @@ object InfluenceMap {
             // этот тик» верна, пока угроза следующего тика равна нынешней — стрелок держит три и стоит, мили ходит клетку в тик и
             // бьёт лекаря первым на 240; клетка в двух от него вне огня сейчас и под топором через тик. Поле eMelee (K_MELEE,
             // радиус 2 — «шаг + удар») и есть эта досягаемость
-            if (fireMode && (eFire[key(x, y)] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[key(x, y)] > 0))) return 0.0
+            if (fireMode && (if (nx != null) nx.threatAt(healer, x, y) > 0.0 else (eFire[key(x, y)] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[key(x, y)] > 0)))) return 0.0
             var best = 0.0
             for (a in allies) {
-                if (fireMode && (a.id !in inFire || a.id in advancingWards)) continue
-                val d = maxOf(abs(a.x - x), abs(a.y - y))
+                if (fireMode && (!inFireNow(a) || a.id in advancingWards)) continue
+                val q = if (fireMode && nx != null) nx.wardCell(a) else null
+                val d = if (q != null) maxOf(abs(q.x - x), abs(q.y - y)) else maxOf(abs(a.x - x), abs(a.y - y))
                 if (d >= k.size) continue
                 val left = needLeft[a.id] ?: continue
                 if (left <= 0.0) continue
@@ -868,6 +879,8 @@ object InfluenceMap {
         /** Свои в зоне его огня этим тиком (v438, см. USE_HEAL_DELIVERY_IN_FIRE): поле eFire в клетке подопечного больше нуля —
          *  его мили вплотную или стрелок в ≤ 3, без шага сближения. Заполняется вместе с нуждой. */
         private val inFire = HashSet<String>()
+        /** Подопечный в зоне огня: по прогнозу следующего тика (v478), когда он есть, иначе по полю этого тика. */
+        private fun inFireNow(a: Creep): Boolean = next?.let { it.underFire(a) } ?: (a.id in inFire)
 
         /** РЕЖИМ «В ЗОНЕ ОГНЯ» (v438, см. USE_HEAL_DELIVERY_IN_FIRE): у лекаря в досягаемости шага (d ≤ размер ядра) есть
          *  подопечный под его огнём с непокрытой нуждой — тогда доставка в цене клетки считается по одним таким: лечение ему
@@ -887,9 +900,11 @@ object InfluenceMap {
                 // сам лекарь режим не включает (сужение v438 по гейту match33:camp 18 354 : 23 667): доставка себе одинакова
                 // из любой клетки (d = 0), режим же — про перестановку к ДРУГОМУ; единственный раненый в танце перед боем
                 // был лекарь с −52, режим гасил ему клей, и танец разошёлся в отряжение семерых бегунами и отход
-                if (a.id == healer.id || a.id !in inFire || a.id in advancingWards) continue
+                if (a.id == healer.id || !inFireNow(a) || a.id in advancingWards) continue
                 if ((needLeft[a.id] ?: 0.0) <= 0.0) continue
-                if (maxOf(abs(a.x - healer.x), abs(a.y - healer.y)) <= reach) return true
+                val q = next?.let { it.wardCell(a) }
+                val d = if (q != null) maxOf(abs(q.x - healer.x), abs(q.y - healer.y)) else maxOf(abs(a.x - healer.x), abs(a.y - healer.y))
+                if (d <= reach) return true
             }
             return false
         }
