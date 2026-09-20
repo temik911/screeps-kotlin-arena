@@ -826,8 +826,11 @@ internal class Deal(
             if (c.id in out) continue
             // ...и клетку, уже отданную кому-то приказом, хранитель не занимает повторно: без этой проверки одна
             // клетка доставалась двоим — прибор ловил это как clash=1 (v176)
+            // ...и приказ пишется ТОЙ ЖЕ операцией, что у остальных проходов (v471, дефект 10 постановки): прямая запись в
+            // `taken` и `out` обходила `commit` — проход не попадал в `pass=` (вопрос 5 смотрел на слепой счётчик), хранитель не
+            // давал притязания (`claimAt`) и не входил в `adr=`
             val key = c.key
-            if (ourFlagCells.contains(key) && key !in taken) { taken.add(key); out[c.id] = InfluenceMap.cell(c.x, c.y) }
+            if (ourFlagCells.contains(key) && key !in taken) commit(c, InfluenceMap.cell(c.x, c.y), 0)
         }
     }
 
