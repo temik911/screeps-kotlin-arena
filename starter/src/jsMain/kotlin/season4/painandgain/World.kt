@@ -793,8 +793,14 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     private val armyDist = stallCentroid?.let { getRange(ourArmedCentroid ?: it, it) } ?: -1
     // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
     // бой этого тика ещё не стрелял: `lastFireTick` здесь — каким его оставил ПРОШЛЫЙ тик (см. объявление внизу файла)
+    // ДВА ВРЕМЕНИ ПОД ОДНИМ ИМЕНЕМ — НАЗВАНЫ (v475, дефект 14 постановки). Признак складывает наш огонь ПРОШЛОГО тика (`lastFireTick`
+    // пишет стадия огня ПОСЛЕ мер) и его урон по нам ЭТОГО тика (`lastHurtTick` пишет `readSignals` ДО бегунов и мер). Порядок
+    // конвейера вынужден — огонь решается после мер, — и асимметрия не ошибка, а свойство: на границе окна «недавно» гаснет
+    // для нашего огня на тик позже, чем для его урона. Имена слагаемых называют время каждого; дизъюнкция прежняя
     private val lastFireTickPrev = lastFireTick
-    val exchangeRecent = exchange.now - lastFireTickPrev <= STALL_TICKS || (lastHurtTick > 0 && exchange.now - lastHurtTick <= STALL_TICKS)
+    val ourFireRecentPrev = exchange.now - lastFireTickPrev <= STALL_TICKS
+    val hisHurtRecentNow = lastHurtTick > 0 && exchange.now - lastHurtTick <= STALL_TICKS
+    val exchangeRecent = ourFireRecentPrev || hisHurtRecentNow
     val fightOn = inContact(forces.armedEnemies, ctx.army) && (exchangeRecent)
     private val pauseReach = 2 * ENGAGE_RANGE   // v106: окно сквозь мигание
     private val pausedChase =  Memory.prevPosture == Posture.HOLD &&
