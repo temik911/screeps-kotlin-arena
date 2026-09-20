@@ -371,7 +371,7 @@ private fun declareLine() {
     Gauges.computed("rush") { "${Signals.unflaggedRushNow}" }
     Gauges.computed("weak") { "$outmatchedTicks" }
     Gauges.computed("touch") { "${(Prev.touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(Prev.hisTouchShare * 100).toInt()}" }
-    Gauges.computed("touchl") { "${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()}" }
+    Gauges.computed("touchl") { "${(Prev.touchShareLast * 100).toInt()}/${(Prev.hisTouchShareLast * 100).toInt()}" }
     Gauges.computed("rotset") { "${Memory.rotatingIds.size}" }   // размер набора ротации на печати (v463, дефект 2); часть 1 — Tactician
     Gauges.computed("our") { "${tickView.ours.toInt()}" }
     Gauges.computed("enemy") { "${tickView.theirs.toInt()}" }
@@ -393,7 +393,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v473"
+internal const val BOT_VERSION = "v474"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и

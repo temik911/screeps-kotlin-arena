@@ -189,7 +189,8 @@ internal fun powerOf(side: List<Creep>, opp: List<Creep>, mods: HypoMods, oppMod
     val his = side.firstOrNull()?.my == false
     // доля касаний — последняя ИЗМЕРЕННАЯ за полное окно (v433, USE_TOUCH_SHARE_LAST), а не единица, которую окно
     // показывает вне контакта: ATTACK бьёт на 1, и разрыв контакта не делает мили досягающим
-    val share = if (USE_TOUCH_SHARE_LAST) (if (his) hisTouchShareLast else touchShareLast) else (if (his) Prev.hisTouchShare else Prev.touchShare)
+    // ...одна на тик для всех читателей (v474, дефект 12): пишет `RememberTick`, а не стойка посреди тика
+    val share = if (USE_TOUCH_SHARE_LAST) (if (his) Prev.hisTouchShareLast else Prev.touchShareLast) else (if (his) Prev.hisTouchShare else Prev.touchShare)
     val meleeK = mods.melee * share
     val dps = side.sumOf { effectiveDps(it, opp, mods.ranged, meleeK) }
     val heal = opp.sumOf { InfluenceMap.profileOf(it).heal } * oppMods.heal
@@ -224,8 +225,4 @@ internal class HypoMods(val ranged: Double = 1.0, val melee: Double = 1.0, val h
 
 internal val NO_MODS = HypoMods()
 
-// ДОЛЯ КАСАНИЯ ЗА ПОЛНОЕ ОКНО — ВХОД МОДЕЛИ МОЩИ (v454): пишет стратег (`armyStance`, уровень 3), читает `powerOf` здесь, на
-// уровне 1. Объявление стоит у читателя нижнего уровня: на верху файла-писателя модель мощи импортировала бы стратега.
-internal var touchShareLast = 1.0                      // последняя доля за ПОЛНОЕ окно — для меры мощи (v433, USE_TOUCH_SHARE_LAST)
-
-internal var hisTouchShareLast = 1.0
+// Доля касания за полное окно — вход модели мощи — с v474 живёт в `Prev` (Memory.kt): вчерашнее явно, одно значение на тик.

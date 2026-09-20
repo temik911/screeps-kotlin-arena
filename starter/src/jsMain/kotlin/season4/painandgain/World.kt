@@ -990,6 +990,13 @@ internal class RememberTick(private val ctx: Ctx, private val meas: ArmyMeasures
     init { if (meas != null) { Prev.exchange = meas.view; Prev.ledgerWindow = meas.exchange.ledgerWindow; Prev.hisLostWindow = meas.exchange.hisLostWindow } }
     init { if (strat != null) { Prev.approachRate = strat.obj.approachRate; Prev.farmerQuietNow = strat.detach.farmerQuietNow; Prev.cmdMode = strat.dec.decision.cmdMode } }
     init { if (stance != null) { Prev.touchShare = stance.windows.touchShare; Prev.hisTouchShare = stance.windows.hisTouchShare } }
+    // ...и последняя доля за ПОЛНОЕ окно — по тому же условию, что стояло у стойки (v474, дефект 12): окно полно
+    init {
+        if (stance != null) {
+            if (Memory.touchHist.size >= TOUCH_WINDOW) Prev.touchShareLast = stance.windows.touchShare
+            if (Memory.hisTouchHist.size >= TOUCH_WINDOW) Prev.hisTouchShareLast = stance.windows.hisTouchShare
+        }
+    }
 }
 
 /** СИГНАЛЫ ТИКА (v257, этап 10; сегмент tickBody до бегунов и армии): сомкнутость по форме и по прибытию, бросок безфлаговой армии (unflaggedRushNow), «бой близко» (fightImminentNow), полученный урон, тишина огня, «он не дерётся» (enemyNotFightingNow). Перенесено дословно. */

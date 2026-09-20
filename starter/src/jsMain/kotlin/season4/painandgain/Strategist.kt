@@ -1672,8 +1672,8 @@ internal class StanceWindows(private val ctx: Ctx, private val meas: ArmyMeasure
     init { if (touchShare < touchMin) touchMin = touchShare }
     // ...и ПОСЛЕДНЯЯ ИЗМЕРЕННАЯ доля живёт дальше окна (v433, см. USE_TOUCH_SHARE_LAST): мера мощи берёт её, а не единицу,
     // которую окно показывает вне контакта — ровно в те тики, когда ворота захвата и срабатывают
-    init { if (Memory.touchHist.size >= TOUCH_WINDOW) touchShareLast = touchShare }
-    init { if (Memory.hisTouchHist.size >= TOUCH_WINDOW) hisTouchShareLast = hisTouchShare }
+    // ...и с v474 (дефект 12) её ЗАПОМИНАЕТ `RememberTick` в `Prev.touchShareLast`, а не стойка посреди тика: до того мощь в одном
+    // тике считалась двумя долями — по вчерашней до этой строки, по сегодняшней после (командир, тактик)
     private val stalemateOurNow = strat.inp.combatArmy.sumOf { it.hits }
     private val stalemateHisNow = meas.forces.combatEnemies.sumOf { it.hits }
     // ОКНО ПАТА ПЕРЕЖИВАЕТ МИГАНИЕ КОНТАКТА (v198). Окно очищалось на КАЖДОМ тике без контакта, а `contact` в
