@@ -163,7 +163,6 @@ object PainAndGain {
     internal var huntsWounded = false
     internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
-    internal var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
     internal var ledgerWindow = 0
     internal var ourLostWindow = 0
     internal var hisLostWindow = 0
@@ -178,10 +177,7 @@ object PainAndGain {
     /** По прогнозу (счёт + темп × остаток) мы проигрываем: очки важнее силы (см. captureAllowed). */
     internal var behindOnScore = false
 
-    internal var bfsMaxCost = 0.0
-    internal var bfsMaxTick = 0
 
-    internal val cpuPhases = ArrayList<Pair<String, Double>>()
 
     /** Отметка «тик открыт» (см. USE_ABORT_REPAIR) и пара прибора: оборванных тиков / записей, положенных обратно. */
     private var tickOpen = false

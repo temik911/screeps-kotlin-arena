@@ -1346,3 +1346,11 @@ internal val kchaseTicks = Gauges.counter("kchase")
 /** Погоня за кайтером (v221, только прибор, см. kiteChaseNow): тиков односторонней погони в ANNIHILATE /
  *  тиков ANNIHILATE; отказов безфлагового броска в такой погоне / всех отказов безфлагового броска. */
 internal var kiteChaseSeen = false
+
+// ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
+
+internal var lastReachTick = -1                        // последний тик с его вооружённым в ENGAGE_RANGE от наших
+
+internal var bfsMaxCost = 0.0
+
+internal var bfsMaxTick = 0
