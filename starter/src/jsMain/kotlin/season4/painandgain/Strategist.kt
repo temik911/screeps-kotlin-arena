@@ -325,6 +325,18 @@ internal class CaptureCase(val ctx: Ctx, val f: FlagInfo) {
     var floor = 0.0
 }
 
+/** Причины отказа (прибор `whynot t=`, см. Why в Tables.kt). У входов постуры ложный конъюнкт — почему вход не поднят; у ворот захвата
+ *  цепочка — условие ВЕТО, и ложный конъюнкт — почему ворота не запретили (прошли насквозь). */
+private val CONTACT_FIGHT = Why("contactFight")
+private val ANNIHILATE = Why("annihilate")
+private val EVADE = Why("evade")
+private val RETREAT = Why("retreat")
+private val ENEMY_RETREATING = Why("enemyRetreating")
+private val GATE_RUSH = Why("gate.rush")
+private val GATE_CONTACT_MASS = Why("gate.contactMass")
+private val GATE_FIRST_FIGHT = Why("gate.firstFight")
+private val GATE_ENOUGH = Why("gate.enough")
+
 /** Счётчики ворот захвата (прибор `reach t=`, таблица `gate`): дошли / решили. */
 internal val captureTally = Tally("gate")
 
@@ -397,7 +409,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // говорит и после размена: первая редакция сняла вето целиком и уронила гейт на match30:camp (уничтожение лагеря на
         // 1459-м → проигрыш по очкам 21 635 : 24 096 — флаг, взятый на его подходе, лёг на бой)
         val rushNow = approachingNow || (unflaggedRushNow && firstFightTick == 0)
-        if (rushNow && !rushStale && !intercept && !(stalledNow)) {
+        if (GATE_RUSH.c("rushNow", rushNow) && GATE_RUSH.c("notStale", !rushStale) && GATE_RUSH.c("notIntercept", !intercept) && GATE_RUSH.c("notStalled", !(stalledNow))) {
             // пара к погоне за кайтером (v221, см. kiteChaseSeen): сколько отказов доктрины безфлагового броска
             // выдано, пока мы гонимся за отходящим, который бьёт нас сильнее, чем мы его
             if (unflaggedRushNow) { kvetoAll.n++; if (kiteChaseSeen) kvetoHit.n++ }
@@ -442,7 +454,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         foes = ctx.threats
         val mass = centroidOf(ctx.army)
         val contactArmy = if (mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
-        if (!losingRace && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy)) {
+        if (GATE_CONTACT_MASS.c("notLosingRace", !losingRace) && GATE_CONTACT_MASS.c("notStalled", !stalledNow) && GATE_CONTACT_MASS.c("notIntercept", !intercept) && GATE_CONTACT_MASS.c("striker", contactArmy.any { fullSpeed(it) && hasWeapon(it) }) && GATE_CONTACT_MASS.c("inContact", inContact(foes, contactArmy))) {
             // пара к вето контакта по размену (v221, только прибор): сколько отказов выдано контактом, в котором за
             // окно ни одна сторона не потеряла STALL_DAMAGE. Окно — прошлого тика: runRunners идёт раньше runArmy
             warmCapAll.n++; if (!exchangeLiveNow) warmCap.n++
@@ -452,7 +464,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
     },
     Gate("first.fight") {
         // ...и отдельно считаем то, что этой правкой снято: стычка одиночки вне массы
-        if (!losingRace && !stalledNow && !intercept && ctx.army.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, ctx.army)) {
+        if (GATE_CONTACT_MASS.c("whole.notLosingRace", !losingRace) && GATE_CONTACT_MASS.c("whole.notStalled", !stalledNow) && GATE_CONTACT_MASS.c("whole.notIntercept", !intercept) && GATE_CONTACT_MASS.c("whole.striker", ctx.army.any { fullSpeed(it) && hasWeapon(it) }) && GATE_CONTACT_MASS.c("whole.inContact", inContact(foes, ctx.army))) {
             capCount(f, "contact.edge.lifted"); capIdleEdge.n++   // холостой прибор: своим счётчиком тоже (v451)
         }
         // ПЕРВЫЙ БОЙ — БЕЗ ЛИШНЕГО ДЕБАФФА (v281). Пока его сомкнутая армия цела и размена ещё не было, флаг, после которого
@@ -484,9 +496,9 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // (отставание по очкам, застой, перехват) не тронуты: отстав по счёту, флаг берём — и это же открывает ворота,
         // когда флаги начнёт брать он. ⚠️ Гейт стенда к правке СЛЕП: отчёт побайтово тождествен базе, потому что на
         // стенде размен идёт тогда же, когда армия в контакте, а контакт перекрыт воротами `contact.mass` выше
-        val firstFightAhead = (firstFightTick == 0 || (USE_FIRST_FIGHT_UNSETTLED && exchangeLiveNow)) &&
-            enemyMassedSignal && !ctx.passiveEnemy
-        if (firstFightAhead && !behindOnScore && !stalledNow && !intercept) {
+        val firstFightAhead = GATE_FIRST_FIGHT.c("noFightYetOrUnsettled", firstFightTick == 0 || (USE_FIRST_FIGHT_UNSETTLED && exchangeLiveNow)) &&
+            GATE_FIRST_FIGHT.c("enemyMassed", enemyMassedSignal) && GATE_FIRST_FIGHT.c("notPassive", !ctx.passiveEnemy)
+        if (GATE_FIRST_FIGHT.c("firstFightAhead", firstFightAhead) && GATE_FIRST_FIGHT.c("notBehindOnScore", !behindOnScore) && GATE_FIRST_FIGHT.c("notStalled", !stalledNow) && GATE_FIRST_FIGHT.c("notIntercept", !intercept)) {
             val ourAfter = ctx.flags.count { it.ours } + 1
             val hisAfter = ctx.flags.count { it.theirs } - (if (f.theirs) 1 else 0)
             if (ourAfter > hisAfter) return@Gate Verdict.Veto(capCount(f, "first.fight"))
@@ -504,7 +516,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // брать флаги и проекция перевернётся, правило само откроет следующий. Новых чисел нет: проекция — та же, что у
         // `losingAtTheEnd` выше, «стоит» — тот же признак сомкнутости, что у ворот первого боя
         val raceWon = (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft > 0
-        if (raceWon && enemyMassedSignal && !ctx.passiveEnemy && !stalledNow && !intercept) return@Gate Verdict.Veto(capCount(f, "enough"))
+        if (GATE_ENOUGH.c("raceWon", raceWon) && GATE_ENOUGH.c("enemyMassed", enemyMassedSignal) && GATE_ENOUGH.c("notPassive", !ctx.passiveEnemy) && GATE_ENOUGH.c("notStalled", !stalledNow) && GATE_ENOUGH.c("notIntercept", !intercept)) return@Gate Verdict.Veto(capCount(f, "enough"))
         Verdict.Next
     },
     Gate("parityOk") {
@@ -2266,7 +2278,7 @@ internal class StrategyContact(private val ctx: Ctx, private val meas: ArmyMeasu
     // то есть отменилось бы решение оператора «держать линию» (см. USE_BREAK_OFF_HOLDS_LINE), принятое
     // строкой выше по той же причине. Второе: это и есть «слабее — только отход», замеренное 2:6 против 10:0.
     // Намерение охраны теперь исполняет гашение наступления, и исполняет его, не разворачивая армию
-    private val contactFight = !meas.chase.stalled && meas.forces.armedEnemies.isNotEmpty() && meas.forces.strikers.isNotEmpty() && hotContact
+    private val contactFight = CONTACT_FIGHT.c("notStalled", !meas.chase.stalled) && CONTACT_FIGHT.c("armedFoes", meas.forces.armedEnemies.isNotEmpty()) && CONTACT_FIGHT.c("strikers", meas.forces.strikers.isNotEmpty()) && CONTACT_FIGHT.c("hotContact", hotContact)
     // СПЕРВА ТУШИМ МЕСТНЫЙ ОЧАГ (v214, оператор по записи: «загнали в угол 2-3 крипа, мы там значительно
     // сильнее, но армия разворачивается и убегает в другой конец карты; нужен механизм, который сперва тушит
     // местный очаг, если мы сильнее, и лишь затем бежит на помощь»).
@@ -2293,7 +2305,7 @@ internal class StrategyContact(private val ctx: Ctx, private val meas: ArmyMeasu
     // считается здесь, до постуры: вторая редакция — нет точки и он в контакте, значит бой строем, а не стояние в
     // отходе (первая редакция парковала армию у точки отхода, и он добивал её там, стоящую: 0-8 против Coldkimchi#1)
     // поля выхода — этим тиком, а не прошлым: на первом тике режима их ещё нет, и уходить было бы «некуда»
-    val annihilate = (pushing || contactFight || holdingSpot) 
+    val annihilate = (ANNIHILATE.c("pushing", pushing) || ANNIHILATE.c("contactFight", contactFight) || ANNIHILATE.c("holdingSpot", holdingSpot)) 
     // ПРИБОРЫ ТЁПЛОГО КОНТАКТА (v221, пары к USE_FIGHT_BY_LEDGER, `warmNow` — см. hotContact): ровно то, что правка
     // называет «не боем». `warm` — доля такого контакта во всём контакте; `warmann` — тики, где боевую постуру
     // держал только он (не толчок и не очаг; с правкой — ноль по построению); `warmhold` — из них тики, где
@@ -2430,10 +2442,10 @@ internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasur
             }
         }
     }
-    private val evade = obj.evadeTo != null
+    private val evade = EVADE.c("evadePoint", obj.evadeTo != null)
     init { if (!evade) evadeTarget = null }
     // ...и в выживании отход к ТОЧКЕ не берётся: стоящую у точки армию он добивает (v223, вторая редакция)
-    private val retreat = meas.forces.armedEnemies.isNotEmpty() && !contact.annihilate && obj.objective == null && !evade && meas.fight.enemyNear && thr.weaker && meas.fight.retreatFeasible 
+    private val retreat = RETREAT.c("armedFoes", meas.forces.armedEnemies.isNotEmpty()) && RETREAT.c("notAnnihilate", !contact.annihilate) && RETREAT.c("noObjective", obj.objective == null) && RETREAT.c("notEvade", !evade) && RETREAT.c("enemyNear", meas.fight.enemyNear) && RETREAT.c("weaker", thr.weaker) && RETREAT.c("feasible", meas.fight.retreatFeasible) 
     // ---- меры, которые читает решение о режиме командира (подняты сюда в v241: одно решение — одни входы) ----
     // боеспособные: вооружённые и лекари — фокус, контакт и местные группы считаются по ним, раненые не в счёт
     val combatArmy = ctx.army.filter { combatant(it) }
@@ -2455,7 +2467,7 @@ internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasur
     // Первая редакция (одно «его шаг») ещё и ДОБАВЛЯЛА ярлык там, где мы теснили его быстрее, чем он пятился, — и
     // командир уходил из FIGHT посреди выигрываемой погони: доля FIGHT в тиках размена 18 % -> 11 % против
     // MetalicaX#4 и 68 % -> 45 % против Coldkimchi#1, разница очков +1208 -> +232 и +3290 -> −3538
-    val enemyRetreating = retreatByDistance && (retreatByHisStep)
+    val enemyRetreating = ENEMY_RETREATING.c("byDistance", retreatByDistance) && ENEMY_RETREATING.c("byHisStep", (retreatByHisStep))
     // сколько его вооружённых стоит у нашей армии: группа — дело командира, одиночка — нет
     private val foesAtHand = meas.forces.armedEnemies.count { e -> meas.fight.massArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
 
