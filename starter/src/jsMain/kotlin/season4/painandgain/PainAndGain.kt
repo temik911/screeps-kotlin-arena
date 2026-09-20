@@ -190,6 +190,19 @@ object PainAndGain {
 
 
     /** Носители стадий армии этого тика — для `RememberTick` (см. Prev); `null` в тике без армии. */
+    /** ОДНА СТАДИЯ РАЗДАЧИ КЛЕТОК (v489, проект docs/pain-and-gain-one-controller.md, шаг 3): строй, ротация по его
+     *  фокусу, выход раненых и раздача командира — в прежнем порядке и с прежними метками `cpu`. Поведение
+     *  тождественно; смысл в том, что «кто назначает крипу клетку» спрашивается теперь в ОДНОМ месте конвейера. */
+    private fun assignCells(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance) {
+        armyBlock(ctx, meas, strat, targ, stanceOut)
+        cpuMark("block")
+        rotateByFocus(ctx.army, meas.forces.combatEnemies)
+        // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)
+        stepOutWounded(ctx.army, targ.zones.reachCells, strat.inp.enemyRetreating || !TacticianState.huntsWounded)
+        armyCommand(ctx, meas, strat, targ, stanceOut)
+        cpuMark("command")
+    }
+
     private fun runArmy(ctx: Ctx): ArmyTick? {
         // прибор `cmdinert=` часть 1 (v465, дефект 4): армии нет — стадии армии не зовутся, и набор отряжённых командиром остаётся
         // ...и приказы прошлого тика не переживают тик без армии (v469, дефект 8): см. Orders.dismiss
@@ -202,13 +215,11 @@ object PainAndGain {
         val strat = ArmyStrategy(ctx, meas)
         val targ = ArmyTargets(ctx, meas, strat)
         val stanceOut = ArmyStance(ctx, meas, strat, targ)
-        armyBlock(ctx, meas, strat, targ, stanceOut)
-        cpuMark("block")
-        rotateByFocus(ctx.army, meas.forces.combatEnemies)
-        // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)
-        stepOutWounded(ctx.army, targ.zones.reachCells, strat.inp.enemyRetreating || !TacticianState.huntsWounded)
-        armyCommand(ctx, meas, strat, targ, stanceOut)
-        cpuMark("command")
+        // РАЗДАЧА КЛЕТОК — ОДНОЙ СТАДИЕЙ (v489, проект «Один управляющий», шаг 3). Четыре места, назначающих крипу
+        // клетку, стояли в конвейере вперемешку с чтениями, и по коду конвейера нельзя было сказать, где кончается
+        // одно управление и начинается другое. Порядок вызовов, их аргументы и метки `cpu` ПРЕЖНИЕ: меняется только
+        // то, что у раздачи появилось одно имя и одно место, куда следующие шаги перенесут режимы
+        assignCells(ctx, meas, strat, targ, stanceOut)
         orderAudit(ctx, meas, strat, targ)
         healerWall(ctx, meas)
         cpuMark("plan")
