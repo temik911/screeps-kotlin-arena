@@ -28,7 +28,7 @@ the parallel-sessions rules in `CLAUDE.md`).
 ```
 tickBody: Ctx (мир) → readSignals → runRunners → runArmy → TrafficManager.resolve → Arbiter.audit → Executor.run
           → cpuSummary → RememberTick → printTick
-runArmy:  updateKeepers → ArmyMeasures → ArmyStrategy (восемь подстадий; Strategist.decide) → ArmyTargets → ArmyStance → armyBlock
+runArmy:  updateKeepers → ArmyMeasures (4 группы мер) → ArmyStrategy (восемь подстадий; Strategist.decide) → ArmyTargets (6) → ArmyStance (5) → armyBlock
           → armyCommand (Commander.kt) → orderAudit → healerWall
           → creepTurn для каждого бойца: Turn → ladder() → Stride → steps() → Proposal → submit
           → armyFireAndHeal
@@ -44,7 +44,7 @@ runArmy:  updateKeepers → ArmyMeasures → ArmyStrategy (восемь подс
 | `Strategist.kt` | стратег | одно решение о постуре и режиме `Strategist.decide` (смена — когда кандидат устоялся), гейт захвата и паритет, цель-флаг, точки отхода, поста и уклонения, отряд за флагами и его отзыв, погоня, гонка, постановка `Disposition` для прибора `disp=` и букв заданий; цепочки решений — таблицами (ворота захвата `captureGates()`, правила постуры / режима / причины в `Strategist.decide`, `pushRules()`) |
 | `Commander.kt` | командир | стадия `armyCommand`: раздача командира с перебором замыслов под бюджетом тика (зовёт `commandFight`, `commandMarch`, `Formation.brace`, читает стратега и прогноз) |
 | `Missions.kt` | задания бегунов | паросочетание «бегун ↔ флаг» по ценности на горизонте, режимы FLEE / RESERVE / EXIT / HOLD / TO_FLAG / POISED |
-| `Tables.kt` | таблицы решений | `Row(тег, условие, действие)`, счётчики `Tally` (`won` / `true` / `shadowed`), обходчик `walk` — один на все таблицы, с полным обходом условий |
+| `Tables.kt` | таблицы решений | `Row(тег, условие, [свойство `RowMark`,] действие)`, счётчики `Tally` (`won` / `true` / `shadowed`), обходчик `walk` — один на все таблицы, с полным обходом условий |
 | `Tactician.kt` | тактик | цели тика (фокус, добыча, захватчик, досягаемость его стволов); ход крипа `creepTurn`: факты — носитель `Turn` → лестница цели `ladder()`, 27 строк → факты шага — носитель `Stride` → цепочка шага `steps()`, 8 строк; `Proposal` с приоритетом SURVIVE / MISSION / OPPORTUNITY и причиной «задание.терм», `submit` арбитру |
 | `Deal.kt` | раздача | носитель одной раздачи `Deal` (класс верхнего уровня с v456): поля, методы-оценки `scoreMelee` / `scoreRanged` / `scoreHeal`, `place`, поле притязаний и тринадцать проходов в списке `passes` |
 | `Fight.kt` | бой | раздача клеток в бою `commandFight` (ранние выходы и построение `Deal`): носитель одного вызова `Deal` (поля, методы-оценки `scoreMelee` / `scoreRanged` / `scoreHeal`, `place`, поле притязаний) и тринадцать проходов в списке `passes`; запись раздачи `DealRecord` — поле нужды (`InfluenceMap.HealNeed`) и пробы, свои у каждой пробы замысла, в мир и приборы уходит запись выбранной (`Commander.publishDeal`, v449); назначение огня и лечения, исполнители удара, выстрела и лечения |
@@ -72,6 +72,11 @@ runArmy:  updateKeepers → ArmyMeasures → ArmyStrategy (восемь подс
   действии; в условии их быть не может (условия вычисляются у всех строк). Прибор `reach t=` считает строку сам; читать
   его — `tools/series.py reach`, помня, что у замыкающей строки и у строки, стоящей под своей «половиной», `shadowed`
   ненулевой по построению.
+- **Строка несёт свои свойства** (v457, второй шаг архитектуры, 4.5): то, что код ВНЕ таблицы хочет знать о выигравшей
+  строке, — её `mark` (`RowMark.SURVIVE` у бегства, `ORDER` у шага по приказу, `FREE` у свободного шага, `OPPORTUNITY` у
+  ступеней-возможностей): `priorityOf(pace.mark, rung.mark)`, `pace.mark != RowMark.ORDER`. Сравнение тега со строковым
+  литералом вне таблицы — FAIL линта `tag_outside_table` (список известных пуст): переименованная строка не может молча
+  сменить приоритет предложения. Перечня ступеней в комментариях нет — он один, список `ladder()`.
 - Факт о крипе, ключ клетки, группа постур, выборка — по имени из словаря, а не инлайном: определение факта одно, в
   `Facts.kt` (`CreepFacts`); обёртки `hasMelee(c)`, `healerOnly(c)`, `meleeOnlyBorn(c)`… и функции-выборки (`living`, `armedOf`,
   `notDetached`…) — в `World.kt`; выборки по спискам тика — поля `Ctx` (`side`, `threats`, `armedArmy`…). Новый вариант
@@ -101,12 +106,23 @@ runArmy:  updateKeepers → ArmyMeasures → ArmyStrategy (восемь подс
   лямбды инициализатора компилятор не сужает по `!= null`, как сужал локальную: там пишется `x!!` с комментарием, где
   непустота проверена. Класс-параметр чистого решателя (`Strategist.Inputs`) остаётся списком — `decide` тестируем без
   игровых объектов; `PushCase` читает меры и пачки из носителей. Семь пустых `…Out` — до этапа 6.
-- **Длинная стадия — цепочка подстадий-носителей** (v456, этап 4): `ArmyStrategy` — список из восьми вызовов (`StrategyPacks` →
+- **Длинная стадия — цепочка подстадий-носителей** (v456–v457, этап 4): `ArmyStrategy` — список из восьми вызовов (`StrategyPacks` →
   `StrategyThresholds` → `StrategyDetach` → `StrategyPush` → `StrategyContact` → `StrategyObjective` → `StrategyDecide` →
   `StrategyThreats`), у каждой свой выход; параметры подстадии — носители предыдущих, и читает она их квалифицированно
   (`packs.oursFight`). Место правки стратегии ищется по имени подстадии; читатели пишут `strat.obj.objective`. Швы — минимумы
   `tools/cutwidth.py`, подтверждённые чтением: состояние, идущее через члены объекта и `Memory`, прибор не видит (шов внутри
   `StrategyObjective` не резать — порядок «темп сближения → поля бегства → цель-флаг → точка уклонения» есть поведение).
+  Так же устроены остальные стадии армии (v457): меры `ArmyMeasures` = `forces` (силы сторон) → `exchange` (размен) → `chase`
+  (погоня, затор) → `fight` (мощь, контакт, отход); цели `ArmyTargets` = `pool` (занятость клеток, пул огня) → `focus` → `quarry`
+  (добыча) → `takers` (захватчики) → `form` (авангард, готовность строя) → `zones` (досягаемость его стволов, слоты); стойка
+  `ArmyStance` = `windows` (блок и окна истории) → `press` (прижим) → `breakOff` → `applied` (постура применена) → `gauges`.
+  Читатели пишут `meas.fight.contact`, `targ.quarry.prey`, `stanceOut.press.pressOn`. **У функции с ранними выходами фасад —
+  сама функция:** тело класса вернуться не может, поэтому `commandRace` (`RaceRoster` → `RaceBudget` → `RaceRoutes` →
+  `RaceGarrison` → `RaceParties`) и `runRunners` (`RunnerMatch` → `RunnerMoves`) держат свои `return` на прежних местах МЕЖДУ
+  вызовами подстадий; изменяемое, шедшее через шов локальной (`budget`), — открытое `var`-поле своей подстадии (`purse.budget`).
+  Метод обычного класса режется на СЕКЦИИ — приватные методы по порядку (`Deal.place` → `evict`, `commit`; `Deal.passHealer` →
+  `meetWounded`, `adjacencyGauge`, `pickProbe`); цикл поиска клетки в `place` не резан — через его шов идут три величины, а
+  путь самый горячий у командира.
 - Зависимость направлена ВНИЗ или внутри уровня (`tools/stub/painandgain/levels.txt`, строка `graph` гейта): 0 — `Rules`,
   `Tuning`, `Types`, `Tables`; 1 — `Memory`, `Facts`, `Geometry`, `Power`, `Clock`, `DistanceMap`, `InfluenceMap` и приёмники
   `Executor`, `Arbiter`, `TrafficManager`; 2 — `World`; 3 — `Forecast`, `Strategist`, `Missions`; 4 — `Tactician`, `Fight`,

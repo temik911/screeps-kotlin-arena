@@ -891,7 +891,7 @@ internal fun freeStep(s: Stride): Position? {
         val standoff = aim.standoff
         // клетка флага открыта только назначенному на него (захватчик цели, «подобрать» рядом)
         val designated = grab?.pos ?: strat.obj.objective?.flag?.pos?.takeIf { targ.takers.objectiveCapturer == creep.id }
-        var myBlocked = if (designated != null) targ.focus.blockedSet - (designated.key) else targ.focus.blockedSet
+        var myBlocked = if (designated != null) targ.pool.blockedSet - (designated.key) else targ.pool.blockedSet
         // плотность (см. COMPACT_RANGE): при враге в досягаемости — только на клетки строя
         // лекарь и раненый — вне правила (их цель — свой в строю); снаружи зоны шаг К центру всегда открыт:
         // прежде крип вне зоны не мог шагнуть никуда (все соседи тоже вне), и три лекаря простояли весь бой
@@ -937,7 +937,7 @@ internal fun freeStep(s: Stride): Position? {
                 val x = creep.x + dx; val y = creep.y + dy
                 if (x < 0 || y < 0 || x > 99 || y > 99) continue
                 val c = InfluenceMap.cell(x, y)
-                val byMelee = targ.focus.meleeEnemies.any { getRange(c, it) <= 1 }
+                val byMelee = targ.pool.meleeEnemies.any { getRange(c, it) <= 1 }
                 val byPatient = healingNow && getRange(c, healMate!!) <= 1
                 if (localEnemies.any { getRange(c, it) <= 1 } && (byMelee || !byPatient)) front.add(key(x, y))
             }
@@ -948,7 +948,7 @@ internal fun freeStep(s: Stride): Position? {
         // крип доходит до своей клетки в 7 % случаев (10 из 144) и даже приближается лишь в 32 %. Прогноз
         // при этом считает, что армия встанет по плану: он опирался на фикцию. Клетка в ОДНОМ шаге теперь
         // запрашивается напрямую, как это делают захватчики
-        val chosen = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, meas.forces.enemyCreeps, meas.forces.allies, targ.focus.meleeEnemies, myBlocked, targ.focus.enemyPositions, targ.focus.occupantAt, healerFireW, targ.focus.focusTarget)
+        val chosen = bestSingleMove(creep, target, flow, standoff, localAggressive || spotNow, inCombat, meas.forces.enemyCreeps, meas.forces.allies, targ.pool.meleeEnemies, myBlocked, targ.pool.enemyPositions, targ.focus.occupantAt, healerFireW, targ.focus.focusTarget)
         return chosen
     } } }
 }
@@ -993,7 +993,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
         if (cell.x == creep.x && cell.y == creep.y) null else cell
     },
     Row("slotHold", { turn.slot != null && turn.slotHold }) { null },
-    Row("slotStep", { turn.slot != null }) { slotStep(creep, turn.slot!!, t.targ.focus.blockedSet, t.targ.focus.enemyPositions, t.targ.focus.occupantAt, t.meas.forces.combatEnemies, if (turn.support && !inReach) reachMine else emptySet()) },
+    Row("slotStep", { turn.slot != null }) { slotStep(creep, turn.slot!!, t.targ.pool.blockedSet, t.targ.pool.enemyPositions, t.targ.focus.occupantAt, t.meas.forces.combatEnemies, if (turn.support && !inReach) reachMine else emptySet()) },
     // ПРИКАЗ ВЫШЕ СЛОТА И ОСТАНОВКИ (v171): в выборе ШАГА приказ не участвовал вовсе — слот уводил крипа в
     // строй, а hold оставлял на месте, и приказ работал только в последней ветке. Разбор потерь показал
     // цену: из 143 приказов 50 кончались уходом в другую клетку и 36 — тем, что крип не двинулся
@@ -1305,15 +1305,16 @@ internal fun passable(x: Int, y: Int, blockedSet: Set<Int>, enemyPositions: Set<
 
 /** ЦЕЛИ ТИКА ДЛЯ ТАКТИКА (v256, этап 10; сегмент runArmy): позиции и занятость, фокус огня (focusTarget, focusOrder), добыча, захватчик цели, авангард и готовность строя, досягаемость его стволов (reachCells, reachNow). Перенесено дословно. */
 internal class ArmyTargets(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, pag: PainAndGain) {
-    val focus = TargetsFocus(ctx, meas, strat)
+    val pool = TargetsPool(ctx, meas, strat)
+    val focus = TargetsFocus(ctx, meas, strat, pool)
     val quarry = TargetsQuarry(ctx, meas, strat)
     val takers = TargetsTakers(ctx, meas, strat, pag)
     val form = TargetsForm(meas, takers)
     val zones = TargetsZones(ctx, meas, pag)
 }
 
-/** ПОДСТАДИЯ 1 ЦЕЛЕЙ: позиции и занятость клеток, пул огня, мера цели и выбор фокуса с удержанием (`focusTarget`, `focusOrder`). */
-internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategy) {
+/** ПОДСТАДИЯ 1 ЦЕЛЕЙ: позиции и занятость клеток, его мили, пул огня — кто в дальности, сколько огня достаёт цель, цели-скауты. */
+internal class TargetsPool(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategy) {
     val enemyPositions = meas.forces.enemyCreeps.mapTo(HashSet()) { it.key }
     val blockedSet: Set<Int> = ctx.blocked.mapTo(HashSet()) { it.key } + ctx.flagCells
     val meleeEnemies = meas.forces.enemyCreeps.filter { InfluenceMap.profileOf(it).melee > 0.0 }
@@ -1352,9 +1353,13 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
             e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)
     }
     init { scoutShots.n += scoutTargets.size }
-    private val focusPool = (inFireRange.filter { e -> meas.forces.combatEnemies.any { it.id == e.id } } + scoutTargets)
+    val focusPool = (inFireRange.filter { e -> meas.forces.combatEnemies.any { it.id == e.id } } + scoutTargets)
         .ifEmpty { inFireRange }
-    private fun fireAvailableAt(e: Creep) = fireAvailable(e)
+    fun fireAvailableAt(e: Creep) = fireAvailable(e)
+}
+
+/** ПОДСТАДИЯ 2 ЦЕЛЕЙ: мера цели (лечение на ней, угроза, тики до убийства) и выбор фокуса с удержанием (`focusTarget`, `focusOrder`). */
+internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategy, private val pool: TargetsPool) {
     // лечение, которое враг получит на этой цели: вплотную — полное, на дистанции — треть (rangedHeal 4 против 12)
     // ...И САМА ЦЕЛЬ ТОЖЕ ЛЕЧИТ СЕБЯ (v266, разбор стены лечения по реплеям серии v263). Сумма шла по всем, КРОМЕ цели, и
     // его лекарь под нашим огнём выглядел пробиваемым, хотя лечит себя в 52–71 % таких тиков (против Coldkimchi; у ●ω<♥♪ —
@@ -1394,7 +1399,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     }
     // тики до убийства нашим огнём в дальности за вычетом их лечения на цели; бесконечность — цель не убиваема
     fun killTicks(e: Creep): Double {
-        val net = fireAvailableAt(e) * InfluenceMap.takenOf(e) - healOn(e)
+        val net = pool.fireAvailableAt(e) * InfluenceMap.takenOf(e) - healOn(e)
         return if (net <= 0.0) Double.POSITIVE_INFINITY else e.hits / net
     }
     // фокус: добиваемые за тик, затем наибольшая угроза, снимаемая за тик боя (угроза / тики до убийства), и лишь
@@ -1408,11 +1413,11 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     private fun armedHealer(e: Creep?) = e != null && InfluenceMap.profileOf(e).heal > 0.0 &&
         InfluenceMap.profileOf(e).ranged == 0.0 && InfluenceMap.profileOf(e).melee == 0.0
     // лекарь, из-за которого цель не умирает: в HEAL_RANGE от вооружённого врага, которого нам не убить
-    private fun savesSomeone(h: Creep) = focusPool.any { c -> c.id != h.id && InfluenceMap.profileOf(c).let { it.melee + it.ranged > 0.0 } &&
+    private fun savesSomeone(h: Creep) = pool.focusPool.any { c -> c.id != h.id && InfluenceMap.profileOf(c).let { it.melee + it.ranged > 0.0 } &&
         getRange(h, c) <= HEAL_RANGE && killTicks(c).isInfinite() }
     // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
     private fun gunsAt(e: Creep?) = if (e == null) 0 else strat.dec.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
-    private val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+    private val focusCmp = compareBy<Creep> { if (it.hits <= pool.fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
         // ЛЕКАРЬ В ДОСЯГАЕМОСТИ — ЦЕЛЬ ПЕРВЫМ (v224, см. USE_FOCUS_ANY_HEALER): правило соперника, снятое с реплеев
         // обеих сторон, — его ствол при нашем лекаре в досягаемости бьёт лекаря в 82–97 % выстрелов
         // ...И ТОЛЬКО ТОТ ЛЕКАРЬ, КОТОРОГО ДОТЯГИВАЮЩИЙСЯ ОГОНЬ ПРОБИВАЕТ (v224, серия): без этого условия ярус
@@ -1490,20 +1495,20 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
         .thenBy { threatOf(it) / it.hits.coerceAtLeast(1) }
         .thenByDescending { it.hits }
         .thenByDescending { getRange(it, strat.threats.centroid) }
-    private val focusBest = focusPool.maxWithOrNull(focusCmp)
+    private val focusBest = pool.focusPool.maxWithOrNull(focusCmp)
     // прибор яруса «лекарь первым» (v224): его лекарь в досягаемости наших стволов был / фокус лёг на лекаря
     // ...и прибор v266 (fself=): его лекарь в досягаемости наших стволов, которого модель без самолечения читала
     // пробиваемым, а с ним — нет, то есть сколько решений о добиваемости правка поменяла
     init {
-        for (e in focusPool) if (armedHealer(e) && gunsAt(e) > 0) {
+        for (e in pool.focusPool) if (armedHealer(e) && gunsAt(e) > 0) {
             fselfAll.n++
-            val fire = fireAvailableAt(e) * InfluenceMap.takenOf(e)
+            val fire = pool.fireAvailableAt(e) * InfluenceMap.takenOf(e)
             val own = InfluenceMap.profileOf(e).heal
             val others = healOn(e) - own
             if (fire - others > 0.0 && fire - others - own <= 0.0) fselfFlip.n++
         }
     }
-    init { if (focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail.n++; if (focusBest != null && armedHealer(focusBest)) fhlChosen.n++ } }
+    init { if (pool.focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail.n++; if (focusBest != null && armedHealer(focusBest)) fhlChosen.n++ } }
     // ЛИПКИЙ фокус (v45): цель держится, пока жива с оружием или лечением и в шаге от досягаемости хоть одного нашего стрелка;
     // сменяется на ту, что добивается за тик. Замер по реплеям (матчи 78, 73, 67): наибольшее число наших выстрелов в ОДНУ
     // цель за тик — 1 в 57 тиках из 111, 2 в 42, 3 в 10, четыре и больше в 2 (1 %); у Coldkimchi 4+ в 11 % тиков, у けろびー
@@ -1520,9 +1525,9 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     // врагов вне досягаемости, а её стволы для правила v70 считаются тем же «в шаге» (gunsNear): у цели на четырёх в
     // досягаемости ноль стволов, и moreGuns сбрасывал бы её тем же тиком
     private val focusPrevId = focusId
-    private val focusPrev = focusId?.let { id -> focusPool.firstOrNull { it.id == id } ?: meas.forces.combatEnemies.firstOrNull { it.id == id } }
+    private val focusPrev = focusId?.let { id -> pool.focusPool.firstOrNull { it.id == id } ?: meas.forces.combatEnemies.firstOrNull { it.id == id } }
     private fun gunsNear(e: Creep) = strat.dec.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE + 1 }
-    private val killableNow = focusBest != null && focusBest.hits <= fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
+    private val killableNow = focusBest != null && focusBest.hits <= pool.fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
     // …и не к мили, чья угроза схлопнулась (v49): матч 91 (Coldkimchi, 430 тиков боя) — его мили тычет вплотную (угроза 240,
     // фокус на нём), отходит к лекарям, и фокус на нём держится: 395 выстрелов в мили под 727 его лечений вплотную, 101 в
     // стрелков (35 % при стрелке в трёх, у него 71 %). Мили держится, пока вплотную или идёт (см. threatOf); «отпускать
@@ -1539,7 +1544,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     // прибор v267 (fsw=смен/тиков:ушла/далеко/стрелок/стволы/добиваем/раздета): смена фокуса и её причина — на тиках, где
     // есть кого бить в досягаемости
     init {
-        if (focusPool.isNotEmpty()) {
+        if (pool.focusPool.isNotEmpty()) {
             fswTicks.n++
             if (focusPrevId != null && focusTarget?.id != focusPrevId) {
                 fswN.n++
@@ -1560,12 +1565,12 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
         // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
     }
     // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
-    val focusOrder = focusPool.sortedWith(focusCmp.reversed())
+    val focusOrder = pool.focusPool.sortedWith(focusCmp.reversed())
     val occupantAt = HashMap<Int, Creep>()
     init { for (c in ctx.active) occupantAt[c.key] = c }
 }
 
-/** ПОДСТАДИЯ 2: добыча армии — ближайший по пути боевой враг; в бою по контакту — только тот, кто уже в руках. */
+/** ПОДСТАДИЯ 3 ЦЕЛЕЙ: добыча армии — ближайший по пути боевой враг; в бою по контакту — только тот, кто уже в руках. */
 internal class TargetsQuarry(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategy) {
     // добить: цель армии — ближайший к центру армии боевой враг (по пути); в бою ПО КОНТАКТУ (без перевеса) —
     // только враг, который УЖЕ у нас в руках (в RANGED_RANGE + 2 от своих): стая «в 11 клетках» включала основную
@@ -1604,7 +1609,7 @@ internal class TargetsQuarry(private val ctx: Ctx, private val meas: ArmyMeasure
     }
 }
 
-/** ПОДСТАДИЯ 3: центр вооружённых, захватчик флага-цели и попутные захватчики ближних флагов. */
+/** ПОДСТАДИЯ 4 ЦЕЛЕЙ: центр вооружённых, захватчик флага-цели и попутные захватчики ближних флагов. */
 internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategy, private val pag: PainAndGain) {
     val armedCentroid = clusterCentroid(armedOf(meas.chase.mobileArmy).ifEmpty { ctx.army }) ?: strat.threats.centroid
     // захватчик флага-цели — ближайший к флагу ВООРУЖЁННЫЙ член группы (одной клетки на всех не хватит; лекарь
@@ -1625,7 +1630,7 @@ internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasure
     }
 }
 
-/** ПОДСТАДИЯ 4: авангард построения, собранность и готовность строя (с терпением ожидания). */
+/** ПОДСТАДИЯ 5 ЦЕЛЕЙ: авангард построения, собранность и готовность строя (с терпением ожидания). */
 internal class TargetsForm(private val meas: ArmyMeasures, private val takers: TargetsTakers) {
     // построение перед контактом (см. FORM_RANGE): авангард — ближайший к врагу ходячий вооружённый; готовность —
     // доля вооружённых в RALLY_RANGE от него, собравшихся в FORM_RANGE; клетки под огнём — в дальности стрелка
@@ -1673,7 +1678,7 @@ internal class TargetsForm(private val meas: ArmyMeasures, private val takers: T
     val formationReady = formationGathered || (formWaitSince >= 0 && getTicks() - formWaitSince >= FORM_PATIENCE)
 }
 
-/** ПОДСТАДИЯ 5: досягаемость врага для лекаря и раненого, клетки огня, живы ли лекари, слоты тика. */
+/** ПОДСТАДИЯ 6 ЦЕЛЕЙ: досягаемость врага для лекаря и раненого, клетки огня, живы ли лекари, слоты тика. */
 internal class TargetsZones(private val ctx: Ctx, private val meas: ArmyMeasures, private val pag: PainAndGain) {
     // досягаемость врага для лекаря и раненого (см. reachCells): стрелок бьёт на 3, мили шагнёт и ударит на 2. Тело
     // лекаря HHHHHHMMMMMM — лечение впереди, и первое же попадание снимает 12 лечения в тик навсегда; наши лекари
