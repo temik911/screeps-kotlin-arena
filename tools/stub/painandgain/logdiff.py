@@ -3,9 +3,8 @@
 """Тождество логов стенда: первое расхождение каждого лога гейта с эталоном.
 
 Оракул механических этапов переработки (docs/pain-and-gain-rework.md, раздел 8): `compare.py` сравнивает пять полей
-исхода, а этот скрипт — логи сценариев целиком. Логи детерминированы, кроме строк `cpu t=` и поля `time=` в `done:`; строки приборов `tac t=` (v252) и `reach t=` (v444) новые;
-они отбрасываются. Поля, добавленные или снятые переработкой намеренно (`anchor=`, `ovw=`, `conf=`, `disp=`, `evt=`, `lead=`), и номер версии
-в приветствии маскируются — список ниже дополняется вместе с приборами.
+исхода, а этот скрипт — логи сценариев целиком. Логи детерминированы, кроме строк `cpu t=`, поля `time=` в `done:` и поля
+`srch=` (хвост тика в мс); они и номер версии в приветствии — единственное, что отбрасывается и маскируется.
 
   python3 tools/stub/painandgain/logdiff.py [--old runs/gate_235] [--new tools/stub/painandgain/out] [подстрока…]
 
@@ -29,21 +28,19 @@ from collections import Counter
 MASK = [
     (re.compile(r'hello season4 pain-and-gain v\d+'), 'hello season4 pain-and-gain vX'),
     (re.compile(r' cpu=\d+/\d+$'), ' cpu=X'),
-    (re.compile(r' anchor=\S+'), ''),
-    (re.compile(r' ovw=\S+ conf=\S+'), ''),
-    (re.compile(r' disp=\S+'), ''),
-    (re.compile(r' evt=\S+'), ''),
-    (re.compile(r' lead=\S+'), ''),
+    # srch=обрезок/тиков/ХВОСТ ТИКА В МС — третья часть читает настоящее время; поле маскируется целиком
     (re.compile(r' srch=\S+'), ''),
-    (re.compile(r' deals=\S+ srchd=\S+'), ''),      # v449, пункт В: раздач ушло в мир / сыграно; перебор с победителем ≠ последнему
-    (re.compile(r' capq=\S+ capqu=\S+ capu=\S* capeval=\S+ capidle=\S+ mstrip=\S+'), ''),   # v451, пункты Г и Д: ворота с одним писателем; мили без ATTACK
 ]
+# 20.09.2026 (второй шаг архитектуры, этап 2): маски полей `anchor=`, `ovw= conf=`, `disp=`, `evt=`, `lead=`, `deals= srchd=`,
+# `capq= … mstrip=` СНЯТЫ, и строки `tac t=` / `reach t=` больше не отбрасываются. Каждая вводилась как «новое поле против
+# ТОГДАШНЕГО эталона»; в нынешнем эталоне эти поля и строки есть, они детерминированы, и маска на них — слепое пятно оракула:
+# перенос прибора `reach` в раскладку (v455) тождеством не проверялся вовсе, пока строку отбрасывали. Новое поле маскируется само.
 
 
 def lines(p):
     out = []
     for l in open(p, encoding='utf-8', errors='replace').read().split('\n'):
-        if l.startswith('cpu t=') or 'time=' in l or l.startswith('tac t=') or l.startswith('reach t='):
+        if l.startswith('cpu t=') or 'time=' in l:
             continue
         for rx, rep in MASK:
             l = rx.sub(rep, l)
