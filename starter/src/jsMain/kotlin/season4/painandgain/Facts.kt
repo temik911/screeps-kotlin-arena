@@ -149,6 +149,8 @@ internal object BodyMemo {
     /** Вес тела и живые MOVE на этот тик (см. USE_BODY_MEMO); чистятся в начале тика. */
     val bodyWeightNow = HashMap<String, Int>()
     val liveMovesNow = HashMap<String, Int>()
+    /** Сброс в начале тика — операция владельца: пишет оба словаря только этот файл. */
+    fun reset() { bodyWeightNow.clear(); liveMovesNow.clear() }
 }
 
 /** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)

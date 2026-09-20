@@ -408,7 +408,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     val rotating = creep.id in Memory.rotByFocus || stepOut || (rotGate && creep.id in Memory.rotatingLatch)
     val support = healer || stripped
     val nearestEnemyRange = meas.forces.combatEnemies.minOfOrNull { getRange(creep, it) } ?: 99
-    val localAllies = strat.dec.combatArmy.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
+    val localAllies = strat.inp.combatArmy.filter { getRange(creep, it) <= (if (posture == Posture.ANNIHILATE || posture == Posture.FLAG) ENGAGE_RANGE else RANGED_RANGE + 1) }
     val localEnemies = meas.forces.combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE + RANGED_RANGE }
     val ratio = if (creep.id in Memory.aggressiveIds) LOCAL_ENTER_RATIO else PUSH_RATIO
     val ghost = run {
@@ -445,7 +445,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         // отходить к массе есть смысл, только если масса не здесь: когда рядом больше половины армии, это и
         // есть масса, и «отход к центру» был шагом на месте под ударами (матч 3, t=140–280: армия из
         // семи-восьми «отходила к центру» сто сорок тиков и потеряла всех по одному, не стреляя в ответ)
-        posture == Posture.ANNIHILATE -> AGGR.c("annihilate.noFoeOrMassOrPower", localEnemies.isEmpty() || localAllies.size * 2 >= strat.dec.combatArmy.size ||
+        posture == Posture.ANNIHILATE -> AGGR.c("annihilate.noFoeOrMassOrPower", localEnemies.isEmpty() || localAllies.size * 2 >= strat.inp.combatArmy.size ||
             ourPowerReach(localAllies, localEnemies) >= enemyPowerReach(localEnemies, localAllies) * (if (creep.id in Memory.aggressiveIds) ANNIHILATE_HOLD_RATIO else LOCAL_ENTER_RATIO))
         localEnemies.isEmpty() -> true
         // без боевого своего в четырёх клетках (раненый один) запаса хода нет: maxOf пустого списка бросал
@@ -503,13 +503,13 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // то, что его вооружённый мили УЖЕ дотянулся до нашего небоевого — стрелка, лекаря или раздетого.
     // Пикет одиночки такого не делает, а блоб делает первым же тиком
     private fun guards(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
-        strat.dec.combatArmy.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
+        strat.inp.combatArmy.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
     // защита своего — работа ТЕЛОМ, остаётся написание А (рождённый мили): встать между его мили и своим мягким может и
     // раздетый (v452, пункт Д — разбиение оператора: тело — А, урон — Б)
     private val guardNow =  GUARD_NOW.c("meleeBorn", meleeOnlyBorn(creep)) && GUARD_NOW.c("combatant", !support) && GUARD_NOW.c("notRotating", !rotating) &&
         GUARD_NOW.c("foeToGuardFrom", localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && guards(e) })
     init { if (meleeOnlyBorn(creep) && localEnemies.isNotEmpty()) { guardTicks.n++; if (guardNow) guardFired.n++ } }
-    val inLine =  IN_LINE.c("spotting", spotNow) || IN_LINE.c("guarding", guardNow) || (IN_LINE.c("formationReady", targ.form.formationReady) && IN_LINE.c("twoMatesInForm", strat.dec.combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2))
+    val inLine =  IN_LINE.c("spotting", spotNow) || IN_LINE.c("guarding", guardNow) || (IN_LINE.c("formationReady", targ.form.formationReady) && IN_LINE.c("twoMatesInForm", strat.inp.combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2))
     // при бесплодной охоте (см. STALL_TICKS) броска нет: висящие крипы россыпи «ловимы» (не уходят стабильно), и
     // каждый наш крип танцевал со своим соседом вместо марша к флагу-цели (стенд m19 spread, travel=23 четыреста тиков)
     // «держит линию» — про мили В ЛИНИИ, а не про любого мили в бою: без этого условия мили, до которого враг
@@ -518,7 +518,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // прижим (см. USE_PRESS): мили в пачке — вплотную к цели фокуса в PRESS_RANGE, иначе к ближайшему ловимому врагу с
     // боем; стрелок — в кольцо ровно в RANGED_RANGE от цели фокуса
     private val pack = PACK.c("pressOn", stanceOut.press.pressOn) && PACK.c("meleeLive", meleeOnlyLive(creep)) && PACK.c("notRotating", !rotating) && PACK.c("aggr", localAggressive) &&
-        PACK.c("mateInPackOrFoeAdjacent", strat.dec.combatArmy.any { it.id != creep.id && meleeOnlyLive(it) && getRange(creep, it) <= PRESS_PACK } ||
+        PACK.c("mateInPackOrFoeAdjacent", strat.inp.combatArmy.any { it.id != creep.id && meleeOnlyLive(it) && getRange(creep, it) <= PRESS_PACK } ||
             localEnemies.any { getRange(creep, it) <= 1 })
     // отказ (см. PRESS_GIVEUP) действует, пока цель не вернулась в три (v111, USE_GIVEUP_RETURNS), и снимается,
     // когда цель стоит ВПЛОТНУЮ к нашему не-мили (v135, см. USE_GIVEUP_LIFTS_ON_BACK): отказ — про погоню, а
@@ -529,7 +529,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // в одиночку под её огонь (серия 307–326: けろびー#1 дважды за 240 тиков, наш мили 1600 → 752 за 14 тиков погони,
     // стрелки в двух за мили не достают — 44 выстрела против 70)
     private fun pressCovered(e: Creep) = 
-        strat.dec.combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
+        strat.inp.combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
         ctx.army.any { a -> a.id != creep.id && getRange(e, a) <= 1 }
     val pressTarget: Creep? = if (!PRESS_TARGET.c("pack", pack)) null else
         targ.focus.focusTarget?.takeIf { PRESS_TARGET.c("focus.inRange", getRange(creep, it) <= PRESS_RANGE) && PRESS_TARGET.c("focus.catchable", catchable(it, meas.chase.chasers)) && PRESS_TARGET.c("focus.notGivenUp", !givenUp(it)) && PRESS_TARGET.c("focus.covered", pressCovered(it)) }
@@ -575,7 +575,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // КОНКРЕТНОЙ цели, а не по spotNow: перевес над одним не должен открывать бросок на другого
     fun covered(e: Creep) =  holdMelee || (spotEdgeAt(e) >= PUSH_RATIO) ||
         (guards(e)) ||
-        strat.dec.combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
+        strat.inp.combatArmy.count { it.id != creep.id && hasRanged(it) && getRange(it, e) <= RANGED_RANGE + 1 } >= MELEE_COVER ||
         ctx.army.any { a -> a.id != creep.id && getRange(e, a) <= 1 }
     // ОДНА ДОБЫЧА НА ВСЕХ в толчке (v71): бросок — только на цель в ENGAGE_RANGE от добычи армии (prey — ближайший к центру по
     // полю). Стенд camp+shy (застенчивый лагерь матчей 133/152/159: отходит от наших в шести и возвращается на флаг): его
@@ -584,7 +584,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // стоящему блобу, который не сближается (матчи 70, 133, 152, 159)
     // мили входит парой (v101, USE_MELEE_PAIR_ENGAGE): к цели в досягаемости — другой наш мили в MELEE_HOLD_RANGE + 1 от неё
     val meleeOnly = meleeOnlyBorn(creep)
-    private fun mateNear(e: Creep, r: Int) = strat.dec.combatArmy.any { m -> m.id != creep.id && meleeOnlyLive(m) && getRange(m, e) <= r }
+    private fun mateNear(e: Creep, r: Int) = strat.inp.combatArmy.any { m -> m.id != creep.id && meleeOnlyLive(m) && getRange(m, e) <= r }
     // ...и присоединяется к напарнику, уже стоящему в MELEE_HOLD_RANGE от цели: досягаемость на клетку больше
     fun holdReach(e: Creep) = if (meleeOnly && mateNear(e, MELEE_HOLD_RANGE)) MELEE_HOLD_RANGE + 1 else MELEE_HOLD_RANGE
     val engage = if (pressTarget != null) pressTarget else poker ?: if (ENGAGE.c("aggr", localAggressive || spotNow) && ENGAGE.c("combatant", !support) && ENGAGE.c("inLine", inLine) && ENGAGE.c("notRotating", !rotating) && ENGAGE.c("notStalled", !meas.chase.stalled)) meas.forces.combatEnemies.filter { ENGAGE.c("foe.inReach", getRange(creep, it) <= (if (holdMelee) holdReach(it) else ENGAGE_RANGE)) && ENGAGE.c("foe.catchable", catchable(it, meas.chase.chasers)) && ENGAGE.c("foe.threatening", threatening(it, meas.forces.enemyCreeps)) && ENGAGE.c("foe.notGivenUp", !givenUp(it)) && ENGAGE.c("foe.covered", !meleeOnlyBorn(creep) || covered(it))  }.let { c ->
@@ -645,7 +645,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     init { if (hasRanged(creep) && localAggressive) { closeTicks.n++; if (foeMeleeLive) closeHeld.n++ } }
     // сброс слота строя у мили с целью — работа ТЕЛОМ, остаётся написание А (v452, пункт Д — разбиение оператора)
     val melee = meleeOnlyBorn(creep)
-    val meleeMate: Creep? = if (melee) strat.dec.combatArmy.filter { it.id != creep.id && meleeOnlyLive(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
+    val meleeMate: Creep? = if (melee) strat.inp.combatArmy.filter { it.id != creep.id && meleeOnlyLive(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
     // мили со слотом стены (см. planBlock) оставляет его ради цели: прижим или враг в досягаемости удара
     val slot = if (melee && engage != null) null else slot0
     val grab = targ.takers.grabberOf[creep.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } }
@@ -744,7 +744,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // вплотную, не «в двух клетках»: со счётом союзников в двух клетках мили под огнём не отходили и ныряли в блоб
     // врага по одному — три мили за восемь тиков при одном убитом (стенд m5 army, v22, t=300–308)
     val aloneInFire =  ALONE_IN_FIRE.c("combatant", !support) && ALONE_IN_FIRE.c("notStripped", !stripped) && ALONE_IN_FIRE.c("annihilate", posture == Posture.ANNIHILATE) && ALONE_IN_FIRE.c("notPushing", !pushing) && ALONE_IN_FIRE.c("underFire", InfluenceMap.damageAt(creep.x, creep.y, meas.forces.combatEnemies) > 0.0) &&
-        ALONE_IN_FIRE.c("fewerThanTwoMates", strat.dec.combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= 1 } < 2) && ALONE_IN_FIRE.c("noPressTarget", pressTarget == null) 
+        ALONE_IN_FIRE.c("fewerThanTwoMates", strat.inp.combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= 1 } < 2) && ALONE_IN_FIRE.c("noPressTarget", pressTarget == null) 
     // вес огня лекаря: подопечный в бою — только разница между клетками (HEALER_W_DAMAGE_FIGHT); место за
     // подопечным и шаг от мили задают HEALER_W_FRONT и HEALER_W_MELEE, а вес 0.05 в бою держал лекаря на кромке
     // огня в 2–3 клетках (лечение 24 вместо 72) и проиграл рубки sleeper на картах 4 и 8
@@ -1318,7 +1318,7 @@ internal class TargetsPool(private val ctx: Ctx, private val meas: ArmyMeasures,
     // фокус-файр: добиваемые за тик -> наибольшая угроза на хит (урон, который враг СЕЙЧАС наносит нам, плюс
     // его лечение, делённые на его хиты: мили вплотную за 1000 хитов снимает 90, стрелок за 800 — 40, лекарь
     // за 600 — 36; «лекари первыми» без учёта хитов вело огонь мимо мили, который резал наш строй)
-    private val inFireRange = meas.forces.enemyCreeps.filter { e -> strat.dec.combatArmy.any { it.getRangeTo(e) <= RANGED_RANGE } }
+    private val inFireRange = meas.forces.enemyCreeps.filter { e -> strat.inp.combatArmy.any { it.getRangeTo(e) <= RANGED_RANGE } }
     // остовы (без оружия и лечения) — вне пула, пока есть боевые. Матч 22: разоружённый M6 с 542 хитами простоял
     // 25 тиков в 2–4 клетках от наших стрелков необстрелянным и был вылечен обратно в M8A8, пока пять его стрелков
     // добивали наших. ДВА способа перенести на него огонь ОТВЕРГНУТЫ стендом: «отрастающая угроза» (мёртвые части
@@ -1369,7 +1369,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     // дистанция каждого врага до ближайшего нашего боеспособного сейчас и тик назад — «идёт ли» (см. threatOf)
     private val prevArmedRange = HashMap(Memory.lastArmedRange)
     init { Memory.lastArmedRange.clear() }
-    init { for (e in meas.forces.enemyCreeps) Memory.lastArmedRange[e.id] = strat.dec.combatArmy.minOfOrNull { getRange(e, it) } ?: 99 }
+    init { for (e in meas.forces.enemyCreeps) Memory.lastArmedRange[e.id] = strat.inp.combatArmy.minOfOrNull { getRange(e, it) } ?: 99 }
     private fun threatOf(e: Creep): Double {
         val p = InfluenceMap.profileOf(e)
         // мили — полная угроза ВПЛОТНУЮ к нашему или в двух, когда ИДЁТ на нас (v41: дистанция до наших боеспособных
@@ -1385,7 +1385,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
         // идущий мили в двух вплотную уже в следующий тик, и тик его огня без фокуса — цена, которую стенд заметил
         val r = Memory.lastArmedRange[e.id] ?: 99
         val meleeLive = p.melee > 0.0 && (r <= 1 || (r <= MELEE_KEEP_RANGE && (prevArmedRange[e.id] ?: 99) > r))
-        val rangedLive = p.ranged > 0.0 && strat.dec.combatArmy.any { getRange(e, it) <= RANGED_RANGE }
+        val rangedLive = p.ranged > 0.0 && strat.inp.combatArmy.any { getRange(e, it) <= RANGED_RANGE }
         // лекарь в угрозе — треть лечения ВСЕГДА (24 против 60 у стрелка): «живой» лекарь при раненом соседе весил 72 и
         // собирал четверть-треть нашего огня (матч 44: 66 из 192, матч 45: 46 из 175, при HEALER_VALUE 1.0), пока けろびー
         // тратил на лекарей 6–15 % и снимал наших стрелков (96 выстрелов по ним против наших 24 по его). Лекаря бьют,
@@ -1404,7 +1404,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     private fun armedRanged(e: Creep?) = e != null && InfluenceMap.profileOf(e).ranged > 0.0
     // его мили, стоящий вплотную к кому-то из наших: он бьёт ПРЯМО СЕЙЧАС на 240 в тик (v135)
     private fun meleeHitting(e: Creep?) = e != null && InfluenceMap.profileOf(e).melee > 0.0 &&
-        strat.dec.combatArmy.any { getRange(e, it) <= 1 }
+        strat.inp.combatArmy.any { getRange(e, it) <= 1 }
     // его лекарь: живое лечение и никакого живого оружия (v134, см. USE_FOCUS_HEALER_FIRST)
     private fun armedHealer(e: Creep?) = e != null && InfluenceMap.profileOf(e).heal > 0.0 &&
         InfluenceMap.profileOf(e).ranged == 0.0 && InfluenceMap.profileOf(e).melee == 0.0
@@ -1412,7 +1412,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     private fun savesSomeone(h: Creep) = pool.focusPool.any { c -> c.id != h.id && InfluenceMap.profileOf(c).let { it.melee + it.ranged > 0.0 } &&
         getRange(h, c) <= HEAL_RANGE && killTicks(c).isInfinite() }
     // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
-    private fun gunsAt(e: Creep?) = if (e == null) 0 else strat.dec.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
+    private fun gunsAt(e: Creep?) = if (e == null) 0 else strat.inp.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
     private val focusCmp = compareBy<Creep> { if (it.hits <= pool.fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
         // ЛЕКАРЬ В ДОСЯГАЕМОСТИ — ЦЕЛЬ ПЕРВЫМ (v224, см. USE_FOCUS_ANY_HEALER): правило соперника, снятое с реплеев
         // обеих сторон, — его ствол при нашем лекаре в досягаемости бьёт лекаря в 82–97 % выстрелов
@@ -1522,7 +1522,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     // досягаемости ноль стволов, и moreGuns сбрасывал бы её тем же тиком
     private val focusPrevId = focusId
     private val focusPrev = focusId?.let { id -> pool.focusPool.firstOrNull { it.id == id } ?: meas.forces.combatEnemies.firstOrNull { it.id == id } }
-    private fun gunsNear(e: Creep) = strat.dec.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE + 1 }
+    private fun gunsNear(e: Creep) = strat.inp.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE + 1 }
     private val killableNow = focusBest != null && focusBest.hits <= pool.fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
     // …и не к мили, чья угроза схлопнулась (v49): матч 91 (Coldkimchi, 430 тиков боя) — его мили тычет вплотную (угроза 240,
     // фокус на нём), отходит к лекарям, и фокус на нём держится: 395 выстрелов в мили под 727 его лечений вплотную, 101 в
@@ -1534,7 +1534,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     // липкость уступает цели, которую достают на FOCUS_GUNS_SWITCH стволов больше (v70)
     private val moreGuns =  focusBest != null && focusPrev != null && gunsAt(focusBest) >= gunsNear(focusPrev) + FOCUS_GUNS_SWITCH
     private val prevArmed = focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 }
-    private val prevNear = focusPrev != null && strat.dec.combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }
+    private val prevNear = focusPrev != null && strat.inp.combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }
     val focusTarget = if (focusPrev != null && !killableNow && !rangedNow && !moreGuns && prevArmed && prevNear) focusPrev else focusBest
     init { focusId = focusTarget?.id }
     // прибор v267 (fsw=смен/тиков:ушла/далеко/стрелок/стволы/добиваем/раздета): смена фокуса и её причина — на тиках, где
@@ -1555,7 +1555,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
             }
         }
     }
-    private val packMelee = pureMeleeOf(strat.dec.combatArmy)
+    private val packMelee = pureMeleeOf(strat.inp.combatArmy)
     init {
         if (packMelee.isNotEmpty() && meas.forces.combatEnemies.isNotEmpty()) packTicks.n++
         // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
@@ -1571,7 +1571,7 @@ internal class TargetsQuarry(private val ctx: Ctx, private val meas: ArmyMeasure
     // добить: цель армии — ближайший к центру армии боевой враг (по пути); в бою ПО КОНТАКТУ (без перевеса) —
     // только враг, который УЖЕ у нас в руках (в RANGED_RANGE + 2 от своих): стая «в 11 клетках» включала основную
     // массу врага, и контакт с одним забредшим мили увёл армию с дома на неё — бой при 0.97 проигран 12:1 (матч 13)
-    private val contactPack = meas.forces.combatEnemies.filter { e -> strat.dec.combatArmy.any { getRange(e, it) <= RANGED_RANGE + 2 } }
+    private val contactPack = meas.forces.combatEnemies.filter { e -> strat.inp.combatArmy.any { getRange(e, it) <= RANGED_RANGE + 2 } }
     // расстояние до КАЖДОГО кандидата в добычу мерилось своим полем BFS, а поля считаются под бюджетом
     // (см. BFS_BUDGET): сверх него кандидат получает ограниченное (NEAR_FLOW) или устаревшее поле, и «до него
     // неизвестно» читается как «бесконечно далеко». Сравнения кандидатов при этом нет вовсе — есть сравнение

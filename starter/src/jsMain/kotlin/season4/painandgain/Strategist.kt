@@ -61,26 +61,6 @@ import kotlin.reflect.*
  * составам; постановка как решатель вместо тройки Posture / CmdMode / Intent — следующие срезы.
  */
 internal object Strategist {
-    /** Что видно армии к моменту решения; имена — как у мер в runArmy. */
-    class Inputs(
-        val annihilate: Boolean, val hasObjective: Boolean, val evade: Boolean, val retreat: Boolean,
-        /** нет контакта и ни одного его вооружённого в MARCH_SAFE от массы */
-        val marchNow: Boolean,
-        val stalled: Boolean,
-        /** он отходит, и это не рубка, в которой мы стоим: enemyRetreating && !(underTheirFire && theirMeleeIn) */
-        val hisRetreat: Boolean,
-        val outmatched: Boolean, val pushing: Boolean, val underFire: Boolean,
-        /** ни сомкнутой армии, ни COMMAND_MIN_FOES у руки */
-        val fewFoes: Boolean,
-        /** его вооружённые сомкнуты в кулак И мы уже позади по суммарным хитам (v352, см. fightNow) */
-        val enemyMassed: Boolean,
-        val posture: Posture, val postureSince: Int, val now: Int,
-        /** кандидат прошлого тика и тик, с которого он предлагается без перерыва (v250) */
-        val candidate: Posture?, val candidateSince: Int,
-        /** событие тика (прибор evt=, в гистерезис пока не входит — см. decide): наш крип погиб или флаг сменил владельца */
-        val event: Boolean,
-    )
-
     class Decision(
         val newPosture: Posture, val postureTakes: Boolean,
         /** постура после гистерезиса, до перезаписи режимом боя — применяется у решения (v241, v243) */
@@ -94,7 +74,7 @@ internal object Strategist {
     )
 
     /** Один вопрос о режиме командира: вход решения, признак «бой сейчас» и — для цепочки причин — уже выбранный режим. */
-    class ModeCase(val i: Inputs, val fightNow: Boolean) { var mode: CmdMode = CmdMode.RACE }
+    class ModeCase(val i: StrategyInputs, val fightNow: Boolean) { var mode: CmdMode = CmdMode.RACE }
 
     /** Счётчики трёх таблиц решения (прибор `reach t=`): постура, режим командира, причина режима. */
     val postureTally = Tally("posture")
@@ -103,7 +83,7 @@ internal object Strategist {
 
     /** ПРАВИЛА ПОСТУРЫ (v445): порядок списка = приоритет. Строка выигрывает — её действие называет постуру; условие истинно, а
      *  выиграла строка выше — `shadowed`: так видно, например, сколько тиков уклонение перекрыто целью-флагом. */
-    private val POSTURE_RULES: List<Row<Inputs, Posture>> by lazy { listOf<Row<Inputs, Posture>>(
+    private val POSTURE_RULES: List<Row<StrategyInputs, Posture>> by lazy { listOf<Row<StrategyInputs, Posture>>(
         Row("annihilate", { annihilate }) { Posture.ANNIHILATE },
         Row("flag", { hasObjective }) { Posture.FLAG },
         Row("evade", { evade }) { Posture.EVADE },
@@ -111,6 +91,11 @@ internal object Strategist {
         Row("hold", { true }) { Posture.HOLD },
     ) }
 
+    // РЕЖИМЫ КОМАНДИРА (v160, оператор: «командир должен оркестрировать всю игру»). Раздача клеток против его
+    // строя — это ОДИН режим, и все формы, на которых расширение окна падало (camp, roost, scatter, kite),
+    // просят другого: там враг строем не дерётся, а сидит на флагах, разбегается или держит дистанцию, и
+    // выигрывает не кулак, а счёт. Поэтому командир сперва называет РЕЖИМ, а уже режим решает, что делать
+    // ...и режим НАЗНАЧАЕТ постуру: командир решил драться — значит армия уничтожает, а не держит и не бежит
     /** РЕЖИМ КОМАНДИРА: поход → гонка при застое или его отходе → бой → гонка. */
     private val MODE_RULES: List<Row<ModeCase, CmdMode>> by lazy { listOf<Row<ModeCase, CmdMode>>(
         Row("march", { i.marchNow }) { CmdMode.MARCH },
@@ -126,13 +111,13 @@ internal object Strategist {
         Row("outmatched", { i.outmatched }) { "outmatched" },
         Row("stall", { i.stalled }) { "stall" },
         Row("retreat", { i.hisRetreat }) { "retreat" },
-        Row("push", { i.pushing }) { "push" },
-        Row("nofire", { !i.underFire }) { "nofire" },
+        Row("push", { pushing }) { "push" },
+        Row("nofire", { !i.underTheirFire }) { "nofire" },
         Row("few", { i.fewFoes }) { "few" },
         Row("posture", { true }) { "posture" },
     ) }
 
-    fun decide(i: Inputs): Decision {
+    fun decide(i: StrategyInputs): Decision {
         val newPosture = walk(POSTURE_RULES, i, postureTally).act(i)
         // ГИСТЕРЕЗИС ПОСТУРЫ (v181): держится не меньше POSTURE_HOLD тиков; раньше срока меняется только на RETREAT —
         // спасение не ждёт; EVADE срока ждёт (v183: изъятие для EVADE само рождало пилу с периодом POSTURE_HOLD)
@@ -153,9 +138,9 @@ internal object Strategist {
         // POSTURE_HOLD тиков подряд — это и минимальный срок постуры, потому что следующему кандидату нужно столько же.
         // Спасение (RETREAT) по-прежнему без срока; бой под огнём тоже: его ставит перезапись режимом FIGHT ниже
         val candSince = if (newPosture == i.candidate) i.candidateSince else i.now
-        val takes = newPosture == i.posture || escape || i.now - candSince >= POSTURE_HOLD
-        val pre = if (takes) newPosture else i.posture
-        val sincePre = if (takes && newPosture != i.posture) i.now else i.postureSince
+        val takes = newPosture == i.posturePrev || escape || i.now - candSince >= POSTURE_HOLD
+        val pre = if (takes) newPosture else i.posturePrev
+        val sincePre = if (takes && newPosture != i.posturePrev) i.now else i.postureSincePrev
         // РЕЖИМ КОМАНДИРА (v160): поход — врага рядом нет; гонка — затор или его отход вне рубки; бой — под его огнём,
         // его группа у руки, мы не наступаем и не бежим (v217: наступление режим боя не исключает — кулак нужен там,
         // где лечение не даёт добить, а признак «мы позади по размену» и есть !pushing … underFire)
@@ -175,7 +160,7 @@ internal object Strategist {
         // взят из того же живого замера, которым правило и обосновано: в победах в момент боя у нас 12 560 хитов
         // против его 5 719 — мы впереди вдвое и добиваем, в поражениях 8 133 против 9 935 — мы уже позади, и строй
         // проигранный размен не выправляет. Поэтому запрет действует только позади по хитам: впереди — бьём строем
-        val fightNow = !i.pushing && i.underFire && !i.fewFoes && !pre.withdrawing &&
+        val fightNow = !pushing && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
             !(i.enemyMassed && USE_NO_FIST_FIGHT)
         val case = ModeCase(i, fightNow)
         val mode = walk(MODE_RULES, case, modeTally).act(case)
@@ -658,7 +643,7 @@ internal fun lostRaceNow(view: ExchangeView): Boolean {
 
 internal fun planCapture(ctx: Ctx, step: Position?) {
     if (step == null) return
-    ctx.flags.firstOrNull { !it.ours && it.pos.x == step.x && it.pos.y == step.y }?.let { WorldState.plannedCaptures.add(it.id) }
+    ctx.flags.firstOrNull { !it.ours && it.pos.x == step.x && it.pos.y == step.y }?.let { WorldState.announceCapture(it.id) }
 }
 
 /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
@@ -1554,7 +1539,7 @@ internal class StanceWindows(private val ctx: Ctx, private val meas: ArmyMeasure
     // Здесь вопрос задан по КАЖДОМУ дерущемуся: есть ли свой лекарь в дальности лечения
     private val medsNow = ctx.armyHealers
     init {
-        for (c in strat.dec.combatArmy) {
+        for (c in strat.inp.combatArmy) {
             if (!hasWeapon(c) || meas.forces.armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 1 }) continue
             healGapN.n++
             if (medsNow.none { getRange(c, it) <= HEAL_RANGE }) healGap.n++
@@ -1574,7 +1559,7 @@ internal class StanceWindows(private val ctx: Ctx, private val meas: ArmyMeasure
     }
     // «их мили идут» (см. PRESS_CLOSING): дистанция их мили до наших вооружённых за окно терпения
     private val theirMeleeDist = meas.forces.combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
-        .minOfOrNull { e -> armedOf(strat.dec.combatArmy).minOfOrNull { getRange(e, it) } ?: 99 } ?: 99
+        .minOfOrNull { e -> armedOf(strat.inp.combatArmy).minOfOrNull { getRange(e, it) } ?: 99 } ?: 99
     init { if (meas.fight.contact) Memory.meleeDistHist.addLast(theirMeleeDist) else Memory.meleeDistHist.clear() }
     init { while (Memory.meleeDistHist.size > PRESS_PATIENCE + 1) Memory.meleeDistHist.removeFirst() }
     val theirMeleeClosing = Memory.meleeDistHist.size > PRESS_PATIENCE && Memory.meleeDistHist.first() - Memory.meleeDistHist.last() >= PRESS_CLOSING
@@ -1582,7 +1567,7 @@ internal class StanceWindows(private val ctx: Ctx, private val meas: ArmyMeasure
     // армий за окно терпения сократилась не меньше PRESS_CLOSING — атака; стоит — стоячий бой (см. standingNow). Признак
     // «его мили не вплотную» выключал расстановку ровно в боях с Coldkimchi (его мили лезут вплотную к стрелкам), а
     // «его мили не идут» (v43f) брал и остановившуюся атаку — центры армий отличают одно от другого
-    private val ourArmedC = centroidOf(armedOf(strat.dec.combatArmy).map { InfluenceMap.cell(it.x, it.y) })
+    private val ourArmedC = centroidOf(armedOf(strat.inp.combatArmy).map { InfluenceMap.cell(it.x, it.y) })
     private val theirArmedC = centroidOf(meas.forces.armedEnemies.map { InfluenceMap.cell(it.x, it.y) })
     init { if (meas.fight.contact && ourArmedC != null && theirArmedC != null) Memory.centreDistHist.addLast(getRange(ourArmedC, theirArmedC)) else Memory.centreDistHist.clear() }
     init { while (Memory.centreDistHist.size > PRESS_PATIENCE + 1) Memory.centreDistHist.removeFirst() }
@@ -1613,13 +1598,13 @@ internal class StanceWindows(private val ctx: Ctx, private val meas: ArmyMeasure
         if (meas.fight.contact) {
             // ...ПО ЖИВОЙ ATTACK (v452, пункт Д): «достаёт ли наш мили» — вопрос об ударе, и раздетый мили в знаменателе занижал долю
             // касания (у него — завышал симметрично, см. hisMelee ниже). Написание Б = meleeOnlyLive
-            val meleeN = strat.dec.combatArmy.count { meleeOnlyLive(it) }
-            val touched = strat.dec.combatArmy.count { meleeOnlyLive(it) && meas.forces.combatEnemies.any { e -> getRange(it, e) <= 1 } }
+            val meleeN = strat.inp.combatArmy.count { meleeOnlyLive(it) }
+            val touched = strat.inp.combatArmy.count { meleeOnlyLive(it) && meas.forces.combatEnemies.any { e -> getRange(it, e) <= 1 } }
             // ...и при НУЛЕ мили в ядре окно не трогается вовсе: иначе отряд, уведённый по этому же признаку, обнуляет
             // мили в строю, доля прыгает к единице, признак гаснет и отряд отзывается — качели через тик
             if (meleeN > 0) Memory.touchHist.addLast(100 * touched / meleeN)
             val hisMelee = meas.forces.combatEnemies.count { meleeOnlyLive(it) }
-            val hisTouched = meas.forces.combatEnemies.count { meleeOnlyLive(it) && strat.dec.combatArmy.any { a -> getRange(it, a) <= 1 } }
+            val hisTouched = meas.forces.combatEnemies.count { meleeOnlyLive(it) && strat.inp.combatArmy.any { a -> getRange(it, a) <= 1 } }
             if (hisMelee > 0) Memory.hisTouchHist.addLast(100 * hisTouched / hisMelee)
         } else { Memory.touchHist.clear(); Memory.hisTouchHist.clear() }
     }
@@ -1632,7 +1617,7 @@ internal class StanceWindows(private val ctx: Ctx, private val meas: ArmyMeasure
     // которую окно показывает вне контакта — ровно в те тики, когда ворота захвата и срабатывают
     init { if (Memory.touchHist.size >= TOUCH_WINDOW) touchShareLast = touchShare }
     init { if (Memory.hisTouchHist.size >= TOUCH_WINDOW) hisTouchShareLast = hisTouchShare }
-    private val stalemateOurNow = strat.dec.combatArmy.sumOf { it.hits }
+    private val stalemateOurNow = strat.inp.combatArmy.sumOf { it.hits }
     private val stalemateHisNow = meas.forces.combatEnemies.sumOf { it.hits }
     // ОКНО ПАТА ПЕРЕЖИВАЕТ МИГАНИЕ КОНТАКТА (v198). Окно очищалось на КАЖДОМ тике без контакта, а `contact` в
     // стоянке мигает — и в матче 3d9894, где 1700 тиков не погиб ни один крип ни у нас, ни у него, прибор дошёл
@@ -1677,15 +1662,15 @@ internal class StancePress(private val meas: ArmyMeasures, private val strat: Ar
     // либо у неё (Kero v2, Coldkimchi: в 2–3 и не бьют), либо далеко; подходящих строй ждёт — они входят в его фокус сами
     private val theirMeleeMid = meas.forces.combatEnemies.any { e ->
         InfluenceMap.profileOf(e).melee > 0.0 &&
-            (armedOf(strat.dec.combatArmy).minOfOrNull { getRange(e, it) } ?: 99).let { it > MELEE_HOLD_RANGE + 2 && it <= ENGAGE_RANGE }
+            (armedOf(strat.inp.combatArmy).minOfOrNull { getRange(e, it) } ?: 99).let { it > MELEE_HOLD_RANGE + 2 && it <= ENGAGE_RANGE }
     }
-    init { standoffTicks = if (meas.fight.contact && strat.dec.underTheirFire && !strat.dec.theirMeleeIn && !windows.theirMeleeClosing && !theirMeleeMid) standoffTicks + 1 else 0 }
+    init { standoffTicks = if (meas.fight.contact && strat.inp.underTheirFire && !strat.inp.theirMeleeIn && !windows.theirMeleeClosing && !theirMeleeMid) standoffTicks + 1 else 0 }
     init { pressing =  windows.blockOn && meas.fight.contact && !strat.push.leadHolds && (standoffTicks >= PRESS_PATIENCE || pressing) }
     val pressOn = pressing
     // «цель уходит» (см. PRESS_GIVEUP): за два тика прижима дистанция от наших мили до неё не сократилась
     init {
         if (windows.blockOn) {
-            val ourMelee = pureMeleeOf(strat.dec.combatArmy)
+            val ourMelee = pureMeleeOf(strat.inp.combatArmy)
             for (e in meas.forces.combatEnemies) {
                 val near = ourMelee.minByOrNull { getRange(e, it) } ?: continue
                 val d = getRange(e, near)
@@ -1712,19 +1697,6 @@ internal class StancePress(private val meas: ArmyMeasures, private val strat: Ar
 
 /** ПОДСТАДИЯ 3: признаки проигранного размена — по мощи и по счёту хитов; сам признак отхода посчитан мерами (`meas.breakOffNow`), здесь прибор расхождения. */
 internal class StanceBreakOff(private val meas: ArmyMeasures, private val strat: ArmyStrategy) {
-    // стрелки впереди (см. USE_RANGED_FRONT) — только против линии, которая СТОИТ: признак прижима и дистанция до центра
-    // врага за APPROACH_WINDOW не выросла. Уходящий (кайтер стенда, остаток) — прежний строй с мили впереди: стрелки во
-    // главе погони не догоняют никого, а мили за их спиной и подавно (m11 kite: уничтожение на 395-м → лидерство, m28
-    // farm+weak красный)
-    // КОМАНДИР ВНЕ БЛОКА СТРОЯ (v160): весь его расчёт стоял внутри `if (blockOn)`, а blockOn требует постуры
-    // ANNIHILATE, врагов в поле и отсутствия добивания — то есть командир молчал везде, кроме рубки, что бы ни
-    // говорил его собственный режим: замер показал mode=FIGHT в 150 строках лога при cmdTicks=26. Теперь он
-    // считается всегда и сам решает по режиму
-    // РЕЖИМЫ КОМАНДИРА (v160, оператор: «командир должен оркестрировать всю игру»). Раздача клеток против его
-    // строя — это ОДИН режим, и все формы, на которых расширение окна падало (camp, roost, scatter, kite),
-    // просят другого: там враг строем не дерётся, а сидит на флагах, разбегается или держит дистанцию, и
-    // выигрывает не кулак, а счёт. Поэтому командир сперва называет РЕЖИМ, а уже режим решает, что делать
-    // ...и режим НАЗНАЧАЕТ постуру: командир решил драться — значит армия уничтожает, а не держит и не бежит
     // РАЗМЕН, КОТОРЫЙ УЖЕ ПРОИГРАН, НАДО ПРЕКРАЩАТЬ (v185, разбор серии). Прибор разделил двадцать матчей начисто:
     // в ВОСЬМИ поражениях армия стояла в бою при мощи ниже 60 % от его от 31 до 94 % боевых тиков (410 тиков из
     // 512), в ОДИННАДЦАТИ победах из двенадцати — НОЛЬ таких тиков (3 из 236 по всей пачке). Против Coldkimchi это
@@ -1736,8 +1708,8 @@ internal class StanceBreakOff(private val meas: ArmyMeasures, private val strat:
     // контактных тиках, чтобы прибор назвал числом, как часто они расходятся: старый признак стоил ровно
     // столько же — два вызова powerOf, — поэтому цена замера нулевая
     private val outmatchedByPower =  meas.fight.contact && meas.forces.armedEnemies.isNotEmpty() && run {
-        val oursNow = ourPowerOf(strat.dec.combatArmy, meas.forces.combatEnemies)
-        val theirsNow = enemyPowerOf(meas.forces.combatEnemies, strat.dec.combatArmy)
+        val oursNow = ourPowerOf(strat.inp.combatArmy, meas.forces.combatEnemies)
+        val theirsNow = enemyPowerOf(meas.forces.combatEnemies, strat.inp.combatArmy)
         theirsNow > 0.0 && oursNow < theirsNow * BREAK_OFF_RATIO
     }
     // «мы теряем хиты, а он почти нет» — то же отношение BREAK_OFF_RATIO, только по фактическим потерям
@@ -1759,9 +1731,6 @@ internal class StanceBreakOff(private val meas: ArmyMeasures, private val strat:
 
 /** ПОДСТАДИЯ 4: причина режима командира и применение окончательной постуры (`Strategist.decide` -> `postureFinal`). */
 internal class StanceApply(private val meas: ArmyMeasures, private val strat: ArmyStrategy) {
-    // признак для режима боя при наступлении (см. ниже): мы позади по размену хитов, то есть его лечение
-    // перекрывает наш урон — ровно тот случай, ради которого концентрация и нужна
-    private val healingWins = enemyDamageTaken < ourDamageTaken
     init { cmdWhy.bump(strat.dec.cmdWhyNow) }
     init {
         cmdWhyN.n++
@@ -1825,7 +1794,7 @@ internal class StanceGauges(private val meas: ArmyMeasures, private val strat: A
     init {
         if (posture == Posture.HOLD) {
             gatherHold.n++
-            val shooters = rangedOf(strat.dec.combatArmy)
+            val shooters = rangedOf(strat.inp.combatArmy)
             if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread.n++
         }
     }
@@ -1836,7 +1805,7 @@ internal class StanceGauges(private val meas: ArmyMeasures, private val strat: A
     init {
         if (posture == Posture.ANNIHILATE) {
             gatherAnnAll.n++
-            val sh = rangedOf(strat.dec.combatArmy)
+            val sh = rangedOf(strat.inp.combatArmy)
             if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn.n++
         }
     }
@@ -1847,8 +1816,8 @@ internal class StanceGauges(private val meas: ArmyMeasures, private val strat: A
             // Смешивать их нельзя ровно потому, что дефект живёт в отходе: `evadeTo` почти всегда есть, и
             // общий счётчик показал бы 98 % там, где у отхода ноль
             if (if (posture == Posture.RETREAT) strat.dec.retreatTo != null else strat.obj.evadeTo != null) retrWithPoint.n++
-            if (strat.dec.underTheirFire) retrUnderFire.n++
-            for (c in strat.dec.combatArmy) {
+            if (strat.inp.underTheirFire) retrUnderFire.n++
+            for (c in strat.inp.combatArmy) {
                 if (!hasWeapon(c)) continue
                 standTicks.n++
                 if (meas.forces.combatEnemies.any { getRange(c, it) <= (if (hasRanged(c)) RANGED_RANGE else 1) }) standFire.n++
@@ -1901,7 +1870,8 @@ internal class ArmyStrategy(ctx: Ctx, meas: ArmyMeasures) {
     val push = StrategyPush(ctx, meas, packs, thr)
     val contact = StrategyContact(ctx, meas, packs)
     val obj = StrategyObjective(ctx, meas, packs, thr, detach, push, contact)
-    val dec = StrategyDecide(ctx, meas, packs, thr, contact, obj)
+    val inp = StrategyInputs(ctx, meas, thr, contact, obj)
+    val dec = StrategyDecide(ctx, meas, packs, thr, obj, inp)
     val threats = StrategyThreats(ctx, meas)
 }
 
@@ -2410,8 +2380,10 @@ internal class StrategyObjective(private val ctx: Ctx, private val meas: ArmyMea
     init { cpuMark("a.evade") }
 }
 
-/** ПОДСТАДИЯ 7: приборы прогноза, входы, `Strategist.decide`, память, точка отхода, пост, печать, применение постуры. */
-internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasures, private val packs: StrategyPacks, private val thr: StrategyThresholds, private val contact: StrategyContact, private val obj: StrategyObjective) {
+/** ПОДСТАДИЯ 7: приборы прогноза и ВХОДЫ решения. Предмет таблиц `Strategist.decide` — эта подстадия: строка правила читает её поле,
+ *  поэтому новый вход — поле здесь и строка правила. Поля входов стоят в порядке прежнего списка параметров (порядок вычисления тот же);
+ *  `pushing` решение читает само — это величина верха пакета, записанная подстадией 4 в этом же тике. */
+internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasures, private val thr: StrategyThresholds, private val contact: StrategyContact, private val obj: StrategyObjective) {
     // ПРИБОР ДЕЛЬТЫ ПРОГНОЗА (v397). Решение «драться ли с кулаком» стоит на СТАТИЧЕСКОЙ мере мощи, потому что
     // прогноз `simulate` возвращает АБСОЛЮТНУЮ разность мощей (наша минус его) — при живой армии она положительна
     // всегда, и потому «не уходит в минус ни разу». Но величина, отвечающая на вопрос «выигрываем ли мы размен», —
@@ -2449,10 +2421,10 @@ internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasur
             }
         }
     }
-    private val evade = EVADE.c("evadePoint", obj.evadeTo != null)
+    val evade = EVADE.c("evadePoint", obj.evadeTo != null)
     init { if (!evade) evadeTarget = null }
     // ...и в выживании отход к ТОЧКЕ не берётся: стоящую у точки армию он добивает (v223, вторая редакция)
-    private val retreat = RETREAT.c("armedFoes", meas.forces.armedEnemies.isNotEmpty()) && RETREAT.c("notAnnihilate", !contact.annihilate) && RETREAT.c("noObjective", obj.objective == null) && RETREAT.c("notEvade", !evade) && RETREAT.c("enemyNear", meas.fight.enemyNear) && RETREAT.c("weaker", thr.weaker) && RETREAT.c("feasible", meas.fight.retreatFeasible) 
+    val retreat = RETREAT.c("armedFoes", meas.forces.armedEnemies.isNotEmpty()) && RETREAT.c("notAnnihilate", !contact.annihilate) && RETREAT.c("noObjective", obj.objective == null) && RETREAT.c("notEvade", !evade) && RETREAT.c("enemyNear", meas.fight.enemyNear) && RETREAT.c("weaker", thr.weaker) && RETREAT.c("feasible", meas.fight.retreatFeasible) 
     // ---- меры, которые читает решение о режиме командира (подняты сюда в v241: одно решение — одни входы) ----
     // боеспособные: вооружённые и лекари — фокус, контакт и местные группы считаются по ним, раненые не в счёт
     val combatArmy = ctx.army.filter { combatant(it) }
@@ -2478,6 +2450,60 @@ internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasur
     // сколько его вооружённых стоит у нашей армии: группа — дело командира, одиночка — нет
     private val foesAtHand = meas.forces.armedEnemies.count { e -> meas.fight.massArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
 
+    // ---- входы решения: каждое поле читает строка таблицы `Strategist.decide` ----
+    val annihilate = contact.annihilate
+    val hasObjective = obj.objective != null
+    /** нет контакта и ни одного его вооружённого в MARCH_SAFE от массы */
+    val marchNow = !meas.fight.contact && meas.forces.armedEnemies.none { e -> meas.fight.massArmy.any { getRange(e, it) <= MARCH_SAFE } }
+    val stalled = meas.chase.stalled
+    /** он отходит, и это не рубка, в которой мы стоим: enemyRetreating && !(underTheirFire && theirMeleeIn) */
+    val hisRetreat = enemyRetreating && !(underTheirFire && theirMeleeIn)
+    val outmatched = outmatchedTicks >= BREAK_OFF_TICKS
+    /** ни сомкнутой армии, ни COMMAND_MIN_FOES у руки */
+    val fewFoes = !(meas.forces.enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES)
+    /** его вооружённые сомкнуты в кулак И мы уже позади по суммарным хитам (v352, см. fightNow) */
+    // ...И «ПОЗАДИ» МЕРЯЕТСЯ МОЩЬЮ, А НЕ ХИТАМИ (v382). Гейт строевого боя (v352) читал сумму хитов, и разбор 5
+    // реплеев против топ-3 показал, насколько это тонко: худшая ПОБЕДА отличается от лучшего ПОРАЖЕНИЯ на 282
+    // хита — 1,8 % армии, — а решение по знаку запирает нас в гонке на весь бой. Хиты не знают ни оружия, ни
+    // лечения: крип с выбитыми стволами весит столько же, сколько целый. Ланчестеровская мощь знает (powerOf
+    // считает живые части и досягаемость за POWER_REACH_TICKS), и она уже служит мерой во всех прочих решениях
+    // бота — от пары за флагом до бюджета погони. Прогноз `Forecast.simulate` для этого не годится: он не уходит
+    // в минус НИ РАЗУ (см. комментарий у simPending), то есть на вопрос «выигрываем ли размен» всегда отвечает да
+    // ...и у порога есть ЗАПАС (v383): по знаку решение запирает армию в гонке от любого минимального отставания,
+    // а разбор показал, что дерутся как раз победы — строевой бой занимает 8–10 замеров из 13 в выигранных
+    // матчах против 0–2 в проигранных, и худшая победа отстаёт от лучшего поражения всего на 1,8 % армии.
+    // Отказ от строя стоит брать, когда мы отстаём ЗАМЕТНО, а не на волос
+    // ...И ОТКАЗ ОТ СТРОЯ СНИМАЕТСЯ, КОГДА ПРОГНОЗ ОБЕЩАЕТ ВЫИГРАННЫЙ РАЗМЕН (v398). Мера мощи статична: она
+    // знает состав армий, но не знает, чем кончится ТЕКУЩИЙ обмен, — а исход решают первые шесть-пятнадцать
+    // тиков размена (разбор 55 матчей `MetalicaX#9` и 16 `#13`: различителя до контакта нет вовсе, 26 %
+    // случайных перемешиваний меток разделяют данные лучше настоящего исхода). Прогноз это знает и меряет:
+    // `simulate` возвращает АБСОЛЮТНУЮ разность мощей, которая при живой армии положительна всегда — оттого
+    // «не уходит в минус ни разу», — но её ДЕЛЬТА за прокат отвечает ровно на вопрос «выигрываем ли мы
+    // размен». Прибор v397 показал, что дельта различает исход: доля тиков с положительной дельтой 0,59 в
+    // победах против 0,30 в поражениях, при том что действующее решение по мощи расходится с прогнозом в
+    // 35-60 % тиков. ⚠️ И это НЕ четвёртая проба прогноза вслед за отвергнутыми: v244/v246 ставили прогноз в
+    // опасность клетки, v394 в пробиваемость цели, v395 в сходимость стволов, и все три меняли ОЦЕНКУ, не
+    // меняя того, кто и куда идёт, — оценка уходила вперёд исполнения. Здесь прогноз питает решение, которое
+    // тот же командир и ИСПОЛНЯЕТ раздачей клеток в том же тике. Запрет остаётся, пока против нас обе меры
+    val enemyMassed = Signals.enemyMassedSignal && Memory.simdShare <= SIMD_FIGHT_SHARE &&
+        ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * FIGHT_POWER_ROOM
+    // прежняя постура: применение решения (подстадия 8) перепишет `posture` и `postureSince`, решение читает их ДО записи
+    val posturePrev = posture
+    val postureSincePrev = postureSince
+    val now = getTicks()
+    /** кандидат прошлого тика и тик, с которого он предлагается без перерыва (v250) */
+    val candidate = Memory.postureCandidate
+    val candidateSince = Memory.candidateSince
+    /** событие тика (прибор evt=, в гистерезис пока не входит — см. decide): наш крип погиб или флаг сменил владельца */
+    // событие — прибор evt= (в гистерезис пока не входит, см. Strategist.decide): гибель своего (по числу живых,
+    // не по составу армии — отряжённый в бегуны не потеря) и смена владельца флага. Замер v242 на стенде: события
+    // в гистерезисе — любое изменение контакта 635 за матч, появившийся контакт 126, гибель + флаг 71 — и каждое
+    // роняло scatter m34 (24 326:23 996 → 24 305:24 317 → 19 010:24 312) при 34/34/19 сценариях с иным счётом
+    val event = ctx.myCreeps.size < Memory.armyPrev || WorldState.flagFlipNow
+}
+
+/** ПОДСТАДИЯ 8: `Strategist.decide`, память, точка отхода, пост, печать, применение постуры. */
+internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasures, private val packs: StrategyPacks, private val thr: StrategyThresholds, private val obj: StrategyObjective, private val inp: StrategyInputs) {
     // ОТВЕРГНУТО стендом (v58-опыт): снимать простой, когда паритет не пускает ни к одному флагу (матч 133: «марш не сдвинулся —
     // флаги до 479» при 1,32 к лагерю на D5, obj=- все 300 тиков, 18 против 7 в тик). На стенде m31 camp снятый на 536-м простой
     // дал 700 тиков ANNIHILATE pushing при 3679 против 1209 без единого убитого (центры армий в одной клетке, reach 0/5) —
@@ -2485,44 +2511,7 @@ internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasur
     // сближается — открытая находка матчей 70 и 133
     // РЕШЕНИЕ О СОСТОЯНИИ АРМИИ — ОДНО (v241, этап 6): постура, её гистерезис, режим командира и перезапись постуры
     // режимом боя считаются вместе в Strategist.decide; здесь применяется то, что относится к постуре, ниже — режим
-    val decision = Strategist.decide(Strategist.Inputs(
-        annihilate = contact.annihilate, hasObjective = obj.objective != null, evade = evade, retreat = retreat,
-        marchNow = !meas.fight.contact && meas.forces.armedEnemies.none { e -> meas.fight.massArmy.any { getRange(e, it) <= MARCH_SAFE } },
-        stalled = meas.chase.stalled, hisRetreat = enemyRetreating && !(underTheirFire && theirMeleeIn),
-        outmatched = outmatchedTicks >= BREAK_OFF_TICKS, pushing = pushing, underFire = underTheirFire,
-        fewFoes = !(meas.forces.enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES),
-        // ...И «ПОЗАДИ» МЕРЯЕТСЯ МОЩЬЮ, А НЕ ХИТАМИ (v382). Гейт строевого боя (v352) читал сумму хитов, и разбор 5
-        // реплеев против топ-3 показал, насколько это тонко: худшая ПОБЕДА отличается от лучшего ПОРАЖЕНИЯ на 282
-        // хита — 1,8 % армии, — а решение по знаку запирает нас в гонке на весь бой. Хиты не знают ни оружия, ни
-        // лечения: крип с выбитыми стволами весит столько же, сколько целый. Ланчестеровская мощь знает (powerOf
-        // считает живые части и досягаемость за POWER_REACH_TICKS), и она уже служит мерой во всех прочих решениях
-        // бота — от пары за флагом до бюджета погони. Прогноз `Forecast.simulate` для этого не годится: он не уходит
-        // в минус НИ РАЗУ (см. комментарий у simPending), то есть на вопрос «выигрываем ли размен» всегда отвечает да
-        // ...и у порога есть ЗАПАС (v383): по знаку решение запирает армию в гонке от любого минимального отставания,
-        // а разбор показал, что дерутся как раз победы — строевой бой занимает 8–10 замеров из 13 в выигранных
-        // матчах против 0–2 в проигранных, и худшая победа отстаёт от лучшего поражения всего на 1,8 % армии.
-        // Отказ от строя стоит брать, когда мы отстаём ЗАМЕТНО, а не на волос
-        // ...И ОТКАЗ ОТ СТРОЯ СНИМАЕТСЯ, КОГДА ПРОГНОЗ ОБЕЩАЕТ ВЫИГРАННЫЙ РАЗМЕН (v398). Мера мощи статична: она
-        // знает состав армий, но не знает, чем кончится ТЕКУЩИЙ обмен, — а исход решают первые шесть-пятнадцать
-        // тиков размена (разбор 55 матчей `MetalicaX#9` и 16 `#13`: различителя до контакта нет вовсе, 26 %
-        // случайных перемешиваний меток разделяют данные лучше настоящего исхода). Прогноз это знает и меряет:
-        // `simulate` возвращает АБСОЛЮТНУЮ разность мощей, которая при живой армии положительна всегда — оттого
-        // «не уходит в минус ни разу», — но её ДЕЛЬТА за прокат отвечает ровно на вопрос «выигрываем ли мы
-        // размен». Прибор v397 показал, что дельта различает исход: доля тиков с положительной дельтой 0,59 в
-        // победах против 0,30 в поражениях, при том что действующее решение по мощи расходится с прогнозом в
-        // 35-60 % тиков. ⚠️ И это НЕ четвёртая проба прогноза вслед за отвергнутыми: v244/v246 ставили прогноз в
-        // опасность клетки, v394 в пробиваемость цели, v395 в сходимость стволов, и все три меняли ОЦЕНКУ, не
-        // меняя того, кто и куда идёт, — оценка уходила вперёд исполнения. Здесь прогноз питает решение, которое
-        // тот же командир и ИСПОЛНЯЕТ раздачей клеток в том же тике. Запрет остаётся, пока против нас обе меры
-        enemyMassed = Signals.enemyMassedSignal && Memory.simdShare <= SIMD_FIGHT_SHARE &&
-            ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * FIGHT_POWER_ROOM,
-        posture = posture, postureSince = postureSince, now = getTicks(),
-        candidate = Memory.postureCandidate, candidateSince = Memory.candidateSince,
-        // событие — прибор evt= (в гистерезис пока не входит, см. Strategist.decide): гибель своего (по числу живых,
-        // не по составу армии — отряжённый в бегуны не потеря) и смена владельца флага. Замер v242 на стенде: события
-        // в гистерезисе — любое изменение контакта 635 за матч, появившийся контакт 126, гибель + флаг 71 — и каждое
-        // роняло scatter m34 (24 326:23 996 → 24 305:24 317 → 19 010:24 312) при 34/34/19 сценариях с иным счётом
-        event = ctx.myCreeps.size < Memory.armyPrev || WorldState.flagFlipNow))
+    val decision = Strategist.decide(inp)
     init { Memory.contactPrev = meas.fight.contact }
     init { Memory.armyPrev = ctx.myCreeps.size }
     init { Memory.postureCandidate = decision.candidate }
@@ -2589,7 +2578,7 @@ internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasur
     val cmdWhyNow = decision.cmdWhy
 }
 
-/** ПОДСТАДИЯ 8: угроза, рейдер, охота; чистка таблиц. Идёт ПОСЛЕ печати постуры: та читает `huntingThreat` прошлого тика. */
+/** ПОДСТАДИЯ 9: угроза, рейдер, охота; чистка таблиц. Идёт ПОСЛЕ печати постуры: та читает `huntingThreat` прошлого тика. */
 internal class StrategyThreats(private val ctx: Ctx, private val meas: ArmyMeasures) {
     // ---- общие цели ----
     val centroid = ctx.ourCentroid

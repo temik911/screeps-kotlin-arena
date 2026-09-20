@@ -64,8 +64,7 @@ internal class FlagInfo(val flag: ScoreFlag, val mine: Boolean?, val type: Strin
 
 /** СБОРКА МИРА (v257, этап 10; начало tickBody): сброс тиковых кэшей, крипы обеих сторон, дом, флаги с эффектами и счётом, раздел армии и бегунов, препятствия, поля влияния, матрицы опасности, карта расстояний, Ctx, прибытие врага. Перенесено дословно. */
 internal class Ctx() {
-    init { BodyMemo.bodyWeightNow.clear() }
-    init { BodyMemo.liveMovesNow.clear() }
+    init { BodyMemo.reset() }
     init { Executor.clear() }
     init { WorldState.flagFlipNow = false }
     init { bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick) }
@@ -1285,7 +1284,7 @@ internal var bfsMaxTick = 0
 /** Окно прибора `bfs t=` снято печатью — максимумы начинаются заново. Сбрасывает владелец: у обоих полей один файл-писатель. */
 internal fun bfsWindowDone() { bfsMaxTick = 0; bfsMaxCost = 0.0 }
 
-/** СОСТОЯНИЕ МИРА (v459, второй шаг архитектуры, этап 6): то, что пишет мир тика и читают стадии выше, — как есть. `plannedCaptures` чистит мир, а пополняет стратег: объявлен у нижнего из двух писателей, иначе чистка была бы ребром вверх. */
+/** СОСТОЯНИЕ МИРА (v459, второй шаг архитектуры, этап 6): то, что пишет мир тика и читают стадии выше, — как есть. `plannedCaptures` чистит мир, а пополняет стратег — операцией владельца [announceCapture]: объявлен у нижнего из двух, иначе чистка была бы ребром вверх. */
 internal object WorldState {
     internal val disarmedFoe = HashSet<String>()
     internal val arrivalById = HashMap<String, Int>()
@@ -1294,6 +1293,8 @@ internal object WorldState {
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
      *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
     internal val plannedCaptures = HashSet<String>()
+    /** Операция владельца: захват этого флага объявлен на этот тик (зовёт `planCapture` стратега). */
+    internal fun announceCapture(flagId: String) { plannedCaptures.add(flagId) }
     // ---------- счёт ----------
     internal var ourRate = 0
     internal var enemyRate = 0

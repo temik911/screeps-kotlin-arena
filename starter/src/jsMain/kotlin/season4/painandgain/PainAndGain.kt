@@ -204,7 +204,7 @@ object PainAndGain {
         cpuMark("block")
         rotateByFocus(ctx.army, meas.forces.combatEnemies)
         // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)
-        stepOutWounded(ctx.army, targ.zones.reachCells, strat.dec.enemyRetreating || !TacticianState.huntsWounded)
+        stepOutWounded(ctx.army, targ.zones.reachCells, strat.inp.enemyRetreating || !TacticianState.huntsWounded)
         armyCommand(ctx, meas, strat, targ, stanceOut)
         cpuMark("command")
         orderAudit(ctx, meas, strat, targ)

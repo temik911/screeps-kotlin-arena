@@ -721,7 +721,7 @@ internal class Deal(
             // из первых — поставленных вплотную к теряющему хиты; снимается ДО раздачи — насыщение меняет режим следующему
             val fireMode = !met && rec.need.deliveryFireMode(c, living(army))
             rec.hfireAll.n++; if (fireMode) rec.hfireN.n++
-            val ok = met || placeScored(c, 2, intentOf(c)).also { placed ->
+            if (!met) placeScored(c, 2, intentOf(c)).also { placed ->
                 if (placed) out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
             }
             // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
