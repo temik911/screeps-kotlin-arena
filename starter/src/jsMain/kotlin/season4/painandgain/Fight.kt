@@ -441,7 +441,7 @@ internal fun pinnedAt(p: Position, foe: Creep, ours: Set<Int>, hisStuck: Set<Int
  */
 internal class DealRecord {
     val need = InfluenceMap.HealNeed()
-    val tally = Tally("pass", sequence = true)
+    val tally = Tally("pass", sequence = true, register = false)
     /** Приборы записи (Gauges.kt): объявление ОДНО — здесь; близнец матча заводится сам, строка `t=` печатает его по имени поля. */
     val g = GaugeSet()
     /** ...и какой проход раздачи командира сколько клеток назначил (перепись `rung t=`, поле `pass=`). */
@@ -483,8 +483,7 @@ private val dealGaugesDeclared = DealRecord().also {
  *  перечислял все поля записи руками — четвёртый список тех же имён (запись, влив, члены `PainAndGain`, печать). */
 internal fun mergeDeal(rec: DealRecord) {
     Gauges.absorb(rec.g)
-    fightTally.fitTags(rec.tally.tags)
-    for (i in rec.tally.on.indices) { fightTally.on[i] += rec.tally.on[i]; fightTally.won[i] += rec.tally.won[i]; fightTally.idle[i] += rec.tally.idle[i] }
+    fightTally.absorb(rec.tally)
 }
 
 internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,

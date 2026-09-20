@@ -22,7 +22,11 @@ internal class Row<F, R>(val tag: String, val guard: F.() -> Boolean, val act: F
  * kite и wall»); `on = 0` на всём гейте и всех живых сериях — условие ни разу не было истинно. Массивы, а не таблицы:
  * чинить после оборванного тика нечего.
  */
-internal class Tally(val name: String, val sequence: Boolean = false) {
+internal class Tally(val name: String, val sequence: Boolean = false, register: Boolean = true) {
+    // таблица регистрирует свой счётчик сама (v455): строку `reach t=` печатает раскладка имён в Instruments.kt, а не два ручных
+    // списка счётчиков. Счётчик записи раздачи (`register = false`) — не таблица матча: он вливается в одноимённый ([absorb])
+    init { if (register) tallies.add(this) }
+
     var tags: List<String> = emptyList()
     var on = IntArray(0)
     var won = IntArray(0)
@@ -42,11 +46,24 @@ internal class Tally(val name: String, val sequence: Boolean = false) {
         tags = names; on = IntArray(names.size); won = IntArray(names.size); idle = IntArray(names.size)
     }
 
+    /** Влить счётчики записи [rec] той же таблицы (выбранная раздача тика) в счётчики матча. */
+    fun absorb(rec: Tally) {
+        fitTags(rec.tags)
+        for (i in rec.on.indices) { on[i] += rec.on[i]; won[i] += rec.won[i]; idle[i] += rec.idle[i] }
+    }
+
     /** `имя=тег:won/true/shadowed,…` — в порядке таблицы (порядок и есть приоритет), нулевые строки тоже: они и нужны. */
     fun print(): String = "$name=" + tags.indices.joinToString(",") {
         "${tags[it]}:${won[it]}/${on[it]}/${if (sequence) idle[it] else on[it] - won[it]}"
     }
 }
+
+/** Счётчики таблиц матча в порядке появления (список, а не словарь: чинить после оборванного тика нечего). Порядок печати задаёт
+ *  раскладка `REACH_LINE` в Instruments.kt; здесь — только «какие есть». */
+internal val tallies = ArrayList<Tally>()
+
+/** Счётчик таблицы по её имени в приборе `reach`. */
+internal fun tallyOf(name: String): Tally = tallies.first { it.name == name }
 
 /** Обходчик, один на все таблицы: первая строка с истинным условием выигрывает — семантика прежнего `when`. Порядок списка —
  *  приоритет, другого описания приоритета нет; последняя строка таблицы замыкающая (`{ true }`).

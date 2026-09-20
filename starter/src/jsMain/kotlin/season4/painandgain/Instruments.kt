@@ -387,7 +387,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
         // ...и ТА ЖЕ ПЕРЕПИСЬ ПО ПРЕДЛОЖЕНИЯМ (v252, этап 9): «задание отряда . терм» и приоритет; сумма обязана совпасть с
         // суммой rung — оба счёта растут один раз на крипа армии за тик
         // ДОСТИЖИМОСТЬ ПО СТРОКАМ ТАБЛИЦ (v444, прибор `reach t=`, см. Tables.kt): тег:выиграла/условие истинно/перекрыта порядком
-        println("reach t=${getTicks()}: ${ladderTally.print()} ${stepsTally.print()} ${captureTally.print()} ${fightTally.print()} ${Strategist.postureTally.print()} ${Strategist.modeTally.print()} ${Strategist.whyTally.print()} ${pushTally.print()} err=${ladderTally.err + stepsTally.err + Strategist.postureTally.err + Strategist.modeTally.err + Strategist.whyTally.err + pushTally.err}")
+        println("reach t=${getTicks()}: " + REACH_LINE.joinToString(" ") { tallyOf(it).print() } + " err=${REACH_LINE.sumOf { tallyOf(it).err }}")
         println("tac t=${getTicks()}: mt=" + tacCount.shown() +
             " prio=" + prioCount.shown() +
             " sum=${prioCount.sum()}")
@@ -424,6 +424,11 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
     return PrintTickOut(
     )
 }
+
+/** РАСКЛАДКА СТРОКИ `reach t=` (v455): таблицы решений по именам их счётчиков, в порядке печати. Таблица регистрирует счётчик сама
+ *  (`Tally("имя")`, Tables.kt) — новая таблица здесь называется один раз. `err` — сумма по всем: у последовательностей (`gate`,
+ *  `pass`) полного обхода нет, и их `err` всегда ноль. */
+internal val REACH_LINE = listOf("rung", "step", "gate", "pass", "posture", "mode", "cmdwhy", "push")
 
 /** То, что вычисляемым полям строки `t=` нужно от тика: мир, память тика и мощь сторон. Ставится перед печатью строки. */
 internal class TickView(val bw: BuildWorldOut, val rem: RememberTickOut, val ours: Double, val theirs: Double)
