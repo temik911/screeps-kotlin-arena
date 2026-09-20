@@ -314,7 +314,7 @@ private fun PainAndGain.declareLine() {
     // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
-    Gauges.computed("gsafe", 1) { "$groupDmgWindow" }
+    Gauges.computed("gsafe", 1) { "${Signals.groupDmgWindow}" }
     Gauges.computed("ledgerw") { "$ledgerWindow/$ourLostWindow/$hisLostWindow" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
@@ -329,8 +329,8 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("simd") { "${(simdSum * 100).toInt()}/$simdTicks/$simdPos/$simdDisagree" }
     Gauges.computed("hstill") { "${InfluenceMap.wardsUnderStill}/${InfluenceMap.wardsUnderRanged}" }
     Gauges.computed("score") { "${ourScore.toInt()}/${enemyScore.toInt()}" }
-    Gauges.computed("rate") { "$ourRate/$enemyRate" }
-    Gauges.computed("behind") { "$behindOnScore" }
+    Gauges.computed("rate") { "${WorldState.ourRate}/${WorldState.enemyRate}" }
+    Gauges.computed("behind") { "${WorldState.behindOnScore}" }
     Gauges.computed("passive") { "${tickView.ctx.passiveEnemy}" }
     Gauges.computed("flags") { "${flagsSummary(tickView.ctx.flags)}" }
     Gauges.computed("massed") { "$kiteMassed" }
@@ -341,7 +341,7 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("posture") { "$posture" }
     Gauges.computed("obj") { "${objectiveFlagId?.let { id -> tickView.ctx.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"}" }
     Gauges.computed("hunt@2") { "$huntingThreat" }
-    Gauges.computed("rush") { "$unflaggedRushNow" }
+    Gauges.computed("rush") { "${Signals.unflaggedRushNow}" }
     Gauges.computed("weak") { "$outmatchedTicks" }
     Gauges.computed("touch") { "${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()}" }
     Gauges.computed("touchl") { "${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()}" }

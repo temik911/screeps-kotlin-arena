@@ -132,21 +132,11 @@ object PainAndGain {
 
 
     internal var approachRate = 0.0
-    internal var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
-    internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
-    internal var approachingNow = false                    // та же, но по его подходу, без безфлагового броска (v284, см. captureBlock)
-    internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
-    internal var enemyMassedSignal = false
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
     internal var ledgerWindow = 0
     internal var ourLostWindow = 0
     internal var hisLostWindow = 0
 
-    // ---------- счёт ----------
-    internal var ourRate = 0
-    internal var enemyRate = 0
-    /** По прогнозу (счёт + темп × остаток) мы проигрываем: очки важнее силы (см. captureAllowed). */
-    internal var behindOnScore = false
 
 
 
@@ -163,7 +153,7 @@ object PainAndGain {
     private fun repairAfterAbort() {
         abortTicks.n++
         var maps = 0; var sets = 0; var entries = 0
-        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges, Orders, FireBook, Wall, StrategistState, WorldState, TacticianState, MapDump)) {
+        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges, Orders, FireBook, Wall, StrategistState, WorldState, TacticianState, MapDump, Signals)) {
             val r = AbortRepair.repairFields(owner)
             maps += r.maps; sets += r.sets; entries += r.entries
         }
@@ -240,13 +230,9 @@ object PainAndGain {
 
 
     internal var cmdMode = CmdMode.MARCH
-    /** Событие этого тика для стратега (v242): флаг сменил владельца — считается при сборе флагов, до решения. */
-    internal var flagFlipNow = false
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     internal var fightOnNow = false
-    internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
     internal var coreContactNow = false                    // v315: контакт массы армии (а не всякий выстрел за окно)
-    internal var groupDmgWindow = 0
     /** Размен идёт прямо сейчас (v221, см. exchangeLive) — для гейта захвата, который зовётся из `runRunners`
      *  раньше `runArmy` и потому читает окно прошлого тика. */
     internal var exchangeLiveNow = false

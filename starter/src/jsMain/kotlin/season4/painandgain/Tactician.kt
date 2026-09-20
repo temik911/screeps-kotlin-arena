@@ -137,7 +137,7 @@ internal class ArmyTick(
  * Так его огонь переходит с одного на другого, и ни один не раздевается — его же цикл. Пока правило не его — ротация по
  * фокусу снимается, прежняя (ROTATE_OUT) остаётся. Новых чисел нет: дальности — движка, окна — существующие.
  */
-internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
+internal fun rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
     val live = livingCombatants(army)
     // ПРЕДСКАЗАТЕЛЬ ТОЧНЕЕ (v276, разбор v275 по реплеям: предсказатель угадывал 64,8 % против 100 % его правила). Три
     // причины и три поправки: кандидаты его стволов — ВСЕ наши, и раздетые тоже (он их бьёт, а они выпадали из «живых»);
@@ -185,7 +185,7 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     // ...и не в штурме, к которому нас вынуждает гонка очков (v295): отставая, мы обязаны брать его флаги, и в штурме лекари
     // идут за бойцами, а раненые не выходят — стенд match31:camp (лагерь бьёт наименьшие хиты и держит центр) при лекарях
     // позади проигрывал по очкам 23 934 : 24 002; ●ω<♥♪#6 флагов до 1500-го тика не берёт, и штурмовать его гонка не велит
-    TacticianState.huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN && !behindOnScore
+    TacticianState.huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN && !WorldState.behindOnScore
     val healersLive = live.any { healerOnly(it) }
     val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
     if (!fracRules) {
@@ -683,7 +683,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         // ...и «вне боя» здесь — КОНТАКТ МАССЫ АРМИИ, а не всякий выстрел за окно (v315): `fightOnNow` держится
         // двадцать тиков после любого выстрела, а фермер стреляет по одиночкам весь матч — лекарь не выходил к
         // хранителю почти никогда, и тот сходил с флага по хитам 6–11 раз за матч
-        val medic = if (!HEAL_MATE.c("medic.pairsMode", t.pag.groupSafe) || !HEAL_MATE.c("medic.noCoreContact", !t.pag.coreContactNow)) null else run {
+        val medic = if (!HEAL_MATE.c("medic.pairsMode", Signals.groupSafe) || !HEAL_MATE.c("medic.noCoreContact", !t.pag.coreContactNow)) null else run {
             val medics = ctx.army.filter { healerOnly(it) && canMove(it) }
             if (!HEAL_MATE.c("medic.twoMedics", medics.size >= 2)) return@run null
             // ...и подопечный — не только хранитель из армии, но и ДЕРЖАТЕЛЬ-БЕГУН на нашем флаге (v334): против

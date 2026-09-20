@@ -67,7 +67,7 @@ internal class Ctx(private val pag: PainAndGain) {
     init { BodyMemo.bodyWeightNow.clear() }
     init { BodyMemo.liveMovesNow.clear() }
     init { Executor.clear() }
-    init { pag.flagFlipNow = false }
+    init { WorldState.flagFlipNow = false }
     init { bfsMaxTick = maxOf(bfsMaxTick, bfsThisTick) }
     init { bfsMaxCost = maxOf(bfsMaxCost, bfsCost) }
     init { bfsThisTick = 0 }
@@ -94,10 +94,10 @@ internal class Ctx(private val pag: PainAndGain) {
     val home = homePos ?: centroidOf(active) ?: InfluenceMap.cell(50, 50)
     val enemyHome = enemyHomePos ?: InfluenceMap.cell(99 - home.x, 99 - home.y)
 
-    val flags = pag.collectFlags(myCreeps, enemyCreeps, combatEnemies)
+    val flags = collectFlags(myCreeps, enemyCreeps, combatEnemies)
     init { WorldState.flagsNow = flags }
     init { applyEffects(flags, myCreeps, enemyCreeps) }
-    init { pag.accountScore(flags) }
+    init { accountScore(flags) }
 
 
     // раненый (см. wounded): боец, потерявший всё оружие, остаётся в армии, пока жив хоть один ходячий лекарь —
@@ -207,7 +207,7 @@ internal class Ctx(private val pag: PainAndGain) {
 
 // ==================== флаги и эффекты ====================
 
-internal fun PainAndGain.collectFlags(myCreeps: List<Creep>, enemyCreeps: List<Creep>, combatEnemies: List<Creep>): List<FlagInfo> {
+internal fun collectFlags(myCreeps: List<Creep>, enemyCreeps: List<Creep>, combatEnemies: List<Creep>): List<FlagInfo> {
     val result = ArrayList<FlagInfo>()
     val all = getObjectsByPrototype(ScoreFlag::class).filter { it.exists }
     for (f in all) {
@@ -219,7 +219,7 @@ internal fun PainAndGain.collectFlags(myCreeps: List<Creep>, enemyCreeps: List<C
     for (fi in result) {
         val owner = if (fi.ours) 1 else if (fi.theirs) -1 else 0
         val prev = Memory.lastFlagOwner[fi.id]
-        if (prev != null && prev != owner) flagFlipNow = true       // событие для стратега (v242)
+        if (prev != null && prev != owner) WorldState.flagFlipNow = true       // событие для стратега (v242)
         if (prev != null && prev != owner && DEBUG_LOG) {
             println("flag t=${getTicks()}: (${fi.pos.x},${fi.pos.y})${typeChar(fi.type)}${fi.score} owner ${ownerName(prev)} -> ${ownerName(owner)} occupant=${fi.occupant?.let { "${if (it.my) "my" else "enemy"} ${bodySummary(it)}" } ?: "none"}")
         }
@@ -271,20 +271,20 @@ internal fun applyEffects(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCre
     }
 }
 
-internal fun PainAndGain.accountScore(flags: List<FlagInfo>) {
+internal fun accountScore(flags: List<FlagInfo>) {
     val cap = num(MAX_SCORE_PER_TICK.asDynamic(), Double.MAX_VALUE)
-    ourRate = minOf(cap, oursOf(flags).sumOf { it.score }.toDouble()).toInt()
-    enemyRate = minOf(cap, flags.filter { it.theirs }.sumOf { it.score }.toDouble()).toInt()
-    ourScore += ourRate
-    enemyScore += enemyRate
+    WorldState.ourRate = minOf(cap, oursOf(flags).sumOf { it.score }.toDouble()).toInt()
+    WorldState.enemyRate = minOf(cap, flags.filter { it.theirs }.sumOf { it.score }.toDouble()).toInt()
+    ourScore += WorldState.ourRate
+    enemyScore += WorldState.enemyRate
     val remaining = maxOf(0, arenaInfo.ticksLimit - getTicks())
-    behindOnScore = ourScore + ourRate * remaining < enemyScore + enemyRate * remaining
-    behindTicks = if (behindOnScore) behindTicks + 1 else 0
+    WorldState.behindOnScore = ourScore + WorldState.ourRate * remaining < enemyScore + WorldState.enemyRate * remaining
+    behindTicks = if (WorldState.behindOnScore) behindTicks + 1 else 0
     // СНИМОК ДЕБЮТА (v216): по собственному замеру файла забег решается в первые двести тиков, а все приборы
     // в доках сняты «по последнему тику матча». Две строки, которые называют забег там, где он решается
-    if (getTicks() == 100) race100 = "$ourRate:$enemyRate"
-    if (getTicks() == 200) race200 = "$ourRate:$enemyRate"
-    if (DEBUG_LOG && getTicks() % 100 == 0) println("score t=${getTicks()}: our=${ourScore.toInt()} (+$ourRate/t) enemy=${enemyScore.toInt()} (+$enemyRate/t) behind=$behindOnScore lead=${(ourScore - enemyScore).toInt()} maxSwing=${(cap * remaining).toInt()}")
+    if (getTicks() == 100) race100 = "${WorldState.ourRate}:${WorldState.enemyRate}"
+    if (getTicks() == 200) race200 = "${WorldState.ourRate}:${WorldState.enemyRate}"
+    if (DEBUG_LOG && getTicks() % 100 == 0) println("score t=${getTicks()}: our=${ourScore.toInt()} (+${WorldState.ourRate}/t) enemy=${enemyScore.toInt()} (+${WorldState.enemyRate}/t) behind=${WorldState.behindOnScore} lead=${(ourScore - enemyScore).toInt()} maxSwing=${(cap * remaining).toInt()}")
 }
 
 // ==================== армия ====================
@@ -507,17 +507,17 @@ internal fun enemyCreeps(ctx: Ctx): List<Creep> = ctx.enemyCreeps
 
 /** Флаг, который крип держит (v297, см. HOLD_WATCH): наш флаг под ним, пока его крип не дальше HOLD_WATCH от флага; в
  *  режиме пар (v298, см. GROUP_SAFE_DMG) — всегда: фермер возвращается, а гонять держателя туда и обратно — пустая трата. */
-internal fun PainAndGain.heldFlag(ctx: Ctx, c: Creep): FlagInfo? =
+internal fun heldFlag(ctx: Ctx, c: Creep): FlagInfo? =
     ctx.flags.firstOrNull { it.ours && it.pos.x == c.x && it.pos.y == c.y }
-        ?.takeIf { f -> groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+        ?.takeIf { f -> Signals.groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
 
 /** Флаг, при котором крип стоит охраной (v298): наш флаг его задания, на клетке — другой наш крип, сам крип не дальше
  *  двух клеток, и его крип не дальше HOLD_WATCH от флага (в режиме пар — всегда, как у держателя). */
-internal fun PainAndGain.guardFlag(ctx: Ctx, c: Creep): FlagInfo? {
+internal fun guardFlag(ctx: Ctx, c: Creep): FlagInfo? {
     val f = Memory.runnerFlag[c.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } } ?: return null
     val occ = f.occupant ?: return null
     if (!f.ours || occ.my != true || occ.id == c.id || getRange(c, f.pos) > 2) return null
-    return f.takeIf { groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
+    return f.takeIf { Signals.groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
 }
 
 // ==================== тело, скорость, мощь ====================
@@ -736,7 +736,7 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     // ...и В РЕЖИМЕ ПАР БЕЗ ХРАНИТЕЛЕЙ (v306, см. GROUP_SAFE_DMG): состав командира — единственное место, где хранитель
     // ему виден (марш и погоня берут mobileArmy и strikers, а те его исключают), и приказ уводит его с флага (правило
     // v173, «хранитель тоже слушает приказ»). Против けろびー#19 это 71 снятие хранителя из 110 за матч — «сошёл с клетки»
-    val commandArmy = ctx.army.filter { canMove(it) && !(pag.groupSafe && it.id in Memory.keeperIds) }
+    val commandArmy = ctx.army.filter { canMove(it) && !(Signals.groupSafe && it.id in Memory.keeperIds) }
     val chasers = forces.strikers.ifEmpty { mobileArmy }
     // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
     // пикет простоя — поэтому охота посчитана здесь, до простоя
@@ -931,8 +931,8 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
             // ...а в режиме пар (v326) — и отряды на пути к флагу: «бой» здесь держится двадцать тиков после любого выстрела,
             // и отзыв срабатывал 506 раз за матч, отправляя в ядро тех, кого командир только что послал (man=124, split=392).
             // Возражение v301 снято тем же, чем и в v325: сидящий на флагах в режим пар не попадает (v302)
-            val keep = if (contact) emptySet() else ctx.runners.filter { (pag.heldFlag(ctx, it) ?: pag.guardFlag(ctx, it)) != null ||
-                (pag.groupSafe && it.id in Memory.cmdDetach) }.mapTo(HashSet()) { it.id }
+            val keep = if (contact) emptySet() else ctx.runners.filter { (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null ||
+                (Signals.groupSafe && it.id in Memory.cmdDetach) }.mapTo(HashSet()) { it.id }
             val before = Memory.cmdDetach.size + Memory.detachedIds.size
             Memory.cmdDetach.retainAll(keep)
             Memory.detachedIds.retainAll(keep)
@@ -1005,7 +1005,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
     }
     if (massedByArrival && !massedByShape) massArrivalAdded.n++
     val enemyMassed = massedByShape || massedByArrival
-    enemyMassedSignal = enemyMassed
+    Signals.enemyMassedSignal = enemyMassed
     // ДРАЛСЯ ЛИ ОН С НАМИ СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER): защёлка на матч. Россыпь дерётся стычками по одному-два
     // крипа у флагов и сюда не попадает; блок, который между боями расходится группами по флагам, — попадает первым же боем
     if (exchangeLiveNow && enemyMassed) fightMassedSeen = true
@@ -1020,9 +1020,9 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
     // первый флаг — на 54-м. Бросок сквозь центр без захвата снова читается броском, когда его темп к флагу падает
     val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed  
     if (rushSignal) { rushSignalAll.n++; if (!massedByShape) rushByArrival.n++ }
-    val rushHold = unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
+    val rushHold = Signals.unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
         (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
-    unflaggedRushNow = rushSignal || rushHold
+    Signals.unflaggedRushNow = rushSignal || rushHold
     // бой близко — для ЗАХВАТОВ флаг врага не в счёт: «безфлаговый» бросок кончился на 39-м тике, когда его армия по пути
     // взяла D5, и скаут взял R3 на 42-м (матч 47, пятый бой с けろびー подряд с R×0.8); уклонение по-прежнему только от
     // безфлагового (флагованный слабее — с ним дерёмся), а дебафф перед боем не берём ни от кого
@@ -1032,16 +1032,16 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
         val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
         maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= APPROACH_WINDOW / 4
     })
-    approachingNow = !ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
-    fightImminentNow = unflaggedRushNow || approachingNow
+    Signals.approachingNow = !ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
+    Signals.fightImminentNow = Signals.unflaggedRushNow || Signals.approachingNow
     // ...и ЗАПОМИНАЕМ РАССТОЯНИЕ НА НАЧАЛО ПОДХОДА (v215, см. USE_RUSH_VETO_EXPIRES). Первая редакция срока
     // сравнивала с ТЕКУЩИМ расстоянием между центрами — а оно по мере подхода сокращается, то есть срок
     // ужесточался ровно наоборот и вето снималось в тот момент, когда бой действительно начинался: строка
     // match20:brawl+heals перестала проходить гейт (7 674:2 503 -> 12 310:18 500). Время, которое ему нужно,
     // чтобы дойти, задаётся расстоянием НА СТАРТЕ броска, и оно не меняется, пока бросок идёт
-    if (fightImminentNow && fightImminentTicks == 0)
+    if (Signals.fightImminentNow && fightImminentTicks == 0)
         rushStartDist = ctx.enemyCentroid?.let { getRange(ctx.ourCentroid, it) } ?: 0
-    fightImminentTicks = if (fightImminentNow) fightImminentTicks + 1 else 0
+    fightImminentTicks = if (Signals.fightImminentNow) fightImminentTicks + 1 else 0
     // враг рядом, но не воюет: армия с боем в досягаемости броска, и наши хиты не падали STALL_TICKS тиков подряд — фермер
     // (けろびー v5, матчи 51 и 57: шесть флагов к 82-му, 1400 тиков рядом без единого выстрела, 10804:22779 при 12 наших
     // против его 4 к концу); гейты боя в captureAllowed («в контакте», «бой близко») к нему не применяются, паритет —
@@ -1064,7 +1064,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
     }
     Memory.groupDmgHist.addLast(groupDmg)
     while (Memory.groupDmgHist.size > GROUP_WINDOW) Memory.groupDmgHist.removeFirst()
-    groupDmgWindow = Memory.groupDmgHist.sum()
+    Signals.groupDmgWindow = Memory.groupDmgHist.sum()
     val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
     val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
@@ -1092,8 +1092,8 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
     // пар ему подходит идеально, а сидит он на 47 % своих флаго-тиков — и режим не включался НИ РАЗУ (1,2 % тиков
     // против 97,3 % у けろびー). Ни постоянного гарнизона, ни правила ухода, ни курьера против топ-1 не работало.
     // Запрет на занятые флаги живёт там, где он и нужен: пара и курьер не идут на клетку под его телом
-    groupSafe = getTicks() >= GROUP_WINDOW && groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (groupSafe || splitNow)
-    if (groupSafe) groupSafeTicks.n++
+    Signals.groupSafe = getTicks() >= GROUP_WINDOW && Signals.groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (Signals.groupSafe || splitNow)
+    if (Signals.groupSafe) groupSafeTicks.n++
     flagSitOcc.n = sitOcc; flagSitAll.n = sitHis
     val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
     noFireTicks = if (enemyNear && !hurt) noFireTicks + 1 else 0
@@ -1101,7 +1101,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
     // мы стояли на своём флаге, и перехват превратил бой, который v38 выигрывала на 439-м, в стояние до конца матча
     // (m31 screen: 16000/16000 у обоих 800 тиков, проигрыш по очкам); враг в ENGAGE_RANGE — это бой, не перехват
     val enemyWithinReach = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE } }
-    enemyNotFightingNow =  noFireTicks >= STALL_TICKS && !enemyWithinReach
+    Signals.enemyNotFightingNow =  noFireTicks >= STALL_TICKS && !enemyWithinReach
     if (hurt) lastHurtTick = getTicks()
     if (enemyWithinReach) lastReachTick = getTicks()
     // «он подходил» для фермера — по NEAR, не по броску (v72): застенчивый лагерь стенда (camp+shy) держит девять клеток и в
@@ -1297,4 +1297,22 @@ internal object WorldState {
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
      *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
     internal val plannedCaptures = HashSet<String>()
+    // ---------- счёт ----------
+    internal var ourRate = 0
+    internal var enemyRate = 0
+    /** По прогнозу (счёт + темп × остаток) мы проигрываем: очки важнее силы (см. captureAllowed). */
+    internal var behindOnScore = false
+    /** Событие этого тика для стратега (v242): флаг сменил владельца — считается при сборе флагов, до решения. */
+    internal var flagFlipNow = false
+}
+
+/** СИГНАЛЫ ТИКА (v459, второй шаг архитектуры, этап 6): то, что `readSignals` говорит стадиям ниже, — как есть. Объект, а не носитель: `unflaggedRushNow` и `groupSafe` — защёлки, читающие собственное значение прошлого тика, а `readSignals` стоит после зонда первых тиков и перед бегунами — место в тике несущее. */
+internal object Signals {
+    internal var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
+    internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
+    internal var approachingNow = false                    // та же, но по его подходу, без безфлагового броска (v284, см. captureBlock)
+    internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
+    internal var enemyMassedSignal = false
+    internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
+    internal var groupDmgWindow = 0
 }

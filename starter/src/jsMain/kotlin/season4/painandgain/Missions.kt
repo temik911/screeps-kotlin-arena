@@ -84,7 +84,7 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
     // флаг за ним и закрыт для других. Прежде сидеть на своём стоило половину его очков, любой чужой флаг перевешивал, и
     // скаут уходил, а его крип вставал на клетку через 11–15 тиков
     val holds = HashMap<String, FlagInfo>()
-    init { for (s in runners) pag.heldFlag(ctx, s)?.let { holds[s.id] = it } }
+    init { for (s in runners) heldFlag(ctx, s)?.let { holds[s.id] = it } }
     // ...И ОХРАНА ПРИ НЁМ (v298, см. GROUP_SAFE_DMG): второй из пары стоит рядом с флагом, который взял первый
     private val guards = HashMap<String, FlagInfo>()
     // ...и ОХРАНА ТОЛЬКО ОТ БЕЗДЕЛЬЯ (v335): вооружённый рядом с уже нашим флагом не приносит ничего, а стоит тела.
@@ -93,13 +93,13 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
     // брать больше нечего: ни одного не нашего свободного флага и ни одного своего без тела
     private val nothingElse = ctx.flags.none { f -> (!f.ours && f.occupant == null) || (f.ours && f.occupant?.my != true) }
     init {
-        if (nothingElse) for (s in runners) if (s.id !in holds && hasWeapon(s) && pag.groupSafe && s.id in Memory.cmdDetach)
-            pag.guardFlag(ctx, s)?.let { guards[s.id] = it }
+        if (nothingElse) for (s in runners) if (s.id !in holds && hasWeapon(s) && Signals.groupSafe && s.id in Memory.cmdDetach)
+            guardFlag(ctx, s)?.let { guards[s.id] = it }
     }
     // ...и пара, посланная командиром, идёт к своему флагу вместе, а не расходится паросочетанием по одному
     private val orders = HashMap<String, FlagInfo>()
     init {
-        if (pag.groupSafe) for (s in runners) if (s.id !in holds && s.id !in guards && s.id in Memory.cmdDetach)
+        if (Signals.groupSafe) for (s in runners) if (s.id !in holds && s.id !in guards && s.id in Memory.cmdDetach)
             Memory.runnerFlag[s.id]?.let { id -> flagById[id] }?.takeIf { it.occupant == null || it.occupant?.my == true }?.let { orders[s.id] = it }
     }
     // страховка CPU (v131): тик уже дороже CPU_GUARD_MS — бегуны оставляют прежние флаги, кандидаты не пересчитываются
@@ -240,7 +240,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             // достающих клетку (с его дебаффами), healAt — лечение наших лекарей в дальности (с нашими)
             val incoming = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies)
             val healing = InfluenceMap.healAt(s.x, s.y, ctx.armyWithHeal)
-            val garrisonStays = pag.groupSafe && Memory.garrisonOf[s.id] != null && match.holds.containsKey(s.id) &&
+            val garrisonStays = Signals.groupSafe && Memory.garrisonOf[s.id] != null && match.holds.containsKey(s.id) &&
                 s.hits * 2 >= s.hitsMax && incoming <= healing
             if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay.n++
             if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay.n++
@@ -254,7 +254,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 // ...а ГАРНИЗОННЫЙ ОТХОДИТ НА ШАГ ИЗ-ПОД ВЫСТРЕЛА (v347): бегство на SCOUT_FLEE_RANGE уводит его на дюжину
                 // клеток, и флаг стоит пустым все двадцать тиков дороги туда и обратно; из четырёх-семи закреплённых стоит
                 // в среднем 2,4. Достаточно выйти за дальность его стрелка — вернётся он через два-три тика
-                val fleeTo = if (pag.groupSafe && Memory.garrisonOf[s.id] != null) RANGED_RANGE + 1 else SCOUT_FLEE_RANGE
+                val fleeTo = if (Signals.groupSafe && Memory.garrisonOf[s.id] != null) RANGED_RANGE + 1 else SCOUT_FLEE_RANGE
                 val step = fleeStep(s, foes, ctx.dangerMatrix, fleeTo) ?: greedyFlee(ctx, s, foes, force = danger)
                 if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
                 dbg(s, "FLEE", f, step)
