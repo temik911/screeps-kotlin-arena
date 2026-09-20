@@ -390,6 +390,8 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // защёлка ротации по оружию обновляется ОПЕРАТОРОМ (v443, этап 2) — и только у того, до кого дошла бы прежняя цепочка
     // `||` / `&&`: не в ротации по фокусу, не выходит из строя, вооружённый не-лекарь при живых лекарях
     private val rotGate = ROT_GATE.c("notByFocus", creep.id !in Memory.rotByFocus) && ROT_GATE.c("notStepOut", !stepOut) && ROT_GATE.c("notHealer", !healer) && ROT_GATE.c("armed", hasWeapon(creep)) && ROT_GATE.c("healersAlive", targ.zones.healersAlive)
+    // прибор `rotset=` (v463, дефект 2): крипо-тики живого бойца в `rotatingIds` — до обновления защёлки; часть 0 — размер набора на печати
+    init { if (creep.id in Memory.rotatingIds) rotSetTicks.n++ }
     init {
         if (rotGate) {
             val weapons = creep.body.count { it.type == ATTACK || it.type == RANGED_ATTACK }
@@ -403,6 +405,13 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
             val isOut = Memory.rotatingLatch.update(creep.id, enter = frac < ROTATE_OUT, exit = backIn)
             if (wasOut && !isOut && DEBUG_LOG) println("rot t=${meas.exchange.now} in ${creep.id} frac=$frac took=${meas.exchange.now - (Memory.rotateSince[creep.id] ?: meas.exchange.now)}")
             if (!wasOut && isOut) { Memory.rotateSince[creep.id] = meas.exchange.now; rotOut.n++; if (DEBUG_LOG) println("rot t=${meas.exchange.now} out ${creep.id} frac=$frac hits=${creep.hits}") }
+        } else if (creep.id in Memory.rotatingLatch && creep.id !in Memory.rotByFocus && !stepOut) {
+            // ЗАЛИПШАЯ ЗАЩЁЛКА (v463, дефект 2): защёлка обновляется только под rotGate. Закрылся гейт у бойца, уже стоящего в
+            // `rotatingIds` по её пути (погибли все лекари — конъюнкт healersAlive, — или он потерял оружие), и выхода нет: тактик
+            // его ротирующим уже не считает (`rotating` ниже требует rotGate), а мир читает множество напрямую — lineMelees,
+            // lineRangeds, raceCapable, — и вылеченный боец до конца матча не входит в линию строя и не выпускается отрядом.
+            // Прибор `rotstuck=` считает такие крипо-тики
+            rotStuck.n++
         }
     }
     val rotating = creep.id in Memory.rotByFocus || stepOut || (rotGate && creep.id in Memory.rotatingLatch)
@@ -1910,6 +1919,12 @@ internal val strayCapRefused = Gauges.counter("stray")
 internal val spotMeleeTicks = Gauges.counter("spotm")
 
 internal val rotOut = Gauges.counter("rot")
+
+/** Защёлка ротации (v463, дефект 2): крипо-тики живого бойца в `rotatingIds` (часть 1 поля `rotset=`; часть 0 — размер набора на
+ *  печати, в `Instruments.kt`) и крипо-тики «в наборе по пути защёлки при закрытом rotGate» (`rotstuck=`). */
+internal val rotSetTicks = Gauges.counter("rotset", 1)
+
+internal val rotStuck = Gauges.counter("rotstuck")
 
 /** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
 internal val hexpN = Gauges.counter("hexp")
