@@ -2345,7 +2345,16 @@ internal class StrategyObjective(private val ctx: Ctx, private val meas: ArmyMea
         val flow = flowTo(ctx, f.pos)
         Objective(f, emptyList(), 1.0, group.maxOfOrNull { pathTicks(it, flow, it.key) } ?: 0)
     }
-    val objective = if (contact.annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, meas.view, approachRate, detach.farmerQuietNow, meas.forces.strikers.ifEmpty { meas.chase.mobileArmy }, thr.pushRatio, hunted , if (push.cpuGuardArmy) objectiveFlagId else null)
+    // ЦЕЛЬ-ФЛАГ ТРЕБУЕТ ВЫХОДА ВСЯКИЙ РАЗ, КОГДА ЕСТЬ АРМИЯ, КОТОРУЮ МЫ НЕ МОЖЕМ ТОЛКНУТЬ (v462, замысел v12): седьмой параметр —
+    // `escapeNeeded`, а не `hunted`. `hunted` требует живых ударников, поэтому при его вооружённых и пустых strikers проверка
+    // запаса выхода (exitMargin < ESCAPE_MARGIN) не применялась вовсе, и армия из лекарей и раздетых могла выбрать флаг без
+    // выхода — при том что поля бегства строились по escapeNeeded (init выше). Осознанной смены аргумента в истории нет
+    private val objectiveAsked = !(contact.annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) && interceptObjective == null
+    val objective = if (contact.annihilate || evadeFirst != null || (holdLine && interceptObjective == null)) null else interceptObjective ?: chooseFlagObjective(ctx, meas.view, approachRate, detach.farmerQuietNow, meas.forces.strikers.ifEmpty { meas.chase.mobileArmy }, thr.pushRatio, escapeNeeded, if (push.cpuGuardArmy) objectiveFlagId else null)
+    // прибор `objns=спрошено/пусто` (v462): тики, когда выбор флаг-цели спрошен в состоянии «его вооружённые живы, наших ударников
+    // нет» (escapeNeeded без hunted — ровно там, где правка действует), и из них — когда он вернул пусто. Гейт этого состояния не
+    // знает (0 тиков в 140 сценариях, whynot hunted=strikers), живьём в серии v461 — 137 тиков в четырёх матчах
+    init { if (objectiveAsked && escapeNeeded && !hunted) { objNs.n++; if (objective == null) objNsNull.n++ } }
     // ПОЧЕМУ У АРМИИ НЕТ ФЛАГ-ЦЕЛИ (v216). Постура HOLD занимает 43–58 % матча, и в ней армия стоит в точке,
     // которая не даёт очков, при 2,3–2,6 ничьих флагах на доске. Причин ровно четыре, и прежде чем менять
     // поведение, надо знать, которая из них держит: «пост на флаге» уже мерили дважды (v214: любой не его флаг
@@ -2944,6 +2953,11 @@ internal val budgetTicks = Gauges.counter("budget", 1)
 internal val objAll = Gauges.counter("objnone", 1)
 
 internal val objDropN = Gauges.counter("objdrop", 1)
+
+/** Выбор флаг-цели в состоянии «его вооружённые живы, наших ударников нет» (v462): спрошен / вернул пусто. */
+internal val objNs = Gauges.counter("objns")
+
+internal val objNsNull = Gauges.counter("objns", 1)
 
 internal val stateEventTicks = Gauges.counter("evt")
 
