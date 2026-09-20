@@ -110,6 +110,12 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
             // Потеря целого тика на входе в бой хуже, чем два оценённых замысла вместо пяти. Хвост (cmdTailMax) остался прибором
             var lastCost = 0.0
             srchTicks++
+            // ПЕРЕБОР ЧИСТ (v460, этап 6.7 второго шага, прибор `impure=`): проба замысла считает в СВОЮ запись, и в мир попадает только
+            // выбранная (v449). Чтобы дефект не вернулся с первой же новой оценкой, до перебора снимаются записи владельцев общих
+            // полей, до которых раздача дотягивается, — счётчик публикаций поля нужды и приказы, — а после сверяются: разница обязана
+            // быть нулём на всём гейте (строка `impure` в regress.sh)
+            val publishedBefore = InfluenceMap.publishedWrites
+            val ordersBefore = HashMap(Orders.commandOf)
             // ЗАПИСЬ ВЫБРАННОЙ РАЗДАЧИ (v449, пункт В): каждая проба несёт своё поле нужды и свои пробы; в мир и в приборы
             // уходит запись победителя, а не последнего оценённого (см. DealRecord)
             var bestRec: DealRecord? = null
@@ -127,6 +133,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
                 if (sc > bestScore) { bestScore = sc; bestPlan = trial; bestIntent = intent; bestRec = rec }
                 lastCost = cpuMs() - t0
             }
+            impure.n += (InfluenceMap.publishedWrites - publishedBefore) + (if (ordersBefore != Orders.commandOf) 1 else 0)
             publishDeal(bestRec, tried)
             if (bestPlan != null && bestIntent != lastIntent) srchDiff.n++
             cmdEndMs = cpuMs(); cmdSearched = true
@@ -246,6 +253,10 @@ internal fun publishDeal(rec: DealRecord?, tried: Int) {
 // Перенесены из Instruments.kt дословно; Instruments их читает и печатает. `cmdSearched` сбрасывает оркестровка в конце тика.
 
 /** Раздач, ушедших в мир (по одной на тик раздачи) / раздач сыграно, включая пробы замыслов (v449, прибор `deals=`). */
+/** Записей в общее состояние ЗА ВРЕМЯ перебора замыслов (v460, прибор `impure=`): публикации поля нужды и изменения приказов между
+ *  началом перебора и публикацией победителя. На всём гейте — ноль; ненулевое значение значит, что проба замысла пишет в мир. */
+internal val impure = Gauges.counter("impure")
+
 internal val dealsChosen = Gauges.counter("deals")
 internal val dealsTried = Gauges.counter("deals", 1)
 /** Тиков перебора, где выбранный замысел — не последний оценённый (v449, прибор `srchd=`): столько раз до v449 после командира
