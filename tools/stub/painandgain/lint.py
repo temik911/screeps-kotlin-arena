@@ -416,17 +416,35 @@ def single_writer(files):
     """ОДИН ПИСАТЕЛЬ: поле `Memory` или член `PainAndGain` пишется более чем из одного файла. По тексту: запись — присваивание,
     `++`, запись по индексу, изменяющий метод коллекции; одноимённая локальная или параметр функции запись не считает."""
     owners = {o: _object_vars(files, o) for o in _state_owners(files)}
+    # член, переехавший из объекта на ВЕРХ файла-владельца (этапы 1–2), уносит своё нарушение с собой: имена из списка известных,
+    # которые сегодня объявлены на верху пакета, считаются полями условного владельца `top`
+    moved = {a.split(' ', 1)[1].split('<-')[0] for a in (read_known(open(KNOWN, encoding='utf-8').read()) if os.path.exists(KNOWN) else []) if a.startswith('writer ')}
+    tops = set()
+    for rows in files.values():
+        depth = 0
+        for _, code in rows:
+            if depth == 0:
+                m = re.match(r'(?:internal |private )?va[lr] (\w+)\b', code)
+                if m and m.group(1) in moved:
+                    tops.add(m.group(1))
+            depth += code.count('{') - code.count('}')
+    owners['top'] = tops
     writers = {}
     for f, rows in files.items():
         text = [STRING.sub('""', code) for _, code in rows]     # `posture=` в тексте строки лога — не запись
         local = _local_names(text)
         for i, code in enumerate(text):
-            for m in re.finditer(r'(?<![\w.])(?:(%s)\.)?(\w+)(?=%s)' % ('|'.join(sorted(owners)), WRITE), code):
+            for m in re.finditer(r'(?<![\w.])(?:(%s)\.)?(\w+)(?=%s)' % ('|'.join(sorted(o for o in owners if o != 'top')), WRITE), code):
                 obj, name = m.group(1), m.group(2)
                 if obj is None:
-                    if name not in owners['PainAndGain'] or name in local[i] or re.search(r'\bva[lr] %s\b' % name, code):
+                    if name in local[i] or re.search(r'\bva[lr] %s\b' % name, code):
                         continue
-                    obj = 'PainAndGain'
+                    if name in owners['PainAndGain']:
+                        obj = 'PainAndGain'
+                    elif name in owners['top']:
+                        obj = 'top'
+                    else:
+                        continue
                 elif name not in owners[obj]:
                     continue
                 writers.setdefault('%s.%s' % (obj, name), {}).setdefault(f, rows[i][0])
