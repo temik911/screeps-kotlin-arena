@@ -109,7 +109,7 @@ def repeated_selection(files):
 # v456 (второй шаг архитектуры, этап 3): построители `buildStride` / `buildTurn` становятся ТЕЛАМИ КЛАССОВ-носителей — поле объявлено
 # там, где вычислено; запись или счётчик между фактами стоит блоком `init { … }` на прежнем месте последовательности, а не внутри
 # выражения `val … =`. Имя класса-носителя в этом списке проверяется так же, как имя функции.
-PURE_INITIALIZERS = {'creepTurn', 'buildTurn', 'Stride', 'freeStep', 'commandFight', 'scoreCell', 'updateKeepers'}
+PURE_INITIALIZERS = {'creepTurn', 'Turn', 'Stride', 'freeStep', 'commandFight', 'scoreCell', 'updateKeepers'}
 EFFECT = re.compile(r'(?<![+\w])(\w+)(?:\.\w+)*\+\+|\+\+\w|Memory\.\w+(\[[^\]]*\]\s*=(?!=)|\.(add|remove|clear|put|addAll|retainAll|removeAll|getOrPut)\b)')
 DECL = re.compile(r'^\s*(?:private |internal )?va[lr] [\w<>?:, ()]+?=(?!=)')
 FUN = re.compile(r'\b(?:fun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?|class\s+)(\w+)\s*\(')
@@ -554,9 +554,47 @@ def member_vs_toplevel(files):
     return out
 
 
+# Носители (v456, второй шаг архитектуры, этап 3): класс, чьё тело — прежний построитель. Список пополняется с каждым новым носителем.
+CARRIERS = ['Turn', 'Stride']
+
+
+def carrier_method_order(files):
+    """МЕТОД НОСИТЕЛЯ НЕ ЧИТАЕТ ПОЛЕ, ОБЪЯВЛЕННОЕ НИЖЕ НЕГО. В функции-построителе компилятор запрещал обращение к локальной до её
+    объявления; в классе метод может прочитать ещё не инициализированное поле и молча получить `null` / `0` / `false` — если его
+    позовёт инициализатор поля, стоящего между ними. Перенос с сохранением порядка текста безопасен; правило держит этот порядок."""
+    out = []
+    for f, rows in files.items():
+        text = [code_of_strings(code) for _, code in rows]
+        for cls in CARRIERS:
+            start = next((i for i, c in enumerate(text) if re.match(r'\s*(?:internal |private )?class %s\b' % cls, c)), None)
+            if start is None:
+                continue
+            depth, i, fields, methods = 0, start, [], []
+            while i < len(text):
+                c = text[i]
+                if depth == 1:
+                    m = re.match(r'\s*(?:private |internal |override )*va[lr] (\w+)\b', c)
+                    if m:
+                        fields.append((m.group(1), i))
+                    m = re.match(r'\s*(?:private |internal |override )*fun (\w+)\b', c)
+                    if m:
+                        methods.append([m.group(1), i, _fun_end(text, i)])
+                depth += c.count('{') - c.count('}')
+                i += 1
+                if depth <= 0 and i > start + 1:
+                    break
+            for name, a, b in methods:
+                body = '\n'.join(text[a:b + 1])
+                for fld, line in fields:
+                    if line > a and re.search(r'(?<![\w.])%s\b' % fld, body):
+                        out.append((f, rows[a][0], 'носитель %s: метод `%s` читает поле `%s`, объявленное ниже него (строка %d)' % (cls, name, fld, rows[line][0]),
+                                    'order-in-carrier %s.%s>%s' % (cls, name, fld)))
+    return out
+
+
 # (проверка, есть ли у неё список известных нарушений)
 KNOWN_CHECKS = [(plumbing, True), (needless_receiver, True), (tag_outside_table, True), (single_writer, True), (table_order, False),
-                (member_vs_toplevel, False)]
+                (member_vs_toplevel, False), (carrier_method_order, False)]
 
 
 def read_known(text):
