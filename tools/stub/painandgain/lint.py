@@ -554,19 +554,41 @@ def member_vs_toplevel(files):
     return out
 
 
-# Носители (v456, второй шаг архитектуры, этап 3): класс, чьё тело — прежний построитель. Список пополняется с каждым новым носителем.
-CARRIERS = ['Turn', 'Stride', 'ArmyStance', 'ArmyTargets', 'ArmyMeasures', 'Ctx', 'RememberTick',
-            'StrategyPacks', 'StrategyThresholds', 'StrategyDetach', 'StrategyPush', 'StrategyContact', 'StrategyObjective', 'StrategyDecide', 'StrategyThreats']
+# Носители (v456, второй шаг архитектуры, этап 3): класс, чьё тело — прежний построитель. Списка нет — носитель узнаётся по форме:
+# класс пакета, у которого на уровне тела есть блок `init` (оператор прежней функции на прежнем месте) или который строится от мира
+# тика (`Ctx`) либо от синглтона. До v457 имена перечислялись здесь вручную, и каждый разрез стадии требовал дописать их во второй раз.
+def carriers(files):
+    out = []
+    for f, rows in files.items():
+        text = [code_of_strings(code) for _, code in rows]
+        i = 0
+        while i < len(text):
+            m = re.match(r'\s*(?:internal |private )?class (\w+)\b', text[i])
+            if not m or '{' not in text[i]:
+                i += 1
+                continue
+            depth, j, has_init = 0, i, bool(re.search(r':\s*(?:Ctx|PainAndGain)\b', text[i]))
+            while j < len(text):
+                if depth == 1 and re.match(r'\s*init\s*\{', text[j]):
+                    has_init = True
+                depth += text[j].count('{') - text[j].count('}')
+                j += 1
+                if depth <= 0:
+                    break
+            if has_init:
+                out.append(m.group(1))
+            i += 1
+    return out
 
 
 def carrier_method_order(files):
     """МЕТОД НОСИТЕЛЯ НЕ ЧИТАЕТ ПОЛЕ, ОБЪЯВЛЕННОЕ НИЖЕ НЕГО. В функции-построителе компилятор запрещал обращение к локальной до её
     объявления; в классе метод может прочитать ещё не инициализированное поле и молча получить `null` / `0` / `false` — если его
     позовёт инициализатор поля, стоящего между ними. Перенос с сохранением порядка текста безопасен; правило держит этот порядок."""
-    out = []
+    out, names = [], carriers(files)
     for f, rows in files.items():
         text = [code_of_strings(code) for _, code in rows]
-        for cls in CARRIERS:
+        for cls in names:
             start = next((i for i, c in enumerate(text) if re.match(r'\s*(?:internal |private )?class %s\b' % cls, c)), None)
             if start is None:
                 continue
