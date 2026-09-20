@@ -70,12 +70,54 @@ internal fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?,
         adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
         else -> null
     }
-    target?.let { Executor.attack(creep, it); lastFireTick = getTicks(); FireBook.strikesAt[it.id] = (FireBook.strikesAt[it.id] ?: 0) + 1 }
+    target?.let {
+        bookDamage(it, InfluenceMap.profileOf(creep).melee * InfluenceMap.takenOf(it), enemyCreeps, ordered = it === ordered, melee = true)
+        Executor.attack(creep, it); lastFireTick = getTicks(); FireBook.strikesAt[it.id] = (FireBook.strikesAt[it.id] ?: 0) + 1
+    }
+}
+
+/** Лечение врага, дотягивающееся до цели за тик: вплотную — полное, в HEAL_RANGE — дальнее (треть). То же выражение, что у
+ *  `killable` в `commandFire`; одно на оба места (v468). */
+internal fun healCoverOn(enemies: List<Creep>, e: Creep): Double = enemies.sumOf { h ->
+    val pr = InfluenceMap.profileOf(h)
+    val d = h.getRangeTo(e)
+    if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
+}
+
+/** ПРИБОР ПЕРЕБОЯ (v468, дефект 7 постановки). `damageBooked` с v140 ПИСАЛСЯ и не читался: `booked(t)` объявлена в `shoot` и в
+ *  выборе цели не участвует, так что правило «стрелок переходит к следующей цели, когда по этой уже расписано достаточно» не
+ *  действовало ни разу. Здесь считается его цена, а не чинится: назначение урона по цели, которую УЖЕ добивает расписанное
+ *  (с учётом лечения, дотягивающегося до неё), — лишнее целиком; из них по приказу командира и ударом мили; сумма урона сверх
+ *  добивания (у частично лишнего — только хвост); всего назначений. Удар мили записывается тоже — без него книга неполна и
+ *  перебой по цели, которую рубят четверо, невидим. Печать — `okill=`. */
+internal fun bookDamage(target: Creep, dmg: Double, enemies: List<Creep>, ordered: Boolean, melee: Boolean) {
+    val already = FireBook.damageBooked[target.id] ?: 0.0
+    val need = target.hits + healCoverOn(enemies, target)
+    okAll.n++; okBooked.x += dmg
+    if (already >= need) { okDead.n++; if (ordered) okDeadOrdered.n++; if (melee) okDeadMelee.n++ }
+    val over = minOf(dmg, maxOf(0.0, already + dmg - need))
+    okOver.x += over
+    // ...и ПРЕМИССА ПРАВИЛА (`okkill=`): «лишний» урон лишний, только если цель ПОГИБЛА, — в v140 правило отвергнуто со словами
+    // «её держат три лекаря»; хвост сверх книги запоминается по цели и судится следующим тиком по её живости
+    if (over > 0.0) FireBook.overByTarget[target.id] = (FireBook.overByTarget[target.id] ?: 0.0) + over
+    FireBook.damageBooked[target.id] = already + dmg
+}
+
+/** Суд премиссы перебоя (v468): цели, расписанные насмерть в прошлом тике огня, — погибли ли; их хвост урона сверх книги —
+ *  к погибшим (лишний взаправду) или к выжившим (лечение перекрыло книгу, лишнего не было). Зовётся в начале стадии огня;
+ *  тик без армии откладывает суд на тик — цель, погибшая за это время, считается погибшей. */
+internal fun judgeOverkill(enemyCreeps: List<Creep>) {
+    for ((id, over) in FireBook.overByTarget) {
+        okBookedDead.n++
+        if (enemyCreeps.none { it.id == id && it.hits > 0 }) { okDied.n++; okOverDied.x += over } else okOverHeld.x += over
+    }
+    FireBook.overByTarget.clear()
 }
 
 internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
     FireBook.shotsAt.clear()
     FireBook.strikesAt.clear()
+    judgeOverkill(enemyCreeps)
     val healDone = HashMap<String, Int>()
     val incoming = HashMap<String, Int>()
     // подтверждённый входящий (v233, см. USE_HEAL_BY_DEFICIT): адресный огонь этого тика или потеря прошлого
@@ -239,7 +281,8 @@ internal fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, 
         // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
         // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
         // нашими за тик; если этого хватает с учётом её лечения, стрелок переходит к следующей цели по ранжиру
-        fun booked(t: Creep) = FireBook.damageBooked[t.id] ?: 0.0
+        // ⚠️ ...не переходит (v468, дефект 7 постановки): книга здесь только ПИСАЛАСЬ — `booked(t)` объявлялась и в выборе
+        // цели ниже не читалась, правило не действовало с v140. Цена считается прибором `okill=` (см. bookDamage)
         // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
         val ordered = FireBook.fireOf[creep.id]?.let { id -> enemyCreeps.firstOrNull { it.id == id } }
         val target = when {
@@ -250,8 +293,8 @@ internal fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, 
                 ?: massPool.minByOrNull { it.hits }
         }
         target?.let {
+            bookDamage(it, InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it), enemyCreeps, ordered = it === ordered, melee = false)
             Executor.rangedAttack(creep, it); FireBook.shotsAt[it.id] = (FireBook.shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots.n++
-            FireBook.damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
         }
     }
 }
@@ -280,11 +323,7 @@ internal fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?,
             val pr = InfluenceMap.profileOf(c)
             (if (hasRanged(c)) pr.ranged else pr.melee) * InfluenceMap.takenOf(e)
         }
-        val cover = enemies.sumOf { h ->
-            val pr = InfluenceMap.profileOf(h)
-            val d = h.getRangeTo(e)
-            if (pr.heal <= 0.0 || d > HEAL_RANGE) 0.0 else if (d <= 1) pr.heal else pr.heal / 3.0
-        }
+        val cover = healCoverOn(enemies, e)
         burst >= e.hits + cover
     }.minByOrNull { it.hits }
     for (c in shooters) {
@@ -688,6 +727,23 @@ internal val fanShots = Gauges.counter("concfan")
 
 internal val fireShots = Gauges.counter("concfan", 1)
 
+/** Перебой (v468, см. bookDamage): `okill=целиком лишних/из них по приказу/из них мили/урон сверх добивания/назначений/урон
+ *  расписан всего`; суд премиссы `okkill=погибло/расписано насмерть/урон сверх у погибших/у выживших` (см. judgeOverkill). */
+internal val okDead = Gauges.counter("okill")
+internal val okDeadOrdered = Gauges.counter("okill", 1)
+internal val okDeadMelee = Gauges.counter("okill", 2)
+internal val okOver = Gauges.real("okillOver")
+private val okOverDeclared = Gauges.computed("okill", 3) { okOver.x.toInt().toString() }
+internal val okAll = Gauges.counter("okill", 4)
+internal val okBooked = Gauges.real("okillBooked")
+private val okBookedDeclared = Gauges.computed("okill", 5) { okBooked.x.toInt().toString() }
+internal val okDied = Gauges.counter("okkill")
+internal val okBookedDead = Gauges.counter("okkill", 1)
+internal val okOverDied = Gauges.real("okkillDied")
+private val okOverDiedDeclared = Gauges.computed("okkill", 2) { okOverDied.x.toInt().toString() }
+internal val okOverHeld = Gauges.real("okkillHeld")
+private val okOverHeldDeclared = Gauges.computed("okkill", 3) { okOverHeld.x.toInt().toString() }
+
 internal val mconcTicks = Gauges.counter("mconc", 1)
 
 // ==================== межтиковое состояние и константы стадии (до v454 — члены object PainAndGain; второй шаг архитектуры, этап 1) ====================
@@ -720,5 +776,7 @@ internal object FireBook {
     internal val strikesAt = HashMap<String, Int>()
     /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
     internal val damageBooked = HashMap<String, Double>()
+    /** Хвост урона сверх книги по цели за тик огня — судится следующим тиком (v468, см. judgeOverkill). */
+    internal val overByTarget = HashMap<String, Double>()
     internal var prevShooters: List<Shooter> = emptyList()
 }
