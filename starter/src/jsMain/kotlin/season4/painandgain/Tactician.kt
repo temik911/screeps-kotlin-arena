@@ -201,6 +201,23 @@ internal fun rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
     // идут за бойцами, а раненые не выходят — стенд match31:camp (лагерь бьёт наименьшие хиты и держит центр) при лекарях
     // позади проигрывал по очкам 23 934 : 24 002; ●ω<♥♪#6 флагов до 1500-го тика не берёт, и штурмовать его гонка не велит
     TacticianState.huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN && !WorldState.behindOnScore
+    // ПРИБОР ПРАВИЛА, КОТОРОЕ РЕШАЕТ СУДЬБУ ЛЕКАРЕЙ (v509, `hw=` сработало / всего, `hwwhy=` на чём остановилось).
+    // `huntsWounded` — единственное, что в КОНТАКТЕ выводит лекаря из досягаемости его стрелков (см. reachNow:
+    // иначе избегается только мили, два шага). Реплеи четырёх поражений от MetalicaX#17 (21.09.2026) говорят, что
+    // решает именно это: наши лекари под его стволами 85/383/106/99 крип-тиков против 14/161/20/14 в победах, он
+    // кладёт в них 27-62 % одиночных выстрелов против наших 0-2 % по его, и с тика, где наш урон падает ниже его
+    // ёмкости лечения 216, он не теряет больше никого. А прибора у правила не было ни одного: `hunt=` — это загон
+    // (v331), другое правило. Три причины отказа разделены, потому что лечатся они по-разному: окно ещё не
+    // наполнено, модель «наименьшая доля» не выиграла у адресной, или мы отстаём по счёту — последнее поставлено
+    // в v295 ради штурма, и в этих матчах он отстаёт по нашей вине ровно с того тика, где он взял центральный флаг
+    hwAll.n++
+    if (TacticianState.huntsWounded) hwOn.n++
+    hwWhy.bump(
+        if (Memory.fracHits.size < STALL_TICKS) "window"
+        else if (fracN <= addrN) "addrModel"
+        else if (WorldState.behindOnScore) "behind"
+        else "on"
+    )
     val healersLive = live.any { healerOnly(it) }
     val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
     if (!fracRules) {
@@ -2000,6 +2017,16 @@ internal val madjN = Gauges.counter("madj")
 internal val madjStep = Gauges.counter("madj", 1)
 
 internal val madjAll = Gauges.counter("madj", 2)
+
+/** ОХОТА ЗА РАНЕНЫМИ (v509, `hw=` сработало / всего): единственное правило, выводящее лекаря из досягаемости его
+ *  стрелков в контакте (см. reachNow). До v509 прибора не имело — `hunt=` это загон, другое правило. */
+internal val hwOn = Gauges.counter("hw")
+
+internal val hwAll = Gauges.counter("hw", 1)
+
+/** На чём остановилось правило охоты за ранеными (v509, `hwwhy=`): окно не наполнено / выиграла адресная модель /
+ *  мы отстаём по счёту (условие v295) / сработало. */
+internal val hwWhy = Gauges.labelled("hwwhy")
 
 internal val hexpN = Gauges.counter("hexp")
 
