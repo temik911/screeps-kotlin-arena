@@ -899,6 +899,21 @@ internal class Stride(val turn: Turn, val aim: Aim) {
     val avoidCells = reachMine
     // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
     init { if (turn.healer && inCombat) { hexpAll.n++; if ((creep.key) in targ.zones.reachCells) hexpN.n++; hlostSum.n += (Wall.lostTick[creep.id] ?: 0) } }
+    // ПРИЛЕГАНИЕ МИЛИ (v501, прибор). Разбор десяти рук v497 по реплеям назвал эту величину лучшим кандидатом в
+    // причину: доля крипо-тиков вооружённого мили с врагом на дистанции 1 — 49-59 % в победах против 42-46 % в
+    // поражениях, замерено ДО предрешённости и по знаменателю «вооружённых», то есть не падает от того, что наших
+    // срезали. Арифметика делает её крупной: a8m8 вплотную даёт 240 урона в тик против 60 у r6m6, и четыре мили ×
+    // 16 тиков × 10 п.п. ≈ 1 500 урона — больше, чем нужно, чтобы перевалить ещё одного его крипа за порог
+    // безоружности. Своего прибора у неё нет: `touch=` насыщен (100/100/100 во всех десяти матчах) и различать не
+    // может. Здесь: вплотную / в шаге от вплотную / мили-тиков в бою
+    init {
+        if (InfluenceMap.profileOf(creep).melee > 0.0 && inCombat) {
+            madjAll.n++
+            val d = meas.forces.armedEnemies.minOfOrNull { creep.getRangeTo(it) } ?: 99
+            if (d <= 1) madjN.n++
+            if (d <= 2) madjStep.n++
+        }
+    }
     val mustFlee = MUST_FLEE.c("supportAloneNearFoe", turn.support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
         MUST_FLEE.c("supportInReach", turn.support && inReach) ||
         MUST_FLEE.c("stepOutInReach", turn.stepOut && (creep.key) in targ.zones.reachCells) ||
@@ -1973,6 +1988,13 @@ internal val rotStuck = Gauges.counter("rotstuck")
 internal val rotStuckNoHeal = Gauges.counter("rotstuck", 1)
 
 /** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
+/** Прилегание мили (v501): крипо-тиков вооружённого мили с врагом вплотную / в шаге от вплотную / в бою. */
+internal val madjN = Gauges.counter("madj")
+
+internal val madjStep = Gauges.counter("madj", 1)
+
+internal val madjAll = Gauges.counter("madj", 2)
+
 internal val hexpN = Gauges.counter("hexp")
 
 internal val hexpAll = Gauges.counter("hexp", 1)
