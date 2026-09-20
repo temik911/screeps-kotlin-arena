@@ -720,6 +720,23 @@ internal fun healerWall(ctx: Ctx, meas: ArmyMeasures) {
             val cell = InfluenceMap.cell(x, y)
             if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
         }
+        // ...И КОГДА ВПЛОТНУЮ НЕЛЬЗЯ, СТЕНА ВСТАЁТ В ДАЛЬНОСТИ (v495, см. USE_HEAL_WALL_REACH): у правила два исхода
+        // вместо трёх — вплотную или молчание, — а игра даёт третий: `rangedHeal` доставляет треть с HEAL_RANGE, и
+        // ветка стены в scoreHeal эту треть уже считает. Клетки в дальности берутся ТОЛЬКО когда вплотную пусто, с
+        // теми же условиями безопасности, поэтому там, где стена работала, не меняется ничего
+        var reachWall = false
+        if (USE_HEAL_WALL_REACH && cells.isEmpty()) {
+            hwallNear.n++
+            for (dx in sym(HEAL_RANGE)) for (dy in sym(HEAL_RANGE)) {
+                if (maxOf(abs(dx), abs(dy)) <= 1) continue
+                val x = v.x + dx; val y = v.y + dy
+                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y) || (key(x, y)) in occupied) continue
+                val cell = InfluenceMap.cell(x, y)
+                if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
+            }
+            reachWall = cells.isNotEmpty()
+            if (reachWall) hwallReach.n++
+        }
         Wall.wallCells = cells
         val healers = ctx.army.filter { hasHeal(it) && it.id != v.id }
         val free = ArrayList(cells)
@@ -733,7 +750,10 @@ internal fun healerWall(ctx: Ctx, meas: ArmyMeasures) {
             val heal = InfluenceMap.profileOf(h).heal
             val cell = Wall.wallCellOf[h.id]
             val d = getRange(h, v)
-            if (h.id == v.id || (cell != null && getRange(h, cell) <= 1)) heal else if (d <= HEAL_RANGE) heal / 3.0 else 0.0
+            // ...и клетка ДАЛЬНЕЙ стены доставляет треть, а не полное (v495): «удержимость» обязана считаться по тому,
+            // что стена на самом деле доставит, иначе жертва объявляется спасаемой втрое щедрее, чем есть
+            val onWall = cell != null && getRange(h, cell) <= 1
+            if (h.id == v.id || (onWall && !reachWall)) heal else if (onWall || d <= HEAL_RANGE) heal / 3.0 else 0.0
         }
         Wall.victimNow = v
         Wall.victimSaveable = cells.isNotEmpty() && loss <= potential
@@ -883,6 +903,11 @@ internal val hwallPredA = Gauges.counter("hwallp")
 internal val hwallPredL = Gauges.counter("hwallp", 1)
 
 internal val hwallPredN = Gauges.counter("hwallp", 2)
+
+/** Дальняя стена (v495): тиков, где клетки дала дальность / тиков, где вплотную к жертве не нашлось ни одной клетки. */
+internal val hwallReach = Gauges.counter("hwallr")
+
+internal val hwallNear = Gauges.counter("hwallr", 1)
 
 /** СТЕНА ЛЕКАРЕЙ И ПОТЕРИ ТИКА (v459, второй шаг архитектуры, этап 6): то, что пишет `healerWall`, — перенесено из `object PainAndGain` как есть. `victimNow`, `victimSaveable`, `wallCells` раздача боя читает РАНЬШЕ, чем стена их перепишет в этом тике, — то есть значением прошлого тика (см. Prev). */
 internal object Wall {

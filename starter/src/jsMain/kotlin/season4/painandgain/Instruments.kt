@@ -303,7 +303,7 @@ internal val T_LINE = listOf(
     "warmann", "warmhold", "warmcmd", "warmfight", "warmcap", "mconc", "mconcmax", "mpack", "pack", "mpackon", "kchase",
     "kveto", "gathera", "annempty", "shooters", "abort", "srch", "deals", "srchd", "pin", "fself", "rotf", "rotfm", "meet",
     "fsw", "ffoc", "ovw", "conf", "rtr", "pflip", "mquiet", "mquietc", "maj", "surv", "adr", "rad", "simd", "fhl", "mrush", "zlb",
-    "hwall", "hwallh", "hwalla", "hwallp", "postc", "rot", "rotset", "rotstuck", "mdir", "hfull", "hover", "hswap", "hexp", "hlost", "hwallx",
+    "hwall", "hwallh", "hwalla", "hwallp", "hwallr", "postc", "rot", "rotset", "rotstuck", "mdir", "hfull", "hover", "hswap", "hexp", "hlost", "hwallx",
     "hpick", "hadj", "hadjn", "hfire", "hstill", "hnext", "cmdheal", "dh", "retr", "standfire", "outmw", "score", "rate", "behind",
     "passive", "flags", "obey", "rule", "dual", "fist", "branch", "fled", "clash", "lost", "kite", "massed", "plan", "lay", "rloss", "rhadj", "cmd", "mode", "disp", "evt",
     "fire", "posture", "obj", "hthreat", "rush", "weak", "pat", "strip", "touch", "touchl", "out", "back", "guns", "mheal",
@@ -393,7 +393,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v494"
+internal const val BOT_VERSION = "v495"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
