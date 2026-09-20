@@ -341,6 +341,17 @@ internal fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?,
                 ?: pool.filter { reach(c, it) }.minByOrNull { it.hits }
                 ?: live.filter { reach(c, it) }.minByOrNull { it.hits }
         }
+        // КУДА УХОДИТ ОГОНЬ ОТНОСИТЕЛЬНО ЕГО ЛЕКАРЕЙ (v480, прибор к задаче «первые тики боя против MetalicaX#17»):
+        // по 16 живым рукам исход разделяют его части лечения — в победах они сбиты к t=70…90 и остаются сбитыми,
+        // в поражениях мы сбиваем их к t=80 и он ВОССТАНАВЛИВАЕТ их к t=90 (18/18), после чего его хиты растут.
+        // Мерить это нечем: `okill` считает перебой, `conc` — концентрацию, но ни один не говорит, стоял ли его
+        // лекарь под нашим стволом, не будучи целью. Здесь — три числа: назначений огня в лекаря / назначений, где
+        // лекарь был в досягаемости, а целью стал другой / всего назначений
+        if (t != null) {
+            fireAll.n++
+            if (InfluenceMap.profileOf(t).heal > 0.0) fireHeal.n++
+            else if (pool.any { InfluenceMap.profileOf(it).heal > 0.0 && it.hits > 0 && reach(c, it) }) fireSkipHeal.n++
+        }
         if (t != null) out[c.id] = t.id
     }
 }
@@ -737,6 +748,15 @@ internal val concAllTicks = Gauges.counter("concall", 1)
 internal val fanShots = Gauges.counter("concfan")
 
 internal val fireShots = Gauges.counter("concfan", 1)
+
+/** Огонь против его лечения (v480, прибор): `ehshot=назначений в его лекаря/назначений мимо лекаря, стоявшего в
+ *  досягаемости/всего назначений`. Средняя часть и есть вопрос: сколько раз его часть лечения стояла под нашим
+ *  стволом, а выстрел ушёл в другого. */
+internal val fireHeal = Gauges.counter("ehshot")
+
+internal val fireSkipHeal = Gauges.counter("ehshot", 1)
+
+internal val fireAll = Gauges.counter("ehshot", 2)
 
 /** Перебой (v468, см. bookDamage): `okill=целиком лишних/из них по приказу/из них мили/урон сверх добивания/назначений/урон
  *  расписан всего`; суд премиссы `okkill=погибло/расписано насмерть/урон сверх у погибших/у выживших` (см. judgeOverkill). */
