@@ -106,10 +106,13 @@ def repeated_selection(files):
 # спрятавшее запись внутрь `val x = … run { … Memory.X.add(id) … }`, нельзя ни посчитать отдельно от записи, ни вычислить
 # дважды (а полный обход таблиц этапа 3 вычисляет условия всех строк). Список пополняется этапами 3 и 4; v448 (пункт Б.3
 # оператора) добавил scoreCell и updateKeepers — оставшиеся два места с тем же рисунком, названные находкой этапа 2.
-PURE_INITIALIZERS = {'creepTurn', 'buildTurn', 'buildStride', 'freeStep', 'commandFight', 'scoreCell', 'updateKeepers'}
+# v456 (второй шаг архитектуры, этап 3): построители `buildStride` / `buildTurn` становятся ТЕЛАМИ КЛАССОВ-носителей — поле объявлено
+# там, где вычислено; запись или счётчик между фактами стоит блоком `init { … }` на прежнем месте последовательности, а не внутри
+# выражения `val … =`. Имя класса-носителя в этом списке проверяется так же, как имя функции.
+PURE_INITIALIZERS = {'creepTurn', 'buildTurn', 'Stride', 'freeStep', 'commandFight', 'scoreCell', 'updateKeepers'}
 EFFECT = re.compile(r'(?<![+\w])(\w+)(?:\.\w+)*\+\+|\+\+\w|Memory\.\w+(\[[^\]]*\]\s*=(?!=)|\.(add|remove|clear|put|addAll|retainAll|removeAll|getOrPut)\b)')
 DECL = re.compile(r'^\s*(?:private |internal )?va[lr] [\w<>?:, ()]+?=(?!=)')
-FUN = re.compile(r'\bfun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?(\w+)\s*\(')
+FUN = re.compile(r'\b(?:fun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?|class\s+)(\w+)\s*\(')
 
 
 def effect_in_initializer(files):
@@ -139,7 +142,7 @@ def effect_in_initializer(files):
             for i, ch in enumerate(code):
                 if ch == '{':
                     head = code[:i]
-                    kind = 'fun' if re.search(r'\bfun\b[^{]*$', head) else 'decl' if decl_line and '=' in head else 'blk'
+                    kind = 'fun' if re.search(r'\b(?:fun|class)\b[^{]*$', head) else 'decl' if decl_line and '=' in head else 'blk'
                     stack.append([kind, n, set()])
                 elif ch == '}' and stack:
                     stack.pop()
@@ -184,7 +187,8 @@ def _ctor_fields(files, cls):
             k, d = j + 1, 1
             while k < len(text) and d:
                 if d == 1:
-                    mm = re.match(r'[ \t]*(?:private |internal |override |lateinit )*va[lr] (\w+)\b', text[k:]) if text[k - 1] == '\n' else None
+                    # `private` поле носителя строка таблицы (лямбда с получателем, снаружи класса) не видит — затенить им нечего
+                    mm = re.match(r'[ \t]*(?:internal |override |lateinit )*va[lr] (\w+)\b', text[k:]) if text[k - 1] == '\n' else None
                     if mm:
                         fields.add(mm.group(1))
                 d += (text[k] == '{') - (text[k] == '}')
