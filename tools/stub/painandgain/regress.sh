@@ -485,6 +485,24 @@ done
 if [[ -x "$(command -v python3)" ]]; then
   python3 ./lint.py --gate
   python3 ../../depgraph.py ../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/painandgain --levels ./levels.txt --gate
+  # impure — ПЕРЕБОР ЗАМЫСЛОВ КОМАНДИРА ЧИСТ (20.09.2026, docs/pain-and-gain-architecture-2.md, этап 6.7): проба замысла считает в свою
+  # запись, в мир попадает только выбранная раздача (v449). Бот считает записи в общее состояние за время перебора (поле `impure=`
+  # строки `t=`, накопительно); в последней строке `t=` КАЖДОГО лога прогона оно обязано быть нулём. Лог без поля (сборка до v460) — не ошибка.
+  python3 - "$TAG" <<'PY'
+import glob, re, sys
+tag = sys.argv[1]; total = 0; seen = 0; bad = []
+for f in sorted(glob.glob('out/run-%s-*.log' % tag)):
+    last = None
+    for line in open(f, encoding='utf-8', errors='replace'):
+        if line.startswith('t='):
+            m = re.search(r' impure=(\d+)', line)
+            if m: last = int(m.group(1))
+    if last is None: continue
+    seen += 1; total += last
+    if last: bad.append(f)
+for f in bad[:10]: sys.stderr.write('impure: %s\n' % f)
+print('%-4s %-22s %-40s | errors: %d ' % ('PASS' if not total else 'FAIL', 'impure', 'writes during the commander search: %d over %d logs' % (total, seen), total))
+PY
 else
   printf '%-4s %-22s %-40s | errors: %s \n' FAIL "lint+graph" "python3 not found" 1
 fi
