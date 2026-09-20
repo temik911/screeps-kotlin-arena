@@ -17,7 +17,7 @@
 1: Geometry                                      # sym, mirrorTL — обход и сторона карты в своей системе координат
 2: World
 3: Forecast Strategist Missions
-4: Tactician Fight Formation Commander            # Commander — раздача командира (armyCommand): зовёт бой и строй, читает стратега
+4: Tactician Fight Deal Formation Commander            # Commander — раздача командира (armyCommand): зовёт бой и строй, читает стратега; Deal — носитель одной раздачи (v456)
 7: PainAndGain AbortRepair
 # вне уровней: читает всех, импортировать его может только оркестратор
 outside: Instruments <- PainAndGain
