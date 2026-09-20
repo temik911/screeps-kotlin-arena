@@ -369,7 +369,7 @@ def table_tags(files):
         for n, code in rows:
             for m in re.finditer(r'\b(\w+) = Tally\("([\w.]+)"', code):
                 tally[m.group(1)] = m.group(2)
-            for m in re.finditer(r'\b(?:walk|pass)\((\w+)(?:\(\))?, .*, ([\w.]+)\)', code):
+            for m in re.finditer(r'\b(?:walk|pass)\((?:[\w.]+\.)?(\w+)(?:\(\))?, .*, ([\w.]+)\)', code):     # `walk(pag.pushRules(), …)` — таблицу зовёт носитель
                 walks[m.group(1)] = m.group(2).split('.')[-1]
             for m in re.finditer(r'\brunPasses\((\w+), ([\w.]+)\)', code):
                 walks[m.group(1)] = m.group(2).split('.')[-1]
@@ -555,7 +555,8 @@ def member_vs_toplevel(files):
 
 
 # Носители (v456, второй шаг архитектуры, этап 3): класс, чьё тело — прежний построитель. Список пополняется с каждым новым носителем.
-CARRIERS = ['Turn', 'Stride', 'ArmyStance', 'ArmyTargets', 'ArmyMeasures', 'Ctx', 'RememberTick']
+CARRIERS = ['Turn', 'Stride', 'ArmyStance', 'ArmyTargets', 'ArmyMeasures', 'Ctx', 'RememberTick',
+            'StrategyPacks', 'StrategyThresholds', 'StrategyDetach', 'StrategyPush', 'StrategyContact', 'StrategyObjective', 'StrategyDecide', 'StrategyThreats']
 
 
 def carrier_method_order(files):
