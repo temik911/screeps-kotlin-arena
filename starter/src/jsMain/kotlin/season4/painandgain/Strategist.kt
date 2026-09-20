@@ -1400,6 +1400,10 @@ internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagIn
     // Здесь четыре ближайших к дому флага закрепляются за крипами на весь матч и меняются, только если крип погиб
     init {
         if (roster.safe) {
+            // прибор `garscout=` (v466, дефект 5): записи скаутов гарнизона на входе в тик гонки — чистка ниже их не удерживает (скаут не в
+            // составе и не в cmdDetach), и запись пересоздаётся по сегодняшней близости: на тот же флаг / на другой / не пересоздана
+            val scoutBefore = HashMap<String, String>()
+            for ((id, fid) in Squads.garrisonOf) if (ctx.runners.any { it.id == id && stripped(it) }) scoutBefore[id] = fid
             Squads.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Squads.cmdDetach.contains(id) }
             // ...и ШЕСТОЙ ФЛАГ — ТОЛЬКО ПРОТИВ РАССЫПАННОГО (v348): шестёрку гейт отверг на match29:camp (15 991 : 23 801),
             // где его армия собрана и ядру тоньше двух вооружённых уже не устоять; у けろびー армия рассыпана весь матч, и
@@ -1455,6 +1459,7 @@ internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagIn
                 if (!roster.coreHolds(without)) break
                 Squads.garrisonOf[c.id] = f.id
             }
+            for ((id, fid) in scoutBefore) { val now = Squads.garrisonOf[id]; if (now == null) garScoutLost.n++ else if (now == fid) garScoutSame.n++ else garScoutSwitch.n++ }
             // скаут-гарнизон ходит по тем же правилам бегуна: задание за ним, пока он жив
             for ((id, fid) in Squads.garrisonOf) if (ctx.runners.any { it.id == id && !hasWeapon(it) }) Squads.assign(id, fid)
             // ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v347): смена на флаге — раненый гарнизонный отдаёт флаг целому из ядра (v346). Наших
@@ -2972,6 +2977,13 @@ internal val budgetTicks = Gauges.counter("budget", 1)
 internal val objAll = Gauges.counter("objnone", 1)
 
 internal val objDropN = Gauges.counter("objdrop", 1)
+
+/** Записи скаутов гарнизона на входе в тик гонки (v466, дефект 5): пересоздана на тот же флаг / на другой / не пересоздана. */
+internal val garScoutSame = Gauges.counter("garscout")
+
+internal val garScoutSwitch = Gauges.counter("garscout", 1)
+
+internal val garScoutLost = Gauges.counter("garscout", 2)
 
 /** Ранние выходы гонки при непустом прежнем составе командира (v465, дефект 4): бой блокирует и держателей нет / свободных нет /
  *  бой блокирует при держателях / бюджет исчерпан. Первые два оставляют `cmdDetach` пустым до следующего тика. */
