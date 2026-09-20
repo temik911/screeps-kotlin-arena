@@ -860,6 +860,16 @@ internal class Deal(
                 rec.hadjnAll.n++
                 if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) rec.hadjnN.n++
             }
+            // ...И ОТДЕЛЬНО ПО СТРЕЛКАМ (v494, `rhadj=`), потому что снимают именно их. `rloss=` живьём против
+            // MetalicaX#17 говорит, что 62-99 % потерь наших стрелков приходит от его ЗАЛПА, а не от дошедшего мили,
+            // и тогда всё решает лечение, доставленное стрелку под огнём. `hadj=` этого не видит: он считает
+            // прилегание к ЛЮБОМУ теряющему хиты, а раненый мили в контакте есть почти всегда и забивает долю
+            val hurtRanged = losing.filter { hasRanged(it) }
+            if (hurtRanged.isNotEmpty()) {
+                rec.rhadjAll.n++
+                if (hurtRanged.any { a -> getRange(a, c) <= HEAL_RANGE + 1 }) rec.rhadjNear.n++
+                if (hurtRanged.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) rec.rhadjN.n++
+            }
         }
     }
 
