@@ -63,7 +63,7 @@ internal class GaugeField(val name: String) {
         parts[at] = part
     }
     fun print(): String {
-        val sb = StringBuilder(name.substringBefore('@')).append('=')     // `hunt@2` печатается как `hunt=`: в строке два поля с этим именем
+        val sb = StringBuilder(name).append('=')
         for (i in parts.indices) {
             val p = parts[i] ?: throw IllegalStateException("gauge $name: part $i of ${parts.size} is not declared")
             if (i > 0) sb.append(p.sep)
@@ -138,13 +138,12 @@ internal object Gauges {
     fun realsAt(key: String): DoubleArray = twins[key] as DoubleArray
     fun labelledAt(field: String): Labelled = twins["$field#0"] as Labelled
 
-    /** Строка приборов по раскладке: имена полей через пробел; имя с ведущим `<` печатается БЕЗ пробела перед собой. */
+    /** Строка приборов по раскладке: поля через пробел. */
     fun line(layout: List<String>): String {
         val sb = StringBuilder()
         for (i in layout.indices) {
-            val glued = layout[i].startsWith("<")
-            val name = if (glued) layout[i].substring(1) else layout[i]
-            if (i > 0 && !glued) sb.append(' ')
+            val name = layout[i]
+            if (i > 0) sb.append(' ')
             sb.append((fields[name] ?: throw IllegalStateException("gauge $name is in the layout and is declared nowhere")).print())
         }
         return sb.toString()

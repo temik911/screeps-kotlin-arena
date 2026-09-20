@@ -281,15 +281,14 @@ private var lineDeclared = false
 
 /**
  * РАСКЛАДКА СТРОКИ `t=` (v455, второй шаг архитектуры, этап 2): порядок полей — ЭТОТ список, и другого описания порядка нет.
- * Поле объявляет тот, кто его считает (`Gauges.counter("имя", часть)` у стадии — см. Gauges.kt); здесь — только имена. Имя с
- * хвостом `@2` — второе поле с тем же печатным именем (в строке два `hunt=`: охота за остовами и «охотимся на угрозу»); имя с
- * ведущим `<` печатается без пробела перед собой: `fmassed=0stray=0` — склейка, которой прибор `stray` невидим для `series.py`
- * с момента появления; она воспроизводится побайтно до решения оператора (docs/pain-and-gain-architecture-2.md, 2.8, п. 1).
+ * Поле объявляет тот, кто его считает (`Gauges.counter("имя", часть)` у стадии — см. Gauges.kt); здесь — только имена. Имя
+ * в строке одно: до v461 полей `hunt=` было два (охота за остовами и «охотимся на угрозу» — второе стало `hthreat=`), а `stray=`
+ * печатался вплотную к `fmassed=` и был невидим для `series.py` с момента появления (docs/pain-and-gain-architecture-2.md, 2.8, п. 1).
  */
 internal val T_LINE = listOf(
     "t", "army", "runners", "enemies", "reach", "spread", "hfar", "hparts", "ehparts", "hcov", "hulk", "hulkreach",
     "revived", "chase", "kills", "capgate", "cap", "capq", "capqu", "capu", "capeval", "capidle", "mstrip", "poised", "edge",
-    "capopp", "ffight", "fmassed", "<stray", "sout", "hold", "gsafe", "fguard", "route", "man", "gcov", "courier", "hunt",
+    "capopp", "ffight", "fmassed", "stray", "sout", "hold", "gsafe", "fguard", "route", "man", "gcov", "courier", "hunt",
     "toothless", "sit", "keep2", "keep3", "scout", "spotm", "spothold", "sym", "split", "recall", "healgap", "nomedic",
     "flip", "aggro", "pushheld", "lethal", "ledgerw", "breakoff", "race", "poisedcost", "objnone", "objdrop", "budget",
     "runner", "cmdwhy", "ovl", "conc", "concall", "concmax", "concfan", "lostrace", "gather", "close3", "guard", "warm",
@@ -299,7 +298,7 @@ internal val T_LINE = listOf(
     "hwall", "hwallh", "hwalla", "hwallp", "postc", "rot", "mdir", "hfull", "hover", "hswap", "hexp", "hlost", "hwallx",
     "hpick", "hadj", "hadjn", "hfire", "hstill", "cmdheal", "dh", "retr", "standfire", "outmw", "score", "rate", "behind",
     "passive", "flags", "obey", "branch", "fled", "clash", "lost", "kite", "massed", "plan", "cmd", "mode", "disp", "evt",
-    "fire", "posture", "obj", "hunt@2", "rush", "weak", "pat", "strip", "touch", "touchl", "out", "back", "guns", "mheal",
+    "fire", "posture", "obj", "hthreat", "rush", "weak", "pat", "strip", "touch", "touchl", "out", "back", "guns", "mheal",
     "hline", "fall", "our", "enemy", "ledger", "wounded", "hits", "enemyHits", "centroid", "enemyCentroid",
     "squads", "dbl", "impure",
 )
@@ -360,7 +359,7 @@ private fun declareLine() {
     Gauges.computed("fire") { "${FireBook.fireOf.size}" }
     Gauges.computed("posture") { "$posture" }
     Gauges.computed("obj") { "${objectiveFlagId?.let { id -> tickView.ctx.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"}" }
-    Gauges.computed("hunt@2") { "$huntingThreat" }
+    Gauges.computed("hthreat") { "$huntingThreat" }
     Gauges.computed("rush") { "${Signals.unflaggedRushNow}" }
     Gauges.computed("weak") { "$outmatchedTicks" }
     Gauges.computed("touch") { "${(Prev.touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(Prev.hisTouchShare * 100).toInt()}" }
