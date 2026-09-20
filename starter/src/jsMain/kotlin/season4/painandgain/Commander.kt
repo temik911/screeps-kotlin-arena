@@ -56,16 +56,16 @@ internal class ArmyCommandOut(
 )
 
 /** РАЗДАЧА КОМАНДИРА (v256, этап 10; сегмент runArmy): режим FIGHT — перебор замыслов commandFight с прогнозом Forecast.simulate, изготовка (Formation.brace) и гонка (commandRace, commandGoal, commandMarch), погоня (assignChase), постановка стратега для прибора disp= и букв заданий missionOf. Перенесено дословно. */
-internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyCommandOut {
+internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyCommandOut {
     val ourFlagCells = ctx.ourFlags.mapTo(HashSet()) { it.pos.key }
-    val commanderNow =  cmdMode == CmdMode.FIGHT
+    val commanderNow =  strat.dec.decision.cmdMode == CmdMode.FIGHT
     // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
     // он перестаёт молчать там, где раньше просто уступал место старым правилам
     // ...и ПОХОД — тот же вопрос, что гонка, только врага рядом нет: командир так же раздаёт флаги группами,
     // а ядро держит вместе. Прежняя попытка вести поход (v151) провалилась 0-8 потому, что вела его РАЗДАЧА
     // КЛЕТОК ПРОТИВ СТРОЯ — расстановка, которой в походе нечего расставлять; здесь у похода свой режим (v160)
     val raceCommandNow = 
-        (cmdMode == CmdMode.RACE || (cmdMode == CmdMode.MARCH))
+        (strat.dec.decision.cmdMode == CmdMode.RACE || (strat.dec.decision.cmdMode == CmdMode.MARCH))
     // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
     // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
     if (commanderNow) cmdTicks++ else cmdBlocked = strat.dec.cmdWhyNow
@@ -78,7 +78,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
     // раздача, когда он правит, и обычная цепочка целей (ветка `chase`), когда молчит
     assignChase(meas.chase.mobileArmy, meas.forces.enemyCreeps, meas.forces.armedEnemies)
     val disposition = Strategist.snapshot(ctx.army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
-        Memory.keeperIds, Memory.chaseOf, posture, cmdMode, objectiveFlagId, meas.forces.armedEnemies)
+        Memory.keeperIds, Memory.chaseOf, posture, strat.dec.decision.cmdMode, objectiveFlagId, meas.forces.armedEnemies)
     dispNow = Strategist.summary(disposition)
     Orders.missionOf.clear()
     for (sq in disposition.squads) for (id in sq.members) Orders.missionOf[id] = sq.mission.tag
@@ -201,7 +201,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         val hunting = commandHunt(ctx, restCore, meas.forces.armedEnemies, Orders.commandOf)
         if (!hunting && meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
-            val goal = commandGoal(ctx, meas.view, meas.chase.mobileArmy, meas.forces.armedEnemies)
+            val goal = commandGoal(ctx, meas.view, strat.obj.approachRate, strat.detach.farmerQuietNow, meas.chase.mobileArmy, meas.forces.armedEnemies)
             cpuMark("p.goal")
             val steps = HashMap<String, Position>()
             commandMarch(ctx, notCmdDetached(meas.chase.mobileArmy), goal, steps)
@@ -334,7 +334,7 @@ internal class OrderAuditOut(
 )
 
 /** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
-internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): OrderAuditOut {
+internal fun orderAudit(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets): OrderAuditOut {
     val seen = HashMap<Int, Int>()
     Orders.commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
     val dup = seen.values.count { it > 1 }
@@ -352,7 +352,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTarg
     if (dup > 0 && DEBUG_LOG) {
         val where = seen.entries.firstOrNull { it.value > 1 }?.key ?: 0
         val who = Orders.commandOf.filterValues { it.key == where }.keys.joinToString(",")
-        println("clash t=${getTicks()}: mode=$cmdMode cell=(${where / 100},${where % 100}) who=$who")
+        println("clash t=${getTicks()}: mode=${strat.dec.decision.cmdMode} cell=(${where / 100},${where % 100}) who=$who")
     }
     // ЗАЖАТОГО БЬЁМ — ПРИБОР (v264): считается по итоговым приказам, а не внутри раздачи — та идёт по разу на
     // замысел перебора и насчитала бы пробные планы. Сначала сверка вчерашних постановок, потом сегодняшние

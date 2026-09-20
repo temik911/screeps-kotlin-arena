@@ -184,12 +184,12 @@ internal fun hypoMods(type: String, k: Double) = HypoMods(
 
 /** Мощь стороны по Ланчестеру против группы противника: √(её урон − его лечение) × её хиты; mods — её
  *  гипотетические множители, oppMods — множитель лечения противника. */
-internal fun PainAndGain.powerOf(side: List<Creep>, opp: List<Creep>, mods: HypoMods, oppMods: HypoMods): Double {
+internal fun powerOf(side: List<Creep>, opp: List<Creep>, mods: HypoMods, oppMods: HypoMods): Double {
     // удар мили — с долей смежности (v103, USE_MELEE_ADJACENCY_SHARE); хиты (weightedHits) без неё
     val his = side.firstOrNull()?.my == false
     // доля касаний — последняя ИЗМЕРЕННАЯ за полное окно (v433, USE_TOUCH_SHARE_LAST), а не единица, которую окно
     // показывает вне контакта: ATTACK бьёт на 1, и разрыв контакта не делает мили досягающим
-    val share = if (USE_TOUCH_SHARE_LAST) (if (his) hisTouchShareLast else touchShareLast) else (if (his) hisTouchShare else touchShare)
+    val share = if (USE_TOUCH_SHARE_LAST) (if (his) hisTouchShareLast else touchShareLast) else (if (his) Prev.hisTouchShare else Prev.touchShare)
     val meleeK = mods.melee * share
     val dps = side.sumOf { effectiveDps(it, opp, mods.ranged, meleeK) }
     val heal = opp.sumOf { InfluenceMap.profileOf(it).heal } * oppMods.heal
@@ -197,21 +197,21 @@ internal fun PainAndGain.powerOf(side: List<Creep>, opp: List<Creep>, mods: Hypo
 }
 
 /** Мощь по УЧАСТИЮ: считает только тех, кто достаёт цель, и решает «вступать ли в бой здесь и сейчас» (v140). */
-internal fun PainAndGain.ourPowerReach(ours: List<Creep>, theirs: List<Creep>): Double {
+internal fun ourPowerReach(ours: List<Creep>, theirs: List<Creep>): Double {
     val v = powerOf(ours, theirs, NO_MODS, NO_MODS)
     return v
 }
 
-internal fun PainAndGain.enemyPowerReach(theirs: List<Creep>, ours: List<Creep>): Double {
+internal fun enemyPowerReach(theirs: List<Creep>, ours: List<Creep>): Double {
     val v = powerOf(theirs, ours, NO_MODS, NO_MODS)
     return v
 }
 
 /** НАША мощь против группы врага (текущие эффекты). */
-internal fun PainAndGain.ourPowerOf(ours: List<Creep>, theirs: List<Creep>): Double = powerOf(ours, theirs, NO_MODS, NO_MODS)
+internal fun ourPowerOf(ours: List<Creep>, theirs: List<Creep>): Double = powerOf(ours, theirs, NO_MODS, NO_MODS)
 
 /** Мощь врага против нашей группы (текущие эффекты). */
-internal fun PainAndGain.enemyPowerOf(theirs: List<Creep>, ours: List<Creep>): Double = powerOf(theirs, ours, NO_MODS, NO_MODS)
+internal fun enemyPowerOf(theirs: List<Creep>, ours: List<Creep>): Double = powerOf(theirs, ours, NO_MODS, NO_MODS)
 
 internal const val POWER_REACH_TICKS = 2
 

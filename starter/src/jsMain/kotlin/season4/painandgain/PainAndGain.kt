@@ -131,8 +131,6 @@ object PainAndGain {
 
 
 
-    internal var approachRate = 0.0
-    internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
 
 
 
@@ -159,7 +157,7 @@ object PainAndGain {
     }
 
     private fun tickBody() {
-        val ctx = Ctx(this)
+        val ctx = Ctx()
         // ПРИБОРЫ ПЕРВЫХ ТИКОВ (v447, этап 6): зонд, дамп карты и печать составов до этапа 6 звал сам `buildWorld` — мир
         // импортировал файл приборов. Зовёт их оркестровка, сразу после мира; порядок строк лога прежний (проверен оракулом)
         if (!greeted) {
@@ -173,7 +171,7 @@ object PainAndGain {
         readSignals(ctx)
         runRunners(ctx)
         cpuMark("runners")
-        val meas = runArmy(ctx)
+        val army = runArmy(ctx)
 
         // боевые интенты уходят в API до разрешения движения: стенд разрешает конфликты за клетку в порядке первого
         // интента крипа, и порядок «удар, затем ход» — часть тождества с эталоном v235 (движку порядок безразличен)
@@ -185,27 +183,25 @@ object PainAndGain {
         cpuSummary()
         // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
         if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
-        val rem = RememberTick(ctx, meas)
+        val rem = RememberTick(ctx, army?.meas, army?.strat, army?.stanceOut)
         printTick(ctx, rem)
     }
 
-    internal var hisTouchShare = 1.0
-    internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
 
 
 
 
-    /** Меры этого тика — для `RememberTick` (см. Prev); `null` в тике без армии. */
-    private fun runArmy(ctx: Ctx): ArmyMeasures? {
+    /** Носители стадий армии этого тика — для `RememberTick` (см. Prev); `null` в тике без армии. */
+    private fun runArmy(ctx: Ctx): ArmyTick? {
         if (ctx.army.isEmpty()) return null
         // хранители флагов — решение стратега; до v446 его звала первой строкой мера мира (ребро World → Strategist). До вызова в
         // armyMeasures не исполнялось ничего, кроме трёх чтений полей ctx, — порядок прежний
         updateKeepers(ctx, ctx.army)
         Memory.prevPosture = posture      // меры мира читают решение ПРОШЛОГО тика — явно, а не полем, которое стратег перепишет ниже
-        val meas = ArmyMeasures(ctx, this)
-        val strat = ArmyStrategy(ctx, meas, this)
-        val targ = ArmyTargets(ctx, meas, strat, this)
-        val stanceOut = ArmyStance(ctx, meas, strat, targ, this)
+        val meas = ArmyMeasures(ctx)
+        val strat = ArmyStrategy(ctx, meas)
+        val targ = ArmyTargets(ctx, meas, strat)
+        val stanceOut = ArmyStance(ctx, meas, strat, targ)
         armyBlock(ctx, meas, strat, targ, stanceOut)
         cpuMark("block")
         rotateByFocus(ctx.army, meas.forces.combatEnemies)
@@ -213,21 +209,20 @@ object PainAndGain {
         stepOutWounded(ctx.army, targ.zones.reachCells, strat.dec.enemyRetreating || !TacticianState.huntsWounded)
         armyCommand(ctx, meas, strat, targ, stanceOut)
         cpuMark("command")
-        orderAudit(ctx, meas, targ)
+        orderAudit(ctx, meas, strat, targ)
         healerWall(ctx, meas)
         cpuMark("plan")
         // ПОКРИПНАЯ ЛЕСТНИЦА — В ТАКТИКЕ (v251, этап 9): тело цикла перенесено в Tactician.kt дословно, величины тика —
         // в ArmyTick; порядок крипов тот же, проход один (см. заголовок Tactician.kt)
-        val tick = ArmyTick(meas, strat, targ, stanceOut, this)
+        val tick = ArmyTick(meas, strat, targ, stanceOut)
         for (creep in ctx.army) creepTurn(creep, ctx, tick)
 
         armyFireAndHeal(ctx, meas, targ)
-        return meas
+        return tick
     }
 
 
 
-    internal var cmdMode = CmdMode.MARCH
 
 
 }

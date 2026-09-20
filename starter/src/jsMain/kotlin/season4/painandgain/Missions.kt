@@ -61,16 +61,16 @@ internal fun wantsRunner(f: FlagInfo): Boolean {
     return !f.ours || occ == null
 }
 
-internal fun PainAndGain.runRunners(ctx: Ctx) {
+internal fun runRunners(ctx: Ctx) {
     val runners = ctx.runners
     Memory.idleRunnerIds.clear()
     if (runners.isEmpty()) { Memory.runnerFlag.clear(); return }
-    val match = RunnerMatch(ctx, runners, this)
-    RunnerMoves(ctx, runners, match, this)
+    val match = RunnerMatch(ctx, runners)
+    RunnerMoves(ctx, runners, match)
 }
 
 /** ПОДСТАДИЯ 1 БЕГУНОВ: назначение — держатели, охрана, пары командира и глобальное жадное паросочетание «захватчик — флаг»; пишет `Memory.runnerFlag`. */
-internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep>, private val pag: PainAndGain) {
+internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep>) {
     init { Memory.runnerFlag.keys.retainAll { id -> runners.any { it.id == id } } }
     val flagById = ctx.flags.associateBy { it.id }
     // назначение — глобальное жадное паросочетание по ценности (лучшая пара «захватчик-флаг» первой),
@@ -118,7 +118,7 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
                     if (!armedRunner || occ.my) continue
                     val e = ctx.enemyCreeps.firstOrNull { it.x == f.pos.x && it.y == f.pos.y } ?: continue
                     if (ctx.enemyCreeps.any { it.id != e.id && getRange(it, f.pos) <= ENGAGE_RANGE }) continue
-                    if (pag.ourPowerOf(listOf(s), listOf(e)) <= pag.enemyPowerOf(listOf(e), listOf(s))) continue
+                    if (ourPowerOf(listOf(s), listOf(e)) <= enemyPowerOf(listOf(e), listOf(s))) continue
                 }
                 val flow = flowTo(ctx, f.pos)
                 val ticks = pathTicks(s, flow, s.key)
@@ -129,7 +129,7 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
                 val pack = packAt(ctx, f.pos, flow, ticks)
                 // тихий фермер бегуну не стая (v105, USE_FARMER_RUNNER_PACK_FREE); безоружному скауту — по-прежнему стая
                 if (pack.isNotEmpty() &&
-                    (!armedRunner || pag.enemyPowerOf(pack, listOf(s)) >= pag.ourPowerOf(listOf(s), pack))) continue
+                    (!armedRunner || enemyPowerOf(pack, listOf(s)) >= ourPowerOf(listOf(s), pack))) continue
                 // при охотнике (см. escapeFlows) флаг без выхода — карман: три безоружных крипа сидели на угловых флагах,
                 // пока армия врага шла к ним, и были добиты по одному — последний на 545-м тике, аннигиляция при +5000
                 // очков (матч 13)
@@ -138,16 +138,16 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
                 // чем угроза войдёт в его порог. Матч 407: армия 530 тиков в EVADE при его армии в 47 клетках, бегун scout_1 всё
                 // время RESERVE — у каждого флага запас выхода отрицателен или неизвестен; бегун — M1 на 100 хитов, армию не тянет
                 val hisNearestToFlag = ctx.threats.minOfOrNull { getRange(it, f.pos) } ?: Int.MAX_VALUE / 4
-                if (StrategistState.escapeFlows.isNotEmpty() && pag.exitMargin(ctx, f.pos, ticks) < 0) continue
+                if (StrategistState.escapeFlows.isNotEmpty() && exitMargin(ctx, f.pos, ticks, Prev.approachRate) < 0) continue
                 // свой пустой флаг стоит половину — но СИДЯЩИЙ на нём закрывает клетку от чужих бегунов (матч 2:
                 // центральный D5 забрал вражеский M1, пока армия уходила за соседним флагом, и вернуть его было
                 // некому); чужой — двойной размен; флаг, который порог силы сейчас не разрешает, — пятую часть
                 // (ждать у него можно, но сидеть на своём полезнее); дорогой по силе — позже дешёвого (см.
                 // captureCost); текущий — с премией
-                val gain = (if (f.ours) 0.5 * f.score else f.swing) * pag.captureCost(ctx, f)
-                val horizon = if (pag.farmerQuietNow) maxOf(1, arenaInfo.ticksLimit - getTicks() - ticks).toDouble() else 1.0 / (ticks + 5)
+                val gain = (if (f.ours) 0.5 * f.score else f.swing) * captureCost(ctx, f)
+                val horizon = if (Prev.farmerQuietNow) maxOf(1, arenaInfo.ticksLimit - getTicks() - ticks).toDouble() else 1.0 / (ticks + 5)
                 val value = gain * horizon *
-                    (if (f.id == currentId) 1.25 else 1.0) * (if (!f.ours && !pag.captureAllowed(ctx, f, Prev.exchange, serious = false)) 0.2 else 1.0)   // оценка, не ворота (v451, capeval=)
+                    (if (f.id == currentId) 1.25 else 1.0) * (if (!f.ours && !captureAllowed(ctx, f, Prev.exchange, serious = false)) 0.2 else 1.0)   // оценка, не ворота (v451, capeval=)
                 cands.add(Cand(s, f, value))
             }
         }
@@ -182,8 +182,8 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
                 val occ = ctx.enemyCreeps.filter { it.x == f.pos.x && it.y == f.pos.y }
                 val pack = (packAt(ctx, f.pos, flow, ticks) + occ).distinctBy { it.id }
                 if (pack.isEmpty()) continue
-                if (pag.ourPowerOf(free, pack) <= pag.enemyPowerOf(pack, free)) continue
-                if (StrategistState.escapeFlows.isNotEmpty() && pag.exitMargin(ctx, f.pos, ticks) < 0) continue
+                if (ourPowerOf(free, pack) <= enemyPowerOf(pack, free)) continue
+                if (StrategistState.escapeFlows.isNotEmpty() && exitMargin(ctx, f.pos, ticks, Prev.approachRate) < 0) continue
                 for (r in free) { assigned.add(r.id); Memory.runnerFlag[r.id] = f.id }
                 taken.add(f.id)
             }
@@ -193,7 +193,7 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
 }
 
 /** ПОДСТАДИЯ 2: ход каждого бегуна по назначенному флагу — удар вплотную, бегство, резерв, выход, удержание, охрана, подход; прибор забега (`dbg`). */
-internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep>, private val match: RunnerMatch, private val pag: PainAndGain) {
+internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep>, private val match: RunnerMatch) {
     private fun dbg(s: Creep, mode: String, f: FlagInfo?, step: Position? = null) {
         // ПРИБОР ЗАБЕГА (v216): все ветки поведения бегуна проходят ровно здесь, поэтому счёт стоит тут, а не
         // в каждой из них. Считается ВСЕГДА, независимо от DEBUG_LOG: прибор, который виден только в логе с
@@ -225,7 +225,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             val outgunned = !hasWeapon(s) || run {
                 val foes = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER }
                 val mates = (ctx.army + runners).filter { hasWeapon(it) && getRange(s, it) <= RANGED_RANGE }
-                foes.isNotEmpty() && pag.enemyPowerOf(foes, mates) >= pag.ourPowerOf(mates, foes)
+                foes.isNotEmpty() && enemyPowerOf(foes, mates) >= ourPowerOf(mates, foes)
             }
             // ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v329): «держатель уходит только от полученного урона, а не от счёта стволов» (v327).
             // Основание было сильным — 90,6 % потерь флага это сход держателя (581 из 641), ни одной потери под нашим телом,
@@ -269,8 +269,8 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 continue
             }
             // выход закрывается (см. exitMargin): с флага — в лучшую точку выхода, пока устье открыто
-            if (f != null && StrategistState.escapeFlows.isNotEmpty() && getRange(s, f.pos) <= 2 && pag.exitMargin(ctx, f.pos, 0) < 0) {
-                val to = pag.runnerEscape(ctx, s)
+            if (f != null && StrategistState.escapeFlows.isNotEmpty() && getRange(s, f.pos) <= 2 && exitMargin(ctx, f.pos, 0, Prev.approachRate) < 0) {
+                val to = runnerEscape(ctx, s, Prev.approachRate)
                 if (to != null) {
                     val step = pathStep(s, to, 1, ctx.dangerMatrix)
                     if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
@@ -290,7 +290,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 continue
             }
             // брать ли флаг сейчас (дебафф): нельзя — ждём рядом, шаг на клетку сделаем, когда станет можно
-            val block = pag.captureBlock(ctx, f, Prev.exchange)
+            val block = captureBlock(ctx, f, Prev.exchange)
             val allowed = block == null
             val range = if (allowed) 0 else 1
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)

@@ -67,7 +67,6 @@ internal class Deal(
     private val army: List<Creep>, private val combatEnemies: List<Creep>, private val armedEnemies: List<Creep>,
     private val out: MutableMap<String, Position>, private val intent: Intent, private val ourFlagCells: Set<Int>, private val healersOnly: Boolean,
     private val fighters: List<Creep>, private val enemyAt: HashSet<Int>, private val cells: HashMap<Int, Position>,
-    private val pag: PainAndGain,
 ) {
     // якорь кулака не читается нигде (мёртв), а сам вызов нужен: Formation.fist СУЖАЕТ `cells` на месте
     val fistAnchor = Formation.fist(fighters, cells)

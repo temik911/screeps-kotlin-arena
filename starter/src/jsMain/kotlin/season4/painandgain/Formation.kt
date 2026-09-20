@@ -424,7 +424,7 @@ internal fun flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int, lead: Creep
 
 /** Мини-состояние для симуляции (v138): позиция, хиты и профиль крипа. */
 
-internal fun PainAndGain.planBlock(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
+internal fun planBlock(approachRate: Double, army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
     val melees = lineMelees(army)
     val rangeds = lineRangeds(army)
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
@@ -693,7 +693,7 @@ internal class ArmyBlockOut(
 )
 
 /** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
-internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyBlockOut {
+internal fun armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyBlockOut {
     if (stanceOut.windows.blockOn) {
         // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
         // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
@@ -743,7 +743,7 @@ internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStra
         // командирские клетки — два ответа на один вопрос «кто где стоит»; пока командир ведёт бой, спрашивать
         // второй раз незачем, и крип, которому клетки не досталось, шёл в слот прежней расстановки
         if (planNow) planFight(meas.chase.mobileArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, meas.forces.enemyCreeps, targ.zones.slotOf, targ.focus.focusTarget)
-        else planBlock(meas.chase.mobileArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, targ.zones.slotOf)
+        else planBlock(strat.obj.approachRate, meas.chase.mobileArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, targ.zones.slotOf)
     }
     return ArmyBlockOut(
     )

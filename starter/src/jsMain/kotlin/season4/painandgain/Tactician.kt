@@ -88,7 +88,7 @@ internal fun priorityOf(step: RowMark, rung: RowMark): Priority = when {
 }
 
 /** Отдать предложение арбитру: перепись (прежняя и новая) и запрос хода — в прежнем порядке побочных действий. */
-internal fun PainAndGain.submit(p: Proposal, ctx: Ctx, view: ExchangeView) {
+internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView) {
     rungCount.bump(p.rung)
     stepCount.bump(p.stepTag)
     tacCount.bump(p.why)
@@ -113,11 +113,6 @@ internal class ArmyTick(
     val strat: ArmyStrategy,
     val targ: ArmyTargets,
     val stanceOut: ArmyStance,
-    /** Оркестратор — носителям хода ([Turn], [Stride]), ПАРАМЕТРОМ (v456): то, что ещё остаётся его членом (величины одного тика и
-     *  коллекции — до этапа 6 второго шага архитектуры), носитель читает явно, `t.pag.lostTick`. Квалифицированное
-     *  `PainAndGain.lostTick` дало бы модулю тактика импорт объекта-оркестратора — ребро вверх, 4 → 7, которое гейт графа не
-     *  пропускает; приёмник расширения приходил так же — параметром, без импорта. Поле исчезает вместе с последним членом. */
-    val pag: PainAndGain,
 )
 
 /**
@@ -441,7 +436,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // локальный перевес: бойцы, способные стрелять по той же цели через тик-другой, против врагов в их
     // досягаемости; цена боя — по ГРУППЕ (самый большой запас хода), в контакте цена больше не гейт
     val localAggressive = when {
-        posture.withdrawing -> AGGR.c("withdraw.contact", inContact(localEnemies, localAllies)) && AGGR.c("withdraw.power", t.pag.ourPowerOf(localAllies, localEnemies) >= t.pag.enemyPowerOf(localEnemies, localAllies) * ratio)
+        posture.withdrawing -> AGGR.c("withdraw.contact", inContact(localEnemies, localAllies)) && AGGR.c("withdraw.power", ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio)
         // добивание: армия в целом сильнее (или в контакте без отхода), но ЯВНО слабейшая на месте группа
         // отходит к массе — «всегда агрессивен» посылал четверых на двенадцать (матч 2 на стенде). Вход в
         // бой при 0.9 (при равных силах никто не вступал в бой — рывок врага кончался ничьёй), выход — только
@@ -451,12 +446,12 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         // есть масса, и «отход к центру» был шагом на месте под ударами (матч 3, t=140–280: армия из
         // семи-восьми «отходила к центру» сто сорок тиков и потеряла всех по одному, не стреляя в ответ)
         posture == Posture.ANNIHILATE -> AGGR.c("annihilate.noFoeOrMassOrPower", localEnemies.isEmpty() || localAllies.size * 2 >= strat.dec.combatArmy.size ||
-            t.pag.ourPowerReach(localAllies, localEnemies) >= t.pag.enemyPowerReach(localEnemies, localAllies) * (if (creep.id in Memory.aggressiveIds) ANNIHILATE_HOLD_RATIO else LOCAL_ENTER_RATIO))
+            ourPowerReach(localAllies, localEnemies) >= enemyPowerReach(localEnemies, localAllies) * (if (creep.id in Memory.aggressiveIds) ANNIHILATE_HOLD_RATIO else LOCAL_ENTER_RATIO))
         localEnemies.isEmpty() -> true
         // без боевого своего в четырёх клетках (раненый один) запаса хода нет: maxOf пустого списка бросал
         // NoSuchElementException КАЖДЫЙ тик до конца матча — армия стояла 1500 тиков после выигранного боя
         // (стенд m19 nine, v30; в v29 то же падало в m8 rush t=115–120 и m28 wing t=1200, стенд этого не считал)
-        else -> AGGR.c("power", t.pag.ourPowerOf(localAllies, localEnemies) >= t.pag.enemyPowerOf(localEnemies, localAllies) * ratio) &&
+        else -> AGGR.c("power", ourPowerOf(localAllies, localEnemies) >= enemyPowerOf(localEnemies, localAllies) * ratio) &&
             AGGR.c("affordableOrContact", fightCost(localEnemies, localAllies) <= (localAllies.maxOfOrNull { speedSlack(it) } ?: 0) || inContact(localEnemies, localAllies))
     }
     init { Memory.aggressiveLatch.set(creep.id, localAggressive) }
@@ -989,7 +984,7 @@ private var stepRows: List<Row<Stride, Position?>>? = null
  * матчах серии v447. Тела стуба на синтетической карте (T2M5A3, ATTACK в хвосте) вне ворот; там неподвижный крип
  * предложил бы шаг, который оркестровка не отдаёт разводу (`resolve` берёт только `canMove`).
  */
-internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stride, Position?>>(
+internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stride, Position?>>(
     // ВЫЖИВАНИЕ ВЫШЕ ЗАДАНИЯ (v240, этап 5 переработки, решение оператора 13.09.2026): крип под смертельным
     // огнём бежит, даже если у него приказ командира или пост хранителя. До v240 приказ стоял выше бегства
     // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
@@ -1028,7 +1023,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
 /** Ход одного бойца армии: тело прежнего цикла runArmy без изменений (см. заголовок файла). С v444 оно разложено по швам, в том
  *  же порядке: факты ([buildTurn]) → цель по лестнице → поле, бегство, сплочение → шаг → предложение арбитру.
  *  Имена читаются так: локальная → поле [Turn] → поле [ArmyTick] → член `PainAndGain` → верх пакета. */
-internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
+internal fun creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
     val tracing = traceNow(getTicks())
     if (tracing) forgetFirstFalse()
     val turn = Turn(creep, ctx, t)
@@ -1305,13 +1300,13 @@ internal fun passable(x: Int, y: Int, blockedSet: Set<Int>, enemyPositions: Set<
 
 
 /** ЦЕЛИ ТИКА ДЛЯ ТАКТИКА (v256, этап 10; сегмент runArmy): позиции и занятость, фокус огня (focusTarget, focusOrder), добыча, захватчик цели, авангард и готовность строя, досягаемость его стволов (reachCells, reachNow). Перенесено дословно. */
-internal class ArmyTargets(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, pag: PainAndGain) {
+internal class ArmyTargets(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy) {
     val pool = TargetsPool(ctx, meas, strat)
     val focus = TargetsFocus(ctx, meas, strat, pool)
     val quarry = TargetsQuarry(ctx, meas, strat)
-    val takers = TargetsTakers(ctx, meas, strat, pag)
+    val takers = TargetsTakers(ctx, meas, strat)
     val form = TargetsForm(meas, takers)
-    val zones = TargetsZones(ctx, meas, pag)
+    val zones = TargetsZones(ctx, meas)
 }
 
 /** ПОДСТАДИЯ 1 ЦЕЛЕЙ: позиции и занятость клеток, его мили, пул огня — кто в дальности, сколько огня достаёт цель, цели-скауты. */
@@ -1611,7 +1606,7 @@ internal class TargetsQuarry(private val ctx: Ctx, private val meas: ArmyMeasure
 }
 
 /** ПОДСТАДИЯ 4 ЦЕЛЕЙ: центр вооружённых, захватчик флага-цели и попутные захватчики ближних флагов. */
-internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategy, private val pag: PainAndGain) {
+internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategy) {
     val armedCentroid = clusterCentroid(armedOf(meas.chase.mobileArmy).ifEmpty { ctx.army }) ?: strat.threats.centroid
     // захватчик флага-цели — ближайший к флагу ВООРУЖЁННЫЙ член группы (одной клетки на всех не хватит; лекарь
     // ходит за подопечным, и назначенный захватчиком лекарь тысячу тиков стоял рядом с флагом — стенд greedy)
@@ -1622,7 +1617,7 @@ internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasure
         for (f in ctx.flags) {
             if (f.ours || f.occupant != null || f.id == objectiveFlagId) continue
             if (meas.forces.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
-            if (!pag.captureAllowed(ctx, f, meas.view)) continue
+            if (!captureAllowed(ctx, f, meas.view)) continue
             // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
             val near = meas.chase.mobileArmy.filter { getRange(it, f.pos) <= 3 && (hasWeapon(it)) }
                 .minByOrNull { getRange(it, f.pos) } ?: continue
@@ -1680,7 +1675,7 @@ internal class TargetsForm(private val meas: ArmyMeasures, private val takers: T
 }
 
 /** ПОДСТАДИЯ 6 ЦЕЛЕЙ: досягаемость врага для лекаря и раненого, клетки огня, живы ли лекари, слоты тика. */
-internal class TargetsZones(private val ctx: Ctx, private val meas: ArmyMeasures, private val pag: PainAndGain) {
+internal class TargetsZones(private val ctx: Ctx, private val meas: ArmyMeasures) {
     // досягаемость врага для лекаря и раненого (см. reachCells): стрелок бьёт на 3, мили шагнёт и ударит на 2. Тело
     // лекаря HHHHHHMMMMMM — лечение впереди, и первое же попадание снимает 12 лечения в тик навсегда; наши лекари
     // входили в зону огня к подопечному и к 130-му были M6H4/M6H2, лекари врага за строем не получили ни царапины

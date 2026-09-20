@@ -163,4 +163,13 @@ internal object Prev {
     /** Размен и потери его стороны за окно — для строки `t=` (поле `ledgerw`), которая печатается и в тике без армии. */
     var ledgerWindow = 0
     var hisLostWindow = 0
+    /** Темп сближения его армии с нашей (пишет `StrategyObjective`): вчерашний читают `readSignals` и бегуны (`exitMargin`, `runnerEscape`). */
+    var approachRate = 0.0
+    /** Противник тих `FARMER_QUIET` с первой досягаемости (пишет `StrategyDetach`): вчерашний читает горизонт ценности флага у бегунов. */
+    var farmerQuietNow = false
+    /** Доля мили, достающих врага, за окно контакта — наша и его (пишет `StanceWindows`): вчерашнюю читает `StrategyDetach`, стоящий раньше. */
+    var touchShare = 1.0
+    var hisTouchShare = 1.0
+    /** Режим командира (пишет `StrategyDecide`) — для строки `t=` (поле `mode`), которая печатается и в тике без армии. */
+    var cmdMode = CmdMode.MARCH
 }

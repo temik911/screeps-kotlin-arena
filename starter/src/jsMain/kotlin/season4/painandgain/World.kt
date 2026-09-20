@@ -63,7 +63,7 @@ internal class FlagInfo(val flag: ScoreFlag, val mine: Boolean?, val type: Strin
 }
 
 /** СБОРКА МИРА (v257, этап 10; начало tickBody): сброс тиковых кэшей, крипы обеих сторон, дом, флаги с эффектами и счётом, раздел армии и бегунов, препятствия, поля влияния, матрицы опасности, карта расстояний, Ctx, прибытие врага. Перенесено дословно. */
-internal class Ctx(private val pag: PainAndGain) {
+internal class Ctx() {
     init { BodyMemo.bodyWeightNow.clear() }
     init { BodyMemo.liveMovesNow.clear() }
     init { Executor.clear() }
@@ -658,13 +658,13 @@ private val MARCH_STALLED = Why("marchStalled")
 private val ZERO_LEAD = Why("zeroLead")
 
 /** МЕРЫ АРМИИ ЗА ТИК (v256, этап 10; сегмент runArmy): бойцы и его вооружённые, сомкнутость, охота (huntable), масса и контакт, истории дистанций и центров, простой и бесплодная охота, отход по размену, признак «слабее», выполнимость отхода. Перенесено дословно. */
-internal class ArmyMeasures(ctx: Ctx, pag: PainAndGain) {
+internal class ArmyMeasures(ctx: Ctx) {
     val forces = MeasuresForces(ctx)
-    val exchange = MeasuresExchange(ctx, forces, pag)
-    val chase = MeasuresChase(ctx, forces, exchange, pag)
+    val exchange = MeasuresExchange(ctx, forces)
+    val chase = MeasuresChase(ctx, forces, exchange)
     /** Размен этого тика для ворот захвата, вызванных из `runArmy` (см. [ExchangeView]). */
     val view = ExchangeView(chase.stalled, exchange.exchangeLive, exchange.ourLostWindow)
-    val fight = MeasuresFight(ctx, forces, exchange, chase, pag)
+    val fight = MeasuresFight(ctx, forces, exchange, chase)
 }
 
 /** ГРУППА МЕР 1: силы сторон — свои, его крипы, его боевые и вооружённые, наши ударные; собран ли он массой. */
@@ -688,7 +688,7 @@ internal class MeasuresForces(private val ctx: Ctx) {
 }
 
 /** ГРУППА МЕР 2: размен — счёт потерь хитов за матч и за окно, жив ли размен, окупается ли он. */
-internal class MeasuresExchange(private val ctx: Ctx, private val forces: MeasuresForces, private val pag: PainAndGain) {
+internal class MeasuresExchange(private val ctx: Ctx, private val forces: MeasuresForces) {
     // чистый урон врагу за окно: сумма его хитов ниже, чем STALL_TICKS тиков назад (попадание с полным лечением в тот же
     // тик — не прогресс: стрелок россыпи с трёх клеток попадал, лечился, и «обмен уронами» сбрасывал простой);
     // простой — только когда добыча в досягаемости броска, а прогресса нет (на марше к врагу за 20+ клеток простоя
@@ -730,7 +730,7 @@ internal class MeasuresExchange(private val ctx: Ctx, private val forces: Measur
 }
 
 /** ГРУППА МЕР 3: погоня — подвижная армия и догоняемые, кайт, пикет, стоящий марш, удержание дистанции, загнанная группа, затор. */
-internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresForces, private val exchange: MeasuresExchange, private val pag: PainAndGain) {
+internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresForces, private val exchange: MeasuresExchange) {
     val mobileArmy = ctx.army.filter { canMove(it) && it.id !in Memory.keeperIds }
     // ...а командир видит ВСЁ поле, включая хранителей флагов: решение снять хранителя — его, а не следствие того,
     // что он невидим (v173, оператор). Держат флаг они по-прежнему сами, пока приказа нет
@@ -831,7 +831,7 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
         }
         val group = still.filter { e -> still.count { getRange(e, it) <= ENGAGE_RANGE } >= SPLIT_MIN }
         group.isNotEmpty() && group.any { e -> chasers.any { getRange(it, e) <= ENGAGE_RANGE + RANGED_RANGE } } &&
-            pag.ourPowerOf(chasers, group) >= pag.enemyPowerOf(group, chasers) * PUSH_RATIO
+            ourPowerOf(chasers, group) >= enemyPowerOf(group, chasers) * PUSH_RATIO
     }
     val cornered = corneredInReach 
     init { if (DEBUG_LOG && cornered != corneredWas) println("cornered t=${exchange.now}: ${if (cornered) "a still weak group of his in reach — no distance stall" else "gone"}") }
@@ -864,10 +864,10 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
 }
 
 /** ГРУППА МЕР 4: бой — мощь сторон и её окно, близость, масса и контакт, нулевая мощь при лидерстве, признак отхода по размену, отзыв отпущенных боем, выполним ли отход. */
-internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresForces, private val exchange: MeasuresExchange, private val chase: MeasuresChase, private val pag: PainAndGain) {
+internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresForces, private val exchange: MeasuresExchange, private val chase: MeasuresChase) {
     // ---- постура ----
-    val ours = pag.ourPowerOf(ctx.army, forces.combatEnemies)
-    val theirs = pag.enemyPowerOf(forces.combatEnemies, ctx.army)
+    val ours = ourPowerOf(ctx.army, forces.combatEnemies)
+    val theirs = enemyPowerOf(forces.combatEnemies, ctx.army)
     // РЕЖИМ ВЫЖИВАНИЯ (v223, доктрина оператора, см. USE_SURVIVAL): ведём по очкам, а его армия сильнее — не деремся,
     // а уходим, беря флаги с выходом. Порог и гистерезис — как у «слабее», по мощи всей армии
     private val leadingNow = ourScore > enemyScore
@@ -957,7 +957,7 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
 
 
 /** ПАМЯТЬ ТИКА (v257, этап 10; сегмент tickBody после исполнения): стойки полей, его прошлые клетки и ходы, история центра наших вооружённых и его клеток. Перенесено дословно. */
-internal class RememberTick(private val ctx: Ctx, private val meas: ArmyMeasures?) {
+internal class RememberTick(private val ctx: Ctx, private val meas: ArmyMeasures?, private val strat: ArmyStrategy?, private val stance: ArmyStance?) {
     init { InfluenceMap.pruneStances(ctx.myCreeps.mapTo(HashSet()) { it.id }) }
     // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
     init {
@@ -984,13 +984,15 @@ internal class RememberTick(private val ctx: Ctx, private val meas: ArmyMeasures
     // ПРОШЛЫЙ ТИК — ЯВНО (v459, см. Prev): меры этого тика становятся «вчерашними» для тех, кто в следующем тике читает раньше мер;
     // в тике без армии мер нет — значения остаются прежними, как оставались члены синглтона
     init { if (meas != null) { Prev.exchange = meas.view; Prev.ledgerWindow = meas.exchange.ledgerWindow; Prev.hisLostWindow = meas.exchange.hisLostWindow } }
+    init { if (strat != null) { Prev.approachRate = strat.obj.approachRate; Prev.farmerQuietNow = strat.detach.farmerQuietNow; Prev.cmdMode = strat.dec.decision.cmdMode } }
+    init { if (stance != null) { Prev.touchShare = stance.windows.touchShare; Prev.hisTouchShare = stance.windows.hisTouchShare } }
 }
 
 internal class ReadSignalsOut(
 )
 
 /** СИГНАЛЫ ТИКА (v257, этап 10; сегмент tickBody до бегунов и армии): сомкнутость по форме и по прибытию, бросок безфлаговой армии (unflaggedRushNow), «бой близко» (fightImminentNow), полученный урон, тишина огня, «он не дерётся» (enemyNotFightingNow). Перенесено дословно. */
-internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
+internal fun readSignals(ctx: Ctx): ReadSignalsOut {
     WorldState.plannedCaptures.clear()
     // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
     // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
@@ -1020,10 +1022,10 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
     // не дальше нашего центра, и его темп к этому флагу не ниже темпа к нам — он на туре. Матч 5 серии 367–386 (MetalicaX#3):
     // с 10-го по 41-й rush=true, армия на посту, захваты под вето; он взял D5 на 41-м, R3 на 45-м, оба A3 на 60-м, наш
     // первый флаг — на 54-м. Бросок сквозь центр без захвата снова читается броском, когда его темп к флагу падает
-    val rushSignal = !ctx.passiveEnemy && noEnemyFlag && approachRate >= APPROACH_RUSH && enemyMassed  
+    val rushSignal = !ctx.passiveEnemy && noEnemyFlag && Prev.approachRate >= APPROACH_RUSH && enemyMassed  
     if (rushSignal) { rushSignalAll.n++; if (!massedByShape) rushByArrival.n++ }
     val rushHold = Signals.unflaggedRushNow && !ctx.passiveEnemy && noEnemyFlag && armedNow.isNotEmpty() &&
-        (approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
+        (Prev.approachRate > 0.0 || armedNow.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE })
     Signals.unflaggedRushNow = rushSignal || rushHold
     // бой близко — для ЗАХВАТОВ флаг врага не в счёт: «безфлаговый» бросок кончился на 39-м тике, когда его армия по пути
     // взяла D5, и скаут взял R3 на 42-м (матч 47, пятый бой с けろびー подряд с R×0.8); уклонение по-прежнему только от
@@ -1034,7 +1036,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
         val a = Memory.hisCentHist.first(); val b = Memory.hisCentHist.last()
         maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100)) >= APPROACH_WINDOW / 4
     })
-    Signals.approachingNow = !ctx.passiveEnemy && approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
+    Signals.approachingNow = !ctx.passiveEnemy && Prev.approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
     Signals.fightImminentNow = Signals.unflaggedRushNow || Signals.approachingNow
     // ...и ЗАПОМИНАЕМ РАССТОЯНИЕ НА НАЧАЛО ПОДХОДА (v215, см. USE_RUSH_VETO_EXPIRES). Первая редакция срока
     // сравнивала с ТЕКУЩИМ расстоянием между центрами — а оно по мере подхода сокращается, то есть срок

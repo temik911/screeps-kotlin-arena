@@ -188,7 +188,7 @@ internal class PrintTickOut(
 )
 
 /** ПЕЧАТЬ ТИКА (v257, этап 10; хвост tickBody): строка застрявших, строка t= со всеми приборами раз в LOG_EVERY тиков, перепись rung / tac, поля fld. Перенесено дословно. */
-internal fun PainAndGain.printTick(ctx: Ctx, rem: RememberTick): PrintTickOut {
+internal fun printTick(ctx: Ctx, rem: RememberTick): PrintTickOut {
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
         bfsWindowDone()
@@ -289,7 +289,7 @@ internal val T_LINE = listOf(
 
 /** Поля строки `t=`, которые считаются НА МЕСТЕ ПЕЧАТИ: снимок мира, величины состояния, отношения накопителей. Объявляются один
  *  раз, при первой печати; расширение оркестратора — пока они читают его члены (величины одного тика уходят к носителям на этапе 6). */
-private fun PainAndGain.declareLine() {
+private fun declareLine() {
     if (lineDeclared) return
     lineDeclared = true
     Gauges.computed("t") { "${getTicks()}" }
@@ -335,7 +335,7 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("flags") { "${flagsSummary(tickView.ctx.flags)}" }
     Gauges.computed("massed") { "$kiteMassed" }
     Gauges.computed("cmd") { "${Orders.commandOf.size}/$cmdTicks:$cmdBlocked" }
-    Gauges.computed("mode") { "$cmdMode" }
+    Gauges.computed("mode") { "${Prev.cmdMode}" }
     Gauges.computed("disp") { "$dispNow" }
     Gauges.computed("fire") { "${FireBook.fireOf.size}" }
     Gauges.computed("posture") { "$posture" }
@@ -343,7 +343,7 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("hunt@2") { "$huntingThreat" }
     Gauges.computed("rush") { "${Signals.unflaggedRushNow}" }
     Gauges.computed("weak") { "$outmatchedTicks" }
-    Gauges.computed("touch") { "${(touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(hisTouchShare * 100).toInt()}" }
+    Gauges.computed("touch") { "${(Prev.touchShare * 100).toInt()}/${(touchMin * 100).toInt()}/${(Prev.hisTouchShare * 100).toInt()}" }
     Gauges.computed("touchl") { "${(touchShareLast * 100).toInt()}/${(hisTouchShareLast * 100).toInt()}" }
     Gauges.computed("our") { "${tickView.ours.toInt()}" }
     Gauges.computed("enemy") { "${tickView.theirs.toInt()}" }

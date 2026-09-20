@@ -486,7 +486,7 @@ internal fun mergeDeal(rec: DealRecord) {
     fightTally.absorb(rec.tally)
 }
 
-internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
+internal fun commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>,
                          out: MutableMap<String, Position>, intent: Intent = Intent.PRESS,
                          ourFlagCells: Set<Int> = emptySet(), healersOnly: Boolean = false): DealRecord? {
     out.clear()
@@ -504,7 +504,7 @@ internal fun PainAndGain.commandFight(army: List<Creep>, combatEnemies: List<Cre
         cells[key] = InfluenceMap.cell(x, y)
     }
     if (cells.isEmpty()) return null
-    val deal = Deal(army, combatEnemies, armedEnemies, out, intent, ourFlagCells, healersOnly, fighters, enemyAt, cells, this)
+    val deal = Deal(army, combatEnemies, armedEnemies, out, intent, ourFlagCells, healersOnly, fighters, enemyAt, cells)
     deal.distribute()
     return deal.rec
 }
