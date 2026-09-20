@@ -26,18 +26,18 @@ the parallel-sessions rules in `CLAUDE.md`).
 - **зависимости направлены вниз**, счётчик живёт у того, кто считает — оба правила держит гейт (`lint`, `graph`), а не память.
 
 ```
-tickBody: buildWorld → readSignals → runRunners → runArmy → TrafficManager.resolve → Arbiter.audit → Executor.run
-          → cpuSummary → rememberTick → printTick
-runArmy:  updateKeepers → armyMeasures → armyStrategy (Strategist.decide) → armyTargets → armyStance → armyBlock
+tickBody: Ctx (мир) → readSignals → runRunners → runArmy → TrafficManager.resolve → Arbiter.audit → Executor.run
+          → cpuSummary → RememberTick → printTick
+runArmy:  updateKeepers → ArmyMeasures → ArmyStrategy (восемь подстадий; Strategist.decide) → ArmyTargets → ArmyStance → armyBlock
           → armyCommand (Commander.kt) → orderAudit → healerWall
-          → creepTurn для каждого бойца: buildTurn → ladder() → buildStride → steps() → Proposal → submit
+          → creepTurn для каждого бойца: Turn → ladder() → Stride → steps() → Proposal → submit
           → armyFireAndHeal
 ```
 
 | файл | стадия | что в нём решается |
 |---|---|---|
 | `Facts.kt` | словарь фактов | `CreepFacts` — факты крипа за тик одним проходом по телу (живые и «рождённые» части, `armed`, `healerOnly`, `stripped`, `combatant`, `meleeOnlyBorn` / `meleeOnlyLive`), таблица `TickFacts` на тик, ключ клетки `key(x, y)` / `pos.key` |
-| `World.kt` | мир и меры | `Ctx`, флаги с эффектами и счётом, поля потоков, признаки врага (ловим ли, стоит ли, грозит ли), тела и скорости, путь и шаг бегства; сегменты `buildWorld`, `readSignals`, `armyMeasures`, `rememberTick` |
+| `World.kt` | мир и меры | носители `Ctx` (мир тика — прежний `buildWorld`), `ArmyMeasures`, `RememberTick`; сегмент `readSignals`; флаги с эффектами и счётом, поля потоков, признаки врага (ловим ли, стоит ли, грозит ли), путь и шаг бегства |
 | `Types.kt`, `Geometry.kt`, `Clock.kt` | типы и службы нижних уровней | перечисления `Posture` / `CmdMode` / `Intent` и запись `ChaseSample`; обход и сторона карты в своей системе координат (`sym`, `mirrorTL`, `centroidOf`, `sgn`); часы тика `cpuMs` / `cpuMark` |
 | `Power.kt` | модель мощи | `ourPowerOf`, `enemyPowerOf`, `fightTicks`, `fightCost`, Ланчестер — чистые функции над телами и профилями |
 | `Forecast.kt` | прогноз | прокат `simulate` на `SIM_TICKS`, модель его выбора цели `wallTargetOf` / `fracTargetOf`, ошибка прогноза |
@@ -45,8 +45,9 @@ runArmy:  updateKeepers → armyMeasures → armyStrategy (Strategist.decide) �
 | `Commander.kt` | командир | стадия `armyCommand`: раздача командира с перебором замыслов под бюджетом тика (зовёт `commandFight`, `commandMarch`, `Formation.brace`, читает стратега и прогноз) |
 | `Missions.kt` | задания бегунов | паросочетание «бегун ↔ флаг» по ценности на горизонте, режимы FLEE / RESERVE / EXIT / HOLD / TO_FLAG / POISED |
 | `Tables.kt` | таблицы решений | `Row(тег, условие, действие)`, счётчики `Tally` (`won` / `true` / `shadowed`), обходчик `walk` — один на все таблицы, с полным обходом условий |
-| `Tactician.kt` | тактик | цели тика (фокус, добыча, захватчик, досягаемость его стволов); ход крипа `creepTurn`: факты `Turn` (`buildTurn`) → лестница цели `ladder()`, 27 строк → факты шага `Stride` (`buildStride`) → цепочка шага `steps()`, 8 строк; `Proposal` с приоритетом SURVIVE / MISSION / OPPORTUNITY и причиной «задание.терм», `submit` арбитру |
-| `Fight.kt` | бой | раздача клеток в бою `commandFight`: носитель одного вызова `Deal` (поля, методы-оценки `scoreMelee` / `scoreRanged` / `scoreHeal`, `place`, поле притязаний) и тринадцать проходов в списке `passes`; запись раздачи `DealRecord` — поле нужды (`InfluenceMap.HealNeed`) и пробы, свои у каждой пробы замысла, в мир и приборы уходит запись выбранной (`Commander.publishDeal`, v449); назначение огня и лечения, исполнители удара, выстрела и лечения |
+| `Tactician.kt` | тактик | цели тика (фокус, добыча, захватчик, досягаемость его стволов); ход крипа `creepTurn`: факты — носитель `Turn` → лестница цели `ladder()`, 27 строк → факты шага — носитель `Stride` → цепочка шага `steps()`, 8 строк; `Proposal` с приоритетом SURVIVE / MISSION / OPPORTUNITY и причиной «задание.терм», `submit` арбитру |
+| `Deal.kt` | раздача | носитель одной раздачи `Deal` (класс верхнего уровня с v456): поля, методы-оценки `scoreMelee` / `scoreRanged` / `scoreHeal`, `place`, поле притязаний и тринадцать проходов в списке `passes` |
+| `Fight.kt` | бой | раздача клеток в бою `commandFight` (ранние выходы и построение `Deal`): носитель одного вызова `Deal` (поля, методы-оценки `scoreMelee` / `scoreRanged` / `scoreHeal`, `place`, поле притязаний) и тринадцать проходов в списке `passes`; запись раздачи `DealRecord` — поле нужды (`InfluenceMap.HealNeed`) и пробы, свои у каждой пробы замысла, в мир и приборы уходит запись выбранной (`Commander.publishDeal`, v449); назначение огня и лечения, исполнители удара, выстрела и лечения |
 | `Formation.kt` | строй | медиана, изготовка, колонна марша, кулак боя, ряды блока, `planFight`, стена лекарей; одно правило назначения крип → место (узкое место, затем сумма) |
 | `Arbiter.kt`, `TrafficManager.kt` | арбитр | ранги толкания, развод ходов без вызовов API, счёт конфликтов `conf=` |
 | `Executor.kt` | исполнитель | единственный писатель API: слоты интентов по крипу, затем ходы |
@@ -66,8 +67,8 @@ runArmy:  updateKeepers → armyMeasures → armyStrategy (Strategist.decide) �
 - Решение «первое сработавшее условие выигрывает» — СТРОКА ТАБЛИЦЫ, а не ветка `when`: `Row("тег", { условие }) { действие }`
   в списке `ladder()` / `steps()`; место в списке — приоритет, другого описания приоритета нет. Условие — чистое чтение
   фактов: голое имя — поле `Turn` (или `Stride`), `t.` — величина тика, остальное — член `PainAndGain` или верх пакета.
-  Новый ингредиент условия — поле `Turn`, определённое в `buildTurn` (имя не должно совпасть с полем `ArmyTick`, `Ctx`
-  или членом `PainAndGain` — держит линт). Счётчик или запись, которые должны случиться при выигрыше строки, — в её
+  Новый ингредиент условия — поле `Turn`, объявленное в теле носителя там, где оно считается (имя не должно совпасть с
+  открытым полем `ArmyTick`, `Ctx` или членом `PainAndGain` — держит линт). Счётчик или запись, которые должны случиться при выигрыше строки, — в её
   действии; в условии их быть не может (условия вычисляются у всех строк). Прибор `reach t=` считает строку сам; читать
   его — `tools/series.py reach`, помня, что у замыкающей строки и у строки, стоящей под своей «половиной», `shadowed`
   ненулевой по построению.
@@ -85,10 +86,27 @@ runArmy:  updateKeepers → armyMeasures → armyStrategy (Strategist.decide) �
   (приборы — до этапа 2, величины одного тика и коллекции — до этапа 6), функция, которая их читает, остаётся расширением;
   на v454 таких 65 из прежних 161. Имя члена объекта и имя верхнего уровня пакета не совпадают НИКОГДА (правило линта
   `member_vs_toplevel`): в расширении голое имя нашло бы член, в обычной функции — верх пакета, молча.
-- Величина, которую одна стадия армии отдаёт другой, — поле класса `<Сегмент>Out` стадии-владельца, объявленное ОДИН раз.
-  Стадия получает выходы предыдущих целиком — `armyStance(ctx, meas, strat, targ)` — и читает `meas.contact`; классов `…In`
-  нет (отменено оператором 19.09.2026). Оркестровка (`runArmy`, `tickBody`) — список вызовов; `ArmyTick` держит ссылки на
-  выходы, ход крипа читает `meas.…` / `strat.…`, строка таблицы — `t.meas.…`. Порядок конвейера проверяет компилятор.
+- **Носитель: поле объявлено там, где вычислено** (v456, второй шаг архитектуры, этап 3). Стадия армии — КЛАСС, чьё тело и есть
+  прежняя функция стадии: `class ArmyMeasures(ctx, pag)`, `ArmyTargets`, `ArmyStance`, мир — `class Ctx(pag)`, память тика —
+  `RememberTick(ctx)`; факты хода и шага — `class Turn(creep, ctx, t)` и `class Stride(turn, aim)`. Новая величина от стадии к
+  стадии, новый факт хода для строки лестницы, новый факт шага — ОДНО место: `val contact = …` в теле носителя, там, где она
+  считается (до v456 имя писалось трижды: в заголовке класса `…Out` / `Turn`, локальной в построителе и аргументом `x = x` его
+  `return`). Порядок текста — порядок инициализации; оператор между фактами (счётчик прибора, запись в память, печать) — блок
+  `init { … }` на своём месте последовательности; прежняя локальная функция — метод на своём месте, и метод не читает поле,
+  объявленное ниже него (в функции это запрещал компилятор, в классе — правило линта `carrier_method_order`). Читают снаружи —
+  открытое поле, нет — `private`. Оркестровка — по-прежнему список вызовов: `val meas = ArmyMeasures(ctx, this)`; читатели пишут
+  `meas.contact`, `t.meas.contact`, `turn.slot`. То, что ещё остаётся членом синглтона (величины одного тика и коллекции — до
+  этапа 6), носитель читает ЯВНО, через параметр `pag` (`pag.stalledNow`, у хода — `t.pag.victimSaveable`): квалифицированное
+  `PainAndGain.x` дало бы модулю стадии импорт оркестратора — ребро вверх, которое гейт графа не пропускает. Поле носителя внутри
+  лямбды инициализатора компилятор не сужает по `!= null`, как сужал локальную: там пишется `x!!` с комментарием, где
+  непустота проверена. Класс-параметр чистого решателя (`Strategist.Inputs`) остаётся списком — `decide` тестируем без
+  игровых объектов; `PushCase` читает меры и пачки из носителей. Семь пустых `…Out` — до этапа 6.
+- **Длинная стадия — цепочка подстадий-носителей** (v456, этап 4): `ArmyStrategy` — список из восьми вызовов (`StrategyPacks` →
+  `StrategyThresholds` → `StrategyDetach` → `StrategyPush` → `StrategyContact` → `StrategyObjective` → `StrategyDecide` →
+  `StrategyThreats`), у каждой свой выход; параметры подстадии — носители предыдущих, и читает она их квалифицированно
+  (`packs.oursFight`). Место правки стратегии ищется по имени подстадии; читатели пишут `strat.obj.objective`. Швы — минимумы
+  `tools/cutwidth.py`, подтверждённые чтением: состояние, идущее через члены объекта и `Memory`, прибор не видит (шов внутри
+  `StrategyObjective` не резать — порядок «темп сближения → поля бегства → цель-флаг → точка уклонения» есть поведение).
 - Зависимость направлена ВНИЗ или внутри уровня (`tools/stub/painandgain/levels.txt`, строка `graph` гейта): 0 — `Rules`,
   `Tuning`, `Types`, `Tables`; 1 — `Memory`, `Facts`, `Geometry`, `Power`, `Clock`, `DistanceMap`, `InfluenceMap` и приёмники
   `Executor`, `Arbiter`, `TrafficManager`; 2 — `World`; 3 — `Forecast`, `Strategist`, `Missions`; 4 — `Tactician`, `Fight`,
