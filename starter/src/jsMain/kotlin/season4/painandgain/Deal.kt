@@ -273,28 +273,38 @@ internal class Deal(
         val bs = bare
         if (bs == null || bs.x != b.x || bs.y != b.y) rec.goalFlips.n++
         val tenant = bestTenant
-        if (tenant != null) {
-            if (depth >= CHAIN_DEPTH) return false
-            // СПАСЕНИЕ СТАРШЕ ЛЮБОГО ПРИКАЗА (v176, оператор): если самая безопасная клетка занята крипом, которому
-            // велено стоять, приказ стоять снимается и жилец уводится цепочкой — беречь расстановку ценой крипа
-            // армия из четырнадцати не может. Снимается он ТОЛЬКО у выбранного жильца: первая редакция снимала
-            // приказы прямо в переборе кандидатов, у всех подряд, и прибор поймал это коллизией (clash=1)
-            var undo: Position? = null
-            if (rescue) { undo = out.remove(tenant.id); taken.remove(tenant.key) }
-            // своп: жилец встаёт на клетку просителя — так делается ротация состава
-            val swapCell = cells[c.key]
-            val moved = (swapCell != null && place(tenant, { p -> p.x == c.x && p.y == c.y }, { 0.0 }, depth + 1)) ||
-                place(tenant, { p -> p.x != b.x || p.y != b.y }, { p -> danOf(tenant, p.key) }, depth + 1)
-            // ...и при неудаче цепочки снятый приказ ВОЗВРАЩАЕТСЯ: без отката жилец оставался без приказа, его
-            // клетка свободной, и позже она доставалась двоим — прибор ловил это как clash=1 (v176)
-            if (!moved) {
-                // ...и вернуть приказ можно, только если его клетку за это время никто не занял: слепое
-                // восстановление отдавало одну клетку двоим (clash в режиме боя, t=808)
-                val back = undo
-                if (back != null && back.key !in taken) { out[tenant.id] = back; taken.add(back.key) }
-                return false
-            }
+        if (tenant != null && !evict(c, b, tenant, depth, rescue)) return false
+        commit(c, b, depth)
+        return true
+    }
+
+    /** СЕКЦИЯ `place`: жилец выбранной клетки уводится цепочкой (своп или любая другая клетка); `false` — увести не удалось, снятый спасением приказ возвращён. */
+    private fun evict(c: Creep, b: Position, tenant: Creep, depth: Int, rescue: Boolean): Boolean {
+        if (depth >= CHAIN_DEPTH) return false
+        // СПАСЕНИЕ СТАРШЕ ЛЮБОГО ПРИКАЗА (v176, оператор): если самая безопасная клетка занята крипом, которому
+        // велено стоять, приказ стоять снимается и жилец уводится цепочкой — беречь расстановку ценой крипа
+        // армия из четырнадцати не может. Снимается он ТОЛЬКО у выбранного жильца: первая редакция снимала
+        // приказы прямо в переборе кандидатов, у всех подряд, и прибор поймал это коллизией (clash=1)
+        var undo: Position? = null
+        if (rescue) { undo = out.remove(tenant.id); taken.remove(tenant.key) }
+        // своп: жилец встаёт на клетку просителя — так делается ротация состава
+        val swapCell = cells[c.key]
+        val moved = (swapCell != null && place(tenant, { p -> p.x == c.x && p.y == c.y }, { 0.0 }, depth + 1)) ||
+            place(tenant, { p -> p.x != b.x || p.y != b.y }, { p -> danOf(tenant, p.key) }, depth + 1)
+        // ...и при неудаче цепочки снятый приказ ВОЗВРАЩАЕТСЯ: без отката жилец оставался без приказа, его
+        // клетка свободной, и позже она доставалась двоим — прибор ловил это как clash=1 (v176)
+        if (!moved) {
+            // ...и вернуть приказ можно, только если его клетку за это время никто не занял: слепое
+            // восстановление отдавало одну клетку двоим (clash в режиме боя, t=808)
+            val back = undo
+            if (back != null && back.key !in taken) { out[tenant.id] = back; taken.add(back.key) }
+            return false
         }
+        return true
+    }
+
+    /** СЕКЦИЯ `place`: приказ записан — клетка занята, прибор адресной опасности, притязание, перепись проходов. */
+    private fun commit(c: Creep, b: Position, depth: Int) {
         taken.add(b.key); out[c.id] = b
         // прибор адресной опасности (v224): E и T выбранной клетки, в обеих сборках
         if (depth == 0) {
@@ -308,7 +318,6 @@ internal class Deal(
         // провала USE_FORWARD_SEARCH: «каждый крип считает за себя»
         claimed.add(c.id)          // притязание — из приказа в `out`, снимается вместе с ним (v450, см. claimAt)
         if (depth == 0) { rec.passCount.bump(passTag); rec.tally.won[passIndex]++ }
-        return true
     }
     // поля, которые пишет один проход, а читает другой (до v445 — локальные посреди тела функции)
     val rotatingMeet = HashMap<String, Position>()
@@ -706,24 +715,7 @@ internal class Deal(
             // ЛЕКАРЕЙ +0,32 — они впереди мили, и в 155 тиках из 335 лекари в среднем ближе к врагу, чем мили; на
             // t=63, через три тика после контакта, один лекарь уже без лечащих частей. Условие простое и жёсткое:
             // хотя бы один свой боец стоит к врагу БЛИЖЕ, чем клетка лекаря, — считая по уже назначенным клеткам
-            // ВСТРЕЧА РАНЕНОГО С ЛЕКАРЁМ (v276, разбор v275: наш уходящий раненый за пять тиков получает 198 урона при 144
-            // лечения, его — 76 при 144; его лекарь сходится с раненым с трёх клеток до вплотную за пять тиков, а наш стоял там,
-            // куда его поставила оценка поля нужды — по опасности у подопечного, которой у ушедшего из-под огня уже нет). Лекарь,
-            // который за шаг встаёт вплотную к клетке, куда уходит раненый по его фокусу (Memory.rotByFocus, клетка — из
-            // прохода отхода), встаёт туда, если переживёт её с порогом своего замысла; раненый — ближайший ещё без лекаря
-            val medicFor = rotatingMeet.entries.filter { (rid, dest) -> rid !in medicked && getRange(c, dest) <= 2 }
-                .minByOrNull { getRange(c, it.value) }
-            var met = false
-            if (medicFor != null) {
-                val dest = medicFor.value
-                val (_, _, ttlMin) = weightsOf(intentOf(c))
-                if (place(c, { p -> getRange(p, dest) <= 1 && ttlAt(c, p.key, p) >= ttlMin }, { p -> danOf(c, p.key) })) {
-                    medicked.add(medicFor.key)
-                    rec.rotfMeet.n++
-                    met = true
-                    out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
-                }
-            }
+            val met = meetWounded(c)
             // лекаря, поставленного проходом отхода, оценка по-прежнему переставляет — не встреча, не трогается (первая
             // редакция v276 это переразмещение снимала попутно, и гейт переменил 89 строк и уронил match30:camp)
             // ПРИБОР РЕЖИМА «В ЗОНЕ ОГНЯ» (v438, `hfire=`): лекарей, у которых доставка считалась по подопечным под огнём / всех /
@@ -735,65 +727,96 @@ internal class Deal(
             }
             // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
             if (c.id !in out) place(c, { true }, { p -> danOf(c, p.key) })
-            // ПРИБОР ПРИЛЕГАНИЯ (v435, `hadj=`): назначенная клетка лекаря вплотную к своему, терявшему хиты за прошлый тик, /
-            // все назначения лекарей — та величина, по которой разбор E делил стороны (26 % лечений вплотную против 75 %)
-            out[c.id]?.let { b ->
-                rec.hadjAll.n++
-                val losing = army.filter { a -> a.id != c.id && a.hits > 0 && (Memory.lastHits[a.id] ?: a.hits) > a.hits }
-                if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) { rec.hadjN.n++; if (fireMode) rec.hfireAdj.n++ }
-                // ...и НОРМИРОВАННЫЙ прибор (`hadjn=`): среди назначений, при которых кто-то из своих в дальности шага и
-                // лечения (HEAL_RANGE + 1) терял хиты, — доля клеток вплотную к такому; без него hadj делится и на тихие тики
-                if (losing.any { a -> getRange(a, c) <= HEAL_RANGE + 1 }) {
-                    rec.hadjnAll.n++
-                    if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) rec.hadjnN.n++
-                }
-            }
-            // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
-            // огнём 37 % лекаре-тиков, наши — 10 %, и в FIGHT свободная клетка вплотную к бойцу не опаснее своей есть в
-            // 30–51 % лекаре-тиков. Зонд отвечает, какое слагаемое оценки увело лекаря от такой клетки: считает те же
-            // слагаемые, что scoreHeal и place, для выбранной клетки и для лучшего свободного кандидата вплотную к бойцу
-            // вне его стрелкового огня, и копит разницу «выбранная минус кандидат» по слагаемым
-            run {
-                val b = out[c.id] ?: return@run
-                val (att, dan, ttlMin) = weightsOf(intentOf(c))
-                // кандидат — вплотную к бойцу ПЕРВОЙ ЛИНИИ (его клетка в его стрелковом огне) и сам вне огня: первое
-                // чтение зонда (4 игры) показало, что «вплотную к любому бойцу вне огня» выбирается в 63 % раздач — строй
-                // глубокий, боец рядом есть всегда, — а к тому, кого бьют, лекарь по реплеям стоит в 10 %
-                fun adjSafe(p: Position): Boolean = foeDist(p.x, p.y) > RANGED_RANGE &&
-                    fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) <= RANGED_RANGE && maxOf(abs(it.x - p.x), abs(it.y - p.y)) <= 1 } }
-                fun terms(p: Position): DoubleArray {
-                    val key = p.key
-                    val scr = screenAt(c, p)
-                    val fire = InfluenceMap.fireFieldAt(key)
-                    val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
-                    val deliver = InfluenceMap.healOf(c)
-                    val raw = rec.need.attHealAt(key)
-                    val pull = if (USE_HEAL_NEED_ACTUAL) rec.need.bestDeliveryAt(c, p.x, p.y, army)
-                        else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
-                    val self = p.x == c.x && p.y == c.y
-                    val tenant = if (self) null else tenantOf(key, c)
-                    return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEAL_NO_LINE && (pull > 0.0 || rec.need.deliveryFireMode(c, army))) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
-                        -W_SCREEN * shielded, CLAIM_COST * claimAt(key), -stayBonus(c, p),
-                        if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
-                }
-                rec.hpN.n++
-                if (adjSafe(b)) { rec.hpAdj.n++; return@run }
-                var best: Position? = null; var bestSc = Double.MAX_VALUE; var gated = 0
-                for ((key, p) in nearCells(c)) {
-                    if (p.x == b.x && p.y == b.y) continue
-                    if (key in taken || !adjSafe(p)) continue
-                    if (!(p.x == c.x && p.y == c.y) && tenantOf(key, c) != null) continue
-                    if (ttlAt(c, key, p) < ttlMin) { gated++; continue }
-                    val sc = terms(p).sum()
-                    if (sc < bestSc) { bestSc = sc; best = p }
-                }
-                val a = best
-                if (a == null) { if (gated > 0) rec.hpGate.n++; return@run }
-                rec.hpAvail.n++
-                val tb = terms(b); val ta = terms(a)
-                for (i in tb.indices) rec.hpDelta[i] += tb[i] - ta[i]
+            adjacencyGauge(c, fireMode)
+            pickProbe(c)
+        }
+    }
+
+    /** СЕКЦИЯ `passHealer`: встреча раненого с лекарём; `true` — лекарь поставлен вплотную к клетке, куда уходит раненый. */
+    private fun meetWounded(c: Creep): Boolean {
+        // ВСТРЕЧА РАНЕНОГО С ЛЕКАРЁМ (v276, разбор v275: наш уходящий раненый за пять тиков получает 198 урона при 144
+        // лечения, его — 76 при 144; его лекарь сходится с раненым с трёх клеток до вплотную за пять тиков, а наш стоял там,
+        // куда его поставила оценка поля нужды — по опасности у подопечного, которой у ушедшего из-под огня уже нет). Лекарь,
+        // который за шаг встаёт вплотную к клетке, куда уходит раненый по его фокусу (Memory.rotByFocus, клетка — из
+        // прохода отхода), встаёт туда, если переживёт её с порогом своего замысла; раненый — ближайший ещё без лекаря
+        val medicFor = rotatingMeet.entries.filter { (rid, dest) -> rid !in medicked && getRange(c, dest) <= 2 }
+            .minByOrNull { getRange(c, it.value) }
+        var met = false
+        if (medicFor != null) {
+            val dest = medicFor.value
+            val (_, _, ttlMin) = weightsOf(intentOf(c))
+            if (place(c, { p -> getRange(p, dest) <= 1 && ttlAt(c, p.key, p) >= ttlMin }, { p -> danOf(c, p.key) })) {
+                medicked.add(medicFor.key)
+                rec.rotfMeet.n++
+                met = true
+                out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
             }
         }
+        return met
+    }
+
+    /** СЕКЦИЯ `passHealer`: приборы прилегания назначенной клетки лекаря (`hadj=`, `hadjn=`, `hfire=` вплотную). */
+    private fun adjacencyGauge(c: Creep, fireMode: Boolean) {
+        // ПРИБОР ПРИЛЕГАНИЯ (v435, `hadj=`): назначенная клетка лекаря вплотную к своему, терявшему хиты за прошлый тик, /
+        // все назначения лекарей — та величина, по которой разбор E делил стороны (26 % лечений вплотную против 75 %)
+        out[c.id]?.let { b ->
+            rec.hadjAll.n++
+            val losing = army.filter { a -> a.id != c.id && a.hits > 0 && (Memory.lastHits[a.id] ?: a.hits) > a.hits }
+            if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) { rec.hadjN.n++; if (fireMode) rec.hfireAdj.n++ }
+            // ...и НОРМИРОВАННЫЙ прибор (`hadjn=`): среди назначений, при которых кто-то из своих в дальности шага и
+            // лечения (HEAL_RANGE + 1) терял хиты, — доля клеток вплотную к такому; без него hadj делится и на тихие тики
+            if (losing.any { a -> getRange(a, c) <= HEAL_RANGE + 1 }) {
+                rec.hadjnAll.n++
+                if (losing.any { a -> maxOf(abs(a.x - b.x), abs(a.y - b.y)) <= 1 }) rec.hadjnN.n++
+            }
+        }
+    }
+
+    /** СЕКЦИЯ `passHealer`: зонд раздачи лекарей (`hpick=`) — какое слагаемое оценки увело лекаря от клетки вплотную к бойцу первой линии. */
+    private fun pickProbe(c: Creep) {
+        // ЗОНД РАЗДАЧИ ЛЕКАРЕЙ (v224, `hpick=`): по реплеям обеих сторон его лекари стоят вплотную к крипу под нашим
+        // огнём 37 % лекаре-тиков, наши — 10 %, и в FIGHT свободная клетка вплотную к бойцу не опаснее своей есть в
+        // 30–51 % лекаре-тиков. Зонд отвечает, какое слагаемое оценки увело лекаря от такой клетки: считает те же
+        // слагаемые, что scoreHeal и place, для выбранной клетки и для лучшего свободного кандидата вплотную к бойцу
+        // вне его стрелкового огня, и копит разницу «выбранная минус кандидат» по слагаемым
+        val b = out[c.id] ?: return
+        val (att, dan, ttlMin) = weightsOf(intentOf(c))
+        // кандидат — вплотную к бойцу ПЕРВОЙ ЛИНИИ (его клетка в его стрелковом огне) и сам вне огня: первое
+        // чтение зонда (4 игры) показало, что «вплотную к любому бойцу вне огня» выбирается в 63 % раздач — строй
+        // глубокий, боец рядом есть всегда, — а к тому, кого бьют, лекарь по реплеям стоит в 10 %
+        fun adjSafe(p: Position): Boolean = foeDist(p.x, p.y) > RANGED_RANGE &&
+            fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) <= RANGED_RANGE && maxOf(abs(it.x - p.x), abs(it.y - p.y)) <= 1 } }
+        fun terms(p: Position): DoubleArray {
+            val key = p.key
+            val scr = screenAt(c, p)
+            val fire = InfluenceMap.fireFieldAt(key)
+            val shielded = fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
+            val deliver = InfluenceMap.healOf(c)
+            val raw = rec.need.attHealAt(key)
+            val pull = if (USE_HEAL_NEED_ACTUAL) rec.need.bestDeliveryAt(c, p.x, p.y, army)
+                else if (deliver <= 0.0 || raw <= 0.0) 0.0 else deliver * raw / (raw + deliver)
+            val self = p.x == c.x && p.y == c.y
+            val tenant = if (self) null else tenantOf(key, c)
+            return doubleArrayOf(-W_ATT * att * pull, W_DAN * dan * fire, if (USE_HEAL_NO_LINE && (pull > 0.0 || rec.need.deliveryFireMode(c, army))) 0.0 else -W_LINE * InfluenceMap.influenceOf(key),
+                -W_SCREEN * shielded, CLAIM_COST * claimAt(key), -stayBonus(c, p),
+                if (tenant != null) ALLY_CELL_COST else 0.0, GOAL_STEP_COST * goalCost(key))
+        }
+        rec.hpN.n++
+        if (adjSafe(b)) { rec.hpAdj.n++; return }
+        var best: Position? = null; var bestSc = Double.MAX_VALUE; var gated = 0
+        for ((key, p) in nearCells(c)) {
+            if (p.x == b.x && p.y == b.y) continue
+            if (key in taken || !adjSafe(p)) continue
+            if (!(p.x == c.x && p.y == c.y) && tenantOf(key, c) != null) continue
+            if (ttlAt(c, key, p) < ttlMin) { gated++; continue }
+            val sc = terms(p).sum()
+            if (sc < bestSc) { bestSc = sc; best = p }
+        }
+        val a = best
+        if (a == null) { if (gated > 0) rec.hpGate.n++; return }
+        rec.hpAvail.n++
+        val tb = terms(b); val ta = terms(a)
+        for (i in tb.indices) rec.hpDelta[i] += tb[i] - ta[i]
     }
 
     /** Проход `keeper`: стоящий на нашем флаге без приказа получает «стой» (безымянная вставка до v445). */
