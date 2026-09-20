@@ -254,7 +254,7 @@ internal fun publishDeal(rec: DealRecord?, tried: Int) {
 }
 
 // ==================== приборы стадии: счётчик живёт у того, кто считает (v446, план архитектуры, 4.7) ====================
-// Перенесены из Instruments.kt дословно; Instruments их читает и печатает. `cmdSearched` сбрасывает оркестровка в конце тика.
+// Перенесены из Instruments.kt дословно; Instruments их читает и печатает. `cmdSearched` сбрасывает операция `commanderTailDone()` — её зовёт оркестровка в конце тика.
 
 /** Раздач, ушедших в мир (по одной на тик раздачи) / раздач сыграно, включая пробы замыслов (v449, прибор `deals=`). */
 /** Записей в общее состояние ЗА ВРЕМЯ перебора замыслов (v460, прибор `impure=`): публикации поля нужды и изменения приказов между
@@ -274,6 +274,8 @@ internal var srchCut = 0
 internal var cmdTailMax = 0.0
 internal var cmdEndMs = 0.0
 internal var cmdSearched = false
+/** Хвост тика после перебора (v262) снят — операция владельца: `cmdSearched` пишет только этот файл, оркестровка зовёт её в конце тика. */
+internal fun commanderTailDone() { if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false } }
 
 /** Постановка этого тика, как её задают старые решатели (v241, см. Strategist.snapshot): прибор `disp=`. */
 internal var dispNow = "-"

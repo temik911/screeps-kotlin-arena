@@ -180,7 +180,7 @@ object PainAndGain {
         cpuMark("resolve")
         cpuSummary()
         // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
-        if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
+        commanderTailDone()
         val rem = RememberTick(ctx, army?.meas, army?.strat, army?.stanceOut)
         printTick(ctx, rem)
     }

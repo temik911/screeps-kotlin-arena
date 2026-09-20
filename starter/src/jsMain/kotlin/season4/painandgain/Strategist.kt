@@ -261,7 +261,7 @@ internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, serious: Bo
         capqAsked.n++
         // причина `parity(ours/floor)` вычисляемая — считается под одним именем, как и у прежнего `capCount(f, "parity")`
         val why = reason?.let { if (it.startsWith("parity(")) "parity" else it }
-        if (why != null) { capqVeto.n++; capqWhy.bump(why) }
+        if (why != null) capqVeto.n++
         // ...и по одному на пару «тик × флаг» — первый вопрос всерьёз решает (сравнимо с прежним `capgate=` / `cap=`, где
         // первым мог быть и холостой вызов); множество трогают только вопросы всерьёз
         if (capquTick != getTicks()) { capquTick = getTicks(); capquSeen.clear() }
@@ -274,12 +274,11 @@ internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, serious: Bo
 }
 
 // ==================== прибор ворот захвата с одним писателем (v451, пункт Г) ====================
-/** Вопросов всерьёз / из них запретов; по причинам; то же по одному на пару «тик × флаг»; оценочных вопросов; холостых
+/** Вопросов всерьёз / из них запретов; то же по одному на пару «тик × флаг» и причины запретов; оценочных вопросов; холостых
  *  приборов в головах ворот (`rush.approach.expired`, `contact.edge.lifted`) — печать `capq=`, `capu=`, `capqu=`, `capeval=`,
  *  `capidle=`. */
 internal val capqAsked = Gauges.counter("capq", 1)
 internal val capqVeto = Gauges.counter("capq")
-internal val capqWhy = Gauges.labelledOnly("capqWhy")
 internal val capquAsked = Gauges.counter("capqu", 1)
 internal val capquVeto = Gauges.counter("capqu")
 internal val capquWhy = Gauges.labelled("capu")
@@ -2086,17 +2085,17 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
         if (farmer && Squads.detachedIds.isNotEmpty()) {
             val floorNow = recallFloor
             var core = notDetached(ctx.army)
-            var recalled = 0
+            var pulledBack = 0
             val short = core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * meas.fight.theirsDown * floorNow
             coreShortTicks = if (short) coreShortTicks + 1 else 0
             while (Squads.detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * meas.fight.theirsDown * floorNow) {
                 // держатель флага (v297, см. HOLD_WATCH) возвращается последним
                 val back = detachedRunners(ctx)
                     .maxWithOrNull(compareBy({ heldFlag(ctx, it) == null }, { ourPowerOf(listOf(it), emptyList()) })) ?: break
-                Squads.recall(back.id); core = core + back; recalled++
+                Squads.recall(back.id); core = core + back; pulledBack++
             }
-            if (recalled > 0) { detachRecallTick = meas.exchange.now; coreShortTicks = 0 }   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
-            if (DEBUG_LOG && recalled > 0) println("detach t=${meas.exchange.now}: $recalled recalled — the core fell under ${floorNow} of him by the posture's measure")
+            if (pulledBack > 0) { detachRecallTick = meas.exchange.now; coreShortTicks = 0 }   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
+            if (DEBUG_LOG && pulledBack > 0) println("detach t=${meas.exchange.now}: $pulledBack recalled — the core fell under ${floorNow} of him by the posture's measure")
         }
     }
     init { farmerOffTicks = if (farmer) 0 else farmerOffTicks + 1 }
@@ -2393,18 +2392,25 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     // НЕ меняется — прежде чем менять решение, надо знать, различает ли дельта исход (три пробы прогноза до этого
     // отвергнуты живьём именно потому, что их ставили в решение, не измерив)
     private val simdFoeCentroid = if (meas.forces.armedEnemies.isEmpty()) null else centroidOf(meas.forces.armedEnemies)
-    init {
+    /** Дельта прогноза за прокат на SIM_TICKS — на тиках, где решение принимается (враг сомкнут, его центроид близко); иначе null. */
+    private val simdDelta: Double? =
         if (Signals.enemyMassedSignal && simdFoeCentroid != null && ctx.army.isNotEmpty() &&
             getRange(ctx.ourCentroid, simdFoeCentroid) <= ENGAGE_RANGE + RANGED_RANGE) {
             val base = Forecast.simulate(ctx.army, meas.forces.armedEnemies, emptyMap(), 0, null, null)
             val next = Forecast.simulate(ctx.army, meas.forces.armedEnemies, emptyMap(), Forecast.SIM_TICKS, null, null)
-            val delta = next - base
-            simdSum += delta; simdTicks++
-            if (delta > 0.0) simdPos++
-            Memory.simdShare = (1.0 - SIMD_SMOOTH) * Memory.simdShare + SIMD_SMOOTH * (if (delta > 0.0) 1.0 else 0.0)
+            next - base
+        } else null
+    // ВХОД РЕШЕНИЯ, А НЕ ПРИБОР (с v398): сглаженную долю тиков с положительной дельтой читает `enemyMassed` ниже. Запись стояла
+    // внутри блока прибора `simd=` (находка 2.8 п. 6 плана второго шага архитектуры) — разведена с ним, значение и место в тике те же
+    init { if (simdDelta != null) Memory.simdShare = (1.0 - SIMD_SMOOTH) * Memory.simdShare + SIMD_SMOOTH * (if (simdDelta > 0.0) 1.0 else 0.0) }
+    // ...а это прибор `simd=`
+    init {
+        if (simdDelta != null) {
+            simdSum += simdDelta; simdTicks++
+            if (simdDelta > 0.0) simdPos++
             // расходится ли знак прогноза с действующим решением по мощи: «мощь говорит не драться, прогноз — драться»
             val powerSaysNo = ourPowerOf(ctx.army, ctx.combatEnemies) < enemyPowerOf(ctx.combatEnemies, ctx.army) * FIGHT_POWER_ROOM
-            if (powerSaysNo != (delta <= 0.0)) simdDisagree++
+            if (powerSaysNo != (simdDelta <= 0.0)) simdDisagree++
         }
     }
     // прибор разлёта (v409): радиус боевой части армии на тиках, где по нам стреляют

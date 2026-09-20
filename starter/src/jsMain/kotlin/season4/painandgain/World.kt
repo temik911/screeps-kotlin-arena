@@ -791,7 +791,9 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     private val stallCentroid: Position? = ctx.enemyCentroid
     private val armyDist = stallCentroid?.let { getRange(ourArmedCentroid ?: it, it) } ?: -1
     // бой — контакт С ОБМЕНОМ (v74, см. USE_COLD_CONTACT): выстрел наш или удар по нам не дальше STALL_TICKS назад
-    val exchangeRecent = exchange.now - lastFireTick <= STALL_TICKS || (lastHurtTick > 0 && exchange.now - lastHurtTick <= STALL_TICKS)
+    // бой этого тика ещё не стрелял: `lastFireTick` здесь — каким его оставил ПРОШЛЫЙ тик (см. объявление внизу файла)
+    private val lastFireTickPrev = lastFireTick
+    val exchangeRecent = exchange.now - lastFireTickPrev <= STALL_TICKS || (lastHurtTick > 0 && exchange.now - lastHurtTick <= STALL_TICKS)
     val fightOn = inContact(forces.armedEnemies, ctx.army) && (exchangeRecent)
     private val pauseReach = 2 * ENGAGE_RANGE   // v106: окно сквозь мигание
     private val pausedChase =  Memory.prevPosture == Posture.HOLD &&
@@ -839,7 +841,9 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
         ((distanceKept || (forces.combatEnemies.isNotEmpty() && kept(DETACH_WINDOW, needMoved = false)))))
     init { while (Memory.marchHist.size > MARCH_STALL_TICKS) Memory.marchHist.removeFirst() }
     // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
-    private val marchStalled = MARCH_STALLED.c("pushing", pushing) && MARCH_STALLED.c("hasCell", marchCell >= 0) && MARCH_STALLED.c("fullWindow", Memory.marchHist.size == MARCH_STALL_TICKS) &&
+    // стратег этого тика ещё не решал о наступлении: `pushing` здесь — значение ПРОШЛОГО тика (см. объявление внизу файла)
+    private val pushingPrev = pushing
+    private val marchStalled = MARCH_STALLED.c("pushing", pushingPrev) && MARCH_STALLED.c("hasCell", marchCell >= 0) && MARCH_STALLED.c("fullWindow", Memory.marchHist.size == MARCH_STALL_TICKS) &&
         MARCH_STALLED.c("sameCellAllWindow", Memory.marchHist.all { it == marchCell }) && MARCH_STALLED.c("noFight", !fightOn)
     // сухой толчок (v86): толчок PASSIVE_TICKS без нашего выстрела и без удара по нам — не толчок
     // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
@@ -942,7 +946,9 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
     // при РАВНОЙ скорости отход из контакта без мили вплотную — размен выстрелами в обе стороны, не бегство; из
     // точки отхода, куда уже пришли, отходить некуда — бой (матч 5: семеро в углу (3,96) при «отходе» не
     // шевелились и не били, пока их расстреливали с трёх клеток)
-    private val atRetreatPoint = retreatTarget?.let { getRange(ctx.ourCentroid, it) <= POST_STANDOFF + ARRIVED_SLACK } ?: false
+    // стратег этого тика ещё не выбирал точку отхода: `retreatTarget` здесь — точка ПРОШЛОГО тика (см. объявление внизу файла)
+    private val retreatTargetPrev = retreatTarget
+    private val atRetreatPoint = retreatTargetPrev?.let { getRange(ctx.ourCentroid, it) <= POST_STANDOFF + ARRIVED_SLACK } ?: false
     // из контакта отхода нет: «отход, пока мили не вплотную» мигал ДОБИТЬ/ОТХОД через тик и отдавал армию по одному
     // в матчах 4, 6 и 7 (в седьмом — при 1.53, без единой потери у врага); при равной скорости из контакта не
     // уйти, и единственный способ его кончить — бой строем
