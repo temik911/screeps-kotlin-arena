@@ -401,11 +401,7 @@ internal class Deal(
         // дистанции <= 1,45 даёт 6 побед из 6 против 0 из 9. Слагаемое считается так же, как у лекаря («доставленное
         // лечение минус полученный урон»): клетка, из которой мили достаёт вооружённого, приносит армии его удар с
         // поправкой на входящий модификатор цели, и этот удар конкурирует с опасностью честно, а не через вес
-        val strike = if (!USE_MELEE_STRIKE_VALUE) 0.0 else {
-            val hit = InfluenceMap.profileOf(c).melee
-            if (hit <= 0.0) 0.0
-            else armedEnemies.filter { getRange(p, it) <= 1 }.maxOfOrNull { hit * InfluenceMap.takenOf(it) } ?: 0.0
-        }
+        val strike = if (!USE_MELEE_STRIKE_VALUE) 0.0 else strikeValue(c, p)
         return -W_ATT * att * pull - strike + W_DAN * dan * danOf(c, key) -
             W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
             W_HEALCOVER * InfluenceMap.healReachAt(key) +
@@ -470,6 +466,40 @@ internal class Deal(
                 val heal = foeHealOn[e.id] ?: 0.0
                 val fire = others + mine
                 if (fire <= 0.0) 0.0 else mine * fire / (fire + heal)
+            }
+        } ?: 0.0
+    }
+    // удар ОСТАЛЬНЫХ наших мили по этой цели — с их НАЗНАЧЕННЫХ клеток, а не с нынешних позиций (та же форма, что
+    // у `othersFireOn`): оценка и исполнение стоят в одном решении одного тика
+    private fun othersStrikeOn(c: Creep, e: Creep): Double = melees.sumOf { f ->
+        if (f.id == c.id || f.hits <= 0) 0.0
+        else { val q = cellOf(f); if (getRange(q, e) <= 1) InfluenceMap.profileOf(f).melee * InfluenceMap.takenOf(e) else 0.0 }
+    }
+    /**
+     * УДАР СТОИТ СТОЛЬКО, СКОЛЬКО ОН ДОБАВЛЯЕТ К ЧИСТОМУ УРОНУ (v504, см. USE_MELEE_STRIKE_NET).
+     *
+     * v425 поставила удар в цену клетки валовой величиной — «наибольший урон по достижимому отсюда», — и в ней
+     * клетка у свежего врага стоит ровно столько же (240), сколько клетка у того, кого уже рубят двое. Выбор между
+     * ними достаётся опасности и фронту, а те разводят мили по гребню: `mconcmax` = 2 в трёх поражениях из четырёх.
+     * Между тем арифметика класса говорит, что именно ТРЕТИЙ удар решает: цель под его лекарями лечится на 140-288
+     * в тик, один удар даёт чистыми 0-100, два 192-480, три 432-720.
+     *
+     * Форма — доля удара, проходящая сквозь лечение цели, `мой · (чужие + мой) / (чужие + мой + лечение)`: при
+     * лечении 140 один мили получает 152, два 186, три 201, четыре 210, то есть сходимость поощряется монотонно и
+     * слагаемое НЕ обнуляется на непробиваемой цели (обнуление и было дефектом отвергнутой v483 — там оно гнало
+     * стрелка от врага). Ни одной новой константы: лечение на цели берётся из `foeHealOn`, огонь остальных — с их
+     * назначенных клеток, как у `othersFireOn`.
+     */
+    fun strikeValue(c: Creep, p: Position): Double {
+        val hit = InfluenceMap.profileOf(c).melee
+        if (hit <= 0.0) return 0.0
+        return armedEnemies.filter { getRange(p, it) <= 1 }.maxOfOrNull { e ->
+            val mine = hit * InfluenceMap.takenOf(e)
+            if (!USE_MELEE_STRIKE_NET) mine else {
+                val others = othersStrikeOn(c, e)
+                val blow = others + mine
+                val heal = foeHealOn[e.id] ?: 0.0
+                if (blow <= 0.0) 0.0 else mine * blow / (blow + heal)
             }
         } ?: 0.0
     }
