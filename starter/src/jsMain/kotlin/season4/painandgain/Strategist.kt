@@ -656,9 +656,9 @@ internal fun PainAndGain.lostRaceNow(): Boolean {
     return losingAtTheEnd && quietShort
 }
 
-internal fun PainAndGain.planCapture(ctx: Ctx, step: Position?) {
+internal fun planCapture(ctx: Ctx, step: Position?) {
     if (step == null) return
-    ctx.flags.firstOrNull { !it.ours && it.pos.x == step.x && it.pos.y == step.y }?.let { plannedCaptures.add(it.id) }
+    ctx.flags.firstOrNull { !it.ours && it.pos.x == step.x && it.pos.y == step.y }?.let { WorldState.plannedCaptures.add(it.id) }
 }
 
 /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
@@ -668,7 +668,7 @@ internal fun PainAndGain.powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double>
 
 /** То же для заданной стороны и группы врага (v95: пул проверяет ядро без крипа с дебаффом его флага-цели). */
 internal fun PainAndGain.powerAfterFor(ctx: Ctx, side: List<Creep>, opp: List<Creep>, f: FlagInfo): Pair<Double, Double> {
-    val taking = HashSet(plannedCaptures); taking.add(f.id)
+    val taking = HashSet(WorldState.plannedCaptures); taking.add(f.id)
     // и флаг-цель армии (v121): захват, который уже идёт, — часть состояния «после»
     fun mods(mine: Boolean): HypoMods {
         fun k(type: String): Double {
@@ -804,21 +804,21 @@ internal fun PainAndGain.escapeCandidates(ctx: Ctx): List<Position> =
 /** Поля потока к точкам выхода и ход врага до каждой — раз в EVADE_EVAL_EVERY тиков (девять полей). */
 internal fun PainAndGain.refreshEscape(ctx: Ctx, armed: List<Creep>) {
     val now = getTicks()
-    if (now - escapeAt < EVADE_EVAL_EVERY && escapeFlows.isNotEmpty()) return
+    if (now - escapeAt < EVADE_EVAL_EVERY && StrategistState.escapeFlows.isNotEmpty()) return
     escapeAt = now
-    escapeFlows.clear(); escapeTheirs.clear(); escapeNearest.clear()
+    StrategistState.escapeFlows.clear(); StrategistState.escapeTheirs.clear(); StrategistState.escapeNearest.clear()
     for (c in escapeCandidates(ctx)) {
         val key = c.key
         val flow = flowTo(ctx, c)
-        escapeFlows[key] = flow
+        StrategistState.escapeFlows[key] = flow
         var bestTicks = Int.MAX_VALUE / 4
         var bestCell = -1
         for (e in armed) {
             val t = pathTicks(e, flow, e.key)
             if (t < bestTicks) { bestTicks = t; bestCell = e.key }
         }
-        escapeTheirs[key] = bestTicks
-        escapeNearest[key] = bestCell
+        StrategistState.escapeTheirs[key] = bestTicks
+        StrategistState.escapeNearest[key] = bestCell
     }
 }
 
@@ -829,9 +829,9 @@ internal fun PainAndGain.refreshEscape(ctx: Ctx, armed: List<Creep>) {
  *  hunter, m8 army); без выхода точка — карман (матч 11). */
 internal fun PainAndGain.exitMargin(ctx: Ctx, c: Position, arrive: Int): Int {
     val ckey = c.key
-    val flowC = escapeFlows[ckey] ?: return Int.MIN_VALUE / 2
-    val start = escapeNearest[ckey] ?: return Int.MIN_VALUE / 2
-    val theirsC = escapeTheirs[ckey] ?: return Int.MIN_VALUE / 2
+    val flowC = StrategistState.escapeFlows[ckey] ?: return Int.MIN_VALUE / 2
+    val start = StrategistState.escapeNearest[ckey] ?: return Int.MIN_VALUE / 2
+    val theirsC = StrategistState.escapeTheirs[ckey] ?: return Int.MIN_VALUE / 2
     if (theirsC >= Int.MAX_VALUE / 4) return Int.MIN_VALUE / 2   // его путь неизвестен — выход не подтверждён (v54)
     // при броске (см. EVADE_EQUAL_RATIO) преследователь идёт за нами на ПОЛНОЙ скорости: проекция по замеренному
     // темпу (0.42 в паузе колонны) считала дом безопасным выходом, и армия ушла в свой угол под удар (матч 32)
@@ -840,7 +840,7 @@ internal fun PainAndGain.exitMargin(ctx: Ctx, c: Position, arrive: Int): Int {
     var best = Int.MIN_VALUE / 2
     for (d in escapeCandidates(ctx)) {
         if (d.x == c.x && d.y == c.y) continue
-        val flow = escapeFlows[d.key] ?: continue
+        val flow = StrategistState.escapeFlows[d.key] ?: continue
         val step = flowNear(flow, c)
         if (step < 0) continue
         val theirs = if (pursuer < 0) Int.MAX_VALUE / 4 else flowNear(flow, InfluenceMap.cell(pursuer / 100, pursuer % 100)).let { if (it < 0) Int.MAX_VALUE / 4 else it }
@@ -860,8 +860,8 @@ internal fun PainAndGain.runnerEscape(ctx: Ctx, s: Creep): Position? {
     for (c in escapeCandidates(ctx)) {
         if (getRange(c, s) <= 2) continue
         val key = c.key
-        val flow = escapeFlows[key] ?: continue
-        val theirs = escapeTheirs[key] ?: continue
+        val flow = StrategistState.escapeFlows[key] ?: continue
+        val theirs = StrategistState.escapeTheirs[key] ?: continue
         val ticks = pathTicks(s, flow, s.key)
         if (ticks >= Int.MAX_VALUE / 4) continue
         val score = minOf(theirs - ticks, exitMargin(ctx, c, ticks))
@@ -891,8 +891,8 @@ internal fun PainAndGain.evadePoint(ctx: Ctx, armed: List<Creep>, strikers: List
         if (left != null && c.x == left.x && c.y == left.y) continue
         if (enemyCentre != null && getRange(c, enemyCentre) <= getRange(ctx.ourCentroid, enemyCentre)) continue
         val key = c.key
-        val flow = escapeFlows[key] ?: continue
-        val theirs = escapeTheirs[key] ?: continue
+        val flow = StrategistState.escapeFlows[key] ?: continue
+        val theirs = StrategistState.escapeTheirs[key] ?: continue
         // «ему не дойти» — это НЕИЗВЕСТНОСТЬ, не безопасность (v54): поле за бюджетом BFS даёт Int.MAX_VALUE / 4, и точка
         // получала запас 536870903 — армия ушла в угол (96,3) при его армии в 75 клетках к югу и была там стёрта (матч 114,
         // Coldkimchi, t=333); бегство вбок (v53) не включилось, потому что «лучшая точка» была положительной
@@ -1690,8 +1690,8 @@ internal class StancePress(private val meas: ArmyMeasures, private val strat: Ar
             for (e in meas.forces.combatEnemies) {
                 val near = ourMelee.minByOrNull { getRange(e, it) } ?: continue
                 val d = getRange(e, near)
-                if (d > PRESS_RANGE + 1) { pag.pressChase.remove(e.id); continue }
-                val h = pag.pressChase.getOrPut(e.id) { ArrayDeque() }
+                if (d > PRESS_RANGE + 1) { StrategistState.pressChase.remove(e.id); continue }
+                val h = StrategistState.pressChase.getOrPut(e.id) { ArrayDeque() }
                 h.addLast(ChaseSample(d, e.key, near.key))
                 while (h.size > 3) h.removeFirst()
                 // цель ушла (v96, USE_GIVEUP_HE_LEAVES): САМА отдалилась от места, где стоял наш ближайший мили в начале окна, —
@@ -1700,14 +1700,14 @@ internal class StancePress(private val meas: ArmyMeasures, private val strat: Ar
                 val from = InfluenceMap.cell(first.meleeCell / 100, first.meleeCell % 100)
                 val left =  getRange(e, from) > getRange(InfluenceMap.cell(first.eCell / 100, first.eCell % 100), from)
                 if (h.size == 3 && d > (MELEE_HOLD_RANGE) && h.last().d >= first.d && left) {
-                    pag.pressGiveUp[e.id] = getTicks() + PRESS_GIVEUP
+                    StrategistState.pressGiveUp[e.id] = getTicks() + PRESS_GIVEUP
                     h.clear()
                     if (DEBUG_LOG) println("press t=${getTicks()}: ${e.id} keeps its distance — not pressed for $PRESS_GIVEUP ticks")
                 }
             }
-        } else pag.pressChase.clear()
+        } else StrategistState.pressChase.clear()
     }
-    init { pag.pressGiveUp.entries.removeAll { it.value <= getTicks() } }
+    init { StrategistState.pressGiveUp.entries.removeAll { it.value <= getTicks() } }
     init { if (DEBUG_LOG && pressOn && standoffTicks == PRESS_PATIENCE) println("press t=${getTicks()}: the enemy line has stood at range for $PRESS_PATIENCE ticks under fire — the pack goes in") }
 }
 
@@ -1862,7 +1862,7 @@ internal class StanceGauges(private val meas: ArmyMeasures, private val strat: A
 private fun rangedMass(cs: List<Creep>) = cs.sumOf { InfluenceMap.profileOf(it).ranged }
 
 /** Тиков до прихода его крипа к нашей массе по мере этого тика; неизвестный — «очень далеко» (до v445 — локальная функция). */
-private fun PainAndGain.arrivalOf(c: Creep) = arrivalById[c.id] ?: Int.MAX_VALUE / 2
+private fun arrivalOf(c: Creep) = WorldState.arrivalById[c.id] ?: Int.MAX_VALUE / 2
 
 /** Один вопрос «идём ли в наступление»: то, что `armyStrategy` уже посчитал к этому месту. `pushing` и `pushSince` строки читают
  *  у `PainAndGain` — СТАРЫМИ: условия всех строк вычисляются до действия выигравшей; `fightOnNow` — тоже его член. */
@@ -2079,13 +2079,13 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
         }
     }
     // поштучно (v85): отделённый DETACH_WINDOW тиков подряд без цели возвращается в ядро
-    init { for (id in Memory.detachedIds) pag.idleRunnerTicks[id] = if (id in Memory.idleRunnerIds) (pag.idleRunnerTicks[id] ?: 0) + 1 else 0 }
-    init { pag.idleRunnerTicks.keys.retainAll { it in Memory.detachedIds } }
-    private val idle = Memory.detachedIds.filter { (pag.idleRunnerTicks[it] ?: 0) >= DETACH_WINDOW }
+    init { for (id in Memory.detachedIds) StrategistState.idleRunnerTicks[id] = if (id in Memory.idleRunnerIds) (StrategistState.idleRunnerTicks[id] ?: 0) + 1 else 0 }
+    init { StrategistState.idleRunnerTicks.keys.retainAll { it in Memory.detachedIds } }
+    private val idle = Memory.detachedIds.filter { (StrategistState.idleRunnerTicks[it] ?: 0) >= DETACH_WINDOW }
     init {
         if (idle.isNotEmpty()) {
             if (DEBUG_LOG) println("detach t=${meas.exchange.now}: ${idle.size} of ${Memory.detachedIds.size} recalled — without a target for $DETACH_WINDOW ticks")
-            Memory.detachedIds.removeAll(idle.toSet()); idle.forEach { pag.idleRunnerTicks.remove(it) }; detachRecallTick = meas.exchange.now
+            Memory.detachedIds.removeAll(idle.toSet()); idle.forEach { StrategistState.idleRunnerTicks.remove(it) }; detachRecallTick = meas.exchange.now
         }
     }
     // ОДНА ОПОРА (v95b): группа врага и порог одни для выпуска, проверки с дебаффом цели и отзыва — при гонке выпуск
@@ -2357,7 +2357,7 @@ internal class StrategyObjective(private val ctx: Ctx, private val meas: ArmyMea
             pag.approachRate = if (Memory.enemyDistHist.size >= 2) ((Memory.enemyDistHist.first() - Memory.enemyDistHist.last()).toDouble() / (Memory.enemyDistHist.size - 1)).coerceIn(0.0, 1.0) else 0.0
         }
     }
-    init { if (escapeNeeded && !(push.cpuGuardArmy && pag.escapeFlows.isNotEmpty())) pag.refreshEscape(ctx, meas.forces.armedEnemies) else if (!escapeNeeded) { pag.escapeFlows.clear(); pag.escapeTheirs.clear(); pag.escapeNearest.clear(); evadeLeft = null } }
+    init { if (escapeNeeded && !(push.cpuGuardArmy && StrategistState.escapeFlows.isNotEmpty())) pag.refreshEscape(ctx, meas.forces.armedEnemies) else if (!escapeNeeded) { StrategistState.escapeFlows.clear(); StrategistState.escapeTheirs.clear(); StrategistState.escapeNearest.clear(); evadeLeft = null } }
     init { cpuMark("a.escape") }
     // враг близко (см. EVADE_RANGE) — уклонение раньше целей; далеко — цели с выходом, иначе безопасная точка
     private val enemyClose = (hunted) && meas.forces.armedEnemies.any { getRange(it, ctx.ourCentroid) <= EVADE_RANGE }
@@ -2595,7 +2595,7 @@ internal class StrategyThreats(private val ctx: Ctx, private val meas: ArmyMeasu
     val centroid = ctx.ourCentroid
     private val ourHalfCombat = meas.forces.armedEnemies.filter { DistanceMap.inOurHalf(it.x, it.y) }
     private val ourHalfSoft = meas.forces.enemyCreeps.filter { c -> meas.forces.combatEnemies.none { it.id == c.id } && DistanceMap.inOurHalf(c.x, c.y) }
-    val threat = ourHalfCombat.filter { catchable(it, meas.chase.chasers) }.minWithOrNull(compareBy<Creep>({ pag.arrivalOf(it) }, { getRange(it, centroid) }))
+    val threat = ourHalfCombat.filter { catchable(it, meas.chase.chasers) }.minWithOrNull(compareBy<Creep>({ arrivalOf(it) }, { getRange(it, centroid) }))
     // рейдер: чужой безоружный на нашей половине — тот, что ближе к нашему флагу (захватчик идёт к нему); гонимся,
     // только если стрелки бьют стаю вокруг него: без этой проверки армия гналась за безоружным остовом к
     // стоявшей за ним армии врага и вошла в бой при 0.77 (матч 3, t=100)
@@ -3090,3 +3090,13 @@ internal val capSeen = Gauges.marks("cap")      // (тик, флаг) счита
 
 /** `capgate=запретов/предъявлений`: числитель — сумма словаря причин `cap=`. */
 private val capgateDeclared = Gauges.computed("capgate") { capBlocked.sum().toString() }
+
+/** СОСТОЯНИЕ СТРАТЕГА (v459, второй шаг архитектуры, этап 6): словари стратега, жившие членами `object PainAndGain`, — как есть, с чисткой на прежних местах. */
+internal object StrategistState {
+    internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
+    internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
+    internal val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
+    internal val escapeFlows = HashMap<Int, IntArray>()
+    internal val escapeTheirs = HashMap<Int, Int>()
+    internal val escapeNearest = HashMap<Int, Int>()   // клетка врага, ближайшего к точке
+}

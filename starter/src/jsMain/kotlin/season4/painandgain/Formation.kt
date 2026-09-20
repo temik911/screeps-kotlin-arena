@@ -607,9 +607,9 @@ internal class HealerWallOut(
 )
 
 /** ПОТЕРИ ТИКА И СТЕНА ЛЕКАРЕЙ (v256, этап 10; сегмент runArmy перед покрипным циклом): потеря каждого бойца за тик (lostTick), жертва по адресному огню его стволов или по потере, клетки стены вокруг неё и лекари к ним (victimNow, victimSaveable, wallCells, wallCellOf). Перенесено дословно. */
-internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut {
-    lostTick.clear()
-    for (c in ctx.army) lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
+internal fun healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut {
+    Wall.lostTick.clear()
+    for (c in ctx.army) Wall.lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
     // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): жертва — терявший больше всех за прошлый тик; удержима, если её потеря не
     // больше лечения, которое наши лекари доставят в неё следующим тиком (вплотную или в шаге от вплотную — полное, в трёх
     // — треть; лекарь считается и для себя)
@@ -619,12 +619,12 @@ internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut
     // от которой его вооружённые мили дальше двух (за один ход не встанут вплотную); живьём против Coldkimchi#1 такая клетка
     // у жертвы есть в 83–89 % тиков, в блобе MetalicaX#9 — в 29 %. Лекарь получает ближайшую свою клетку как слот; без
     // клеток жертва не удержима, и правило молчит
-    victimNow = null; victimSaveable = false; wallCells = emptyList(); wallCellOf.clear()
-    addressedDmg.clear()
+    Wall.victimNow = null; Wall.victimSaveable = false; Wall.wallCells = emptyList(); Wall.wallCellOf.clear()
+    Wall.addressedDmg.clear()
     // ...И ЖЕРТВА — ПО АДРЕСНОМУ ОГНЮ ЭТОГО ТИКА (v229, см. USE_HEAL_WALL_ADDRESSED): его правило выбора цели по
     // текущим клеткам — лекарь в досягаемости первым, иначе ближайший, при равенстве с меньшими хитами
     // ...и карта адресного урона живёт тик (v233, см. USE_HEAL_BY_DEFICIT): её читает выбор пациента
-    val addressed = addressedDmg
+    val addressed = Wall.addressedDmg
     val live = livingCombatants(ctx.army)
     for (e in ctx.combatEnemies) {
         val q = InfluenceMap.profileOf(e)
@@ -632,25 +632,25 @@ internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut
         if (q.melee > 0.0) Forecast.wallTargetOf(unitsNow, e, live, MELEE_STEP_REACH)?.let { t -> addressed[t.id] = (addressed[t.id] ?: 0.0) + q.melee }
     }
     val byAddress = addressed.entries.maxByOrNull { it.value }
-    val lostV = ctx.army.filter { (combatant(it)) && (lostTick[it.id] ?: 0) > 0 }.maxByOrNull { lostTick[it.id] ?: 0 }
+    val lostV = ctx.army.filter { (combatant(it)) && (Wall.lostTick[it.id] ?: 0) > 0 }.maxByOrNull { Wall.lostTick[it.id] ?: 0 }
     // ...И АДРЕС БЕРЁТСЯ, ПОКА ОН ПОПАДАЕТ (v229, вторая редакция по стенду m28 brawl+heals: его сценарий стреляет «в
     // вооружённого стрелка первым», а не в лекаря, и адресная жертва промахивалась — уничтожение на 442-м стало
     // проигрышем на 1570-м). Оба предсказателя сверяются с фактом следующего тика (кто потерял больше всех) за окно
     // TOUCH_WINDOW; адресный используется, только пока попадает чаще, чем «по потере», — против того, чьё правило
     // цели другое, стена сама возвращается к v228
     if (lostV != null && (wallAddrPrev != null || wallLostPrev != null)) {
-        wallAddrHits.addLast(wallAddrPrev == lostV.id); wallLostHits.addLast(wallLostPrev == lostV.id)
-        while (wallAddrHits.size > TOUCH_WINDOW) wallAddrHits.removeFirst()
-        while (wallLostHits.size > TOUCH_WINDOW) wallLostHits.removeFirst()
+        Wall.wallAddrHits.addLast(wallAddrPrev == lostV.id); Wall.wallLostHits.addLast(wallLostPrev == lostV.id)
+        while (Wall.wallAddrHits.size > TOUCH_WINDOW) Wall.wallAddrHits.removeFirst()
+        while (Wall.wallLostHits.size > TOUCH_WINDOW) Wall.wallLostHits.removeFirst()
         hwallPredN.n++; if (wallAddrPrev == lostV.id) hwallPredA.n++; if (wallLostPrev == lostV.id) hwallPredL.n++
     }
     wallAddrPrev = byAddress?.key; wallLostPrev = lostV?.id
-    val addrWins = wallAddrHits.size >= STALL_TICKS && wallAddrHits.count { it } > wallLostHits.count { it }
+    val addrWins = Wall.wallAddrHits.size >= STALL_TICKS && Wall.wallAddrHits.count { it } > Wall.wallLostHits.count { it }
     val v = if (byAddress != null && addrWins) ctx.army.firstOrNull { it.id == byAddress.key } ?: lostV else lostV
     if (v != null) {
         val useAddr = byAddress != null && addrWins && v.id == byAddress.key
         if (useAddr) hwallAddr.n++
-        val loss = if (useAddr) byAddress!!.value else (lostTick[v.id] ?: 0).toDouble()
+        val loss = if (useAddr) byAddress!!.value else (Wall.lostTick[v.id] ?: 0).toDouble()
         val hisMelee = ctx.combatEnemies.filter { hasMelee(it) }
         val hisRanged = ctx.combatEnemies.filter { hasRanged(it) }
         val occupied = HashSet<Int>()
@@ -664,26 +664,26 @@ internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut
             val cell = InfluenceMap.cell(x, y)
             if (hisMelee.none { getRange(cell, it) <= 2 }) cells.add(cell)
         }
-        wallCells = cells
+        Wall.wallCells = cells
         val healers = ctx.army.filter { hasHeal(it) && it.id != v.id }
         val free = ArrayList(cells)
         for (h in healers.sortedBy { getRange(it, v) }) {
             if (free.isEmpty() || getRange(h, v) > HEAL_RANGE + 1) break
             val best = free.minByOrNull { getRange(h, it) } ?: break
             free.remove(best)
-            wallCellOf[h.id] = best
+            Wall.wallCellOf[h.id] = best
         }
         val potential = ctx.army.filter { hasHeal(it) }.sumOf { h ->
             val heal = InfluenceMap.profileOf(h).heal
-            val cell = wallCellOf[h.id]
+            val cell = Wall.wallCellOf[h.id]
             val d = getRange(h, v)
             if (h.id == v.id || (cell != null && getRange(h, cell) <= 1)) heal else if (d <= HEAL_RANGE) heal / 3.0 else 0.0
         }
-        victimNow = v
-        victimSaveable = cells.isNotEmpty() && loss <= potential
-        if (!victimSaveable) wallCellOf.clear()
+        Wall.victimNow = v
+        Wall.victimSaveable = cells.isNotEmpty() && loss <= potential
+        if (!Wall.victimSaveable) Wall.wallCellOf.clear()
         hwallVictimTicks.n++
-        if (victimSaveable) hwallTicks.n++
+        if (Wall.victimSaveable) hwallTicks.n++
     }
     return HealerWallOut(
     )
@@ -794,3 +794,17 @@ internal val hwallPredA = Gauges.counter("hwallp")
 internal val hwallPredL = Gauges.counter("hwallp", 1)
 
 internal val hwallPredN = Gauges.counter("hwallp", 2)
+
+/** СТЕНА ЛЕКАРЕЙ И ПОТЕРИ ТИКА (v459, второй шаг архитектуры, этап 6): то, что пишет `healerWall`, — перенесено из `object PainAndGain` как есть. `victimNow`, `victimSaveable`, `wallCells` раздача боя читает РАНЬШЕ, чем стена их перепишет в этом тике, — то есть значением прошлого тика (см. Prev). */
+internal object Wall {
+    /** Адресный урон этого тика по нашим (v229/v233): кто из его стрелков и мили в кого целится по модели его выбора. */
+    internal val addressedDmg = HashMap<String, Double>()
+    /** Темп очков на сотом и двухсотом тике — снимок дебюта, которого не снимал ни один прибор. */
+    internal val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
+    internal val wallAddrHits = ArrayDeque<Boolean>()
+    internal val wallLostHits = ArrayDeque<Boolean>()
+    internal val wallCellOf = HashMap<String, Position>()  // клетка стены, назначенная лекарю на этот тик
+    internal var victimNow: Creep? = null          // стена лечения (v228): терявший больше всех за прошлый тик
+    internal var victimSaveable = false            // ...и его потеря не больше доставимого в него лечения
+    internal var wallCells: List<Position> = emptyList()   // клетки стены: соседние с жертвой, его вооружённые мили дальше двух
+}

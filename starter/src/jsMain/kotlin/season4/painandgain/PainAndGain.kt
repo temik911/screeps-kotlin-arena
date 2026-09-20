@@ -95,11 +95,7 @@ object PainAndGain {
 
 
 
-    /** Адресный урон этого тика по нашим (v229/v233): кто из его стрелков и мили в кого целится по модели его выбора. */
-    internal val addressedDmg = HashMap<String, Double>()
     /** Приборы наблюдения 5: сколько раз скаут попадал в пул огня, сколько тиков он был в нашей дальности. */
-    /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
-    internal var flagsNow: List<FlagInfo> = emptyList()
 
 
 
@@ -127,47 +123,24 @@ object PainAndGain {
 
 
 
-    internal val disarmedFoe = HashSet<String>()
 
 
 
 
 
 
-    internal var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
 
 
-    internal val arrivalById = HashMap<String, Int>()
-    internal val escapeFlows = HashMap<Int, IntArray>()
-    internal val escapeTheirs = HashMap<Int, Int>()
-    internal val escapeNearest = HashMap<Int, Int>()   // клетка врага, ближайшего к точке
-    internal var victimNow: Creep? = null          // стена лечения (v228): терявший больше всех за прошлый тик
-    internal var victimSaveable = false            // ...и его потеря не больше доставимого в него лечения
-    internal val wallAddrHits = ArrayDeque<Boolean>()
-    internal val wallLostHits = ArrayDeque<Boolean>()
-    internal var wallCells: List<Position> = emptyList()   // клетки стены: соседние с жертвой, его вооружённые мили дальше двух
-    internal val wallCellOf = HashMap<String, Position>()  // клетка стены, назначенная лекарю на этот тик
     internal var approachRate = 0.0
     internal var unflaggedRushNow = false                  // бросок безфлаговой армии на нас (см. EVADE_EQUAL_RATIO)
     internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
     internal var approachingNow = false                    // та же, но по его подходу, без безфлагового броска (v284, см. captureBlock)
     internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     internal var enemyMassedSignal = false
-    /** Предсказанный урон его стволов по нашим на этот тик — по модели его выбора цели, что чаще попадает (v292, см.
-     *  rotateByFocus); null, пока сверок меньше окна. Читает лечение вместо неадресного damageAt. */
-    internal var focusPredDmg: Map<String, Double>? = null
-    /** Его стволы, по сверке с фактом, бьют нашего с наименьшей долей хитов в досягаемости — охотятся за ранеными (v294,
-     *  см. rotateByFocus): тогда раненые уходят к лекарям позади, а лекари стоят вне его досягаемости. */
-    internal var huntsWounded = false
-    internal val idleRunnerTicks = HashMap<String, Int>()  // бегун → подряд тиков без цели (v85: поштучный отзыв)
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
     internal var ledgerWindow = 0
     internal var ourLostWindow = 0
     internal var hisLostWindow = 0
-    /** Темп очков на сотом и двухсотом тике — снимок дебюта, которого не снимал ни один прибор. */
-    internal val lostTick = HashMap<String, Int>()   // потеря хитов за прошлый тик по всей армии, снятая до обновления lastHits (v109)
-    internal val ghostLogged = HashMap<String, Int>()
-    internal var prevShooters: List<Shooter> = emptyList()
 
     // ---------- счёт ----------
     internal var ourRate = 0
@@ -190,7 +163,7 @@ object PainAndGain {
     private fun repairAfterAbort() {
         abortTicks.n++
         var maps = 0; var sets = 0; var entries = 0
-        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges)) {
+        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges, Orders, FireBook, Wall, StrategistState, WorldState, TacticianState, MapDump)) {
             val r = AbortRepair.repairFields(owner)
             maps += r.maps; sets += r.sets; entries += r.entries
         }
@@ -207,7 +180,7 @@ object PainAndGain {
             probe(ctx.flags, ctx.myCreeps, ctx.enemyCreeps, ctx.home, ctx.enemyHome)
         }
         // дамп карты — четырьмя частями по 25 строк на тиках 3–6 (см. logMap)
-        if (DEBUG_MAP && mapMarks == null) captureMapMarks(ctx.flags, ctx.myCreeps, ctx.enemyCreeps)
+        if (DEBUG_MAP && MapDump.mapMarks == null) captureMapMarks(ctx.flags, ctx.myCreeps, ctx.enemyCreeps)
         if (DEBUG_MAP && getTicks() in 3..6) logMap((getTicks() - 3) * 25)
         logBodies(ctx.myCreeps, ctx.enemyCreeps)
         readSignals(ctx)
@@ -217,7 +190,7 @@ object PainAndGain {
 
         // боевые интенты уходят в API до разрешения движения: стенд разрешает конфликты за клетку в порядке первого
         // интента крипа, и порядок «удар, затем ход» — часть тождества с эталоном v235 (движку порядок безразличен)
-        TrafficManager.markOrdered(commandOf.keys)
+        TrafficManager.markOrdered(Orders.commandOf.keys)
         val moves = TrafficManager.resolve(ctx.active.filter { canMove(it) }, ctx.myCreeps + ctx.enemyCreeps)
         Arbiter.audit()
         Executor.run(moves)
@@ -229,15 +202,9 @@ object PainAndGain {
         printTick(ctx, rem)
     }
 
-    /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
-     *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
-    internal val plannedCaptures = HashSet<String>()
     internal var stalledNow = false                        // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
     internal var hisTouchShare = 1.0
     internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
-    internal val missionOf = HashMap<String, Char>()      // крип → буква задания его отряда этим тиком (v252, из Strategist.snapshot)
-    internal val pressChase = HashMap<String, ArrayDeque<ChaseSample>>()  // погоня за целью прижима по тикам (см. PRESS_GIVEUP)
-    internal val pressGiveUp = HashMap<String, Int>()      // цель прижима, от которой отказались, → тик, до которого
 
 
 
@@ -256,7 +223,7 @@ object PainAndGain {
         cpuMark("block")
         rotateByFocus(ctx.army, meas.forces.combatEnemies)
         // ...его система — только против того, кто охотится за ранеными (v294, см. huntsWounded)
-        stepOutWounded(ctx.army, targ.zones.reachCells, strat.dec.enemyRetreating || !huntsWounded)
+        stepOutWounded(ctx.army, targ.zones.reachCells, strat.dec.enemyRetreating || !TacticianState.huntsWounded)
         armyCommand(ctx, meas, strat, targ, stanceOut)
         cpuMark("command")
         orderAudit(ctx, meas, targ)
@@ -270,30 +237,19 @@ object PainAndGain {
         armyFireAndHeal(ctx, meas, targ)
     }
 
-    /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
-    internal val damageBooked = HashMap<String, Double>()
 
 
     internal var cmdMode = CmdMode.MARCH
     /** Событие этого тика для стратега (v242): флаг сменил владельца — считается при сборе флагов, до решения. */
     internal var flagFlipNow = false
-    internal val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
-    internal val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
-    internal val orderFatigue = HashMap<String, Int>()
-    internal val orderDist = HashMap<String, Int>()
-    internal val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
     /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
     internal var fightOnNow = false
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
     internal var coreContactNow = false                    // v315: контакт массы армии (а не всякий выстрел за окно)
     internal var groupDmgWindow = 0
-    internal val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
-    internal val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
     /** Размен идёт прямо сейчас (v221, см. exchangeLive) — для гейта захвата, который зовётся из `runRunners`
      *  раньше `runArmy` и потому читает окно прошлого тика. */
     internal var exchangeLiveNow = false
-    /** Удары мили по цели за тик (v221) — как `shotsAt`, но из `strike`; чистится там же. */
-    internal val strikesAt = HashMap<String, Int>()
 
 
 }

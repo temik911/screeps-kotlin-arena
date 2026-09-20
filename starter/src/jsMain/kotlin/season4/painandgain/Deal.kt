@@ -451,10 +451,10 @@ internal class Deal(
         // ...И ПРИ УДЕРЖИМОЙ ЖЕРТВЕ ЦЕНА КЛЕТКИ — ДОСТАВЛЕННОЕ В НЕЁ ЛЕЧЕНИЕ (v228, см. USE_HEAL_WALL): вплотную полное, в трёх
         // треть, без насыщенной суммы и без слагаемого влияния — клетка вплотную к жертве получает положительную цену, которой
         // обе редакции v224 ей дать не смогли (72 против 24)
-        val victim = pag.victimNow
-        if (pag.victimSaveable && victim != null) {
+        val victim = Wall.victimNow
+        if (Wall.victimSaveable && victim != null) {
             val d = getRange(p, victim)
-            val wall = if (d <= 1 && pag.wallCells.any { it.x == p.x && it.y == p.y }) deliver else if (d <= HEAL_RANGE) deliver / 3.0 else 0.0
+            val wall = if (d <= 1 && Wall.wallCells.any { it.x == p.x && it.y == p.y }) deliver else if (d <= HEAL_RANGE) deliver / 3.0 else 0.0
             return -W_ATT * att * wall + W_DAN * dan * fire - W_SCREEN * shielded + CLAIM_COST * claimAt(key) - stayBonus(c, p)
         }
         // ...И ВЛИЯНИЕ ЛИНИИ НЕ ВЫТЕСНЯЕТ ДОСТАВКУ (v437, см. USE_HEAL_NO_LINE): у лекаря все прочие слагаемые — в хитах
@@ -546,7 +546,7 @@ internal class Deal(
         // уходящие по его фокусу и их клетки — для встречи с лекарём (v276, см. проход лекарей)
         for (c in fighters) {
             if (c.id in out) continue
-            val hurtBadly = (pag.lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
+            val hurtBadly = (Wall.lostTick[c.id] ?: 0) * 2 >= c.hits && c.hits * 3 < c.hitsMax
             val alone = InfluenceMap.damageAt(c.x, c.y, combatEnemies) > 0.0 &&
                 army.none { it.id != c.id && hasHeal(it) && getRange(c, it) <= HEAL_RANGE }
             // ...и уходящий по его фокусу (v275, см. rotateByFocus): та же самая безопасная клетка, и среди равных — ближе к
@@ -570,7 +570,7 @@ internal class Deal(
             // ХИТОВ, тогда как MetalicaX бьёт ближайшего или лекаря. Сбор раненых у лекаря против добивающего раненых
             // — готовая мишень: мы сами сводим в одну точку тех, в кого он и целится, вместе с лекарем. Признак у бота
             // уже есть и проверен фактом (`huntsWounded`: две модели его выбора сверяются с правдой следующего тика)
-            val medics = if (pag.huntsWounded) (if (rotate) army.filter { it.id != c.id && healerOnly(it) } else emptyList())
+            val medics = if (TacticianState.huntsWounded) (if (rotate) army.filter { it.id != c.id && healerOnly(it) } else emptyList())
                 else army.filter { it.id != c.id && hasHeal(it) && (rotate || !hasWeapon(it)) }
             place(c, { true }, rescue = true, rank = { p -> danOf(c, p.key) * 100 -
                 (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() +

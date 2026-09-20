@@ -56,11 +56,11 @@ import kotlin.reflect.*
  */
 
 /** Удар мили: фокус-цель вплотную, иначе самый раненый сосед. */
-internal fun PainAndGain.strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
+internal fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
     if (!hasMelee(creep)) return
     val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
     val focusDying = focusTarget != null && creep.getRangeTo(focusTarget) <= 1 && focusTarget.hits <= InfluenceMap.profileOf(creep).melee
-    val ordered = fireOf[creep.id]?.let { id -> adjacent.firstOrNull { it.id == id } }
+    val ordered = FireBook.fireOf[creep.id]?.let { id -> adjacent.firstOrNull { it.id == id } }
     val target: Creep? = when {
         // приказ командира и для удара (v161): цель назначена по всей армии, а не по тому, кто оказался рядом.
         // Исключение одно — крип, которого мы ДОБИВАЕМ этим ударом: добить дороже, чем исполнить приказ
@@ -70,23 +70,23 @@ internal fun PainAndGain.strike(creep: Creep, enemyCreeps: List<Creep>, focusTar
         adjacent.isNotEmpty() -> focusOrder.firstOrNull { creep.getRangeTo(it) <= 1 } ?: adjacent.minByOrNull { it.hits }
         else -> null
     }
-    target?.let { Executor.attack(creep, it); lastFireTick = getTicks(); strikesAt[it.id] = (strikesAt[it.id] ?: 0) + 1 }
+    target?.let { Executor.attack(creep, it); lastFireTick = getTicks(); FireBook.strikesAt[it.id] = (FireBook.strikesAt[it.id] ?: 0) + 1 }
 }
 
-internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
-    shotsAt.clear()
-    strikesAt.clear()
+internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
+    FireBook.shotsAt.clear()
+    FireBook.strikesAt.clear()
     val healDone = HashMap<String, Int>()
     val incoming = HashMap<String, Int>()
     // подтверждённый входящий (v233, см. USE_HEAL_BY_DEFICIT): адресный огонь этого тика или потеря прошлого
-    fun confirmed(target: Creep) = (addressedDmg[target.id] ?: 0.0) > 0.0 || (lostTick[target.id] ?: 0) > 0
+    fun confirmed(target: Creep) = (Wall.addressedDmg[target.id] ?: 0.0) > 0.0 || (Wall.lostTick[target.id] ?: 0) > 0
     // ...И ОЖИДАЕМЫЙ УРОН — АДРЕСНЫЙ (v292). Нужда была «недостача + весь урон, который его стволы МОГУТ положить в клетку»
     // (damageAt), и полный крип у фронта выглядел нуждающимся, хотя его стволы бьют другого: аудит 112 игр (v289–v290,
     // Opus) — наше лечение полных и не битых в этот тик 16,7 хита за тик контакта против его 0,0, не той цели 9,9 против
     // 3,7 (p < 0,001); против ●ω<♥♪#6, который бьёт наименьшую долю хитов в досягаемости, полный крип — не его цель, пока
     // есть раненые. Ожидаемый урон берётся из предсказателя его выбора (rotateByFocus: две модели, сверка с фактом, 92 %
     // попаданий против ●ω) — той модели, что попадает чаще; пока сверок меньше окна — прежний damageAt
-    fun expectedOn(target: Creep): Int = focusPredDmg?.let { (it[target.id] ?: 0.0).toInt() }
+    fun expectedOn(target: Creep): Int = TacticianState.focusPredDmg?.let { (it[target.id] ?: 0.0).toInt() }
         ?: InfluenceMap.damageAt(target.x, target.y, enemyCreeps).toInt()
     fun need(target: Creep): Int {
         val deficit = target.hitsMax - target.hits
@@ -96,7 +96,7 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     // нужда по подтверждённому — для прибора и для переназначения соседу (не зависит от тумблера)
     fun needConfirmed(target: Creep): Int {
         val deficit = target.hitsMax - target.hits
-        val expected = if (confirmed(target)) maxOf((addressedDmg[target.id] ?: 0.0).toInt(), lostTick[target.id] ?: 0) else 0
+        val expected = if (confirmed(target)) maxOf((Wall.addressedDmg[target.id] ?: 0.0).toInt(), Wall.lostTick[target.id] ?: 0) else 0
         return deficit + expected - (healDone[target.id] ?: 0)
     }
     fun book(target: Creep, amount: Int) {
@@ -116,13 +116,13 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
         if (healParts > 0) {
             val candidates = allies.filter { !it.spawning && need(it) > 0 && creep.getRangeTo(it) <= HEAL_RANGE }
             // приказ командира первым (v162): он назначил пациента, зная, кого враг добивает и кого лечение спасёт
-            val ordered = healOf[creep.id]?.let { id -> candidates.firstOrNull { it.id == id } }
+            val ordered = FireBook.healOf[creep.id]?.let { id -> candidates.firstOrNull { it.id == id } }
             // ...И ПРИКАЗ ДЕЙСТВУЕТ НА ВСЕЙ ЛЕЧЕБНОЙ ДАЛЬНОСТИ (v183, оператор: «не должно быть ничего, что идёт
             // мимо командира»). Прежде назначенный пациент брался, только если он ВПЛОТНУЮ; иначе выбор перехватывал
             // местный ранг соседей — и приказ отбрасывался тем, что рядом просто кто-то стоит
             // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): удержимую жертву лечит каждый лекарь в дальности, вплотную — полностью
-            if (victimSaveable) hwallHealsAll.n++
-            val wallTarget = if (victimSaveable) victimNow?.takeIf { v -> !v.spawning && creep.getRangeTo(v) <= HEAL_RANGE } else null
+            if (Wall.victimSaveable) hwallHealsAll.n++
+            val wallTarget = if (Wall.victimSaveable) Wall.victimNow?.takeIf { v -> !v.spawning && creep.getRangeTo(v) <= HEAL_RANGE } else null
             if (wallTarget != null) {
                 if (creep.getRangeTo(wallTarget) <= 1) {
                     hwallHeals.n++
@@ -186,8 +186,8 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     // лечение, назначенное за тик, — для истины предсказателя его фокуса на следующем тике (v276, см. rotateByFocus)
     Memory.healGiven.clear()
     Memory.healGiven.putAll(healDone)
-    damageBooked.clear()
-    val most = shotsAt.values.maxOrNull() ?: 0
+    FireBook.damageBooked.clear()
+    val most = FireBook.shotsAt.values.maxOrNull() ?: 0
     if (most > 0) {
         concSum.n += most; concTicks.n++
         concAll.n += most; concAllTicks.n++
@@ -209,14 +209,14 @@ internal fun PainAndGain.healAndShoot(active: List<Creep>, allies: List<Creep>, 
     }
     // ...и то же ДЛЯ МИЛИ (v221, см. mconcAll): удар не кладёт ничего в `shotsAt`, поэтому `conc` про мили
     // слеп — сложены ли четыре удара в одну цель, не измерял ни один прибор
-    val mostStrikes = strikesAt.values.maxOrNull() ?: 0
+    val mostStrikes = FireBook.strikesAt.values.maxOrNull() ?: 0
     if (mostStrikes > 0) {
         mconcAll.n += mostStrikes; mconcTicks.n++
         if (mostStrikes > mconcMax.n) mconcMax.n = mostStrikes
     }
 }
 
-internal fun PainAndGain.shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
+internal fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
     if (!hasRanged(creep)) return
     val creepsInRange = enemyCreeps.filter { creep.getRangeTo(it) <= RANGED_RANGE }
     if (creepsInRange.isEmpty()) return
@@ -239,9 +239,9 @@ internal fun PainAndGain.shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarg
         // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
         // назначенного в этом тике урона, пропадает целиком. `damageBooked` считает, сколько по ней уже расписано
         // нашими за тик; если этого хватает с учётом её лечения, стрелок переходит к следующей цели по ранжиру
-        fun booked(t: Creep) = damageBooked[t.id] ?: 0.0
+        fun booked(t: Creep) = FireBook.damageBooked[t.id] ?: 0.0
         // фокус-цель вне дальности — добиваем самого раненого боевого в дальности (безоружных — в последнюю очередь)
-        val ordered = fireOf[creep.id]?.let { id -> enemyCreeps.firstOrNull { it.id == id } }
+        val ordered = FireBook.fireOf[creep.id]?.let { id -> enemyCreeps.firstOrNull { it.id == id } }
         val target = when {
             // приказ командира — первым: он назначал цель, зная всю армию и всё, что до цели дотягивается (v161)
             ordered != null && creep.getRangeTo(ordered) <= RANGED_RANGE  -> ordered
@@ -250,13 +250,13 @@ internal fun PainAndGain.shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarg
                 ?: massPool.minByOrNull { it.hits }
         }
         target?.let {
-            Executor.rangedAttack(creep, it); shotsAt[it.id] = (shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots.n++
-            damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
+            Executor.rangedAttack(creep, it); FireBook.shotsAt[it.id] = (FireBook.shotsAt[it.id] ?: 0) + 1; lastFireTick = getTicks(); fireShots.n++
+            FireBook.damageBooked[it.id] = booked(it) + InfluenceMap.profileOf(creep).ranged * InfluenceMap.takenOf(it)
         }
     }
 }
 
-internal fun PainAndGain.commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?, order: List<Creep>,
+internal fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?, order: List<Creep>,
                         out: MutableMap<String, String>) {
     out.clear()
     val shooters = army.filter { hasWeapon(it) && !it.spawning }
@@ -272,7 +272,7 @@ internal fun PainAndGain.commandFire(army: List<Creep>, enemies: List<Creep>, fo
     // dangerous }` ниже отфильтровал бы его обратно, и стрелок, которому фокус назначил скаута, молчал бы.
     // Распоряжение v178 не тронуто: остов сюда по-прежнему не попадает (у него потенциал есть, у скаута нет)
     val scoutsHere = live.filter { e ->
-        scoutFoe(e) && flagsNow.any { !it.ours && getRange(e, it.pos) <= 1 } }
+        scoutFoe(e) && WorldState.flagsNow.any { !it.ours && getRange(e, it.pos) <= 1 } }
     val dangerous = live.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } } + scoutsHere
     val pool = if (dangerous.isNotEmpty()) dangerous else live
     val killable = pool.filter { e ->
@@ -311,12 +311,12 @@ internal fun PainAndGain.commandFire(army: List<Creep>, enemies: List<Creep>, fo
  *  Здесь пациент назначается поимённо: сперва тот, кого убивают сейчас и кого лечение ещё СПАСАЕТ (иначе это
  *  лечение в труп), и на него ставится ровно столько лекарей, сколько нужно, чтобы перекрыть входящий; остальные
  *  идут по наибольшей нужде. Порядок лекарей — от дальнего к ближнему, чтобы ближний добирал остаток. */
-internal fun PainAndGain.commandHeal(army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, String>) {
+internal fun commandHeal(army: List<Creep>, enemies: List<Creep>, out: MutableMap<String, String>) {
     out.clear()
     val healers = army.filter { hasHeal(it) && !it.spawning }
     if (healers.isEmpty()) return
     // ...ожидаемый урон — адресный, по той же модели его выбора, что у исполнителя (v292, см. healAndShoot.need)
-    val pred = focusPredDmg
+    val pred = TacticianState.focusPredDmg
     fun expected(m: Creep) = pred?.let { it[m.id] ?: 0.0 } ?: (InfluenceMap.damageAt(m.x, m.y, enemies) * InfluenceMap.takenOf(m))
     val mates = army.filter { it.hits < it.hitsMax || expected(it) > 0.0 }
     if (mates.isEmpty()) return
@@ -513,14 +513,14 @@ internal class ArmyFireAndHealOut(
 )
 
 /** ОГОНЬ И ЛЕЧЕНИЕ АРМИИ ЗА ТИК (v256, этап 10): хвост runArmy после покрипного цикла — перепись «почему» (why t=, why-sum), стрелки врага на прошлом тике для прогноза (prevShooters), назначение огня и лечения и исполнение. Перенесено дословно. */
-internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): ArmyFireAndHealOut {
+internal fun armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): ArmyFireAndHealOut {
     cpuMark("moves")
-    prevShooters = meas.forces.combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.key, p.ranged, p.melee) }
+    FireBook.prevShooters = meas.forces.combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.key, p.ranged, p.melee) }
     // ...командирская цель НЕ подменяет цель стрельбы (v138): проведённая сюда, она уронила гейт до 129/131 и
     // дала m33:kite 0:21 135 — армия бросала всё ради назначенной цели. Она влияет мягко, через порядок focusOrder
     // огонь тоже по приказу командира (v161): назначения считаются на всю силу, включая захватчиков с оружием
-    commandFire(ctx.army + ctx.runners.filter { hasWeapon(it) }, meas.forces.enemyCreeps, targ.focus.focusTarget, targ.focus.focusOrder, fireOf)
-    commandHeal(ctx.army, meas.forces.enemyCreeps, healOf)
+    commandFire(ctx.army + ctx.runners.filter { hasWeapon(it) }, meas.forces.enemyCreeps, targ.focus.focusTarget, targ.focus.focusOrder, FireBook.fireOf)
+    commandHeal(ctx.army, meas.forces.enemyCreeps, FireBook.healOf)
     // ...и отряжённый лекарь без оружия лечит (v240): до этого healAndShoot получал бегунов только с оружием
     healAndShoot(ctx.army + ctx.combatRunners, meas.forces.allies, meas.forces.enemyCreeps, targ.focus.focusTarget, targ.focus.focusOrder)
     cpuMark("shoot")
@@ -715,3 +715,15 @@ internal val mconcAll = Gauges.counter("mconc")
 internal val mconcMax = Gauges.counter("mconcmax")
 
 internal val concMax = Gauges.counter("concmax")
+
+/** КНИГА ОГНЯ И ЛЕЧЕНИЯ (v459, второй шаг архитектуры, этап 6): назначения командира и счёт выстрелов тика — словари живут весь матч и чистятся на своих местах, перенесены из `object PainAndGain` как есть. Пишет только стадия огня и лечения; владелец — в списке починки. */
+internal object FireBook {
+    internal val fireOf = HashMap<String, String>() // крип → цель, назначенная командиром (v161)
+    internal val healOf = HashMap<String, String>() // лекарь → пациент, назначенный командиром (v162)
+    internal val shotsAt = HashMap<String, Int>()     // выстрелы по цели за тик (см. conc в строке t=)
+    /** Удары мили по цели за тик (v221) — как `shotsAt`, но из `strike`; чистится там же. */
+    internal val strikesAt = HashMap<String, Int>()
+    /** Урон, уже расписанный по цели в этом тике (v140, отказ от перебоя): чистится вместе с shotsAt. */
+    internal val damageBooked = HashMap<String, Double>()
+    internal var prevShooters: List<Shooter> = emptyList()
+}

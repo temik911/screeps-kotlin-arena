@@ -180,12 +180,12 @@ internal fun PainAndGain.rotateByFocus(army: List<Creep>, combatEnemies: List<Cr
     // ОЖИДАЕМЫЙ ВХОДЯЩИЙ ДЛЯ ЛЕЧЕНИЯ — АДРЕСНЫЙ (v292, см. focusPredDmg): модель, чаще попадающая за окно
     val fracN = Memory.fracHits.count { it }
     val addrN = Memory.addrHits.count { it }
-    focusPredDmg = if (Memory.fracHits.size < STALL_TICKS) null else if (fracN >= addrN) HashMap(byFrac) else HashMap(byAddr)
+    TacticianState.focusPredDmg = if (Memory.fracHits.size < STALL_TICKS) null else if (fracN >= addrN) HashMap(byFrac) else HashMap(byAddr)
     // ОН ОХОТИТСЯ ЗА РАНЕНЫМИ (v294): модель «наименьшая доля» за окно попадает чаще модели «лекарь, иначе ближайший»
     // ...и не в штурме, к которому нас вынуждает гонка очков (v295): отставая, мы обязаны брать его флаги, и в штурме лекари
     // идут за бойцами, а раненые не выходят — стенд match31:camp (лагерь бьёт наименьшие хиты и держит центр) при лекарях
     // позади проигрывал по очкам 23 934 : 24 002; ●ω<♥♪#6 флагов до 1500-го тика не берёт, и штурмовать его гонка не велит
-    huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN && !behindOnScore
+    TacticianState.huntsWounded = Memory.fracHits.size >= STALL_TICKS && fracN > addrN && !behindOnScore
     val healersLive = live.any { healerOnly(it) }
     val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
     if (!fracRules) {
@@ -299,14 +299,14 @@ private var ladderRows: List<Row<Turn, Aim>>? = null
  * взаимные инициализаторы верхнего уровня в Kotlin/JS дают `undefined`.
  * ПЕРЕПИСЬ РЕШЕНИЙ (v203, этап 1): каждая ветка обеих цепочек называет себя, и счётчик копится за матч.
  */
-internal fun PainAndGain.ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<Row<Turn, Aim>>(
+internal fun ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<Row<Turn, Aim>>(
     Row("keeper", { keeper }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
     Row("slotHold", { slotHold }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
     // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
     // ...и ЛЕКАРЮ ПРИКАЗ «СТОЯТЬ» — ТОЖЕ ПРИКАЗ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT): раздача разрешает свою
     // клетку («стой»), но здесь такой приказ молча проваливался ниже, к healMate, и лекарь уходил с клетки, которую
     // командир оценил лучшей; у бойцов условие не тронуто
-    Row("order", { commandOf[creep.id] != null && ((USE_COMMANDER_HEALERS_IN_CONTACT && healer) || commandOf[creep.id]!!.x != creep.x || commandOf[creep.id]!!.y != creep.y) }) { Aim(commandOf[creep.id]!!, 0) },
+    Row("order", { Orders.commandOf[creep.id] != null && ((USE_COMMANDER_HEALERS_IN_CONTACT && healer) || Orders.commandOf[creep.id]!!.x != creep.x || Orders.commandOf[creep.id]!!.y != creep.y) }) { Aim(Orders.commandOf[creep.id]!!, 0) },
     // ПОГОНЯ ЗА ОСТОВОМ (v212) — сразу под приказом командира: пока он правит, клетку даёт он (и тоже
     // знает про погоню, см. chaseTarget в placeScored); когда молчит, преследователь идёт сюда. Ниже
     // кайта и строя стоять нельзя: обе ветки увели бы его обратно в кулак, а весь смысл отряда в том,
@@ -323,7 +323,7 @@ internal fun PainAndGain.ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<R
     // Причина в порядке цепочки: слот стоял выше подопечного, а расстановка не знает, кого лечить, и уводила
     // лекаря в строй за пределы дальности. Лекарь вне HEAL_RANGE не лечит вовсе — в бою подопечный главнее
     // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): назначенная клетка стены — как слот, вплотную к удержимой жертве
-    Row("wall", { healer && victimSaveable && wallCellOf[creep.id] != null }) { Aim(wallCellOf[creep.id]!!, 0) },
+    Row("wall", { healer && Wall.victimSaveable && Wall.wallCellOf[creep.id] != null }) { Aim(Wall.wallCellOf[creep.id]!!, 0) },
     // ЛЕКАРЬ ПРИ МИЛИ (v235, см. USE_HEALER_AT_MELEE): клетка при своём фронтовом мили с тыла — как слот
     Row("healMate", { healer && healMate != null && t.meas.fight.contact }, why = HEAL_MATE) { Aim(healMate!!, 1, nearFlow = true) },
     Row("slot", { slot != null }) { Aim(slot!!, 0) },
@@ -423,7 +423,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
             val lost = prev - creep.hits
             var explained = 0.0
             val taken = InfluenceMap.takenOf(creep)
-            for (s in t.pag.prevShooters) {
+            for (s in FireBook.prevShooters) {
                 val d = maxOf(abs(s.cell / 100 - cell / 100), abs(s.cell % 100 - cell % 100))
                 if (d <= RANGED_RANGE) explained += s.ranged * taken
                 if (d <= 1) explained += s.melee * taken
@@ -432,8 +432,8 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         }
     }
     init {
-        if (ghost > 0 && DEBUG_LOG && getTicks() - (t.pag.ghostLogged[creep.id] ?: -100) >= 10) {
-            t.pag.ghostLogged[creep.id] = getTicks()
+        if (ghost > 0 && DEBUG_LOG && getTicks() - (TacticianState.ghostLogged[creep.id] ?: -100) >= 10) {
+            TacticianState.ghostLogged[creep.id] = getTicks()
             val nearest = meas.forces.combatEnemies.minOfOrNull { getRange(creep, it) } ?: -1
             println("ghost damage t=${getTicks()}: ${creep.id} -$ghost at (${creep.x},${creep.y}) hits=${creep.hits} nearestCombat=$nearest — источник не виден")
         }
@@ -528,7 +528,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // отказ (см. PRESS_GIVEUP) действует, пока цель не вернулась в три (v111, USE_GIVEUP_RETURNS), и снимается,
     // когда цель стоит ВПЛОТНУЮ к нашему не-мили (v135, см. USE_GIVEUP_LIFTS_ON_BACK): отказ — про погоню, а
     // враг у нашего лекаря никуда не бежит
-    fun givenUp(e: Creep) = e.id in t.pag.pressGiveUp && !(getRange(creep, e) <= MELEE_HOLD_RANGE + 1) 
+    fun givenUp(e: Creep) = e.id in StrategistState.pressGiveUp && !(getRange(creep, e) <= MELEE_HOLD_RANGE + 1) 
     // прижим — только под прикрытием стрелков (v122, USE_PRESS_COVER): та же мера, что у броска (см. covered, v55) —
     // MELEE_COVER стрелков в RANGED_RANGE + 1 от цели или свой вплотную к ней; иначе мили прижимают шагающую назад линию
     // в одиночку под её огонь (серия 307–326: けろびー#1 дважды за 240 тиков, наш мили 1600 → 752 за 14 тиков погони,
@@ -711,7 +711,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
             mine
         }
         medic
-            ?: (if (HEAL_MATE.c("victim.saveable", t.pag.victimSaveable)) t.pag.victimNow?.takeIf { v -> HEAL_MATE.c("victim.notMe", v.id != creep.id) && HEAL_MATE.c("victim.inReach", getRange(creep, v) <= HEAL_RANGE + 1) } else null)
+            ?: (if (HEAL_MATE.c("victim.saveable", Wall.victimSaveable)) Wall.victimNow?.takeIf { v -> HEAL_MATE.c("victim.notMe", v.id != creep.id) && HEAL_MATE.c("victim.inReach", getRange(creep, v) <= HEAL_RANGE + 1) } else null)
             ?: near.maxByOrNull { it.hitsMax - it.hits }
             ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
             ?: fighters.minByOrNull { getRange(creep, it) }
@@ -853,7 +853,7 @@ internal class Stride(val turn: Turn, val aim: Aim) {
     // ...и для лекаря закрытые для шага клетки — полная досягаемость (v234, вторая редакция), бегство — по прежней
     val avoidCells = reachMine
     // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
-    init { if (turn.healer && inCombat) { hexpAll.n++; if ((creep.key) in targ.zones.reachCells) hexpN.n++; hlostSum.n += (t.pag.lostTick[creep.id] ?: 0) } }
+    init { if (turn.healer && inCombat) { hexpAll.n++; if ((creep.key) in targ.zones.reachCells) hexpN.n++; hlostSum.n += (Wall.lostTick[creep.id] ?: 0) } }
     val mustFlee = MUST_FLEE.c("supportAloneNearFoe", turn.support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
         MUST_FLEE.c("supportInReach", turn.support && inReach) ||
         MUST_FLEE.c("stepOutInReach", turn.stepOut && (creep.key) in targ.zones.reachCells) ||
@@ -995,13 +995,13 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
     // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
     Row("flee", { mustFlee }, RowMark.SURVIVE, why = MUST_FLEE) {
-        if (commandOf.containsKey(creep.id)) orderFled.n++
+        if (Orders.commandOf.containsKey(creep.id)) orderFled.n++
         fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (turn.support || turn.stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, t.strat.dec.retreatTo ?: t.strat.dec.post, 1, ctx.dangerMatrix)
     },
     // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
     // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
     // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
-    Row("keeperOrder", { turn.keeper && commandOf.containsKey(creep.id) }) { commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y } },
+    Row("keeperOrder", { turn.keeper && Orders.commandOf.containsKey(creep.id) }) { Orders.commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y } },
     Row("keeperStay", { turn.keeper }) { TrafficManager.pin(creep.id); null },
     // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
     // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
@@ -1010,9 +1010,9 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // на нём, а не на непослушании
     // ...и во ВСЕХ режимах, а не только в бою (v172, оператор): «все крипы должны двигаться ТОЛЬКО по
     // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
-    Row("order", { commandOf.containsKey(creep.id) }, RowMark.ORDER) {
+    Row("order", { Orders.commandOf.containsKey(creep.id) }, RowMark.ORDER) {
         orderBranch.n++          // сколько приказов реально дошло до ветки исполнения (v173)
-        val cell = commandOf[creep.id]!!
+        val cell = Orders.commandOf[creep.id]!!
         if (cell.x == creep.x && cell.y == creep.y) null else cell
     },
     Row("slotHold", { turn.slot != null && turn.slotHold }) { null },
@@ -1068,11 +1068,11 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // боец, захватчик, — и замысел в нём не участвовал. Теперь очередь назначает командир: крип, исполняющий
         // приказ, идёт первым, а среди приказов вперёд пропускается тот, чья клетка важнее для боя — мили,
         // выходящий в контакт, затем стрелок с целью, затем лекарь к подопечному, и лишь потом все прочие
-        val prio = Arbiter.pushRank(ordered = commandOf.containsKey(creep.id), melee = meleeOnlyLive(creep),
+        val prio = Arbiter.pushRank(ordered = Orders.commandOf.containsKey(creep.id), melee = meleeOnlyLive(creep),
             armed = hasWeapon(creep), healer = hasHeal(creep), stripped = stripped)
         // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
         // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
-        submit(Proposal(creep, step, priorityOf(pace.mark, rung.mark), prio, missionOf[creep.id] ?: '?',
+        submit(Proposal(creep, step, priorityOf(pace.mark, rung.mark), prio, Orders.missionOf[creep.id] ?: '?',
             if (pace.mark == RowMark.FREE) whyTag else stepTag, whyTag, stepTag), ctx)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.key
@@ -1721,7 +1721,7 @@ internal class TargetsZones(private val ctx: Ctx, private val meas: ArmyMeasures
     // 15-33, у v292 8-24) и 2-14 против Coldkimchi#1 (у v289 10-6, p ≈ 0,01): против бьющего наименьшую долю раненому надо
     // уходить к лекарям позади, против бьющего «лекаря, иначе ближайшего» уведённый из боя раненый — огонь, потерянный даром.
     // Правило его стволов бот мерит сам (сверка двух моделей с фактом), это не подгонка под имя
-    val reachNow = if (!meas.fight.contact || pag.huntsWounded) reachCells else meleeReachCells
+    val reachNow = if (!meas.fight.contact || TacticianState.huntsWounded) reachCells else meleeReachCells
     private val fireCells = HashSet<Int>()
     init {
         for (e in meas.forces.combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
@@ -1993,3 +1993,14 @@ internal val stepCount = Gauges.labelledOnly("step")        // ...и какая 
 internal val tacCount = Gauges.labelledOnly("tac")        // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
 
 internal val prioCount = Gauges.labelledOnly("prio")        // ...и с каким приоритетом (SURVIVE / MISSION / OPPORTUNITY)
+
+/** СОСТОЯНИЕ ТАКТИКА (v459, второй шаг архитектуры, этап 6): сверка модели его выбора цели и журнал печати — как есть. */
+internal object TacticianState {
+    internal val ghostLogged = HashMap<String, Int>()
+    /** Предсказанный урон его стволов по нашим на этот тик — по модели его выбора цели, что чаще попадает (v292, см.
+     *  rotateByFocus); null, пока сверок меньше окна. Читает лечение вместо неадресного damageAt. */
+    internal var focusPredDmg: Map<String, Double>? = null
+    /** Его стволы, по сверке с фактом, бьют нашего с наименьшей долей хитов в досягаемости — охотятся за ранеными (v294,
+     *  см. rotateByFocus): тогда раненые уходят к лекарям позади, а лекари стоят вне его досягаемости. */
+    internal var huntsWounded = false
+}

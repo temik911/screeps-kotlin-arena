@@ -95,7 +95,7 @@ internal class Ctx(private val pag: PainAndGain) {
     val enemyHome = enemyHomePos ?: InfluenceMap.cell(99 - home.x, 99 - home.y)
 
     val flags = pag.collectFlags(myCreeps, enemyCreeps, combatEnemies)
-    init { pag.flagsNow = flags }
+    init { WorldState.flagsNow = flags }
     init { applyEffects(flags, myCreeps, enemyCreeps) }
     init { pag.accountScore(flags) }
 
@@ -141,11 +141,11 @@ internal class Ctx(private val pag: PainAndGain) {
             val armable = pot.melee + pot.ranged > 0.0
             val disarmed = armable && live.melee + live.ranged <= 0.0
             if (disarmed) {
-                pag.disarmedFoe.add(e.id)
+                WorldState.disarmedFoe.add(e.id)
                 hulkTicks.n++
                 if (active.any { hasRanged(it) && getRange(it, e) <= RANGED_RANGE }) hulkInReach.n++
-            } else if (e.id in pag.disarmedFoe) {
-                pag.disarmedFoe.remove(e.id)
+            } else if (e.id in WorldState.disarmedFoe) {
+                WorldState.disarmedFoe.remove(e.id)
                 if (live.melee + live.ranged > 0.0) hulkRevived.n++
             }
         }
@@ -198,7 +198,7 @@ internal class Ctx(private val pag: PainAndGain) {
     // ⚠️ ДВА ХВОСТОВЫХ БЛОКА ОТДАЮТ `this` НАРУЖУ ДО КОНЦА КОНСТРУИРОВАНИЯ (v456; до него мир был готов раньше вызова). Сегодня
     // безопасно: `enemyArrivalTicks`, `flowTo`, `avoidCells` читают только поля, объявленные ВЫШЕ, и не сохраняют контекст. Поле,
     // добавленное НИЖЕ этих блоков и прочитанное оттуда, молча окажется null / 0 — новое поле мира объявляется выше них.
-    init { pag.enemyArrivalTicks(this) }
+    init { enemyArrivalTicks(this) }
     // предзагрузка (v131b): потоки ко всем флагам считаются на первом тике, чей лимит 1000 мс, — второй тик (лимит 100 мс,
     // холодный JIT, 60–95 мс живьём) находит их в кэше вместо семи BFS
     init { if (getTicks() == 1) { for (f in flags) flowTo(this, f.pos); cpuMark("prefetch") } }
@@ -477,11 +477,11 @@ internal fun passableNear(p: Position): Position {
 
 /** Через сколько тиков боевые враги дойдут до нашего дома — по темпу сближения за APPROACH_WINDOW;
  *  новый враг — по ходу его тела вдоль поля. Заполняет approachingIds/arrivalById (для приоритета угроз). */
-internal fun PainAndGain.enemyArrivalTicks(ctx: Ctx) {
+internal fun enemyArrivalTicks(ctx: Ctx) {
     val now = getTicks()
     Memory.approachHistory.keys.retainAll { id -> ctx.combatEnemies.any { it.id == id } }
     Memory.approachingIds.clear()
-    arrivalById.clear()
+    WorldState.arrivalById.clear()
     val enemyApproach = flowTo(ctx, ctx.home)
     for (e in ctx.combatEnemies) {
         val approach = enemyApproach[e.key]
@@ -494,7 +494,7 @@ internal fun PainAndGain.enemyArrivalTicks(ctx: Ctx) {
             val rate = (a0 - approach).toDouble() / (now - t0)
             if (rate > 0.0) (approach / rate).toInt() else Int.MAX_VALUE / 2
         }
-        arrivalById[e.id] = arrival
+        WorldState.arrivalById[e.id] = arrival
         if (arrival < Int.MAX_VALUE / 2) Memory.approachingIds.add(e.id)
     }
 }
@@ -989,7 +989,7 @@ internal class ReadSignalsOut(
 
 /** СИГНАЛЫ ТИКА (v257, этап 10; сегмент tickBody до бегунов и армии): сомкнутость по форме и по прибытию, бросок безфлаговой армии (unflaggedRushNow), «бой близко» (fightImminentNow), полученный урон, тишина огня, «он не дерётся» (enemyNotFightingNow). Перенесено дословно. */
 internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
-    plannedCaptures.clear()
+    WorldState.plannedCaptures.clear()
     // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
     // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
     val armedNow = ctx.threats
@@ -1287,3 +1287,14 @@ internal var bfsMaxTick = 0
 
 /** Окно прибора `bfs t=` снято печатью — максимумы начинаются заново. Сбрасывает владелец: у обоих полей один файл-писатель. */
 internal fun bfsWindowDone() { bfsMaxTick = 0; bfsMaxCost = 0.0 }
+
+/** СОСТОЯНИЕ МИРА (v459, второй шаг архитектуры, этап 6): то, что пишет мир тика и читают стадии выше, — как есть. `plannedCaptures` чистит мир, а пополняет стратег: объявлен у нижнего из двух писателей, иначе чистка была бы ребром вверх. */
+internal object WorldState {
+    internal val disarmedFoe = HashSet<String>()
+    internal val arrivalById = HashMap<String, Int>()
+    /** Флаги этого тика — чтобы приказ огня мог спросить «стоит ли скаут на не нашем флаге», не таская список. */
+    internal var flagsNow: List<FlagInfo> = emptyList()
+    /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4
+     *  скаутом — каждый в отдельности проходил порог паритета, вместе дали 0.93 и разгром 12:0 (стенд m9 hunter, t=98). */
+    internal val plannedCaptures = HashSet<String>()
+}

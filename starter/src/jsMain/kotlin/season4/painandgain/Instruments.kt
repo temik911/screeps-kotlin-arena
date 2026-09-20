@@ -139,7 +139,7 @@ internal fun logStuck(active: List<Creep>, enemyCreeps: List<Creep>) {
 }
 
 /** ASCII-карта один раз: '#' стена, '~' болото, '.' равнина, 'F' флаг, 'm' наш крип, 'e' вражеский. */
-internal fun PainAndGain.captureMapMarks(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
+internal fun captureMapMarks(flags: List<FlagInfo>, myCreeps: List<Creep>, enemyCreeps: List<Creep>) {
     val m = HashMap<Int, Char>()
     fun mark(x: Int, y: Int, c: Char) { m[key(x, y)] = c }
     getObjectsByPrototype(StructureWall::class).forEach { mark(it.x, it.y, '#') }
@@ -148,14 +148,14 @@ internal fun PainAndGain.captureMapMarks(flags: List<FlagInfo>, myCreeps: List<C
     enemyCreeps.forEach { mark(it.x, it.y, 'e') }
     myCreeps.forEach { mark(it.x, it.y, 'm') }
     flags.forEach { mark(it.pos.x, it.pos.y, 'F') }
-    mapMarks = m
+    MapDump.mapMarks = m
 }
 
 /** Дамп карты — четырьмя частями по 25 строк на тиках 3–6, одной строкой каждая: сто println на холодном первом
  *  тике упирались в лимит (матч 17), а весь дамп вторым тиком — в бюджет 100 мс (матч 18). Метки крипов сняты на
  *  первом тике (см. captureMapMarks), чтобы стенд получал стартовые клетки. */
-internal fun PainAndGain.logMap(fromRow: Int) {
-    val marks = mapMarks ?: return
+internal fun logMap(fromRow: Int) {
+    val marks = MapDump.mapMarks ?: return
     val out = StringBuilder(if (fromRow == 0) "=== MAP (rows y=0..99, cols x=0..99) ===" else "")
     for (y in fromRow until minOf(fromRow + 25, 100)) {
         val row = StringBuilder()
@@ -309,7 +309,7 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("hparts") { "${withHeal(tickView.ctx.myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(tickView.ctx.myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }}" }
     Gauges.computed("ehparts") { "${tickView.ctx.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${tickView.ctx.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }}" }
     Gauges.computed("hcov") { "${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }}" }
-    Gauges.computed("hulk") { "${disarmedFoe.size}" }
+    Gauges.computed("hulk") { "${WorldState.disarmedFoe.size}" }
     Gauges.computed("chase") { "${Memory.chaseOf.size}/$chaseTicks" }
     // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
     Gauges.computed("ffight") { "$firstFightTick" }
@@ -334,10 +334,10 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("passive") { "${tickView.ctx.passiveEnemy}" }
     Gauges.computed("flags") { "${flagsSummary(tickView.ctx.flags)}" }
     Gauges.computed("massed") { "$kiteMassed" }
-    Gauges.computed("cmd") { "${commandOf.size}/$cmdTicks:$cmdBlocked" }
+    Gauges.computed("cmd") { "${Orders.commandOf.size}/$cmdTicks:$cmdBlocked" }
     Gauges.computed("mode") { "$cmdMode" }
     Gauges.computed("disp") { "$dispNow" }
-    Gauges.computed("fire") { "${fireOf.size}" }
+    Gauges.computed("fire") { "${FireBook.fireOf.size}" }
     Gauges.computed("posture") { "$posture" }
     Gauges.computed("obj") { "${objectiveFlagId?.let { id -> tickView.ctx.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"}" }
     Gauges.computed("hunt@2") { "$huntingThreat" }
@@ -434,3 +434,8 @@ internal val mpackOnHit = Gauges.counter("mpackon")
 internal val mpackOn = Gauges.counter("mpackon", 1)
 
 // ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
+
+/** Метки дампа карты (v459): сняты на первом тике, читает печать карты. */
+internal object MapDump {
+    internal var mapMarks: HashMap<Int, Char>? = null   // метки дампа карты, снятые на первом тике
+}

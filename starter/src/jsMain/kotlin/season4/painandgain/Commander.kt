@@ -80,8 +80,8 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
     val disposition = Strategist.snapshot(ctx.army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
         Memory.keeperIds, Memory.chaseOf, posture, cmdMode, objectiveFlagId, meas.forces.armedEnemies)
     dispNow = Strategist.summary(disposition)
-    missionOf.clear()
-    for (sq in disposition.squads) for (id in sq.members) missionOf[id] = sq.mission.tag
+    Orders.missionOf.clear()
+    for (sq in disposition.squads) for (id in sq.members) Orders.missionOf[id] = sq.mission.tag
     if (commanderNow) {
         // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
         // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
@@ -90,7 +90,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         val cpuTight =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
         if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
         // ...и при разрыве контакта (v227, см. USE_ZERO_LEAD_BREAK) замысел не выбирается прогоном — он задан: KITE
-        if (cpuTight) publishDeal(commandFight(meas.chase.commandArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, commandOf, Intent.PRESS, ourFlagCells = ourFlagCells), tried = 1)
+        if (cpuTight) publishDeal(commandFight(meas.chase.commandArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, Orders.commandOf, Intent.PRESS, ourFlagCells = ourFlagCells), tried = 1)
         else {
             // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через Forecast.SIM_TICKS (v138)
             var bestScore = -Double.MAX_VALUE
@@ -142,8 +142,8 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
             // кластеризацией юнитов, и при нашей грубой оценке она обязательна — назначая замысел каждому крипу
             // порознь, поиск рвал строй (гейт 128/131, m30:kite 0:21 899 при CPU всего 3,8 мс, то есть дело не
             // в цене, а в том, что смешанные наборы получают завышенную оценку)
-            commandOf.clear()
-            bestPlan?.let { commandOf.putAll(it) }
+            Orders.commandOf.clear()
+            bestPlan?.let { Orders.commandOf.putAll(it) }
             // ОТХОД ПО ПРОГНОЗУ (v165, оператор: переносить логику в командира). Решение «бежать» принимала постура,
             // а у командира есть прибор, которого у неё нет, — симуляция размена. Если ЛУЧШИЙ из его замыслов
             // кончается тем, что уцелевшая мощь врага перевешивает нашу, драться незачем: он объявляет отход сам
@@ -182,13 +182,13 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         // ...и гонка идёт ПАРАЛЛЕЛЬНО строю: изготовка стояла В ЦЕПОЧКЕ ПЕРЕД гонкой, поэтому, пока враг
         // подходил, командир не отпускал за флагами вовсе — ни одного захватчика не назначалось, и сценарий
         // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
-        commandRace(ctx, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, commandOf)
-        val runners = HashMap(commandOf)
-        Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Memory.cmdDetach }, meas.forces.armedEnemies, commandOf)
-        commandOf.putAll(runners)
+        commandRace(ctx, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
+        val runners = HashMap(Orders.commandOf)
+        Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Memory.cmdDetach }, meas.forces.armedEnemies, Orders.commandOf)
+        Orders.commandOf.putAll(runners)
     } else if (raceCommandNow) {
         cmdTicks++
-        commandRace(ctx, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, commandOf)
+        commandRace(ctx, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
         // прибор второго тика (v222): фаза plan стоит 20–28 мс на тиках 1–2 и 0,7 мс на третьем — метки внутри неё
         // называют, что именно (строка cpu печатается на первых трёх тиках и на медленных)
         cpuMark("p.race")
@@ -198,20 +198,20 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         // ведущий ядро на флаг мимо них, ронял screen и scatter (гейт 131 из 135)
         // ЗАГОН ВМЕСТО МАРША (v331): ядро, оставшееся после раздачи флагов, ловит его одиночку двумя группами
         val restCore = notCmdDetached(meas.chase.mobileArmy)
-        val hunting = commandHunt(ctx, restCore, meas.forces.armedEnemies, commandOf)
+        val hunting = commandHunt(ctx, restCore, meas.forces.armedEnemies, Orders.commandOf)
         if (!hunting && meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
             val goal = commandGoal(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies)
             cpuMark("p.goal")
             val steps = HashMap<String, Position>()
             commandMarch(ctx, notCmdDetached(meas.chase.mobileArmy), goal, steps)
-            commandOf.putAll(steps)
+            Orders.commandOf.putAll(steps)
             cpuMark("p.march")
         }
     }
         // ...и задания на захват снимаются вместе с режимом: без этого крип, отпущенный командиром за флагом,
         // оставался захватчиком НАВСЕГДА — армия таяла тик за тиком, и сценарий kite давал 0 очков (v160)
-        else { commandOf.clear(); Memory.cmdDetach.clear() }
+        else { Orders.commandOf.clear(); Memory.cmdDetach.clear() }
     // ЛЕКАРИ — ПОД ПРИКАЗОМ ВО ВСЯКОМ КОНТАКТЕ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT). Режим боя против Coldkimchi
     // включён в 25–40 % тиков контакта (остальное — outmatched, retreat, posture, nofire), и в молчании командира клетку
     // лекаря выбирают ветки тактика: healMate ведёт к самому раненому в четырёх (уже отведённому из огня; совпадает с
@@ -221,7 +221,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         val only = HashMap<String, Position>()
         publishDeal(commandFight(meas.chase.commandArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true), tried = 1)
         var given = 0
-        for (h in meas.chase.commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { commandOf[h.id] = it; given++ }
+        for (h in meas.chase.commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { Orders.commandOf[h.id] = it; given++ }
         cmdHealTicks.n++; cmdHealGiven.n += given
     }
 
@@ -336,7 +336,7 @@ internal class OrderAuditOut(
 /** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
 internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): OrderAuditOut {
     val seen = HashMap<Int, Int>()
-    commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
+    Orders.commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
     val dup = seen.values.count { it > 1 }
     orderClash.n += dup
     // ГАРАНТИЯ, А НЕ НАБЛЮДЕНИЕ (v176, оператор: «не должно быть такого, что по приказам командира в одну
@@ -346,12 +346,12 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTarg
     if (dup > 0) {
         val used = HashSet<Int>()
         val drop = ArrayList<String>()
-        for ((id, p) in commandOf) { val k = p.key; if (!used.add(k)) drop.add(id) }
-        drop.forEach { commandOf.remove(it) }
+        for ((id, p) in Orders.commandOf) { val k = p.key; if (!used.add(k)) drop.add(id) }
+        drop.forEach { Orders.commandOf.remove(it) }
     }
     if (dup > 0 && DEBUG_LOG) {
         val where = seen.entries.firstOrNull { it.value > 1 }?.key ?: 0
-        val who = commandOf.filterValues { it.key == where }.keys.joinToString(",")
+        val who = Orders.commandOf.filterValues { it.key == where }.keys.joinToString(",")
         println("clash t=${getTicks()}: mode=$cmdMode cell=(${where / 100},${where % 100}) who=$who")
     }
     // ЗАЖАТОГО БЬЁМ — ПРИБОР (v264): считается по итоговым приказам, а не внутри раздачи — та идёт по разу на
@@ -376,11 +376,11 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTarg
     Memory.meetWatch.clear()
     for (rid in Memory.rotByFocus) {
         val r = meas.chase.commandArmy.firstOrNull { it.id == rid } ?: continue
-        val dest = commandOf[rid] ?: continue
+        val dest = Orders.commandOf[rid] ?: continue
         meetRot.n++
         val medics = meas.chase.commandArmy.filter { it.id != rid && healerOnly(it) }
         if (medics.any { getRange(it, dest) <= 2 }) meetNear.n++
-        val m = medics.firstOrNull { h -> commandOf[h.id]?.let { getRange(it, dest) <= 1 } == true } ?: continue
+        val m = medics.firstOrNull { h -> Orders.commandOf[h.id]?.let { getRange(it, dest) <= 1 } == true } ?: continue
         meetPlan.n++
         Memory.meetWatch[rid] = m.id
     }
@@ -389,7 +389,7 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTarg
     targ.focus.focusTarget?.takeIf { it.hits > 0 }?.let { f ->
         for (c in meas.chase.commandArmy) {
             if (!hasRanged(c)) continue
-            val cell = commandOf[c.id] ?: continue
+            val cell = Orders.commandOf[c.id] ?: continue
             ffocAll.n++
             if (getRange(c, f) <= RANGED_RANGE) ffocBefore.n++
             if (getRange(cell, f) <= RANGED_RANGE) ffocAfter.n++
@@ -397,16 +397,16 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTarg
     }
     run {
         val foes = ctx.combatEnemies.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } }
-        if (foes.isEmpty() || commandOf.isEmpty()) return@run
+        if (foes.isEmpty() || Orders.commandOf.isEmpty()) return@run
         val stuck = HashSet<Int>()
         for (e in ctx.enemyCreeps) if (e.fatigue > 0) stuck.add(e.key)
         val foeAt = HashSet<Int>()
         for (e in ctx.enemyCreeps) foeAt.add(e.key)
         val plan = HashMap<String, Int>()
-        for (f in meas.chase.commandArmy) if (f.hits > 0) plan[f.id] = (commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.key }
+        for (f in meas.chase.commandArmy) if (f.hits > 0) plan[f.id] = (Orders.commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.key }
         for (c in meas.chase.commandArmy) {
             if (!(meleeOnlyLive(c))) continue
-            val mine = commandOf[c.id] ?: continue
+            val mine = Orders.commandOf[c.id] ?: continue
             val near = foes.filter { getRange(c, it) <= 2 }
             if (near.isEmpty()) continue
             val ours = HashSet<Int>()
@@ -444,45 +444,54 @@ internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTarg
         // и починить не тот код (см. USE_BRACE_STEPS). По всей серии v183 «ушёл в другую клетку» набрал
         // 2 022 случая из 39 245 — почти все они этой природы
         val far = 
-            (orderDist[id] ?: 0) > 1 && maxOf(abs(c.x - cell.x), abs(c.y - cell.y)) < (orderDist[id] ?: 0)
+            (Orders.orderDist[id] ?: 0) > 1 && maxOf(abs(c.x - cell.x), abs(c.y - cell.y)) < (Orders.orderDist[id] ?: 0)
         if ((c.x == cell.x && c.y == cell.y) || far) orderAuditOk.n++
         else {
             // ...и КУДА делись остальные (v170): приказ был «стой», а крип ушёл; крип не двинулся
             // вовсе; двинулся, но в другую клетку; или не мог двигаться от усталости
-            val here = orderWas[id]
+            val here = Orders.orderWas[id]
             when {
                 cell.x == here?.first && cell.y == here.second -> lostStay.n++
                 // ...клетку мог занять ВРАГ: он ходит одновременно с нами, и его шаг делает приказ
                 // неисполнимым задним числом — это неустранимо в принципе, и считать надо отдельно (v175)
                 ctx.enemyCreeps.any { e -> e.x == cell.x && e.y == cell.y } -> lostEnemy.n++
                 c.x == here?.first && c.y == here.second -> lostStuck.n++
-                (orderFatigue[id] ?: 0) > 0 -> lostFatigue.n++
+                (Orders.orderFatigue[id] ?: 0) > 0 -> lostFatigue.n++
                 else -> lostElsewhere.n++
             }
         }
         // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
-        val wasD = orderDist[id] ?: 99
+        val wasD = Orders.orderDist[id] ?: 99
         val nowD = maxOf(abs(c.x - cell.x), abs(c.y - cell.y))
         if (nowD < wasD) orderAuditCloser++
         // ...и ДЕРЖИТСЯ ЛИ приказ: та же клетка, что была назначена в прошлый тик
-        if (commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
+        if (Orders.commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
     }
     // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
     // и доля исполнения ограничена этим по построению (v170)
-    commandOf.forEach { (id, p) ->
+    Orders.commandOf.forEach { (id, p) ->
         val c = meas.chase.commandArmy.firstOrNull { it.id == id } ?: return@forEach
         if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
     }
-    orderWas.clear(); orderFatigue.clear()
-    meas.chase.commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
-    orderDist.clear()
-    commandOf.forEach { (id, p) ->
+    Orders.orderWas.clear(); Orders.orderFatigue.clear()
+    meas.chase.commandArmy.forEach { c -> Orders.orderWas[c.id] = c.x to c.y; Orders.orderFatigue[c.id] = c.fatigue }
+    Orders.orderDist.clear()
+    Orders.commandOf.forEach { (id, p) ->
         val c = meas.chase.commandArmy.firstOrNull { it.id == id }
-        if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
+        if (c != null) Orders.orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
     }
     Memory.orderPrev.clear()
-    commandOf.forEach { (id, p) -> Memory.orderPrev[id] = p }
+    Orders.commandOf.forEach { (id, p) -> Memory.orderPrev[id] = p }
     // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
     return OrderAuditOut(
     )
+}
+
+/** ПРИКАЗЫ КОМАНДИРА (v459, второй шаг архитектуры, этап 6): словари одного тика, которые живут весь матч и чистятся на своих местах — перенесены из `object PainAndGain` как есть. `commandOf` переживает тик с пустой армией (`runArmy` выходит раньше раздачи), поэтому «новый словарь каждый тик» изменил бы поведение. Владелец — в списке починки после оборванного тика. */
+internal object Orders {
+    internal val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
+    internal val missionOf = HashMap<String, Char>()      // крип → буква задания его отряда этим тиком (v252, из Strategist.snapshot)
+    internal val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
+    internal val orderFatigue = HashMap<String, Int>()
+    internal val orderDist = HashMap<String, Int>()
 }
