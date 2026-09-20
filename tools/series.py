@@ -23,6 +23,13 @@ truth, and nothing to keep in sync by hand. What it adds is the join that was be
         "which of our own numbers differs between the matches we win and the ones we lose" — read the
         top of that list before designing the next version.
 
+    tools/series.py whynot [--arena pain-and-gain] [--version 458] [--by-opponent | --by-outcome] [--fact engage ...] [--stand DIR [--tag land]]
+        why a fact said no (the bot's `whynot t=` line: per fact, per NAMED conjunct of its `&&` chain, how many
+        times the chain stopped on it — cumulative, so the LAST line of each match is read). One block per fact,
+        conjuncts by how often they refused, with the share of the fact's refusals and the number of matches that
+        saw it. The names live at the call site in the bot (`ENGAGE.c("inLine", inLine)`), there is no list of them
+        here: a new conjunct shows up without touching the tool.
+
     tools/series.py reach [--arena pain-and-gain] [--version 444] [--by-opponent] [--stand DIR [--tag land]]
         the decision tables' reachability (the bot's `reach t=` line: per table, per row `tag:won/true/shadowed`,
         cumulative over a match — so the LAST line of each match is read, never a sum of lines). One row per
@@ -503,6 +510,67 @@ def cmd_reach(args):
                   f"lost {100.0 * (on - won) / max(on, 1):5.1f}%{note}")
 
 
+# ---------------------------------------------------------------- whynot
+
+WHYNOT_FACT = re.compile(r" ([\w.]+)=((?:[\w.]+:\d+,?)*)")
+
+
+def last_whynot(lines):
+    """{fact: [(conjunct, times false), ...]} out of the last `whynot t=` line of one match (the counters are cumulative)."""
+    last = None
+    for line in lines:
+        if line.startswith("whynot t="):
+            last = line
+    if last is None:
+        return None
+    return {fact: [(n, int(c)) for n, c in re.findall(r"([\w.]+):(\d+)", body)] for fact, body in WHYNOT_FACT.findall(last)}
+
+
+def cmd_whynot(args):
+    import glob
+    matches = []                                    # (group, whynot)
+    if args.stand:
+        for f in sorted(glob.glob(os.path.join(args.stand, f"run-{args.tag}-*.log"))):
+            got = last_whynot(open(f, encoding="utf-8", errors="replace"))
+            if got:
+                matches.append(("stand", got))
+    else:
+        for r in rows(args):
+            ticks = matchlog.log_ticks(r["game"], {r["game"]: r["logs"]})
+            got = last_whynot(line for t in sorted(ticks) for line in ticks[t].split("\n"))
+            if got:
+                group = bot(r) if args.by_opponent else r["result"] if args.by_outcome else "all"
+                matches.append((group, got))
+    if not matches:
+        sys.exit("no match carries a `whynot t=` line (the instrument is printed since pain-and-gain v458)")
+    for group in sorted({g for g, _ in matches}):
+        sub_ = [m for g, m in matches if g == group]
+        print(f"\n{group}: {len(sub_)} matches — per fact: the conjunct it stopped on, times false (sum over matches), "
+              f"share of the fact's refusals, matches where it was ever false")
+        order, agg = [], {}
+        for m in sub_:
+            for fact, conj in m.items():
+                if args.fact and fact not in args.fact:
+                    continue
+                for name, n in conj:
+                    k = (fact, name)
+                    if k not in agg:
+                        agg[k] = [0, 0]
+                        order.append(k)
+                    agg[k][0] += n
+                    agg[k][1] += n > 0
+        facts = []
+        for fact, _ in order:
+            if fact not in facts:
+                facts.append(fact)
+        for fact in facts:
+            total = sum(agg[k][0] for k in order if k[0] == fact)
+            print(f"  {fact}: refused {total}")
+            for k in sorted((k for k in order if k[0] == fact), key=lambda k: -agg[k][0]):
+                n, seen = agg[k]
+                print(f"      {k[1]:<28} {n:>10}  {100.0 * n / max(total, 1):5.1f}%   in {seen} of {len(sub_)}")
+
+
 # ---------------------------------------------------------------- cpu
 
 CPU_WINDOW = re.compile(r"^cpu t=(\d+): max=([\d.]+)ms at t=(\d+) slow\(>(\d+)ms\)=(\d+)")
@@ -756,6 +824,17 @@ p.add_argument("--stand", help="read the stub's logs in this directory instead o
 p.add_argument("--tag", default="land", help="with --stand: the regress.sh tag of the logs")
 p.set_defaults(func=cmd_reach)
 
+p = sub.add_parser("whynot", parents=[common],
+                   help="why a fact said no: the named conjunct each `&&` chain stopped on (the bot's whynot t= line)")
+p.add_argument("--version", type=int, nargs="*", help="only these bot versions")
+p.add_argument("--opponent", help="only matches against this opponent (substring)")
+p.add_argument("--by-opponent", action="store_true", help="one table per opponent bot (name#version)")
+p.add_argument("--by-outcome", action="store_true", help="one table for the matches won, one for the matches lost")
+p.add_argument("--fact", nargs="*", help="only these facts (engage, healMate, annihilate...)")
+p.add_argument("--stand", help="read the stub's logs in this directory instead of the match store")
+p.add_argument("--tag", default="land", help="with --stand: the regress.sh tag of the logs")
+p.set_defaults(func=cmd_whynot)
+
 p = sub.add_parser("metrics", parents=[common],
                    help="the bot's own printed numbers, aggregated across matches")
 p.add_argument("--version", type=int, nargs="*", help="only these bot versions")
@@ -787,7 +866,7 @@ p.set_defaults(func=cmd_shares, version=None)
 args = ap.parse_args()
 if args.cmd in ("cpu", "shares"):
     args.version = args.control + args.final
-elif args.cmd not in ("metrics", "field", "reach"):
+elif args.cmd not in ("metrics", "field", "reach", "whynot"):
     args.version = None
     args.opponent = None
 args.func(args)

@@ -26,6 +26,9 @@ const MAP = process.env.MAP; // path to a 100-row DEBUG_MAP dump: '#' wall, '~' 
 const ticks = parseInt(process.argv[2] || '2000', 10);
 // TRACE=from-to prints every creep's position each tick in that range (see the loop below)
 const TRACE = process.env.TRACE ? process.env.TRACE.split('-').map((v) => parseInt(v, 10)) : null;
+// ...and the same window opens the bot's own decision trace (`trace t=` — one line per fighter: the winning rows and, for every row above,
+// the first false conjunct of its fact; see Why in Tables.kt and traceNow in Clock.kt): the bot reads the bounds from this global
+if (TRACE) globalThis.PG_TRACE = TRACE;
 const scenario = (process.argv[3] || 'none').split('+');
 if (scenario.includes('blitz')) scenario.push('split');   // blitz is the split farmer with keepers, our flags as targets and far-running scouts
 const has = (s) => scenario.includes(s);
