@@ -363,19 +363,19 @@ internal class PrintTickOut(
 )
 
 /** ПЕЧАТЬ ТИКА (v257, этап 10; хвост tickBody): строка застрявших, строка t= со всеми приборами раз в LOG_EVERY тиков, перепись rung / tac, поля fld. Перенесено дословно. */
-internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTickOut): PrintTickOut {
+internal fun PainAndGain.printTick(ctx: Ctx, rem: RememberTickOut): PrintTickOut {
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
         bfsMaxTick = 0
         bfsMaxCost = 0.0
     }
-    if (DEBUG_LOG) logStuck(bw.active, bw.enemyCreeps)
-    if (DEBUG_VISUALS) InfluenceMap.drawDebug(bw.army, bw.myCreeps, bw.enemyCreeps)
+    if (DEBUG_LOG) logStuck(ctx.active, ctx.enemyCreeps)
+    if (DEBUG_VISUALS) InfluenceMap.drawDebug(ctx.army, ctx.myCreeps, ctx.enemyCreeps)
 
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-        val ours = ourPowerOf(bw.army, bw.combatEnemies)
-        val theirs = enemyPowerOf(bw.combatEnemies, bw.army)
-        tickView = TickView(bw, rem, ours, theirs)
+        val ours = ourPowerOf(ctx.army, ctx.combatEnemies)
+        val theirs = enemyPowerOf(ctx.combatEnemies, ctx.army)
+        tickView = TickView(ctx, rem, ours, theirs)
         declareLine()
         println(Gauges.line(T_LINE))
         // ПЕРЕПИСЬ (v203): только ненулевые ветки, накопительно за матч. Сумма stepCount обязана равняться
@@ -416,10 +416,10 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
     // МИЛИ БЕЗ ЖИВОЙ ATTACK (счётчик к пункту Д оператора, v451): крипо-тиков, где рождённый мили стоит без живой ATTACK (написание
     // А истинно, Б ложно), тиков с хотя бы одним таким, и крипо-тиков таких в трёх клетках от его вооружённого — редкое
     // состояние, которое обязано быть посчитано до правки мест, где оно решает про урон
-    val strippedMelee = bw.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) }
+    val strippedMelee = ctx.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) }
     if (strippedMelee > 0) {
         mstripTicks.n += strippedMelee; mstripAny.n++
-        mstripReach.n += bw.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) && ctx.threats.any { e -> getRange(it, e) <= RANGED_RANGE } }
+        mstripReach.n += ctx.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) && ctx.threats.any { e -> getRange(it, e) <= RANGED_RANGE } }
     }
     return PrintTickOut(
     )
@@ -431,7 +431,7 @@ internal fun PainAndGain.printTick(ctx: Ctx, bw: BuildWorldOut, rem: RememberTic
 internal val REACH_LINE = listOf("rung", "step", "gate", "pass", "posture", "mode", "cmdwhy", "push")
 
 /** То, что вычисляемым полям строки `t=` нужно от тика: мир, память тика и мощь сторон. Ставится перед печатью строки. */
-internal class TickView(val bw: BuildWorldOut, val rem: RememberTickOut, val ours: Double, val theirs: Double)
+internal class TickView(val ctx: Ctx, val rem: RememberTickOut, val ours: Double, val theirs: Double)
 
 private lateinit var tickView: TickView
 private var lineDeclared = false
@@ -466,21 +466,21 @@ private fun PainAndGain.declareLine() {
     if (lineDeclared) return
     lineDeclared = true
     Gauges.computed("t") { "${getTicks()}" }
-    Gauges.computed("army") { "${tickView.bw.army.size}" }
-    Gauges.computed("runners") { "${tickView.bw.runners.size}(${Memory.detachedIds.size} detached)" }
-    Gauges.computed("enemies") { "${tickView.bw.enemyCreeps.size}/${tickView.bw.combatEnemies.size}" }
-    Gauges.computed("reach") { "${tickView.bw.army.count { hasRanged(it) && tickView.bw.combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${tickView.bw.army.count { hasRanged(it) }}" }
+    Gauges.computed("army") { "${tickView.ctx.army.size}" }
+    Gauges.computed("runners") { "${tickView.ctx.runners.size}(${Memory.detachedIds.size} detached)" }
+    Gauges.computed("enemies") { "${tickView.ctx.enemyCreeps.size}/${tickView.ctx.combatEnemies.size}" }
+    Gauges.computed("reach") { "${tickView.ctx.army.count { hasRanged(it) && tickView.ctx.combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${tickView.ctx.army.count { hasRanged(it) }}" }
     // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
     // центра. Реплеи говорят, что стирание приходит на диаметре 21, а пат — на диаметре 3
-    Gauges.computed("spread") { "${tickView.bw.army.filter { hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${tickView.bw.army.count { hasWeapon(it) && getRange(it, tickView.rem.armedCentroid) > LEASH_RANGE }}" }
+    Gauges.computed("spread") { "${tickView.ctx.army.filter { hasRanged(it) }.let { sh -> if (sh.size > 1) sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } else 0 }}/${tickView.ctx.army.count { hasWeapon(it) && getRange(it, tickView.rem.armedCentroid) > LEASH_RANGE }}" }
     // ...и отдельно ЛЕКАРИ за поводком (v202): именно они разъезжались, а прибор их не считал вовсе
-    Gauges.computed("hfar") { "${tickView.bw.army.count { healerOnly(it) && getRange(it, tickView.rem.armedCentroid) > LEASH_RANGE }}/${tickView.bw.army.count { healerOnly(it) }}" }
+    Gauges.computed("hfar") { "${tickView.ctx.army.count { healerOnly(it) && getRange(it, tickView.rem.armedCentroid) > LEASH_RANGE }}/${tickView.ctx.army.count { healerOnly(it) }}" }
     // ЛЕКАРИ СУДЯТСЯ ВЫЖИВАНИЕМ, А НЕ ДОСТАВЛЕННЫМ ЛЕЧЕНИЕМ (этап 7): v202 поднял лечение и дал 0:3.
     // Тело лекаря — h6m6, лечащие части СПЕРЕДИ, поэтому урон уничтожает именно их и первыми; замер
     // разгрома 3d97c4 говорит, что его лекари сохраняют 100 % лечащих частей, наши 8 %. hcov — доля
     // нужды, покрытая назначенными клетками: прибор раздачи, а не исхода
-    Gauges.computed("hparts") { "${withHeal(tickView.bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(tickView.bw.myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }}" }
-    Gauges.computed("ehparts") { "${tickView.bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${tickView.bw.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }}" }
+    Gauges.computed("hparts") { "${withHeal(tickView.ctx.myCreeps).sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${withHeal(tickView.ctx.myCreeps).sumOf { c -> c.body.count { it.type == HEAL } }}" }
+    Gauges.computed("ehparts") { "${tickView.ctx.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${tickView.ctx.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }}" }
     Gauges.computed("hcov") { "${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }}" }
     Gauges.computed("hulk") { "${disarmedFoe.size}" }
     Gauges.computed("chase") { "${Memory.chaseOf.size}/$chaseTicks" }
@@ -493,7 +493,7 @@ private fun PainAndGain.declareLine() {
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
     // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а
     // консоль не показывала (имя `guns=` занято прибором v200)
-    Gauges.computed("shooters") { "${tickView.bw.army.count { hasRanged(it) }}/${tickView.bw.combatEnemies.count { hasRanged(it) }}" }
+    Gauges.computed("shooters") { "${tickView.ctx.army.count { hasRanged(it) }}/${tickView.ctx.combatEnemies.count { hasRanged(it) }}" }
     Gauges.computed("srch") { "$srchCut/$srchTicks/${cmdTailMax.toInt()}" }
     Gauges.computed("ovw") { "${Executor.ovwContact}/${Executor.ovwRanged}" }
     Gauges.computed("conf") { "${Arbiter.confReach}/${Arbiter.confFatigue}" }
@@ -504,15 +504,15 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("score") { "${ourScore.toInt()}/${enemyScore.toInt()}" }
     Gauges.computed("rate") { "$ourRate/$enemyRate" }
     Gauges.computed("behind") { "$behindOnScore" }
-    Gauges.computed("passive") { "${tickView.bw.passiveEnemy}" }
-    Gauges.computed("flags") { "${flagsSummary(tickView.bw.flags)}" }
+    Gauges.computed("passive") { "${tickView.ctx.passiveEnemy}" }
+    Gauges.computed("flags") { "${flagsSummary(tickView.ctx.flags)}" }
     Gauges.computed("massed") { "$kiteMassed" }
     Gauges.computed("cmd") { "${commandOf.size}/$cmdTicks:$cmdBlocked" }
     Gauges.computed("mode") { "$cmdMode" }
     Gauges.computed("disp") { "$dispNow" }
     Gauges.computed("fire") { "${fireOf.size}" }
     Gauges.computed("posture") { "$posture" }
-    Gauges.computed("obj") { "${objectiveFlagId?.let { id -> tickView.bw.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"}" }
+    Gauges.computed("obj") { "${objectiveFlagId?.let { id -> tickView.ctx.flags.firstOrNull { it.id == id }?.let { "(${it.pos.x},${it.pos.y})" } } ?: "-"}" }
     Gauges.computed("hunt@2") { "$huntingThreat" }
     Gauges.computed("rush") { "$unflaggedRushNow" }
     Gauges.computed("weak") { "$outmatchedTicks" }
@@ -521,11 +521,11 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("our") { "${tickView.ours.toInt()}" }
     Gauges.computed("enemy") { "${tickView.theirs.toInt()}" }
     Gauges.computed("ledger") { "${enemyDamageTaken - ourDamageTaken}" }
-    Gauges.computed("wounded") { "${tickView.bw.army.count { stripped(it) }}" }
-    Gauges.computed("hits") { "${tickView.bw.army.sumOf { it.hits }}/${tickView.bw.army.sumOf { it.hitsMax }}" }
-    Gauges.computed("enemyHits") { "${tickView.bw.combatEnemies.sumOf { it.hits }}/${tickView.bw.combatEnemies.sumOf { it.hitsMax }}" }
-    Gauges.computed("centroid") { "(${tickView.bw.ourCentroid.x},${tickView.bw.ourCentroid.y})" }
-    Gauges.computed("enemyCentroid") { "${tickView.bw.enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}" }
+    Gauges.computed("wounded") { "${tickView.ctx.army.count { stripped(it) }}" }
+    Gauges.computed("hits") { "${tickView.ctx.army.sumOf { it.hits }}/${tickView.ctx.army.sumOf { it.hitsMax }}" }
+    Gauges.computed("enemyHits") { "${tickView.ctx.combatEnemies.sumOf { it.hits }}/${tickView.ctx.combatEnemies.sumOf { it.hitsMax }}" }
+    Gauges.computed("centroid") { "(${tickView.ctx.ourCentroid.x},${tickView.ctx.ourCentroid.y})" }
+    Gauges.computed("enemyCentroid") { "${tickView.ctx.enemyCentroid?.let { "(${it.x},${it.y})" } ?: "-"}" }
 }
 
 /** Мили без живой ATTACK (v451, счётчик к пункту Д): крипо-тиков / тиков с хотя бы одним / крипо-тиков в досягаемости его

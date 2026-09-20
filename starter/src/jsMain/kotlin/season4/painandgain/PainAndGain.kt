@@ -201,8 +201,7 @@ object PainAndGain {
     }
 
     private fun tickBody() {
-        val bw = buildWorld()
-        val ctx = bw.ctx
+        val ctx = Ctx(this)
         // ПРИБОРЫ ПЕРВЫХ ТИКОВ (v447, этап 6): зонд, дамп карты и печать составов до этапа 6 звал сам `buildWorld` — мир
         // импортировал файл приборов. Зовёт их оркестровка, сразу после мира; порядок строк лога прежний (проверен оракулом)
         if (!greeted) {
@@ -213,7 +212,7 @@ object PainAndGain {
         if (DEBUG_MAP && mapMarks == null) captureMapMarks(ctx.flags, ctx.myCreeps, ctx.enemyCreeps)
         if (DEBUG_MAP && getTicks() in 3..6) logMap((getTicks() - 3) * 25)
         logBodies(ctx.myCreeps, ctx.enemyCreeps)
-        readSignals(ctx, bw)
+        readSignals(ctx)
         runRunners(ctx)
         cpuMark("runners")
         runArmy(ctx)
@@ -221,15 +220,15 @@ object PainAndGain {
         // боевые интенты уходят в API до разрешения движения: стенд разрешает конфликты за клетку в порядке первого
         // интента крипа, и порядок «удар, затем ход» — часть тождества с эталоном v235 (движку порядок безразличен)
         TrafficManager.markOrdered(commandOf.keys)
-        val moves = TrafficManager.resolve(bw.active.filter { canMove(it) }, bw.myCreeps + bw.enemyCreeps)
+        val moves = TrafficManager.resolve(ctx.active.filter { canMove(it) }, ctx.myCreeps + ctx.enemyCreeps)
         Arbiter.audit()
         Executor.run(moves)
         cpuMark("resolve")
         cpuSummary()
         // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
         if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
-        val rem = rememberTick(ctx, bw)
-        printTick(ctx, bw, rem)
+        val rem = rememberTick(ctx)
+        printTick(ctx, rem)
     }
 
     /** Флаги, на которые наши крипы уже шагают в ЭТОТ тик (см. planCapture): два захвата одним тиком — D5 армией и H4

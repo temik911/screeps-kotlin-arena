@@ -177,7 +177,7 @@ def _ctor_fields(files, cls):
             d += (text[i] == '(') - (text[i] == ')')
             i += 1
         head = text[m.end():i - 1]
-        fields = set(re.findall(r'\bva[lr] (\w+)\s*:', head))
+        fields = set(re.findall(r'(?<!private )\bva[lr] (\w+)\s*:', head))     # `private val` заголовка строка таблицы не видит
         j = i
         while j < len(text) and text[j] in ' \t':
             j += 1
@@ -555,7 +555,7 @@ def member_vs_toplevel(files):
 
 
 # Носители (v456, второй шаг архитектуры, этап 3): класс, чьё тело — прежний построитель. Список пополняется с каждым новым носителем.
-CARRIERS = ['Turn', 'Stride', 'ArmyStance', 'ArmyTargets', 'ArmyMeasures']
+CARRIERS = ['Turn', 'Stride', 'ArmyStance', 'ArmyTargets', 'ArmyMeasures', 'Ctx']
 
 
 def carrier_method_order(files):
