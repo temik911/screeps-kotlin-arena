@@ -1058,7 +1058,20 @@ internal fun freeStep(s: Stride): Position? {
         // лечением ТОЛЬКО дальним (или вовсе без лечения) 11-20 за матч, полученного урона 110-284, а контрфакт
         // «стоять вне огня и лечить дальним» даёт РОВНО ТО ЖЕ лечение — 440/288/288/460 против фактических
         // 404/240/264/456. Эти тики не куплены ничем, и в двух поражениях из четырёх в них не лечили совсем
-        val carveNow = if (!USE_HEAL_CARVE_ADJACENT_ONLY) healingNow else healingNow && getRange(creep, healMate!!) <= 1
+        val carveBase = if (!USE_HEAL_CARVE_ADJACENT_ONLY) healingNow else healingNow && getRange(creep, healMate!!) <= 1
+        // ...И ИЗЪЯТИЕ ТРЕБУЕТ ПЕРВОГО РЯДА (v513, см. USE_HEAL_CARVE_NEEDS_FRONT). Изъятие разрешает лекарю войти в
+        // досягаемость его стрелков ради лечения бойца — но когда у армии не осталось НИ ОДНОЙ живой части ATTACK,
+        // этого бойца уже некому прикрыть, и лекарь встаёт рядом с тем, кто его не защищает.
+        // Проверка оператора (21.09.2026) подтверждена реплеями восьми матчей и звучит так: при верных эшелонах его
+        // стрелку, чтобы достать лекаря на 3, надо встать ВПЛОТНУЮ к нашим мили, где его рубят на 240 в тик. Замер:
+        // из 566 событий «он выстрелил в нашего лекаря» он стоял >= 2 клеток от нашего ближайшего ЖИВОГО мили в
+        // 100 %, выстрелов с дистанции 1 — НОЛЬ, и наших мили на линии выстрела не было ни разу. А различает исходы
+        // не глубина рядов (зазор мили->лекари у нас −0,1/1,1/0,7/−0,3 в поражениях и −1,0..+1,7 в победах, у него
+        // 1,8-3,5 всегда), а наличие первого ряда ВООБЩЕ: событий «живого мили нет ни одного» 36/79/35/50 % в
+        // поражениях против 0/20/0/0 % в победах, и среди фактических выстрелов по лекарям на них приходится 61-93 %
+        val frontAlive = meas.forces.allies.any { hasMelee(it) }
+        val carveNow = carveBase && (!USE_HEAL_CARVE_NEEDS_FRONT || frontAlive)
+        if (turn.healer && carveBase) { hfrontAll.n++; if (!frontAlive) hfrontOff.n++ }
         if (support && !inReach && avoidCells.isNotEmpty() && !(carveNow)) myBlocked = myBlocked + avoidCells
         if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
             val front = HashSet<Int>()
@@ -2041,6 +2054,12 @@ internal val madjN = Gauges.counter("madj")
 internal val madjStep = Gauges.counter("madj", 1)
 
 internal val madjAll = Gauges.counter("madj", 2)
+
+/** ИЗЪЯТИЕ ЛЕКАРЯ БЕЗ ПЕРВОГО РЯДА (v513, `hfront=` отказано / раз, когда изъятие было бы взято): сколько раз
+ *  лекарь НЕ получил права войти в досягаемость, потому что живых частей ATTACK у армии не осталось. */
+internal val hfrontOff = Gauges.counter("hfront")
+
+internal val hfrontAll = Gauges.counter("hfront", 1)
 
 /** ОХОТА ЗА РАНЕНЫМИ (v509, `hw=` сработало / всего): единственное правило, выводящее лекаря из досягаемости его
  *  стрелков в контакте (см. reachNow). До v509 прибора не имело — `hunt=` это загон, другое правило. */
