@@ -1279,3 +1279,6 @@ internal var lastReachTick = -1                        // последний т�
 internal var bfsMaxCost = 0.0
 
 internal var bfsMaxTick = 0
+
+/** Окно прибора `bfs t=` снято печатью — максимумы начинаются заново. Сбрасывает владелец: у обоих полей один файл-писатель. */
+internal fun bfsWindowDone() { bfsMaxTick = 0; bfsMaxCost = 0.0 }

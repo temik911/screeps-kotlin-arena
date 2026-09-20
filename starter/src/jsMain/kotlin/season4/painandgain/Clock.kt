@@ -10,6 +10,9 @@ internal fun cpuMs(): Double = try { getCpuTime() / 1_000_000.0 } catch (e: Thro
 
 internal fun cpuMark(phase: String) { cpuPhases.add(phase to cpuMs()) }
 
+/** Отметки фаз тика сняты прибором `cpu t=` — список пуст к следующему тику. Чистит владелец: у `cpuPhases` один файл-писатель. */
+internal fun cpuPhasesDone() { cpuPhases.clear() }
+
 // ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
 
 internal val cpuPhases = ArrayList<Pair<String, Double>>()

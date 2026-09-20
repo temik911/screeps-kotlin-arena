@@ -26,17 +26,11 @@ tag Tactician.kt:order
 tag Tactician.kt:prey
 tag Tactician.kt:raider
 tag Tactician.kt:threat
-writer bfsMaxCost<-Instruments.kt
-writer bfsMaxCost<-World.kt
-writer bfsMaxTick<-Instruments.kt
-writer bfsMaxTick<-World.kt
 writer bodyWeightNow<-Facts.kt
 writer bodyWeightNow<-World.kt
 writer cmdDetach<-Commander.kt
 writer cmdDetach<-Strategist.kt
 writer cmdDetach<-World.kt
-writer cpuPhases<-Clock.kt
-writer cpuPhases<-Instruments.kt
 writer detachedIds<-Strategist.kt
 writer detachedIds<-World.kt
 writer liveMovesNow<-Facts.kt

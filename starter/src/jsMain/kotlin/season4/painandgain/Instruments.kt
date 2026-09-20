@@ -69,7 +69,7 @@ internal fun cpuSummary() {
         val parts = cpuPhases.joinToString(" ") { (ph, at) -> val d = at - prev; prev = at; "$ph=${(d * 10).toInt() / 10.0}" }
         println("cpu t=${getTicks()} total=${(ms * 10).toInt() / 10.0}ms: $parts")
     }
-    cpuPhases.clear()
+    cpuPhasesDone()
     if (DEBUG_LOG && getTicks() % 100 == 0) {
         println("cpu t=${getTicks()}: max=${(cpuMaxMs * 10).toInt() / 10.0}ms at t=$cpuMaxTick slow(>${CPU_SLOW_MS.toInt()}ms)=$cpuSlowTicks limit=${arenaInfo.cpuTimeLimit / 1_000_000}/${arenaInfo.cpuTimeLimitFirstTick / 1_000_000}ms")
         cpuMaxMs = 0.0; cpuMaxTick = 0; cpuSlowTicks = 0
@@ -191,8 +191,7 @@ internal class PrintTickOut(
 internal fun PainAndGain.printTick(ctx: Ctx, rem: RememberTick): PrintTickOut {
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
-        bfsMaxTick = 0
-        bfsMaxCost = 0.0
+        bfsWindowDone()
     }
     if (DEBUG_LOG) logStuck(ctx.active, ctx.enemyCreeps)
     if (DEBUG_VISUALS) InfluenceMap.drawDebug(ctx.army, ctx.myCreeps, ctx.enemyCreeps)
