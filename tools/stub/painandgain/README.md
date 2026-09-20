@@ -14,7 +14,7 @@ $NODE --import ./register.mjs run.mjs 2000 rush                                 
 MAP=map-match8.txt START=match2 $NODE --import ./register.mjs run.mjs 2000 hunter   # a live map; we are player 2
 MAP=map-match6.txt $NODE --import ./register.mjs run.mjs 2000 sleeper           # a live map where we were player 1
 SLEEP=300 MAP=map-match7.txt START=match2 $NODE --import ./register.mjs run.mjs 2000 sleeper   # the sleeper wakes at 300
-TRACE=510-600 MAP=map-match11.txt $NODE --import ./register.mjs run.mjs 2000 sleeper   # per-tick positions of every creep in that tick range (reading a chase)
+TRACE=510-600 MAP=map-match11.txt $NODE --import ./register.mjs run.mjs 2000 sleeper   # per-tick positions of every creep in that tick range (reading a chase) AND the bot's own decision trace in the log (`trace t=`: per fighter the winning rows and the first false conjunct of every row above - v458)
 REPLAY=~/ScreepsArena/replays/<id>.replay.json.gz $NODE --import ./register.mjs run.mjs 2000 ghost   # the recorded opponent of a live match walks its replay (see below)
 zsh regress.sh v9                                                               # every scenario, one line each, logs in out/
 ```
