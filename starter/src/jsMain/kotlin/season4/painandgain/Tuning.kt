@@ -250,7 +250,7 @@ internal const val FIST_RADIUS = 4
  *  тиков после контакта, затем армия за десять тиков падает с 11 до 7, `ovl` и `conc` перестают расти вовсе, и
  *  остаток добивают поодиночке. Правка ограничивает ДВИЖЕНИЕ, не раздавая клеток, чем отличается от расширения
  *  командира (v155/v156) и расширения строя (v384/v385) — обоих отвергнутых. */
-internal const val USE_FIST_EVERY_STEP = false
+internal const val USE_FIST_EVERY_STEP = true
 
 internal const val PGS_ROUNDS = 1
 
