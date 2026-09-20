@@ -20,7 +20,8 @@ import screeps.api.Creep
  *  4. Порядок стадий `runRunners → updateKeepers → отзыв боем → отряд и отзыв стратега → assignChase → commandRace` — несущий.
  *  5. `cmdDetach` командир каждый тик очищает и строит заново; ранние выходы `commandRace` оставляют его НЕДОСТРОЕННЫМ, и гарнизон
  *     (`garrisonOf.retainAll`) читает это промежуточное состояние.
- *  6. Один крип МОЖЕТ оказаться в двух реестрах сразу (`detachedIds` и `cmdDetach`) — этого не стережёт ничто; считает прибор `squads=`.
+ *  6. Отряжённый стратегом, хранитель и преследователь командиром не отряжаются (v464, дефект 3): состав гонки их исключает, а
+ *     [detach] с флагом отказывает и считает `sqref=`; пару «гарнизон + хранитель» считают `dbl=` и `dblf=` (тот же флаг / разные).
  *  7. Чистка `detachedIds` — решение, а не уборка: остаётся только живой, ВООРУЖЁННЫЙ и ПОДВИЖНЫЙ ([keepDetached], зовёт мир).
  *  8. Чистка `runnerFlag` — только нынешние бегуны ([keepAssigned]); между `commandRace` и паросочетанием бегунов следующего тика у
  *     `runnerFlag` «последний писатель побеждает».
@@ -50,8 +51,16 @@ internal object Squads {
      *  фокус не назначался никогда, и стенд показал 13 назначений при нуле добитых. */
     val chaseTarget = HashMap<String, Creep>()
 
-    /** Командир отряжает крипа к флагу: член `cmdDetach` И его флаг — одной операцией, в прежнем порядке записей. */
-    fun detach(id: String, flagId: String) { cmdDetach.add(id); runnerFlag[id] = flagId }
+    /** Командир отряжает крипа к флагу: член `cmdDetach` И его флаг — одной операцией, в прежнем порядке записей.
+     *  ИНВАРИАНТЫ ЧЛЕНСТВА (v464, дефект 3): отряжённого стратегом в этом тике, хранителя и преследователя командир не отряжает —
+     *  состав гонки их не содержит (`commandRace`), а здесь стоит предохранитель со счётчиком `sqref=`: отказ считается, не молчит. */
+    fun detach(id: String, flagId: String): Boolean {
+        if (id in detachedIds) { refDetached.n++; return false }
+        if (id in keeperIds) { refKeeper.n++; return false }
+        if (id in chaseOf) { refChaser.n++; return false }
+        cmdDetach.add(id); runnerFlag[id] = flagId
+        return true
+    }
 
     /** Стратег выпускает крипа в отряд за флагами; флаг ему назначит паросочетание бегунов со следующего тика. */
     fun detach(id: String) { detachedIds.add(id) }
@@ -81,4 +90,12 @@ internal object Squads {
 
     /** Назначения остаются только у нынешних бегунов. */
     fun keepAssigned(runner: (String) -> Boolean) { runnerFlag.keys.retainAll(runner) }
+
+    // приборы владельца — ЧЛЕНЫ объекта, не верх файла: у Squads.kt нет функций верхнего уровня, и верх файла в Kotlin/JS
+    // инициализируется только при первом обращении к нему, а раскладка строки `t=` спрашивает поле раньше первого отказа
+    /** Отказы командирского [detach] (v464, дефект 3): крип уже отряжён стратегом / хранитель / преследователь. Состав гонки их
+     *  не содержит, поэтому ненулевое значение — новое место записи в обход состава. */
+    val refDetached = Gauges.counter("sqref")
+    val refKeeper = Gauges.counter("sqref", 1)
+    val refChaser = Gauges.counter("sqref", 2)
 }

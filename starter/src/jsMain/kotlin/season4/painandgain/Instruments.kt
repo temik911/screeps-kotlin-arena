@@ -195,6 +195,10 @@ private val dblChaseDet = Gauges.counter("dbl", 2)
 private val dblGarKeep = Gauges.counter("dbl", 3)
 private val dblGarCour = Gauges.counter("dbl", 4)
 private val dblKeepCmd = Gauges.counter("dbl", 5)
+/** Пара «гарнизон + хранитель» по флагам (v464, дефект 3): крипо-тики, где хранитель держит СВОЙ гарнизонный флаг (гарнизонный,
+ *  оставшийся в армии за нехваткой бюджета гонки, прикован к флагу хранителем — намерение одно), и где флаги разные. */
+private val dblGarKeepSame = Gauges.counter("dblf")
+private val dblGarKeepDiff = Gauges.counter("dblf", 1)
 
 private fun squadOverlapTick() {
     dblDetCmd.n += Squads.detachedIds.count { it in Squads.cmdDetach }
@@ -203,6 +207,7 @@ private fun squadOverlapTick() {
     dblGarKeep.n += Squads.garrisonOf.keys.count { it in Squads.keeperIds }
     dblGarCour.n += Squads.garrisonOf.keys.count { it in Squads.courierOf }
     dblKeepCmd.n += Squads.keeperIds.keys.count { it in Squads.cmdDetach }
+    for ((id, fid) in Squads.garrisonOf) { val k = Squads.keeperIds[id] ?: continue; if (k == fid) dblGarKeepSame.n++ else dblGarKeepDiff.n++ }
 }
 
 internal fun printTick(ctx: Ctx, rem: RememberTick) {
@@ -300,7 +305,7 @@ internal val T_LINE = listOf(
     "passive", "flags", "obey", "branch", "fled", "clash", "lost", "kite", "massed", "plan", "cmd", "mode", "disp", "evt",
     "fire", "posture", "obj", "hthreat", "rush", "weak", "pat", "strip", "touch", "touchl", "out", "back", "guns", "mheal",
     "hline", "fall", "our", "enemy", "ledger", "wounded", "hits", "enemyHits", "centroid", "enemyCentroid",
-    "squads", "dbl", "impure",
+    "squads", "dbl", "dblf", "sqref", "racex", "impure",
 )
 
 /** Поля строки `t=`, которые считаются НА МЕСТЕ ПЕЧАТИ: снимок мира, величины состояния, отношения накопителей. Объявляются один
@@ -385,7 +390,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v463"
+internal const val BOT_VERSION = "v464"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и

@@ -1241,7 +1241,18 @@ internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedE
     // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
     // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
     val mine = army + (roster.alreadyOut)
-    val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) }.toMutableList()
+    // ИНВАРИАНТЫ ЧЛЕНСТВА (v464, дефект 3): в состав гонки не входят отряжённый стратегом В ЭТОМ тике (StrategyDetach стоит выше и
+    // пишет detachedIds, а commandArmy заморожен на начало тика — тот же крип получал ещё и командирский флаг, и со следующего тика
+    // ветка бегуна шла по нему, решение стратега молча перекрывалось), хранитель (вне режима пар он в commandArmy и получал задание
+    // на другой флаг — сходил с клетки) и преследователь (assignChase стоит выше: в этом тике он ходит за остовом, со следующего —
+    // бегун). Предохранитель на самой операции — Squads.detach со счётчиком sqref=
+    fun raceFit(c: Creep): Boolean {   // прибор `racex=` считает, кого из подвижных вооружённых состав не взял и почему
+        if (c.id in Squads.detachedIds) { raceExclDet.n++; return false }
+        if (c.id in Squads.keeperIds) { raceExclKeep.n++; return false }
+        if (c.id in Squads.chaseOf) { raceExclChase.n++; return false }
+        return true
+    }
+    val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) && raceFit(it) }.toMutableList()
     if (free.isEmpty()) return
     val purse = RaceBudget(ctx, meas, roster, free)
     if (roster.fightBlocks) return
@@ -2953,6 +2964,14 @@ internal val budgetTicks = Gauges.counter("budget", 1)
 internal val objAll = Gauges.counter("objnone", 1)
 
 internal val objDropN = Gauges.counter("objdrop", 1)
+
+/** Исключения из состава гонки (v464, дефект 3): крипо-тики подвижных вооружённых, которых состав не взял — отряжён стратегом в
+ *  этом тике / хранитель / преследователь. Отвечает, где именно инварианты членства действуют. */
+internal val raceExclDet = Gauges.counter("racex")
+
+internal val raceExclKeep = Gauges.counter("racex", 1)
+
+internal val raceExclChase = Gauges.counter("racex", 2)
 
 /** Выбор флаг-цели в состоянии «его вооружённые живы, наших ударников нет» (v462): спрошен / вернул пусто. */
 internal val objNs = Gauges.counter("objns")
