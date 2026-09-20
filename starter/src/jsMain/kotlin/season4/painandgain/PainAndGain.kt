@@ -138,8 +138,6 @@ object PainAndGain {
 
 
     internal val arrivalById = HashMap<String, Int>()
-    internal val whyLines = ArrayList<String>()             // трасса решений мили за тик (см. TRACE_WHY)
-    internal val whySum = HashMap<String, Int>()             // причины за сто тиков
     internal val escapeFlows = HashMap<Int, IntArray>()
     internal val escapeTheirs = HashMap<Int, Int>()
     internal val escapeNearest = HashMap<Int, Int>()   // клетка врага, ближайшего к точке

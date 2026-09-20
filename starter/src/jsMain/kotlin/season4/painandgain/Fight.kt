@@ -515,11 +515,6 @@ internal class ArmyFireAndHealOut(
 /** ОГОНЬ И ЛЕЧЕНИЕ АРМИИ ЗА ТИК (v256, этап 10): хвост runArmy после покрипного цикла — перепись «почему» (why t=, why-sum), стрелки врага на прошлом тике для прогноза (prevShooters), назначение огня и лечения и исполнение. Перенесено дословно. */
 internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): ArmyFireAndHealOut {
     cpuMark("moves")
-    if (TRACE_WHY && DEBUG_LOG && whyLines.isNotEmpty()) { println("why t=${getTicks()}: " + whyLines.joinToString(" ")); whyLines.clear() }
-    if (TRACE_WHY && DEBUG_LOG && getTicks() % (LOG_EVERY * 10) == 0 && whySum.isNotEmpty()) {
-        println("why-sum t=${getTicks()}: " + whySum.entries.sortedByDescending { it.value }.joinToString(" ") { "${it.key}=${it.value}" })
-        whySum.clear()
-    }
     prevShooters = meas.forces.combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.key, p.ranged, p.melee) }
     // ...командирская цель НЕ подменяет цель стрельбы (v138): проведённая сюда, она уронила гейт до 129/131 и
     // дала m33:kite 0:21 135 — армия бросала всё ради назначенной цели. Она влияет мягко, через порядок focusOrder

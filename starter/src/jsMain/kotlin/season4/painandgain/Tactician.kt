@@ -1056,33 +1056,6 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
                 if (!inCombat) dangerBlindFar.n++ else if (localAggressive || spotNow) dangerBlind.n++
             }
         }
-        if (TRACE_WHY && DEBUG_LOG && meleeOnly && hasMelee(creep) && engage == null && !posture.withdrawing) {
-            // только враг «с боем» (см. threatening): праздность при небоевых остатках после выигранного боя — не находка
-            val near = meas.forces.combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && threatening(it, meas.forces.enemyCreeps) }.minByOrNull { getRange(creep, it) }
-            if (near != null) {
-                val r = ArrayList<String>()
-                if (support) r.add("support")
-                if (rotating) r.add("rotating")
-                if (meas.chase.stalled) r.add("stalled")
-                if (!localAggressive) r.add("!aggr(${ourPowerOf(localAllies, localEnemies).toInt()}/${enemyPowerOf(localEnemies, localAllies).toInt()}x${ratio} cost=${fightCost(localEnemies, localAllies).let { if (it >= Double.MAX_VALUE / 2) "inf" else it.toInt().toString() }} slack=${localAllies.maxOfOrNull { speedSlack(it) } ?: 0} le=${localEnemies.size} la=${localAllies.size})")
-                if (!inLine) r.add("!inLine")
-                val d = getRange(creep, near)
-                if (holdMelee && d > holdReach(near)) r.add("hold:d$d>${holdReach(near)}")
-                if (!catchable(near, meas.chase.chasers)) r.add("!catchable")
-                if (givenUp(near)) r.add("giveup")
-                if (!covered(near)) r.add("!covered")
-                if (r.isEmpty()) r.add("?")
-                // ДУБЛЬ ЦЕПОЧКИ УДАЛЁН (v203): здесь стояла вторая, написанная руками копия цепочки целей — и она
-                // успела рассинхронизироваться (в ней не было guardMate, rallyBlob, shieldMate, приказа, поиска,
-                // кайта, ухода из кольца и кольца прижима). Прибор, повторяющий решение вручную, рассказывает о
-                // боте неправду ровно тогда, когда бот меняется; настоящая ветка называет себя сама
-                val did = whyTag
-                val short = { id: String -> id.replace(Regex("^pg_player\\d_"), "") }
-                whyLines.add("${short(creep.id)}@(${creep.x},${creep.y})d$d>${short(near.id)}[${r.joinToString(",")}]$did${if (hold) "+hold" else ""}/${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
-                for (k in r) whySum[k] = (whySum[k] ?: 0) + 1
-                whySum["idle"] = (whySum["idle"] ?: 0) + 1
-            }
-        }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
             println("  f${creep.id} (${creep.x},${creep.y}) ${bodySummary(creep)} hits=${creep.hits}/${creep.hitsMax} tgt=(${target.x},${target.y}) so=$standoff flow=$myFlow flee=$mustFlee combat=$inCombat aggr=$localAggressive hold=$hold${if (formHold) "(form)" else if (retreatHold) "(rear)" else ""}${if (leashed) " leash" else ""}${if (stripped) " WOUNDED" else ""}${if (pressTarget != null) " PRESS" else ""} spd=${plainPeriod(creep)} fatigue=${creep.fatigue} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}${if (TrafficManager.isStuck(creep.id)) " STUCK" else ""}")
         }

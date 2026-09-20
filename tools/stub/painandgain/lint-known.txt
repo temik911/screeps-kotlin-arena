@@ -30,7 +30,3 @@ writer plannedCaptures<-Strategist.kt
 writer plannedCaptures<-World.kt
 writer runnerFlag<-Missions.kt
 writer runnerFlag<-Strategist.kt
-writer whyLines<-Fight.kt
-writer whyLines<-Tactician.kt
-writer whySum<-Fight.kt
-writer whySum<-Tactician.kt
