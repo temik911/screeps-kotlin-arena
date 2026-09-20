@@ -56,7 +56,7 @@ internal class ArmyCommandOut(
 )
 
 /** РАЗДАЧА КОМАНДИРА (v256, этап 10; сегмент runArmy): режим FIGHT — перебор замыслов commandFight с прогнозом Forecast.simulate, изготовка (Formation.brace) и гонка (commandRace, commandGoal, commandMarch), погоня (assignChase), постановка стратега для прибора disp= и букв заданий missionOf. Перенесено дословно. */
-internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategyOut, targ: ArmyTargets, stanceOut: ArmyStance): ArmyCommandOut {
+internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyCommandOut {
     val ourFlagCells = ctx.ourFlags.mapTo(HashSet()) { it.pos.key }
     val commanderNow =  cmdMode == CmdMode.FIGHT
     // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
@@ -68,7 +68,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         (cmdMode == CmdMode.RACE || (cmdMode == CmdMode.MARCH))
     // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
     // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
-    if (commanderNow) cmdTicks++ else cmdBlocked = strat.cmdWhyNow
+    if (commanderNow) cmdTicks++ else cmdBlocked = strat.dec.cmdWhyNow
     // ПОГОНЯ НАЗНАЧАЕТСЯ ДО ПЕРЕБОРА (v211): раздача прогоняется пять раз, по разу на замысел, и отряд обязан
     // быть один и тот же во всех пяти — иначе прогноз оценивает пять разных армий.
     // ...И НЕ ЗАВИСИТ ОТ ТОГО, ПРАВИТ ЛИ КОМАНДИР (v212). Первая редакция стояла под `commanderNow`, и первый же

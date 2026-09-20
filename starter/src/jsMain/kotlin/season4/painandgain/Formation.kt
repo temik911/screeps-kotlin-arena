@@ -693,13 +693,13 @@ internal class ArmyBlockOut(
 )
 
 /** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
-internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategyOut, targ: ArmyTargets, stanceOut: ArmyStance): ArmyBlockOut {
+internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyBlockOut {
     if (stanceOut.blockOn) {
         // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
         // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
         // атакующего уходил, а кайтер добивался позже (гейт v43c: block/nine/rush «уничтожение → лидерство» ×10, кайтеры
         // медленнее ×7 при wing ×4, block+flagless ×2 и farm+weak m33 +7561 лучше)
-        val standoffNow = stanceOut.pressOn && !strat.enemyRetreating
+        val standoffNow = stanceOut.pressOn && !strat.dec.enemyRetreating
         // ОТВЕРГНУТО: расстановка и в контакте, пока его мили не идут на нас (!theirMeleeClosing) — ради матча 73 (Coldkimchi:
         // его мили подходили к нашим стрелкам и лекарям вплотную, били по 240 и отходили — 46 ударов против наших 7, а
         // прижим требует «его мили не вплотную», и расстановка была выключена ровно в этом бою): едва атака врага встаёт,
@@ -716,9 +716,9 @@ internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStra
         // поражение: 2:699 и 3:1431 крип-тиков его мили, 61 удар за 700 тиков боя) — по «в трёх» v62 расстановка была выключена
         // весь бой, ряды planBlock ставили стрелков за передним мили, и наш огонь (1611 выстрелов против его 1428) шёл по
         // разным целям: 4+ в одну цель 9 тиков против его 44 при 216 лечения в тик на цели с обеих сторон
-        val meleeBrawl = strat.theirMeleeIn
-        val standingNow = meas.contact && Memory.centreDistHist.size > PRESS_PATIENCE && !stanceOut.armiesClosing && !strat.enemyRetreating && !meleeBrawl && !stanceOut.ourYielding
-        if (DEBUG_LOG && stanceOut.ourYielding && meas.contact && !stanceOut.armiesClosing && !strat.enemyRetreating && !meleeBrawl && yieldingTick != getTicks() - 1) println("plan t=${getTicks()}: our line has yielded ${PRESS_CLOSING}+ cells over $PRESS_PATIENCE ticks — rows behind the front melee, not the plan")
+        val meleeBrawl = strat.dec.theirMeleeIn
+        val standingNow = meas.contact && Memory.centreDistHist.size > PRESS_PATIENCE && !stanceOut.armiesClosing && !strat.dec.enemyRetreating && !meleeBrawl && !stanceOut.ourYielding
+        if (DEBUG_LOG && stanceOut.ourYielding && meas.contact && !stanceOut.armiesClosing && !strat.dec.enemyRetreating && !meleeBrawl && yieldingTick != getTicks() - 1) println("plan t=${getTicks()}: our line has yielded ${PRESS_CLOSING}+ cells over $PRESS_PATIENCE ticks — rows behind the front melee, not the plan")
         if (stanceOut.ourYielding) yieldingTick = getTicks()
         val planNow =  (standoffNow || standingNow)
         // командир (v137): в бою с сомкнутым блобом решение одно на армию, и оно вытесняет оба планировщика
