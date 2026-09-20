@@ -1233,14 +1233,32 @@ internal fun PainAndGain.commandHunt(ctx: Ctx, hunters: List<Creep>, armedEnemie
 internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>,
                         out: MutableMap<String, Position>) {
     out.clear()
+    val roster = RaceRoster(ctx, armedEnemies, this)
+    if (roster.fightBlocks && roster.holding.isEmpty()) return
+    // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
+    // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
+    // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
+    val mine = army + (roster.alreadyOut)
+    val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) }.toMutableList()
+    if (free.isEmpty()) return
+    val purse = RaceBudget(ctx, roster, free, this)
+    if (roster.fightBlocks) return
+    if (purse.budget <= 0) return
+    val routes = RaceRoutes(ctx, flags, roster, free, purse, this)
+    RaceGarrison(ctx, flags, roster, free, purse, this)
+    RaceParties(ctx, armedEnemies, roster, free, purse, routes, this)
+}
+
+/** ПОДСТАДИЯ 1 ГОНКИ: состав — уже отпущенные (снимаются ДО очистки `Memory.cmdDetach`), держатели, режим пар (`safe`), мера ядра (`coreHolds`), запрет боем. */
+internal class RaceRoster(private val ctx: Ctx, private val armedEnemies: List<Creep>, private val pag: PainAndGain) {
     // ...и состав берётся ДО очистки (v215, см. USE_RACE_COUNTS_RELEASED): очистка стояла строкой выше чтения
     val alreadyOut = ctx.runners.filter { it.id in Memory.cmdDetach }
-    Memory.cmdDetach.clear()
+    init { Memory.cmdDetach.clear() }
     // ДЕРЖАТЕЛИ ОСТАЮТСЯ (v297, см. HOLD_WATCH): отпущенный, стоящий на взятом флаге при его крипе рядом, сохраняет
     // задание, пока хватает бюджета и ядро без него держит паритет. Задания раздавались только на ЧУЖИЕ флаги, и
     // взявший флаг на следующем тике уходил за другим или в армию — против けろびー#19 130 из 194 сходов вооружённых
-    val holding = alreadyOut.filter { canMove(it) && hasWeapon(it) && (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null }
-        .sortedByDescending { (heldFlag(ctx, it) ?: guardFlag(ctx, it))?.score ?: 0 }
+    val holding = alreadyOut.filter { canMove(it) && hasWeapon(it) && (pag.heldFlag(ctx, it) ?: pag.guardFlag(ctx, it)) != null }
+        .sortedByDescending { (pag.heldFlag(ctx, it) ?: pag.guardFlag(ctx, it))?.score ?: 0 }
     // ОТРЯД ИЗ ДВУХ ЕМУ НЕ ЦЕЛЬ (v298, см. GROUP_SAFE_DMG): пока он не бьёт наших, стоящих группой, выпуск меряется не всей
     // его армией, а тем, чтобы в ядре оставались двое с оружием, и флаг берёт пара — если его стая у флага её не бьёт.
     // Прежде ядро без отпущенных сравнивалось со всей его армией, разбросанной группами по 1–4 по пяти флагам, и при
@@ -1248,7 +1266,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // ...И НЕ ПРОТИВ ТОГО, КТО УЖЕ ДРАЛСЯ С НАМИ СОМКНУТЫМ (v438, см. USE_PAIRS_NOT_VS_FIGHTER): тот же различитель, что у ворот
     // захвата с v434, — признак «не бьёт» говорит о прошлом за GROUP_WINDOW, а цену раздробленной армии платит бой, который
     // случится; гейт match33:camp: после первого боя его блок отошёл и раздробился, режим пар отпустил семерых из двенадцати
-    val safe = groupSafe && !(USE_PAIRS_NOT_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy)
+    val safe = pag.groupSafe && !(USE_PAIRS_NOT_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy)
     // ...и мера ядра в режиме пар — его КРУПНЕЙШАЯ ГРУППА, а не «двое с оружием» (v301): доктрина паритета остаётся, меняется
     // только опора — та же локализация, что у ворот захвата с v214 и у отзыва с v296. «Двое с оружием» (первая редакция)
     // отпускали столько, что ядро переставало брать флаг, на котором сидит его крип: стендовый фермер scatter держал
@@ -1258,7 +1276,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // Режим и открывается только против того, кто группы не бьёт (см. GROUP_SAFE_DMG); начнёт бить — окно в сто тиков
     // закрывает режим, и все возвращаются в кулак
     fun coreHolds(without: List<Creep>) = if (safe) without.count { hasWeapon(it) } >= 2
-        else without.any { hasWeapon(it) } && ourPowerOf(without, armedEnemies) >= enemyPowerOf(armedEnemies, without) * PARITY_FLOOR
+        else without.any { hasWeapon(it) } && pag.ourPowerOf(without, armedEnemies) >= pag.enemyPowerOf(armedEnemies, without) * PARITY_FLOOR
     // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
     // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
     // перестали стрелять, и командир раздавал задания на захват посреди рубки. Держателей, которых бой вне контакта
@@ -1269,14 +1287,11 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // режим пар не попадает вовсе, поэтому возражение снято, а цена запрета видна числом: `fightOnNow` держится двадцать
     // тиков после ЛЮБОГО выстрела, けろびー стреляет по одиночкам весь матч, и командир выходил из раздачи, не успев
     // завести ни одного держателя, — 20 назначений за 260 тиков при бюджете 3,2 бойца в тик и man=2 за матч
-    val fightBlocks = if (safe) coreContactNow else fightOnNow
-    if (fightBlocks && holding.isEmpty()) return
-    // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
-    // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
-    // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
-    val mine = army + (alreadyOut)
-    val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) }.toMutableList()
-    if (free.isEmpty()) return
+    val fightBlocks = if (safe) pag.coreContactNow else pag.fightOnNow
+}
+
+/** ПОДСТАДИЯ 2: бюджет выпуска — симметричное ядро (в режиме пар — двое с оружием) и держатели, сохраняющие задание. `budget` тратят подстадии ниже. */
+internal class RaceBudget(private val ctx: Ctx, private val roster: RaceRoster, private val free: MutableList<Creep>, private val pag: PainAndGain) {
     // СИММЕТРИЧНАЯ АРМИЯ (v214, решение оператора): «держать в основной армии столько же крипов, сколько у
     // врага, симметрично по типам боевых; лекари всегда остаются в основной армии; остальных отпустить».
     // Считается по ВСЕМ его живым боевым крипам, как он и просил. Лекари сюда не попадают вовсе: `free`
@@ -1285,7 +1300,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // столько же — симметрия оставляет в ядре все девять и не отпускает НИКОГО. Это ровно то, чего просит
     // оператор, и это безопаснее прежней половины (match29:kite: армия таяла до двух крипов при нуле очков).
     // Флаговый забег при этом ложится на двух наших скаутов и на флаг-цель армии, открытую локализацией вето.
-    val core = run {
+    private val core = run {
         // ...и «сколько у врага» значит «сколько у врага ЗДЕСЬ» (v216, см. USE_SYMMETRY_BY_NEAR)
         val near = ctx.combatEnemies.filter { e ->
             e.id in fightPackIds || getRange(e, ctx.ourCentroid) <= MARCH_SAFE
@@ -1294,22 +1309,26 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
         val hisRanged = near.count { hasRanged(it) }
         minOf(free.count { meleeOnlyLive(it) }, hisMelee) + minOf(free.count { hasRanged(it) }, hisRanged)
     }
-    if (!fightOnNow) { symCore.n += core; symFree.n += free.size }
+    init { if (!pag.fightOnNow) { symCore.n += core; symFree.n += free.size } }
     // ...и В РЕЖИМЕ ПАР БЮДЖЕТ НЕ СИММЕТРИЧЕН (v324): симметрия (v214, решение оператора) держит в ядре столько же, сколько
     // его боевых рядом, и против けろびー это 4–6 крипов независимо от того, что он с ядром не дерётся, — на флагах стоит
     // полтора наших тела из четырнадцати при его пяти флагах. В режиме пар в ядре остаются двое с оружием, остальные идут
     // на флаги; ярлык режима и означает «он не бьёт наших в группе», а начнёт — окно в сто тиков его закроет
-    var budget = if (safe) free.size - 2 else free.size - core
-    if (!fightOnNow) { budgetSum.n += maxOf(0, budget); budgetTicks.n++ }
-    for (h in holding) {
-        if (budget <= 0) break
-        val without = free.filter { it.id != h.id }
-        if (!coreHolds(without)) break
-        val f = heldFlag(ctx, h) ?: guardFlag(ctx, h) ?: continue
-        Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace.n++
+    var budget = if (roster.safe) free.size - 2 else free.size - core
+    init { if (!pag.fightOnNow) { budgetSum.n += maxOf(0, budget); budgetTicks.n++ } }
+    init {
+        for (h in roster.holding) {
+            if (budget <= 0) break
+            val without = free.filter { it.id != h.id }
+            if (!roster.coreHolds(without)) break
+            val f = pag.heldFlag(ctx, h) ?: pag.guardFlag(ctx, h) ?: continue
+            Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace.n++
+        }
     }
-    if (fightBlocks) return
-    if (budget <= 0) return
+}
+
+/** ПОДСТАДИЯ 3: флаги, которые брать можно (`wanted`), и отряды в пути, сохраняющие задание (режим пар). */
+internal class RaceRoutes(private val ctx: Ctx, private val flags: List<FlagInfo>, private val roster: RaceRoster, private val free: MutableList<Creep>, private val purse: RaceBudget, private val pag: PainAndGain) {
     // флаги — от ближайшего к армии; занятые нами пропускаем
     // ...и только те, которые БРАТЬ МОЖНО: флаг вешает дебафф на ВЛАДЕЛЬЦА (−20 % удару, −25 % лечению, +10 %
     // получаемому урону за штуку), поэтому доктрина паритета держит захват в узде через captureAllowed, и гонка
@@ -1318,32 +1337,38 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // ...а пара (v298) — только на свободную клетку: флаг, на котором сидит его крип, берёт армия силой. Первая редакция
     // слала пары и на занятые — стендовый фермер scatter держит на каждом своём флаге по крипу, пары весь матч ходили к ним и
     // бежали, ядро из шести флагов не брало, и match28/19:scatter проиграны по очкам (18 873:24 312, 14 925:24 322)
-    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it) && !(safe && it.occupant != null) &&
-        !(safe && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
+    val wanted = flags.filter { !it.ours && it.occupant?.my != true && pag.captureAllowed(ctx, it) && !(roster.safe && it.occupant != null) &&
+        !(roster.safe && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
             flags.any { o -> !o.ours && getRange(o.pos, ctx.home) <= getRange(o.pos, ctx.enemyHome) }) }
 
         .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
     // ...И ОТРЯД НА ПУТИ К ФЛАГУ СОХРАНЯЕТ ЗАДАНИЕ (v299): задание раздавалось заново каждый тик, а флаг, к которому уже
     // идёт бегун, командир не дублирует, — своя же пара с прошлого тика закрывала ему этот флаг, и её распускали через
     // тик: против けろびー#19 армия мерцала 12↔6 каждые десять тиков, охрана у взятого флага стояла 0–12 тиков за матч
-    if (safe) {
-        val outIds = alreadyOut.mapTo(HashSet()) { it.id }
-        val enRoute = free.filter { it.id in outIds }.groupBy { Memory.runnerFlag[it.id] }
-        for ((fid, members) in enRoute) {
-            // ...и СВОЙ ПУСТОЙ ФЛАГ ТОЖЕ ЖДЁТ (v317): гарнизонный боец (v316) шёл к нашему флагу, а удержание задания
-            // знало только про чужие флаги — его распускали через тик, и он возвращался в армию, не дойдя: man=14–99
-            // назначений за матч при 1,74 нашего флага
-            val f = wanted.firstOrNull { it.id == fid }
-                ?: flags.firstOrNull { it.id == fid && it.ours && it.occupant?.my != true }
-                ?: continue
-            if (budget < members.size) continue
-            val without = free.filter { c -> members.none { it.id == c.id } }
-            if (!coreHolds(without)) break
-            for (c in members) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c) }
-            budget -= members.size
-            routeKept.n += members.size
+    init {
+        if (roster.safe) {
+            val outIds = roster.alreadyOut.mapTo(HashSet()) { it.id }
+            val enRoute = free.filter { it.id in outIds }.groupBy { Memory.runnerFlag[it.id] }
+            for ((fid, members) in enRoute) {
+                // ...и СВОЙ ПУСТОЙ ФЛАГ ТОЖЕ ЖДЁТ (v317): гарнизонный боец (v316) шёл к нашему флагу, а удержание задания
+                // знало только про чужие флаги — его распускали через тик, и он возвращался в армию, не дойдя: man=14–99
+                // назначений за матч при 1,74 нашего флага
+                val f = wanted.firstOrNull { it.id == fid }
+                    ?: flags.firstOrNull { it.id == fid && it.ours && it.occupant?.my != true }
+                    ?: continue
+                if (purse.budget < members.size) continue
+                val without = free.filter { c -> members.none { it.id == c.id } }
+                if (!roster.coreHolds(without)) break
+                for (c in members) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c) }
+                purse.budget -= members.size
+                routeKept.n += members.size
+            }
         }
     }
+}
+
+/** ПОДСТАДИЯ 4 (режим пар): постоянный гарнизон ближних флагов, курьер на дорогой флаг, прибор покрытия лечением, тела на свои пустые флаги. */
+internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagInfo>, private val roster: RaceRoster, private val free: MutableList<Creep>, private val purse: RaceBudget, private val pag: PainAndGain) {
     // СВОЙ ПУСТОЙ ФЛАГ — СНАЧАЛА (v316, см. GROUP_SAFE_DMG): держатели заводились только из захвата армией, и на флагах
     // стоял в среднем ОДИН наш крип из четырнадцати: 1,6 нашего флага против его 5,1 при 37 взятиях и 36 потерях за матч,
     // среднее владение 59 тиков. Гарнизон ставится прямо: на каждый наш флаг без нашего крипа на клетке — ближайший
@@ -1352,133 +1377,141 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     // 16 739 и 16 побед из 16). Прежде назначение пересчитывалось каждый тик, и крип половину матча шёл через карту:
     // среднее владение 74–105 тиков против его 158, потому что он берёт флаги рядом с собой, а мы — где придётся.
     // Здесь четыре ближайших к дому флага закрепляются за крипами на весь матч и меняются, только если крип погиб
-    if (safe) {
-        Memory.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Memory.cmdDetach.contains(id) }
-        // ...и ШЕСТОЙ ФЛАГ — ТОЛЬКО ПРОТИВ РАССЫПАННОГО (v348): шестёрку гейт отверг на match29:camp (15 991 : 23 801),
-        // где его армия собрана и ядру тоньше двух вооружённых уже не устоять; у けろびー армия рассыпана весь матч, и
-        // шестое тело — это ровно тот флаг, которого не хватило в двух матчах, проигранных на 22 и 33 очка
-        val homeFlags = flags.sortedBy { getRange(it.pos, ctx.home) }
-            .take(if (enemyMassedSignal) GARRISON_FLAGS else GARRISON_FLAGS + 1)
-        // ...И СКАУТЫ — ТОЖЕ ГАРНИЗОН (v341): они тела, в бою не нужны, а держат флаг не хуже вооружённого; из четырёх
-        // закреплённых в среднем стоит двое — остальные в пути, — и два скаута добавляют ровно недостающие тела
-        val scoutsFree = ctx.runners.filter { stripped(it) && canMove(it) && it.id !in Memory.garrisonOf }
-            .toMutableList()
-        // КУРЬЕР НА ДОРОГОЙ ФЛАГ, КОТОРЫЙ ОН НЕ ДЕРЖИТ ТЕЛОМ (v367). Замер владения по каждому флагу за 8 матчей на
-        // соперника показал, что весь проигрыш по очкам сидит в дорогих флагах, и у ОБОИХ соперников там дыра одного
-        // вида. けろびー#19: H4#2 даёт ему −44 560 очков разрыва, H4#1 −15 920, и на клетке он стоит 0–1 % тиков —
-        // флаг его, а тела нет. ricardo18informatica2020#14 (топ-1): R3#5 и R3#6 он ДЕРЖИТ телом 94–97 % тиков и
-        // отдавать не станет, но H4#1 у него не охраняется вовсе (0 %) при владении вровень с нами — занять его
-        // целиком даёт +3 460 очков за матч при дефиците 1 400. Пустую клетку берёт кто угодно, поэтому идёт скаут:
-        // он тело, в бою не нужен и стоит 100 хитов вместо 1 200–1 600
-        // ...и приз должен быть свободен НЕ ТОЛЬКО НА КЛЕТКЕ (v367, сужение по гейту): первая редакция смотрела лишь
-        // на occupant и уронила match34:camp (14 481 : 23 960) — скаут уходил на флаг, у которого стоит его
-        // вооружённый, и там гиб, ничего не удержав. Скаута сгоняет любой ствол (см. SCOUT_FLEE_TRIGGER), поэтому
-        // приз — это флаг, у которого его стволов нет вовсе
-        val prize = flags.filter { !it.ours && it.score >= COURIER_SCORE && it.occupant == null &&
-            ctx.combatEnemies.none { e -> getRange(e, it.pos) <= SCOUT_FLEE_TRIGGER } }
-            .maxByOrNull { it.swing * 100 - getRange(it.pos, ctx.home) }
-        // ...и слот курьера ПОСТОЯННЫЙ, как гарнизон (v369). Первая редакция брала скаута из «свободных», а свободных
-        // нет: обоих с первого тика забирает постоянный гарнизон, — прибор показал ОДИН тик курьера за матч, и тот
-        // единственный тик вырывал скаута из гарнизона и ломал закрепление (0-8 против топ-1, флагов 2,65 против
-        // 3,07). Теперь скаут закрепляется за призом на весь матч и в гарнизон не входит вовсе
-        Memory.courierOf.keys.retainAll { id -> ctx.runners.any { it.id == id } }
-        Memory.courierOf.entries.retainAll { e -> flags.any { it.id == e.value && !it.ours } }
-        if (prize != null && Memory.courierOf.isEmpty()) {
-            val pick = ctx.runners.filter { stripped(it) && canMove(it) }
-                .minByOrNull { getRange(it, prize.pos) }
-            if (pick != null) Memory.courierOf[pick.id] = prize.id
-        }
-        for ((id, fid) in Memory.courierOf) {
-            val c = ctx.runners.firstOrNull { it.id == id } ?: continue
-            Memory.garrisonOf.remove(id)
-            scoutsFree.removeAll { it.id == id }
-            Memory.cmdDetach.add(id)
-            Memory.runnerFlag[id] = fid
-            free.removeAll { it.id == c.id }
-            courierTicks.n++
-        }
-        for (f in homeFlags) {
-            if (Memory.garrisonOf.values.contains(f.id)) continue
-            val sc = scoutsFree.minByOrNull { getRange(it, f.pos) }
-            if (sc != null && scoutsFree.size >= homeFlags.count { fl -> !Memory.garrisonOf.values.contains(fl.id) }) {
-                Memory.garrisonOf[sc.id] = f.id; scoutsFree.remove(sc); continue
+    init {
+        if (roster.safe) {
+            Memory.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Memory.cmdDetach.contains(id) }
+            // ...и ШЕСТОЙ ФЛАГ — ТОЛЬКО ПРОТИВ РАССЫПАННОГО (v348): шестёрку гейт отверг на match29:camp (15 991 : 23 801),
+            // где его армия собрана и ядру тоньше двух вооружённых уже не устоять; у けろびー армия рассыпана весь матч, и
+            // шестое тело — это ровно тот флаг, которого не хватило в двух матчах, проигранных на 22 и 33 очка
+            val homeFlags = flags.sortedBy { getRange(it.pos, ctx.home) }
+                .take(if (pag.enemyMassedSignal) GARRISON_FLAGS else GARRISON_FLAGS + 1)
+            // ...И СКАУТЫ — ТОЖЕ ГАРНИЗОН (v341): они тела, в бою не нужны, а держат флаг не хуже вооружённого; из четырёх
+            // закреплённых в среднем стоит двое — остальные в пути, — и два скаута добавляют ровно недостающие тела
+            val scoutsFree = ctx.runners.filter { stripped(it) && canMove(it) && it.id !in Memory.garrisonOf }
+                .toMutableList()
+            // КУРЬЕР НА ДОРОГОЙ ФЛАГ, КОТОРЫЙ ОН НЕ ДЕРЖИТ ТЕЛОМ (v367). Замер владения по каждому флагу за 8 матчей на
+            // соперника показал, что весь проигрыш по очкам сидит в дорогих флагах, и у ОБОИХ соперников там дыра одного
+            // вида. けろびー#19: H4#2 даёт ему −44 560 очков разрыва, H4#1 −15 920, и на клетке он стоит 0–1 % тиков —
+            // флаг его, а тела нет. ricardo18informatica2020#14 (топ-1): R3#5 и R3#6 он ДЕРЖИТ телом 94–97 % тиков и
+            // отдавать не станет, но H4#1 у него не охраняется вовсе (0 %) при владении вровень с нами — занять его
+            // целиком даёт +3 460 очков за матч при дефиците 1 400. Пустую клетку берёт кто угодно, поэтому идёт скаут:
+            // он тело, в бою не нужен и стоит 100 хитов вместо 1 200–1 600
+            // ...и приз должен быть свободен НЕ ТОЛЬКО НА КЛЕТКЕ (v367, сужение по гейту): первая редакция смотрела лишь
+            // на occupant и уронила match34:camp (14 481 : 23 960) — скаут уходил на флаг, у которого стоит его
+            // вооружённый, и там гиб, ничего не удержав. Скаута сгоняет любой ствол (см. SCOUT_FLEE_TRIGGER), поэтому
+            // приз — это флаг, у которого его стволов нет вовсе
+            val prize = flags.filter { !it.ours && it.score >= COURIER_SCORE && it.occupant == null &&
+                ctx.combatEnemies.none { e -> getRange(e, it.pos) <= SCOUT_FLEE_TRIGGER } }
+                .maxByOrNull { it.swing * 100 - getRange(it.pos, ctx.home) }
+            // ...и слот курьера ПОСТОЯННЫЙ, как гарнизон (v369). Первая редакция брала скаута из «свободных», а свободных
+            // нет: обоих с первого тика забирает постоянный гарнизон, — прибор показал ОДИН тик курьера за матч, и тот
+            // единственный тик вырывал скаута из гарнизона и ломал закрепление (0-8 против топ-1, флагов 2,65 против
+            // 3,07). Теперь скаут закрепляется за призом на весь матч и в гарнизон не входит вовсе
+            Memory.courierOf.keys.retainAll { id -> ctx.runners.any { it.id == id } }
+            Memory.courierOf.entries.retainAll { e -> flags.any { it.id == e.value && !it.ours } }
+            if (prize != null && Memory.courierOf.isEmpty()) {
+                val pick = ctx.runners.filter { stripped(it) && canMove(it) }
+                    .minByOrNull { getRange(it, prize.pos) }
+                if (pick != null) Memory.courierOf[pick.id] = prize.id
             }
-            if (budget <= 0) break
-            val c = free.filter { it.id !in Memory.garrisonOf }.minByOrNull { getRange(it, f.pos) } ?: break
-            val without = free.without(c)
-            if (!coreHolds(without)) break
-            Memory.garrisonOf[c.id] = f.id
-        }
-        // скаут-гарнизон ходит по тем же правилам бегуна: задание за ним, пока он жив
-        for ((id, fid) in Memory.garrisonOf) if (ctx.runners.any { it.id == id && !hasWeapon(it) }) Memory.runnerFlag[id] = fid
-        // ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v347): смена на флаге — раненый гарнизонный отдаёт флаг целому из ядра (v346). Наших
-        // флагов 2,81 против 3,03 у пятёрки без смены, тел на флагах 2,27 против 2,43: смена меняет ОДНОГО уходящего на
-        // другого идущего, а клетка всё равно пустует, пока сменщик идёт
-        // прибор покрытия гарнизона лечением (v361): считается по стоящим, до раздачи заданий
-        val medics = ctx.armyHealers
-        for ((id, _) in Memory.garrisonOf) {
-            val c = ctx.runners.firstOrNull { it.id == id } ?: ctx.army.firstOrNull { it.id == id } ?: continue
-            garAll.n++
-            if (medics.any { getRange(it, c) <= HEAL_RANGE }) garCovered.n++
-        }
-        for ((id, fid) in Memory.garrisonOf) {
-            val c = free.firstOrNull { it.id == id } ?: continue
-            if (budget <= 0) break
-            Memory.cmdDetach.add(id); Memory.runnerFlag[id] = fid; free.remove(c); budget--; manned.n++
-        }
-        val unmanned = flags.filter { it.ours && it.occupant?.my != true &&
-            ctx.runners.none { r -> Memory.runnerFlag[r.id] == it.id } }
-            .sortedByDescending { it.score }
-        for (f in unmanned) {
-            if (budget <= 0) break
-            // ...и на флаг садится ПАРА (v330), а в ней первым — стрелок (v319): одиночка на флаге живёт мало. Разбор
-            // 16 матчей v325/v326: мы теряем 5,3 крипа за матч против его 0,5, и 100 % наших смертей — в одиночку
-            // (ни одного своего с оружием в трёх клетках), 75 % — в трёх клетках от флага; от групп из двух и больше он
-            // отходит (см. GROUP_SAFE_DMG). Второй стоит рядом охраной (см. guardFlag) и не даёт бить первого даром
-            val c = free.filter { hasRanged(it) }.minByOrNull { getRange(it, f.pos) }
-                ?: free.minByOrNull { getRange(it, f.pos) } ?: break
-            val without = free.without(c)
-            if (!coreHolds(without)) break
-            Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); budget--
-            manned.n++
+            for ((id, fid) in Memory.courierOf) {
+                val c = ctx.runners.firstOrNull { it.id == id } ?: continue
+                Memory.garrisonOf.remove(id)
+                scoutsFree.removeAll { it.id == id }
+                Memory.cmdDetach.add(id)
+                Memory.runnerFlag[id] = fid
+                free.removeAll { it.id == c.id }
+                courierTicks.n++
+            }
+            for (f in homeFlags) {
+                if (Memory.garrisonOf.values.contains(f.id)) continue
+                val sc = scoutsFree.minByOrNull { getRange(it, f.pos) }
+                if (sc != null && scoutsFree.size >= homeFlags.count { fl -> !Memory.garrisonOf.values.contains(fl.id) }) {
+                    Memory.garrisonOf[sc.id] = f.id; scoutsFree.remove(sc); continue
+                }
+                if (purse.budget <= 0) break
+                val c = free.filter { it.id !in Memory.garrisonOf }.minByOrNull { getRange(it, f.pos) } ?: break
+                val without = free.without(c)
+                if (!roster.coreHolds(without)) break
+                Memory.garrisonOf[c.id] = f.id
+            }
+            // скаут-гарнизон ходит по тем же правилам бегуна: задание за ним, пока он жив
+            for ((id, fid) in Memory.garrisonOf) if (ctx.runners.any { it.id == id && !hasWeapon(it) }) Memory.runnerFlag[id] = fid
+            // ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v347): смена на флаге — раненый гарнизонный отдаёт флаг целому из ядра (v346). Наших
+            // флагов 2,81 против 3,03 у пятёрки без смены, тел на флагах 2,27 против 2,43: смена меняет ОДНОГО уходящего на
+            // другого идущего, а клетка всё равно пустует, пока сменщик идёт
+            // прибор покрытия гарнизона лечением (v361): считается по стоящим, до раздачи заданий
+            val medics = ctx.armyHealers
+            for ((id, _) in Memory.garrisonOf) {
+                val c = ctx.runners.firstOrNull { it.id == id } ?: ctx.army.firstOrNull { it.id == id } ?: continue
+                garAll.n++
+                if (medics.any { getRange(it, c) <= HEAL_RANGE }) garCovered.n++
+            }
+            for ((id, fid) in Memory.garrisonOf) {
+                val c = free.firstOrNull { it.id == id } ?: continue
+                if (purse.budget <= 0) break
+                Memory.cmdDetach.add(id); Memory.runnerFlag[id] = fid; free.remove(c); purse.budget--; manned.n++
+            }
+            val unmanned = flags.filter { it.ours && it.occupant?.my != true &&
+                ctx.runners.none { r -> Memory.runnerFlag[r.id] == it.id } }
+                .sortedByDescending { it.score }
+            for (f in unmanned) {
+                if (purse.budget <= 0) break
+                // ...и на флаг садится ПАРА (v330), а в ней первым — стрелок (v319): одиночка на флаге живёт мало. Разбор
+                // 16 матчей v325/v326: мы теряем 5,3 крипа за матч против его 0,5, и 100 % наших смертей — в одиночку
+                // (ни одного своего с оружием в трёх клетках), 75 % — в трёх клетках от флага; от групп из двух и больше он
+                // отходит (см. GROUP_SAFE_DMG). Второй стоит рядом охраной (см. guardFlag) и не даёт бить первого даром
+                val c = free.filter { hasRanged(it) }.minByOrNull { getRange(it, f.pos) }
+                    ?: free.minByOrNull { getRange(it, f.pos) } ?: break
+                val without = free.without(c)
+                if (!roster.coreHolds(without)) break
+                Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); purse.budget--
+                manned.n++
+            }
         }
     }
-    for (f in wanted) {
-        if (budget <= 0) break
-        // ...и размер горстки задаёт НЕ флаг, а его армия: пока она цела и на ходу, одиночку она перехватывает и
-        // бьёт — на match29:kite наши уходили за флагами по одному, армия таяла до двух крипов, а очков не было
-        // вовсе (0 : 22 469). Одиночка посылается, только когда перехватывать некому
-        val guarded = armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }
-        val loose = armedEnemies.count { e -> canMove(e) } >= COMMAND_MIN_FOES
-        // ...идущий туда бегун ЗАСЧИТЫВАЕТСЯ в группу, а не отменяет её: прежний фильтр выкидывал флаг целиком, и
-        // когда бегуны разбирали все доступные флаги, командир не отпускал никого вовсе — гейт терял roost
-        // (7 597:24 268) и camp, где прежняя логика отряда выпускала бойцов
-        // ...а флаг, который уже берёт бегун, командир не дублирует: засчитывать бегуна в группу и досылать бойца
-        // замерено хуже — 131 из 135 против 133 (roost трижды, camp)
-        if (ctx.runners.any { r -> Memory.runnerFlag[r.id] == f.id }) continue
-        val need = if (safe || guarded) 2 else if (loose) RACE_PARTY else 1
-        if (budget < need) continue
-        // ...а пара — со стрелком (v298): два мили не отвечают его стрелку, который бьёт их с трёх клеток
-        val party = if (safe) run {
-            val byRange = free.sortedBy { getRange(it, f.pos) }
-            val r = byRange.firstOrNull { hasRanged(it) }
-            if (r == null) byRange.take(2) else listOf(r) + byRange.filter { it.id != r.id }.take(1)
-        } else free.sortedBy { getRange(it, f.pos) }.take(need)
-        if (party.size < need) continue
-        if (safe) {
-            val pack = foesInEngage(armedEnemies, f.pos)
-            if (pack.isNotEmpty() && enemyPowerOf(pack, party) >= ourPowerOf(party, pack)) continue
+}
+
+/** ПОДСТАДИЯ 5: горстки за чужими флагами — размер по его армии, пара со стрелком, ядро обязано остаться сильнее. */
+internal class RaceParties(private val ctx: Ctx, private val armedEnemies: List<Creep>, private val roster: RaceRoster, private val free: MutableList<Creep>, private val purse: RaceBudget, private val routes: RaceRoutes, private val pag: PainAndGain) {
+    init {
+        for (f in routes.wanted) {
+            if (purse.budget <= 0) break
+            // ...и размер горстки задаёт НЕ флаг, а его армия: пока она цела и на ходу, одиночку она перехватывает и
+            // бьёт — на match29:kite наши уходили за флагами по одному, армия таяла до двух крипов, а очков не было
+            // вовсе (0 : 22 469). Одиночка посылается, только когда перехватывать некому
+            val guarded = armedEnemies.any { getRange(it, f.pos) <= ENGAGE_RANGE }
+            val loose = armedEnemies.count { e -> canMove(e) } >= COMMAND_MIN_FOES
+            // ...идущий туда бегун ЗАСЧИТЫВАЕТСЯ в группу, а не отменяет её: прежний фильтр выкидывал флаг целиком, и
+            // когда бегуны разбирали все доступные флаги, командир не отпускал никого вовсе — гейт терял roost
+            // (7 597:24 268) и camp, где прежняя логика отряда выпускала бойцов
+            // ...а флаг, который уже берёт бегун, командир не дублирует: засчитывать бегуна в группу и досылать бойца
+            // замерено хуже — 131 из 135 против 133 (roost трижды, camp)
+            if (ctx.runners.any { r -> Memory.runnerFlag[r.id] == f.id }) continue
+            val need = if (roster.safe || guarded) 2 else if (loose) RACE_PARTY else 1
+            if (purse.budget < need) continue
+            // ...а пара — со стрелком (v298): два мили не отвечают его стрелку, который бьёт их с трёх клеток
+            val party = if (roster.safe) run {
+                val byRange = free.sortedBy { getRange(it, f.pos) }
+                val r = byRange.firstOrNull { hasRanged(it) }
+                if (r == null) byRange.take(2) else listOf(r) + byRange.filter { it.id != r.id }.take(1)
+            } else free.sortedBy { getRange(it, f.pos) }.take(need)
+            if (party.size < need) continue
+            if (roster.safe) {
+                val pack = foesInEngage(armedEnemies, f.pos)
+                if (pack.isNotEmpty() && pag.enemyPowerOf(pack, party) >= pag.ourPowerOf(party, pack)) continue
+            }
+            // ...и ЯДРО ОБЯЗАНО ОСТАТЬСЯ СИЛЬНЕЕ ЕГО АРМИИ — та же проверка, которой держится отряд (см. USE_DETACH):
+            // аннигиляция проигрывает матч при любом счёте, поэтому отпускать можно лишь до тех пор, пока оставшиеся
+            // держат паритет. Без неё командир растаскивал армию грубее прежней логики и ронял army-сценарии (гейт 127)
+            val without = free.filter { c -> party.none { it.id == c.id } }
+            if (!roster.coreHolds(without)) break
+            // ...и ЗАДАНИЕ — это зачисление в захватчики с целью, а не клетка: вооружённый крип, приведённый к флагу
+            // как боец, флага НЕ БЕРЁТ (захват делают бегуны), и первая редакция на сценарии kite набрала 0 очков.
+            // Командир решает КТО и КУДА, а ведёт и берёт существующий механизм захвата (v160)
+            for (c in party) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); splitAll.n++; if (pag.fightOnNow) splitFight.n++ }
+            purse.budget -= need
         }
-        // ...и ЯДРО ОБЯЗАНО ОСТАТЬСЯ СИЛЬНЕЕ ЕГО АРМИИ — та же проверка, которой держится отряд (см. USE_DETACH):
-        // аннигиляция проигрывает матч при любом счёте, поэтому отпускать можно лишь до тех пор, пока оставшиеся
-        // держат паритет. Без неё командир растаскивал армию грубее прежней логики и ронял army-сценарии (гейт 127)
-        val without = free.filter { c -> party.none { it.id == c.id } }
-        if (!coreHolds(without)) break
-        // ...и ЗАДАНИЕ — это зачисление в захватчики с целью, а не клетка: вооружённый крип, приведённый к флагу
-        // как боец, флага НЕ БЕРЁТ (захват делают бегуны), и первая редакция на сценарии kite набрала 0 очков.
-        // Командир решает КТО и КУДА, а ведёт и берёт существующий механизм захвата (v160)
-        for (c in party) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); splitAll.n++; if (fightOnNow) splitFight.n++ }
-        budget -= need
     }
 }
 
