@@ -200,6 +200,12 @@ fails — the list only shrinks. Both print one `PASS … | errors: 0 ` line at 
 landing like any scenario (`tools/land.sh` reads every stdout line that way); the details go to stderr, and
 `compare.py` does not read these lines (no ` at t=` in them).
 
+**`impure` — the third structural line (20.09.2026, v460).** A probe of an intent in the commander's search counts into its own
+record, and only the chosen deal reaches the world (v449). The bot counts what reached the shared state DURING the search (the
+published heal-need field through its setter, the orders by a snapshot) and prints it as `impure=` in the `t=` line, cumulative;
+`regress.sh` reads the last `t=` line of every log of the run and prints `PASS impure … | errors: 0 ` only when the sum is zero — a
+new evaluation inside a deal that writes to the world stops the landing. A log without the field (a build before v460) is skipped.
+
 **`cputrace.py` — the stand's cpu trace out of the gate's logs**: the largest `max=`, the sum of `slow`, the mean tick
 by phase over the hundred-tick samples, for one log directory or two (`--against`). Absolute numbers say nothing about
 the arena's cold VM; the shift from stage to stage on one machine does. It gives no verdict.
