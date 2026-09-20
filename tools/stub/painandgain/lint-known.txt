@@ -9,13 +9,10 @@ plumbing InfluenceMap.kt:opacity~2
 plumbing InfluenceMap.kt:x
 plumbing InfluenceMap.kt:y
 plumbing Strategist.kt:annihilate
-plumbing Strategist.kt:armiesClosing
-plumbing Strategist.kt:blockOn
 plumbing Strategist.kt:centroid
 plumbing Strategist.kt:cmdWhyNow
 plumbing Strategist.kt:combatArmy
 plumbing Strategist.kt:decision
-plumbing Strategist.kt:enemyApproaching
 plumbing Strategist.kt:enemyRetreating
 plumbing Strategist.kt:evade
 plumbing Strategist.kt:evadeTo
@@ -23,11 +20,9 @@ plumbing Strategist.kt:hisStill
 plumbing Strategist.kt:holdingSpot
 plumbing Strategist.kt:leadHolds
 plumbing Strategist.kt:objective
-plumbing Strategist.kt:ourYielding
 plumbing Strategist.kt:post
 plumbing Strategist.kt:posture
 plumbing Strategist.kt:postureSince
-plumbing Strategist.kt:pressOn
 plumbing Strategist.kt:pushing
 plumbing Strategist.kt:raider
 plumbing Strategist.kt:retreat

@@ -254,7 +254,7 @@ object PainAndGain {
         val meas = armyMeasures(ctx)
         val strat = armyStrategy(ctx, meas)
         val targ = armyTargets(ctx, meas, strat)
-        val stanceOut = armyStance(ctx, meas, strat, targ)
+        val stanceOut = ArmyStance(ctx, meas, strat, targ, this)
         armyBlock(ctx, meas, strat, targ, stanceOut)
         cpuMark("block")
         rotateByFocus(ctx.army, meas.combatEnemies)

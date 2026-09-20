@@ -113,7 +113,7 @@ internal class ArmyTick(
     val meas: ArmyMeasuresOut,
     val strat: ArmyStrategyOut,
     val targ: ArmyTargetsOut,
-    val stanceOut: ArmyStanceOut,
+    val stanceOut: ArmyStance,
     /** Оркестратор — носителям хода ([Turn], [Stride]), ПАРАМЕТРОМ (v456): то, что ещё остаётся его членом (величины одного тика и
      *  коллекции — до этапа 6 второго шага архитектуры), носитель читает явно, `t.pag.lostTick`. Квалифицированное
      *  `PainAndGain.lostTick` дало бы модулю тактика импорт объекта-оркестратора — ребро вверх, 4 → 7, которое гейт графа не

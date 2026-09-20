@@ -1482,17 +1482,10 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
     }
 }
 
-internal class ArmyStanceOut(
-    val blockOn: Boolean,
-    val armiesClosing: Boolean,
-    val enemyApproaching: Boolean,
-    val ourYielding: Boolean,
-    val pressOn: Boolean,
-)
 
 /** СТОЙКА АРМИИ ПОСЛЕ РЕШЕНИЯ (v256, этап 10; сегмент runArmy): блок в бою (blockOn), прижим стоящей линии (pressing), признаки отхода по мощи и по размену, применение режима командира и окончательной постуры (Strategist.decide → postureFinal), приборы режима. Перенесено дословно. */
-internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargetsOut): ArmyStanceOut {
-    cpuMark("posture")
+internal class ArmyStance(private val ctx: Ctx, private val meas: ArmyMeasuresOut, private val strat: ArmyStrategyOut, private val targ: ArmyTargetsOut, private val pag: PainAndGain) {
+    init { cpuMark("posture") }
     val blockOn =  posture == Posture.ANNIHILATE && !pushing && meas.combatEnemies.isNotEmpty() && meas.strikers.isNotEmpty()
     // прижим (см. USE_PRESS, PRESS_PATIENCE): линия врага стоит — контакт, его огонь достаёт наших, и ни один его мили не
     // в MELEE_HOLD_RANGE + 1 от наших вооружённых; включившись, держится, пока есть контакт и строй
@@ -1500,36 +1493,40 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // Прежний `hfar` мерил другое — расстояние лекаря до центроида ВООРУЖЁННЫХ; у армии, растянутой на
     // тридцать клеток, этот центроид стоит посреди пустоты, и «лекарь при армии» там ничего не значит.
     // Здесь вопрос задан по КАЖДОМУ дерущемуся: есть ли свой лекарь в дальности лечения
-    val medsNow = ctx.armyHealers
-    for (c in strat.combatArmy) {
-        if (!hasWeapon(c) || meas.armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 1 }) continue
-        healGapN.n++
-        if (medsNow.none { getRange(c, it) <= HEAL_RANGE }) healGap.n++
-        // ...и ОТДЕЛЬНО — жалоба оператора дословно: «в бою не оказывается НИ ОДНОГО хиллера». Это не «лекарь в
-        // четырёх клетках вместо трёх», это «лекаря рядом нет вовсе»: боец дерётся там, куда лекарь не придёт
-        if (medsNow.none { getRange(c, it) <= MASS_RANGE }) noMedic.n++
+    private val medsNow = ctx.armyHealers
+    init {
+        for (c in strat.combatArmy) {
+            if (!hasWeapon(c) || meas.armedEnemies.none { getRange(c, it) <= RANGED_RANGE + 1 }) continue
+            healGapN.n++
+            if (medsNow.none { getRange(c, it) <= HEAL_RANGE }) healGap.n++
+            // ...и ОТДЕЛЬНО — жалоба оператора дословно: «в бою не оказывается НИ ОДНОГО хиллера». Это не «лекарь в
+            // четырёх клетках вместо трёх», это «лекаря рядом нет вовсе»: боец дерётся там, куда лекарь не придёт
+            if (medsNow.none { getRange(c, it) <= MASS_RANGE }) noMedic.n++
+        }
     }
     // СМЕНА НАПРАВЛЕНИЯ АРМИИ (v215, оператор: «пару тиков погоня, потом разворот, и так много раз»).
     // Направление — это то, КУДА армия идёт: флаг-цель, добыча или пост. Одна смена за матч — это план,
     // сто — это дрожь, и пара «смен/тиков» отличает одно от другого
-    val aimNow = strat.objective?.flag?.id?.let { "F$it" } ?: targ.prey?.id?.let { "E$it" } ?: "P"
-    aimTicks.n++
-    if (lastAim.isNotEmpty() && aimNow != lastAim) aimFlips.n++
-    lastAim = aimNow
+    private val aimNow = strat.objective?.flag?.id?.let { "F$it" } ?: targ.prey?.id?.let { "E$it" } ?: "P"
+    init {
+        aimTicks.n++
+        if (lastAim.isNotEmpty() && aimNow != lastAim) aimFlips.n++
+        lastAim = aimNow
+    }
     // «их мили идут» (см. PRESS_CLOSING): дистанция их мили до наших вооружённых за окно терпения
-    val theirMeleeDist = meas.combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
+    private val theirMeleeDist = meas.combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
         .minOfOrNull { e -> armedOf(strat.combatArmy).minOfOrNull { getRange(e, it) } ?: 99 } ?: 99
-    if (meas.contact) Memory.meleeDistHist.addLast(theirMeleeDist) else Memory.meleeDistHist.clear()
-    while (Memory.meleeDistHist.size > PRESS_PATIENCE + 1) Memory.meleeDistHist.removeFirst()
-    val theirMeleeClosing = Memory.meleeDistHist.size > PRESS_PATIENCE && Memory.meleeDistHist.first() - Memory.meleeDistHist.last() >= PRESS_CLOSING
+    init { if (meas.contact) Memory.meleeDistHist.addLast(theirMeleeDist) else Memory.meleeDistHist.clear() }
+    init { while (Memory.meleeDistHist.size > PRESS_PATIENCE + 1) Memory.meleeDistHist.removeFirst() }
+    private val theirMeleeClosing = Memory.meleeDistHist.size > PRESS_PATIENCE && Memory.meleeDistHist.first() - Memory.meleeDistHist.last() >= PRESS_CLOSING
     // «армии сближаются» (v47, оператор: «признак по сближению центров армий»): дистанция между центрами ВООРУЖЁННЫХ
     // армий за окно терпения сократилась не меньше PRESS_CLOSING — атака; стоит — стоячий бой (см. standingNow). Признак
     // «его мили не вплотную» выключал расстановку ровно в боях с Coldkimchi (его мили лезут вплотную к стрелкам), а
     // «его мили не идут» (v43f) брал и остановившуюся атаку — центры армий отличают одно от другого
-    val ourArmedC = centroidOf(armedOf(strat.combatArmy).map { InfluenceMap.cell(it.x, it.y) })
-    val theirArmedC = centroidOf(meas.armedEnemies.map { InfluenceMap.cell(it.x, it.y) })
-    if (meas.contact && ourArmedC != null && theirArmedC != null) Memory.centreDistHist.addLast(getRange(ourArmedC, theirArmedC)) else Memory.centreDistHist.clear()
-    while (Memory.centreDistHist.size > PRESS_PATIENCE + 1) Memory.centreDistHist.removeFirst()
+    private val ourArmedC = centroidOf(armedOf(strat.combatArmy).map { InfluenceMap.cell(it.x, it.y) })
+    private val theirArmedC = centroidOf(meas.armedEnemies.map { InfluenceMap.cell(it.x, it.y) })
+    init { if (meas.contact && ourArmedC != null && theirArmedC != null) Memory.centreDistHist.addLast(getRange(ourArmedC, theirArmedC)) else Memory.centreDistHist.clear() }
+    init { while (Memory.centreDistHist.size > PRESS_PATIENCE + 1) Memory.centreDistHist.removeFirst() }
     val armiesClosing = Memory.centreDistHist.size > PRESS_PATIENCE && Memory.centreDistHist.first() - Memory.centreDistHist.last() >= PRESS_CLOSING
     // СБЛИЖЕНИЕ БЕЗ КОНТАКТА (v183, оператор: «делай строй до боя»). Изготовка требовала `!contact && armiesClosing`,
     // а armiesClosing набирается ТОЛЬКО в контакте: строкой выше история центров чистится, едва контакт пропал.
@@ -1537,8 +1534,8 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // за весь подход командир отдал ноль приказов (cmd=0/50 … cmd=0/90), к первому выстрелу армия стояла смазкой
     // 5,8×6,1 клетки против его кирпича 4,5×3,9. Здесь то же расстояние пишется ВСЕГДА, и «он идёт на нас»
     // становится измеримым до первого выстрела
-    if (ourArmedC != null && theirArmedC != null) Memory.approachHist.addLast(getRange(ourArmedC, theirArmedC)) else Memory.approachHist.clear()
-    while (Memory.approachHist.size > PRESS_PATIENCE + 1) Memory.approachHist.removeFirst()
+    init { if (ourArmedC != null && theirArmedC != null) Memory.approachHist.addLast(getRange(ourArmedC, theirArmedC)) else Memory.approachHist.clear() }
+    init { while (Memory.approachHist.size > PRESS_PATIENCE + 1) Memory.approachHist.removeFirst() }
     val enemyApproaching =  Memory.approachHist.size > PRESS_PATIENCE &&
         Memory.approachHist.first() - Memory.approachHist.last() >= PRESS_CLOSING
     // ПАТ: БОЙ, В КОТОРОМ НИКТО НИКОГО НЕ УБЬЁТ (v189, разбор Coldkimchi#2). Замер матча 3d97d8 за 1400 тиков:
@@ -1553,94 +1550,101 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // ДОСТАЁТ ЛИ НАШ МИЛИ ВООБЩЕ (v192, см. USE_MELEE_OUT_OF_FIRE): доля мили, стоявших вплотную к врагу, за окно
     // контакта. Величина измеряется, а не назначается: против кайтера она падает до нуля сама, против того, кто
     // идёт в размен, держится высокой, и правило снимается без порога, подогнанного под сегодняшнего соперника
-    if (meas.contact) {
-        // ...ПО ЖИВОЙ ATTACK (v452, пункт Д): «достаёт ли наш мили» — вопрос об ударе, и раздетый мили в знаменателе занижал долю
-        // касания (у него — завышал симметрично, см. hisMelee ниже). Написание Б = meleeOnlyLive
-        val meleeN = strat.combatArmy.count { meleeOnlyLive(it) }
-        val touched = strat.combatArmy.count { meleeOnlyLive(it) && meas.combatEnemies.any { e -> getRange(it, e) <= 1 } }
-        // ...и при НУЛЕ мили в ядре окно не трогается вовсе: иначе отряд, уведённый по этому же признаку, обнуляет
-        // мили в строю, доля прыгает к единице, признак гаснет и отряд отзывается — качели через тик
-        if (meleeN > 0) Memory.touchHist.addLast(100 * touched / meleeN)
-        val hisMelee = meas.combatEnemies.count { meleeOnlyLive(it) }
-        val hisTouched = meas.combatEnemies.count { meleeOnlyLive(it) && strat.combatArmy.any { a -> getRange(it, a) <= 1 } }
-        if (hisMelee > 0) Memory.hisTouchHist.addLast(100 * hisTouched / hisMelee)
-    } else { Memory.touchHist.clear(); Memory.hisTouchHist.clear() }
-    while (Memory.touchHist.size > TOUCH_WINDOW) Memory.touchHist.removeFirst()
-    while (Memory.hisTouchHist.size > TOUCH_WINDOW) Memory.hisTouchHist.removeFirst()
-    touchShare = if (Memory.touchHist.size >= TOUCH_WINDOW) Memory.touchHist.sum() / (100.0 * Memory.touchHist.size) else 1.0
-    hisTouchShare = if (Memory.hisTouchHist.size >= TOUCH_WINDOW) Memory.hisTouchHist.sum() / (100.0 * Memory.hisTouchHist.size) else 1.0
-    if (touchShare < touchMin) touchMin = touchShare
+    init {
+        if (meas.contact) {
+            // ...ПО ЖИВОЙ ATTACK (v452, пункт Д): «достаёт ли наш мили» — вопрос об ударе, и раздетый мили в знаменателе занижал долю
+            // касания (у него — завышал симметрично, см. hisMelee ниже). Написание Б = meleeOnlyLive
+            val meleeN = strat.combatArmy.count { meleeOnlyLive(it) }
+            val touched = strat.combatArmy.count { meleeOnlyLive(it) && meas.combatEnemies.any { e -> getRange(it, e) <= 1 } }
+            // ...и при НУЛЕ мили в ядре окно не трогается вовсе: иначе отряд, уведённый по этому же признаку, обнуляет
+            // мили в строю, доля прыгает к единице, признак гаснет и отряд отзывается — качели через тик
+            if (meleeN > 0) Memory.touchHist.addLast(100 * touched / meleeN)
+            val hisMelee = meas.combatEnemies.count { meleeOnlyLive(it) }
+            val hisTouched = meas.combatEnemies.count { meleeOnlyLive(it) && strat.combatArmy.any { a -> getRange(it, a) <= 1 } }
+            if (hisMelee > 0) Memory.hisTouchHist.addLast(100 * hisTouched / hisMelee)
+        } else { Memory.touchHist.clear(); Memory.hisTouchHist.clear() }
+    }
+    init { while (Memory.touchHist.size > TOUCH_WINDOW) Memory.touchHist.removeFirst() }
+    init { while (Memory.hisTouchHist.size > TOUCH_WINDOW) Memory.hisTouchHist.removeFirst() }
+    init { pag.touchShare = if (Memory.touchHist.size >= TOUCH_WINDOW) Memory.touchHist.sum() / (100.0 * Memory.touchHist.size) else 1.0 }
+    init { pag.hisTouchShare = if (Memory.hisTouchHist.size >= TOUCH_WINDOW) Memory.hisTouchHist.sum() / (100.0 * Memory.hisTouchHist.size) else 1.0 }
+    init { if (pag.touchShare < touchMin) touchMin = pag.touchShare }
     // ...и ПОСЛЕДНЯЯ ИЗМЕРЕННАЯ доля живёт дальше окна (v433, см. USE_TOUCH_SHARE_LAST): мера мощи берёт её, а не единицу,
     // которую окно показывает вне контакта — ровно в те тики, когда ворота захвата и срабатывают
-    if (Memory.touchHist.size >= TOUCH_WINDOW) touchShareLast = touchShare
-    if (Memory.hisTouchHist.size >= TOUCH_WINDOW) hisTouchShareLast = hisTouchShare
-    val stalemateOurNow = strat.combatArmy.sumOf { it.hits }
-    val stalemateHisNow = meas.combatEnemies.sumOf { it.hits }
+    init { if (Memory.touchHist.size >= TOUCH_WINDOW) touchShareLast = pag.touchShare }
+    init { if (Memory.hisTouchHist.size >= TOUCH_WINDOW) hisTouchShareLast = pag.hisTouchShare }
+    private val stalemateOurNow = strat.combatArmy.sumOf { it.hits }
+    private val stalemateHisNow = meas.combatEnemies.sumOf { it.hits }
     // ОКНО ПАТА ПЕРЕЖИВАЕТ МИГАНИЕ КОНТАКТА (v198). Окно очищалось на КАЖДОМ тике без контакта, а `contact` в
     // стоянке мигает — и в матче 3d9894, где 1700 тиков не погиб ни один крип ни у нас, ни у него, прибор дошёл
     // лишь до 48 из ста нужных (`pat=0/48`). Признак, который в чистейшем пату не может стать истинным, ничего не
     // измеряет: он и был причиной, по которой v189 не с чем было сравнивать. Разрыв короче STALEMATE_GAP окно
     // держит — сто тиков «ни одна сторона не потеряла и пяти процентов хитов» остаются теми же ста тиками
-    if (meas.contact) { Memory.stalemateOurHist.addLast(stalemateOurNow); Memory.stalemateHisHist.addLast(stalemateHisNow); stalemateGap = 0 }
-    else {
-        stalemateGap++
-        if (stalemateGap > STALEMATE_GAP) { Memory.stalemateOurHist.clear(); Memory.stalemateHisHist.clear() }
+    init {
+        if (meas.contact) { Memory.stalemateOurHist.addLast(stalemateOurNow); Memory.stalemateHisHist.addLast(stalemateHisNow); stalemateGap = 0 }
+        else {
+            stalemateGap++
+            if (stalemateGap > STALEMATE_GAP) { Memory.stalemateOurHist.clear(); Memory.stalemateHisHist.clear() }
+        }
     }
-    while (Memory.stalemateOurHist.size > STALEMATE_WINDOW) Memory.stalemateOurHist.removeFirst()
-    while (Memory.stalemateHisHist.size > STALEMATE_WINDOW) Memory.stalemateHisHist.removeFirst()
+    init { while (Memory.stalemateOurHist.size > STALEMATE_WINDOW) Memory.stalemateOurHist.removeFirst() }
+    init { while (Memory.stalemateHisHist.size > STALEMATE_WINDOW) Memory.stalemateHisHist.removeFirst() }
     // ПРИБОР, а не правило: счётчик пата считается всегда, независимо от того, кто им пользуется. Он был
     // загейчен на USE_CAPTURE_IN_STALEMATE, и когда тот выключили после отказа v189, счётчик замер на нуле —
     // вместе с ним умерло правило v190, которое на него опиралось: двенадцать игр измерили не его, а v186
-    val stalemateNow = Memory.stalemateOurHist.size >= STALEMATE_WINDOW && run {
+    private val stalemateNow = Memory.stalemateOurHist.size >= STALEMATE_WINDOW && run {
         val ourDrop = Memory.stalemateOurHist.first() - Memory.stalemateOurHist.last()
         val hisDrop = Memory.stalemateHisHist.first() - Memory.stalemateHisHist.last()
         ourDrop < Memory.stalemateOurHist.first() * STALEMATE_LOSS && hisDrop < Memory.stalemateHisHist.first() * STALEMATE_LOSS
     }
-    stalemateTicks.n = if (stalemateNow) stalemateTicks.n + 1 else 0
-    if (stalemateTicks.n > patMax.n) patMax.n = stalemateTicks.n
+    init { stalemateTicks.n = if (stalemateNow) stalemateTicks.n + 1 else 0 }
+    init { if (stalemateTicks.n > patMax.n) patMax.n = stalemateTicks.n }
     // наша линия отступает (v96, USE_STANDING_LINE_HOLDS): центр наших вооружённых за окно терпения отдалился от его
     // НЫНЕШНЕГО центра на PRESS_CLOSING и больше — бой не стоячий, это отход под огнём, и расстановке в нём места нет
-    if (meas.contact && ourArmedC != null) Memory.ourCentreHist.addLast(ourArmedC.key) else Memory.ourCentreHist.clear()
-    while (Memory.ourCentreHist.size > PRESS_PATIENCE + 1) Memory.ourCentreHist.removeFirst()
+    init { if (meas.contact && ourArmedC != null) Memory.ourCentreHist.addLast(ourArmedC.key) else Memory.ourCentreHist.clear() }
+    init { while (Memory.ourCentreHist.size > PRESS_PATIENCE + 1) Memory.ourCentreHist.removeFirst() }
     val ourYielding =  theirArmedC != null && Memory.ourCentreHist.size > PRESS_PATIENCE && run {
         val was = Memory.ourCentreHist.first(); val now0 = Memory.ourCentreHist.last()
-        getRange(InfluenceMap.cell(now0 / 100, now0 % 100), theirArmedC) - getRange(InfluenceMap.cell(was / 100, was % 100), theirArmedC) >= PRESS_CLOSING
+        // `!!`: поле носителя внутри лямбды инициализатора компилятор не сужает, как сужал локальную; непустота проверена левее, в этом же `&&`
+        getRange(InfluenceMap.cell(now0 / 100, now0 % 100), theirArmedC!!) - getRange(InfluenceMap.cell(was / 100, was % 100), theirArmedC!!) >= PRESS_CLOSING
     }
     // их мили на подходе — в (MELEE_HOLD_RANGE + 2 .. ENGAGE_RANGE] от наших вооружённых — это не стоячая линия и не пустое
     // место: матч 56 (G1N6ERbreadMan) — прижим на 115-м при его мили в 4–7, через три тика они вошли в нашу пачку у своих же
     // стрелков (его 51 удар против наших 24, a→ranged 31), пять наших потеряны за двадцать тиков. Прижим — линии, чьи мили
     // либо у неё (Kero v2, Coldkimchi: в 2–3 и не бьют), либо далеко; подходящих строй ждёт — они входят в его фокус сами
-    val theirMeleeMid = meas.combatEnemies.any { e ->
+    private val theirMeleeMid = meas.combatEnemies.any { e ->
         InfluenceMap.profileOf(e).melee > 0.0 &&
             (armedOf(strat.combatArmy).minOfOrNull { getRange(e, it) } ?: 99).let { it > MELEE_HOLD_RANGE + 2 && it <= ENGAGE_RANGE }
     }
-    standoffTicks = if (meas.contact && strat.underTheirFire && !strat.theirMeleeIn && !theirMeleeClosing && !theirMeleeMid) standoffTicks + 1 else 0
-    pressing =  blockOn && meas.contact && !strat.leadHolds && (standoffTicks >= PRESS_PATIENCE || pressing)
+    init { standoffTicks = if (meas.contact && strat.underTheirFire && !strat.theirMeleeIn && !theirMeleeClosing && !theirMeleeMid) standoffTicks + 1 else 0 }
+    init { pressing =  blockOn && meas.contact && !strat.leadHolds && (standoffTicks >= PRESS_PATIENCE || pressing) }
     val pressOn = pressing
     // «цель уходит» (см. PRESS_GIVEUP): за два тика прижима дистанция от наших мили до неё не сократилась
-    if (blockOn) {
-        val ourMelee = pureMeleeOf(strat.combatArmy)
-        for (e in meas.combatEnemies) {
-            val near = ourMelee.minByOrNull { getRange(e, it) } ?: continue
-            val d = getRange(e, near)
-            if (d > PRESS_RANGE + 1) { pressChase.remove(e.id); continue }
-            val h = pressChase.getOrPut(e.id) { ArrayDeque() }
-            h.addLast(ChaseSample(d, e.key, near.key))
-            while (h.size > 3) h.removeFirst()
-            // цель ушла (v96, USE_GIVEUP_HE_LEAVES): САМА отдалилась от места, где стоял наш ближайший мили в начале окна, —
-            // а не «мы к ней не приблизились»: идущий за нашим отходом к тому месту приближается
-            val first = h.first()
-            val from = InfluenceMap.cell(first.meleeCell / 100, first.meleeCell % 100)
-            val left =  getRange(e, from) > getRange(InfluenceMap.cell(first.eCell / 100, first.eCell % 100), from)
-            if (h.size == 3 && d > (MELEE_HOLD_RANGE) && h.last().d >= first.d && left) {
-                pressGiveUp[e.id] = getTicks() + PRESS_GIVEUP
-                h.clear()
-                if (DEBUG_LOG) println("press t=${getTicks()}: ${e.id} keeps its distance — not pressed for $PRESS_GIVEUP ticks")
+    init {
+        if (blockOn) {
+            val ourMelee = pureMeleeOf(strat.combatArmy)
+            for (e in meas.combatEnemies) {
+                val near = ourMelee.minByOrNull { getRange(e, it) } ?: continue
+                val d = getRange(e, near)
+                if (d > PRESS_RANGE + 1) { pag.pressChase.remove(e.id); continue }
+                val h = pag.pressChase.getOrPut(e.id) { ArrayDeque() }
+                h.addLast(ChaseSample(d, e.key, near.key))
+                while (h.size > 3) h.removeFirst()
+                // цель ушла (v96, USE_GIVEUP_HE_LEAVES): САМА отдалилась от места, где стоял наш ближайший мили в начале окна, —
+                // а не «мы к ней не приблизились»: идущий за нашим отходом к тому месту приближается
+                val first = h.first()
+                val from = InfluenceMap.cell(first.meleeCell / 100, first.meleeCell % 100)
+                val left =  getRange(e, from) > getRange(InfluenceMap.cell(first.eCell / 100, first.eCell % 100), from)
+                if (h.size == 3 && d > (MELEE_HOLD_RANGE) && h.last().d >= first.d && left) {
+                    pag.pressGiveUp[e.id] = getTicks() + PRESS_GIVEUP
+                    h.clear()
+                    if (DEBUG_LOG) println("press t=${getTicks()}: ${e.id} keeps its distance — not pressed for $PRESS_GIVEUP ticks")
+                }
             }
-        }
-    } else pressChase.clear()
-    pressGiveUp.entries.removeAll { it.value <= getTicks() }
-    if (DEBUG_LOG && pressOn && standoffTicks == PRESS_PATIENCE) println("press t=${getTicks()}: the enemy line has stood at range for $PRESS_PATIENCE ticks under fire — the pack goes in")
+        } else pag.pressChase.clear()
+    }
+    init { pag.pressGiveUp.entries.removeAll { it.value <= getTicks() } }
+    init { if (DEBUG_LOG && pressOn && standoffTicks == PRESS_PATIENCE) println("press t=${getTicks()}: the enemy line has stood at range for $PRESS_PATIENCE ticks under fire — the pack goes in") }
     // стрелки впереди (см. USE_RANGED_FRONT) — только против линии, которая СТОИТ: признак прижима и дистанция до центра
     // врага за APPROACH_WINDOW не выросла. Уходящий (кайтер стенда, остаток) — прежний строй с мили впереди: стрелки во
     // главе погони не догоняют никого, а мили за их спиной и подавно (m11 kite: уничтожение на 395-м → лидерство, m28
@@ -1664,9 +1668,9 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // ...И ПРИЗНАК СЧИТАЕТСЯ ПО ФАКТУ РАЗМЕНА (v216, см. USE_BREAK_OFF_BY_LEDGER). Обе величины считаются на
     // контактных тиках, чтобы прибор назвал числом, как часто они расходятся: старый признак стоил ровно
     // столько же — два вызова powerOf, — поэтому цена замера нулевая
-    val outmatchedByPower =  meas.contact && meas.armedEnemies.isNotEmpty() && run {
-        val oursNow = ourPowerOf(strat.combatArmy, meas.combatEnemies)
-        val theirsNow = enemyPowerOf(meas.combatEnemies, strat.combatArmy)
+    private val outmatchedByPower =  meas.contact && meas.armedEnemies.isNotEmpty() && run {
+        val oursNow = pag.ourPowerOf(strat.combatArmy, meas.combatEnemies)
+        val theirsNow = pag.enemyPowerOf(meas.combatEnemies, strat.combatArmy)
         theirsNow > 0.0 && oursNow < theirsNow * BREAK_OFF_RATIO
     }
     // «мы теряем хиты, а он почти нет» — то же отношение BREAK_OFF_RATIO, только по фактическим потерям
@@ -1675,19 +1679,23 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // и признак объявил отход, — тогда как ЗА МАТЧ мы к этому моменту убили троих его крипов и не потеряли ни
     // одного (16 000/16 000 у нас против его 10 798/11 600). Строка перестала проходить гейт. Вопрос «стоит ли
     // прекращать размен» — про размен целиком, а не про последние двадцать тиков; окно осталось прибором
-    val outmatchedByLedger =  meas.contact && meas.armedEnemies.isNotEmpty() &&
+    private val outmatchedByLedger =  meas.contact && meas.armedEnemies.isNotEmpty() &&
         ourDamageTaken > 0 && enemyDamageTaken < ourDamageTaken * BREAK_OFF_RATIO
     // ...а САМ признак посчитан выше (v217, см. outmatchedNow): здесь остаётся только прибор расхождения
-    if (meas.contact && meas.armedEnemies.isNotEmpty()) {
-        breakOffN.n++
-        if (outmatchedByPower != outmatchedByLedger) breakOffSplit.n++
+    init {
+        if (meas.contact && meas.armedEnemies.isNotEmpty()) {
+            breakOffN.n++
+            if (outmatchedByPower != outmatchedByLedger) breakOffSplit.n++
+        }
     }
     // признак для режима боя при наступлении (см. ниже): мы позади по размену хитов, то есть его лечение
     // перекрывает наш урон — ровно тот случай, ради которого концентрация и нужна
-    val healingWins = enemyDamageTaken < ourDamageTaken
-    cmdWhy.bump(strat.cmdWhyNow)
-    cmdWhyN.n++
-    // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
+    private val healingWins = enemyDamageTaken < ourDamageTaken
+    init { cmdWhy.bump(strat.cmdWhyNow) }
+    init {
+        cmdWhyN.n++
+        // ...и условие командира теперь ОДНО: он правит там, где сам назвал режим боя. Прежние пять множителей
+    }
     // (контакт, сомкнутость или шесть рядом, постура, огонь, отсутствие отхода и затора) целиком перешли в
     // выбор режима выше — это то же самое, сказанное один раз, и дальше режимы можно наполнять по одному
     // ...и ЗАПИСЬ ИДЁТ ЧЕРЕЗ ТЕ ЖЕ ЧАСЫ (v215). Здесь и ниже постура присваивалась в обход гистерезиса и БЕЗ
@@ -1697,76 +1705,81 @@ internal fun PainAndGain.armyStance(ctx: Ctx, meas: ArmyMeasuresOut, strat: Army
     // постуры за 1700 тиков, медиана удержания ОДИН тик, 71–81 % смен живут не дольше трёх тиков
     // ПАРА К КОМАНДИРУ (v221, см. warmNow): сколько тиков режима боя командир держит при тёплом контакте — на
     // этих тиках он вернёт ANNIHILATE сам, что бы ни решила постура
-    if (cmdMode == CmdMode.FIGHT) { warmCmdAll.n++; if (strat.warmNow) warmCmd.n++ }
-    posture = strat.decision.postureFinal
-    postureSince = strat.decision.postureSinceFinal
+    init { if (pag.cmdMode == CmdMode.FIGHT) { warmCmdAll.n++; if (strat.warmNow) warmCmd.n++ } }
+    init { posture = strat.decision.postureFinal }
+    init { postureSince = strat.decision.postureSinceFinal }
     // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
     // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
     // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
-    if (meas.breakOffNow && DEBUG_LOG && getTicks() % LOG_EVERY == 0)
-        println("cmd t=${getTicks()}: outmatched for $outmatchedTicks ticks — the advance stops, the line holds")
+    init {
+        if (meas.breakOffNow && DEBUG_LOG && getTicks() % LOG_EVERY == 0)
+            println("cmd t=${getTicks()}: outmatched for $outmatchedTicks ticks — the advance stops, the line holds")
+    }
     // ПРИБОРЫ ОТХОДА (v217). Считаются ЗДЕСЬ, после того как постура окончательна: командир перезаписывает
     // её на 600 строк позже, чем она решается, и прибор, снятый раньше, рассказал бы про другую постуру
-    if (outmatchedTicks >= BREAK_OFF_TICKS) {
-        outmTicks.n++
-        if (posture == Posture.RETREAT) outmRetreat.n++
+    init {
+        if (outmatchedTicks >= BREAK_OFF_TICKS) {
+            outmTicks.n++
+            if (posture == Posture.RETREAT) outmRetreat.n++
+        }
     }
     // РАЗЛОЖЕНИЕ ПУСТОЙ БОЕВОЙ ПОСТУРЫ (v221, прибор). Живой A/B против MetalicaX#2: с USE_FIGHT_BY_LEDGER доля
     // тиков ANNIHILATE без размена НЕ упала (20 % против 16 % в контроле), хотя тёплый контакт в контакте упал с
     // 0,45 до 0,27. Значит, пустую постуру держит другой источник, и его надо назвать числом, а не гадать. Порядок
     // проверки — порядок власти над постурой: командир перезаписывает её последним
-    if (posture == Posture.ANNIHILATE && !meas.exchangeLive) {
-        annEmptyAll.n++
-        val src = when {
-            cmdMode == CmdMode.FIGHT -> "cmd"
-            pushing -> "push"
-            strat.holdingSpot -> "spot"
-            meas.meleeAdjacent -> "melee"
-            meas.cornered -> "corner"
-            meas.contact && strat.hisStill -> "still"
-            meas.contact -> "warm"
-            else -> "held"
+    init {
+        if (posture == Posture.ANNIHILATE && !meas.exchangeLive) {
+            annEmptyAll.n++
+            val src = when {
+                pag.cmdMode == CmdMode.FIGHT -> "cmd"
+                pushing -> "push"
+                strat.holdingSpot -> "spot"
+                meas.meleeAdjacent -> "melee"
+                meas.cornered -> "corner"
+                meas.contact && strat.hisStill -> "still"
+                meas.contact -> "warm"
+                else -> "held"
+            }
+            annEmpty.bump(src)
         }
-        annEmpty.bump(src)
     }
     // ПАРА К СБОРУ (v218, см. gatherSpread). Сбор (rallyTo) и сплочение (cohesionHold) намеренно молчат в
     // HOLD, и основание записано рядом с ними: «в HOLD цель — точка, к ней сходятся и так». Прибор проверяет
     // именно это основание — растянут ли строй стрелков в HOLD шире того порога, каким сбор и включается.
     // Мал числитель — основание верно, трогать сбор незачем
-    if (posture == Posture.HOLD) {
-        gatherHold.n++
-        val shooters = rangedOf(strat.combatArmy)
-        if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread.n++
+    init {
+        if (posture == Posture.HOLD) {
+            gatherHold.n++
+            val shooters = rangedOf(strat.combatArmy)
+            if (shooters.size > 1 && shooters.maxOf { a -> shooters.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherSpread.n++
+        }
     }
     // ...И ТА ЖЕ ПАРА В ПОСТУРЕ БОЯ (v221, только прибор). Разбор v220, матч #11: ведём +1077, на 1400-м армия
     // растянута по флагам, его шестеро бьют ближайшую часть, и десять целых крипов ложатся за 80 тиков. Сбор
     // (rallyTo) в ANNIHILATE не работает по построению, а сплочение (cohesionHold) — ожидание, которое гасит
     // огонь по своим. Прибор отдельный, чтобы прежний `gather=` по HOLD остался сравним с логами v218–v220
-    if (posture == Posture.ANNIHILATE) {
-        gatherAnnAll.n++
-        val sh = rangedOf(strat.combatArmy)
-        if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn.n++
-    }
-    if (posture.withdrawing) {
-        retrTicks.n++
-        // ...и точка спрашивается ПО СВОЕЙ постуре: у отхода — `retreatTo`, у уклонения — `evadeTo`.
-        // Смешивать их нельзя ровно потому, что дефект живёт в отходе: `evadeTo` почти всегда есть, и
-        // общий счётчик показал бы 98 % там, где у отхода ноль
-        if (if (posture == Posture.RETREAT) strat.retreatTo != null else strat.evadeTo != null) retrWithPoint.n++
-        if (strat.underTheirFire) retrUnderFire.n++
-        for (c in strat.combatArmy) {
-            if (!hasWeapon(c)) continue
-            standTicks.n++
-            if (meas.combatEnemies.any { getRange(c, it) <= (if (hasRanged(c)) RANGED_RANGE else 1) }) standFire.n++
+    init {
+        if (posture == Posture.ANNIHILATE) {
+            gatherAnnAll.n++
+            val sh = rangedOf(strat.combatArmy)
+            if (sh.size > 1 && sh.maxOf { a -> sh.maxOf { b -> getRange(a, b) } } > RALLY_RANGE) gatherAnn.n++
         }
     }
-    return ArmyStanceOut(
-        blockOn = blockOn,
-        armiesClosing = armiesClosing,
-        enemyApproaching = enemyApproaching,
-        ourYielding = ourYielding,
-        pressOn = pressOn,
-    )
+    init {
+        if (posture.withdrawing) {
+            retrTicks.n++
+            // ...и точка спрашивается ПО СВОЕЙ постуре: у отхода — `retreatTo`, у уклонения — `evadeTo`.
+            // Смешивать их нельзя ровно потому, что дефект живёт в отходе: `evadeTo` почти всегда есть, и
+            // общий счётчик показал бы 98 % там, где у отхода ноль
+            if (if (posture == Posture.RETREAT) strat.retreatTo != null else strat.evadeTo != null) retrWithPoint.n++
+            if (strat.underTheirFire) retrUnderFire.n++
+            for (c in strat.combatArmy) {
+                if (!hasWeapon(c)) continue
+                standTicks.n++
+                if (meas.combatEnemies.any { getRange(c, it) <= (if (hasRanged(c)) RANGED_RANGE else 1) }) standFire.n++
+            }
+        }
+    }
 }
 
 /** Стрелковая масса списка: сумма дальнего урона по профилям (до v445 — локальная функция `armyStrategy`). */

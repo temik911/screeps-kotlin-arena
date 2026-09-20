@@ -693,7 +693,7 @@ internal class ArmyBlockOut(
 )
 
 /** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
-internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargetsOut, stanceOut: ArmyStanceOut): ArmyBlockOut {
+internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargetsOut, stanceOut: ArmyStance): ArmyBlockOut {
     if (stanceOut.blockOn) {
         // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
         // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
