@@ -110,7 +110,7 @@ internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
 
 /** Величины тика, которые покрипный цикл читает из runArmy; все посчитаны до цикла и в нём не меняются. */
 internal class ArmyTick(
-    val meas: ArmyMeasuresOut,
+    val meas: ArmyMeasures,
     val strat: ArmyStrategyOut,
     val targ: ArmyTargets,
     val stanceOut: ArmyStance,
@@ -1305,7 +1305,7 @@ internal fun passable(x: Int, y: Int, blockedSet: Set<Int>, enemyPositions: Set<
 
 
 /** ЦЕЛИ ТИКА ДЛЯ ТАКТИКА (v256, этап 10; сегмент runArmy): позиции и занятость, фокус огня (focusTarget, focusOrder), добыча, захватчик цели, авангард и готовность строя, досягаемость его стволов (reachCells, reachNow). Перенесено дословно. */
-internal class ArmyTargets(private val ctx: Ctx, private val meas: ArmyMeasuresOut, private val strat: ArmyStrategyOut, private val pag: PainAndGain) {
+internal class ArmyTargets(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategyOut, private val pag: PainAndGain) {
     val enemyPositions = meas.enemyCreeps.mapTo(HashSet()) { it.key }
     val blockedSet: Set<Int> = ctx.blocked.mapTo(HashSet()) { it.key } + ctx.flagCells
     val meleeEnemies = meas.enemyCreeps.filter { InfluenceMap.profileOf(it).melee > 0.0 }

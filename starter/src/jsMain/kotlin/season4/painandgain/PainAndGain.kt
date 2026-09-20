@@ -251,7 +251,7 @@ object PainAndGain {
         // armyMeasures не исполнялось ничего, кроме трёх чтений полей ctx, — порядок прежний
         updateKeepers(ctx, ctx.army)
         Memory.prevPosture = posture      // меры мира читают решение ПРОШЛОГО тика — явно, а не полем, которое стратег перепишет ниже
-        val meas = armyMeasures(ctx)
+        val meas = ArmyMeasures(ctx, this)
         val strat = armyStrategy(ctx, meas)
         val targ = ArmyTargets(ctx, meas, strat, this)
         val stanceOut = ArmyStance(ctx, meas, strat, targ, this)

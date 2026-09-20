@@ -1484,7 +1484,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
 
 
 /** СТОЙКА АРМИИ ПОСЛЕ РЕШЕНИЯ (v256, этап 10; сегмент runArmy): блок в бою (blockOn), прижим стоящей линии (pressing), признаки отхода по мощи и по размену, применение режима командира и окончательной постуры (Strategist.decide → postureFinal), приборы режима. Перенесено дословно. */
-internal class ArmyStance(private val ctx: Ctx, private val meas: ArmyMeasuresOut, private val strat: ArmyStrategyOut, private val targ: ArmyTargets, private val pag: PainAndGain) {
+internal class ArmyStance(private val ctx: Ctx, private val meas: ArmyMeasures, private val strat: ArmyStrategyOut, private val targ: ArmyTargets, private val pag: PainAndGain) {
     init { cpuMark("posture") }
     val blockOn =  posture == Posture.ANNIHILATE && !pushing && meas.combatEnemies.isNotEmpty() && meas.strikers.isNotEmpty()
     // прижим (см. USE_PRESS, PRESS_PATIENCE): линия врага стоит — контакт, его огонь достаёт наших, и ни один его мили не
@@ -1836,7 +1836,7 @@ internal class ArmyStrategyOut(
 )
 
 /** СТРАТЕГИЯ ТИКА (v256, этап 10; сегмент runArmy): стая боя и стая толчка по порядку прихода (fightPack, pushPack), толчок (pushing), отряд за флагами (detachedIds) и его отзыв, вето погони, поля выхода, цель-флаг, уклонение, отход и решение Strategist.decide с применением постуры до перезаписи режимом. Перенесено дословно. */
-internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasuresOut): ArmyStrategyOut {
+internal fun PainAndGain.armyStrategy(ctx: Ctx, meas: ArmyMeasures): ArmyStrategyOut {
     // мера боя (v120, см. USE_FIGHT_PACK_MEASURE): его боевые по порядку прихода к нашей массе — первый и все, кто придёт,
     // пока стая, набранная до него, умирает под нашим огнём (окно растёт вместе со стаей: колонна входит целиком)
     val fightPack = if (meas.combatEnemies.size <= 1 || meas.strikers.isEmpty()) meas.combatEnemies else run {

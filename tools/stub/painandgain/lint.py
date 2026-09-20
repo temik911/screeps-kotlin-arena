@@ -555,7 +555,7 @@ def member_vs_toplevel(files):
 
 
 # Носители (v456, второй шаг архитектуры, этап 3): класс, чьё тело — прежний построитель. Список пополняется с каждым новым носителем.
-CARRIERS = ['Turn', 'Stride', 'ArmyStance', 'ArmyTargets']
+CARRIERS = ['Turn', 'Stride', 'ArmyStance', 'ArmyTargets', 'ArmyMeasures']
 
 
 def carrier_method_order(files):

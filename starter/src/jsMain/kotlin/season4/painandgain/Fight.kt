@@ -1354,7 +1354,7 @@ internal class ArmyFireAndHealOut(
 )
 
 /** ОГОНЬ И ЛЕЧЕНИЕ АРМИИ ЗА ТИК (v256, этап 10): хвост runArmy после покрипного цикла — перепись «почему» (why t=, why-sum), стрелки врага на прошлом тике для прогноза (prevShooters), назначение огня и лечения и исполнение. Перенесено дословно. */
-internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyTargets): ArmyFireAndHealOut {
+internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): ArmyFireAndHealOut {
     cpuMark("moves")
     if (TRACE_WHY && DEBUG_LOG && whyLines.isNotEmpty()) { println("why t=${getTicks()}: " + whyLines.joinToString(" ")); whyLines.clear() }
     if (TRACE_WHY && DEBUG_LOG && getTicks() % (LOG_EVERY * 10) == 0 && whySum.isNotEmpty()) {

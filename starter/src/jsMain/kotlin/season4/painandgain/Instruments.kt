@@ -206,7 +206,7 @@ internal class OrderAuditOut(
 )
 
 /** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
-internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasuresOut, targ: ArmyTargets): OrderAuditOut {
+internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): OrderAuditOut {
     val seen = HashMap<Int, Int>()
     commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
     val dup = seen.values.count { it > 1 }

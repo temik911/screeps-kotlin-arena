@@ -607,7 +607,7 @@ internal class HealerWallOut(
 )
 
 /** ПОТЕРИ ТИКА И СТЕНА ЛЕКАРЕЙ (v256, этап 10; сегмент runArmy перед покрипным циклом): потеря каждого бойца за тик (lostTick), жертва по адресному огню его стволов или по потере, клетки стены вокруг неё и лекари к ним (victimNow, victimSaveable, wallCells, wallCellOf). Перенесено дословно. */
-internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasuresOut): HealerWallOut {
+internal fun PainAndGain.healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut {
     lostTick.clear()
     for (c in ctx.army) lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
     // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): жертва — терявший больше всех за прошлый тик; удержима, если её потеря не
@@ -693,7 +693,7 @@ internal class ArmyBlockOut(
 )
 
 /** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
-internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargets, stanceOut: ArmyStance): ArmyBlockOut {
+internal fun PainAndGain.armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategyOut, targ: ArmyTargets, stanceOut: ArmyStance): ArmyBlockOut {
     if (stanceOut.blockOn) {
         // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
         // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
