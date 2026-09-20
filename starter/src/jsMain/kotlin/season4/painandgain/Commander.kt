@@ -193,13 +193,16 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         // ...и гонка идёт ПАРАЛЛЕЛЬНО строю: изготовка стояла В ЦЕПОЧКЕ ПЕРЕД гонкой, поэтому, пока враг
         // подходил, командир не отпускал за флагами вовсе — ни одного захватчика не назначалось, и сценарий
         // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
-        commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
-        val runners = HashMap(Orders.commandOf)
+        // ...гонка раздаёт задания (Squads), а не приказы на клетку, и словарь приказов не трогает (v470, дефект 9: здесь стояла
+        // копия «приказов гонки» в обход изготовки — копия пустого словаря; `Formation.brace` чистит приказы сам)
+        commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags)
         Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Squads.cmdDetach }, meas.forces.armedEnemies, Orders.commandOf)
-        Orders.commandOf.putAll(runners)
     } else if (raceCommandNow) {
         cmdTicks++
-        commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
+        // приказы прошлого тика снимаются ЗДЕСЬ (v470): до того это делал `out.clear()` первой строкой гонки — единственное, что
+        // она с приказами делала; ниже загон и марш пишут приказы заново
+        Orders.commandOf.clear()
+        commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags)
         // прибор второго тика (v222): фаза plan стоит 20–28 мс на тиках 1–2 и 0,7 мс на третьем — метки внутри неё
         // называют, что именно (строка cpu печатается на первых трёх тиках и на медленных)
         cpuMark("p.race")

@@ -1264,9 +1264,11 @@ internal fun commandHunt(ctx: Ctx, hunters: List<Creep>, armedEnemies: List<Cree
     return true
 }
 
-internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>,
-                        out: MutableMap<String, Position>) {
-    out.clear()
+/** ГОНКА ЗА ФЛАГАМИ КОМАНДИРА: раздаёт ЗАДАНИЯ (`Squads.detach` — отряжённые командиром, флаг бегуна, гарнизон, курьер), а не
+ *  приказы на клетку: шаг отряжённого делает ветка бегуна. Параметр `out` снят в v470 (дефект 9 постановки): функция его
+ *  только чистила и ни разу не писала, а вызывающие копировали пустой словарь и клали обратно (см. Commander.kt). Чистка
+ *  приказов перед гонкой стоит теперь у вызова, где она и действует. */
+internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedEnemies: List<Creep>, flags: List<FlagInfo>) {
     val roster = RaceRoster(ctx, meas, armedEnemies)
     // прибор `raceexit=` (v465, дефект 4): ранние выходы гонки, когда прежний состав командира был НЕ пуст — состав очищен
     // (`RaceRoster`), и до конца тика его не восстановит никто: на следующем тике гарнизон и курьер возвращаются в армию
