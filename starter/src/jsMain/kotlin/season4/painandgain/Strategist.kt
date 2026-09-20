@@ -1659,8 +1659,19 @@ internal class StanceWindows(private val ctx: Ctx, private val meas: ArmyMeasure
     }
     init { while (Memory.touchHist.size > TOUCH_WINDOW) Memory.touchHist.removeFirst() }
     init { while (Memory.hisTouchHist.size > TOUCH_WINDOW) Memory.hisTouchHist.removeFirst() }
-    val touchShare = if (Memory.touchHist.size >= TOUCH_WINDOW) Memory.touchHist.sum() / (100.0 * Memory.touchHist.size) else 1.0
-    val hisTouchShare = if (Memory.hisTouchHist.size >= TOUCH_WINDOW) Memory.hisTouchHist.sum() / (100.0 * Memory.hisTouchHist.size) else 1.0
+    // ...И НЕПОЛНОЕ ОКНО ЛУЧШЕ ЗАВЕДОМО НЕВЕРНОГО ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ (v502, см. USE_TOUCH_PARTIAL_WINDOW). Доля
+    // требовала TOUCH_WINDOW = 50 тиков контакта ПОДРЯД (история чистится на каждом тике без контакта строкой выше),
+    // а бой против MetalicaX#17 решается за 40-50 тиков при мерцающем контакте. Когда окно не наполнилось, действует
+    // 1.0 — «мили бьёт вплотную каждый тик», — при настоящем прилегании около 20 % (прибор `madj=` v501, 14 рук).
+    // Мера мощи завышает тогда мили впятеро, а на ней стоят цена захвата, пол паритета, постура и отход. Замер
+    // `touchl=` по тем же 14 рукам: в четырёх победах 8, 16, 18, 23 — ни разу 100; в десяти поражениях пять раз 100,
+    // то есть ровно «замера нет». Правка берёт среднее по тому, что есть, начиная с TOUCH_MIN_SAMPLES замеров
+    val touchShare = if (Memory.touchHist.size >= TOUCH_WINDOW) Memory.touchHist.sum() / (100.0 * Memory.touchHist.size)
+        else if (USE_TOUCH_PARTIAL_WINDOW && Memory.touchHist.size >= TOUCH_MIN_SAMPLES) Memory.touchHist.sum() / (100.0 * Memory.touchHist.size)
+        else 1.0
+    val hisTouchShare = if (Memory.hisTouchHist.size >= TOUCH_WINDOW) Memory.hisTouchHist.sum() / (100.0 * Memory.hisTouchHist.size)
+        else if (USE_TOUCH_PARTIAL_WINDOW && Memory.hisTouchHist.size >= TOUCH_MIN_SAMPLES) Memory.hisTouchHist.sum() / (100.0 * Memory.hisTouchHist.size)
+        else 1.0
     init { if (touchShare < touchMin) touchMin = touchShare }
     // ...и ПОСЛЕДНЯЯ ИЗМЕРЕННАЯ доля живёт дальше окна (v433, см. USE_TOUCH_SHARE_LAST): мера мощи берёт её, а не единицу,
     // которую окно показывает вне контакта — ровно в те тики, когда ворота захвата и срабатывают
