@@ -539,12 +539,14 @@ def main():
         for label, ref in zip("AB", a.ab):
             wt, starter, sha = ab_worktree(ref, label)
             sides[label] = (wt, starter, sha, ref)
+        # The folder is the arena's own, matched the way the series matches it (folder_for: the name as a SUFFIX). A substring
+        # match stood here and took the LAST hit of the sorted list — for Pain and Gain that was `season4-pain_and_gain-advanced`,
+        # the client's empty-loop template folder for the advanced arena: two A/B series on 20.09.2026 (17 hands) were played
+        # by `export function loop() {}`, every hand lost at t=100 with an empty console.
         folder = None
         try:
-            want = a.arena.lower().replace("-", "_")
-            hits = [d for d in sorted(os.listdir(CLIENT_ROOT)) if want in d and os.path.isdir(os.path.join(CLIENT_ROOT, d))] if os.path.isdir(CLIENT_ROOT) else []
-            folder = os.path.join(CLIENT_ROOT, hits[-1]) if hits else None
-        except OSError:
+            folder = folder_for(a.arena.replace("-", " "))
+        except SystemExit:
             folder = None
         payloads = {}
         if folder:
@@ -567,6 +569,8 @@ def main():
             raise SystemExit(1 if diffs else 0)
         c = CDP()
         arena = pick(c, a.arena)
+        if folder != folder_for(arena["name"]):
+            raise SystemExit(f"ab: the payload folder {folder} is not the arena's own {folder_for(arena['name'])}")
         s = slot(c, arena["id"])
         if s["game"] and s["status"] != "finished":
             raise SystemExit(f"{arena['name']}: a match is already running ({s['game']})")
