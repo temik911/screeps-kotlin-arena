@@ -114,6 +114,11 @@ internal class ArmyTick(
     val strat: ArmyStrategyOut,
     val targ: ArmyTargetsOut,
     val stanceOut: ArmyStanceOut,
+    /** Оркестратор — носителям хода ([Turn], [Stride]), ПАРАМЕТРОМ (v456): то, что ещё остаётся его членом (величины одного тика и
+     *  коллекции — до этапа 6 второго шага архитектуры), носитель читает явно, `t.pag.lostTick`. Квалифицированное
+     *  `PainAndGain.lostTick` дало бы модулю тактика импорт объекта-оркестратора — ребро вверх, 4 → 7, которое гейт графа не
+     *  пропускает; приёмник расширения приходил так же — параметром, без импорта. Поле исчезает вместе с последним членом. */
+    val pag: PainAndGain,
 )
 
 /**
@@ -805,123 +810,110 @@ internal fun PainAndGain.buildTurn(creep: Creep, ctx: Ctx, t: ArmyTick): Turn {
 
 /**
  * ФАКТЫ ШАГА (v444, план архитектуры, этап 3): то, что становится известно ПОСЛЕ выбора цели, — поле потока к ней, огонь,
- * бегство, сплочение. Определение каждой величины — в [buildStride], в прежнем порядке; здесь имена и типы тех, что читают
- * цепочка шага ([steps]) и хвост хода. `creep`, `ctx`, `t` — те же объекты, что у [Turn].
+ * бегство, сплочение. `creep`, `ctx`, `t` — те же объекты, что у [Turn].
+ * НОСИТЕЛЬ (v456, второй шаг архитектуры, 4.1 и этап 3): ПОЛЕ ОБЪЯВЛЕНО ТАМ, ГДЕ ВЫЧИСЛЕНО. До v456 каждое имя писалось трижды —
+ * в заголовке класса, локальной в построителе `buildStride` и аргументом `x = x` его `return Stride(…)`; теперь класс И ЕСТЬ
+ * прежнее тело построителя, дословно и в прежнем порядке: порядок текста — порядок инициализации, операторы между фактами
+ * (приборы лекаря, записи терпения) стоят блоками `init` на своих местах последовательности. То, что читают цепочка шага
+ * ([steps]) и хвост хода, — открытые поля; остальное `private`. Факты хода читаются явно — `turn.slot`; величины тика — через
+ * приватные `meas` / `strat` / `targ`; то, что ещё остаётся членом синглтона, — через `t.pag` (`t.pag.lostTick`, см. [ArmyTick]).
  */
-internal class Stride(
-    val turn: Turn,
-    val aim: Aim,
-    val flow: IntArray,
-    val nearbyEnemies: List<Creep>,
-    val inCombat: Boolean,
-    val localThreats: List<Creep>,
-    val reachMine: Set<Int>,
-    val inReach: Boolean,
-    val avoidCells: Set<Int>,
-    val mustFlee: Boolean,
-    val myFlow: Int,
-    val retreatHold: Boolean,
-    val hold: Boolean,
-) {
+internal class Stride(val turn: Turn, val aim: Aim) {
     val creep: Creep get() = turn.creep
     val ctx: Ctx get() = turn.ctx
     val t: ArmyTick get() = turn.t
-}
+    private val meas = turn.t.meas
+    private val strat = turn.t.strat
+    private val targ = turn.t.targ
 
-/** Факты шага: прежняя третья секция [creepTurn] дословно и в прежнем порядке (записи терпения — на своих местах). */
-internal fun PainAndGain.buildStride(turn: Turn, aim: Aim): Stride {
-    with(turn.t) { with(turn) {
-        val target = aim.target
-        val standoff = aim.standoff
-        val avoid = aim.avoid
-        val nearFlow = aim.nearFlow   // цель-крип рядом: поле «вблизи» (см. NEAR_FLOW)
-        val flow0 = if (slot != null || keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep, nearFlow) else flowTo(ctx, target, near = nearFlow)
-        // за пределом поля «вблизи» — полное поле
-        val flow = if (nearFlow && slot == null && !keeper && flow0[creep.key] < 0)
-            (if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)) else flow0
+    private val target = aim.target
+    private val standoff = aim.standoff
+    private val avoid = aim.avoid
+    private val nearFlow = aim.nearFlow   // цель-крип рядом: поле «вблизи» (см. NEAR_FLOW)
+    private val flow0 = if (turn.slot != null || turn.keeper) NO_FLOW else if (avoid) flowAvoiding(ctx, target, creep, nearFlow) else flowTo(ctx, target, near = nearFlow)
+    // за пределом поля «вблизи» — полное поле
+    val flow = if (nearFlow && turn.slot == null && !turn.keeper && flow0[creep.key] < 0)
+        (if (avoid) flowAvoiding(ctx, target, creep) else flowTo(ctx, target)) else flow0
 
-        val nearbyEnemies = meas.combatEnemies.filter { getRange(creep, it) <= 12 }
-        // «в бою», плотность и передний ряд — по врагам С БОЕМ: три безоружных лекаря врага в 4–5 клетках после выигранного
-        // боя держали армию в зоне плотности и не давали толкнуть своего — мили, зажатый своими лекарями, и армия
-        // простояли тысячу тиков в 20 клетках от флага (стенд m16 nine)
-        val inCombat = meas.armedEnemies.any { creep.getRangeTo(it) <= RANGED_RANGE + 2 }
-        val localThreats = localEnemies.filter { threatening(it, meas.enemyCreeps) }
-        val underFire = InfluenceMap.damageAt(creep.x, creep.y, meas.combatEnemies) > 0.0 || ghost > 0
-        // бегство: смертельный урон за два тика; безоружный лекарь — от врага рядом, если рядом нет ни одного
-        // вооружённого своего (при нём лекарь стоит и лечит: бегущий лекарь — потерянные 72 в тик, матч 3);
-        // невидимый урон
-        // вооружённый бежит, только когда его ДОБИВАЮТ: за прошлый тик снято не меньше половины оставшихся хитов и
-        // осталось меньше трети. Прежнее «весь возможный огонь по клетке за два тика больше хитов» в бою 12 на 12
-        // верно для КАЖДОЙ клетки у вражеского блоба (1260 против 1600), и трое мили с полными хитами
-        // разворачивались спиной в первый тик контакта — их резали в спину, строй рассыпался (стенд sleeper,
-        // t=550; матчи 4–6 в первом размене теряли 1:5 при равной силе)
-        val lostLastTick = Memory.lastHits[creep.id]?.let { it - creep.hits } ?: 0
-        // лекарь и раненый бегут (врассыпную) только в одиночестве: при своём рядом — отход группой по постуре
-        // раненый (без оружия и лечения) и в контакте уходит из ПОЛНОЙ досягаемости — стрелка в трёх, мили в двух (v123,
-        // USE_STRIPPED_LEAVES_REACH): сужение до мили в контакте — для лекаря, которому лечить фронт; обезоруженному в
-        // огне делать нечего, а живым он вернётся с лечением. Серия 307–326: наши обезоруженные стояли в трёх от его
-        // вооружённых половину своего времени (131 из 258, 264 из 552 крип-тиков), его — десятую (26 из 79, 7 из 11);
-        // правило «обезоруженные в досягаемости» — 3 из 6 поражений и 0 из 18 побед
-        val reachMine = targ.reachNow
-        val inReach = (creep.key) in reachMine
-        // ...и для лекаря закрытые для шага клетки — полная досягаемость (v234, вторая редакция), бегство — по прежней
-        val avoidCells = reachMine
-        // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
-        if (healer && inCombat) { hexpAll.n++; if ((creep.key) in targ.reachCells) hexpN.n++; hlostSum.n += (lostTick[creep.id] ?: 0) }
-        val mustFlee = (support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
-            (support && inReach) ||
-            (stepOut && (creep.key) in targ.reachCells) ||
-            (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
-            (ghost > 0 && creep.hits <= ghost)
+    val nearbyEnemies = meas.combatEnemies.filter { getRange(creep, it) <= 12 }
+    // «в бою», плотность и передний ряд — по врагам С БОЕМ: три безоружных лекаря врага в 4–5 клетках после выигранного
+    // боя держали армию в зоне плотности и не давали толкнуть своего — мили, зажатый своими лекарями, и армия
+    // простояли тысячу тиков в 20 клетках от флага (стенд m16 nine)
+    val inCombat = meas.armedEnemies.any { creep.getRangeTo(it) <= RANGED_RANGE + 2 }
+    val localThreats = turn.localEnemies.filter { threatening(it, meas.enemyCreeps) }
+    private val underFire = InfluenceMap.damageAt(creep.x, creep.y, meas.combatEnemies) > 0.0 || turn.ghost > 0
+    // бегство: смертельный урон за два тика; безоружный лекарь — от врага рядом, если рядом нет ни одного
+    // вооружённого своего (при нём лекарь стоит и лечит: бегущий лекарь — потерянные 72 в тик, матч 3);
+    // невидимый урон
+    // вооружённый бежит, только когда его ДОБИВАЮТ: за прошлый тик снято не меньше половины оставшихся хитов и
+    // осталось меньше трети. Прежнее «весь возможный огонь по клетке за два тика больше хитов» в бою 12 на 12
+    // верно для КАЖДОЙ клетки у вражеского блоба (1260 против 1600), и трое мили с полными хитами
+    // разворачивались спиной в первый тик контакта — их резали в спину, строй рассыпался (стенд sleeper,
+    // t=550; матчи 4–6 в первом размене теряли 1:5 при равной силе)
+    private val lostLastTick = Memory.lastHits[creep.id]?.let { it - creep.hits } ?: 0
+    // лекарь и раненый бегут (врассыпную) только в одиночестве: при своём рядом — отход группой по постуре
+    // раненый (без оружия и лечения) и в контакте уходит из ПОЛНОЙ досягаемости — стрелка в трёх, мили в двух (v123,
+    // USE_STRIPPED_LEAVES_REACH): сужение до мили в контакте — для лекаря, которому лечить фронт; обезоруженному в
+    // огне делать нечего, а живым он вернётся с лечением. Серия 307–326: наши обезоруженные стояли в трёх от его
+    // вооружённых половину своего времени (131 из 258, 264 из 552 крип-тиков), его — десятую (26 из 79, 7 из 11);
+    // правило «обезоруженные в досягаемости» — 3 из 6 поражений и 0 из 18 побед
+    val reachMine = targ.reachNow
+    val inReach = (creep.key) in reachMine
+    // ...и для лекаря закрытые для шага клетки — полная досягаемость (v234, вторая редакция), бегство — по прежней
+    val avoidCells = reachMine
+    // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
+    init { if (turn.healer && inCombat) { hexpAll.n++; if ((creep.key) in targ.reachCells) hexpN.n++; hlostSum.n += (t.pag.lostTick[creep.id] ?: 0) } }
+    val mustFlee = (turn.support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
+        (turn.support && inReach) ||
+        (turn.stepOut && (creep.key) in targ.reachCells) ||
+        (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
+        (turn.ghost > 0 && creep.hits <= turn.ghost)
 
-        // сплочение: авангард ждёт отставших группы (в тиках ИХ хода), пока сам не под огнём и напарник
-        // не в бою; при враге в досягаемости зазор тесный — собираемся ДО входа под огонь
-        val myFlow = flow[creep.key]
-        val grouped = !support && (posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && strat.threat != null && target === strat.threat))
-        // напарники строя — ходячие ВООРУЖЁННЫЕ: у лекаря своя цель (подопечный), и взаимное ожидание «лекарь
-        // отстал от флага — боец отстал от подопечного лекаря» запирало группу навсегда (стенд greedy)
-        val mates = if (grouped) armedMatesOf(meas.mobileArmy, creep) else emptyList()
-        val mateFighting = mates.any { m -> meas.combatEnemies.any { m.getRangeTo(it) <= RANGED_RANGE + 2 } }
-        val gap = if (localEnemies.isEmpty()) COHESION_GAP else ENGAGE_COHESION_TICKS
-        // идущий к авангарду (rallyTo) не ждёт никого: четверо шли к авангарду и «ждали» одиночку в 14 клетках,
-        // а тот ждал их — взаимное ожидание на 1600 тиков (стенд m2 scouts, v4)
-        // подбирающий флаг рядом (grab) не ждёт никого, и его никто не ждёт: он ждал по сплочению группу у своего
-        // флага, а группа ждала его как «отставшего» на пути к цели — взаимное ожидание на 1200 тиков при живом
-        // враге из двух скаутов на наших флагах (стенд m3 kite, проигрыш по очкам 9128:23661)
-        val cohesionHold = grouped && rallyTo == null && grab == null && engage == null && !underFire && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff + ARRIVED_SLACK && run {
-            var lagging = false
-            for (m in mates) {
-                if (getRange(creep, m) <= RANGED_RANGE) continue
-                if (targ.grabberOf.containsKey(m.id) || m.id in Memory.engagingIds) continue
-                val d = flow[m.key]
-                if (d < 0) continue
-                // напарник на другом обходе (только на марше к флагу): далеко и не впереди — ждём его, он идёт
-                // к нам (см. rallyTo)
-                if (posture == Posture.FLAG && getRange(creep, m) > RALLY_RANGE && plainPeriod(m) <= RALLY_MAX_PERIOD && (d > myFlow || (d == myFlow && m.id > creep.id))) { lagging = true; break }
-                val lag = (d - myFlow) * plainPeriod(m)
-                if (lag in (gap + 1)..COHESION_GAP_MAX) { lagging = true; break }
-            }
-            lagging
+    // сплочение: авангард ждёт отставших группы (в тиках ИХ хода), пока сам не под огнём и напарник
+    // не в бою; при враге в досягаемости зазор тесный — собираемся ДО входа под огонь
+    val myFlow = flow[creep.key]
+    private val grouped = !turn.support && (posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && strat.threat != null && target === strat.threat))
+    // напарники строя — ходячие ВООРУЖЁННЫЕ: у лекаря своя цель (подопечный), и взаимное ожидание «лекарь
+    // отстал от флага — боец отстал от подопечного лекаря» запирало группу навсегда (стенд greedy)
+    private val mates = if (grouped) armedMatesOf(meas.mobileArmy, creep) else emptyList()
+    private val mateFighting = mates.any { m -> meas.combatEnemies.any { m.getRangeTo(it) <= RANGED_RANGE + 2 } }
+    private val gap = if (turn.localEnemies.isEmpty()) COHESION_GAP else ENGAGE_COHESION_TICKS
+    // идущий к авангарду (rallyTo) не ждёт никого: четверо шли к авангарду и «ждали» одиночку в 14 клетках,
+    // а тот ждал их — взаимное ожидание на 1600 тиков (стенд m2 scouts, v4)
+    // подбирающий флаг рядом (grab) не ждёт никого, и его никто не ждёт: он ждал по сплочению группу у своего
+    // флага, а группа ждала его как «отставшего» на пути к цели — взаимное ожидание на 1200 тиков при живом
+    // враге из двух скаутов на наших флагах (стенд m3 kite, проигрыш по очкам 9128:23661)
+    private val cohesionHold = grouped && turn.rallyTo == null && turn.grab == null && turn.engage == null && !underFire && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff + ARRIVED_SLACK && run {
+        var lagging = false
+        for (m in mates) {
+            if (getRange(creep, m) <= RANGED_RANGE) continue
+            if (targ.grabberOf.containsKey(m.id) || m.id in Memory.engagingIds) continue
+            val d = flow[m.key]
+            if (d < 0) continue
+            // напарник на другом обходе (только на марше к флагу): далеко и не впереди — ждём его, он идёт
+            // к нам (см. rallyTo)
+            if (posture == Posture.FLAG && getRange(creep, m) > RALLY_RANGE && plainPeriod(m) <= RALLY_MAX_PERIOD && (d > myFlow || (d == myFlow && m.id > creep.id))) { lagging = true; break }
+            val lag = (d - myFlow) * plainPeriod(m)
+            if (lag in (gap + 1)..COHESION_GAP_MAX) { lagging = true; break }
         }
-        // отход строем (см. RETREAT_GAP): передняя половина ждёт отставшего от тела армии, пока сама вне огня
-        val retreatHold = (posture.withdrawing) && !support && canMove(creep) && !underFire && nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
-            val flows = armedOf(meas.mobileArmy).map { flow[it.key] }.filter { it >= 0 }.sorted()
-            if (flows.isEmpty()) return@run false
-            val rear = flows.last()
-            val median = flows[flows.size / 2]
-            rear - median > RETREAT_GAP && myFlow <= median
-        }
-        // терпение (см. COHESION_PATIENCE): затянувшееся ожидание снимается до конца отставания
+        lagging
+    }
+    // отход строем (см. RETREAT_GAP): передняя половина ждёт отставшего от тела армии, пока сама вне огня
+    val retreatHold = (posture.withdrawing) && !turn.support && canMove(creep) && !underFire && turn.nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
+        val flows = armedOf(meas.mobileArmy).map { flow[it.key] }.filter { it >= 0 }.sorted()
+        if (flows.isEmpty()) return@run false
+        val rear = flows.last()
+        val median = flows[flows.size / 2]
+        rear - median > RETREAT_GAP && myFlow <= median
+    }
+    // терпение (см. COHESION_PATIENCE): затянувшееся ожидание снимается до конца отставания
+    init {
         if (!cohesionHold) Memory.holdSince.remove(creep.id)
         else if (creep.id !in Memory.holdSince) Memory.holdSince[creep.id] = getTicks()
-        val waitedOut = cohesionHold && getTicks() - (Memory.holdSince[creep.id] ?: getTicks()) >= COHESION_PATIENCE
-        Memory.impatientLatch.update(creep.id, enter = waitedOut, exit = !cohesionHold)
-        val hold = (cohesionHold && creep.id !in Memory.impatientIds) || formHold || retreatHold
-
-        return Stride(turn, aim, flow = flow, nearbyEnemies = nearbyEnemies, inCombat = inCombat, localThreats = localThreats,
-            reachMine = reachMine, inReach = inReach, avoidCells = avoidCells, mustFlee = mustFlee, myFlow = myFlow,
-            retreatHold = retreatHold, hold = hold)
-    } }
+    }
+    private val waitedOut = cohesionHold && getTicks() - (Memory.holdSince[creep.id] ?: getTicks()) >= COHESION_PATIENCE
+    init { Memory.impatientLatch.update(creep.id, enter = waitedOut, exit = !cohesionHold) }
+    val hold = (cohesionHold && creep.id !in Memory.impatientIds) || turn.formHold || retreatHold
 }
 
 /** Свободный шаг (строка `free` цепочки шага): прежнее тело ветки дословно. Имена: локальная → [Stride] → [Turn] → [ArmyTick]. */
@@ -1054,7 +1046,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
     val rung = walk(ladder(), turn, ladderTally)
     val whyTag = rung.tag
     val aim = rung.act(turn)
-    val stride = buildStride(turn, aim)
+    val stride = Stride(turn, aim)
     val pace = walk(steps(), stride, stepsTally)
     val stepTag = pace.tag
     val step = pace.act(stride)

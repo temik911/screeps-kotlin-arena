@@ -267,7 +267,7 @@ object PainAndGain {
         cpuMark("plan")
         // ПОКРИПНАЯ ЛЕСТНИЦА — В ТАКТИКЕ (v251, этап 9): тело цикла перенесено в Tactician.kt дословно, величины тика —
         // в ArmyTick; порядок крипов тот же, проход один (см. заголовок Tactician.kt)
-        val tick = ArmyTick(meas, strat, targ, stanceOut)
+        val tick = ArmyTick(meas, strat, targ, stanceOut, this)
         for (creep in ctx.army) creepTurn(creep, ctx, tick)
 
         armyFireAndHeal(ctx, meas, targ)
