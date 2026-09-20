@@ -522,11 +522,16 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // стрелка. До v472 стояло `!meleeOnlyBorn(a)`, и раздетый мили своим мягким не считался (846 крипо-тиков `mstrip=` на гейте)
     private fun guards(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
         strat.inp.combatArmy.any { a -> a.id != creep.id && !meleeOnlyLive(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
+    // ПРИБОР ПРАВКИ v472 (v473): те же ворота по прежнему написанию А — крипо-тики, где ворота открыл ТОЛЬКО раздетый мили
+    // (по Б открыты, по А закрыты), считаются в `gstrip=`; живая серия v472 (2-6) блоком не различает, различает это число
+    private fun guardsBorn(e: Creep) = InfluenceMap.profileOf(e).melee > 0.0 &&
+        strat.inp.combatArmy.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= MELEE_KEEP_RANGE }
     // защита своего — работа ТЕЛОМ, остаётся написание А (рождённый мили): встать между его мили и своим мягким может и
     // раздетый (v452, пункт Д — разбиение оператора: тело — А, урон — Б)
     private val guardNow =  GUARD_NOW.c("meleeBorn", meleeOnlyBorn(creep)) && GUARD_NOW.c("combatant", !support) && GUARD_NOW.c("notRotating", !rotating) &&
         GUARD_NOW.c("foeToGuardFrom", localEnemies.any { e -> getRange(creep, e) <= ENGAGE_RANGE && guards(e) })
     init { if (meleeOnlyBorn(creep) && localEnemies.isNotEmpty()) { guardTicks.n++; if (guardNow) guardFired.n++ } }
+    init { if (guardNow && localEnemies.none { e -> getRange(creep, e) <= ENGAGE_RANGE && guardsBorn(e) }) gstripGuard.n++ }
     val inLine =  IN_LINE.c("spotting", spotNow) || IN_LINE.c("guarding", guardNow) || (IN_LINE.c("formationReady", targ.form.formationReady) && IN_LINE.c("twoMatesInForm", strat.inp.combatArmy.count { it.id != creep.id && hasWeapon(it) && getRange(creep, it) <= FORM_RANGE } >= 2))
     // при бесплодной охоте (см. STALL_TICKS) броска нет: висящие крипы россыпи «ловимы» (не уходят стабильно), и
     // каждый наш крип танцевал со своим соседом вместо марша к флагу-цели (стенд m19 spread, travel=23 четыреста тиков)
@@ -578,6 +583,12 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     }.let { c ->
         // защита своего — тоже одной целью на всех (v221, см. USE_MELEE_PACK): цель пачки, если она среди них
         c.minByOrNull { getRange(creep, it) } } else null
+    // прибор правки v472 (v473, см. guardsBorn): цель `poker` есть только благодаря раздетому мили — по А её не было бы
+    init {
+        if (poker != null && meas.forces.combatEnemies.none { e ->
+                InfluenceMap.profileOf(e).melee > 0.0 && getRange(creep, e) <= ENGAGE_RANGE && !givenUp(e) &&
+                    ctx.army.any { a -> a.id != creep.id && !meleeOnlyBorn(a) && getRange(e, a) <= 1 } }) gstripPoker.n++
+    }
     // прикрытие (v55): мили бросается на цель в ENGAGE_RANGE, только если её достают наши стрелки — не меньше MELEE_COVER
     // стрелков в RANGED_RANGE + 1 от неё — или она вплотную к кому-то из наших. Матч 115 (stachu3478, битый до того
     // девятнадцать раз): его одиночный стрелок подошёл на 2–6 клеток к нашим мили и отступал по клетке в тик; трое мили
@@ -1988,6 +1999,10 @@ internal val closeTicks = Gauges.counter("close3", 1)
 
 /** Пара «крипо-тиков, где ворота броска открыла защита своего / всех крипо-тиков мили при враге рядом»
  *  (v220, см. USE_MELEE_GUARDS_LINE). */
+/** Ворота, открытые ТОЛЬКО раздетым мили (v473, прибор правки v472): `gstrip=guardNow/poker` в крипо-тиках. */
+internal val gstripGuard = Gauges.counter("gstrip")
+internal val gstripPoker = Gauges.counter("gstrip", 1)
+
 internal val guardFired = Gauges.counter("guard")
 
 internal val guardTicks = Gauges.counter("guard", 1)
