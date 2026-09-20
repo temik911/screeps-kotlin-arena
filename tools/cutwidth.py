@@ -9,6 +9,7 @@
   python3 tools/cutwidth.py starter/src/jsMain/kotlin/season4/painandgain/Strategist.kt:armyStrategy
   python3 tools/cutwidth.py <файл.kt>:<функция> [<файл.kt>:<функция> …] [--cuts 5] [--all]
   python3 tools/cutwidth.py <файл.kt>:<функция> --at 2242        # кто пересекает шов после строки 2242
+  python3 tools/cutwidth.py <файл.kt>:<Класс>                    # носитель: тело класса — прежняя функция, поля — её локальные
 
 ЧЕГО ПРИБОР НЕ ВИДИТ — и почему шов подтверждается чтением, а не им (docs/pain-and-gain-architecture-2.md, прил. Б):
   - совпадение идёт ПО ИМЕНИ, а не по разрешению символа: одноимённая локальная вложенного блока считается той же;
@@ -30,7 +31,7 @@ def strip(s):
 def body(path, name):
     L = open(path, encoding='utf-8').read().split('\n')
     for i, l in enumerate(L):
-        if re.match(r'^\s*(?:internal |private |override |inline )*fun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?%s\(' % re.escape(name), l):
+        if re.match(r'^\s*(?:internal |private |override |inline )*(?:fun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?|class\s+)%s\(' % re.escape(name), l):
             d, seen, j = 0, False, i
             while j < len(L):
                 s = strip(L[j])
@@ -48,16 +49,16 @@ def profile(path, name, cuts, show_all, at):
     L, a, b = body(path, name)
     decl = collections.Counter()
     for k in range(a + 1, b):
-        m = re.match(r'^(\s+)(val|var|fun)\s+(?:\(?)(\w+)', L[k])
+        m = re.match(r'^(\s+)(?:private |internal )?(val|var|fun)\s+(?:\(?)(\w+)', L[k])
         if m:
             decl[len(m.group(1))] += 1
     base = min((i for i, c in decl.items() if c >= 5), default=min(decl, default=4))
     locs = []                                           # (имя, строка объявления, вид)
     for k in range(a + 1, b):
-        m = re.match(r'^(\s{%d})(val|var|fun)\s+(\w+)' % base, L[k])
+        m = re.match(r'^(\s{%d})(?:private |internal )?(val|var|fun)\s+(\w+)' % base, L[k])
         if m:
             locs.append((m.group(3), k, m.group(2)))
-        m2 = re.match(r'^(\s{%d})val\s+\(([^)]*)\)' % base, L[k])
+        m2 = re.match(r'^(\s{%d})(?:private )?val\s+\(([^)]*)\)' % base, L[k])
         if m2:
             for n in re.findall(r'\w+', m2.group(2)):
                 locs.append((n, k, 'val'))
