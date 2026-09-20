@@ -35,8 +35,6 @@ writer bodyWeightNow<-World.kt
 writer cmdDetach<-Commander.kt
 writer cmdDetach<-Strategist.kt
 writer cmdDetach<-World.kt
-writer commandOf<-Commander.kt
-writer commandOf<-Instruments.kt
 writer cpuPhases<-Clock.kt
 writer cpuPhases<-Instruments.kt
 writer detachedIds<-Strategist.kt

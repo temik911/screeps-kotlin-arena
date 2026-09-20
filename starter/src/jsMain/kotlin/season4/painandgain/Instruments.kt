@@ -53,31 +53,13 @@ import kotlin.reflect.*
  * `PainAndGain` дословно расширениями; счётчики, которые они печатают, пока живут в объекте.
  */
 
-/** «Зажатого бьём» (v264, pin=взято/возможностей/удержано/сверено): мили под приказом с клеткой вплотную к зажатому
- *  врагу в шаге; приказ, поставивший его туда; и был ли зажатый вплотную к нему на следующем тике. */
-internal val pinOpp = Gauges.counter("pin", 1)
-internal val pinOrd = Gauges.counter("pin")
-internal val pinChk = Gauges.counter("pin", 3)
-internal val pinHeld = Gauges.counter("pin", 2)
 /** Знаменатель ehparts= (v265): наибольшее число частей HEAL у его живой армии за матч, то есть его исходные — армия без
  *  спавна. Прежде знаменатель брал только крипов с ЖИВЫМ лечением, и лекарь, раздетый целиком, выпадал из дроби вместе
  *  со своими частями: разбор стены лечения видел в логе 12/12 там, где его лечение потеряло треть. */
 internal var ehpartsAll = 0
-/** Встречи уходящего раненого с лекарём в раздаче командира (v276, rotfm=). */
-internal val meetRot = Gauges.counter("meet", 2)
-internal val meetNear = Gauges.counter("meet", 1)
-internal val meetPlan = Gauges.counter("meet")
-internal val meetDone = Gauges.counter("meet", 3)
-internal val meetChk = Gauges.counter("meet", 4)
 /** Режим пар (v298, gsafe=тиков в режиме/урон по группе за окно, fguard=бегуно-тиков охраны при флаге). */
 /** Его флаги за окно и из них занятые его крипом (v302, sit=): режим пар против сидящего на флагах не включается. */
 /** Хранители (v305, keep2=назначено/крип-тиков/снято: ядро/стая/сошёл). */
-/** Ноги за фокусом (v268, ffoc=до/после/стрелков): стрелки под приказом при живом фокусе, у которых фокус в досягаемости с
- *  нынешней клетки и с клетки приказа. */
-internal val ffocAll = Gauges.counter("ffoc", 2)
-internal val ffocBefore = Gauges.counter("ffoc")
-internal val ffocAfter = Gauges.counter("ffoc", 1)
-
 internal fun cpuSummary() {
     val ms = cpuMs()
     if (ms > cpuMaxMs) { cpuMaxMs = ms; cpuMaxTick = getTicks() }
@@ -200,163 +182,6 @@ internal fun PainAndGain.logMap(fromRow: Int) {
         for (y in 0..99) for (x in 0..99) { if (DistanceMap.isTerrainWall(x, y)) wall++ else if (DistanceMap.isSwamp(x, y)) swamp++ }
         println("=== END MAP swamp=$swamp wall=$wall plain=${10000 - swamp - wall} ===")
     }
-}
-
-internal class OrderAuditOut(
-)
-
-/** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
-internal fun PainAndGain.orderAudit(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): OrderAuditOut {
-    val seen = HashMap<Int, Int>()
-    commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
-    val dup = seen.values.count { it > 1 }
-    orderClash.n += dup
-    // ГАРАНТИЯ, А НЕ НАБЛЮДЕНИЕ (v176, оператор: «не должно быть такого, что по приказам командира в одну
-    // клетку собрались двое»). Раздача держит своё множество занятых, но источников приказа несколько — бой,
-    // гонка, марш, хранители, отход, — и на стыке коллизия всё же случалась (одна на 431 приказ, режим боя).
-    // Здесь она снимается: клетка остаётся за первым, второй теряет приказ и идёт по общим правилам
-    if (dup > 0) {
-        val used = HashSet<Int>()
-        val drop = ArrayList<String>()
-        for ((id, p) in commandOf) { val k = p.key; if (!used.add(k)) drop.add(id) }
-        drop.forEach { commandOf.remove(it) }
-    }
-    if (dup > 0 && DEBUG_LOG) {
-        val where = seen.entries.firstOrNull { it.value > 1 }?.key ?: 0
-        val who = commandOf.filterValues { it.key == where }.keys.joinToString(",")
-        println("clash t=${getTicks()}: mode=$cmdMode cell=(${where / 100},${where % 100}) who=$who")
-    }
-    // ЗАЖАТОГО БЬЁМ — ПРИБОР (v264): считается по итоговым приказам, а не внутри раздачи — та идёт по разу на
-    // замысел перебора и насчитала бы пробные планы. Сначала сверка вчерашних постановок, потом сегодняшние
-    for ((id, foeId) in Memory.pinWatch) {
-        val c = meas.commandArmy.firstOrNull { it.id == id } ?: continue
-        val e = ctx.enemyCreeps.firstOrNull { it.id == foeId } ?: continue
-        pinChk.n++
-        if (getRange(c, e) <= 1) pinHeld.n++
-    }
-    Memory.pinWatch.clear()
-    // ВСТРЕЧА РАНЕНОГО С ЛЕКАРЁМ — ПРИБОР ПО ИСПОЛНЕНИЮ (v276, meet=план/лекарь рядом/уходящих с приказом/исполнено/сверено):
-    // счётчик rotfm считал встречи в пробных планах, а по реплеям лекарь после выхода раненого стоит в двух клетках, как и
-    // до правки. Здесь — по итоговым приказам: у уходящего по фокусу с приказом был ли лекарь в двух клетках от его
-    // клетки, получил ли лекарь клетку вплотную к ней, и стояли ли они вплотную на следующем тике
-    for ((rid, hid) in Memory.meetWatch) {
-        val r = meas.commandArmy.firstOrNull { it.id == rid } ?: continue
-        val h = meas.commandArmy.firstOrNull { it.id == hid } ?: continue
-        meetChk.n++
-        if (getRange(r, h) <= 1) meetDone.n++
-    }
-    Memory.meetWatch.clear()
-    for (rid in Memory.rotByFocus) {
-        val r = meas.commandArmy.firstOrNull { it.id == rid } ?: continue
-        val dest = commandOf[rid] ?: continue
-        meetRot.n++
-        val medics = meas.commandArmy.filter { it.id != rid && healerOnly(it) }
-        if (medics.any { getRange(it, dest) <= 2 }) meetNear.n++
-        val m = medics.firstOrNull { h -> commandOf[h.id]?.let { getRange(it, dest) <= 1 } == true } ?: continue
-        meetPlan.n++
-        Memory.meetWatch[rid] = m.id
-    }
-    // НОГИ ЗА ФОКУСОМ — ПРИБОР (v268, ffoc=до/после/стрелков): стрелки под приказом командира при живом фокусе — у скольких
-    // фокус в досягаемости с нынешней клетки и с клетки приказа. Реплеи до правки: 25–32 % до шага, 14–20 % после
-    targ.focusTarget?.takeIf { it.hits > 0 }?.let { f ->
-        for (c in meas.commandArmy) {
-            if (!hasRanged(c)) continue
-            val cell = commandOf[c.id] ?: continue
-            ffocAll.n++
-            if (getRange(c, f) <= RANGED_RANGE) ffocBefore.n++
-            if (getRange(cell, f) <= RANGED_RANGE) ffocAfter.n++
-        }
-    }
-    run {
-        val foes = ctx.combatEnemies.filter { e -> InfluenceMap.profileOf(e).let { it.melee + it.ranged + it.heal > 0.0 } }
-        if (foes.isEmpty() || commandOf.isEmpty()) return@run
-        val stuck = HashSet<Int>()
-        for (e in ctx.enemyCreeps) if (e.fatigue > 0) stuck.add(e.key)
-        val foeAt = HashSet<Int>()
-        for (e in ctx.enemyCreeps) foeAt.add(e.key)
-        val plan = HashMap<String, Int>()
-        for (f in meas.commandArmy) if (f.hits > 0) plan[f.id] = (commandOf[f.id] ?: InfluenceMap.cell(f.x, f.y)).let { it.key }
-        for (c in meas.commandArmy) {
-            if (!(meleeOnlyLive(c))) continue
-            val mine = commandOf[c.id] ?: continue
-            val near = foes.filter { getRange(c, it) <= 2 }
-            if (near.isEmpty()) continue
-            val ours = HashSet<Int>()
-            for ((id, k) in plan) if (id != c.id) ours.add(k)
-            val canStep = canMove(c) && c.fatigue == 0
-            var opp = false
-            for (dx in -1..1) for (dy in -1..1) {
-                if (opp) continue
-                if (!canStep && (dx != 0 || dy != 0)) continue
-                val x = c.x + dx
-                val y = c.y + dy
-                if (x < 0 || y < 0 || x > 99 || y > 99 || DistanceMap.isTerrainWall(x, y)) continue
-                val key = key(x, y)
-                if (key in foeAt || key in ours) continue
-                val p = InfluenceMap.cell(x, y)
-                if (near.any { e -> getRange(p, e) <= 1 && pinnedAt(p, e, ours, stuck) }) opp = true
-            }
-            if (!opp) continue
-            pinOpp.n++
-            val hit = near.firstOrNull { e -> getRange(mine, e) <= 1 && pinnedAt(mine, e, ours, stuck) } ?: continue
-            pinOrd.n++
-            Memory.pinWatch[c.id] = hit.id
-        }
-    }
-    Memory.orderPrev.forEach { (id, cell) ->
-        // ...и захватчик из аудита исключается: его приказ — ФЛАГ, а не клетка, и ведёт его свой цикл;
-        // считать его ослушником было бы неверно (v173)
-        if (id in Memory.cmdDetach) return@forEach
-        val c = meas.commandArmy.firstOrNull { it.id == id } ?: return@forEach
-        orderAuditN.n++
-        // ...и ПРИКАЗ В ДВУХ ШАГАХ ИСПОЛНЕН, ЕСЛИ КРИП СТАЛ БЛИЖЕ (v184). Прибор сверял клетку крипа с
-        // НАЗНАЧЕННОЙ и только с ней, а строй (`commandBrace`) назначает место в строю за несколько клеток —
-        // такой приказ не мог быть засчитан НИКОГДА, и едва строй заработал, исполнение упало со 99 % до 62 %
-        // при том, что крипы шли туда, куда велено. Из-за этого я успел записать в дефекты то, чего не было,
-        // и починить не тот код (см. USE_BRACE_STEPS). По всей серии v183 «ушёл в другую клетку» набрал
-        // 2 022 случая из 39 245 — почти все они этой природы
-        val far = 
-            (orderDist[id] ?: 0) > 1 && maxOf(abs(c.x - cell.x), abs(c.y - cell.y)) < (orderDist[id] ?: 0)
-        if ((c.x == cell.x && c.y == cell.y) || far) orderAuditOk.n++
-        else {
-            // ...и КУДА делись остальные (v170): приказ был «стой», а крип ушёл; крип не двинулся
-            // вовсе; двинулся, но в другую клетку; или не мог двигаться от усталости
-            val here = orderWas[id]
-            when {
-                cell.x == here?.first && cell.y == here.second -> lostStay.n++
-                // ...клетку мог занять ВРАГ: он ходит одновременно с нами, и его шаг делает приказ
-                // неисполнимым задним числом — это неустранимо в принципе, и считать надо отдельно (v175)
-                ctx.enemyCreeps.any { e -> e.x == cell.x && e.y == cell.y } -> lostEnemy.n++
-                c.x == here?.first && c.y == here.second -> lostStuck.n++
-                (orderFatigue[id] ?: 0) > 0 -> lostFatigue.n++
-                else -> lostElsewhere.n++
-            }
-        }
-        // ...и отдельно: СТАЛ ЛИ БЛИЖЕ к назначенной клетке (приказ бывает в двух шагах, за тик не дойти)
-        val wasD = orderDist[id] ?: 99
-        val nowD = maxOf(abs(c.x - cell.x), abs(c.y - cell.y))
-        if (nowD < wasD) orderAuditCloser++
-        // ...и ДЕРЖИТСЯ ЛИ приказ: та же клетка, что была назначена в прошлый тик
-        if (commandOf[id]?.let { it.x == cell.x && it.y == cell.y } == true) orderAuditSame++
-    }
-    // ...и сколько приказов вообще достижимо за тик: клетка в двух шагах не может быть занята сразу,
-    // и доля исполнения ограничена этим по построению (v170)
-    commandOf.forEach { (id, p) ->
-        val c = meas.commandArmy.firstOrNull { it.id == id } ?: return@forEach
-        if (maxOf(abs(c.x - p.x), abs(c.y - p.y)) > 1) orderFar++
-    }
-    orderWas.clear(); orderFatigue.clear()
-    meas.commandArmy.forEach { c -> orderWas[c.id] = c.x to c.y; orderFatigue[c.id] = c.fatigue }
-    orderDist.clear()
-    commandOf.forEach { (id, p) ->
-        val c = meas.commandArmy.firstOrNull { it.id == id }
-        if (c != null) orderDist[id] = maxOf(abs(c.x - p.x), abs(c.y - p.y))
-    }
-    Memory.orderPrev.clear()
-    commandOf.forEach { (id, p) -> Memory.orderPrev[id] = p }
-    // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
-    return OrderAuditOut(
-    )
 }
 
 internal class PrintTickOut(
@@ -596,7 +421,6 @@ internal val outOfFireTicks = Gauges.counter("out")                        // к
 
 internal val stripTicks = Gauges.counter("strip")                            // тиков, в которые залп сводился на ОДНОГО его лекаря
 
-internal val lostEnemy = Gauges.counter("lost", 2, label = "foe")      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
 
 /** Цель пачки мили (v221, см. USE_MELEE_PACK): липкий id и значение этого тика — для командира. */
 /** Пары пачки (v221): «тиков с целью пачки / тиков, где у нас есть мили и у него боевые»; «крипо-тиков мили, чьи
