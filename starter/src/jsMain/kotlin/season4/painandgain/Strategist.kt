@@ -309,15 +309,15 @@ internal val capIdleEdge = Gauges.counter("capidle", 1)
  * ворота, до которых дошли, в прежнем порядке; ворота ниже её читают. Дорогое (мощь сторон — `losingRace`, `ours` / `theirs`)
  * считается, только если дошли: функцию зовут десятки раз за тик, и для настоящих ворот, и для оценки ценности флага.
  */
+// v456 (второй шаг архитектуры, этап 3): у носителя остались только величины, которые одни ворота пишут, а ДРУГИЕ, ниже, читают.
+// `contactArmy`, `firstFightAhead`, `raceWon` читали только свои же ворота — следы механического переноса v445; теперь это локальные
+// своих ворот (`contact.mass`, `first.fight`, `enough`).
 internal class CaptureCase(val ctx: Ctx, val f: FlagInfo) {
     var ticksLeft = 0
     var intercept = false
     var rushStale = false
     var losingRace = false
     var foes: List<Creep> = emptyList()
-    var contactArmy: List<Creep> = emptyList()
-    var firstFightAhead = false
-    var raceWon = false
     var foughtFoe = false
     var opp: List<Creep> = emptyList()
     var ours = 0.0
@@ -441,7 +441,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // Здесь меняется потребитель — гейт захвата, — а постура не трогается вовсе.
         foes = ctx.threats
         val mass = centroidOf(ctx.army)
-        contactArmy = if (mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
+        val contactArmy = if (mass == null) ctx.army else ctx.army.filter { getRange(it, mass) <= MASS_RANGE }
         if (!losingRace && !stalledNow && !intercept && contactArmy.any { fullSpeed(it) && hasWeapon(it) } && inContact(foes, contactArmy)) {
             // пара к вето контакта по размену (v221, только прибор): сколько отказов выдано контактом, в котором за
             // окно ни одна сторона не потеряла STALL_DAMAGE. Окно — прошлого тика: runRunners идёт раньше runArmy
@@ -484,7 +484,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // (отставание по очкам, застой, перехват) не тронуты: отстав по счёту, флаг берём — и это же открывает ворота,
         // когда флаги начнёт брать он. ⚠️ Гейт стенда к правке СЛЕП: отчёт побайтово тождествен базе, потому что на
         // стенде размен идёт тогда же, когда армия в контакте, а контакт перекрыт воротами `contact.mass` выше
-        firstFightAhead = (firstFightTick == 0 || (USE_FIRST_FIGHT_UNSETTLED && exchangeLiveNow)) &&
+        val firstFightAhead = (firstFightTick == 0 || (USE_FIRST_FIGHT_UNSETTLED && exchangeLiveNow)) &&
             enemyMassedSignal && !ctx.passiveEnemy
         if (firstFightAhead && !behindOnScore && !stalledNow && !intercept) {
             val ourAfter = ctx.flags.count { it.ours } + 1
@@ -503,7 +503,7 @@ internal fun PainAndGain.captureGates(): List<Gate<CaptureCase>> = captureGateRo
         // берётся, только если по проекции на конец матча (счёт + темп × остаток) без него мы не впереди; когда он начнёт
         // брать флаги и проекция перевернётся, правило само откроет следующий. Новых чисел нет: проекция — та же, что у
         // `losingAtTheEnd` выше, «стоит» — тот же признак сомкнутости, что у ворот первого боя
-        raceWon = (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft > 0
+        val raceWon = (ourScore - enemyScore) + (ourRate - enemyRate) * ticksLeft > 0
         if (raceWon && enemyMassedSignal && !ctx.passiveEnemy && !stalledNow && !intercept) return@Gate Verdict.Veto(capCount(f, "enough"))
         Verdict.Next
     },
