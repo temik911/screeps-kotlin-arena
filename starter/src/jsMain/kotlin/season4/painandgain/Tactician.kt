@@ -91,6 +91,13 @@ internal fun priorityOf(step: RowMark, rung: RowMark): Priority = when {
 internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView, fist: Pair<Int, Int>? = null) {
     rungCount.bump(p.rung)
     stepCount.bump(p.stepTag)
+    // ИСТОЧНИК ШАГА ОТДЕЛЬНО ПО ЛЕКАРЯМ (v516, `hstep=`; оператор 21.09.2026: «расстановкой управляет командир и
+    // фронт в разные моменты боя»). Прибор `step=` считает все роли в одной строке (`free:813, order:704,
+    // slotStep:377, flee:81` в разобранном поражении), и по нему нельзя сказать, чья правка вообще достаёт лекаря:
+    // приказ командира (`order`, клетка из раздачи), слот строя (`slotStep`/`slotHold`), свободный шаг тактика
+    // (`free`) или лестница бегства (`flee`). Это ровно то правило, что записано как «цена живёт там, где крип
+    // ходит»: v435 стояла в командире, а лекарей 80 % тиков вели ветки тактика
+    if (healerOnly(p.creep)) hstepTag.bump(p.stepTag)
     tacCount.bump(p.why)
     prioCount.bump(p.priority.name)
     // ЗАХВАТ — ТОЛЬКО ЧЕРЕЗ ВОРОТА (v282). Флаг берёт всякий, кто встал на его клетку, а ворота захвата (`captureBlock`)
@@ -2065,6 +2072,11 @@ internal val madjN = Gauges.counter("madj")
 internal val madjStep = Gauges.counter("madj", 1)
 
 internal val madjAll = Gauges.counter("madj", 2)
+
+/** ИСТОЧНИК ШАГА ЛЕКАРЯ (v516, `hstep=`): приказ командира (`order`), слот строя (`slotStep`/`slotHold`), свободный
+ *  шаг тактика (`free`) или лестница бегства (`flee`) — по какой ветке лекарь реально ходит. Общий `step=` считает
+ *  все роли вместе и на вопрос «в том ли месте правка» не отвечает. */
+internal val hstepTag = Gauges.labelled("hstep")
 
 /** НЕТ ПЕРВОГО РЯДА (v515, `nofront=` тиков без единой живой части ATTACK / тиков со стадией армии): состояние, на
  *  которое приходится 61-93 % всех его выстрелов по нашим лекарям (замер восьми реплеев 21.09.2026). */
