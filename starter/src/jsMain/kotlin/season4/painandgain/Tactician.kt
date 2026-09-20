@@ -1026,7 +1026,7 @@ internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stri
     // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
     // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
     // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
-    Row("keeperOrder", { turn.keeper && Orders.commandOf.containsKey(creep.id) }) { Orders.commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y } },
+    Row("keeperOrder", { turn.keeper && Orders.commandOf.containsKey(creep.id) }) { ruleCount.bump(Orders.source); Orders.commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y } },
     Row("keeperStay", { turn.keeper }) { TrafficManager.pin(creep.id); null },
     // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
     // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
@@ -1037,6 +1037,7 @@ internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stri
     // приказу командира». В гонке и походе приказ тоже закон — там он ведёт ядро строем и за флагами
     Row("order", { Orders.commandOf.containsKey(creep.id) }, RowMark.ORDER) {
         orderBranch.n++          // сколько приказов реально дошло до ветки исполнения (v173)
+        ruleCount.bump(Orders.source)   // ...и ОТ КОГО он (v486, см. rule=): метка ветки командира этого тика
         val cell = Orders.commandOf[creep.id]!!
         if (cell.x == creep.x && cell.y == creep.y) null else cell
     },
@@ -2027,6 +2028,15 @@ internal val orderFled = Gauges.counter("fled")
 internal val rungCount = Gauges.labelledOnly("rung")        // перепись решений (v203): какая ветка ЦЕЛИ выбрана, сколько раз
 
 internal val stepCount = Gauges.labelledOnly("step")        // ...и какая ветка ШАГА
+
+/** ОТ КОГО ПРИКАЗ (v486, `rule=`): `step=order` складывал ШЕСТЬ разных источников — раздачу боя, её же без перебора
+ *  под страховкой CPU, изготовку, гонку, загон, марш и «одних лекарей», — и по логу нельзя было сказать, где правит
+ *  командир, а где марш; ровно на этом я в этот день дважды искал дефект не в том месте. Считается в самих строках
+ *  приказа (`order`, `keeperOrder`) меткой [Orders.source], поэтому сумма поля равна числу исполненных приказов, а
+ *  остальные управляющие видны в `step=` как прежде. Поставлен по запросу оператора «свести бота к одному
+ *  управляющему»: пока источников несколько, их доли надо знать числом, иначе сведение выкинет то, что держит бой
+ *  (см. отказы USE_COMMANDER_EVERY_FIGHT / _ALWAYS / _APPROACH, каждый измерен). */
+internal val ruleCount = Gauges.labelled("rule")
 
 internal val tacCount = Gauges.labelledOnly("tac")        // ...и какое «задание.терм» предложено арбитру (v252, прибор tac t=)
 

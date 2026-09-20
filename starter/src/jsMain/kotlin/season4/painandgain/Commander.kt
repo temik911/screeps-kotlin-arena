@@ -94,6 +94,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         val cpuTight =  getTicks() > 1 && cpuMs() > CPU_GUARD_MS
         if (cpuTight && DEBUG_LOG) println("cpu t=${getTicks()} guard: the commander skips the search (${(cpuMs() * 10).toInt() / 10.0}ms)")
         // ...и при разрыве контакта (v227, см. USE_ZERO_LEAD_BREAK) замысел не выбирается прогоном — он задан: KITE
+        Orders.source = if (cpuTight) "fight.tight" else "fight"
         if (cpuTight) publishDeal(commandFight(meas.chase.commandArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, Orders.commandOf, Intent.PRESS, ourFlagCells = ourFlagCells), tried = 1)
         else {
             // командир предлагает несколько замыслов, симуляция выбирает лучший по мощи через Forecast.SIM_TICKS (v138)
@@ -195,12 +196,14 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
         // ...гонка раздаёт задания (Squads), а не приказы на клетку, и словарь приказов не трогает (v470, дефект 9: здесь стояла
         // копия «приказов гонки» в обход изготовки — копия пустого словаря; `Formation.brace` чистит приказы сам)
+        Orders.source = "brace"
         commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags)
         Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Squads.cmdDetach }, meas.forces.armedEnemies, Orders.commandOf)
     } else if (raceCommandNow) {
         cmdTicks++
         // приказы прошлого тика снимаются ЗДЕСЬ (v470): до того это делал `out.clear()` первой строкой гонки — единственное, что
         // она с приказами делала; ниже загон и марш пишут приказы заново
+        Orders.source = "race"
         Orders.commandOf.clear()
         commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags)
         // прибор второго тика (v222): фаза plan стоит 20–28 мс на тиках 1–2 и 0,7 мс на третьем — метки внутри неё
@@ -213,6 +216,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         // ЗАГОН ВМЕСТО МАРША (v331): ядро, оставшееся после раздачи флагов, ловит его одиночку двумя группами
         val restCore = notCmdDetached(meas.chase.mobileArmy)
         val hunting = commandHunt(ctx, restCore, meas.forces.armedEnemies, Orders.commandOf)
+        if (hunting) Orders.source = "hunt"
         if (!hunting && meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
             val goal = commandGoal(ctx, meas.view, strat.obj.approachRate, strat.detach.farmerQuietNow, meas.chase.mobileArmy, meas.forces.armedEnemies)
@@ -220,12 +224,13 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
             val steps = HashMap<String, Position>()
             commandMarch(ctx, notCmdDetached(meas.chase.mobileArmy), goal, steps)
             Orders.commandOf.putAll(steps)
+            if (steps.isNotEmpty()) Orders.source = "march"
             cpuMark("p.march")
         }
     }
         // ...и задания на захват снимаются вместе с режимом: без этого крип, отпущенный командиром за флагом,
         // оставался захватчиком НАВСЕГДА — армия таяла тик за тиком, и сценарий kite давал 0 очков (v160)
-        else { Orders.commandOf.clear(); Squads.recallAll(Squads.Source.COMMANDER) }
+        else { Orders.source = "none"; Orders.commandOf.clear(); Squads.recallAll(Squads.Source.COMMANDER) }
     // ЛЕКАРИ — ПОД ПРИКАЗОМ ВО ВСЯКОМ КОНТАКТЕ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT). Режим боя против Coldkimchi
     // включён в 25–40 % тиков контакта (остальное — outmatched, retreat, posture, nofire), и в молчании командира клетку
     // лекаря выбирают ветки тактика: healMate ведёт к самому раненому в четырёх (уже отведённому из огня; совпадает с
@@ -236,6 +241,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         publishDeal(commandFight(meas.chase.commandArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true), tried = 1)
         var given = 0
         for (h in meas.chase.commandArmy) if (healerOnly(h) && h.id !in Squads.cmdDetach) only[h.id]?.let { Orders.commandOf[h.id] = it; given++ }
+        if (given > 0) Orders.source = "heal"
         cmdHealTicks.n++; cmdHealGiven.n += given
     }
 
@@ -512,6 +518,14 @@ internal object Orders {
     internal val orderFatigue = HashMap<String, Int>()
     internal val orderDist = HashMap<String, Int>()
 
+    /** КТО ИМЕННО ПРАВИЛ ЭТИМ ТИКОМ (v486, прибор `rule=`). Ветки [armyCommand] взаимоисключающи (цепочка if/else),
+     *  поэтому источник приказа описывается ОДНОЙ меткой на тик: `fight` — раздача боя, `fight.tight` — она же без
+     *  перебора под страховкой CPU, `brace` — изготовка, `hunt` — загон, `march` — колонна похода, `heal` — раздача
+     *  одних лекарей в контакте, `none` — приказов не выдавалось. Метка нужна потому, что `step=order` складывал все
+     *  шесть источников в одно число, и по логу нельзя было сказать, где правит командир, а где марш или изготовка;
+     *  ровно на этом я в этот день дважды искал дефект не в том месте. */
+    internal var source = "none"
+
     /** СБРОС ПРИКАЗОВ В ТИК БЕЗ АРМИИ (v469, дефект 8 постановки). Стадии армии не зовутся, раздачи нет, и приказы прошлого тика
      *  переживали тик: `markOrdered(commandOf.keys)` отдавал их арбитру движения, где живой крип с застарелым приказом — боец,
      *  ставший бегуном после раздевания, — получал право приказа (`SWAP_RESPECTS_INTENT`, `orderedDenied`) на клетку, которой
@@ -523,7 +537,7 @@ internal object Orders {
             staleTicks.n++; staleOrders.n += commandOf.size
             staleLive.n += commandOf.keys.count { id -> living.any { it.id == id } }
         }
-        commandOf.clear(); missionOf.clear(); orderWas.clear(); orderFatigue.clear(); orderDist.clear()
+        commandOf.clear(); missionOf.clear(); orderWas.clear(); orderFatigue.clear(); orderDist.clear(); source = "none"
     }
     internal val staleTicks = Gauges.counter("cmdstale")
     internal val staleOrders = Gauges.counter("cmdstale", 1)
