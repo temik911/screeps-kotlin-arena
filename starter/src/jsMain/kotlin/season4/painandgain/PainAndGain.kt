@@ -253,7 +253,7 @@ object PainAndGain {
         Memory.prevPosture = posture      // меры мира читают решение ПРОШЛОГО тика — явно, а не полем, которое стратег перепишет ниже
         val meas = armyMeasures(ctx)
         val strat = armyStrategy(ctx, meas)
-        val targ = armyTargets(ctx, meas, strat)
+        val targ = ArmyTargets(ctx, meas, strat, this)
         val stanceOut = ArmyStance(ctx, meas, strat, targ, this)
         armyBlock(ctx, meas, strat, targ, stanceOut)
         cpuMark("block")

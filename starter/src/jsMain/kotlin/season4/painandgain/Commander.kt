@@ -56,7 +56,7 @@ internal class ArmyCommandOut(
 )
 
 /** РАЗДАЧА КОМАНДИРА (v256, этап 10; сегмент runArmy): режим FIGHT — перебор замыслов commandFight с прогнозом Forecast.simulate, изготовка (Formation.brace) и гонка (commandRace, commandGoal, commandMarch), погоня (assignChase), постановка стратега для прибора disp= и букв заданий missionOf. Перенесено дословно. */
-internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargetsOut, stanceOut: ArmyStance): ArmyCommandOut {
+internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut, targ: ArmyTargets, stanceOut: ArmyStance): ArmyCommandOut {
     val ourFlagCells = ctx.ourFlags.mapTo(HashSet()) { it.pos.key }
     val commanderNow =  cmdMode == CmdMode.FIGHT
     // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним

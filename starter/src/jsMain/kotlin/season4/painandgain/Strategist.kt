@@ -1484,7 +1484,7 @@ internal fun PainAndGain.commandRace(ctx: Ctx, army: List<Creep>, armedEnemies: 
 
 
 /** СТОЙКА АРМИИ ПОСЛЕ РЕШЕНИЯ (v256, этап 10; сегмент runArmy): блок в бою (blockOn), прижим стоящей линии (pressing), признаки отхода по мощи и по размену, применение режима командира и окончательной постуры (Strategist.decide → postureFinal), приборы режима. Перенесено дословно. */
-internal class ArmyStance(private val ctx: Ctx, private val meas: ArmyMeasuresOut, private val strat: ArmyStrategyOut, private val targ: ArmyTargetsOut, private val pag: PainAndGain) {
+internal class ArmyStance(private val ctx: Ctx, private val meas: ArmyMeasuresOut, private val strat: ArmyStrategyOut, private val targ: ArmyTargets, private val pag: PainAndGain) {
     init { cpuMark("posture") }
     val blockOn =  posture == Posture.ANNIHILATE && !pushing && meas.combatEnemies.isNotEmpty() && meas.strikers.isNotEmpty()
     // прижим (см. USE_PRESS, PRESS_PATIENCE): линия врага стоит — контакт, его огонь достаёт наших, и ни один его мили не

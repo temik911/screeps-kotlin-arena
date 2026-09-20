@@ -112,7 +112,7 @@ internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
 internal class ArmyTick(
     val meas: ArmyMeasuresOut,
     val strat: ArmyStrategyOut,
-    val targ: ArmyTargetsOut,
+    val targ: ArmyTargets,
     val stanceOut: ArmyStance,
     /** Оркестратор — носителям хода ([Turn], [Stride]), ПАРАМЕТРОМ (v456): то, что ещё остаётся его членом (величины одного тика и
      *  коллекции — до этапа 6 второго шага архитектуры), носитель читает явно, `t.pag.lostTick`. Квалифицированное
@@ -1303,28 +1303,9 @@ internal fun passable(x: Int, y: Int, blockedSet: Set<Int>, enemyPositions: Set<
     return !DistanceMap.isTerrainWall(x, y)
 }
 
-internal class ArmyTargetsOut(
-    val enemyPositions: HashSet<Int>,
-    val blockedSet: Set<Int>,
-    val meleeEnemies: List<Creep>,
-    val killTicks: (Creep) -> Double,
-    val focusTarget: Creep?,
-    val focusOrder: List<Creep>,
-    val occupantAt: HashMap<Int, Creep>,
-    val prey: Creep?,
-    val armedCentroid: Position,
-    val objectiveCapturer: String?,
-    val grabberOf: HashMap<String, String>,
-    val formVan: Creep?,
-    val formationReady: Boolean,
-    val reachCells: HashSet<Int>,
-    val reachNow: HashSet<Int>,
-    val healersAlive: Boolean,
-    val slotOf: HashMap<String, Position>,
-)
 
 /** ЦЕЛИ ТИКА ДЛЯ ТАКТИКА (v256, этап 10; сегмент runArmy): позиции и занятость, фокус огня (focusTarget, focusOrder), добыча, захватчик цели, авангард и готовность строя, досягаемость его стволов (reachCells, reachNow). Перенесено дословно. */
-internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: ArmyStrategyOut): ArmyTargetsOut {
+internal class ArmyTargets(private val ctx: Ctx, private val meas: ArmyMeasuresOut, private val strat: ArmyStrategyOut, private val pag: PainAndGain) {
     val enemyPositions = meas.enemyCreeps.mapTo(HashSet()) { it.key }
     val blockedSet: Set<Int> = ctx.blocked.mapTo(HashSet()) { it.key } + ctx.flagCells
     val meleeEnemies = meas.enemyCreeps.filter { InfluenceMap.profileOf(it).melee > 0.0 }
@@ -1332,14 +1313,14 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // фокус-файр: добиваемые за тик -> наибольшая угроза на хит (урон, который враг СЕЙЧАС наносит нам, плюс
     // его лечение, делённые на его хиты: мили вплотную за 1000 хитов снимает 90, стрелок за 800 — 40, лекарь
     // за 600 — 36; «лекари первыми» без учёта хитов вело огонь мимо мили, который резал наш строй)
-    val inFireRange = meas.enemyCreeps.filter { e -> strat.combatArmy.any { it.getRangeTo(e) <= RANGED_RANGE } }
+    private val inFireRange = meas.enemyCreeps.filter { e -> strat.combatArmy.any { it.getRangeTo(e) <= RANGED_RANGE } }
     // остовы (без оружия и лечения) — вне пула, пока есть боевые. Матч 22: разоружённый M6 с 542 хитами простоял
     // 25 тиков в 2–4 клетках от наших стрелков необстрелянным и был вылечен обратно в M8A8, пока пять его стрелков
     // добивали наших. ДВА способа перенести на него огонь ОТВЕРГНУТЫ стендом: «отрастающая угроза» (мёртвые части
     // оружия × 0.5 в угрозе любой цели) проиграла m9 hunter, m3 army и все рубки sleeper; «остов, добиваемый за
     // два залпа, — сразу после добиваемых за тик» проиграла m3 army, рубки sleeper и m18 spread. Огонь по живой
     // угрозе, а не по раненым, — то, на чём стенд стоит; остов на лечении врага — открытая находка
-    fun fireAvailable(e: Creep) = ctx.army.filter { it.getRangeTo(e) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged } +
+    private fun fireAvailable(e: Creep) = ctx.army.filter { it.getRangeTo(e) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged } +
         ctx.army.filter { it.getRangeTo(e) <= 1 }.sumOf { InfluenceMap.profileOf(it).melee }
     // ОСТОВ, КОТОРЫЙ УМИРАЕТ ОТ ОДНОГО ЗАЛПА, — НЕ РАЗМЕН, А БЕСПЛАТНОЕ УБИЙСТВО (v210, оператор по записи:
     // «выбили все боевые части и перестали их добивать, за счёт чего они прошли мимо нас к своей второй половине,
@@ -1358,14 +1339,14 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // потому, что его лечили обратно, — у скаута этой причины нет, он умирает насовсем и перестаёт брать флаги.
     // Его угроза (threatOf) равна нулю, поэтому внутри верхнего яруса focusCmp он стоит ПОСЛЕДНИМ: любой живой
     // добиваемый враг выше. Условие «на флаге или в шаге от него» не даёт огню уходить в скаута, гуляющего мимо.
-    val scoutTargets = inFireRange.filter { e ->
+    private val scoutTargets = inFireRange.filter { e ->
         scoutFoe(e) && ctx.flags.any { !it.ours && getRange(e, it.pos) <= 1 } &&
             e.hits <= fireAvailable(e) * InfluenceMap.takenOf(e)
     }
-    scoutShots.n += scoutTargets.size
-    val focusPool = (inFireRange.filter { e -> meas.combatEnemies.any { it.id == e.id } } + scoutTargets)
+    init { scoutShots.n += scoutTargets.size }
+    private val focusPool = (inFireRange.filter { e -> meas.combatEnemies.any { it.id == e.id } } + scoutTargets)
         .ifEmpty { inFireRange }
-    fun fireAvailableAt(e: Creep) = fireAvailable(e)
+    private fun fireAvailableAt(e: Creep) = fireAvailable(e)
     // лечение, которое враг получит на этой цели: вплотную — полное, на дистанции — треть (rangedHeal 4 против 12)
     // ...И САМА ЦЕЛЬ ТОЖЕ ЛЕЧИТ СЕБЯ (v266, разбор стены лечения по реплеям серии v263). Сумма шла по всем, КРОМЕ цели, и
     // его лекарь под нашим огнём выглядел пробиваемым, хотя лечит себя в 52–71 % таких тиков (против Coldkimchi; у ●ω<♥♪ —
@@ -1375,12 +1356,12 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // (`killable`) самолечение уже считала — её сумма идёт по всем врагам, включая саму цель; здесь это та же модель, а не
     // вторая. Каскадный пересчёт по реплеям: чистый урон армии в тик против Coldkimchi +8,9 → +22,2 при его лечении как
     // было, −9,8 → −7,9 при его лекарях, успевающих перераспределиться; против ротации ●ω разницы нет
-    fun healOn(e: Creep) = meas.enemyCreeps.filter { h -> getRange(h, e) <= HEAL_RANGE }.sumOf { h -> val q = InfluenceMap.profileOf(h); if (getRange(h, e) <= 1) q.heal else q.heal / 3.0 }
+    private fun healOn(e: Creep) = meas.enemyCreeps.filter { h -> getRange(h, e) <= HEAL_RANGE }.sumOf { h -> val q = InfluenceMap.profileOf(h); if (getRange(h, e) <= 1) q.heal else q.heal / 3.0 }
     // дистанция каждого врага до ближайшего нашего боеспособного сейчас и тик назад — «идёт ли» (см. threatOf)
-    val prevArmedRange = HashMap(Memory.lastArmedRange)
-    Memory.lastArmedRange.clear()
-    for (e in meas.enemyCreeps) Memory.lastArmedRange[e.id] = strat.combatArmy.minOfOrNull { getRange(e, it) } ?: 99
-    fun threatOf(e: Creep): Double {
+    private val prevArmedRange = HashMap(Memory.lastArmedRange)
+    init { Memory.lastArmedRange.clear() }
+    init { for (e in meas.enemyCreeps) Memory.lastArmedRange[e.id] = strat.combatArmy.minOfOrNull { getRange(e, it) } ?: 99 }
+    private fun threatOf(e: Creep): Double {
         val p = InfluenceMap.profileOf(e)
         // мили — полная угроза ВПЛОТНУЮ к нашему или в двух, когда ИДЁТ на нас (v41: дистанция до наших боеспособных
         // меньше, чем тик назад). В двух он считался живым на все 240 (в четыре стрелка) всегда, и в
@@ -1411,19 +1392,19 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // фокус: добиваемые за тик, затем наибольшая угроза, снимаемая за тик боя (угроза / тики до убийства), и лишь
     // потом угроза на хит — «угроза на хит» слала огонь в лекарей врага за строем, которых лечили друг друга
     // быстрее, чем мы били (стенд m2 rush: выигранный без потерь рывок стал разгромом)
-    fun armedRanged(e: Creep?) = e != null && InfluenceMap.profileOf(e).ranged > 0.0
+    private fun armedRanged(e: Creep?) = e != null && InfluenceMap.profileOf(e).ranged > 0.0
     // его мили, стоящий вплотную к кому-то из наших: он бьёт ПРЯМО СЕЙЧАС на 240 в тик (v135)
-    fun meleeHitting(e: Creep?) = e != null && InfluenceMap.profileOf(e).melee > 0.0 &&
+    private fun meleeHitting(e: Creep?) = e != null && InfluenceMap.profileOf(e).melee > 0.0 &&
         strat.combatArmy.any { getRange(e, it) <= 1 }
     // его лекарь: живое лечение и никакого живого оружия (v134, см. USE_FOCUS_HEALER_FIRST)
-    fun armedHealer(e: Creep?) = e != null && InfluenceMap.profileOf(e).heal > 0.0 &&
+    private fun armedHealer(e: Creep?) = e != null && InfluenceMap.profileOf(e).heal > 0.0 &&
         InfluenceMap.profileOf(e).ranged == 0.0 && InfluenceMap.profileOf(e).melee == 0.0
     // лекарь, из-за которого цель не умирает: в HEAL_RANGE от вооружённого врага, которого нам не убить
-    fun savesSomeone(h: Creep) = focusPool.any { c -> c.id != h.id && InfluenceMap.profileOf(c).let { it.melee + it.ranged > 0.0 } &&
+    private fun savesSomeone(h: Creep) = focusPool.any { c -> c.id != h.id && InfluenceMap.profileOf(c).let { it.melee + it.ranged > 0.0 } &&
         getRange(h, c) <= HEAL_RANGE && killTicks(c).isInfinite() }
     // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
-    fun gunsAt(e: Creep?) = if (e == null) 0 else strat.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
-    val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+    private fun gunsAt(e: Creep?) = if (e == null) 0 else strat.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
+    private val focusCmp = compareBy<Creep> { if (it.hits <= fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
         // ЛЕКАРЬ В ДОСЯГАЕМОСТИ — ЦЕЛЬ ПЕРВЫМ (v224, см. USE_FOCUS_ANY_HEALER): правило соперника, снятое с реплеев
         // обеих сторон, — его ствол при нашем лекаре в досягаемости бьёт лекаря в 82–97 % выстрелов
         // ...И ТОЛЬКО ТОТ ЛЕКАРЬ, КОТОРОГО ДОТЯГИВАЮЩИЙСЯ ОГОНЬ ПРОБИВАЕТ (v224, серия): без этого условия ярус
@@ -1501,18 +1482,20 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
         .thenBy { threatOf(it) / it.hits.coerceAtLeast(1) }
         .thenByDescending { it.hits }
         .thenByDescending { getRange(it, strat.centroid) }
-    val focusBest = focusPool.maxWithOrNull(focusCmp)
+    private val focusBest = focusPool.maxWithOrNull(focusCmp)
     // прибор яруса «лекарь первым» (v224): его лекарь в досягаемости наших стволов был / фокус лёг на лекаря
     // ...и прибор v266 (fself=): его лекарь в досягаемости наших стволов, которого модель без самолечения читала
     // пробиваемым, а с ним — нет, то есть сколько решений о добиваемости правка поменяла
-    for (e in focusPool) if (armedHealer(e) && gunsAt(e) > 0) {
-        fselfAll.n++
-        val fire = fireAvailableAt(e) * InfluenceMap.takenOf(e)
-        val own = InfluenceMap.profileOf(e).heal
-        val others = healOn(e) - own
-        if (fire - others > 0.0 && fire - others - own <= 0.0) fselfFlip.n++
+    init {
+        for (e in focusPool) if (armedHealer(e) && gunsAt(e) > 0) {
+            fselfAll.n++
+            val fire = fireAvailableAt(e) * InfluenceMap.takenOf(e)
+            val own = InfluenceMap.profileOf(e).heal
+            val others = healOn(e) - own
+            if (fire - others > 0.0 && fire - others - own <= 0.0) fselfFlip.n++
+        }
     }
-    if (focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail.n++; if (focusBest != null && armedHealer(focusBest)) fhlChosen.n++ }
+    init { if (focusPool.any { armedHealer(it) && gunsAt(it) > 0 }) { fhlAvail.n++; if (focusBest != null && armedHealer(focusBest)) fhlChosen.n++ } }
     // ЛИПКИЙ фокус (v45): цель держится, пока жива с оружием или лечением и в шаге от досягаемости хоть одного нашего стрелка;
     // сменяется на ту, что добивается за тик. Замер по реплеям (матчи 78, 73, 67): наибольшее число наших выстрелов в ОДНУ
     // цель за тик — 1 в 57 тиках из 111, 2 в 42, 3 в 10, четыре и больше в 2 (1 %); у Coldkimchi 4+ в 11 % тиков, у けろびー
@@ -1528,50 +1511,54 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // возвращаются в три за три тика, а фокус к ним — лишь в 33–38 %. Теперь прежняя цель ищется и среди живых боевых
     // врагов вне досягаемости, а её стволы для правила v70 считаются тем же «в шаге» (gunsNear): у цели на четырёх в
     // досягаемости ноль стволов, и moreGuns сбрасывал бы её тем же тиком
-    val focusPrevId = focusId
-    val focusPrev = focusId?.let { id -> focusPool.firstOrNull { it.id == id } ?: meas.combatEnemies.firstOrNull { it.id == id } }
-    fun gunsNear(e: Creep) = strat.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE + 1 }
-    val killableNow = focusBest != null && focusBest.hits <= fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
+    private val focusPrevId = focusId
+    private val focusPrev = focusId?.let { id -> focusPool.firstOrNull { it.id == id } ?: meas.combatEnemies.firstOrNull { it.id == id } }
+    private fun gunsNear(e: Creep) = strat.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE + 1 }
+    private val killableNow = focusBest != null && focusBest.hits <= fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
     // …и не к мили, чья угроза схлопнулась (v49): матч 91 (Coldkimchi, 430 тиков боя) — его мили тычет вплотную (угроза 240,
     // фокус на нём), отходит к лекарям, и фокус на нём держится: 395 выстрелов в мили под 727 его лечений вплотную, 101 в
     // стрелков (35 % при стрелке в трёх, у него 71 %). Мили держится, пока вплотную или идёт (см. threatOf); «отпускать
     // всякую неубиваемую цель, пока есть убиваемая» ОТВЕРГНУТО стендом — фокус перескакивал при каждом шаге его лекаря
     // (125/125, но 19 хуже / 12 лучше: screen+flagless m32 −16145, block+flagless m32 −7640, camp m34 −9294, кайтеры медленнее ×7)
     // липкость уступает стрелку (v60): прежняя цель не стрелок, а лучшая — вооружённый стрелок
-    val rangedNow =  armedRanged(focusBest) && !armedRanged(focusPrev)
+    private val rangedNow =  armedRanged(focusBest) && !armedRanged(focusPrev)
     // липкость уступает цели, которую достают на FOCUS_GUNS_SWITCH стволов больше (v70)
-    val moreGuns =  focusBest != null && focusPrev != null && gunsAt(focusBest) >= gunsNear(focusPrev) + FOCUS_GUNS_SWITCH
-    val prevArmed = focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 }
-    val prevNear = focusPrev != null && strat.combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }
+    private val moreGuns =  focusBest != null && focusPrev != null && gunsAt(focusBest) >= gunsNear(focusPrev) + FOCUS_GUNS_SWITCH
+    private val prevArmed = focusPrev != null && InfluenceMap.profileOf(focusPrev).let { it.melee + it.ranged + it.heal > 0.0 }
+    private val prevNear = focusPrev != null && strat.combatArmy.any { hasRanged(it) && getRange(it, focusPrev) <= RANGED_RANGE + 1 }
     val focusTarget = if (focusPrev != null && !killableNow && !rangedNow && !moreGuns && prevArmed && prevNear) focusPrev else focusBest
-    focusId = focusTarget?.id
+    init { focusId = focusTarget?.id }
     // прибор v267 (fsw=смен/тиков:ушла/далеко/стрелок/стволы/добиваем/раздета): смена фокуса и её причина — на тиках, где
     // есть кого бить в досягаемости
-    if (focusPool.isNotEmpty()) {
-        fswTicks.n++
-        if (focusPrevId != null && focusTarget?.id != focusPrevId) {
-            fswN.n++
-            when {
-                focusPrev == null -> fswLost.n++
-                !prevNear -> fswFar.n++
-                killableNow -> fswKill.n++
-                rangedNow -> fswRanged.n++
-                moreGuns -> fswGuns.n++
-                else -> fswBare.n++
+    init {
+        if (focusPool.isNotEmpty()) {
+            fswTicks.n++
+            if (focusPrevId != null && focusTarget?.id != focusPrevId) {
+                fswN.n++
+                when {
+                    focusPrev == null -> fswLost.n++
+                    !prevNear -> fswFar.n++
+                    killableNow -> fswKill.n++
+                    rangedNow -> fswRanged.n++
+                    moreGuns -> fswGuns.n++
+                    else -> fswBare.n++
+                }
             }
         }
     }
-    val packMelee = pureMeleeOf(strat.combatArmy)
-    if (packMelee.isNotEmpty() && meas.combatEnemies.isNotEmpty()) packTicks.n++
-    // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
+    private val packMelee = pureMeleeOf(strat.combatArmy)
+    init {
+        if (packMelee.isNotEmpty() && meas.combatEnemies.isNotEmpty()) packTicks.n++
+        // ранжир для бойца, у которого цель фокуса вне дальности: ПЕРВАЯ по ранжиру цель в его дальности, а не «самый раненый в
+    }
     // дальности» — тот размазывал огонь: 1.91 цели в тик, 66 из 192 выстрелов в лекарей при HEALER_VALUE 1.0 (матч 44)
     val focusOrder = focusPool.sortedWith(focusCmp.reversed())
     val occupantAt = HashMap<Int, Creep>()
-    for (c in ctx.active) occupantAt[c.key] = c
+    init { for (c in ctx.active) occupantAt[c.key] = c }
     // добить: цель армии — ближайший к центру армии боевой враг (по пути); в бою ПО КОНТАКТУ (без перевеса) —
     // только враг, который УЖЕ у нас в руках (в RANGED_RANGE + 2 от своих): стая «в 11 клетках» включала основную
     // массу врага, и контакт с одним забредшим мили увёл армию с дома на неё — бой при 0.97 проигран 12:1 (матч 13)
-    val contactPack = meas.combatEnemies.filter { e -> strat.combatArmy.any { getRange(e, it) <= RANGED_RANGE + 2 } }
+    private val contactPack = meas.combatEnemies.filter { e -> strat.combatArmy.any { getRange(e, it) <= RANGED_RANGE + 2 } }
     // расстояние до КАЖДОГО кандидата в добычу мерилось своим полем BFS, а поля считаются под бюджетом
     // (см. BFS_BUDGET): сверх него кандидат получает ограниченное (NEAR_FLOW) или устаревшее поле, и «до него
     // неизвестно» читается как «бесконечно далеко». Сравнения кандидатов при этом нет вовсе — есть сравнение
@@ -1580,10 +1567,10 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // по очкам 17683:24331; в живом матче 25 армия ровно так же простояла 990 тиков при добыче в 11 клетках.
     // ОДНО поле от центра армии меряет всех кандидатов в одних единицах и в один тик — и стоит дешевле, чем поле
     // на каждого кандидата
-    val preyField by lazy { flowTo(ctx, strat.centroid) }
+    private val preyField by lazy { flowTo(ctx, strat.centroid) }
     // враг НА клетке вражеского флага недостижим по полю (такая клетка в нём стена) — читаем по соседней: нам
     // нужно дойти ДО него, а не встать на него
-    fun travelTo(e: Creep): Int {
+    private fun travelTo(e: Creep): Int {
         var best = -1
         for (dx in sym(1)) for (dy in sym(1)) {
             val x = e.x + dx; val y = e.y + dy
@@ -1595,7 +1582,7 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     }
     // за недостижимым не гонимся: прежде «недостижим» и «очень далеко» были одним числом, и армия шла на цель,
     // до которой нет пути
-    fun nearestPrey(list: List<Creep>): Creep? =
+    private fun nearestPrey(list: List<Creep>): Creep? =
         list.filter { travelTo(it) < Int.MAX_VALUE / 4 }.minByOrNull { travelTo(it) }
     val prey = when {
         posture != Posture.ANNIHILATE -> null
@@ -1609,14 +1596,16 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     val objectiveCapturer = strat.objective?.let { o -> armedOf(meas.mobileArmy).ifEmpty { meas.mobileArmy }.minByOrNull { getRange(it, o.flag.pos) }?.id }
     // флаг рядом (не наш, свободный, без врага в дальности, разрешён) — на него шагает ближайший из наших
     val grabberOf = HashMap<String, String>()
-    for (f in ctx.flags) {
-        if (f.ours || f.occupant != null || f.id == objectiveFlagId) continue
-        if (meas.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
-        if (!captureAllowed(ctx, f)) continue
-        // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
-        val near = meas.mobileArmy.filter { getRange(it, f.pos) <= 3 && (hasWeapon(it)) }
-            .minByOrNull { getRange(it, f.pos) } ?: continue
-        grabberOf[near.id] = f.id
+    init {
+        for (f in ctx.flags) {
+            if (f.ours || f.occupant != null || f.id == objectiveFlagId) continue
+            if (meas.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
+            if (!pag.captureAllowed(ctx, f)) continue
+            // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
+            val near = meas.mobileArmy.filter { getRange(it, f.pos) <= 3 && (hasWeapon(it)) }
+                .minByOrNull { getRange(it, f.pos) } ?: continue
+            grabberOf[near.id] = f.id
+        }
     }
 
     // построение перед контактом (см. FORM_RANGE): авангард — ближайший к врагу ходячий вооружённый; готовность —
@@ -1624,16 +1613,17 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // враг здесь — С БОЕМ (см. threatening): построение собирается перед огнём, а у одинокого лекаря огня нет. Уцелевший
     // лекарь врага шёл за армией в семи клетках, «авангардом» становился ЗАДНИЙ боец, и построение тянуло армию назад,
     // а цель — вперёд: шаг туда, шаг обратно 140 тиков у (20,21) при флаге-цели в 30 (стенд m13 rush, v30)
-    val formers = armedOf(meas.mobileArmy)
+    private val formers = armedOf(meas.mobileArmy)
     // авангард — только из массы (см. MASS_RANGE): оторвавшийся крип не точка сбора
-    val formMass = formers.filter { getRange(it, armedCentroid) <= MASS_RANGE }.ifEmpty { formers }
+    private val formMass = formers.filter { getRange(it, armedCentroid) <= MASS_RANGE }.ifEmpty { formers }
     // авангард есть, только пока враг с боем в досягаемости броска от кого-то из строя: авангард «против врага где-то на
     // карте» при одиноком лекаре врага в одиннадцати клетках давал построение, которому не собраться (штраф за соседей
     // отталкивал мили от авангарда в блобе) и не дождаться терпения (оно считается по врагу с боем) — армия простояла
     // тысячу тиков в 25 клетках от флага-цели (стенд m30 block, v30)
     val formVan = if (meas.armedEnemies.none { e -> formers.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }) null
         else formMass.minWithOrNull(compareBy<Creep>({ f -> meas.armedEnemies.minOf { getRange(f, it) } }, { it.id }))
-    val formationGathered = formVan == null || run {
+    private val formationGathered = formVan == null || run {
+        val formVan = formVan!!     // поле носителя внутри лямбды инициализатора компилятор не сужает, как сужал локальную; непустота — левее, в этом же `||`
         val near = formers.filter { getRange(it, formVan) <= RALLY_RANGE }
         val needed = maxOf(2, ceil(FORM_SHARE * near.size).toInt())
         // ком — только у неподвижной цели (см. USE_FORM_CLUMP_STILL_ONLY): его вооружённые в досягаемости авангарда стоят CHASE_WINDOW
@@ -1655,37 +1645,41 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
             gathered.size >= needed
         }
     }
-    val formWaiting = formVan != null && !formationGathered && meas.armedEnemies.any { e -> formers.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
+    private val formWaiting = formVan != null && !formationGathered && meas.armedEnemies.any { e -> formers.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
     // терпение — с появления авангарда, а не с последнего несобранного тика (v120, USE_FORM_PATIENCE_FROM_VAN): авангард,
     // шагнувший к цели, сам ломал построение (нужны 5 из 6 в двух клетках от него, оставалось 4), по formGo шагал назад,
     // построение собиралось, он шагал снова — цикл в два тика 1300 тиков на spread m31 (20579:24316) при таймере
     // терпения, сбрасываемом каждым собранным тиком
-    if (!formWaiting) formWaitSince = -1 else if (formWaitSince < 0) formWaitSince = getTicks()
+    init { if (!formWaiting) formWaitSince = -1 else if (formWaitSince < 0) formWaitSince = getTicks() }
     val formationReady = formationGathered || (formWaitSince >= 0 && getTicks() - formWaitSince >= FORM_PATIENCE)
     // досягаемость врага для лекаря и раненого (см. reachCells): стрелок бьёт на 3, мили шагнёт и ударит на 2. Тело
     // лекаря HHHHHHMMMMMM — лечение впереди, и первое же попадание снимает 12 лечения в тик навсегда; наши лекари
     // входили в зону огня к подопечному и к 130-му были M6H4/M6H2, лекари врага за строем не получили ни царапины
     // и отрастили ему армию (матчи 14–15). Лекарь в зону не входит, изнутри уходит; раненые приходят к нему сами.
     val reachCells = HashSet<Int>()
-    for (e in meas.combatEnemies) {
-        val q = InfluenceMap.profileOf(e)
-        val r = if (q.ranged > 0.0) RANGED_RANGE else if (q.melee > 0.0) 2 else 0
-        if (r == 0) continue
-        for (dx in sym(r)) for (dy in sym(r)) {
-            val x = e.x + dx; val y = e.y + dy
-            if (x in 0..99 && y in 0..99) reachCells.add(key(x, y))
+    init {
+        for (e in meas.combatEnemies) {
+            val q = InfluenceMap.profileOf(e)
+            val r = if (q.ranged > 0.0) RANGED_RANGE else if (q.melee > 0.0) 2 else 0
+            if (r == 0) continue
+            for (dx in sym(r)) for (dy in sym(r)) {
+                val x = e.x + dx; val y = e.y + dy
+                if (x in 0..99 && y in 0..99) reachCells.add(key(x, y))
+            }
         }
     }
     // в контактном бою лекарь избегает только мили (2 клетки): «вне досягаемости стрелков» выкидывало слот тыла из
     // ряда back+1, лекари стояли в 4–6 клетках за фронтом, и мили гибли без лечения, пока лекари врага стояли у своей
     // линии под нашим огнём (матч 21, t=68–84: четыре мили за шестнадцать тиков, ни одного лечения)
     // только вплотную к мили (клетка в 2 — это ряд сразу за нашим фронтом, свой мили между ними)
-    val meleeReachCells = HashSet<Int>()
-    for (e in meas.combatEnemies) {
-        if (InfluenceMap.profileOf(e).melee <= 0.0) continue
-        for (dx in sym(1)) for (dy in sym(1)) {
-            val x = e.x + dx; val y = e.y + dy
-            if (x in 0..99 && y in 0..99) meleeReachCells.add(key(x, y))
+    private val meleeReachCells = HashSet<Int>()
+    init {
+        for (e in meas.combatEnemies) {
+            if (InfluenceMap.profileOf(e).melee <= 0.0) continue
+            for (dx in sym(1)) for (dy in sym(1)) {
+                val x = e.x + dx; val y = e.y + dy
+                if (x in 0..99 && y in 0..99) meleeReachCells.add(key(x, y))
+            }
         }
     }
     // ...И В КОНТАКТЕ ЛЕКАРЬ ТОЖЕ ВНЕ ДОСЯГАЕМОСТИ ЕГО СТРЕЛКОВ (v293) — вместе с выходом раненых к нему (stepOutWounded), то
@@ -1698,35 +1692,18 @@ internal fun PainAndGain.armyTargets(ctx: Ctx, meas: ArmyMeasuresOut, strat: Arm
     // 15-33, у v292 8-24) и 2-14 против Coldkimchi#1 (у v289 10-6, p ≈ 0,01): против бьющего наименьшую долю раненому надо
     // уходить к лекарям позади, против бьющего «лекаря, иначе ближайшего» уведённый из боя раненый — огонь, потерянный даром.
     // Правило его стволов бот мерит сам (сверка двух моделей с фактом), это не подгонка под имя
-    val reachNow = if (!meas.contact || huntsWounded) reachCells else meleeReachCells
-    val fireCells = HashSet<Int>()
-    for (e in meas.combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
-        val x = e.x + dx; val y = e.y + dy
-        if (x in 0..99 && y in 0..99) fireCells.add(key(x, y))
+    val reachNow = if (!meas.contact || pag.huntsWounded) reachCells else meleeReachCells
+    private val fireCells = HashSet<Int>()
+    init {
+        for (e in meas.combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
+            val x = e.x + dx; val y = e.y + dy
+            if (x in 0..99 && y in 0..99) fireCells.add(key(x, y))
+        }
     }
 
     val healersAlive = ctx.army.any { healerOnly(it) && canMove(it) }
     // строй рядами в бою по контакту (см. USE_BLOCK); при перевесе (добивание) — прежняя охота
     val slotOf = HashMap<String, Position>()
-    return ArmyTargetsOut(
-        enemyPositions = enemyPositions,
-        blockedSet = blockedSet,
-        meleeEnemies = meleeEnemies,
-        killTicks = ::killTicks,
-        focusTarget = focusTarget,
-        focusOrder = focusOrder,
-        occupantAt = occupantAt,
-        prey = prey,
-        armedCentroid = armedCentroid,
-        objectiveCapturer = objectiveCapturer,
-        grabberOf = grabberOf,
-        formVan = formVan,
-        formationReady = formationReady,
-        reachCells = reachCells,
-        reachNow = reachNow,
-        healersAlive = healersAlive,
-        slotOf = slotOf,
-    )
 }
 
 internal const val FOCUS_GUNS_SWITCH = 2
