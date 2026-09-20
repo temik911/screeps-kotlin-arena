@@ -988,11 +988,8 @@ internal class RememberTick(private val ctx: Ctx, private val meas: ArmyMeasures
     init { if (stance != null) { Prev.touchShare = stance.windows.touchShare; Prev.hisTouchShare = stance.windows.hisTouchShare } }
 }
 
-internal class ReadSignalsOut(
-)
-
 /** СИГНАЛЫ ТИКА (v257, этап 10; сегмент tickBody до бегунов и армии): сомкнутость по форме и по прибытию, бросок безфлаговой армии (unflaggedRushNow), «бой близко» (fightImminentNow), полученный урон, тишина огня, «он не дерётся» (enemyNotFightingNow). Перенесено дословно. */
-internal fun readSignals(ctx: Ctx): ReadSignalsOut {
+internal fun readSignals(ctx: Ctx) {
     WorldState.plannedCaptures.clear()
     // доктрина «первый флаг — их» (см. EVADE_EQUAL_RATIO) — до бегунов: их захват идёт тем же гейтом
     // сомкнутая армия (см. MASS_RANGE): россыпь по флагам и клубок фермера — не бросок, хотя их части тоже идут к нам
@@ -1112,8 +1109,6 @@ internal fun readSignals(ctx: Ctx): ReadSignalsOut {
     // восемь не входит никогда — вся цепочка фермера (отряды, порог гонки, стая не преграда) молчала 800 тиков при
     // pushing=true в девяти клетках от него (m30, 9615:23822)
     if (enemyNear && firstNearTick < 0) firstNearTick = getTicks()
-    return ReadSignalsOut(
-    )
 }
 
 

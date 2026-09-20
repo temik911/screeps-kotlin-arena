@@ -509,11 +509,8 @@ internal fun commandFight(army: List<Creep>, combatEnemies: List<Creep>, armedEn
     return deal.rec
 }
 
-internal class ArmyFireAndHealOut(
-)
-
 /** ОГОНЬ И ЛЕЧЕНИЕ АРМИИ ЗА ТИК (v256, этап 10): хвост runArmy после покрипного цикла — перепись «почему» (why t=, why-sum), стрелки врага на прошлом тике для прогноза (prevShooters), назначение огня и лечения и исполнение. Перенесено дословно. */
-internal fun armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): ArmyFireAndHealOut {
+internal fun armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets) {
     cpuMark("moves")
     FireBook.prevShooters = meas.forces.combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.key, p.ranged, p.melee) }
     // ...командирская цель НЕ подменяет цель стрельбы (v138): проведённая сюда, она уронила гейт до 129/131 и
@@ -524,8 +521,6 @@ internal fun armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: ArmyTargets): A
     // ...и отряжённый лекарь без оружия лечит (v240): до этого healAndShoot получал бегунов только с оружием
     healAndShoot(ctx.army + ctx.combatRunners, meas.forces.allies, meas.forces.enemyCreeps, targ.focus.focusTarget, targ.focus.focusOrder)
     cpuMark("shoot")
-    return ArmyFireAndHealOut(
-    )
 }
 
 /** КУЛАК И В ПРОГНОЗЕ (v159): командир не пускает крипа дальше FIST_RADIUS от якоря, а раскатка симуляции пускала —

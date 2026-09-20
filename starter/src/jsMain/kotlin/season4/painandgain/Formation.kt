@@ -603,11 +603,8 @@ internal fun planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemi
     Memory.lastPlan.putAll(plan)
 }
 
-internal class HealerWallOut(
-)
-
 /** ПОТЕРИ ТИКА И СТЕНА ЛЕКАРЕЙ (v256, этап 10; сегмент runArmy перед покрипным циклом): потеря каждого бойца за тик (lostTick), жертва по адресному огню его стволов или по потере, клетки стены вокруг неё и лекари к ним (victimNow, victimSaveable, wallCells, wallCellOf). Перенесено дословно. */
-internal fun healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut {
+internal fun healerWall(ctx: Ctx, meas: ArmyMeasures) {
     Wall.lostTick.clear()
     for (c in ctx.army) Wall.lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
     // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): жертва — терявший больше всех за прошлый тик; удержима, если её потеря не
@@ -685,15 +682,10 @@ internal fun healerWall(ctx: Ctx, meas: ArmyMeasures): HealerWallOut {
         hwallVictimTicks.n++
         if (Wall.victimSaveable) hwallTicks.n++
     }
-    return HealerWallOut(
-    )
 }
 
-internal class ArmyBlockOut(
-)
-
 /** СТРОЙ РЯДАМИ В БОЮ ПО КОНТАКТУ (v256, этап 10; сегмент runArmy): при blockOn — planFight (признаки клеток) или planBlock (ряды), слоты в slotOf. Перенесено дословно. */
-internal fun armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyBlockOut {
+internal fun armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance) {
     if (stanceOut.windows.blockOn) {
         // расстановка (см. USE_PLAN) — только в СТОЯЧЕМ бою (признак прижима: линия стоит под огнём, его мили не идут);
         // против атаки и в погоне — ряды за передним мили: свободная расстановка рыхлее рядов, и с ней остаток
@@ -745,8 +737,6 @@ internal fun armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: 
         if (planNow) planFight(meas.chase.mobileArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, meas.forces.enemyCreeps, targ.zones.slotOf, targ.focus.focusTarget)
         else planBlock(strat.obj.approachRate, meas.chase.mobileArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, targ.zones.slotOf)
     }
-    return ArmyBlockOut(
-    )
 }
 
 internal const val RANGED_FRONT_GROUP = 6   // блоб: столько его вооружённых в ENGAGE_RANGE от ближайшего (россыпь — 1–3)

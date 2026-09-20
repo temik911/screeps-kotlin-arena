@@ -32,6 +32,25 @@ internal class Latch(private val ids: MutableSet<String>) {
 }
 
 internal object Memory {
+    // ТАБЛИЦЫ «ПО ID СВОЕГО БОЙЦА» (v459, второй шаг архитектуры, этап 6.4). Таблица, объявленная через [perCreepSet] / [perCreepMap],
+    // чистится от мёртвых id ОДНОЙ [prune] — до v459 это были семь одинаковых строк `retainAll` в хвосте стратега, и новая таблица
+    // требовала восьмой, которую не держало ничто. Реестр стоит ВЫШЕ таблиц: поля объекта инициализируются по порядку текста. Сами
+    // таблицы остаются прямыми полями `Memory` — починка после оборванного тика обходит только их; реестр — список ссылок, его не чинят.
+    // Чистки, которые на деле РЕШЕНИЯ (`detachedIds` — живой, вооружённый, подвижный; `runnerFlag` — только нынешние бегуны; гарнизон,
+    // курьер), сюда не входят и стоят на своих местах. НЕ чистит никто: `rotatingIds` (по пути защёлки), `rotateSince`, `cmdDetach` в
+    // бою — находка 2.8 п. 3 и п. 10 плана; добавить их сюда значит изменить размеры таблиц, которые печатают приборы.
+    private val creepSets = ArrayList<MutableSet<String>>()
+    private val creepMaps = ArrayList<MutableMap<String, *>>()
+    private fun perCreepSet(): HashSet<String> = HashSet<String>().also { creepSets.add(it) }
+    private fun <V> perCreepMap(): HashMap<String, V> = HashMap<String, V>().also { creepMaps.add(it) }
+
+    /** Снять записи погибших бойцов со всех таблиц «по id своего бойца». Место вызова в тике — хвост стратега (`StrategyThreats`): оно
+     *  входит в тождество, размеры таблиц печатают приборы. */
+    fun prune(living: List<Creep>) {
+        for (t in creepSets) t.retainAll { id -> living.any { it.id == id } }
+        for (t in creepMaps) t.keys.retainAll { id -> living.any { it.id == id } }
+    }
+
     /** ПОСТУРА ПРОШЛОГО ТИКА (v446, план архитектуры, 4.6): меры мира читают решение стратега, принятое тиком раньше, — и до
      *  v446 читали его полем `posture` объекта-оркестратора, про которое надо было ЗНАТЬ, что стратег его в этом тике ещё не
      *  переписал. Снимок ставит оркестровка непосредственно перед `armyMeasures`; значение то же самое. */
@@ -61,13 +80,13 @@ internal object Memory {
     val ourCentroidHist = ArrayDeque<Int>()
     val enemyCellHist = HashMap<String, ArrayDeque<Int>>()
     /** Кто сейчас идёт к авангарду (гистерезис сбора, см. rallyTo). */
-    val rallyingIds = HashSet<String>()
+    val rallyingIds = perCreepSet()
     val rallyingLatch = Latch(rallyingIds)
     /** Кто на прошлом тике шёл на личную цель (engage): такого не ждут по сплочению. */
-    val engagingIds = HashSet<String>()
+    val engagingIds = perCreepSet()
     val engagingLatch = Latch(engagingIds)
-    val holdSince = HashMap<String, Int>()
-    val impatientIds = HashSet<String>()
+    val holdSince = perCreepMap<Int>()
+    val impatientIds = perCreepSet()
     val impatientLatch = Latch(impatientIds)
     /** Дистанция центра боевых врагов до нашего за последние тики — темп сближения для запаса выхода. */
     val enemyDistHist = ArrayDeque<Int>()
@@ -84,11 +103,11 @@ internal object Memory {
     /** ...и обе половины отдельно: признак отхода спрашивает ОТНОШЕНИЕ потерь, а не разность. */
     val ourLostHist = ArrayDeque<Int>()
     val hisLostHist = ArrayDeque<Int>()
-    val aggressiveIds = HashSet<String>()
+    val aggressiveIds = perCreepSet()
     val aggressiveLatch = Latch(aggressiveIds)
-    val lastHits = HashMap<String, Int>()
+    val lastHits = perCreepMap<Int>()
     val theirsHist = ArrayDeque<Double>()   // его мощь против армии за MEASURE_WINDOW тиков (см. USE_CORE_MEASURE_WINDOW)
-    val lastCell = HashMap<String, Int>()
+    val lastCell = perCreepMap<Int>()
     /** id захватчика -> id флага (липкое назначение). */
     val runnerFlag = HashMap<String, String>()
     val lastFlagOwner = HashMap<String, Int>()

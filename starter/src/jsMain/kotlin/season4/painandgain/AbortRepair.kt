@@ -18,6 +18,9 @@ package season4.painandgain
  * починено так же, как сегодняшние. Списки и массивы не чинятся — у них нет пробинга, и зависнуть им не на чем.
  */
 internal object AbortRepair {
+    /** Отметка «тик открыт» (см. USE_ABORT_REPAIR) и пара прибора: оборванных тиков / записей, положенных обратно. */
+    var tickOpen = false
+
     /** Итог одной починки: таблиц, множеств и записей, положенных обратно. */
     class Result(val maps: Int, val sets: Int, val entries: Int)
 

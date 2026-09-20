@@ -184,11 +184,8 @@ internal fun logMap(fromRow: Int) {
     }
 }
 
-internal class PrintTickOut(
-)
-
 /** ПЕЧАТЬ ТИКА (v257, этап 10; хвост tickBody): строка застрявших, строка t= со всеми приборами раз в LOG_EVERY тиков, перепись rung / tac, поля fld. Перенесено дословно. */
-internal fun printTick(ctx: Ctx, rem: RememberTick): PrintTickOut {
+internal fun printTick(ctx: Ctx, rem: RememberTick) {
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
         bfsWindowDone()
@@ -248,8 +245,6 @@ internal fun printTick(ctx: Ctx, rem: RememberTick): PrintTickOut {
         mstripTicks.n += strippedMelee; mstripAny.n++
         mstripReach.n += ctx.army.count { meleeOnlyBorn(it) && !meleeOnlyLive(it) && ctx.threats.any { e -> getRange(it, e) <= RANGED_RANGE } }
     }
-    return PrintTickOut(
-    )
 }
 
 /** РАСКЛАДКА СТРОКИ `reach t=` (v455): таблицы решений по именам их счётчиков, в порядке печати. Таблица регистрирует счётчик сама

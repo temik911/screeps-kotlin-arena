@@ -52,11 +52,8 @@ import kotlin.reflect.*
 // состоянии армии, поэтому стадия переехала к тем, кого зовёт; вниз она по-прежнему читает стратега (`commandRace`, `commandGoal`)
 // и прогноз (`Forecast.simulate`). Текст перенесён дословно.
 
-internal class ArmyCommandOut(
-)
-
 /** РАЗДАЧА КОМАНДИРА (v256, этап 10; сегмент runArmy): режим FIGHT — перебор замыслов commandFight с прогнозом Forecast.simulate, изготовка (Formation.brace) и гонка (commandRace, commandGoal, commandMarch), погоня (assignChase), постановка стратега для прибора disp= и букв заданий missionOf. Перенесено дословно. */
-internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance): ArmyCommandOut {
+internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets, stanceOut: ArmyStance) {
     val ourFlagCells = ctx.ourFlags.mapTo(HashSet()) { it.pos.key }
     val commanderNow =  strat.dec.decision.cmdMode == CmdMode.FIGHT
     // ...а в гонке командир раздаёт задания по флагам (v160, см. commandRace): это второй его режим, и с ним
@@ -231,8 +228,6 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // КОЛЛИЗИИ ПРИКАЗОВ (v172, оператор: «не должно быть такого, что по приказам командира в одну клетку
     // собрались двое»). Внутри одной раздачи это исключено множеством taken, но приказы приходят из РАЗНЫХ
     // мест — бой, гонка, марш ядра, — и вот там пересечение возможно; здесь оно считается
-    return ArmyCommandOut(
-    )
 }
 
 /** ПУБЛИКАЦИЯ ВЫБРАННОЙ РАЗДАЧИ (v449, пункт В оператора): поле нужды выбранной раздачи уходит в мир (`InfluenceMap.published`),
@@ -330,11 +325,8 @@ internal val ffocBefore = Gauges.counter("ffoc")
 internal val ffocAfter = Gauges.counter("ffoc", 1)
 internal val lostEnemy = Gauges.counter("lost", 2, label = "foe")      // клетку приказа занял враг (v175)      // приказов, отменённых бегством (v173)     // сколько раз одна клетка была назначена двоим (v172)
 
-internal class OrderAuditOut(
-)
-
 /** АУДИТ ПРИКАЗОВ КОМАНДИРА (v256, этап 10; сегмент runArmy): одна клетка — двоим (clash), исполнение приказов прошлого тика (obey, lost=stuck/foe/fat/else), дальние приказы, запись orderPrev. Перенесено дословно. */
-internal fun orderAudit(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets): OrderAuditOut {
+internal fun orderAudit(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: ArmyTargets) {
     val seen = HashMap<Int, Int>()
     Orders.commandOf.values.forEach { p -> seen[p.key] = (seen[p.key] ?: 0) + 1 }
     val dup = seen.values.count { it > 1 }
@@ -483,8 +475,6 @@ internal fun orderAudit(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ:
     Memory.orderPrev.clear()
     Orders.commandOf.forEach { (id, p) -> Memory.orderPrev[id] = p }
     // потеря за прошлый тик по всем — ДО цикла: lastHits обновляется в конце каждой итерации, и для уже обработанных она была бы нулём
-    return OrderAuditOut(
-    )
 }
 
 /** ПРИКАЗЫ КОМАНДИРА (v459, второй шаг архитектуры, этап 6): словари одного тика, которые живут весь матч и чистятся на своих местах — перенесены из `object PainAndGain` как есть. `commandOf` переживает тик с пустой армией (`runArmy` выходит раньше раздачи), поэтому «новый словарь каждый тик» изменил бы поведение. Владелец — в списке починки после оборванного тика. */

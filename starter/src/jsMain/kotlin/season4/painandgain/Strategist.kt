@@ -2622,13 +2622,7 @@ internal class StrategyThreats(private val ctx: Ctx, private val meas: ArmyMeasu
                 (fightCost(pack, meas.forces.strikers) <= (meas.forces.strikers.maxOfOrNull { speedSlack(it) } ?: 0) || inContact(pack, meas.forces.strikers))
         }
     }
-    init { Memory.aggressiveIds.retainAll { id -> ctx.army.any { it.id == id } } }
-    init { Memory.rallyingIds.retainAll { id -> ctx.army.any { it.id == id } } }
-    init { Memory.engagingIds.retainAll { id -> ctx.army.any { it.id == id } } }
-    init { Memory.holdSince.keys.retainAll { id -> ctx.army.any { it.id == id } } }
-    init { Memory.impatientIds.retainAll { id -> ctx.army.any { it.id == id } } }
-    init { Memory.lastHits.keys.retainAll { id -> ctx.army.any { it.id == id } } }
-    init { Memory.lastCell.keys.retainAll { id -> ctx.army.any { it.id == id } } }
+    init { Memory.prune(ctx.army) }
 }
 
 internal const val FLEE_EDGE_MIN = 8   // = EDGE_CORNER вскрытия: бой с центром ближе восьми к краю — «у стены»

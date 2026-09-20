@@ -135,14 +135,12 @@ object PainAndGain {
 
 
 
-    /** Отметка «тик открыт» (см. USE_ABORT_REPAIR) и пара прибора: оборванных тиков / записей, положенных обратно. */
-    private var tickOpen = false
 
     fun tick() {
-        if (tickOpen) repairAfterAbort()
-        tickOpen = true
+        if (AbortRepair.tickOpen) repairAfterAbort()
+        AbortRepair.tickOpen = true
         tickBody()
-        tickOpen = false
+        AbortRepair.tickOpen = false
     }
 
     private fun repairAfterAbort() {
