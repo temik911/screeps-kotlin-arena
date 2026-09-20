@@ -411,6 +411,52 @@ internal class Deal(
             W_HEALCOVER * InfluenceMap.healReachAt(key) +
             CLAIM_COST * claimAt(key) - stayBonus(c, p)
     }
+    /**
+     * ВЫСТРЕЛ СТОИТ СТОЛЬКО, СКОЛЬКО ОН ДОБАВЛЯЕТ К ЧИСТОМУ УРОНУ (v482, см. USE_RANGED_SHOT_NET).
+     *
+     * v427 поставила выстрел в цену клетки валовой величиной — «наибольший урон по достижимому отсюда», — и в ней
+     * клетка с ОДИНОЧНЫМ выстрелом стоит ровно столько же, сколько клетка, где огонь армии сходится. Между тем
+     * арифметика класса записана в файле пятикратно и говорит обратное: наш стрелок даёт 60, его лечение на цели
+     * 129–147 в тик, поэтому одиночный выстрел приносит армии ЧИСТЫМИ НОЛЬ, два — ноль, а три пробивают. Валовая
+     * мера этой разницы не видит вовсе, и расстановка платит за выстрел, которого не будет.
+     *
+     * Здесь цена — предельный вклад: насколько мой выстрел поднимает чистый урон по цели сверх того, что по ней уже
+     * ведут остальные. Цель, которую армия и без меня пробивает, отдаёт мне полный урон; цель, которую его лекари
+     * перекрывают и со мной, — ноль; цель, которую мой выстрел ПЕРЕВОДИТ через лечение, — весь перевес разом, и
+     * именно она собирает стволы. Сходимость получается не притяжением к общей цели, а ценой клетки, и это важно:
+     * «притяжение стрелка к фокусу армии» (v268/v269) отвергнуто живьём — фокус уходит своим шагом, и стрелок,
+     * которого к нему тянут, уходит от целей, которые достаёт. Здесь ничего никуда не тянет: стрелок выбирает из
+     * тех же клеток, что и раньше, и лишь перестаёт считать выстрел в неубиваемого равным выстрелу в пробиваемого.
+     *
+     * Ни одной новой константы: лечение на цели считается той же моделью, что у `killTicks` (вплотную полное, в
+     * дальности треть), огонь остальных — по их УЖЕ НАЗНАЧЕННЫМ клеткам (`cellOf`), то есть оценка и исполнение
+     * стоят в одном решении одного тика. Это же отличает правку от трёх отвергнутых форм прогноза (v244/v246,
+     * v394, v395): те меняли оценку, не меняя того, кто и куда идёт, — и оценка уходила вперёд исполнения.
+     */
+    private val foeHealOn: HashMap<String, Double> = HashMap<String, Double>().also { m ->
+        for (e in combatEnemies) m[e.id] = combatEnemies.sumOf { h ->
+            val d = getRange(h, e)
+            val q = InfluenceMap.profileOf(h)
+            if (d > HEAL_RANGE) 0.0 else if (d <= 1) q.heal else q.heal / 3.0
+        }
+    }
+    // огонь ОСТАЛЬНЫХ наших стрелков по этой цели — с их назначенных клеток, а не с нынешних позиций (см. cellOf)
+    private fun othersFireOn(c: Creep, e: Creep): Double = rangeds.sumOf { f ->
+        if (f.id == c.id || f.hits <= 0) 0.0
+        else { val q = cellOf(f); if (getRange(q, e) <= RANGED_RANGE) InfluenceMap.profileOf(f).ranged * InfluenceMap.takenOf(e) else 0.0 }
+    }
+    fun shotValue(c: Creep, p: Position): Double {
+        val hit = InfluenceMap.profileOf(c).ranged
+        if (hit <= 0.0) return 0.0
+        return armedEnemies.filter { getRange(p, it) <= RANGED_RANGE }.maxOfOrNull { e ->
+            val mine = hit * InfluenceMap.takenOf(e)
+            if (!USE_RANGED_SHOT_NET) mine else {
+                val others = othersFireOn(c, e)
+                val heal = foeHealOn[e.id] ?: 0.0
+                maxOf(0.0, others + mine - heal) - maxOf(0.0, others - heal)
+            }
+        } ?: 0.0
+    }
     // СТРЕЛОК: притяжение с пиком на дальности 3 (он останавливается сам, вместо запрета «не ближе мили»),
     // плюс влияние — стоять там, где сильнее мы. Это и есть «не быть первой линией», сказанное числом
     fun scoreRanged(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
@@ -424,11 +470,7 @@ internal class Deal(
         // мили 240, то есть слагаемое вчетверо меньше и не должно переворачивать расстановку — оно лишь перестаёт
         // отдавать выстрел даром. Прежняя мера этого не ловила: v421 вернула выстрел ЗАПАСНОМУ ходу, но основной
         // ранг по-прежнему не знал, что клетка вне дальности не стреляет вовсе
-        val shot = if (!USE_RANGED_SHOT_VALUE) 0.0 else {
-            val hit = InfluenceMap.profileOf(c).ranged
-            if (hit <= 0.0) 0.0
-            else armedEnemies.filter { getRange(p, it) <= RANGED_RANGE }.maxOfOrNull { hit * InfluenceMap.takenOf(it) } ?: 0.0
-        }
+        val shot = if (!USE_RANGED_SHOT_VALUE) 0.0 else shotValue(c, p)
         return -W_ATT * att * pull - shot + W_DAN * dan * danOf(c, key) -
             W_LINE * InfluenceMap.influenceOf(key) +
             CLAIM_COST * claimAt(key) - stayBonus(c, p)
@@ -533,7 +575,25 @@ internal class Deal(
                 (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
                     ttlAt(c, p.key, p) >= lvl
             }, rank)
-            if (ok) { rec.gateLevels[minOf(lvl, rec.gateLevels.size - 1)]++; return true }
+            if (ok) {
+                // ПРИБОР ПРЕДМЕТА (v482): даёт ли назначенная стрелку клетка выстрел, который ЧТО-ТО добавляет к
+                // чистому урону армии. Считается при обоих положениях тумблера — это мера, а не правка
+                if (role == 1) out[c.id]?.let { q ->
+                    rec.shotAll.n++
+                    val hit = InfluenceMap.profileOf(c).ranged
+                    val reach = armedEnemies.filter { getRange(q, it) <= RANGED_RANGE }
+                    if (hit > 0.0 && reach.isNotEmpty()) {
+                        val net = reach.maxOf { e ->
+                            val mine = hit * InfluenceMap.takenOf(e)
+                            val others = othersFireOn(c, e)
+                            val heal = foeHealOn[e.id] ?: 0.0
+                            maxOf(0.0, others + mine - heal) - maxOf(0.0, others - heal)
+                        }
+                        if (net > 0.0) rec.shotPierce.n++ else rec.shotWasted.n++
+                    }
+                }
+                rec.gateLevels[minOf(lvl, rec.gateLevels.size - 1)]++; return true
+            }
         }
         rec.gateFell.n++
         return false
