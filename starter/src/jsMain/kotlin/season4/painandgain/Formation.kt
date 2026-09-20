@@ -652,6 +652,20 @@ internal fun planFight(inp: LayoutInput, slotOf: MutableMap<String, Position>) {
 internal fun healerWall(ctx: Ctx, meas: ArmyMeasures) {
     Wall.lostTick.clear()
     for (c in ctx.army) Wall.lostTick[c.id] = ((Memory.lastHits[c.id] ?: c.hits) - c.hits).coerceAtLeast(0)
+    // ЧЕМ УБИВАЮТ НАШИХ СТРЕЛКОВ (v493, прибор `rloss=`). Вопрос назван точно замером 20.09: огонь прекращается
+    // потому, что стрелки мертвы (`reach` 1/3 -> 1/1 -> 0/0), а наши мили при этом целы; разлёт тут ни при чём
+    // (`spread=` в поражениях 0/0). Но чем именно их снимают — его мили, дошедшим вплотную, или его залпом с
+    // дистанции — не мерил никто, а правка зависит от ответа: от мили спасает заслон и клетка, от залпа — только
+    // концентрация и лечение. Здесь потеря хитов КАЖДОГО нашего стрелка за тик раскладывается по тому, что стояло
+    // рядом: его вооружённый мили вплотную (его удар и есть 240 в тик) или только его стрелки в дальности
+    for (c in ctx.army) {
+        if (!hasRanged(c)) continue
+        val lost = Wall.lostTick[c.id] ?: 0
+        if (lost <= 0) continue
+        rlossAll.n += lost
+        val meleeAdj = meas.forces.combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && getRange(c, e) <= 1 }
+        if (meleeAdj) rlossMelee.n += lost else rlossFire.n += lost
+    }
     // СТЕНА ЛЕЧЕНИЯ (v228, см. USE_HEAL_WALL): жертва — терявший больше всех за прошлый тик; удержима, если её потеря не
     // больше лечения, которое наши лекари доставят в неё следующим тиком (вплотную или в шаге от вплотную — полное, в трёх
     // — треть; лекарь считается и для себя)
@@ -825,6 +839,16 @@ internal val planLoose = Gauges.counter("plan", 1, perTick = true)
  *  ярусы ниже (дистанция, урон, близость к себе) уводят с неё. */
 /** Режимы единой расстановки (v488, `lay=`): сколько крипо-тиков строй раздавал слоты свободной расстановкой и
  *  сколько рядами. Нужен, чтобы при дальнейшем сведении было видно, какой режим исчезает или перестаёт вызываться. */
+/** Потеря хитов НАШИХ СТРЕЛКОВ по источнику (v493, `rloss=от его мили вплотную/от огня с дистанции/всего`). Предмет
+ *  назван замером 20.09: в поражениях его огонь снимает наших стрелков, пока наши мили целы, — но чем именно,
+ *  ударом дошедшего мили или залпом, не мерил никто, а лечится это по-разному: от мили спасают заслон и клетка,
+ *  от залпа — только концентрация и лечение. Раскладка по тому, стоял ли его вооружённый мили вплотную. */
+internal val rlossMelee = Gauges.counter("rloss")
+
+internal val rlossFire = Gauges.counter("rloss", 1)
+
+internal val rlossAll = Gauges.counter("rloss", 2)
+
 internal val layoutCalls = Gauges.labelled("lay")
 
 internal val rfocOn = Gauges.counter("rfoc")
