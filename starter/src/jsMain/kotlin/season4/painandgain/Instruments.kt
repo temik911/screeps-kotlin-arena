@@ -212,6 +212,9 @@ internal fun PainAndGain.printTick(ctx: Ctx, rem: RememberTick): PrintTickOut {
         // суммой rung — оба счёта растут один раз на крипа армии за тик
         // ДОСТИЖИМОСТЬ ПО СТРОКАМ ТАБЛИЦ (v444, прибор `reach t=`, см. Tables.kt): тег:выиграла/условие истинно/перекрыта порядком
         println("reach t=${getTicks()}: " + REACH_LINE.joinToString(" ") { tallyOf(it).print() } + " err=${REACH_LINE.sumOf { tallyOf(it).err }}")
+        // ПРИЧИНЫ ОТКАЗА ФАКТОВ (v458, прибор `whynot t=`, см. Why в Tables.kt): факт=имя конъюнкта:сколько раз он оказался ложным,
+        // накопительно за матч; срез — `tools/series.py whynot`
+        println("whynot t=${getTicks()}: " + whys.joinToString(" ") { it.print() })
         println("tac t=${getTicks()}: mt=" + tacCount.shown() +
             " prio=" + prioCount.shown() +
             " sum=${prioCount.sum()}")

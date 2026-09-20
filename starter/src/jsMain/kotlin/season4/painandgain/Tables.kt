@@ -13,7 +13,7 @@ package season4.painandgain
  * у каждой строки, а не только до первой истинной, — так считаются перекрытые порядком. Действие исполняется только у
  * выигравшей строки; счётчик или запись, которые раньше стояли в теле ветки `when`, живут в нём.
  */
-internal class Row<F, R>(val tag: String, val guard: F.() -> Boolean, val mark: RowMark = RowMark.NONE, val act: F.() -> R)
+internal class Row<F, R>(val tag: String, val guard: F.() -> Boolean, val mark: RowMark = RowMark.NONE, val why: Why? = null, val act: F.() -> R)
 
 /**
  * СВОЙСТВО СТРОКИ (v457, второй шаг архитектуры, 4.5 и этап 5): то, что код ВНЕ таблицы хочет знать о выигравшей строке, строка несёт
@@ -31,6 +31,65 @@ internal enum class RowMark {
     FREE,
     /** Ступень-возможность (бросок, удержание линии, добыча, угроза, рейдер): при свободном шаге приоритет OPPORTUNITY. */
     OPPORTUNITY,
+}
+
+/**
+ * ПРИЧИНА ОТКАЗА — ДАННЫМИ (v458, второй шаг архитектуры, 4.4 и этап 5). Факт из цепочки `&&` отвечает «нет», и вопрос «на каком
+ * конъюнкте» до v458 решала ручная копия условий рядом с фактом (блок `TRACE_WHY` в `creepTurn`), которая расходилась с фактом при
+ * первой же правке. `c(имя, значение)` возвращает значение как есть, а ложное считает под своим именем: в цепочке `&&` ложным
+ * оказывается ровно тот конъюнкт, на котором она остановилась, поэтому ленивость и значение прежние. Дизъюнкция получает одно имя
+ * на группу; фильтр кандидатов считает отказы по кандидатам. ИМЯ ЖИВЁТ ТОЛЬКО В МЕСТЕ ВЫЗОВА — таблицы «индекс → имя» рядом нет,
+ * это был бы новый параллельный список. Счёт накопительный за матч, печатает прибор `whynot t=`; строка таблицы, чьё условие — этот
+ * факт, называет его своим свойством (`Row(…, why = ENGAGE)`), и общая трасса решения берёт оттуда первый ложный конъюнкт.
+ * Линейные массивы, а не словарь: имён у факта единицы, сравнение строк дешевле хеша, чинить после оборванного тика нечего.
+ */
+internal class Why(val name: String) {
+    init { whys.add(this) }
+
+    private var names = arrayOfNulls<String>(8)
+    private var counts = IntArray(8)
+    private var size = 0
+
+    /** Первый ложный конъюнкт с последнего [forgetFirstFalse]: читает общая трасса решения, на ход не влияет. */
+    var firstFalse: String? = null
+
+    fun c(name: String, value: Boolean): Boolean {
+        if (!value) miss(name)
+        return value
+    }
+
+    private fun miss(name: String) {
+        if (firstFalse == null) firstFalse = name
+        var i = 0
+        while (i < size) { if (names[i] == name) { counts[i]++; return }; i++ }
+        if (size == names.size) { names = names.copyOf(size * 2); counts = counts.copyOf(size * 2) }
+        names[size] = name; counts[size] = 1; size++
+    }
+
+    /** `факт=имя:число,…` — в порядке первого отказа (порядок стабилен: он задан текстом факта). */
+    fun print(): String = "$name=" + (0 until size).joinToString(",") { "${names[it]}:${counts[it]}" }
+}
+
+/** Причины отказа в порядке появления (список, а не словарь). Прибор `whynot t=` печатает их все — раскладки имён нет: у строки нет
+ *  читателя, которому важен порядок полей, а срез `tools/series.py whynot` разбирает её по именам. */
+internal val whys = ArrayList<Why>()
+
+/** Перед решением одного субъекта (ход крипа) трасса забывает первые ложные конъюнкты прошлого субъекта. */
+internal fun forgetFirstFalse() { for (w in whys) w.firstFalse = null }
+
+/** Для общей трассы решения: строки ВЫШЕ выигравшей и, где строка несёт свой факт, первый ложный конъюнкт этого факта — с
+ *  раскрытием на один уровень (конъюнкт `inLine` факта `engage` сам факт с именами: `engage:inLine>formationReady`). */
+internal fun <F, R> aboveOf(table: List<Row<F, R>>, winner: Row<F, R>): String {
+    val sb = StringBuilder()
+    for (row in table) {
+        if (row === winner) break
+        if (sb.isNotEmpty()) sb.append(',')
+        sb.append(row.tag)
+        val first = row.why?.firstFalse ?: continue
+        sb.append(':').append(first)
+        whys.firstOrNull { it.name == first }?.firstFalse?.let { sb.append('>').append(it) }
+    }
+    return sb.toString()
 }
 
 /**
