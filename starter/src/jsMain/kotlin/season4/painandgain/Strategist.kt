@@ -121,7 +121,9 @@ internal object Strategist {
         val newPosture = walk(POSTURE_RULES, i, postureTally).act(i)
         // ГИСТЕРЕЗИС ПОСТУРЫ (v181): держится не меньше POSTURE_HOLD тиков; раньше срока меняется только на RETREAT —
         // спасение не ждёт; EVADE срока ждёт (v183: изъятие для EVADE само рождало пилу с периодом POSTURE_HOLD)
-        val escape = newPosture == Posture.RETREAT
+        // ...и ИЗЪЯТИЕ ДЕЙСТВУЕТ ТОЛЬКО ПОД ОГНЁМ (v479, см. USE_ESCAPE_UNDER_FIRE): условие отхода мигает вместе с
+        // целью-флагом, а изъятие пускало отход без срока — постура пилила FLAG<->RETREAT с периодом POSTURE_HOLD
+        val escape = newPosture == Posture.RETREAT && (!USE_ESCAPE_UNDER_FIRE || i.underTheirFire)
         // ПЕРЕСМОТР ПО СОБЫТИЯМ (решение оператора 13.09) ПОКА НЕ ВКЛЮЧЁН — три определения события отвергнуты гейтом
         // (v242, замер в runArmy у поля event): любое изменение контакта, только появившийся контакт, гибель своего + смена
         // владельца флага — каждое роняло scatter m34 и меняло счёт 19–34 сценариев, потому что на стенде эти события
@@ -1795,6 +1797,15 @@ internal class StanceApply(private val meas: ArmyMeasures, private val strat: Ar
     init { if (strat.dec.decision.cmdMode == CmdMode.FIGHT) { warmCmdAll.n++; if (strat.contact.warmNow) warmCmd.n++ } }
     init { posture = strat.dec.decision.postureFinal }
     init { postureSince = strat.dec.decision.postureSinceFinal }
+    // ПИЛА ПОСТУРЫ (v479, см. USE_ESCAPE_UNDER_FIRE): смены считаются у ЕДИНСТВЕННОГО писателя, строкой ниже записи.
+    // Эпизод короче срока гистерезиса не может родиться иначе как изъятием — поэтому средняя часть и есть мера пилы
+    init {
+        if (posture != strat.inp.posturePrev) {
+            postFlips.n++
+            if (strat.inp.now - strat.inp.postureSincePrev < POSTURE_HOLD) postFlipShort.n++
+            if (posture == Posture.RETREAT && !strat.inp.underTheirFire) postFlipDry.n++
+        }
+    }
     // ...и выйти из режима боя МАЛО: постура остаётся ANNIHILATE сама по себе (она липкая и решает по своим
     // признакам), а именно она держит армию в размене. В разгромах серии режим прыгал FIGHT/RACE, а постура все
     // эти сотни тиков стояла ANNIHILATE при нашей мощи вдвое ниже. Отход объявляет командир — по измеренной мощи
@@ -3055,6 +3066,14 @@ internal val retrTicks = Gauges.counter("retr")
 internal val retrWithPoint = Gauges.counter("retr", 1)
 
 internal val retrUnderFire = Gauges.counter("retr", 2)
+
+/** Тройка «смен применённой постуры / из них эпизод короче POSTURE_HOLD / входов в отход не под огнём» (v479, см.
+ *  USE_ESCAPE_UNDER_FIRE). Средняя часть и есть пила: эпизод короче срока гистерезиса рождается только изъятием. */
+internal val postFlips = Gauges.counter("pflip")
+
+internal val postFlipShort = Gauges.counter("pflip", 1)
+
+internal val postFlipDry = Gauges.counter("pflip", 2)
 
 /** Пара «крипо-тиков в отходе, где крип стрелял или бил / всех крипо-тиков в отходе» (v217). */
 internal val standFire = Gauges.counter("standfire")

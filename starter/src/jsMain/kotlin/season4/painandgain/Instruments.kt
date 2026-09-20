@@ -302,7 +302,7 @@ internal val T_LINE = listOf(
     "runner", "cmdwhy", "ovl", "conc", "concall", "concmax", "concfan", "okill", "okkill", "lostrace", "gather", "close3", "guard", "gstrip", "warm",
     "warmann", "warmhold", "warmcmd", "warmfight", "warmcap", "mconc", "mconcmax", "mpack", "pack", "mpackon", "kchase",
     "kveto", "gathera", "annempty", "shooters", "abort", "srch", "deals", "srchd", "pin", "fself", "rotf", "rotfm", "meet",
-    "fsw", "ffoc", "ovw", "conf", "rtr", "mquiet", "mquietc", "maj", "surv", "adr", "rad", "simd", "fhl", "mrush", "zlb",
+    "fsw", "ffoc", "ovw", "conf", "rtr", "pflip", "mquiet", "mquietc", "maj", "surv", "adr", "rad", "simd", "fhl", "mrush", "zlb",
     "hwall", "hwallh", "hwalla", "hwallp", "postc", "rot", "rotset", "rotstuck", "mdir", "hfull", "hover", "hswap", "hexp", "hlost", "hwallx",
     "hpick", "hadj", "hadjn", "hfire", "hstill", "hnext", "cmdheal", "dh", "retr", "standfire", "outmw", "score", "rate", "behind",
     "passive", "flags", "obey", "branch", "fled", "clash", "lost", "kite", "massed", "plan", "cmd", "mode", "disp", "evt",
@@ -393,7 +393,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v478"
+internal const val BOT_VERSION = "v479"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
