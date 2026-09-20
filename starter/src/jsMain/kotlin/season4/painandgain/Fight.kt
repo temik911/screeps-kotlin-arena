@@ -293,7 +293,7 @@ internal fun commandFire(army: List<Creep>, enemies: List<Creep>, focus: Creep?,
         // Но преследователь для того и отделён, чтобы добить одного конкретного, — и назначение ему делается
         // ЗДЕСЬ, потому что commandFire начинается с out.clear() и всякий приказ, поставленный раньше, стирает.
         // Первая редакция ставила приказ в assignChase, и он не доживал до выстрела: крип догонял и молчал
-        val chased = Memory.chaseTarget[c.id]
+        val chased = Squads.chaseTarget[c.id]
         if (chased != null && chased.hits > 0 && reach(c, chased)) { out[c.id] = chased.id; continue }
         val t = when {
             killable != null && reach(c, killable) -> killable

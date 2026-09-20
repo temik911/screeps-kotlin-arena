@@ -19,14 +19,7 @@ plumbing World.kt:range
 plumbing World.kt:range~2
 writer bodyWeightNow<-Facts.kt
 writer bodyWeightNow<-World.kt
-writer cmdDetach<-Commander.kt
-writer cmdDetach<-Strategist.kt
-writer cmdDetach<-World.kt
-writer detachedIds<-Strategist.kt
-writer detachedIds<-World.kt
 writer liveMovesNow<-Facts.kt
 writer liveMovesNow<-World.kt
 writer plannedCaptures<-Strategist.kt
 writer plannedCaptures<-World.kt
-writer runnerFlag<-Missions.kt
-writer runnerFlag<-Strategist.kt

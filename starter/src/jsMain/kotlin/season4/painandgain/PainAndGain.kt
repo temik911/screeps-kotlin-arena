@@ -146,7 +146,7 @@ object PainAndGain {
     private fun repairAfterAbort() {
         abortTicks.n++
         var maps = 0; var sets = 0; var entries = 0
-        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges, Orders, FireBook, Wall, StrategistState, WorldState, TacticianState, MapDump, Signals, Prev)) {
+        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges, Orders, FireBook, Wall, StrategistState, WorldState, TacticianState, MapDump, Signals, Prev, Squads)) {
             val r = AbortRepair.repairFields(owner)
             maps += r.maps; sets += r.sets; entries += r.entries
         }

@@ -105,10 +105,10 @@ internal class Ctx() {
     // из M5 с 416 хитами стал M8A8 к 199-му тику у одного лекаря); прежде он уходил «бегуном» за флагами и гиб
     private val healersAlive = active.any { healerOnly(it) && canMove(it) }
     private fun wounded(c: Creep) =  healersAlive && stripped(c) && bornCombatant(c)
-    init { Memory.detachedIds.retainAll { id -> active.any { it.id == id && hasWeapon(it) && canMove(it) } } }
+    init { Squads.keepDetached { id -> active.any { it.id == id && hasWeapon(it) && canMove(it) } } }
     // ...и зачисленные КОМАНДИРОМ (v160, см. commandRace): его задание на захват действует так же, как detach —
     // иначе крип, посланный за флагом, остаётся бойцом строя и флага не берёт
-    private val takers = { id: String -> id in Memory.detachedIds || (id in Memory.cmdDetach) }
+    private val takers = { id: String -> id in Squads.detachedIds || (id in Squads.cmdDetach) }
     val army = active.filter { (combatant(it) || wounded(it)) && !takers(it.id) }   // с оружием или лечением
     val runners = active.filter { (stripped(it) && !wounded(it)) || takers(it.id) }   // безоружные и без лечения: захватчики
     private val immobile = active.filter { !canMove(it) }
@@ -514,7 +514,7 @@ internal fun heldFlag(ctx: Ctx, c: Creep): FlagInfo? =
 /** Флаг, при котором крип стоит охраной (v298): наш флаг его задания, на клетке — другой наш крип, сам крип не дальше
  *  двух клеток, и его крип не дальше HOLD_WATCH от флага (в режиме пар — всегда, как у держателя). */
 internal fun guardFlag(ctx: Ctx, c: Creep): FlagInfo? {
-    val f = Memory.runnerFlag[c.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } } ?: return null
+    val f = Squads.runnerFlag[c.id]?.let { id -> ctx.flags.firstOrNull { it.id == id } } ?: return null
     val occ = f.occupant ?: return null
     if (!f.ours || occ.my != true || occ.id == c.id || getRange(c, f.pos) > 2) return null
     return f.takeIf { Signals.groupSafe || ctx.enemyCreeps.any { getRange(it, f.pos) <= HOLD_WATCH } }
@@ -539,11 +539,11 @@ internal fun mobileOf(creeps: List<Creep>) = creeps.filter { canMove(it) && !it.
 internal fun lineMelees(creeps: List<Creep>) = creeps.filter { meleeOnlyLive(it) && it.id !in Memory.rotatingIds }
 internal fun lineRangeds(creeps: List<Creep>) = creeps.filter { hasRanged(it) && it.id !in Memory.rotatingIds }
 /** Состав гонки за флагом: вооружённый, на полной скорости, не хранитель и не в ротации (память — в момент вызова). */
-internal fun raceCapable(creeps: List<Creep>) = creeps.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Memory.keeperIds && it.id !in Memory.rotatingIds }
+internal fun raceCapable(creeps: List<Creep>) = creeps.filter { hasWeapon(it) && fullSpeed(it) && it.id !in Squads.keeperIds && it.id !in Memory.rotatingIds }
 /** Отряд за флагами и остальные — по памяти В МОМЕНТ ВЫЗОВА: стратег правит detachedIds и cmdDetach посреди тика. */
-internal fun detachedRunners(ctx: Ctx) = ctx.runners.filter { it.id in Memory.detachedIds }
-internal fun notDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.detachedIds }
-internal fun notCmdDetached(creeps: List<Creep>) = creeps.filter { it.id !in Memory.cmdDetach }
+internal fun detachedRunners(ctx: Ctx) = ctx.runners.filter { it.id in Squads.detachedIds }
+internal fun notDetached(creeps: List<Creep>) = creeps.filter { it.id !in Squads.detachedIds }
+internal fun notCmdDetached(creeps: List<Creep>) = creeps.filter { it.id !in Squads.cmdDetach }
 /** Его вооружённые в досягаемости боя от точки (флага). */
 internal fun foesInEngage(foes: List<Creep>, pos: Position) = foes.filter { getRange(it, pos) <= ENGAGE_RANGE }
 /** Наши флаги из списка (до `Ctx` — в счёте очков; в `Ctx` это поле ourFlags). */
@@ -673,7 +673,7 @@ internal class MeasuresForces(private val ctx: Ctx) {
     val enemyCreeps = ctx.enemyCreeps
     val combatEnemies = ctx.combatEnemies
 
-    val strikers = ctx.army.filter { fullSpeed(it) && hasWeapon(it) && it.id !in Memory.keeperIds }
+    val strikers = ctx.army.filter { fullSpeed(it) && hasWeapon(it) && it.id !in Squads.keeperIds }
     // враги, с которыми есть бой: с уроном — и лекари, у которых рядом (в дальности лечения плюс шаг) есть свой с
     // оружием в теле, живым или мёртвым: такого лекарь вернёт в строй за шесть тиков (стенд m2 rush: армия ушла за
     // флагами от лекарей с обломками, и через сто тиков те вернулись в полном теле). Стая из одних лекарей при
@@ -731,13 +731,13 @@ internal class MeasuresExchange(private val ctx: Ctx, private val forces: Measur
 
 /** ГРУППА МЕР 3: погоня — подвижная армия и догоняемые, кайт, пикет, стоящий марш, удержание дистанции, загнанная группа, затор. */
 internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresForces, private val exchange: MeasuresExchange) {
-    val mobileArmy = ctx.army.filter { canMove(it) && it.id !in Memory.keeperIds }
+    val mobileArmy = ctx.army.filter { canMove(it) && it.id !in Squads.keeperIds }
     // ...а командир видит ВСЁ поле, включая хранителей флагов: решение снять хранителя — его, а не следствие того,
     // что он невидим (v173, оператор). Держат флаг они по-прежнему сами, пока приказа нет
     // ...и В РЕЖИМЕ ПАР БЕЗ ХРАНИТЕЛЕЙ (v306, см. GROUP_SAFE_DMG): состав командира — единственное место, где хранитель
     // ему виден (марш и погоня берут mobileArmy и strikers, а те его исключают), и приказ уводит его с флага (правило
     // v173, «хранитель тоже слушает приказ»). Против けろびー#19 это 71 снятие хранителя из 110 за матч — «сошёл с клетки»
-    val commandArmy = ctx.army.filter { canMove(it) && !(Signals.groupSafe && it.id in Memory.keeperIds) }
+    val commandArmy = ctx.army.filter { canMove(it) && !(Signals.groupSafe && it.id in Squads.keeperIds) }
     val chasers = forces.strikers.ifEmpty { mobileArmy }
     // кого вообще можно догнать (см. catchable): добивание по перевесу идёт только за ними, и по ним же считается
     // пикет простоя — поэтому охота посчитана здесь, до простоя
@@ -931,13 +931,11 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
             // и отзыв срабатывал 506 раз за матч, отправляя в ядро тех, кого командир только что послал (man=124, split=392).
             // Возражение v301 снято тем же, чем и в v325: сидящий на флагах в режим пар не попадает (v302)
             val keep = if (contact) emptySet() else ctx.runners.filter { (heldFlag(ctx, it) ?: guardFlag(ctx, it)) != null ||
-                (Signals.groupSafe && it.id in Memory.cmdDetach) }.mapTo(HashSet()) { it.id }
-            val before = Memory.cmdDetach.size + Memory.detachedIds.size
-            Memory.cmdDetach.retainAll(keep)
-            Memory.detachedIds.retainAll(keep)
-            val kept = Memory.cmdDetach.size + Memory.detachedIds.size
+                (Signals.groupSafe && it.id in Squads.cmdDetach) }.mapTo(HashSet()) { it.id }
+            val gone = Squads.recallAllBut(keep)
+            val kept = Squads.cmdDetach.size + Squads.detachedIds.size
             holdKeptFight.n += kept
-            recalled.n += before - kept
+            recalled.n += gone
         }
     }
     private val ourPeriod = chase.mobileArmy.maxOfOrNull { plainPeriod(it) } ?: 1

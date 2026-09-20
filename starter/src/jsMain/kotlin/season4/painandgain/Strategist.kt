@@ -1028,8 +1028,8 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
     // снимало хранителя от гуляющей мимо ТРОЙКИ ЕГО ЛЕКАРЕЙ — те в `combatEnemies` входят, а бить некого: 1,72 наших
     // флага против 2,39 у v306, счёт 7–10 тыс. против 11–17 тыс. В режиме пар хранителя снимает только нужда ядра и
     // собственные хиты ниже половины: пока его не бьют, флаг стоит очков каждый тик
-    var core = army.filter { it.id !in Memory.keeperIds }
-    val iter = Memory.keeperIds.entries.iterator()
+    var core = army.filter { it.id !in Squads.keeperIds }
+    val iter = Squads.keeperIds.entries.iterator()
     while (iter.hasNext()) {
         val e = iter.next()
         val c = army.firstOrNull { it.id == e.key }
@@ -1094,11 +1094,11 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
     for (f in ctx.flags) {
         if (!f.ours) continue
         val occ = f.occupant ?: continue
-        if (occ.my != true || army.none { it.id == occ.id } || occ.id in Memory.keeperIds) continue
+        if (occ.my != true || army.none { it.id == occ.id } || occ.id in Squads.keeperIds) continue
         // ...и хранителем не становится лекарь (v215, см. USE_HEALER_NEVER_PINNED): ветка `keeper` первая в
         // цепочке целей, и пришпиленный к флагу лекарь выключается из боя целиком
         if (army.any { it.id == occ.id && healerOnly(it) }) continue
-        if (Memory.runnerFlag.values.contains(f.id)) continue
+        if (Squads.runnerFlag.values.contains(f.id)) continue
         if (!Signals.groupSafe && enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
         val cand = army.firstOrNull { it.id == occ.id } ?: continue
         // ...и НЕ НАЗНАЧАЕТСЯ ТОТ, КОГО ПРАВИЛО ТУТ ЖЕ СНИМЕТ (v353). Без зеркального условия снятие отменялось тем
@@ -1110,7 +1110,7 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         if (Signals.groupSafe) {
             if (!coreHolds(core.without(occ))) continue
         } else if (armedEnemies.count { getRange(f.pos, it) <= KEEP_RANGE } > KEEP_PICKET) continue
-        Memory.keeperIds[occ.id] = f.id
+        Squads.keeperIds[occ.id] = f.id
         keepOn.n++
         if (Signals.groupSafe) core = core.without(occ)
         if (DEBUG_LOG) println("keeper t=${getTicks()}: ${occ.id} keeps ${f.id} at (${f.pos.x},${f.pos.y})")
@@ -1154,8 +1154,8 @@ internal fun commandGoal(ctx: Ctx, view: ExchangeView, approachRate: Double, far
  * выдаваться. Отдельного правила отзыва не нужно.
  */
 internal fun assignChase(army: List<Creep>, enemyCreeps: List<Creep>, armedEnemies: List<Creep>) {
-    Memory.chaseOf.clear()
-    Memory.chaseTarget.clear()
+    Squads.chaseOf.clear()
+    Squads.chaseTarget.clear()
     val fighters = army.filter { canMove(it) && !it.spawning && hasWeapon(it) }
     if (fighters.size < CHASE_MIN_ARMY) return
     if (enemyCreeps.none { InfluenceMap.profileOf(it).heal > 0.0 }) return   // лечить некому — остов и так труп
@@ -1188,15 +1188,15 @@ internal fun assignChase(army: List<Creep>, enemyCreeps: List<Creep>, armedEnemi
         val without = free.filter { it.id != chaser.id }
         if (without.none { hasWeapon(it) }) break
         if (ourPowerOf(without, armedEnemies) < enemyPowerOf(armedEnemies, without) * PARITY_FLOOR) break
-        Memory.chaseOf[chaser.id] = h.id
-        Memory.chaseTarget[chaser.id] = h
+        Squads.chaseOf[chaser.id] = h.id
+        Squads.chaseTarget[chaser.id] = h
         free.remove(chaser)
         budget--
     }
-    if (Memory.chaseOf.isNotEmpty()) chaseTicks++
+    if (Squads.chaseOf.isNotEmpty()) chaseTicks++
     // прибор: остов, за которым была погоня и который перестал существовать, — это её результат
     for (id in Memory.chasedIds.toList()) if (enemyCreeps.none { it.id == id }) { chaseKills.n++; Memory.chasedIds.remove(id) }
-    Memory.chasedIds.addAll(Memory.chaseOf.values)
+    Memory.chasedIds.addAll(Squads.chaseOf.values)
 }
 
 /**
@@ -1267,11 +1267,11 @@ internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedE
     RaceParties(ctx, meas, armedEnemies, roster, free, purse, routes)
 }
 
-/** ПОДСТАДИЯ 1 ГОНКИ: состав — уже отпущенные (снимаются ДО очистки `Memory.cmdDetach`), держатели, режим пар (`safe`), мера ядра (`coreHolds`), запрет боем. */
+/** ПОДСТАДИЯ 1 ГОНКИ: состав — уже отпущенные (снимаются ДО очистки `Squads.cmdDetach`), держатели, режим пар (`safe`), мера ядра (`coreHolds`), запрет боем. */
 internal class RaceRoster(private val ctx: Ctx, private val meas: ArmyMeasures, private val armedEnemies: List<Creep>) {
     // ...и состав берётся ДО очистки (v215, см. USE_RACE_COUNTS_RELEASED): очистка стояла строкой выше чтения
-    val alreadyOut = ctx.runners.filter { it.id in Memory.cmdDetach }
-    init { Memory.cmdDetach.clear() }
+    val alreadyOut = ctx.runners.filter { it.id in Squads.cmdDetach }
+    init { Squads.recallAll(Squads.Source.COMMANDER) }
     // ДЕРЖАТЕЛИ ОСТАЮТСЯ (v297, см. HOLD_WATCH): отпущенный, стоящий на взятом флаге при его крипе рядом, сохраняет
     // задание, пока хватает бюджета и ядро без него держит паритет. Задания раздавались только на ЧУЖИЕ флаги, и
     // взявший флаг на следующем тике уходил за другим или в армию — против けろびー#19 130 из 194 сходов вооружённых
@@ -1340,7 +1340,7 @@ internal class RaceBudget(private val ctx: Ctx, private val meas: ArmyMeasures, 
             val without = free.filter { it.id != h.id }
             if (!roster.coreHolds(without)) break
             val f = heldFlag(ctx, h) ?: guardFlag(ctx, h) ?: continue
-            Memory.cmdDetach.add(h.id); Memory.runnerFlag[h.id] = f.id; free.remove(h); budget--; holdKeptRace.n++
+            Squads.detach(h.id, f.id); free.remove(h); budget--; holdKeptRace.n++
         }
     }
 }
@@ -1366,7 +1366,7 @@ internal class RaceRoutes(private val ctx: Ctx, private val meas: ArmyMeasures, 
     init {
         if (roster.safe) {
             val outIds = roster.alreadyOut.mapTo(HashSet()) { it.id }
-            val enRoute = free.filter { it.id in outIds }.groupBy { Memory.runnerFlag[it.id] }
+            val enRoute = free.filter { it.id in outIds }.groupBy { Squads.runnerFlag[it.id] }
             for ((fid, members) in enRoute) {
                 // ...и СВОЙ ПУСТОЙ ФЛАГ ТОЖЕ ЖДЁТ (v317): гарнизонный боец (v316) шёл к нашему флагу, а удержание задания
                 // знало только про чужие флаги — его распускали через тик, и он возвращался в армию, не дойдя: man=14–99
@@ -1377,7 +1377,7 @@ internal class RaceRoutes(private val ctx: Ctx, private val meas: ArmyMeasures, 
                 if (purse.budget < members.size) continue
                 val without = free.filter { c -> members.none { it.id == c.id } }
                 if (!roster.coreHolds(without)) break
-                for (c in members) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c) }
+                for (c in members) { Squads.detach(c.id, f.id); free.remove(c) }
                 purse.budget -= members.size
                 routeKept.n += members.size
             }
@@ -1397,7 +1397,7 @@ internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagIn
     // Здесь четыре ближайших к дому флага закрепляются за крипами на весь матч и меняются, только если крип погиб
     init {
         if (roster.safe) {
-            Memory.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Memory.cmdDetach.contains(id) }
+            Squads.garrisonOf.keys.retainAll { id -> free.any { it.id == id } || Squads.cmdDetach.contains(id) }
             // ...и ШЕСТОЙ ФЛАГ — ТОЛЬКО ПРОТИВ РАССЫПАННОГО (v348): шестёрку гейт отверг на match29:camp (15 991 : 23 801),
             // где его армия собрана и ядру тоньше двух вооружённых уже не устоять; у けろびー армия рассыпана весь матч, и
             // шестое тело — это ровно тот флаг, которого не хватило в двух матчах, проигранных на 22 и 33 очка
@@ -1405,7 +1405,7 @@ internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagIn
                 .take(if (Signals.enemyMassedSignal) GARRISON_FLAGS else GARRISON_FLAGS + 1)
             // ...И СКАУТЫ — ТОЖЕ ГАРНИЗОН (v341): они тела, в бою не нужны, а держат флаг не хуже вооружённого; из четырёх
             // закреплённых в среднем стоит двое — остальные в пути, — и два скаута добавляют ровно недостающие тела
-            val scoutsFree = ctx.runners.filter { stripped(it) && canMove(it) && it.id !in Memory.garrisonOf }
+            val scoutsFree = ctx.runners.filter { stripped(it) && canMove(it) && it.id !in Squads.garrisonOf }
                 .toMutableList()
             // КУРЬЕР НА ДОРОГОЙ ФЛАГ, КОТОРЫЙ ОН НЕ ДЕРЖИТ ТЕЛОМ (v367). Замер владения по каждому флагу за 8 матчей на
             // соперника показал, что весь проигрыш по очкам сидит в дорогих флагах, и у ОБОИХ соперников там дыра одного
@@ -1425,53 +1425,52 @@ internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagIn
             // нет: обоих с первого тика забирает постоянный гарнизон, — прибор показал ОДИН тик курьера за матч, и тот
             // единственный тик вырывал скаута из гарнизона и ломал закрепление (0-8 против топ-1, флагов 2,65 против
             // 3,07). Теперь скаут закрепляется за призом на весь матч и в гарнизон не входит вовсе
-            Memory.courierOf.keys.retainAll { id -> ctx.runners.any { it.id == id } }
-            Memory.courierOf.entries.retainAll { e -> flags.any { it.id == e.value && !it.ours } }
-            if (prize != null && Memory.courierOf.isEmpty()) {
+            Squads.courierOf.keys.retainAll { id -> ctx.runners.any { it.id == id } }
+            Squads.courierOf.entries.retainAll { e -> flags.any { it.id == e.value && !it.ours } }
+            if (prize != null && Squads.courierOf.isEmpty()) {
                 val pick = ctx.runners.filter { stripped(it) && canMove(it) }
                     .minByOrNull { getRange(it, prize.pos) }
-                if (pick != null) Memory.courierOf[pick.id] = prize.id
+                if (pick != null) Squads.courierOf[pick.id] = prize.id
             }
-            for ((id, fid) in Memory.courierOf) {
+            for ((id, fid) in Squads.courierOf) {
                 val c = ctx.runners.firstOrNull { it.id == id } ?: continue
-                Memory.garrisonOf.remove(id)
+                Squads.garrisonOf.remove(id)
                 scoutsFree.removeAll { it.id == id }
-                Memory.cmdDetach.add(id)
-                Memory.runnerFlag[id] = fid
+                Squads.detach(id, fid)
                 free.removeAll { it.id == c.id }
                 courierTicks.n++
             }
             for (f in homeFlags) {
-                if (Memory.garrisonOf.values.contains(f.id)) continue
+                if (Squads.garrisonOf.values.contains(f.id)) continue
                 val sc = scoutsFree.minByOrNull { getRange(it, f.pos) }
-                if (sc != null && scoutsFree.size >= homeFlags.count { fl -> !Memory.garrisonOf.values.contains(fl.id) }) {
-                    Memory.garrisonOf[sc.id] = f.id; scoutsFree.remove(sc); continue
+                if (sc != null && scoutsFree.size >= homeFlags.count { fl -> !Squads.garrisonOf.values.contains(fl.id) }) {
+                    Squads.garrisonOf[sc.id] = f.id; scoutsFree.remove(sc); continue
                 }
                 if (purse.budget <= 0) break
-                val c = free.filter { it.id !in Memory.garrisonOf }.minByOrNull { getRange(it, f.pos) } ?: break
+                val c = free.filter { it.id !in Squads.garrisonOf }.minByOrNull { getRange(it, f.pos) } ?: break
                 val without = free.without(c)
                 if (!roster.coreHolds(without)) break
-                Memory.garrisonOf[c.id] = f.id
+                Squads.garrisonOf[c.id] = f.id
             }
             // скаут-гарнизон ходит по тем же правилам бегуна: задание за ним, пока он жив
-            for ((id, fid) in Memory.garrisonOf) if (ctx.runners.any { it.id == id && !hasWeapon(it) }) Memory.runnerFlag[id] = fid
+            for ((id, fid) in Squads.garrisonOf) if (ctx.runners.any { it.id == id && !hasWeapon(it) }) Squads.assign(id, fid)
             // ⚠️ ОТВЕРГНУТО ЗАМЕРОМ (v347): смена на флаге — раненый гарнизонный отдаёт флаг целому из ядра (v346). Наших
             // флагов 2,81 против 3,03 у пятёрки без смены, тел на флагах 2,27 против 2,43: смена меняет ОДНОГО уходящего на
             // другого идущего, а клетка всё равно пустует, пока сменщик идёт
             // прибор покрытия гарнизона лечением (v361): считается по стоящим, до раздачи заданий
             val medics = ctx.armyHealers
-            for ((id, _) in Memory.garrisonOf) {
+            for ((id, _) in Squads.garrisonOf) {
                 val c = ctx.runners.firstOrNull { it.id == id } ?: ctx.army.firstOrNull { it.id == id } ?: continue
                 garAll.n++
                 if (medics.any { getRange(it, c) <= HEAL_RANGE }) garCovered.n++
             }
-            for ((id, fid) in Memory.garrisonOf) {
+            for ((id, fid) in Squads.garrisonOf) {
                 val c = free.firstOrNull { it.id == id } ?: continue
                 if (purse.budget <= 0) break
-                Memory.cmdDetach.add(id); Memory.runnerFlag[id] = fid; free.remove(c); purse.budget--; manned.n++
+                Squads.detach(id, fid); free.remove(c); purse.budget--; manned.n++
             }
             val unmanned = flags.filter { it.ours && it.occupant?.my != true &&
-                ctx.runners.none { r -> Memory.runnerFlag[r.id] == it.id } }
+                ctx.runners.none { r -> Squads.runnerFlag[r.id] == it.id } }
                 .sortedByDescending { it.score }
             for (f in unmanned) {
                 if (purse.budget <= 0) break
@@ -1483,7 +1482,7 @@ internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagIn
                     ?: free.minByOrNull { getRange(it, f.pos) } ?: break
                 val without = free.without(c)
                 if (!roster.coreHolds(without)) break
-                Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); purse.budget--
+                Squads.detach(c.id, f.id); free.remove(c); purse.budget--
                 manned.n++
             }
         }
@@ -1505,7 +1504,7 @@ internal class RaceParties(private val ctx: Ctx, private val meas: ArmyMeasures,
             // (7 597:24 268) и camp, где прежняя логика отряда выпускала бойцов
             // ...а флаг, который уже берёт бегун, командир не дублирует: засчитывать бегуна в группу и досылать бойца
             // замерено хуже — 131 из 135 против 133 (roost трижды, camp)
-            if (ctx.runners.any { r -> Memory.runnerFlag[r.id] == f.id }) continue
+            if (ctx.runners.any { r -> Squads.runnerFlag[r.id] == f.id }) continue
             val need = if (roster.safe || guarded) 2 else if (loose) RACE_PARTY else 1
             if (purse.budget < need) continue
             // ...а пара — со стрелком (v298): два мили не отвечают его стрелку, который бьёт их с трёх клеток
@@ -1527,7 +1526,7 @@ internal class RaceParties(private val ctx: Ctx, private val meas: ArmyMeasures,
             // ...и ЗАДАНИЕ — это зачисление в захватчики с целью, а не клетка: вооружённый крип, приведённый к флагу
             // как боец, флага НЕ БЕРЁТ (захват делают бегуны), и первая редакция на сценарии kite набрала 0 очков.
             // Командир решает КТО и КУДА, а ведёт и берёт существующий механизм захвата (v160)
-            for (c in party) { Memory.cmdDetach.add(c.id); Memory.runnerFlag[c.id] = f.id; free.remove(c); splitAll.n++; if (meas.fight.fightOnNow) splitFight.n++ }
+            for (c in party) { Squads.detach(c.id, f.id); free.remove(c); splitAll.n++; if (meas.fight.fightOnNow) splitFight.n++ }
             purse.budget -= need
         }
     }
@@ -1993,7 +1992,7 @@ internal class StrategyThresholds(private val ctx: Ctx, private val meas: ArmyMe
     init { interceptFlagId = interceptFlag?.id }
 }
 
-/** ПОДСТАДИЯ 3: ярлыки фермера, разброс, гонка, отряд за флагами — отзыв и выпуск. Наружу не отдаёт ничего: все записи `Memory.detachedIds` — внутри. */
+/** ПОДСТАДИЯ 3: ярлыки фермера, разброс, гонка, отряд за флагами — отзыв и выпуск. Наружу не отдаёт ничего: все записи `Squads.detachedIds` — внутри. */
 internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasures) {
     // перехват снимает наступление, только пока есть ЧТО перехватывать — флаг не наш, за которым фермер придёт; когда все
     // флаги его, «перехват» — пост у своего флага, а за ним он не придёт при 22 очках в тик. Матч 70 (けろびー v5): он сел
@@ -2055,7 +2054,7 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
         DRY_HUNT.c("noFireLately", meas.exchange.now - lastFireTick >= PASSIVE_TICKS) && DRY_HUNT.c("noHurtLately", meas.exchange.now - lastHurtTick >= PASSIVE_TICKS) &&
         DRY_HUNT.c("scatteredOrHuntingLong", scattered || (meas.exchange.now - lastNonHuntTick >= PASSIVE_TICKS))
     private val theirRangedMass = rangedMass(meas.forces.combatEnemies)
-    private val quietChain = QUIET_CHAIN.c("quiet", quiet) && QUIET_CHAIN.c("chaseDryOrDetachedOrLostRace", chaseDry || Memory.detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
+    private val quietChain = QUIET_CHAIN.c("quiet", quiet) && QUIET_CHAIN.c("chaseDryOrDetachedOrLostRace", chaseDry || Squads.detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
     // МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, — НЕ АРМИЯ, А ОТРЯД (v194, USE_IDLE_MELEE_RUNS). Отряд набирается только против
     // соперника, помеченного `farmer`, а этот ярлык требует, чтобы он НЕ ДРАЛСЯ: `raceNow` хочет его россыпи,
     // `dryHunt` — тишины по огню и урону. Coldkimchi#2 дерётся и фармит флаги ОДНОВРЕМЕННО — держит плотный
@@ -2069,23 +2068,23 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
     private val farmer = FARMER.c("armedFoes", meas.forces.armedEnemies.isNotEmpty()) && FARMER.c("quietOrDryOrRaceOrMeleeIdle", (firstNearTick >= 0 && (quietChain || dryHunt)) || raceNow || meleeIdle)
     private val viaDryHunt = dryHunt && !quietChain   // отряд держится только сухой охотой (v82b)
     private val viaRace = raceNow && !quietChain && !dryHunt   // отряд держится только дебют-гонкой (v91)
-    private val detachedBefore = Memory.detachedIds.size
+    private val detachedBefore = Squads.detachedIds.size
     // отряд без дела (v84): все отделённые DETACH_WINDOW тиков подряд без цели — отзыв, и набор ждёт то же окно
-    init { if (Memory.detachedIds.isNotEmpty() && Memory.detachedIds.all { it in Memory.idleRunnerIds }) idleDetachTicks++ else idleDetachTicks = 0 }
+    init { if (Squads.detachedIds.isNotEmpty() && Squads.detachedIds.all { it in Memory.idleRunnerIds }) idleDetachTicks++ else idleDetachTicks = 0 }
     init {
         if (idleDetachTicks >= DETACH_WINDOW) {
-            if (DEBUG_LOG) println("detach t=${meas.exchange.now}: ${Memory.detachedIds.size} recalled — nothing for a runner to take for $DETACH_WINDOW ticks")
-            Memory.detachedIds.clear(); idleDetachTicks = 0; detachRecallTick = meas.exchange.now
+            if (DEBUG_LOG) println("detach t=${meas.exchange.now}: ${Squads.detachedIds.size} recalled — nothing for a runner to take for $DETACH_WINDOW ticks")
+            Squads.recallAll(Squads.Source.STRATEGIST); idleDetachTicks = 0; detachRecallTick = meas.exchange.now
         }
     }
     // поштучно (v85): отделённый DETACH_WINDOW тиков подряд без цели возвращается в ядро
-    init { for (id in Memory.detachedIds) StrategistState.idleRunnerTicks[id] = if (id in Memory.idleRunnerIds) (StrategistState.idleRunnerTicks[id] ?: 0) + 1 else 0 }
-    init { StrategistState.idleRunnerTicks.keys.retainAll { it in Memory.detachedIds } }
-    private val idle = Memory.detachedIds.filter { (StrategistState.idleRunnerTicks[it] ?: 0) >= DETACH_WINDOW }
+    init { for (id in Squads.detachedIds) StrategistState.idleRunnerTicks[id] = if (id in Memory.idleRunnerIds) (StrategistState.idleRunnerTicks[id] ?: 0) + 1 else 0 }
+    init { StrategistState.idleRunnerTicks.keys.retainAll { it in Squads.detachedIds } }
+    private val idle = Squads.detachedIds.filter { (StrategistState.idleRunnerTicks[it] ?: 0) >= DETACH_WINDOW }
     init {
         if (idle.isNotEmpty()) {
-            if (DEBUG_LOG) println("detach t=${meas.exchange.now}: ${idle.size} of ${Memory.detachedIds.size} recalled — without a target for $DETACH_WINDOW ticks")
-            Memory.detachedIds.removeAll(idle.toSet()); idle.forEach { StrategistState.idleRunnerTicks.remove(it) }; detachRecallTick = meas.exchange.now
+            if (DEBUG_LOG) println("detach t=${meas.exchange.now}: ${idle.size} of ${Squads.detachedIds.size} recalled — without a target for $DETACH_WINDOW ticks")
+            Squads.recall(idle.toSet()); idle.forEach { StrategistState.idleRunnerTicks.remove(it) }; detachRecallTick = meas.exchange.now
         }
     }
     // ОДНА ОПОРА (v95b): группа врага и порог одни для выпуска, проверки с дебаффом цели и отзыва — при гонке выпуск
@@ -2108,23 +2107,23 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
     private val coreRef = if (viaRace) largestMembers else meas.forces.combatEnemies
     private val coreFloor = if (viaDryHunt || viaRace) PUSH_RATIO else PARITY_FLOOR
     // при россыпи (v97, USE_SCATTER_RECALL_REF) опора ОТЗЫВА — его крупнейшая группа при PUSH_RATIO; выпуск — как был
-    init { if (Memory.detachedIds.isEmpty()) scatteredAtRelease = scattered }   // без отряда ярлык свежий; с отрядом — как при выпуске (v117)
+    init { if (Squads.detachedIds.isEmpty()) scatteredAtRelease = scattered }   // без отряда ярлык свежий; с отрядом — как при выпуске (v117)
     private val recallGroup = viaRace || ((scatteredAtRelease))
     private val recallRef = if (recallGroup) largestMembers else packRef
     private val recallFloor = if (viaDryHunt || recallGroup) PUSH_RATIO else PARITY_FLOOR
     // одна мера ядра (v94): порог держится каждый тик — просело, сильнейший отделённый возвращается
     init {
-        if (farmer && Memory.detachedIds.isNotEmpty()) {
+        if (farmer && Squads.detachedIds.isNotEmpty()) {
             val floorNow = recallFloor
             var core = notDetached(ctx.army)
             var recalled = 0
             val short = core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * meas.fight.theirsDown * floorNow
             coreShortTicks = if (short) coreShortTicks + 1 else 0
-            while (Memory.detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * meas.fight.theirsDown * floorNow) {
+            while (Squads.detachedIds.isNotEmpty() && core.any { hasWeapon(it) } && ourPowerOf(core, recallRef) < enemyPowerOf(recallRef, core) * meas.fight.theirsDown * floorNow) {
                 // держатель флага (v297, см. HOLD_WATCH) возвращается последним
                 val back = detachedRunners(ctx)
                     .maxWithOrNull(compareBy({ heldFlag(ctx, it) == null }, { ourPowerOf(listOf(it), emptyList()) })) ?: break
-                Memory.detachedIds.remove(back.id); core = core + back; recalled++
+                Squads.recall(back.id); core = core + back; recalled++
             }
             if (recalled > 0) { detachRecallTick = meas.exchange.now; coreShortTicks = 0 }   // новый выпуск ждёт DETACH_WINDOW, как после отзыва «без цели» — иначе качели
             if (DEBUG_LOG && recalled > 0) println("detach t=${meas.exchange.now}: $recalled recalled — the core fell under ${floorNow} of him by the posture's measure")
@@ -2133,7 +2132,7 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
     init { farmerOffTicks = if (farmer) 0 else farmerOffTicks + 1 }
     // сброс отряда по «не фермер» — только продержавшись FARMER_OFF_TICKS (v115): одноткового моргания признака не хватает
     init {
-        if (!farmer) { if (farmerOffTicks >= FARMER_OFF_TICKS) Memory.detachedIds.clear() }
+        if (!farmer) { if (farmerOffTicks >= FARMER_OFF_TICKS) Squads.recallAll(Squads.Source.STRATEGIST) }
         // ...и ОТПУСКАЕТ ЛИ ОТРЯД — решает командир (v164): механика выпуска проверена годом замеров и остаётся, но
         // включает её его режим, а не собственные условия. Полная замена командирской раздачей отвергнута замером:
         // 133 из 135 (roost 7 615:24 325, camp 22 304:23 966) — прежняя логика знает и сухую охоту, и гонку, и
@@ -2152,10 +2151,10 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
                 else armed.sortedBy { ourPowerOf(listOf(it), emptyList()) }
             var remaining = notDetached(ctx.army)
             // держатели (v297) стоят на своих флагах, которые в `unmanned` уже не считаются: выпуск меряется без них
-            val holdingDet = ctx.runners.count { it.id in Memory.detachedIds && heldFlag(ctx, it) != null }
+            val holdingDet = ctx.runners.count { it.id in Squads.detachedIds && heldFlag(ctx, it) != null }
             for (c in pool) {
-                if (Memory.detachedIds.size - holdingDet >= unmanned) break
-                if (viaRace && Memory.detachedIds.size >= raceSlots) break
+                if (Squads.detachedIds.size - holdingDet >= unmanned) break
+                if (viaRace && Squads.detachedIds.size >= raceSlots) break
                 val without = remaining.filter { it.id != c.id }
     
                 // без тишины (сухая охота) ядро держит охотничий перевес, не паритет
@@ -2177,15 +2176,15 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
                     val (oursAfter, theirsAfter) = powerAfterFor(ctx, without, coreRef, target)
                     if (oursAfter < theirsAfter * coreFloor) break
                 }
-                Memory.detachedIds.add(c.id)
+                Squads.detach(c.id)
                 splitAll.n++; if (meas.fight.fightOnNow) splitFight.n++
                 remaining = without
             }
         }
     }
     init {
-        if (DEBUG_LOG && Memory.detachedIds.size != detachedBefore)
-            println("detach t=${meas.exchange.now}: ${Memory.detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow targets=$raceTargets(0 paired) largest=$largestGroup/${meas.forces.armedEnemies.size} dry=${meas.exchange.now - lastDistanceKeptTick} hurt=${meas.exchange.now - lastHurtTick} fire=${meas.exchange.now - lastFireTick} reach=${meas.exchange.now - lastReachTick} contact=${meas.fight.contact} theirs=${meas.fight.theirs.toInt()}")
+        if (DEBUG_LOG && Squads.detachedIds.size != detachedBefore)
+            println("detach t=${meas.exchange.now}: ${Squads.detachedIds.size} detached (was $detachedBefore) farmer=$farmer dryHunt=$dryHunt race=$raceNow targets=$raceTargets(0 paired) largest=$largestGroup/${meas.forces.armedEnemies.size} dry=${meas.exchange.now - lastDistanceKeptTick} hurt=${meas.exchange.now - lastHurtTick} fire=${meas.exchange.now - lastFireTick} reach=${meas.exchange.now - lastReachTick} contact=${meas.fight.contact} theirs=${meas.fight.theirs.toInt()}")
     }
 }
 

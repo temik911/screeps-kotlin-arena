@@ -306,7 +306,7 @@ internal fun ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<Row<Turn, Aim
     // знает про погоню, см. chaseTarget в placeScored); когда молчит, преследователь идёт сюда. Ниже
     // кайта и строя стоять нельзя: обе ветки увели бы его обратно в кулак, а весь смысл отряда в том,
     // чтобы из кулака выйти
-    Row("chase", { Memory.chaseTarget[creep.id]?.let { it.hits > 0 } == true }) { Aim(InfluenceMap.cell(Memory.chaseTarget[creep.id]!!.x, Memory.chaseTarget[creep.id]!!.y), if (hasRanged(creep)) RANGED_RANGE - 1 else 0, avoid = true) },
+    Row("chase", { Squads.chaseTarget[creep.id]?.let { it.hits > 0 } == true }) { Aim(InfluenceMap.cell(Squads.chaseTarget[creep.id]!!.x, Squads.chaseTarget[creep.id]!!.y), if (hasRanged(creep)) RANGED_RANGE - 1 else 0, avoid = true) },
     // кайт раньше слота: слот ставит нас в строй, а строй сходится с блобом вплотную (v135)
     // дистанция кайта зависит от того, выгоден ли ему ВЕЕР: масс-атака бьёт в радиусе трёх (10/4/1 за часть),
     // поэтому в куче держим три — там веер стоит ему шестёрки урона вместо шестидесяти, — а поодиночке два,
@@ -381,7 +381,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     val mobile = meas.forces.strikers.any { it.id == creep.id }
     val healer = healerOnly(creep)
     private val slot0 = targ.zones.slotOf[creep.id]
-    val keeper = creep.id in Memory.keeperIds
+    val keeper = creep.id in Squads.keeperIds
     // раненый (без оружия и лечения, в армии по решению выше): ходит за ближайшим лекарем, в строй не входит
     val stripped = unitOf(creep).stripped
     // ротация (см. ROTATE_OUT): с гистерезисом, чтобы боец не дёргался у порога
@@ -657,10 +657,10 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         // хранителем видел в нём единственного «своего в четырёх», и трое лекарей стояли по одному у хранителей на D5 и
         // R3, а ударная шестёрка у A3 шла без лечения (spread m30 на v120i, 20291:24327); раненый хранитель снимается с
         // флага (см. updateKeepers) и становится подопечным как все
-        val keptOut =  ctx.army.any { hasWeapon(it) && canMove(it) && it.id !in Memory.keeperIds }
-        val fighters = ctx.army.filter { it.id != creep.id && hasWeapon(it) && !(keptOut && it.id in Memory.keeperIds) }
+        val keptOut =  ctx.army.any { hasWeapon(it) && canMove(it) && it.id !in Squads.keeperIds }
+        val fighters = ctx.army.filter { it.id != creep.id && hasWeapon(it) && !(keptOut && it.id in Squads.keeperIds) }
         // подопечные — вооружённые; вне боя рядом — и раненые (они сами идут к лекарю, см. wounded)
-        val patients = ctx.army.filter { it.id != creep.id && !(healerOnly(it)) && !(keptOut && it.id in Memory.keeperIds) }
+        val patients = ctx.army.filter { it.id != creep.id && !(healerOnly(it)) && !(keptOut && it.id in Squads.keeperIds) }
         val engagedNear = fighters.any { f -> getRange(creep, f) <= HEAL_RANGE + 1 && meas.forces.combatEnemies.any { getRange(f, it) <= RANGED_RANGE + 1 } }
         val near = (if (engagedNear) fighters else patients).filter { getRange(creep, it) <= HEAL_RANGE + 1 }
         // подопечный под огнём (v109b, USE_WARD_UNDER_FIRE) ОТВЕРГНУТ таблицей входов стенда: лекари шли к терявшему хиты
@@ -688,11 +688,11 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
             // ...и к гарнизону лекарь идёт ЗАРАНЕЕ, а не по ране (v342): уход держателя решается сравнением «его
             // возможный урон по клетке против нашего лечения на ней» (v340), а лечение там ноль, пока лекарь в ядре, —
             // к раненому он уже не успевает, тот ушёл. Гарнизонных флагов четыре, лекарей три, один всегда с ядром
-            val garrison = ctx.runners.filter { r -> Memory.garrisonOf[r.id] != null &&
+            val garrison = ctx.runners.filter { r -> Squads.garrisonOf[r.id] != null &&
                 ctx.flags.any { f -> f.ours && f.pos.x == r.x && f.pos.y == r.y } }
             val holders = ctx.runners.filter { r -> r.hits < r.hitsMax &&
                 ctx.flags.any { f -> f.ours && f.pos.x == r.x && f.pos.y == r.y } }
-            val hurt = ctx.army.filter { it.id in Memory.keeperIds && it.hits < it.hitsMax } + holders + garrison
+            val hurt = ctx.army.filter { it.id in Squads.keeperIds && it.hits < it.hitsMax } + holders + garrison
             if (!HEAL_MATE.c("medic.someoneHurt", hurt.isNotEmpty())) return@run null
             val free = medics.toMutableList()
             var mine: Creep? = null

@@ -74,8 +74,8 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // третей, поэтому назначение стоит выше него: приказ один, а исполняют его оба пути движения — командирская
     // раздача, когда он правит, и обычная цепочка целей (ветка `chase`), когда молчит
     assignChase(meas.chase.mobileArmy, meas.forces.enemyCreeps, meas.forces.armedEnemies)
-    val disposition = Strategist.snapshot(ctx.army, ctx.runners, Memory.runnerFlag, Memory.detachedIds, Memory.cmdDetach,
-        Memory.keeperIds, Memory.chaseOf, posture, strat.dec.decision.cmdMode, objectiveFlagId, meas.forces.armedEnemies)
+    val disposition = Strategist.snapshot(ctx.army, ctx.runners, Squads.runnerFlag, Squads.detachedIds, Squads.cmdDetach,
+        Squads.keeperIds, Squads.chaseOf, posture, strat.dec.decision.cmdMode, objectiveFlagId, meas.forces.armedEnemies)
     dispNow = Strategist.summary(disposition)
     Orders.missionOf.clear()
     for (sq in disposition.squads) for (id in sq.members) Orders.missionOf[id] = sq.mission.tag
@@ -181,7 +181,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
         commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
         val runners = HashMap(Orders.commandOf)
-        Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Memory.cmdDetach }, meas.forces.armedEnemies, Orders.commandOf)
+        Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Squads.cmdDetach }, meas.forces.armedEnemies, Orders.commandOf)
         Orders.commandOf.putAll(runners)
     } else if (raceCommandNow) {
         cmdTicks++
@@ -208,7 +208,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     }
         // ...и задания на захват снимаются вместе с режимом: без этого крип, отпущенный командиром за флагом,
         // оставался захватчиком НАВСЕГДА — армия таяла тик за тиком, и сценарий kite давал 0 очков (v160)
-        else { Orders.commandOf.clear(); Memory.cmdDetach.clear() }
+        else { Orders.commandOf.clear(); Squads.recallAll(Squads.Source.COMMANDER) }
     // ЛЕКАРИ — ПОД ПРИКАЗОМ ВО ВСЯКОМ КОНТАКТЕ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT). Режим боя против Coldkimchi
     // включён в 25–40 % тиков контакта (остальное — outmatched, retreat, posture, nofire), и в молчании командира клетку
     // лекаря выбирают ветки тактика: healMate ведёт к самому раненому в четырёх (уже отведённому из огня; совпадает с
@@ -218,7 +218,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         val only = HashMap<String, Position>()
         publishDeal(commandFight(meas.chase.commandArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, only, Intent.HOLD, ourFlagCells = ourFlagCells, healersOnly = true), tried = 1)
         var given = 0
-        for (h in meas.chase.commandArmy) if (healerOnly(h) && h.id !in Memory.cmdDetach) only[h.id]?.let { Orders.commandOf[h.id] = it; given++ }
+        for (h in meas.chase.commandArmy) if (healerOnly(h) && h.id !in Squads.cmdDetach) only[h.id]?.let { Orders.commandOf[h.id] = it; given++ }
         cmdHealTicks.n++; cmdHealGiven.n += given
     }
 
@@ -426,7 +426,7 @@ internal fun orderAudit(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ:
     Memory.orderPrev.forEach { (id, cell) ->
         // ...и захватчик из аудита исключается: его приказ — ФЛАГ, а не клетка, и ведёт его свой цикл;
         // считать его ослушником было бы неверно (v173)
-        if (id in Memory.cmdDetach) return@forEach
+        if (id in Squads.cmdDetach) return@forEach
         val c = meas.chase.commandArmy.firstOrNull { it.id == id } ?: return@forEach
         orderAuditN.n++
         // ...и ПРИКАЗ В ДВУХ ШАГАХ ИСПОЛНЕН, ЕСЛИ КРИП СТАЛ БЛИЖЕ (v184). Прибор сверял клетку крипа с

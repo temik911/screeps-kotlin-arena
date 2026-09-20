@@ -185,7 +185,28 @@ internal fun logMap(fromRow: Int) {
 }
 
 /** ПЕЧАТЬ ТИКА (v257, этап 10; хвост tickBody): строка застрявших, строка t= со всеми приборами раз в LOG_EVERY тиков, перепись rung / tac, поля fld. Перенесено дословно. */
+/** ДВОЙНОЕ ЧЛЕНСТВО В ОТРЯДАХ (v460, прибор `dbl=`, этап 6.5 второго шага архитектуры): крипо-тики, в которые один крип состоял сразу
+ *  в двух реестрах, по парам — отряд стратега и отряжённые командиром / погоня и командир / погоня и отряд стратега / гарнизон и
+ *  хранители / гарнизон и курьер / хранители и командир. Двойного членства не стережёт ничто (находка 2.8 п. 9 плана); прибор отвечает,
+ *  случается ли оно живьём. Считается каждый тик, в конце тика. */
+private val dblDetCmd = Gauges.counter("dbl")
+private val dblChaseCmd = Gauges.counter("dbl", 1)
+private val dblChaseDet = Gauges.counter("dbl", 2)
+private val dblGarKeep = Gauges.counter("dbl", 3)
+private val dblGarCour = Gauges.counter("dbl", 4)
+private val dblKeepCmd = Gauges.counter("dbl", 5)
+
+private fun squadOverlapTick() {
+    dblDetCmd.n += Squads.detachedIds.count { it in Squads.cmdDetach }
+    dblChaseCmd.n += Squads.chaseOf.keys.count { it in Squads.cmdDetach }
+    dblChaseDet.n += Squads.chaseOf.keys.count { it in Squads.detachedIds }
+    dblGarKeep.n += Squads.garrisonOf.keys.count { it in Squads.keeperIds }
+    dblGarCour.n += Squads.garrisonOf.keys.count { it in Squads.courierOf }
+    dblKeepCmd.n += Squads.keeperIds.keys.count { it in Squads.cmdDetach }
+}
+
 internal fun printTick(ctx: Ctx, rem: RememberTick) {
+    squadOverlapTick()
     if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
         println("bfs t=${getTicks()} max=$bfsMaxTick cost=$bfsMaxCost")
         bfsWindowDone()
@@ -280,6 +301,7 @@ internal val T_LINE = listOf(
     "passive", "flags", "obey", "branch", "fled", "clash", "lost", "kite", "massed", "plan", "cmd", "mode", "disp", "evt",
     "fire", "posture", "obj", "hunt@2", "rush", "weak", "pat", "strip", "touch", "touchl", "out", "back", "guns", "mheal",
     "hline", "fall", "our", "enemy", "ledger", "wounded", "hits", "enemyHits", "centroid", "enemyCentroid",
+    "squads", "dbl",
 )
 
 /** Поля строки `t=`, которые считаются НА МЕСТЕ ПЕЧАТИ: снимок мира, величины состояния, отношения накопителей. Объявляются один
@@ -289,7 +311,7 @@ private fun declareLine() {
     lineDeclared = true
     Gauges.computed("t") { "${getTicks()}" }
     Gauges.computed("army") { "${tickView.ctx.army.size}" }
-    Gauges.computed("runners") { "${tickView.ctx.runners.size}(${Memory.detachedIds.size} detached)" }
+    Gauges.computed("runners") { "${tickView.ctx.runners.size}(${Squads.detachedIds.size} detached)" }
     Gauges.computed("enemies") { "${tickView.ctx.enemyCreeps.size}/${tickView.ctx.combatEnemies.size}" }
     Gauges.computed("reach") { "${tickView.ctx.army.count { hasRanged(it) && tickView.ctx.combatEnemies.any { e -> getRange(it, e) <= RANGED_RANGE } }}/${tickView.ctx.army.count { hasRanged(it) }}" }
     // разброс строя (v191): диаметр группы стрелков и сколько вооружённых стоят дальше поводка от своего
@@ -305,7 +327,10 @@ private fun declareLine() {
     Gauges.computed("ehparts") { "${tickView.ctx.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL && it.hits > 0 } }}/${tickView.ctx.enemyCreeps.sumOf { c -> c.body.count { it.type == HEAL } }.let { ehpartsAll = maxOf(ehpartsAll, it); ehpartsAll }}" }
     Gauges.computed("hcov") { "${(InfluenceMap.published?.healCoverage() ?: (0.0 to 0.0)).let { (left, total) -> "${(total - left).toInt()}/${total.toInt()}" }}" }
     Gauges.computed("hulk") { "${WorldState.disarmedFoe.size}" }
-    Gauges.computed("chase") { "${Memory.chaseOf.size}/$chaseTicks" }
+    Gauges.computed("chase") { "${Squads.chaseOf.size}/$chaseTicks" }
+    // ОТРЯДЫ (v460, этап 6.5 второго шага): размеры реестров на тике печати — отряд стратега / отряжённые командиром / назначения
+    // бегунов / хранители / гарнизон / курьер / погоня. Пара к нему — `dbl=` (см. squadOverlapTick): двойное членство, крипо-тики
+    Gauges.computed("squads") { "${Squads.detachedIds.size}/${Squads.cmdDetach.size}/${Squads.runnerFlag.size}/${Squads.keeperIds.size}/${Squads.garrisonOf.size}/${Squads.courierOf.size}/${Squads.chaseOf.size}" }
     // прибор ворот с одним писателем (v451, пункт Г): всерьёз / по одному на тик × флаг / оценочные / холостые
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }

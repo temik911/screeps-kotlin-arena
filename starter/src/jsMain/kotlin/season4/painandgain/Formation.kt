@@ -266,7 +266,7 @@ internal object Formation {
         if (keep.isNotEmpty()) {
             // ...КРОМЕ ПРЕСЛЕДОВАТЕЛЯ (v211): кулак и есть то единственное, что мешает крипу пойти за остовом,
             // поэтому отряд освобождается от него — и ровно на девять своих клеток, а не на всё поле
-            val chasers = fighters.filter { it.id in Memory.chaseOf }
+            val chasers = fighters.filter { it.id in Squads.chaseOf }
             if (chasers.isNotEmpty()) for ((k, p) in cells) {
                 if (chasers.any { maxOf(abs(p.x - it.x), abs(p.y - it.y)) <= COMMAND_REACH }) keep[k] = p
             }
