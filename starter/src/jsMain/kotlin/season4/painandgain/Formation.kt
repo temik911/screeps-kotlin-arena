@@ -533,11 +533,27 @@ internal fun planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemi
     val meleeFrontDist = meleeFree.minOfOrNull { m -> threats.minOf { getRange(m, it) } }
     fun behindMelee(cell: FightCell) = meleeFrontDist == null || cell.dist >= meleeFrontDist - 1
     val constrained = rangeds.sortedBy { c -> cells.values.count { it.targets > 0 && it.meleeAdj == 0 && getRange(c, it.pos) <= 1 } }
+    // ПРИБОР v481: сходится ли расстановка стрелков и достаёт ли она его лечение. `ovl` говорит, сколько наших достаёт
+    // лучшую цель (2,5 в окне боя из четырёх-пяти стрелков, v391), но не говорит, ПОЧЕМУ остальные не достают: не было
+    // такой клетки или была и не взята. `rfoc=` разделяет эти два случая на самом месте выбора, `ehrch=` меряет, на
+    // сколько клеток строй промахивается мимо его лекарей — арифметика фронта (мы в трёх от его мили, его лекарь в двух
+    // за ним) говорит, что мимо, но величина промаха решает, правится ли это дистанцией или только охватом
+    val healFoes = enemyCreeps.filter { it.hits > 0 && InfluenceMap.profileOf(it).heal > 0.0 }
     for (r in constrained) {
+        val hadFocus = focusTarget != null &&
+            cells.values.any { it.focusIn && behindMelee(it) && it.key !in taken && (ownAt[it.key] ?: r.id) == r.id }
         val strict = place(r, rangedCmp(r), { it.targets > 0 && it.meleeAdj == 0 && it.meleeNear == 0 && behindMelee(it) }) { behindMelee(it) }
         if (strict != null) planStrict.n++ else planLoose.n++
         val cell = strict ?: place(r, rangedCmp(r), null) { true } ?: continue
         rangedCells[r.id] = cell
+        rfocAll.n++
+        if (cell.focusIn) rfocOn.n++ else if (hadFocus) rfocMissed.n++
+        if (healFoes.isNotEmpty()) {
+            val d = healFoes.minOf { getRange(cell.pos, it) }
+            ehrchAll.n++
+            ehrchDist.n += d
+            if (d <= RANGED_RANGE) ehrchIn.n++
+        }
     }
     // мили без врага вплотную — заслон перед стрелком: клетка рядом с клеткой стрелка и ближе к угрозе, чем она; его мили в
     // двух (есть кого встретить) лучше, чем нет; вплотную к двум и больше его мили — хуже; меньше урона; ближе к себе.
@@ -769,6 +785,23 @@ internal class FightCell(val pos: Position, val key: Int, val dmg: Double, val t
 internal val planStrict = Gauges.counter("plan", perTick = true)
 
 internal val planLoose = Gauges.counter("plan", 1, perTick = true)
+
+/** Расстановка стрелка против фокуса (v481): `rfoc=встал на клетку с фокусом в трёх/имел такую свободную и встал в другую/всего
+ *  назначений стрелкам`. Вторая часть и есть вопрос: расходятся ли стволы потому, что клетки на фокусе НЕТ, или потому, что
+ *  ярусы ниже (дистанция, урон, близость к себе) уводят с неё. */
+internal val rfocOn = Gauges.counter("rfoc")
+
+internal val rfocMissed = Gauges.counter("rfoc", 1)
+
+internal val rfocAll = Gauges.counter("rfoc", 2)
+
+/** Дистанция строя до его лечения (v481): `ehrch=клеток стрелков в выстреле от его лекаря/сумма дистанций до ближайшего
+ *  лекаря/всего назначений при живом его лекаре`. Среднее второй части, делённое на третью, и есть промах фронта. */
+internal val ehrchIn = Gauges.counter("ehrch")
+
+internal val ehrchDist = Gauges.counter("ehrch", 1)
+
+internal val ehrchAll = Gauges.counter("ehrch", 2)
 
 /** Марш (v232): тиков с направлением по полю потока, тиков с целью марша, разворотов направления на обратное. */
 internal val marchFlow = Gauges.counter("mdir")
