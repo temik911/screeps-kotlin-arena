@@ -1790,8 +1790,11 @@ private fun PainAndGain.arrivalOf(c: Creep) = arrivalById[c.id] ?: Int.MAX_VALUE
 
 /** Один вопрос «идём ли в наступление»: то, что `armyStrategy` уже посчитал к этому месту. `pushing` и `pushSince` строки читают
  *  у `PainAndGain` — СТАРЫМИ: условия всех строк вычисляются до действия выигравшей; `fightOnNow` — тоже его член. */
-internal class PushCase(val breakOffNow: Boolean, val pushRaw: Boolean, val toothless: Boolean, val stalled: Boolean,
-                        val now: Int, val oursPush: Double, val theirsPush: Double, val pushRelease: Double)
+// v456 (второй шаг архитектуры, этапы 3–4): величина, которая уже есть у носителя выше, ЧИТАЕТСЯ ИЗ НЕГО, а не копируется ещё
+// одним объявлением — до v456 `stalled`, `breakOffNow`, `now`, `oursPush`, `theirsPush`, `pushRelease` переписывались сюда
+// позиционными аргументами (`stalled` существовал в пакете четырежды). Своих полей у вопроса два — то, что считает сама
+// подстадия наступления.
+internal class PushCase(val meas: ArmyMeasures, val packs: StrategyPacks, val thr: StrategyThresholds, val pushRaw: Boolean, val toothless: Boolean)
 
 /** Счётчики решения о наступлении (прибор `reach t=`, таблица `push`). */
 internal val pushTally = Tally("push")
@@ -1805,10 +1808,10 @@ private var pushRuleRows: List<Row<PushCase, Boolean>>? = null
  * своей строки и исполняется только у выигравшей.
  */
 internal fun PainAndGain.pushRules(): List<Row<PushCase, Boolean>> = pushRuleRows ?: listOf<Row<PushCase, Boolean>>(
-    Row("breakOff", { breakOffNow }) { false },
-    Row("raw", { pushRaw }) { if (!pushing) pushSince = now; true },
-    Row("toothless", { pushing && toothless && !stalled }) { pushToothless.n++; pushHeld = true; true },
-    Row("dwell", { pushing && fightOnNow && now - pushSince < PUSH_DWELL && !stalled && oursPush >= theirsPush * pushRelease }) {
+    Row("breakOff", { meas.breakOffNow }) { false },
+    Row("raw", { pushRaw }) { if (!pushing) pushSince = meas.now; true },
+    Row("toothless", { pushing && toothless && !meas.stalled }) { pushToothless.n++; pushHeld = true; true },
+    Row("dwell", { pushing && fightOnNow && meas.now - pushSince < PUSH_DWELL && !meas.stalled && packs.oursPush >= packs.theirsPush * thr.pushRelease }) {
         pushHeld = true; pushHeldTicks.n++; true
     },
     Row("none", { true }) { false },
@@ -2172,7 +2175,7 @@ internal class StrategyPush(private val ctx: Ctx, private val meas: ArmyMeasures
     // ...и БЕЗ СВОЕГО pushTicks++ (v218, дефект прибора): счётчик увеличивается безусловно десятью строками
     // ниже, поэтому на тиках размена он рос ДВАЖДЫ — и `pushheld` занижался ровно на тех тиках, ради которых
     // прибор и ставился
-    private val pushCase = PushCase(meas.breakOffNow, pushRaw, toothless, meas.stalled, meas.now, packs.oursPush, packs.theirsPush, thr.pushRelease)
+    private val pushCase = PushCase(meas, packs, thr, pushRaw, toothless)
     init { pushing = walk(pag.pushRules(), pushCase, pushTally).act(pushCase) }
     init { pushTicks.n++ }
 }
