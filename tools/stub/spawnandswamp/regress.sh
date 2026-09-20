@@ -6,6 +6,15 @@
 cd "$(dirname "$0")"
 NODE=${NODE:-$(ls -d ~/.gradle/nodejs/node-*/bin/node 2>/dev/null | tail -1)}
 if [[ ! -x "$NODE" ]]; then echo "regress: node not found under ~/.gradle/nodejs (run ./gradlew build once)"; exit 1; fi
+# V8 heap settings for every node process started from here (20.09.2026): a stub scenario holds 13 MB of live data, and
+# left to V8's 4 GB default limit its process grows to 290 MB. A 2 MB semi-space and an old-space limit of 192 MB keep it
+# near 170 at about 14 % more run time; the logs do not change. The limit is hard — a bot whose live heap outgrows it dies with
+# "heap out of memory". STUB_NODE_FLAGS= (empty) switches the settings off, STUB_NODE_FLAGS="--max-old-space-size=512" widens
+# them. The measurement and the choice of 192 are in tools/stub/painandgain/regress.sh.
+if [[ -z ${STUB_NODE_FLAGS_APPLIED-} ]]; then   # once: these scripts call one another and the value is inherited
+  export NODE_OPTIONS="${STUB_NODE_FLAGS---max-semi-space-size=2 --max-old-space-size=192}${NODE_OPTIONS:+ $NODE_OPTIONS}"
+  export STUB_NODE_FLAGS_APPLIED=1
+fi
 TAG=${1:-cur}
 mkdir -p out
 report() { # $1 = label, $2 = log file

@@ -105,6 +105,10 @@ def ghost_scan(ids, jobs):
         if not os.path.exists(rp):
             return g, None
         env = dict(os.environ, NOCLOCK='1', REPLAY=rp, LOGTAG='scan-ghost:%s:ghost-' % g)
+        # те же настройки кучи V8, что ставит regress.sh (там же замер и выбор 192): без них процесс с 23 МБ живых данных
+        # раздувается до 360 МБ, а здесь их `jobs` штук разом. STUB_NODE_FLAGS= (пусто) выключает
+        flags = os.environ.get('STUB_NODE_FLAGS', '--max-semi-space-size=2 --max-old-space-size=192')
+        env['NODE_OPTIONS'] = (flags + ' ' + os.environ.get('NODE_OPTIONS', '')).strip()
         subprocess.run([node, '--import', './register.mjs', 'run.mjs', '2000', 'ghost'], cwd=HERE, env=env, capture_output=True, text=True)
         f = os.path.join(HERE, 'out', 'run-scan-ghost:%s:ghost-ghost-%s.log' % (g, g[-6:]))
         l = last_reach(open(f, errors='ignore').read()) if os.path.exists(f) else None

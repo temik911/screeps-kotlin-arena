@@ -16,6 +16,28 @@ SELF=${0:A}
 cd "${SELF:h}"
 NODE=${NODE:-$(ls -d ~/.gradle/nodejs/node-*/bin/node 2>/dev/null | tail -1)}
 if [[ ! -x "$NODE" ]]; then echo "regress: node not found under ~/.gradle/nodejs (run ./gradlew build once)"; exit 1; fi
+# V8 heap settings for every node process started from here (20.09.2026). A scenario holds 23 MB of LIVE data at any tick
+# count, yet its process grew to 260-360 MB: V8's default heap limit is 4 GB, so it is in no hurry to collect, and JOBS of
+# them at once were the gate's three gigabytes on a machine that has none to spare. What the settings buy, measured on the
+# gate itself (the 143 `run` lines, JOBS=8, the node processes' summed RSS sampled five times a second, two rounds each):
+#   off                           mean 2 355 MB   p95 2 850   max 3 056   wall 102 s
+#   semi-space 2, old-space 192   mean 1 616      p95 1 960   max 2 106   wall 116 s   (-31 % for +14 %)
+#   semi-space 8, old-space 192   mean 1 775      p95 2 236   max 2 450   wall 105 s   (-22 % for  +3 %)
+# The old-space limit is where the gain is, and 192 is where it stops: on the heaviest line (farm on map 28, median of
+# three) the process peaks at 359 MB by default and at 172 under 192, 165 under 128, 171 under 96 — flat below 192, so a
+# tighter limit buys only risk, and 192 is eight times the live set. The semi-space is the trade: the young generation is
+# up to three semi-spaces per process, which is the 150 MB between the two rows; 2 MB is taken because memory is what runs
+# out on this machine, and STUB_NODE_FLAGS="--max-semi-space-size=8 --max-old-space-size=192" gives the time back.
+# All 324 logs of the full suite are byte-identical with the settings on and off (NOCLOCK=1) — a collector's schedule is
+# not something the bot can see.
+# The limit is HARD: a bot whose live heap outgrows it dies with "heap out of memory", and its line says so below rather
+# than "no done line". STUB_NODE_FLAGS= (empty) switches the settings off, STUB_NODE_FLAGS="--max-old-space-size=512"
+# widens them; a NODE_OPTIONS of the caller's is kept and comes last, so it wins. Set once: the workers below re-run this
+# script from the top and inherit the exported value.
+if [[ -z ${STUB_NODE_FLAGS_APPLIED-} ]]; then
+  export NODE_OPTIONS="${STUB_NODE_FLAGS---max-semi-space-size=2 --max-old-space-size=192}${NODE_OPTIONS:+ $NODE_OPTIONS}"
+  export STUB_NODE_FLAGS_APPLIED=1
+fi
 
 # one scenario, in a worker process: writes its report line into <dir>/<n> (see the xargs call at the end)
 if [[ "$1" == --one ]]; then
@@ -38,19 +60,22 @@ if [[ "$1" == --one ]]; then
       print -r -- "#SKIP $label нет записи" > "$dir/$local_n"
       return 0 2>/dev/null || exit 0
     fi
-    line=$(LOGTAG="${TAG}-$label-" REPLAY="$rpdir/$rp" "$NODE" --import ./register.mjs run.mjs 2000 ghost 2>&1 | grep '^done:' | tail -1)
+    raw=$(LOGTAG="${TAG}-$label-" REPLAY="$rpdir/$rp" "$NODE" --import ./register.mjs run.mjs 2000 ghost 2>&1)
   elif [[ "$map" == - ]]; then
-    line=$(LOGTAG="${TAG}-" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1 | grep '^done:' | tail -1)
+    raw=$(LOGTAG="${TAG}-" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1)
   elif [[ "$start" == - ]]; then
-    line=$(LOGTAG="${TAG}-$label-" MAP="$map" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1 | grep '^done:' | tail -1)
+    raw=$(LOGTAG="${TAG}-$label-" MAP="$map" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1)
   else
-    line=$(LOGTAG="${TAG}-$label-" MAP="$map" START="$start" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1 | grep '^done:' | tail -1)
+    raw=$(LOGTAG="${TAG}-$label-" MAP="$map" START="$start" "$NODE" --import ./register.mjs run.mjs 2000 "$sc" 2>&1)
   fi
+  line=$(print -r -- "$raw" | grep '^done:' | tail -1)
   # done: <outcome> score=a/b alive=x/y errors=N time=..s log=...
   outcome=$(print -r -- "$line" | sed -E 's/^done: (.*) score=.*/\1/')
   a=$(print -r -- "$line" | sed -E 's/.*score=([0-9]+)\/([0-9]+).*/\1/'); b=$(print -r -- "$line" | sed -E 's/.*score=([0-9]+)\/([0-9]+).*/\2/')
   errors=$(print -r -- "$line" | sed -E 's/.*errors=([0-9]+).*/\1/')
   if [[ -z "$line" ]]; then verdict=FAIL; outcome="no done line"; errors=?
+    # the heap limit set at the top is a hard one: name it, so the line is not read as a crash of the bot
+    [[ "$raw" == *"heap out of memory"* ]] && outcome="node heap limit hit (STUB_NODE_FLAGS)"
   elif [[ "$outcome" == "enemy army destroyed"* ]]; then verdict=PASS
   elif [[ "$outcome" == "our army destroyed"* ]]; then verdict=FAIL
   elif (( a > b )); then verdict=PASS
