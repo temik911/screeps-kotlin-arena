@@ -424,10 +424,37 @@ internal fun flowDescent(ctx: Ctx, goal: Position, ax: Int, ay: Int, lead: Creep
 
 /** Мини-состояние для симуляции (v138): позиция, хиты и профиль крипа. */
 
-internal fun planBlock(approachRate: Double, army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, slotOf: MutableMap<String, Position>) {
+/** ВХОД РАССТАНОВКИ — ОДИН (v488, проект «Один управляющий», шаг 2). Всё, что нужно обоим режимам, собрано в один
+ *  вход; роли (линия мили, линия стрелков, тыл) считаются ЗДЕСЬ, а не дважды в каждом режиме, — дословно тем же
+ *  порядком, что и прежде, поэтому назначение слотов не меняется. */
+internal class LayoutInput(
+    val army: List<Creep>, val combatEnemies: List<Creep>, val armedEnemies: List<Creep>,
+    val enemyCreeps: List<Creep>, val focusTarget: Creep?, val approachRate: Double,
+) {
     val melees = lineMelees(army)
     val rangeds = lineRangeds(army)
     val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
+}
+
+/** Режим расстановки: свободная по признакам клеток (прежний `planFight`) или ряды за передним мили (`planBlock`). */
+internal enum class LayoutMode { FREE, ROWS }
+
+/** Единственная точка, через которую строй назначает крипу клетку. Режим выбирает `armyBlock` теми же условиями, что
+ *  и до v488 (`planNow`); внутри режимы пока прежние. */
+internal fun layout(mode: LayoutMode, inp: LayoutInput, slotOf: MutableMap<String, Position>) {
+    layoutCalls.bump(mode.name)
+    when (mode) {
+        LayoutMode.FREE -> planFight(inp, slotOf)
+        LayoutMode.ROWS -> planBlock(inp, slotOf)
+    }
+}
+
+internal fun planBlock(inp: LayoutInput, slotOf: MutableMap<String, Position>) {
+    val approachRate = inp.approachRate; val army = inp.army
+    val combatEnemies = inp.combatEnemies; val armedEnemies = inp.armedEnemies
+    val melees = inp.melees
+    val rangeds = inp.rangeds
+    val rear = inp.rear
     val armed = melees + rangeds
     if (armed.isEmpty()) return
     val threats = armedEnemies.ifEmpty { combatEnemies }
@@ -457,10 +484,12 @@ internal fun planBlock(approachRate: Double, army: List<Creep>, combatEnemies: L
 /** Расстановка боя (см. USE_PLAN): клетки с признаками, роли по порядку признаков, жадное назначение. Выход — slotOf,
  *  движение к слоту — как у строя (slotStep). Мили вплотную к врагу слота не получает (рубит по своим правилам), его
  *  клетка занята. */
-internal fun planFight(army: List<Creep>, combatEnemies: List<Creep>, armedEnemies: List<Creep>, enemyCreeps: List<Creep>, slotOf: MutableMap<String, Position>, focusTarget: Creep?) {
-    val melees = lineMelees(army)
-    val rangeds = lineRangeds(army)
-    val rear = army.filter { c -> melees.none { it.id == c.id } && rangeds.none { it.id == c.id } }
+internal fun planFight(inp: LayoutInput, slotOf: MutableMap<String, Position>) {
+    val army = inp.army; val combatEnemies = inp.combatEnemies; val armedEnemies = inp.armedEnemies
+    val enemyCreeps = inp.enemyCreeps; val focusTarget = inp.focusTarget
+    val melees = inp.melees
+    val rangeds = inp.rangeds
+    val rear = inp.rear
     if (melees.isEmpty() && rangeds.isEmpty()) return
     val threats = armedEnemies.ifEmpty { combatEnemies }
     if (threats.isEmpty()) return
@@ -754,8 +783,13 @@ internal fun armyBlock(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ: 
         // РАССТАНОВКА МОЛЧИТ ПРИ КОМАНДИРЕ (v165, оператор: продолжать переносить логику в командира). Слоты и
         // командирские клетки — два ответа на один вопрос «кто где стоит»; пока командир ведёт бой, спрашивать
         // второй раз незачем, и крип, которому клетки не досталось, шёл в слот прежней расстановки
-        if (planNow) planFight(meas.chase.mobileArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, meas.forces.enemyCreeps, targ.zones.slotOf, targ.focus.focusTarget)
-        else planBlock(strat.obj.approachRate, meas.chase.mobileArmy, meas.forces.combatEnemies, meas.forces.armedEnemies, targ.zones.slotOf)
+        // ...И ВХОД ОДИН (v488, проект docs/pain-and-gain-one-controller.md, шаг 2): обе расстановки зовутся через
+        // `layout`, которая считает роли один раз и выбирает режим. Пока это только точка входа — режимы внутри
+        // прежние и поведение тождественно, — но именно в неё потом переедет и командирская раздача, чтобы
+        // «кто назначает крипу клетку» имело ОДИН ответ, а не четыре
+        layout(if (planNow) LayoutMode.FREE else LayoutMode.ROWS, LayoutInput(meas.chase.mobileArmy,
+            meas.forces.combatEnemies, meas.forces.armedEnemies, meas.forces.enemyCreeps,
+            targ.focus.focusTarget, strat.obj.approachRate), targ.zones.slotOf)
     }
 }
 
@@ -789,6 +823,10 @@ internal val planLoose = Gauges.counter("plan", 1, perTick = true)
 /** Расстановка стрелка против фокуса (v481): `rfoc=встал на клетку с фокусом в трёх/имел такую свободную и встал в другую/всего
  *  назначений стрелкам`. Вторая часть и есть вопрос: расходятся ли стволы потому, что клетки на фокусе НЕТ, или потому, что
  *  ярусы ниже (дистанция, урон, близость к себе) уводят с неё. */
+/** Режимы единой расстановки (v488, `lay=`): сколько крипо-тиков строй раздавал слоты свободной расстановкой и
+ *  сколько рядами. Нужен, чтобы при дальнейшем сведении было видно, какой режим исчезает или перестаёт вызываться. */
+internal val layoutCalls = Gauges.labelled("lay")
+
 internal val rfocOn = Gauges.counter("rfoc")
 
 internal val rfocMissed = Gauges.counter("rfoc", 1)
