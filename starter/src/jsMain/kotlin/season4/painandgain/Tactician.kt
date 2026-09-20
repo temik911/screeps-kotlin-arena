@@ -88,7 +88,7 @@ internal fun priorityOf(step: RowMark, rung: RowMark): Priority = when {
 }
 
 /** Отдать предложение арбитру: перепись (прежняя и новая) и запрос хода — в прежнем порядке побочных действий. */
-internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
+internal fun PainAndGain.submit(p: Proposal, ctx: Ctx, view: ExchangeView) {
     rungCount.bump(p.rung)
     stepCount.bump(p.stepTag)
     tacCount.bump(p.why)
@@ -103,7 +103,7 @@ internal fun PainAndGain.submit(p: Proposal, ctx: Ctx) {
     // рождается интент шага армии, поэтому проверка одна на все ветки: разрешённый захват проходит как прежде
     // (planCapture), запрещённый — крип стоит, как POISED-бегун
     val flagAt = p.step?.let { s -> ctx.flags.firstOrNull { !it.ours && it.pos.x == s.x && it.pos.y == s.y } }
-    val step = if (flagAt != null && captureBlock(ctx, flagAt) != null) { strayCapRefused.n++; null } else p.step
+    val step = if (flagAt != null && captureBlock(ctx, flagAt, view) != null) { strayCapRefused.n++; null } else p.step
     if (step != null) { TrafficManager.request(p.creep, step, p.rank); planCapture(ctx, step) }
 }
 
@@ -683,7 +683,7 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         // ...и «вне боя» здесь — КОНТАКТ МАССЫ АРМИИ, а не всякий выстрел за окно (v315): `fightOnNow` держится
         // двадцать тиков после любого выстрела, а фермер стреляет по одиночкам весь матч — лекарь не выходил к
         // хранителю почти никогда, и тот сходил с флага по хитам 6–11 раз за матч
-        val medic = if (!HEAL_MATE.c("medic.pairsMode", Signals.groupSafe) || !HEAL_MATE.c("medic.noCoreContact", !t.pag.coreContactNow)) null else run {
+        val medic = if (!HEAL_MATE.c("medic.pairsMode", Signals.groupSafe) || !HEAL_MATE.c("medic.noCoreContact", !meas.fight.contact)) null else run {
             val medics = ctx.army.filter { healerOnly(it) && canMove(it) }
             if (!HEAL_MATE.c("medic.twoMedics", medics.size >= 2)) return@run null
             // ...и подопечный — не только хранитель из армии, но и ДЕРЖАТЕЛЬ-БЕГУН на нашем флаге (v334): против
@@ -1073,7 +1073,7 @@ internal fun PainAndGain.creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
         // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
         submit(Proposal(creep, step, priorityOf(pace.mark, rung.mark), prio, Orders.missionOf[creep.id] ?: '?',
-            if (pace.mark == RowMark.FREE) whyTag else stepTag, whyTag, stepTag), ctx)
+            if (pace.mark == RowMark.FREE) whyTag else stepTag, whyTag, stepTag), ctx, meas.view)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.key
     } } }
@@ -1622,7 +1622,7 @@ internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasure
         for (f in ctx.flags) {
             if (f.ours || f.occupant != null || f.id == objectiveFlagId) continue
             if (meas.forces.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
-            if (!pag.captureAllowed(ctx, f)) continue
+            if (!pag.captureAllowed(ctx, f, meas.view)) continue
             // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
             val near = meas.chase.mobileArmy.filter { getRange(it, f.pos) <= 3 && (hasWeapon(it)) }
                 .minByOrNull { getRange(it, f.pos) } ?: continue

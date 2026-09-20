@@ -662,6 +662,8 @@ internal class ArmyMeasures(ctx: Ctx, pag: PainAndGain) {
     val forces = MeasuresForces(ctx)
     val exchange = MeasuresExchange(ctx, forces, pag)
     val chase = MeasuresChase(ctx, forces, exchange, pag)
+    /** Размен этого тика для ворот захвата, вызванных из `runArmy` (см. [ExchangeView]). */
+    val view = ExchangeView(chase.stalled, exchange.exchangeLive, exchange.ourLostWindow)
     val fight = MeasuresFight(ctx, forces, exchange, chase, pag)
 }
 
@@ -712,16 +714,15 @@ internal class MeasuresExchange(private val ctx: Ctx, private val forces: Measur
     init { while (Memory.ledgerHist.size > LEDGER_WINDOW + 1) Memory.ledgerHist.removeFirst() }
     init { while (Memory.ourLostHist.size > LEDGER_WINDOW + 1) Memory.ourLostHist.removeFirst() }
     init { while (Memory.hisLostHist.size > LEDGER_WINDOW + 1) Memory.hisLostHist.removeFirst() }
-    init { pag.ledgerWindow = if (Memory.ledgerHist.size >= 2) Memory.ledgerHist.last() - Memory.ledgerHist.first() else 0 }
-    init { pag.ourLostWindow = if (Memory.ourLostHist.size >= 2) Memory.ourLostHist.last() - Memory.ourLostHist.first() else 0 }
-    init { pag.hisLostWindow = if (Memory.hisLostHist.size >= 2) Memory.hisLostHist.last() - Memory.hisLostHist.first() else 0 }
+    val ledgerWindow = if (Memory.ledgerHist.size >= 2) Memory.ledgerHist.last() - Memory.ledgerHist.first() else 0
+    val ourLostWindow = if (Memory.ourLostHist.size >= 2) Memory.ourLostHist.last() - Memory.ourLostHist.first() else 0
+    val hisLostWindow = if (Memory.hisLostHist.size >= 2) Memory.hisLostHist.last() - Memory.hisLostHist.first() else 0
     // РАЗМЕН ИДЁТ (v221, см. USE_FIGHT_BY_LEDGER): за LEDGER_WINDOW тиков хоть одна сторона потеряла
     // STALL_DAMAGE хитов. Та же мера, что у клапана проигранной гонки (см. lostRaceNow) и у простоя
     // (netDamage), только по обеим половинам окна: новых чисел нет. Разбор двух рейтинговых серий по реплеям
     // обеих сторон делит ею забеги начисто: в проигранных армия 38 % тиков в постуре ANNIHILATE, и в 92 %
     // этих тиков размена нет вовсе, — это 35 % матча против 4 % в выигранных (v219: 24 % против 5 %)
-    val exchangeLive = pag.ourLostWindow >= STALL_DAMAGE || pag.hisLostWindow >= STALL_DAMAGE
-    init { pag.exchangeLiveNow = exchangeLive }
+    val exchangeLive = ourLostWindow >= STALL_DAMAGE || hisLostWindow >= STALL_DAMAGE
     init { if (exchangeLive && firstFightTick == 0) firstFightTick = getTicks() }
     // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
     val exchangePaying = Memory.ourHitsHist.size < STALL_TICKS ||
@@ -751,7 +752,7 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     // любой его выстрел даёт netDamage, и простой гаснет. Прибор считает тики, где погоня идёт в ОДНУ сторону —
     // за окно мы потеряли STALL_DAMAGE, он меньше нас, его центр от нас уходит, его мили не вплотную. Считается ДО
     // простоя и по тем величинам, какими простой читал бы её: постура и история дистанции — прошлого тика
-    private val kiteChaseNow = KITE_CHASE.c("wasAnnihilate", Memory.prevPosture == Posture.ANNIHILATE) && KITE_CHASE.c("weLoseHits", pag.ourLostWindow >= STALL_DAMAGE) && KITE_CHASE.c("ledgerNegative", pag.ledgerWindow < 0) && KITE_CHASE.c("noMeleeAdjacent", !meleeAdjacent) &&
+    private val kiteChaseNow = KITE_CHASE.c("wasAnnihilate", Memory.prevPosture == Posture.ANNIHILATE) && KITE_CHASE.c("weLoseHits", exchange.ourLostWindow >= STALL_DAMAGE) && KITE_CHASE.c("ledgerNegative", exchange.ledgerWindow < 0) && KITE_CHASE.c("noMeleeAdjacent", !meleeAdjacent) &&
         KITE_CHASE.c("distHistory", Memory.enemyDistHist.size >= 2) && KITE_CHASE.c("distanceGrows", Memory.enemyDistHist.last() > Memory.enemyDistHist.first())
     init { kiteChaseSeen = kiteChaseNow }
     init { if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn.n++; if (kiteChaseNow) kchaseTicks.n++ } }
@@ -860,7 +861,6 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
         }
     }
     val stalled = exchange.now < stallUntil
-    init { pag.stalledNow = stalled }
 }
 
 /** ГРУППА МЕР 4: бой — мощь сторон и её окно, близость, масса и контакт, нулевая мощь при лидерстве, признак отхода по размену, отзыв отпущенных боем, выполним ли отход. */
@@ -907,11 +907,10 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
     }
     // здесь, ВЫШЕ отряда и командирской гонки, — оба механизма разделения читают его этим тиком, а не
     // прошлым (порядок тика: runRunners идёт раньше runArmy, и признак, посчитанный ниже, опаздывал бы)
-    init { pag.fightOnNow = contact || chase.exchangeRecent }
-    init { pag.coreContactNow = contact }
+    val fightOnNow = contact || chase.exchangeRecent
     // ПАРА К ОТЗЫВУ ПО РАЗМЕНУ (v221, только прибор): сколько тиков «бой идёт» держится на одном слове
     // «контакт» — ни одна сторона за окно не потеряла STALL_DAMAGE. Читать вместе с recall= и budget=
-    init { if (pag.fightOnNow) { warmFightAll.n++; if (!exchange.exchangeLive) warmFight.n++ } }
+    init { if (fightOnNow) { warmFightAll.n++; if (!exchange.exchangeLive) warmFight.n++ } }
     // ПРИЗНАК ОТХОДА СЧИТАЕТСЯ ЗДЕСЬ (v217, см. USE_BREAK_OFF_HOLDS_LINE): он должен успеть погасить
     // наступление, а `pushing` решается на триста строк ниже. Величины готовы: контакт уже есть, а
     // `ourDamageTaken`/`enemyDamageTaken` копятся с начала матча
@@ -926,7 +925,7 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
     // любому нашему, и одиночный стрелок фермера, подстреливший держателя на краю карты, снимал с флагов всех. В контакте
     // ядра в кулак возвращаются все, как прежде
     init {
-        if (pag.fightOnNow) {
+        if (fightOnNow) {
             fightTicksNow.n++
             // ...а в режиме пар (v326) — и отряды на пути к флагу: «бой» здесь держится двадцать тиков после любого выстрела,
             // и отзыв срабатывал 506 раз за матч, отправляя в ядро тех, кого командир только что послал (man=124, split=392).
@@ -958,7 +957,7 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
 
 
 /** ПАМЯТЬ ТИКА (v257, этап 10; сегмент tickBody после исполнения): стойки полей, его прошлые клетки и ходы, история центра наших вооружённых и его клеток. Перенесено дословно. */
-internal class RememberTick(private val ctx: Ctx) {
+internal class RememberTick(private val ctx: Ctx, private val meas: ArmyMeasures?) {
     init { InfluenceMap.pruneStances(ctx.myCreeps.mapTo(HashSet()) { it.id }) }
     // кто из врагов сдвинулся за тик — для признака «стоит на месте» (см. stationary)
     init {
@@ -982,6 +981,9 @@ internal class RememberTick(private val ctx: Ctx) {
         }
     }
     init { Memory.enemyCellHist.keys.retainAll { id -> ctx.enemyCreeps.any { it.id == id } } }
+    // ПРОШЛЫЙ ТИК — ЯВНО (v459, см. Prev): меры этого тика становятся «вчерашними» для тех, кто в следующем тике читает раньше мер;
+    // в тике без армии мер нет — значения остаются прежними, как оставались члены синглтона
+    init { if (meas != null) { Prev.exchange = meas.view; Prev.ledgerWindow = meas.exchange.ledgerWindow; Prev.hisLostWindow = meas.exchange.hisLostWindow } }
 }
 
 internal class ReadSignalsOut(
@@ -1008,7 +1010,7 @@ internal fun PainAndGain.readSignals(ctx: Ctx): ReadSignalsOut {
     Signals.enemyMassedSignal = enemyMassed
     // ДРАЛСЯ ЛИ ОН С НАМИ СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER): защёлка на матч. Россыпь дерётся стычками по одному-два
     // крипа у флагов и сюда не попадает; блок, который между боями расходится группами по флагам, — попадает первым же боем
-    if (exchangeLiveNow && enemyMassed) fightMassedSeen = true
+    if (Prev.exchange.exchangeLive && enemyMassed) fightMassedSeen = true
     // с гистерезисом: темп сближения ходит вокруг порога (колонна на марше то растягивается шире MASS_RANGE, то
     // замедляется), и без него уклонение сменялось стоянием каждые десять-тридцать тиков, пока враг шёл — матч 32:
     // EVADE 57, HOLD 69 при approach=84, EVADE 94, HOLD 109 при 42, EVADE 117, HOLD 122, контакт на 127-м и 12:0.

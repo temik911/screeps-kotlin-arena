@@ -133,9 +133,6 @@ object PainAndGain {
 
     internal var approachRate = 0.0
     internal var farmerQuietNow = false                    // противник тих FARMER_QUIET с первой досягаемости (см. USE_FARMER_PACK_FREE)
-    internal var ledgerWindow = 0
-    internal var ourLostWindow = 0
-    internal var hisLostWindow = 0
 
 
 
@@ -153,7 +150,7 @@ object PainAndGain {
     private fun repairAfterAbort() {
         abortTicks.n++
         var maps = 0; var sets = 0; var entries = 0
-        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges, Orders, FireBook, Wall, StrategistState, WorldState, TacticianState, MapDump, Signals)) {
+        for (owner in listOf<Any>(this, InfluenceMap, DistanceMap, TrafficManager, Executor, Forecast, Memory, BodyMemo, Gauges, Orders, FireBook, Wall, StrategistState, WorldState, TacticianState, MapDump, Signals, Prev)) {
             val r = AbortRepair.repairFields(owner)
             maps += r.maps; sets += r.sets; entries += r.entries
         }
@@ -176,7 +173,7 @@ object PainAndGain {
         readSignals(ctx)
         runRunners(ctx)
         cpuMark("runners")
-        runArmy(ctx)
+        val meas = runArmy(ctx)
 
         // боевые интенты уходят в API до разрешения движения: стенд разрешает конфликты за клетку в порядке первого
         // интента крипа, и порядок «удар, затем ход» — часть тождества с эталоном v235 (движку порядок безразличен)
@@ -188,19 +185,19 @@ object PainAndGain {
         cpuSummary()
         // хвост тика после перебора командира (v262): наибольший за матч — запас бюджета перебора
         if (cmdSearched) { cmdTailMax = maxOf(cmdTailMax, cpuMs() - cmdEndMs); cmdSearched = false }
-        val rem = RememberTick(ctx)
+        val rem = RememberTick(ctx, meas)
         printTick(ctx, rem)
     }
 
-    internal var stalledNow = false                        // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
     internal var hisTouchShare = 1.0
     internal var touchShare = 1.0                          // она же за окно; до заполнения окна — единица, чтобы вход в бой не менялся
 
 
 
 
-    private fun runArmy(ctx: Ctx) {
-        if (ctx.army.isEmpty()) return
+    /** Меры этого тика — для `RememberTick` (см. Prev); `null` в тике без армии. */
+    private fun runArmy(ctx: Ctx): ArmyMeasures? {
+        if (ctx.army.isEmpty()) return null
         // хранители флагов — решение стратега; до v446 его звала первой строкой мера мира (ребро World → Strategist). До вызова в
         // armyMeasures не исполнялось ничего, кроме трёх чтений полей ctx, — порядок прежний
         updateKeepers(ctx, ctx.army)
@@ -225,17 +222,12 @@ object PainAndGain {
         for (creep in ctx.army) creepTurn(creep, ctx, tick)
 
         armyFireAndHeal(ctx, meas, targ)
+        return meas
     }
 
 
 
     internal var cmdMode = CmdMode.MARCH
-    /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
-    internal var fightOnNow = false
-    internal var coreContactNow = false                    // v315: контакт массы армии (а не всякий выстрел за окно)
-    /** Размен идёт прямо сейчас (v221, см. exchangeLive) — для гейта захвата, который зовётся из `runRunners`
-     *  раньше `runArmy` и потому читает окно прошлого тика. */
-    internal var exchangeLiveNow = false
 
 
 }

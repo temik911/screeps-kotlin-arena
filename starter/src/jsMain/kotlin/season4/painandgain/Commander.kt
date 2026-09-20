@@ -182,13 +182,13 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         // ...и гонка идёт ПАРАЛЛЕЛЬНО строю: изготовка стояла В ЦЕПОЧКЕ ПЕРЕД гонкой, поэтому, пока враг
         // подходил, командир не отпускал за флагами вовсе — ни одного захватчика не назначалось, и сценарий
         // camp кончался 15 983:16 266. Сперва раздаются задания на захват, затем ядро из оставшихся строится
-        commandRace(ctx, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
+        commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
         val runners = HashMap(Orders.commandOf)
         Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Memory.cmdDetach }, meas.forces.armedEnemies, Orders.commandOf)
         Orders.commandOf.putAll(runners)
     } else if (raceCommandNow) {
         cmdTicks++
-        commandRace(ctx, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
+        commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags, Orders.commandOf)
         // прибор второго тика (v222): фаза plan стоит 20–28 мс на тиках 1–2 и 0,7 мс на третьем — метки внутри неё
         // называют, что именно (строка cpu печатается на первых трёх тиках и на медленных)
         cpuMark("p.race")
@@ -201,7 +201,7 @@ internal fun PainAndGain.armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmySt
         val hunting = commandHunt(ctx, restCore, meas.forces.armedEnemies, Orders.commandOf)
         if (!hunting && meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
-            val goal = commandGoal(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies)
+            val goal = commandGoal(ctx, meas.view, meas.chase.mobileArmy, meas.forces.armedEnemies)
             cpuMark("p.goal")
             val steps = HashMap<String, Position>()
             commandMarch(ctx, notCmdDetached(meas.chase.mobileArmy), goal, steps)

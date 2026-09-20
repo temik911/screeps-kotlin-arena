@@ -315,7 +315,7 @@ private fun PainAndGain.declareLine() {
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
     Gauges.computed("gsafe", 1) { "${Signals.groupDmgWindow}" }
-    Gauges.computed("ledgerw") { "$ledgerWindow/$ourLostWindow/$hisLostWindow" }
+    Gauges.computed("ledgerw") { "${Prev.ledgerWindow}/${Prev.exchange.ourLostWindow}/${Prev.hisLostWindow}" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
     // кайтером, сбор в бою, и стрелки обеих сторон — «кто теряет стрелков первым», что реплей показал, а

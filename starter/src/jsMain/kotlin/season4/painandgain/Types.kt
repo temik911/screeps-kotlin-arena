@@ -24,4 +24,10 @@ internal enum class CmdMode { FIGHT, RACE, MARCH }
 internal enum class Intent { PRESS, HOLD, YIELD, FOCUS, KITE }
 
 /** Тик погони за целью прижима: дистанция от наших мили, клетка цели и клетка нашего ближайшего мили (см. PRESS_GIVEUP, v96). */
+/** РАЗМЕН, КАКИМ ЕГО ВИДИТ РЕШЕНИЕ О ЗАХВАТЕ (v459, второй шаг архитектуры, этап 6.2). Ворота захвата зовутся и из `runRunners` — ДО мер
+ *  этого тика, и из `runArmy` — после них; до v459 они читали члены синглтона, которые меры переписывают посреди тика, и один и тот же
+ *  вопрос получал ответ то по вчерашнему, то по сегодняшнему размену, а по тексту этого не было видно (находка 2.8 п. 7 плана). Теперь
+ *  место вызова называет, что оно видит: `Prev.exchange` — прошлый тик, `meas.view` — этот. */
+internal class ExchangeView(val stalled: Boolean, val exchangeLive: Boolean, val ourLostWindow: Int)
+
 internal class ChaseSample(val d: Int, val eCell: Int, val meleeCell: Int)

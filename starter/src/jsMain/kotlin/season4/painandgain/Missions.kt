@@ -147,7 +147,7 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
                 val gain = (if (f.ours) 0.5 * f.score else f.swing) * pag.captureCost(ctx, f)
                 val horizon = if (pag.farmerQuietNow) maxOf(1, arenaInfo.ticksLimit - getTicks() - ticks).toDouble() else 1.0 / (ticks + 5)
                 val value = gain * horizon *
-                    (if (f.id == currentId) 1.25 else 1.0) * (if (!f.ours && !pag.captureAllowed(ctx, f, serious = false)) 0.2 else 1.0)   // оценка, не ворота (v451, capeval=)
+                    (if (f.id == currentId) 1.25 else 1.0) * (if (!f.ours && !pag.captureAllowed(ctx, f, Prev.exchange, serious = false)) 0.2 else 1.0)   // оценка, не ворота (v451, capeval=)
                 cands.add(Cand(s, f, value))
             }
         }
@@ -290,7 +290,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 continue
             }
             // брать ли флаг сейчас (дебафф): нельзя — ждём рядом, шаг на клетку сделаем, когда станет можно
-            val block = pag.captureBlock(ctx, f)
+            val block = pag.captureBlock(ctx, f, Prev.exchange)
             val allowed = block == null
             val range = if (allowed) 0 else 1
             // свой назначенный флаг открыт для шага, остальные не наши — стены (см. Ctx.flagCells)
