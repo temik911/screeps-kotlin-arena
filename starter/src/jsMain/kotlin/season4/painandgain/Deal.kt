@@ -902,6 +902,18 @@ internal class Deal(
             val dp = foeDist(p.x, p.y)
             fighters.any { f -> f.id != c.id && hasWeapon(f) && cellOf(f).let { foeDist(it.x, it.y) } < dp }
         }
+        // БЕЗ ПРИКАЗА (v476, вопрос 3): кто по концу проходов остался без клетки. `catchall` добирает строевых, но `place` может
+        // не найти клетки, а спасение (`rescue`) и проход `pinned` снимают ЧУЖОЙ приказ уже после добора; лекарей и раздетых
+        // добор не трогает вовсе. Считается здесь, в последнем проходе, где план окончателен. Строевой, у которого в шаге нет ни
+        // одной клетки-кандидата (кулак отрезал — он вне FIST_RADIUS от медианы), приказа не получает по построению; вторая
+        // часть считает тех, у кого кандидат в шаге был
+        val noLineList = (melees + rangeds).filter { it.id !in out }
+        val noReach = noLineList.count { c -> cells.values.any { p -> abs(p.x - c.x) <= COMMAND_REACH && abs(p.y - c.y) <= COMMAND_REACH } }
+        val noHeal = healers.count { it.id !in out }
+        val noStrip = stripped.count { it.id !in out }
+        rec.unplacedLine.n += noLineList.size; rec.unplacedReach.n += noReach
+        rec.unplacedHeal.n += noHeal; rec.unplacedStrip.n += noStrip
+        if (noLineList.size + noHeal + noStrip > 0) rec.unplacedDeals.n++
     }
 
     /** ПРОХОДЫ РАЗДАЧИ: порядок списка = порядок исполнения, другого описания порядка нет. Имя прохода — тег прибора `pass=`

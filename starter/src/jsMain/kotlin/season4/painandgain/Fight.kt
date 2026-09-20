@@ -508,6 +508,14 @@ internal class DealRecord {
     val planGunsIn = g.counter("guns", 0, last = true); val planGunsAll = g.counter("guns", 1, last = true)
     val planMeleeHealed = g.counter("mheal", 0, last = true); val planMeleeAll = g.counter("mheal", 1, last = true)
     val planHealBehind = g.counter("hline", 0, last = true); val planHealAll = g.counter("hline", 1, last = true)
+    /** БОЙЦЫ БЕЗ ПРИКАЗА ПОСЛЕ ВЫБРАННОЙ РАЗДАЧИ (v476, вопрос 3 оператора): строевых (мили и стрелки) без клетки в `out` по концу
+     *  проходов / из них тех, у кого клетка-кандидат в шаге БЫЛА (кулак её не отрезал — такой обязан был получить приказ) /
+     *  лекарей / раздетых / раздач, где кто-то без приказа; считает проход `audit`, в приборы матча попадает запись выбранной
+     *  раздачи. Повод — match13:brawl+heals на стенде v450: на t=66 у мили пропал приказ (`order/(46,43)` → `kite/stay`) и первый
+     *  бой развалился; прибор говорит, единичен ли случай, прежде чем искать причину. Боец вне кулака (`Formation.fist` оставляет
+     *  клетки в FIST_RADIUS от медианы) кандидатов не имеет по построению и идёт ветками тактика — вторая часть его не считает. */
+    val unplacedLine = g.counter("unplaced"); val unplacedReach = g.counter("unplaced", 1); val unplacedHeal = g.counter("unplaced", 2)
+    val unplacedStrip = g.counter("unplaced", 3); val unplacedDeals = g.counter("unplaced", 4)
 }
 
 /** Поля записи раздачи обязаны быть объявлены до первой печати строки `t=`, а первая настоящая запись появляется только с первым
