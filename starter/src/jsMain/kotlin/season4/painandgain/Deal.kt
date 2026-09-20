@@ -530,7 +530,11 @@ internal class Deal(
         // ОГОНЬ СЛЕДУЮЩЕГО ТИКА В РЕЖИМЕ ОГНЯ (v478, см. USE_HEAL_THREAT_NEXT): адресная угроза лекарю в клетке после его шага, и
         // экран тел ему не скидка (его стрелок бьёт лекаря в досягаемости первым — разбор v438); вне режима — поле этого тика
         val fireModeNow = USE_HEAL_THREAT_NEXT && rec.need.deliveryFireMode(c, army)
-        val fire = if (fireModeNow) threatNext.at(c, p.x, p.y) else InfluenceMap.fireFieldAt(key)
+        // ...И ОГОНЬ СЛЕДУЮЩЕГО ТИКА ВНЕ РЕЖИМА ТОЖЕ (v507, см. USE_HEAL_THREAT_NEXT_ALWAYS): его дальность 3 плюс
+        // шаг — это зона 4, а поле этого тика кончается на 3, и клетка на четвёрке читается безопасной ровно на один
+        // тик. Экран тел остаётся привязан к режиму огня: v438 сняла ему скидку только там, и здесь это не трогается
+        val nextNow = USE_HEAL_THREAT_NEXT && (fireModeNow || USE_HEAL_THREAT_NEXT_ALWAYS)
+        val fire = if (nextNow) threatNext.at(c, p.x, p.y) else InfluenceMap.fireFieldAt(key)
         val shielded = if (fireModeNow) 0.0 else fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))   // урон, который снимут тела своих
         // ПРИТЯЖЕНИЕ ЛЕКАРЯ НАСЫЩАЕТСЯ ТЕМ, ЧТО ОН МОЖЕТ ДОСТАВИТЬ (v208, замер серии v206: лекарей за линией
         // 0.695 против 0.944 у v205 — они полезли в первую линию). Нужда складывается по всем подопечным в
@@ -920,8 +924,9 @@ internal class Deal(
         fun terms(p: Position): DoubleArray {
             val key = p.key
             val scr = screenAt(c, p)
-            val fireModeNow = USE_HEAL_THREAT_NEXT && rec.need.deliveryFireMode(c, army)   // те же слагаемые, что у scoreHeal (v478)
-            val fire = if (fireModeNow) threatNext.at(c, p.x, p.y) else InfluenceMap.fireFieldAt(key)
+            val fireModeNow = USE_HEAL_THREAT_NEXT && rec.need.deliveryFireMode(c, army)   // те же слагаемые, что у scoreHeal (v478, v507)
+            val nextNow = USE_HEAL_THREAT_NEXT && (fireModeNow || USE_HEAL_THREAT_NEXT_ALWAYS)
+            val fire = if (nextNow) threatNext.at(c, p.x, p.y) else InfluenceMap.fireFieldAt(key)
             val shielded = if (fireModeNow) 0.0 else fire * (1.0 - 1.0 / (1.0 + SCREEN_SHARE * scr))
             val deliver = InfluenceMap.healOf(c)
             val raw = rec.need.attHealAt(key)
