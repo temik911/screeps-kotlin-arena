@@ -336,6 +336,12 @@ private val GATE_RUSH = Why("gate.rush")
 private val GATE_CONTACT_MASS = Why("gate.contactMass")
 private val GATE_FIRST_FIGHT = Why("gate.firstFight")
 private val GATE_ENOUGH = Why("gate.enough")
+private val DRY_HUNT = Why("dryHunt")
+private val QUIET_CHAIN = Why("quietChain")
+private val FARMER = Why("farmer")
+private val PUSH_RAW = Why("pushRaw")
+private val HUNTED = Why("hunted")
+private val HOLD_LINE = Why("holdLine")
 
 /** Счётчики ворот захвата (прибор `reach t=`, таблица `gate`): дошли / решили. */
 internal val captureTally = Tally("gate")
@@ -2045,11 +2051,11 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
     init { if (posture == Posture.FLAG || posture == Posture.EVADE || posture == Posture.RETREAT) lastNonHuntTick = meas.exchange.now }
     // рассыпанный остаток — вход v75 как был; блоб-остаток — под стрелковой защитой пула и только после PASSIVE_TICKS
     // охоты без FLAG/EVADE/RETREAT («охота длилась» и для россыпи задерживала отряд: spread m33 24327:24222 → 19509:24315)
-    private val dryHunt =  pag.behindOnScore && lastFireTick >= 0 &&
-        meas.exchange.now - lastFireTick >= PASSIVE_TICKS && meas.exchange.now - lastHurtTick >= PASSIVE_TICKS &&
-        (scattered || (meas.exchange.now - lastNonHuntTick >= PASSIVE_TICKS))
+    private val dryHunt =  DRY_HUNT.c("behindOnScore", pag.behindOnScore) && DRY_HUNT.c("firedOnce", lastFireTick >= 0) &&
+        DRY_HUNT.c("noFireLately", meas.exchange.now - lastFireTick >= PASSIVE_TICKS) && DRY_HUNT.c("noHurtLately", meas.exchange.now - lastHurtTick >= PASSIVE_TICKS) &&
+        DRY_HUNT.c("scatteredOrHuntingLong", scattered || (meas.exchange.now - lastNonHuntTick >= PASSIVE_TICKS))
     private val theirRangedMass = rangedMass(meas.forces.combatEnemies)
-    private val quietChain = quiet && (chaseDry || Memory.detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
+    private val quietChain = QUIET_CHAIN.c("quiet", quiet) && QUIET_CHAIN.c("chaseDryOrDetachedOrLostRace", chaseDry || Memory.detachedIds.isNotEmpty() || (quietSinceFirstReach && lostRaceNow))
     // МИЛИ, КОТОРЫЙ НЕ ДОСТАЁТ, — НЕ АРМИЯ, А ОТРЯД (v194, USE_IDLE_MELEE_RUNS). Отряд набирается только против
     // соперника, помеченного `farmer`, а этот ярлык требует, чтобы он НЕ ДРАЛСЯ: `raceNow` хочет его россыпи,
     // `dryHunt` — тишины по огню и урону. Coldkimchi#2 дерётся и фармит флаги ОДНОВРЕМЕННО — держит плотный
@@ -2060,7 +2066,7 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
     // здесь не ярлык соперника, а НАША измеренная бесполезность: мили, за окно контакта ни разу не
     // дотянувшийся, в бою не участвует, и все пороги выпуска ниже считают его вклад по той же доле (v193)
     private val meleeIdle =  meas.forces.armedEnemies.isNotEmpty() && pag.touchShare < TOUCH_MIN
-    private val farmer = meas.forces.armedEnemies.isNotEmpty() && ((firstNearTick >= 0 && (quietChain || dryHunt)) || raceNow || meleeIdle)
+    private val farmer = FARMER.c("armedFoes", meas.forces.armedEnemies.isNotEmpty()) && FARMER.c("quietOrDryOrRaceOrMeleeIdle", (firstNearTick >= 0 && (quietChain || dryHunt)) || raceNow || meleeIdle)
     private val viaDryHunt = dryHunt && !quietChain   // отряд держится только сухой охотой (v82b)
     private val viaRace = raceNow && !quietChain && !dryHunt   // отряд держится только дебют-гонкой (v91)
     private val detachedBefore = Memory.detachedIds.size
@@ -2210,7 +2216,7 @@ internal class StrategyPush(private val ctx: Ctx, private val meas: ArmyMeasures
     init { leadHoldsWas = leadHolds }
     // ...и В РЕЖИМЕ ПАР АРМИЯ НЕ ГОНИТСЯ (v304): он уходит от групп (646 шагов прочь против 67 навстречу), догнать его
     // нельзя, а наступление держит постуру ДОБИТЬ, и та снимает флаг-цель — 179 тиков из 322 «без цели» несут именно его
-    private val pushRaw = !meas.chase.stalled && !leadHolds && !pag.groupSafe && (thr.sweep || (meas.exchange.exchangePaying && !chaseVeto && meas.chase.huntable.isNotEmpty() && meas.forces.strikers.isNotEmpty() && packs.oursPush >= packs.theirsPush * (if (pushing) thr.pushRelease else thr.pushRatio)))
+    private val pushRaw = PUSH_RAW.c("notStalled", !meas.chase.stalled) && PUSH_RAW.c("leadDoesNotHold", !leadHolds) && PUSH_RAW.c("notPairsMode", !pag.groupSafe) && (PUSH_RAW.c("sweep", thr.sweep) || (PUSH_RAW.c("exchangePaying", meas.exchange.exchangePaying) && PUSH_RAW.c("noChaseVeto", !chaseVeto) && PUSH_RAW.c("huntable", meas.chase.huntable.isNotEmpty()) && PUSH_RAW.c("strikers", meas.forces.strikers.isNotEmpty()) && PUSH_RAW.c("pushPower", packs.oursPush >= packs.theirsPush * (if (pushing) thr.pushRelease else thr.pushRatio))))
     // ...и СРОК (v215, см. USE_PUSH_DWELL): начатое наступление живёт минимум PUSH_DWELL тиков, и снимают его
     // досрочно только затор и настоящая слабость — мощь ниже порога отпускания. Мигание любого из пяти прочих
     // множителей за этот срок армию не разворачивает.
@@ -2336,8 +2342,8 @@ internal class StrategyObjective(private val ctx: Ctx, private val meas: ArmyMea
     // без этого армия переставала уклоняться от далёкого фермера двух групп, которого обыгрывала по очкам, и шла за флагами
     // в его группы — split без одного мили 7-1 → 3-5 при tour 5-3 → 6-2; «далеко» — его БЛИЖАЙШИЙ вооружённый (третий срез):
     // центроид фермера двух групп лежит между ними, далеко от нас при группе рядом
-    private val hunted = meas.forces.armedEnemies.isNotEmpty() && meas.forces.strikers.isNotEmpty() &&
-        (packs.theirsFight >= packs.oursFight * RETREAT_RATIO || (pag.unflaggedRushNow && packs.theirsFight >= packs.oursFight * EVADE_EQUAL_RATIO))
+    private val hunted = HUNTED.c("armedFoes", meas.forces.armedEnemies.isNotEmpty()) && HUNTED.c("strikers", meas.forces.strikers.isNotEmpty()) &&
+        HUNTED.c("theyAreStronger", packs.theirsFight >= packs.oursFight * RETREAT_RATIO || (pag.unflaggedRushNow && packs.theirsFight >= packs.oursFight * EVADE_EQUAL_RATIO))
     private val escapeNeeded = hunted || (meas.forces.armedEnemies.isNotEmpty() && meas.forces.strikers.isEmpty())
     // темп сближения врага (0 — стоит, 1 — идёт на нас): запас выхода даёт ему фору только в этом темпе — фора «идёт
     // к выходу мгновенно» отвергала всякую цель при враге, стоящем дома, и армия весь матч сидела дома (стенд m1 scouts)
@@ -2363,7 +2369,7 @@ internal class StrategyObjective(private val ctx: Ctx, private val meas: ArmyMea
     // ...и НЕ ПРОТИВ ТОГО, КТО НЕ БЬЁТ НАШИХ В ГРУППЕ (v303, см. GROUP_SAFE_DMG): ярлык `farmerQuietNow` требует полной
     // тишины и гаснет от одного подстреленного скаута, а けろびー стреляет по одиночкам весь матч — линия против него
     // стоила армии флаг-цели 584 тика из 1400 (ещё 496 снимало «добить»), и матч кончался 10 тыс. против 23 тыс.
-    private val holdLine = meas.fight.enemyNear && !pushing && !contact.annihilate && !meas.chase.stalled && !(pag.farmerQuietNow || pag.groupSafe)
+    private val holdLine = HOLD_LINE.c("enemyNear", meas.fight.enemyNear) && HOLD_LINE.c("notPushing", !pushing) && HOLD_LINE.c("notAnnihilate", !contact.annihilate) && HOLD_LINE.c("notStalled", !meas.chase.stalled) && HOLD_LINE.c("notFarmerNorPairs", !(pag.farmerQuietNow || pag.groupSafe))
     private val interceptObjective: Objective? = thr.interceptFlag?.takeIf { !it.ours && pag.captureAllowed(ctx, it) }?.let { f ->
         val group = meas.forces.strikers.ifEmpty { meas.chase.mobileArmy }
         val flow = flowTo(ctx, f.pos)

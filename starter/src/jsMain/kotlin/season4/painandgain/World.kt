@@ -652,6 +652,11 @@ internal fun clusterCentroid(cs: List<Creep>): Position? {
 internal fun dirsNow(): List<Pair<Int, Int>> = if (mirrorTL) DIRECTIONS_MIRROR else DIRECTIONS
 
 
+/** Причины отказа фактов-мер (прибор `whynot t=`, см. Why в Tables.kt). */
+private val KITE_CHASE = Why("kiteChaseNow")
+private val MARCH_STALLED = Why("marchStalled")
+private val ZERO_LEAD = Why("zeroLead")
+
 /** МЕРЫ АРМИИ ЗА ТИК (v256, этап 10; сегмент runArmy): бойцы и его вооружённые, сомкнутость, охота (huntable), масса и контакт, истории дистанций и центров, простой и бесплодная охота, отход по размену, признак «слабее», выполнимость отхода. Перенесено дословно. */
 internal class ArmyMeasures(ctx: Ctx, pag: PainAndGain) {
     val forces = MeasuresForces(ctx)
@@ -746,8 +751,8 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     // любой его выстрел даёт netDamage, и простой гаснет. Прибор считает тики, где погоня идёт в ОДНУ сторону —
     // за окно мы потеряли STALL_DAMAGE, он меньше нас, его центр от нас уходит, его мили не вплотную. Считается ДО
     // простоя и по тем величинам, какими простой читал бы её: постура и история дистанции — прошлого тика
-    private val kiteChaseNow = Memory.prevPosture == Posture.ANNIHILATE && pag.ourLostWindow >= STALL_DAMAGE && pag.ledgerWindow < 0 && !meleeAdjacent &&
-        Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
+    private val kiteChaseNow = KITE_CHASE.c("wasAnnihilate", Memory.prevPosture == Posture.ANNIHILATE) && KITE_CHASE.c("weLoseHits", pag.ourLostWindow >= STALL_DAMAGE) && KITE_CHASE.c("ledgerNegative", pag.ledgerWindow < 0) && KITE_CHASE.c("noMeleeAdjacent", !meleeAdjacent) &&
+        KITE_CHASE.c("distHistory", Memory.enemyDistHist.size >= 2) && KITE_CHASE.c("distanceGrows", Memory.enemyDistHist.last() > Memory.enemyDistHist.first())
     init { kiteChaseSeen = kiteChaseNow }
     init { if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn.n++; if (kiteChaseNow) kchaseTicks.n++ } }
     // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
@@ -834,8 +839,8 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
         ((distanceKept || (forces.combatEnemies.isNotEmpty() && kept(DETACH_WINDOW, needMoved = false)))))
     init { while (Memory.marchHist.size > MARCH_STALL_TICKS) Memory.marchHist.removeFirst() }
     // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
-    private val marchStalled = pushing && marchCell >= 0 && Memory.marchHist.size == MARCH_STALL_TICKS &&
-        Memory.marchHist.all { it == marchCell } && !fightOn
+    private val marchStalled = MARCH_STALLED.c("pushing", pushing) && MARCH_STALLED.c("hasCell", marchCell >= 0) && MARCH_STALLED.c("fullWindow", Memory.marchHist.size == MARCH_STALL_TICKS) &&
+        MARCH_STALLED.c("sameCellAllWindow", Memory.marchHist.all { it == marchCell }) && MARCH_STALLED.c("noFight", !fightOn)
     // сухой толчок (v86): толчок PASSIVE_TICKS без нашего выстрела и без удара по нам — не толчок
     // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
     // конца матча (стенд m19 spread, t=600–1600)
@@ -894,7 +899,7 @@ internal class MeasuresFight(private val ctx: Ctx, private val forces: MeasuresF
     // разрывает контакт СТРОЕМ: командир раздаёт клетки замыслом KITE с дальностью «вне его стрелкового огня», свободный
     // шаг отскакивает от ближайшего вооружённого на RANGED_RANGE + 1; постура не меняется, все механизмы боя живут.
     // Не бегство к точке (первая редакция выживания) и не непрерывное уклонение к выходу (вторая), а шаг назад строем
-    private val zeroLead = leadingNow && contact && forces.armedEnemies.isNotEmpty() && ours <= 0.0 && theirs > 0.0
+    private val zeroLead = ZERO_LEAD.c("leading", leadingNow) && ZERO_LEAD.c("contact", contact) && ZERO_LEAD.c("armedFoes", forces.armedEnemies.isNotEmpty()) && ZERO_LEAD.c("ourPowerZero", ours <= 0.0) && ZERO_LEAD.c("theirPowerPositive", theirs > 0.0)
     init { zeroLeadTicks = if (zeroLead) zeroLeadTicks + 1 else 0 }
     init {
         if (zeroLead) zlbZero.n++

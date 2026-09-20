@@ -285,6 +285,10 @@ private val HEAL_MATE = Why("healMate")
 private val MASS_KITE = Why("massKite")
 private val ALONE_IN_FIRE = Why("aloneInFire")
 private val FORMING = Why("forming")
+private val MUST_FLEE = Why("mustFlee")
+private val GROUPED = Why("grouped")
+private val COHESION_HOLD = Why("cohesionHold")
+private val RETREAT_HOLD = Why("retreatHold")
 
 private var ladderRows: List<Row<Turn, Aim>>? = null
 
@@ -850,16 +854,16 @@ internal class Stride(val turn: Turn, val aim: Aim) {
     val avoidCells = reachMine
     // прибор v234: лекарь в бою и в досягаемости его вооружённых; урон по лекарям
     init { if (turn.healer && inCombat) { hexpAll.n++; if ((creep.key) in targ.zones.reachCells) hexpN.n++; hlostSum.n += (t.pag.lostTick[creep.id] ?: 0) } }
-    val mustFlee = (turn.support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
-        (turn.support && inReach) ||
-        (turn.stepOut && (creep.key) in targ.zones.reachCells) ||
-        (lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
-        (turn.ghost > 0 && creep.hits <= turn.ghost)
+    val mustFlee = MUST_FLEE.c("supportAloneNearFoe", turn.support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
+        MUST_FLEE.c("supportInReach", turn.support && inReach) ||
+        MUST_FLEE.c("stepOutInReach", turn.stepOut && (creep.key) in targ.zones.reachCells) ||
+        MUST_FLEE.c("bleeding", lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
+        MUST_FLEE.c("ghostDamage", turn.ghost > 0 && creep.hits <= turn.ghost)
 
     // сплочение: авангард ждёт отставших группы (в тиках ИХ хода), пока сам не под огнём и напарник
     // не в бою; при враге в досягаемости зазор тесный — собираемся ДО входа под огонь
     val myFlow = flow[creep.key]
-    private val grouped = !turn.support && (posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && strat.threats.threat != null && target === strat.threats.threat))
+    private val grouped = GROUPED.c("combatant", !turn.support) && GROUPED.c("groupPostureOrThreatHunt", posture == Posture.ANNIHILATE || posture == Posture.FLAG || (huntingThreat && strat.threats.threat != null && target === strat.threats.threat))
     // напарники строя — ходячие ВООРУЖЁННЫЕ: у лекаря своя цель (подопечный), и взаимное ожидание «лекарь
     // отстал от флага — боец отстал от подопечного лекаря» запирало группу навсегда (стенд greedy)
     private val mates = if (grouped) armedMatesOf(meas.chase.mobileArmy, creep) else emptyList()
@@ -870,7 +874,7 @@ internal class Stride(val turn: Turn, val aim: Aim) {
     // подбирающий флаг рядом (grab) не ждёт никого, и его никто не ждёт: он ждал по сплочению группу у своего
     // флага, а группа ждала его как «отставшего» на пути к цели — взаимное ожидание на 1200 тиков при живом
     // враге из двух скаутов на наших флагах (стенд m3 kite, проигрыш по очкам 9128:23661)
-    private val cohesionHold = grouped && turn.rallyTo == null && turn.grab == null && turn.engage == null && !underFire && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff + ARRIVED_SLACK && run {
+    private val cohesionHold = COHESION_HOLD.c("grouped", grouped) && COHESION_HOLD.c("noRally", turn.rallyTo == null) && COHESION_HOLD.c("noGrab", turn.grab == null) && COHESION_HOLD.c("noEngage", turn.engage == null) && COHESION_HOLD.c("notUnderFire", !underFire) && COHESION_HOLD.c("noMateFighting", !mateFighting) && COHESION_HOLD.c("onFlow", myFlow >= 0) && COHESION_HOLD.c("notArrived", creep.getRangeTo(target) > standoff + ARRIVED_SLACK) && COHESION_HOLD.c("mateLagging", run {
         var lagging = false
         for (m in mates) {
             if (getRange(creep, m) <= RANGED_RANGE) continue
@@ -884,15 +888,15 @@ internal class Stride(val turn: Turn, val aim: Aim) {
             if (lag in (gap + 1)..COHESION_GAP_MAX) { lagging = true; break }
         }
         lagging
-    }
+    })
     // отход строем (см. RETREAT_GAP): передняя половина ждёт отставшего от тела армии, пока сама вне огня
-    val retreatHold = (posture.withdrawing) && !turn.support && canMove(creep) && !underFire && turn.nearestEnemyRange > RANGED_RANGE + 1 && myFlow >= 0 && run {
+    val retreatHold = RETREAT_HOLD.c("withdrawing", (posture.withdrawing)) && RETREAT_HOLD.c("combatant", !turn.support) && RETREAT_HOLD.c("mobile", canMove(creep)) && RETREAT_HOLD.c("notUnderFire", !underFire) && RETREAT_HOLD.c("foeFar", turn.nearestEnemyRange > RANGED_RANGE + 1) && RETREAT_HOLD.c("onFlow", myFlow >= 0) && RETREAT_HOLD.c("rearStretched", run {
         val flows = armedOf(meas.chase.mobileArmy).map { flow[it.key] }.filter { it >= 0 }.sorted()
         if (flows.isEmpty()) return@run false
         val rear = flows.last()
         val median = flows[flows.size / 2]
         rear - median > RETREAT_GAP && myFlow <= median
-    }
+    })
     // терпение (см. COHESION_PATIENCE): затянувшееся ожидание снимается до конца отставания
     init {
         if (!cohesionHold) Memory.holdSince.remove(creep.id)
@@ -990,7 +994,7 @@ internal fun PainAndGain.steps(): List<Row<Stride, Position?>> = stepRows ?: lis
     // огнём бежит, даже если у него приказ командира или пост хранителя. До v240 приказ стоял выше бегства
     // (v172 «приказ — закон»), и комментарий у бегства утверждал обратное. Цена конфликта — прибор:
     // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
-    Row("flee", { mustFlee }, RowMark.SURVIVE) {
+    Row("flee", { mustFlee }, RowMark.SURVIVE, why = MUST_FLEE) {
         if (commandOf.containsKey(creep.id)) orderFled.n++
         fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (turn.support || turn.stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, t.strat.dec.retreatTo ?: t.strat.dec.post, 1, ctx.dangerMatrix)
     },
