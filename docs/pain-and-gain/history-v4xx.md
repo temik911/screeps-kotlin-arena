@@ -1920,9 +1920,65 @@ KDoc подстадий целей перенумерованы после ра�
 > *  `melee_1@(x,y)d2>ranged_3[hold:d2>2,!covered]holdMelee/stay` — и сводка `why-sum t=N:` раз в сто тиков по причинам;
 > *  читает tools/autopsy.py (строка «melee idle» и диагноз). Объём — не больше строки на контактный тик. */
 
-### v459 — архитектура, второй шаг, этап 6: владельцы состояния (тождество, 20.09.2026)
+### v459 — архитектура, второй шаг, этап 6, пункты 1–4: у синглтона нет состояния, прошлый тик — явно, одна чистка мёртвых id (тождество, 20.09.2026)
 
-ЧЕРНОВИК — дописывается. Снятые вместе с членами синглтона строки комментариев (дословно, для `verdicts.py`):
+Пять коммитов пакета, каждый под оракулом (`identity.sh 458r`: compare 140/140, `logdiff` 0, `verdicts` 0, `guard:` 0, lint и graph PASS).
+Поведение не меняется ни на один интент. Отряды, приборы `squads=` / `impure=` и правило одного писателя на владельцев — следующим заходом (v460).
+
+**`object PainAndGain` — это `tick()`, список починки и оркестровка; состояния в нём нет** (59 членов-данных → 0), его никто не получает ни
+приёмником, ни параметром: расширений синглтона 161 (до плана) → 65 (v454) → **0**, параметр `pag` у носителей и `ArmyTick.pag` исчезли.
+Голое имя в пакете разрешается по двум областям (локальная → верх пакета); общее состояние читается квалифицированно. Куда что ушло:
+- **коллекции — к объектам-владельцам в файле писателя, КАК ЕСТЬ** (те же долгоживущие словари с той же чисткой на тех же местах:
+  `commandOf` переживает тик с пустой армией — находка 2.8 п. 13): `Orders` (Commander: `commandOf`, `missionOf`, `orderWas`,
+  `orderFatigue`, `orderDist`), `FireBook` (Fight: `fireOf`, `healOf`, `shotsAt`, `strikesAt`, `damageBooked`, `prevShooters`), `Wall`
+  (Formation: `addressedDmg`, `lostTick`, `wallAddrHits`, `wallLostHits`, `wallCellOf`, `victimNow`, `victimSaveable`, `wallCells`),
+  `StrategistState` (`idleRunnerTicks`, `pressChase`, `pressGiveUp`, `escapeFlows`, `escapeTheirs`, `escapeNearest`), `WorldState`
+  (`disarmedFoe`, `arrivalById`, `flagsNow`, `plannedCaptures`, счёт: `ourRate`, `enemyRate`, `behindOnScore`, `flagFlipNow`),
+  `TacticianState` (`ghostLogged`, `focusPredDmg`, `huntsWounded`), `MapDump`, сигналы тика `Signals` (`unflaggedRushNow`,
+  `fightImminentNow`, `approachingNow`, `enemyNotFightingNow`, `enemyMassedSignal`, `groupSafe`, `groupDmgWindow`). Все — в списке починки
+  после оборванного тика и, значит, под правилом одного писателя. `Signals` — объект, а не носитель: `unflaggedRushNow` и `groupSafe` —
+  защёлки, читающие собственное значение прошлого тика, а `readSignals` стоит после зонда первых тиков — место в тике несущее;
+- **величины одного тика — поля носителей, вчерашние — `Prev`** (объект уровня 1, `Memory.kt`; копирует `RememberTick` и только в тике,
+  где армия считала меры, — иначе значения остаются прежними, как оставались члены): меры `ledgerWindow`, `ourLostWindow`, `hisLostWindow`
+  (`meas.exchange`), `fightOnNow` (`meas.fight`; `coreContactNow` был двойником `contact`, `exchangeLiveNow` — `exchangeLive`, `stalledNow` —
+  `stalled`); стратег `approachRate` (`strat.obj`), `farmerQuietNow` (`strat.detach`), `touchShare` / `hisTouchShare`
+  (`stanceOut.windows`), `cmdMode` (`strat.dec.decision.cmdMode`);
+- **величина, которую одни читали вчерашней, а другие сегодняшней, получила ОБА имени, и место чтения выбирает** (карта — ниже);
+- семь пустых `…Out` исчезли (стадии-функции не возвращают ничего); `tickOpen` — отметка механизма починки — у `AbortRepair`.
+
+**Карта «вчера / сегодня» (находка 2.8 п. 7 плана — теперь она в тексте).**
+| величина | писатель | кто читает ВЧЕРАШНЮЮ (`Prev`) | кто читает сегодняшнюю (носитель) |
+|---|---|---|---|
+| размен глазами ворот захвата: `stalled`, `exchangeLive`, `ourLostWindow` (`ExchangeView`) | `ArmyMeasures` | ворота, вызванные из `runRunners` (`captureAllowed` ×2, `captureBlock`) — `Prev.exchange`; `readSignals` (`fightMassedSeen`) | ворота, вызванные из `runArmy`: `StrategyObjective` (перехват и `chooseFlagObjective`), `TargetsTakers`, `RaceRoutes`, `commandGoal`, `submit` — `meas.view`; `lostRaceNow(view)` так же |
+| `approachRate` | `StrategyObjective` | `readSignals` (бросок, подход), бегуны: `exitMargin` ×3, `runnerEscape` | `exitMargin` из `chooseFlagObjective` / `evadePoint` (значение приходит параметром от зовущего), `planBlock`, печать постуры |
+| `farmerQuietNow` | `StrategyDetach` | горизонт ценности флага у бегунов (`RunnerMatch`) | `StrategyObjective.holdLine`, `chooseFlagObjective` (параметром) |
+| `touchShare` | `StanceWindows` | `StrategyDetach.meleeIdle` — стратег стоит РАНЬШЕ стойки | сама стойка (`touchMin`, `touchShareLast`) |
+| `cmdMode`, `ledgerWindow`, `hisLostWindow` | стратег, меры | строка `t=` (поля `mode`, `ledgerw`) — печатается и в тике без армии | командир, стойка, аудит приказов |
+Ворота и `exitMargin` зовутся из обоих мест — поэтому им значение называет ЗОВУЩИЙ (`captureAllowed(ctx, f, Prev.exchange)` против
+`captureAllowed(ctx, f, meas.view)`); это восемь сигнатур с лишним параметром, и это цена того, что странность видна.
+⚠️ **Граница тождества:** прежде член переписывался посреди тика, теперь `Prev` копируется в конце. После ОБОРВАННОГО тика (исключение,
+таймаут) следующий тик раньше видел частично обновлённые члены, теперь — значения последнего завершённого тика. На гейте оборванных тиков
+нет, живьём они редки; форма предписана планом (этап 6, п. 2).
+
+**Чистка мёртвых id — одна** (этап 6.4): таблица «по id своего бойца» объявляется `Memory.perCreepSet()` / `perCreepMap()`, и одна
+`Memory.prune(ctx.army)` стоит на месте семи одинаковых `retainAll` в хвосте `StrategyThreats` (место входит в тождество: размеры таблиц
+печатают приборы). Чистки-решения (`detachedIds`, `runnerFlag`, гарнизон, курьер) остались на местах. Не чистит никто: `rotatingIds` по
+пути защёлки, `rotateSince`, `cmdDetach` в бою — находки 2.8 п. 3 и п. 10 как есть.
+
+**Цена правки.** Действие 3 (новая величина от стадии к стадии): у стадий-носителей — 1 место с v456; у стадий, отдававших через синглтон
+(около 6 мест в трёх файлах), — теперь тоже 1 (`val` в теле носителя), если писатель — носитель; у трёх оставшихся стадий-функций
+(`readSignals`, `healerWall`, огонь и лечение) — 2 (поле объекта-владельца и запись). Действие 6 (новая память между тиками): было
+2 места + чистка мёртвых id руками в другом файле — стало 1 (`val x = perCreepMap<…>()` в `Memory`).
+
+**Находки.** (1) `FireBook.fireOf` читают три места, а пишет только `commandFire` через параметр `out` — прямой записи нет, перепись
+показывала «никем не пишется». (2) `StrategistState.pressChase` читает только его писатель. (3) `Power.kt` в выключенной ветке
+(`USE_TOUCH_SHARE_LAST = true`) читает `Prev.touchShare`: если рубильник вернуть, мощь, посчитанная ПОСЛЕ стойки в том же тике, увидит
+вчерашнюю долю, а не сегодняшнюю, как раньше. (4) Конвертер переноса переписал имя внутри строкового литерала — тег ворот
+`Gate("groupSafe")` стал `Gate("Signals.groupSafe")`; исходы не изменились, `logdiff` поймал по строке `reach` на всех 140 логах — это
+довод за то, что строки `reach` / `tac` больше не отбрасываются (v455). (5) `plannedCaptures` чистит мир, пополняет стратег — два
+файла-писателя, объявлен у нижнего (иначе чистка — ребро вверх).
+
+Снятые вместе с членами синглтона строки комментариев (дословно, для `verdicts.py`):
 
 > // бесплодная охота (см. STALL_TICKS) — снимает и запрет захвата в контакте
 > /** Идёт ли бой ПРЯМО СЕЙЧАС — считается до отряда и до командирской гонки, чтобы обе читали этот тик. */
