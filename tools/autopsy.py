@@ -93,6 +93,9 @@ RUNNER_RE = re.compile(r'^  r(\S+) \((\d+),(\d+)\) (\S+) hits=(\d+) (\w+) flag=(
 ARMIES_RE = re.compile(r'^armies t=(\d+): ours\((\d+)\) (.*?) \| enemy\((\d+)\) (.*)$')
 HELLO_RE = re.compile(r'^hello \S+ \S+ (v[\w.-]+):')
 WHY_RE = re.compile(r'^why t=(\d+): (.*)$')
+# pain-and-gain v458 took the hand-made `why t=` trace of one fact out; every complex fact now counts the conjunct its `&&` chain
+# stopped on (`whynot t=`: fact=conjunct:times,… — cumulative, so the LAST line of a match is the match). Older matches keep `why t=`.
+WHYNOT_RE = re.compile(r'^whynot t=\d+: (.*)$')
 WHY_ITEM = re.compile(r'(\S+?)@\((\d+),(\d+)\)d(\d+)>(\S+?)\[([^\]]*)\](\S+?)/(\S+)')
 FLAG_ITEM = re.compile(r'([ADHR])(\d)([+\-0])([se]?)(?:g(\d+))?')
 PAIR_RE = re.compile(r'\((-?\d+),(-?\d+)\)')
@@ -112,7 +115,7 @@ def parse_log(text):
     L = dict(version=None, tuning=None, samples=[], postures=[], evades=[], stalls=[], detaches=[], keepers=[],
              plans=[], flags=[], ghosts=[], giveups=[], press_in=[], runners=defaultdict(list), armies=[],
              errors=Counter(), stuck=0, lines=0, why_ticks=0, why_creep_ticks=0, why_reasons=Counter(), why_did=Counter(), why_by=Counter(),
-             why_first=None, why_last=None)
+             why_first=None, why_last=None, whynot=None)
     tick = 0
     for line in text.splitlines():
         L['lines'] += 1
@@ -189,6 +192,10 @@ def parse_log(text):
                 for r in it.group(6).split(','):
                     L['why_reasons'][r] += 1
                 L['why_did'][it.group(7)] += 1
+            continue
+        m = WHYNOT_RE.match(line)
+        if m:
+            L['whynot'] = m.group(1)
             continue
         if line.startswith('tuning: '):
             L['tuning'] = line[8:]
@@ -807,6 +814,13 @@ def render(L, R, info, history, step):
     if L['why_creep_ticks']:
         p(f"  melee idle with an enemy within engage range (why trace): {L['why_creep_ticks']} creep-ticks over {L['why_ticks']} ticks (t={L['why_first']}..{L['why_last']}); "
           f"filters {dict(L['why_reasons'].most_common(8))}; did {dict(L['why_did'].most_common(5))}; by creep {dict(L['why_by'].most_common(4))}")
+    if L['whynot']:
+        facts = {f: [(n, int(c)) for n, c in re.findall(r'([\w.]+):(\d+)', body)] for f, body in re.findall(r'([\w.]+)=(\S*)', L['whynot'])}
+        for fact in ('engage', 'retreat', 'annihilate', 'healMate'):
+            conj = sorted(facts.get(fact, []), key=lambda x: -x[1])
+            total = sum(c for _, c in conj)
+            if total:
+                p(f"  why not {fact} (whynot, {total} refusals): " + ', '.join(f"{n} {100 * c // total}%" for n, c in conj[:6]))
     rs = runner_stands(L)
     if rs:
         p('runners: ' + '; '.join(f"{r['id']} modes {r['modes']} longest stand {r['stand']['ticks']}t at {r['stand']['cell']} {r['stand']['mode']} {r['stand']['flag']}" for r in rs if r['stand']))
