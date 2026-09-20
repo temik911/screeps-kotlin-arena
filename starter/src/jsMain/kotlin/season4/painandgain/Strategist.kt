@@ -1257,6 +1257,9 @@ internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedE
     }
     val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) && raceFit(it) }.toMutableList()
     if (free.isEmpty()) { if (hadOut) raceExitFree.n++; return }
+    // очистка набора командира — ЗДЕСЬ, за ранними выходами (v465, дефект 4; до того — в RaceRoster.init): на выходах выше прежний
+    // состав переживает тик; ниже набор строится заново — держатели (RaceBudget), отряды в пути (RaceRoutes), гарнизон, горстки
+    Squads.recallAll(Squads.Source.COMMANDER)
     val purse = RaceBudget(ctx, meas, roster, free)
     if (roster.fightBlocks) { if (hadOut) raceExitBlocks.n++; return }
     if (purse.budget <= 0) { if (hadOut) raceExitBudget.n++; return }
@@ -1265,11 +1268,13 @@ internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedE
     RaceParties(ctx, meas, armedEnemies, roster, free, purse, routes)
 }
 
-/** ПОДСТАДИЯ 1 ГОНКИ: состав — уже отпущенные (снимаются ДО очистки `Squads.cmdDetach`), держатели, режим пар (`safe`), мера ядра (`coreHolds`), запрет боем. */
+/** ПОДСТАДИЯ 1 ГОНКИ: состав — уже отпущенные (снимаются ДО очистки `Squads.cmdDetach`, а она с v465 стоит в `commandRace` ЗА ранними выходами), держатели, режим пар (`safe`), мера ядра (`coreHolds`), запрет боем. */
 internal class RaceRoster(private val ctx: Ctx, private val meas: ArmyMeasures, private val armedEnemies: List<Creep>) {
-    // ...и состав берётся ДО очистки (v215, см. USE_RACE_COUNTS_RELEASED): очистка стояла строкой выше чтения
+    // ...и состав берётся ДО очистки (v215, см. USE_RACE_COUNTS_RELEASED): очистка стояла строкой выше чтения.
+    // СОСТАВ ПЕРЕЖИВАЕТ РАННИЙ ВЫХОД (v465, дефект 4): очистка стояла здесь, в init, и ранние выходы `commandRace` («бой блокирует и
+    // держателей нет», «свободных нет») оставляли набор ПУСТЫМ до следующего тика — гарнизон и курьер возвращались в армию, получали
+    // её приказы и сходили с флагов на тик. Теперь очистка стоит в `commandRace` за этими выходами (см. там)
     val alreadyOut = ctx.runners.filter { it.id in Squads.cmdDetach }
-    init { Squads.recallAll(Squads.Source.COMMANDER) }
     // ДЕРЖАТЕЛИ ОСТАЮТСЯ (v297, см. HOLD_WATCH): отпущенный, стоящий на взятом флаге при его крипе рядом, сохраняет
     // задание, пока хватает бюджета и ядро без него держит паритет. Задания раздавались только на ЧУЖИЕ флаги, и
     // взявший флаг на следующем тике уходил за другим или в армию — против けろびー#19 130 из 194 сходов вооружённых

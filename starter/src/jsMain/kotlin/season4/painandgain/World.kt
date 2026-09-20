@@ -105,6 +105,7 @@ internal class Ctx() {
     private val healersAlive = active.any { healerOnly(it) && canMove(it) }
     private fun wounded(c: Creep) =  healersAlive && stripped(c) && bornCombatant(c)
     init { Squads.keepDetached { id -> active.any { it.id == id && hasWeapon(it) && canMove(it) } } }
+    init { Squads.pruneDead(active) }   // погибшие — и из набора командира (v465, дефект 4); живых он не трогает
     // ...и зачисленные КОМАНДИРОМ (v160, см. commandRace): его задание на захват действует так же, как detach —
     // иначе крип, посланный за флагом, остаётся бойцом строя и флага не берёт
     private val takers = { id: String -> id in Squads.detachedIds || (id in Squads.cmdDetach) }
