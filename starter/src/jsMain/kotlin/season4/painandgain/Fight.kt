@@ -145,8 +145,7 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
         // ПРИБОР РАЗДЕЛИТЕЛЯ (v496): сколько лечения уходит в крипов, у которых уже НИ ОДНОЙ живой оружейной части, —
         // им доставка чинит MOVE. Замер реплеев: у проигравшего 38-52 %, у победителя 14-21 %, без перекрытия
         hdeadAll.n += amount
-        val q = InfluenceMap.profileOf(target)
-        if (q.melee <= 0.0 && q.ranged <= 0.0 && q.heal <= 0.0) hdeadIn.n += amount
+        if (!InfluenceMap.armedNow(target)) hdeadIn.n += amount
         hfullAll.n++; if (target.hits >= target.hitsMax) hfullN.n++
         hoverSum.n += maxOf(0, amount - maxOf(0, needConfirmed(target))); hdelivSum.n += amount
         healDone[target.id] = (healDone[target.id] ?: 0) + amount
@@ -162,8 +161,7 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
     // конца, а оружие стоит спереди. Замер пяти матчей против MetalicaX#17 (20.09.2026, реплеи): проигравший льёт в
     // уже безоружных 38-52 % своего лечения, победитель 14-21 %, в каждом матче и без перекрытия; до первой
     // вернувшейся оружейной части уходит вхолостую 193 хита (медиана у нас) и 340 у него
-    fun gain(target: Creep, deliver: Double): Int =
-        if (USE_HEAL_BY_FIREPOWER) InfluenceMap.restoredPower(target, deliver).toInt() else 0
+    fun gain(target: Creep, deliver: Double): Int = InfluenceMap.weaponRank(target, deliver)
     for (creep in active) {
         strike(creep, enemyCreeps, focusTarget, focusOrder)
         val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
@@ -416,10 +414,9 @@ internal fun commandHeal(army: List<Creep>, enemies: List<Creep>, out: MutableMa
     for (h in free) {
         val pr = InfluenceMap.profileOf(h)
         fun needOf(m: Creep) = (m.hitsMax - m.hits) + (incoming[m.id] ?: 0.0)
-        fun gainOf(m: Creep): Double {
-            if (!USE_HEAL_BY_FIREPOWER) return 0.0
+        fun gainOf(m: Creep): Int {
             val d = h.getRangeTo(m)
-            return InfluenceMap.restoredPower(m, if (d <= 1) pr.heal else pr.heal / 3.0)
+            return InfluenceMap.weaponRank(m, if (d <= 1) pr.heal else pr.heal / 3.0)
         }
         val t = mates.filter { h.getRangeTo(it) <= HEAL_RANGE && it.id != h.id }
             .maxWithOrNull(compareBy<Creep>({ gainOf(it) }, { needOf(it) }))

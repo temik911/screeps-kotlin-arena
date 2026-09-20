@@ -105,6 +105,20 @@ object InfluenceMap {
      * хитов поднимает число живых до ceil((hits + d) / 100); прирост оружейных частей, умноженный на мощь одной,
      * и есть то, что лечение покупает армии. Ноль, пока доставка не переводит крипа через границу части.
      */
+    /** Есть ли у крипа хоть одна ЖИВАЯ оружейная часть (v496): ниже 100 x хвоста он жив и безоружен совсем. */
+    fun armedNow(a: Creep): Boolean {
+        val q = profileOf(a)
+        return q.melee > 0.0 || q.ranged > 0.0 || q.heal > 0.0
+    }
+
+    /** Ранг подопечного по ОРУЖИЮ (v496, см. USE_HEAL_BY_FIREPOWER): 2 — доставка включает оружейную часть обратно,
+     *  1 — оружие ещё живо и его надо беречь, 0 — крип уже безоружен, и доставка до оружия не дотянет. Ступень нужна
+     *  именно трёхзначная: одна лишь «возвращённая мощь» даёт НОЛЬ и целому крипу (возвращать нечего), и глубоко
+     *  раздетому, а прежний тай-брейк по недобору хитов из этих двух выбирает раздетого — то есть ровно тот выбор,
+     *  который правка и отменяет (первая редакция, прибор `hdead=1860/4392` живьём: 42 %, полоса проигравшего). */
+    fun weaponRank(a: Creep, delivered: Double): Int =
+        if (!USE_HEAL_BY_FIREPOWER) 0 else if (restoredPower(a, delivered) > 0.0) 2 else if (armedNow(a)) 1 else 0
+
     fun restoredPower(a: Creep, delivered: Double): Double {
         if (delivered <= 0.0) return 0.0
         val total = a.body.size
@@ -887,7 +901,7 @@ object InfluenceMap {
             // радиус 2 — «шаг + удар») и есть эта досягаемость
             if (fireMode && (if (nx != null) nx.threatAt(healer, x, y) > 0.0 else (eFire[key(x, y)] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[key(x, y)] > 0)))) return 0.0
             var best = 0.0
-            var bestPower = 0.0
+            var bestPower = -1
             for (a in allies) {
                 if (fireMode && (!inFireNow(a) || a.id in advancingWards)) continue
                 val q = if (fireMode && nx != null) nx.wardCell(a) else null
@@ -899,7 +913,7 @@ object InfluenceMap {
                 // ...И МЕЖДУ ПОДОПЕЧНЫМИ РЕШАЕТ ВОЗВРАЩЁННАЯ ОГНЕВАЯ МОЩЬ (v496, см. USE_HEAL_BY_FIREPOWER): величина
                 // остаётся в хитах — против опасности и влияния взвешивается ровно то же, что и раньше, — а меняется
                 // только ТО, ОТ КОГО она берётся. Когда включить обратно нечего никому, выбор прежний, по хитам
-                val w = if (USE_HEAL_BY_FIREPOWER) restoredPower(a, v) else 0.0
+                val w = weaponRank(a, v)
                 if (w > bestPower || (w == bestPower && v > best)) { bestPower = w; best = v }
             }
             return best
