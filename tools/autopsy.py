@@ -129,7 +129,9 @@ def parse_log(text):
                          enemies=_ratio(d['enemies'])[0], combat=_ratio(d['enemies'])[1],
                          reach=_ratio(d.get('reach', '0/0'))[0], reachable=_ratio(d.get('reach', '0/0'))[1],   # no reach= before v20
                          score=_ratio(d['score']), rate=_ratio(d['rate']), behind=d.get('behind') == 'true',
-                         posture=d.get('posture'), obj=d.get('obj'), hunt=d.get('hunt') == 'true', rush=d.get('rush') == 'true',
+                         posture=d.get('posture'), obj=d.get('obj'),
+                         hunt=d.get('hthreat', d.get('hunt')) == 'true',   # `hthreat=` since v461; before it the line carried two `hunt=` and the last one won
+                         rush=d.get('rush') == 'true',
                          our=int(d['our']), enemy=int(d['enemy']), ledger=int(d.get('ledger', 0)), wounded=int(d.get('wounded', 0)),
                          hits=_ratio(d['hits']), ehits=_ratio(d['enemyHits']),
                          cen=_pair(d.get('centroid')), ecen=_pair(d.get('enemyCentroid')))

@@ -242,7 +242,8 @@ vanished is a divergence as before — existing fields are never masked, that is
 is history and is not extended any more. Reading stops at a log's first real divergence (lines after it are shifted).
 
 **Five lint rules with a known list that only shrinks — `lint-known.txt`.** `plumbing` (an `x = x` argument: the field
-name written a third time), `needless_receiver` (declared an extension of `PainAndGain`, touches the object neither itself
+name written a third time; a `@JsPlainObject` builder is exempt — named arguments are its only form, and the names are read
+from the declarations in the package and in `types/`), `needless_receiver` (declared an extension of `PainAndGain`, touches the object neither itself
 nor through its callees), `tag_outside_table` (a row tag compared as a string with `==` / `!=` / `in`), `single_writer` (a
 `Memory` field or a `PainAndGain` member written from more than one file; by text — assignment, `++`, indexed write, a
 mutating collection call; a same-named local or parameter does not count), `table_order` (below). A violation is an ATOM
