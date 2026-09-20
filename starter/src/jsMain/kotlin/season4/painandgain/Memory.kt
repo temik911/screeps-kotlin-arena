@@ -38,8 +38,8 @@ internal object Memory {
     // требовала восьмой, которую не держало ничто. Реестр стоит ВЫШЕ таблиц: поля объекта инициализируются по порядку текста. Сами
     // таблицы остаются прямыми полями `Memory` — починка после оборванного тика обходит только их; реестр — список ссылок, его не чинят.
     // Чистки, которые на деле РЕШЕНИЯ (`detachedIds` — живой, вооружённый, подвижный; `runnerFlag` — только нынешние бегуны; гарнизон,
-    // курьер), сюда не входят и стоят на своих местах. НЕ чистит никто: `rotatingIds` (по пути защёлки), `rotateSince`, `cmdDetach` в
-    // бою — находка 2.8 п. 3 и п. 10 плана; добавить их сюда значит изменить размеры таблиц, которые печатают приборы.
+    // курьер), сюда не входят и стоят на своих местах. НЕ чистит никто: `cmdDetach` в бою — находка 2.8 п. 10 плана (дефект 4).
+    // `rotatingIds` и `rotateSince` — здесь с v463 (дефект 2): мёртвые id копились в них до конца матча, а сам набор читает мир.
     private val creepSets = ArrayList<MutableSet<String>>()
     private val creepMaps = ArrayList<MutableMap<String, *>>()
     private fun perCreepSet(): HashSet<String> = HashSet<String>().also { creepSets.add(it) }
@@ -105,9 +105,9 @@ internal object Memory {
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()
     val flowCacheTick = HashMap<Int, Int>()   // тик расчёта поля (см. FLOW_TTL)
-    val rotatingIds = HashSet<String>()   // бойцы в ротации (см. ROTATE_OUT)
+    val rotatingIds = perCreepSet()   // бойцы в ротации (см. ROTATE_OUT); под чисткой мёртвых с v463 (дефект 2)
     val rotatingLatch = Latch(rotatingIds)
-    val rotateSince = HashMap<String, Int>()   // тик выхода в ротацию (замер длительности, см. USE_ROTATE_OVER_SLOT)
+    val rotateSince = perCreepMap<Int>()   // тик выхода в ротацию (замер длительности, см. USE_ROTATE_OVER_SLOT); чистится с v463
     val enemyHitsHist = ArrayDeque<Int>()         // сумма хитов врага за STALL_TICKS тиков (чистый урон)
     val marchHist = ArrayDeque<Int>()             // клетка центра вооружённой массы за MARCH_STALL_TICKS тиков
     val armyDistHist = ArrayDeque<Int>()          // дистанция между центрами армий за CHASE_WINDOW тиков (см. третья сетка)

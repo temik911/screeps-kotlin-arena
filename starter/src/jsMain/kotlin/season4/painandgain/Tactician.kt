@@ -407,11 +407,17 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
             if (!wasOut && isOut) { Memory.rotateSince[creep.id] = meas.exchange.now; rotOut.n++; if (DEBUG_LOG) println("rot t=${meas.exchange.now} out ${creep.id} frac=$frac hits=${creep.hits}") }
         } else if (creep.id in Memory.rotatingLatch && creep.id !in Memory.rotByFocus && !stepOut) {
             // ЗАЛИПШАЯ ЗАЩЁЛКА (v463, дефект 2): защёлка обновляется только под rotGate. Закрылся гейт у бойца, уже стоящего в
-            // `rotatingIds` по её пути (погибли все лекари — конъюнкт healersAlive, — или он потерял оружие), и выхода нет: тактик
-            // его ротирующим уже не считает (`rotating` ниже требует rotGate), а мир читает множество напрямую — lineMelees,
-            // lineRangeds, raceCapable, — и вылеченный боец до конца матча не входит в линию строя и не выпускается отрядом.
-            // Прибор `rotstuck=` считает такие крипо-тики
-            rotStuck.n++
+            // `rotatingIds` по её пути, и выхода нет: тактик его ротирующим уже не считает (`rotating` ниже требует rotGate), а
+            // мир читает множество напрямую — lineMelees, lineRangeds, raceCapable. Закрытий у этого пути два, и они разные:
+            //  - `armed` (потерял оружие): пока раздет, запись дублирует фильтры мира (они считают ЖИВЫЕ части), а при излечении
+            //    гейт откроется и защёлка продолжит сама (доля оружия ниже порога — остаётся в ротации, выше backIn — выйдет).
+            //    Вынужденный выход здесь не чинит ничего, а добавляет однотиковый артефакт: строй читает множество ДО хода бойца,
+            //    и вылеченный на тик излечения попадал бы в линию (как всякий свежий вход) — гейт v463 показал это пятью
+            //    разошедшимися сценариями без единого выигрыша. Запись остаётся, крипо-тики считает часть 0 прибора `rotstuck=`;
+            //  - `healersAlive` (погибли все лекари): гейт не откроется никогда, боец с живым оружием до конца матча стоял вне
+            //    линии и вне гонки. Выход — здесь же, в тот же тик; часть 1 прибора считает такие выходы
+            if (targ.zones.healersAlive) rotStuck.n++
+            else { rotStuckNoHeal.n++; Memory.rotatingIds.remove(creep.id) }
         }
     }
     val rotating = creep.id in Memory.rotByFocus || stepOut || (rotGate && creep.id in Memory.rotatingLatch)
@@ -1921,10 +1927,13 @@ internal val spotMeleeTicks = Gauges.counter("spotm")
 internal val rotOut = Gauges.counter("rot")
 
 /** Защёлка ротации (v463, дефект 2): крипо-тики живого бойца в `rotatingIds` (часть 1 поля `rotset=`; часть 0 — размер набора на
- *  печати, в `Instruments.kt`) и крипо-тики «в наборе по пути защёлки при закрытом rotGate» (`rotstuck=`). */
+ *  печати, в `Instruments.kt`) и «в наборе по пути защёлки при закрытом rotGate» — `rotstuck=по оружию/без лекарей`: часть 0 —
+ *  крипо-тики раздетого при живых лекарях (запись остаётся), часть 1 — вынужденные выходы при погибших лекарях. */
 internal val rotSetTicks = Gauges.counter("rotset", 1)
 
 internal val rotStuck = Gauges.counter("rotstuck")
+
+internal val rotStuckNoHeal = Gauges.counter("rotstuck", 1)
 
 /** Лекарь вне досягаемости (v234): лекаре-тиков в досягаемости / в бою, урон по лекарям. */
 internal val hexpN = Gauges.counter("hexp")
