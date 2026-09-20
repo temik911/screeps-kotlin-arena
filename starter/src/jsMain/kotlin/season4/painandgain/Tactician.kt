@@ -1051,7 +1051,15 @@ internal fun freeStep(s: Stride): Position? {
         // наш лекарь стоял вплотную к самому раненому в 13% замеров и дальше трёх клеток — в 32%. Закрытыми
         // остаются клетки вплотную к вражескому МИЛИ: там лекарь не лечит, а умирает
         val healingNow = healer && healMate != null && healMate.hits < healMate.hitsMax && getRange(creep, healMate) <= HEAL_RANGE + 1
-        if (support && !inReach && avoidCells.isNotEmpty() && !(healingNow)) myBlocked = myBlocked + avoidCells
+        // ...И ИЗЪЯТИЕ ДЕЙСТВУЕТ ТОЛЬКО ПРИ ЛЕЧЕНИИ ВПЛОТНУЮ (v511, см. USE_HEAL_CARVE_ADJACENT_ONLY). Обоснование
+        // изъятия — «72 за часть против 24», то есть ВПЛОТНУЮ; но условие пускало лекаря в досягаемость и когда
+        // подопечный в двух-четырёх клетках, а там он льёт ту же треть, что лил бы снаружи. Реплеи четырёх
+        // поражений от MetalicaX#17 (21.09.2026) эту половину оценили прямо: лекарь-тиков под его стволами с
+        // лечением ТОЛЬКО дальним (или вовсе без лечения) 11-20 за матч, полученного урона 110-284, а контрфакт
+        // «стоять вне огня и лечить дальним» даёт РОВНО ТО ЖЕ лечение — 440/288/288/460 против фактических
+        // 404/240/264/456. Эти тики не куплены ничем, и в двух поражениях из четырёх в них не лечили совсем
+        val carveNow = if (!USE_HEAL_CARVE_ADJACENT_ONLY) healingNow else healingNow && getRange(creep, healMate!!) <= 1
+        if (support && !inReach && avoidCells.isNotEmpty() && !(carveNow)) myBlocked = myBlocked + avoidCells
         if (support && localThreats.isNotEmpty() && localThreats.none { getRange(creep, it) <= 1 }) {
             val front = HashSet<Int>()
             for ((dx, dy) in dirsNow()) {
