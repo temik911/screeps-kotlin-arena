@@ -520,14 +520,14 @@ internal fun PainAndGain.armyFireAndHeal(ctx: Ctx, meas: ArmyMeasures, targ: Arm
         println("why-sum t=${getTicks()}: " + whySum.entries.sortedByDescending { it.value }.joinToString(" ") { "${it.key}=${it.value}" })
         whySum.clear()
     }
-    prevShooters = meas.combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.key, p.ranged, p.melee) }
+    prevShooters = meas.forces.combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.key, p.ranged, p.melee) }
     // ...командирская цель НЕ подменяет цель стрельбы (v138): проведённая сюда, она уронила гейт до 129/131 и
     // дала m33:kite 0:21 135 — армия бросала всё ради назначенной цели. Она влияет мягко, через порядок focusOrder
     // огонь тоже по приказу командира (v161): назначения считаются на всю силу, включая захватчиков с оружием
-    commandFire(ctx.army + ctx.runners.filter { hasWeapon(it) }, meas.enemyCreeps, targ.focusTarget, targ.focusOrder, fireOf)
-    commandHeal(ctx.army, meas.enemyCreeps, healOf)
+    commandFire(ctx.army + ctx.runners.filter { hasWeapon(it) }, meas.forces.enemyCreeps, targ.focus.focusTarget, targ.focus.focusOrder, fireOf)
+    commandHeal(ctx.army, meas.forces.enemyCreeps, healOf)
     // ...и отряжённый лекарь без оружия лечит (v240): до этого healAndShoot получал бегунов только с оружием
-    healAndShoot(ctx.army + ctx.combatRunners, meas.allies, meas.enemyCreeps, targ.focusTarget, targ.focusOrder)
+    healAndShoot(ctx.army + ctx.combatRunners, meas.forces.allies, meas.forces.enemyCreeps, targ.focus.focusTarget, targ.focus.focusOrder)
     cpuMark("shoot")
     return ArmyFireAndHealOut(
     )
