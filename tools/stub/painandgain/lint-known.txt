@@ -4,11 +4,5 @@
 plumbing Commander.kt:ourFlagCells
 plumbing Commander.kt:ourFlagCells~2
 plumbing Commander.kt:ourFlagCells~3
-plumbing InfluenceMap.kt:opacity
-plumbing InfluenceMap.kt:opacity~2
-plumbing InfluenceMap.kt:x
-plumbing InfluenceMap.kt:y
 plumbing Tactician.kt:stripped
 plumbing World.kt:near
-plumbing World.kt:range
-plumbing World.kt:range~2

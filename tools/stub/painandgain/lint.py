@@ -266,15 +266,49 @@ def _numbered(atoms):
 PLUMB = re.compile(r'(?<![\w.])(\w+) = \1(?=\s*(?:[,)]|$))')
 
 
+def _plain_objects():
+    """Имена `@JsPlainObject external interface` — пакета и привязок `types/`. Их «конструктор» — построитель JS-объекта, у которого
+    аргументы бывают ТОЛЬКО именованными: `IntPos(x = x, y = y)`, `SearchGoal(pos = target, range = range)` — не третье написание
+    имени поля, а форма API. Список не ведётся руками: он читается из объявлений."""
+    names = set()
+    types = os.path.join(HERE, '..', '..', '..', 'types', 'src', 'jsMain', 'kotlin')
+    for root in (SRC, types):
+        for d, _, fs in os.walk(root):
+            for f in fs:
+                if f.endswith('.kt'):
+                    text = open(os.path.join(d, f), encoding='utf-8').read()
+                    names.update(re.findall(r'@JsPlainObject\s+external\s+interface\s+(\w+)', text))
+    return names
+
+
+def _callee(code, at):
+    """Имя вызова, в чьих скобках стоит позиция at (в пределах строки); None, если скобка открыта не в этой строке."""
+    depth = 0
+    for i in range(at - 1, -1, -1):
+        ch = code[i]
+        if ch in ')]}':
+            depth += 1
+        elif ch in '([{':
+            if depth == 0:
+                m = re.search(r'(\w+)\s*$', code[:i]) if ch == '(' else None
+                return m.group(1) if m else None
+            depth -= 1
+    return None
+
+
 def plumbing(files):
     """САНТЕХНИКА: аргумент `x = x` — имя поля, написанное третий раз (заголовок класса, локальная построителя, аргумент).
-    Носитель, у которого поле объявлено там, где вычислено (план, 4.1), такого аргумента не имеет вовсе."""
+    Носитель, у которого поле объявлено там, где вычислено (план, 4.1), такого аргумента не имеет вовсе. Построитель
+    `@JsPlainObject` — не сантехника: именованный аргумент там единственная форма (см. _plain_objects)."""
     out = []
+    plain = _plain_objects()
     for f, rows in files.items():
         for n, code in rows:
             if re.match(r'\s*(?:va[lr]\s|return\b)', code) and '(' not in code:
                 continue
             for m in PLUMB.finditer(code):
+                if _callee(code, m.start()) in plain:
+                    continue
                 out.append((f, n, 'аргумент `%s = %s` — поле объявляется там, где вычислено' % (m.group(1), m.group(1)), '%s:%s' % (f, m.group(1))))
     return [(f, n, t, 'plumbing ' + k) for f, n, t, k in _numbered(out)]
 
