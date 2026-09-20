@@ -88,7 +88,7 @@ internal fun priorityOf(step: RowMark, rung: RowMark): Priority = when {
 }
 
 /** Отдать предложение арбитру: перепись (прежняя и новая) и запрос хода — в прежнем порядке побочных действий. */
-internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView) {
+internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView, fist: Pair<Int, Int>? = null) {
     rungCount.bump(p.rung)
     stepCount.bump(p.stepTag)
     tacCount.bump(p.why)
@@ -103,7 +103,21 @@ internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView) {
     // рождается интент шага армии, поэтому проверка одна на все ветки: разрешённый захват проходит как прежде
     // (planCapture), запрещённый — крип стоит, как POISED-бегун
     val flagAt = p.step?.let { s -> ctx.flags.firstOrNull { !it.ours && it.pos.x == s.x && it.pos.y == s.y } }
-    val step = if (flagAt != null && captureBlock(ctx, flagAt, view, CapAsker.ARMY) != null) { strayCapRefused.n++; null } else p.step
+    val step0 = if (flagAt != null && captureBlock(ctx, flagAt, view, CapAsker.ARMY) != null) { strayCapRefused.n++; null } else p.step
+    // КУЛАК ДЕЙСТВУЕТ НА ВСЯКИЙ ШАГ В БОЮ (v490, см. USE_FIST_EVERY_STEP). Запрет уходить дальше `FIST_RADIUS +
+    // STRAGGLER_SLACK` от медианы боевых живёт внутри командирской раздачи (`Formation.fist`, зовётся из `Deal.kt:72`),
+    // а она правит 5–20 % крипо-тиков — значит то единственное, что держит армию вместе, на остальных четырёх пятых не
+    // действует вовсе. Здесь тот же запрет стоит на ЕДИНСТВЕННОМ месте рождения шага и потому действует на все ветки.
+    // Он не выбирает клетку и не спорит с выбором: отменяется только шаг, который уводит ДАЛЬШЕ порога И дальше, чем
+    // крип стоит сейчас, — возвращение к своим разрешено всегда. Спасение (SURVIVE) не трогается: выживание выше
+    // задания. Это НЕ расширение командира (v155/v156, 0-8 и падения roost/scatter/camp) и не расширение строя
+    // (v384/v385, 12-20 против 6-10): те раздавали клетки, этот ограничивает движение
+    val step = if (!USE_FIST_EVERY_STEP || fist == null || step0 == null || p.priority == Priority.SURVIVE) step0 else {
+        val now = maxOf(abs(p.creep.x - fist.first), abs(p.creep.y - fist.second))
+        val next = maxOf(abs(step0.x - fist.first), abs(step0.y - fist.second))
+        fistAll.n++
+        if (next > FIST_RADIUS + STRAGGLER_SLACK && next > now) { fistHeld.n++; null } else step0
+    }
     if (step != null) { TrafficManager.request(p.creep, step, p.rank); planCapture(ctx, step) }
 }
 
@@ -113,7 +127,13 @@ internal class ArmyTick(
     val strat: ArmyStrategy,
     val targ: ArmyTargets,
     val stanceOut: ArmyStance,
-)
+) {
+    /** Центр кулака этого тика (v490, см. USE_FIST_EVERY_STEP): медиана боевых, пока бой идёт; вне боя кулака нет и
+     *  запрет не действует — армия ходит за флагами, и стягивать её незачем. */
+    val fistNow: Pair<Int, Int>? =
+        if (!USE_FIST_EVERY_STEP || !meas.fight.contact) null
+        else strat.inp.combatArmy.ifEmpty { null }?.let { Formation.median(it) }
+}
 
 /**
  * РОТАЦИЯ ПО ЕГО ФОКУСУ (v275, разбор 97 игр против ●ω<♥♪#6: все версии 0-8…2-14). Его стволы бьют нашего крипа с
@@ -1100,7 +1120,7 @@ internal fun creepTurn(creep: Creep, ctx: Ctx, t: ArmyTick) {
         // ...И ШАГ СТАНОВИТСЯ ПРЕДЛОЖЕНИЕМ (v252, этап 9): решение крипа — значение, которое отдаётся арбитру одним вызовом,
         // с приоритетом и причиной «задание отряда . терм» (терм — ветка шага, а у свободного шага — ступень лестницы)
         submit(Proposal(creep, step, priorityOf(pace.mark, rung.mark), prio, Orders.missionOf[creep.id] ?: '?',
-            if (pace.mark == RowMark.FREE) whyTag else stepTag, whyTag, stepTag), ctx, meas.view)
+            if (pace.mark == RowMark.FREE) whyTag else stepTag, whyTag, stepTag), ctx, meas.view, t.fistNow)
         Memory.lastHits[creep.id] = creep.hits
         Memory.lastCell[creep.id] = creep.key
     } } }
@@ -2037,6 +2057,12 @@ internal val stepCount = Gauges.labelledOnly("step")        // ...и какая 
  *  остальные управляющие видны в `step=` как прежде. Поставлен по запросу оператора «свести бота к одному
  *  управляющему»: пока источников несколько, их доли надо знать числом, иначе сведение выкинет то, что держит бой
  *  (см. отказы USE_COMMANDER_EVERY_FIGHT / _ALWAYS / _APPROACH, каждый измерен). */
+/** Кулак на всяком шаге (v490, `fist=отменённых шагов/шагов в бою`): сколько раз запрет удержал крипа от ухода за
+ *  пределы кулака и сколько шагов вообще проходило под запретом. Первая часть и есть цена правки. */
+internal val fistHeld = Gauges.counter("fist")
+
+internal val fistAll = Gauges.counter("fist", 1)
+
 internal val ruleCount = Gauges.labelled("rule")
 
 /** ДВОЙНОЕ УПРАВЛЕНИЕ (v487, `dual=приказ при живом слоте/слот прочитан`). Планировщик строя и раздача командира
