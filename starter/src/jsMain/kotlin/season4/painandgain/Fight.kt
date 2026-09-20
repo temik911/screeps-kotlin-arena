@@ -142,6 +142,11 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
         return deficit + expected - (healDone[target.id] ?: 0)
     }
     fun book(target: Creep, amount: Int) {
+        // ПРИБОР РАЗДЕЛИТЕЛЯ (v496): сколько лечения уходит в крипов, у которых уже НИ ОДНОЙ живой оружейной части, —
+        // им доставка чинит MOVE. Замер реплеев: у проигравшего 38-52 %, у победителя 14-21 %, без перекрытия
+        hdeadAll.n += amount
+        val q = InfluenceMap.profileOf(target)
+        if (q.melee <= 0.0 && q.ranged <= 0.0 && q.heal <= 0.0) hdeadIn.n += amount
         hfullAll.n++; if (target.hits >= target.hitsMax) hfullN.n++
         hoverSum.n += maxOf(0, amount - maxOf(0, needConfirmed(target))); hdelivSum.n += amount
         healDone[target.id] = (healDone[target.id] ?: 0) + amount
@@ -152,10 +157,19 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
     // ...ранг под огнём (HEAL_FIRE_RANK / HEAL_FIRE_ROOM) выключен давно: функция возвращала дефицит первой строкой, всё
     // ниже было недостижимо — снято в v261, история правила выше
     fun rank(target: Creep): Int = need(target)
+    // ...И МЕЖДУ ПАЦИЕНТАМИ РЕШАЕТ ВОЗВРАЩЁННАЯ ОГНЕВАЯ МОЩЬ (v496, см. USE_HEAL_BY_FIREPOWER). Ранг по наибольшему
+    // недобору хитов выбирает САМОГО РАЗДЕТОГО — а ему доставка возвращает MOVE, потому что лечение чинит тело с
+    // конца, а оружие стоит спереди. Замер пяти матчей против MetalicaX#17 (20.09.2026, реплеи): проигравший льёт в
+    // уже безоружных 38-52 % своего лечения, победитель 14-21 %, в каждом матче и без перекрытия; до первой
+    // вернувшейся оружейной части уходит вхолостую 193 хита (медиана у нас) и 340 у него
+    fun gain(target: Creep, deliver: Double): Int =
+        if (USE_HEAL_BY_FIREPOWER) InfluenceMap.restoredPower(target, deliver).toInt() else 0
     for (creep in active) {
         strike(creep, enemyCreeps, focusTarget, focusOrder)
         val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
         if (healParts > 0) {
+            val nearHeal = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble())
+            val farHeal = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble())
             val candidates = allies.filter { !it.spawning && need(it) > 0 && creep.getRangeTo(it) <= HEAL_RANGE }
             // приказ командира первым (v162): он назначил пациента, зная, кого враг добивает и кого лечение спасёт
             val ordered = FireBook.healOf[creep.id]?.let { id -> candidates.firstOrNull { it.id == id } }
@@ -183,21 +197,19 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
                 // всего лечения (дефицит + ожидаемый урон − уже назначенное); жертва вплотную лечится как прежде. Сосед —
                 // только раненый: снять фильтр v183 и лечить полного под огнём по оценке бота — ноль выигрыша при 10–16 %
                 // лечений впустую (тот же разбор)
-                val nearPower = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble())
-                val farPower = InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble())
                 val mate = candidates.filter { it.id != wallTarget.id && creep.getRangeTo(it) <= 1 && it.hitsMax - it.hits > 0 }
-                    .maxByOrNull { minOf(nearPower, need(it).toDouble()) }
+                    .maxByOrNull { minOf(nearHeal, need(it).toDouble()) }
                 hwallFar.n++
-                if (mate != null && minOf(nearPower, need(mate).toDouble()) > minOf(farPower, need(wallTarget).toDouble())) {
+                if (mate != null && minOf(nearHeal, need(mate).toDouble()) > minOf(farHeal, need(wallTarget).toDouble())) {
                     hwallYield.n++
                     Executor.heal(creep, mate)
-                    book(mate, nearPower.toInt())
+                    book(mate, nearHeal.toInt())
                     shoot(creep, enemyCreeps, focusTarget, focusOrder)
                     continue
                 }
                 hwallHeals.n++
                 Executor.rangedHeal(creep, wallTarget)
-                book(wallTarget, farPower.toInt())
+                book(wallTarget, farHeal.toInt())
                 continue
             }
             // ...и СОСЕДСТВО НЕ ВАЖНЕЕ РАНЫ (v183, оператор: «лекари лечат себя фулловыми, хотя могли бы лечить
@@ -207,7 +219,7 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
             // случаев рядом стоял крип с потерей 900–1 060. Полный сосед лечится, только если раненых нет вовсе
             val anyWounded =  candidates.any { it.hitsMax - it.hits > 0 }
             val closeTarget0 = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
-                .maxByOrNull { rank(it) }
+                .maxWithOrNull(compareBy<Creep>({ gain(it, nearHeal) }, { rank(it) }))
             val closeTarget = closeTarget0
             if (closeTarget != null) {
                 Executor.heal(creep, closeTarget)
@@ -216,7 +228,7 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
                 continue
             }
             val farTarget = ordered?.takeIf { creep.getRangeTo(it) <= HEAL_RANGE }
-                ?: candidates.filter { it.hitsMax - it.hits > 0  }.maxByOrNull { rank(it) }
+                ?: candidates.filter { it.hitsMax - it.hits > 0  }.maxWithOrNull(compareBy<Creep>({ gain(it, farHeal) }, { rank(it) }))
             if (farTarget != null) {
                 Executor.rangedHeal(creep, farTarget)
                 book(farTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
@@ -398,13 +410,19 @@ internal fun commandHeal(army: List<Creep>, enemies: List<Creep>, out: MutableMa
     // и приказ уводил его лечить издали чуть более нуждающегося вместо соседа. Пока приказ отбрасывался ближней
     // веткой исполнителя, это было незаметно; едва приказ стал действовать на всей дальности (USE_HEAL_ORDER_WINS),
     // гейт потерял обе строки kite. Ценность цели — min(нужда, сколько дойдёт), нужда остаётся тай-брейком
+    // ...И ТО ЖЕ В ПРИКАЗЕ (v496, см. USE_HEAL_BY_FIREPOWER): ранг «наибольший недобор хитов» назначает лекаря на
+    // самого раздетого, которому доставка вернёт MOVE, а не оружие. Сперва мощь, которую эта доставка включит
+    // обратно, и лишь при равенстве — прежняя нужда
     for (h in free) {
         val pr = InfluenceMap.profileOf(h)
+        fun needOf(m: Creep) = (m.hitsMax - m.hits) + (incoming[m.id] ?: 0.0)
+        fun gainOf(m: Creep): Double {
+            if (!USE_HEAL_BY_FIREPOWER) return 0.0
+            val d = h.getRangeTo(m)
+            return InfluenceMap.restoredPower(m, if (d <= 1) pr.heal else pr.heal / 3.0)
+        }
         val t = mates.filter { h.getRangeTo(it) <= HEAL_RANGE && it.id != h.id }
-            .maxByOrNull { m ->
-                val need = (m.hitsMax - m.hits) + (incoming[m.id] ?: 0.0)
-                need
-            }
+            .maxWithOrNull(compareBy<Creep>({ gainOf(it) }, { needOf(it) }))
         if (t != null) out[h.id] = t.id
     }
 }
@@ -708,6 +726,11 @@ internal var goalTick = -1
 // Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
 
 /** Лечение по дефициту (v233): лечений в полного / всех, лечения сверх подтверждённой нужды / доставлено, переназначений. */
+/** Лечение, вылитое в уже безоружных, и всё доставленное (v496): единственный разделитель, найденный по реплеям. */
+internal val hdeadIn = Gauges.counter("hdead")
+
+internal val hdeadAll = Gauges.counter("hdead", 1)
+
 internal val hfullN = Gauges.counter("hfull")
 
 internal val hfullAll = Gauges.counter("hfull", 1)

@@ -31,6 +31,7 @@ import screeps.api.getRange
 import screeps.api.getTerrainAt
 import screeps.api.getTicks
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -95,6 +96,28 @@ object InfluenceMap {
 
     /** Боевая мощь крипа, разложенная по типам (мили/дальняя/лечение). */
     class CombatProfile(val melee: Double, val ranged: Double, val heal: Double)
+
+    /**
+     * ОГНЕВАЯ МОЩЬ, КОТОРУЮ ВКЛЮЧИТ ОБРАТНО ДОСТАВЛЕННОЕ ЛЕЧЕНИЕ (v496, см. USE_HEAL_BY_FIREPOWER).
+     * Арифметика арены, без единого нового числа: часть держит 100 хитов, урон съедает тело СПЕРЕДИ, лечение
+     * возвращает части (см. potentialOf), а оружие в телах этой арены стоит ПЕРВЫМ. Значит живых частей у крипа
+     * ровно ceil(hits / 100), и это ПОСЛЕДНИЕ из них, а оружейных среди них max(0, живых - хвост). Доставка d
+     * хитов поднимает число живых до ceil((hits + d) / 100); прирост оружейных частей, умноженный на мощь одной,
+     * и есть то, что лечение покупает армии. Ноль, пока доставка не переводит крипа через границу части.
+     */
+    fun restoredPower(a: Creep, delivered: Double): Double {
+        if (delivered <= 0.0) return 0.0
+        val total = a.body.size
+        var weapons = 0
+        for (p in a.body) if (p.type == ATTACK || p.type == RANGED_ATTACK || p.type == HEAL) weapons++
+        if (weapons == 0) return 0.0
+        val tail = (total - weapons).toDouble()
+        val wNow = maxOf(0.0, ceil(a.hits / 100.0) - tail)
+        val wAfter = maxOf(0.0, minOf(total.toDouble(), ceil((a.hits + delivered) / 100.0)) - tail)
+        if (wAfter <= wNow) return 0.0
+        val q = potentialOf(a)
+        return (wAfter - wNow) * (q.melee + q.ranged + q.heal) / weapons
+    }
 
     /** Позиция центра клетки (для getRange и searchPath-целей). */
     fun cell(x: Int, y: Int): Position = IntPos(x = x, y = y).unsafeCast<Position>()
@@ -864,6 +887,7 @@ object InfluenceMap {
             // радиус 2 — «шаг + удар») и есть эта досягаемость
             if (fireMode && (if (nx != null) nx.threatAt(healer, x, y) > 0.0 else (eFire[key(x, y)] > 0 || (USE_HEAL_EXACT_IN_FIRE && eMelee[key(x, y)] > 0)))) return 0.0
             var best = 0.0
+            var bestPower = 0.0
             for (a in allies) {
                 if (fireMode && (!inFireNow(a) || a.id in advancingWards)) continue
                 val q = if (fireMode && nx != null) nx.wardCell(a) else null
@@ -872,7 +896,11 @@ object InfluenceMap {
                 val left = needLeft[a.id] ?: continue
                 if (left <= 0.0) continue
                 val v = minOf(left, h * k[d])
-                if (v > best) best = v
+                // ...И МЕЖДУ ПОДОПЕЧНЫМИ РЕШАЕТ ВОЗВРАЩЁННАЯ ОГНЕВАЯ МОЩЬ (v496, см. USE_HEAL_BY_FIREPOWER): величина
+                // остаётся в хитах — против опасности и влияния взвешивается ровно то же, что и раньше, — а меняется
+                // только ТО, ОТ КОГО она берётся. Когда включить обратно нечего никому, выбор прежний, по хитам
+                val w = if (USE_HEAL_BY_FIREPOWER) restoredPower(a, v) else 0.0
+                if (w > bestPower || (w == bestPower && v > best)) { bestPower = w; best = v }
             }
             return best
         }
