@@ -219,8 +219,21 @@ internal fun rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
         else "on"
     )
     val healersLive = live.any { healerOnly(it) }
-    val fracRules = healersLive && Memory.fracHits.size >= STALL_TICKS && Memory.fracHits.count { it } > Memory.addrHits.count { it }
-    if (!fracRules) {
+    // РОТАЦИЯ ПО ЕГО ФОКУСУ ЖИВЁТ ПО ТОЙ МОДЕЛИ, ЧТО ВЫИГРАЛА СВЕРКУ (v510, см. USE_ROT_BY_BEST_MODEL).
+    // В этой же функции двадцатью строками выше v292 уже установила верный принцип: ожидаемый входящий для лечения
+    // берётся у модели, ЧАЩЕ ПОПАДАЮЩЕЙ за окно (`focusPredDmg`). А ротация — решение о том же самом, «кого он
+    // сейчас выстрелит», — требовала победы ОДНОЙ конкретной модели («наименьшая доля») и при её проигрыше
+    // выключалась целиком, да ещё и жертву брала из `byFrac`, то есть из проигравшей. Две точки читают одну
+    // величину по-разному — тот самый класс, что уже был у удара мили (v506).
+    // Цена названа прибором: восемь тестовых рук против MetalicaX#17 (21.09.2026, v509) дали `hwwhy=addrModel`
+    // в СЕМИ из восьми — у него выигрывает адресная модель «лекарь в досягаемости, иначе ближайший», — и ротация
+    // была мертва во всех семи (`rotf` с нулевыми числителями). В единственной руке, где механизм ожил
+    // (`hwwhy=on:1145`, ротация 1199 тиков), экспозиция лекарей `hexp` = 24/132 = 18 % против 32 % во второй
+    // победе и 38-70 % в шести поражениях, и рука выиграна.
+    val bestFrac = Memory.fracHits.count { it } >= Memory.addrHits.count { it }
+    val rotRules = healersLive && Memory.fracHits.size >= STALL_TICKS &&
+        (if (USE_ROT_BY_BEST_MODEL) true else Memory.fracHits.count { it } > Memory.addrHits.count { it })
+    if (!rotRules) {
         for (id in Memory.rotByFocus) Memory.rotatingIds.remove(id)
         Memory.rotByFocus.clear()
         return
@@ -244,7 +257,10 @@ internal fun rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
     // выход: раненый, предсказанная жертва его стволов, и их урон больше нашего лечения в его клетке
     for (c in live) {
         if (!hasWeapon(c) || c.id in Memory.rotByFocus || !canMove(c) || c.hits >= c.hitsMax) continue
-        val inc = byFrac[c.id] ?: continue
+        // ...и ЖЕРТВА — ИЗ ТОЙ ЖЕ ПОБЕДИВШЕЙ МОДЕЛИ (v510): раньше здесь стояла `byFrac` даже тогда, когда сверка
+        // называла победителем адресную, то есть правило уводило из-под огня того, кого он стрелять не собирался
+        val pred = if (!USE_ROT_BY_BEST_MODEL || bestFrac) byFrac else byAddr
+        val inc = pred[c.id] ?: continue
         if (inc <= InfluenceMap.healReachAt(c.key)) continue
         Memory.rotByFocus.add(c.id)
         Memory.rotatingIds.add(c.id)
