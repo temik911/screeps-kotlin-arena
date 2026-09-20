@@ -70,6 +70,9 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // сколько тиков командир действительно правил армией, и почему не правил: без этого спор «виноват командир
     // или базовая логика» решается догадкой, а в разгроме 6aa075ce постура была HOLD, то есть он молчал
     if (commanderNow) cmdTicks++ else cmdBlocked = strat.dec.cmdWhyNow
+    // прибор `cmdinert=` (v465, дефект 4): в режиме боя без `fightOnNow` набор отряжённых командиром не трогает никто — ни отзыв
+    // боем (он под fightOnNow), ни гонка (её не зовут): отряжённые остаются бегунами по инерции
+    if (commanderNow && !meas.fight.fightOnNow && Squads.cmdDetach.isNotEmpty()) cmdInertFight.n++
     // ПОГОНЯ НАЗНАЧАЕТСЯ ДО ПЕРЕБОРА (v211): раздача прогоняется пять раз, по разу на замысел, и отряд обязан
     // быть один и тот же во всех пяти — иначе прогноз оценивает пять разных армий.
     // ...И НЕ ЗАВИСИТ ОТ ТОГО, ПРАВИТ ЛИ КОМАНДИР (v212). Первая редакция стояла под `commanderNow`, и первый же
@@ -281,6 +284,10 @@ internal fun commanderTailDone() { if (cmdSearched) { cmdTailMax = maxOf(cmdTail
 internal var dispNow = "-"
 
 internal var cmdTicks = 0                       // тиков, когда командир правил армией (диагностика, v143)
+
+/** Набор командира по инерции (v465, дефект 4): тиков режима боя без `fightOnNow` при непустом `cmdDetach` (часть 1 — тики
+ *  пустой армии, в `PainAndGain.runArmy`). */
+internal val cmdInertFight = Gauges.counter("cmdinert")
 
 // ==================== приборы стадии, бывшие членами object PainAndGain (v455, второй шаг архитектуры, этап 2) ====================
 

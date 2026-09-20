@@ -1236,7 +1236,10 @@ internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedE
                         out: MutableMap<String, Position>) {
     out.clear()
     val roster = RaceRoster(ctx, meas, armedEnemies)
-    if (roster.fightBlocks && roster.holding.isEmpty()) return
+    // прибор `raceexit=` (v465, дефект 4): ранние выходы гонки, когда прежний состав командира был НЕ пуст — состав очищен
+    // (`RaceRoster`), и до конца тика его не восстановит никто: на следующем тике гарнизон и курьер возвращаются в армию
+    val hadOut = roster.alreadyOut.isNotEmpty()
+    if (roster.fightBlocks && roster.holding.isEmpty()) { if (hadOut) raceExitFight.n++; return }
     // ...и состав считается ЦЕЛИКОМ, вместе с уже отпущенными командиром: иначе он каждый тик берёт половину
     // ОСТАВШИХСЯ и отпускает ещё, а ушедшие ему не видны — армия распадалась экспоненциально, до двух крипов к
     // концу матча (match29:kite, cmd=0/1090, army=2, 0 очков). Задание раздаётся заново на всех, а не поверх
@@ -1253,10 +1256,10 @@ internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedE
         return true
     }
     val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) && raceFit(it) }.toMutableList()
-    if (free.isEmpty()) return
+    if (free.isEmpty()) { if (hadOut) raceExitFree.n++; return }
     val purse = RaceBudget(ctx, meas, roster, free)
-    if (roster.fightBlocks) return
-    if (purse.budget <= 0) return
+    if (roster.fightBlocks) { if (hadOut) raceExitBlocks.n++; return }
+    if (purse.budget <= 0) { if (hadOut) raceExitBudget.n++; return }
     val routes = RaceRoutes(ctx, meas, flags, roster, free, purse)
     RaceGarrison(ctx, flags, roster, free, purse)
     RaceParties(ctx, meas, armedEnemies, roster, free, purse, routes)
@@ -2964,6 +2967,16 @@ internal val budgetTicks = Gauges.counter("budget", 1)
 internal val objAll = Gauges.counter("objnone", 1)
 
 internal val objDropN = Gauges.counter("objdrop", 1)
+
+/** Ранние выходы гонки при непустом прежнем составе командира (v465, дефект 4): бой блокирует и держателей нет / свободных нет /
+ *  бой блокирует при держателях / бюджет исчерпан. Первые два оставляют `cmdDetach` пустым до следующего тика. */
+internal val raceExitFight = Gauges.counter("raceexit")
+
+internal val raceExitFree = Gauges.counter("raceexit", 1)
+
+internal val raceExitBlocks = Gauges.counter("raceexit", 2)
+
+internal val raceExitBudget = Gauges.counter("raceexit", 3)
 
 /** Исключения из состава гонки (v464, дефект 3): крипо-тики подвижных вооружённых, которых состав не взял — отряжён стратегом в
  *  этом тике / хранитель / преследователь. Отвечает, где именно инварианты членства действуют. */
