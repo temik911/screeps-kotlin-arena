@@ -466,9 +466,14 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         // `match28:scatter` и `match33:scatter` — против РАЗРОЗНЕННОГО врага дебют флагами и решает гонку очков.
         // Признак взят готовый (`enemyMassedSignal`, v226): блоб, идущий вместе, сомкнут уже на двадцатом тике,
         // рассыпающаяся по флагам армия — нет. И третье, последнее: `approachingNow` — фермер сомкнут в клубок, но
-        // НЕ ИДЁТ, и без этого условия падал `match31:farm` (18 469:23 732)
+        // НЕ ИДЁТ, и без этого условия падал `match31:farm` (18 469:23 732).
+        // ⚠️ И ещё одна редакция, снятая живым логом: одного `approachingNow` мало. Замер тика за тиком показал, что
+        // флаг RANGED берётся НЕ в дебюте, а на 55-м тике — ПОСЛЕ первого размена (46-й): `fmassed` до 40-го равен
+        // нулю, на 50-м единице, и к моменту захвата он уже не «подходит», а ДЕРЁТСЯ, отчего вето не взводилось ни
+        // разу (`dbfveto=0/19939` живьём). Поэтому признак «он идёт» дополнен признаком «размен уже был»
         if (USE_NO_OUTPUT_DEBUFF_WHOLE_ARMY && f.type != EFF_DAMAGE_TAKEN_MODIFIER &&
-            ctx.threats.size >= MASS_ARMED_MIN && Signals.enemyMassedSignal && Signals.approachingNow &&
+            ctx.threats.size >= MASS_ARMED_MIN && Signals.enemyMassedSignal &&
+            (Signals.approachingNow || firstFightTick > 0) &&
             getTicks() <= FIRST_CLASH_TICKS) { debuffVeto.n++; return@Gate Verdict.Veto("debuff.whole") }
         debuffPass.n++
         Verdict.Next
