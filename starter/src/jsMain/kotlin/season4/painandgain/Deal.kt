@@ -744,6 +744,13 @@ internal class Deal(
         // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
         // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
         for (c in (if (healersOnly) emptyList() else melees).sortedBy { c -> armedEnemies.minOfOrNull { getRange(c, it) } ?: 99 }) {
+            // КЛЕТКА ОТХОДА НЕ ПЕРЕПИСЫВАЕТСЯ БОЕВОЙ РАСКЛАДКОЙ (v522, см. USE_RETREAT_CELL_STICKS): проход отхода
+            // идёт ПЕРВЫМ и даёт раненому и ротирующемуся клетку со слагаемым медика, а этот проход её молча затирал —
+            // проверки `in out` у него не было, хотя у `straggler`, `keeper` и `catchall` она есть. Отсюда и мёртвая
+            // ротация в логах (`sout=0/0/0`, `meet=0/0/0/0/0`, `rotset=0/434` за матч): точка встречи `rotatingMeet`
+            // указывала на клетку, которую крипу уже не отдали, и лекарь шёл встречать пустоту
+            if (USE_RETREAT_CELL_STICKS && c.id in out) { repassKept.n++; continue }
+            repassAll.n++
             val ok = placeScored(c, 0, intentOf(c))
             // ДОБОР МИЛИ ПОМЕНЯЛ СМЫСЛ ВМЕСТЕ С ВОРОТАМИ (v208). Прежде `ok = false` значило «нет клетки вплотную
             // к его вооружённому, куда дотягивается лекарь», и шаг к врагу был верным ответом. С воротами
@@ -756,6 +763,8 @@ internal class Deal(
     fun passRanged() {
         // стрелки: цель в дальности, меньше всего входящего на следующий тик; при равенстве — дальше от его мили
         for (c in (if (healersOnly) emptyList() else rangeds).sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
+            if (USE_RETREAT_CELL_STICKS && c.id in out) { repassKept.n++; continue }   // см. passMelee (v522)
+            repassAll.n++
             val ok = placeScored(c, 1, intentOf(c))
             // ...и КОГДА ВЫБОРА НЕТ, СТРЕЛОК ВЫХОДИТ ИЗ-ПОД МИЛИ, А НЕ ОСТАЁТСЯ СТРЕЛЯТЬ (v183, оператор: «рэнжи не
             // должны быть рядом с его мили»). Все замыслы требуют разом двух вещей — быть вне досягаемости его мили и
@@ -974,9 +983,12 @@ internal class Deal(
 
     fun passStripped() {
         // раздетые: прочь из огня — в бою от них пользы нет, а его выстрелы они на себя собирают исправно
-        for (c in (if (healersOnly) emptyList() else stripped))
+        for (c in (if (healersOnly) emptyList() else stripped)) {
+            if (USE_RETREAT_CELL_STICKS && c.id in out) { repassKept.n++; continue }   // см. passMelee (v522)
+            repassAll.n++
             place(c, { true }, { p -> danOf(c, p.key) * 100 -
                 (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
+        }
     }
 
     fun passCatchall() {

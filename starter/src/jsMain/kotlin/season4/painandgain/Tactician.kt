@@ -755,6 +755,17 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // в 316 поражениях против 2,1 % в 108 победах
     val closeIn = if (localAggressive && !(USE_HOLD_THREE_VS_MELEE && foeMeleeLive)) CLOSE_STANDOFF else RANGED_RANGE
     init { if (hasRanged(creep) && localAggressive) { closeTicks.n++; if (foeMeleeLive) closeHeld.n++ } }
+    // ПРИБОР РЕЗУЛЬТАТА СТОЙКИ, а не её экспозиции (v522). `close3` считает, СКОЛЬКО агрессивных тиков стрелка
+    // пришлось на живого мили сомкнутого врага, — это повод правила, и он не меняется от того, послушались его или
+    // нет; A/B v521 это и показал (4,9 % у базы против 5,3 % у правки при неразличимом счёте). Здесь — то, что
+    // правило меняет: крип-тики ВООРУЖЁННОГО стрелка на двух клетках и ближе от его ЖИВОГО мили, то есть ровно
+    // там, где тот одним шагом бьёт на 240, а наш выстрел с трёх достаёт и так
+    init {
+        if (hasRanged(creep) && InfluenceMap.profileOf(creep).ranged > 0.0 && meas.fight.contact) {
+            rnearAll.n++
+            if (meas.forces.combatEnemies.any { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= 2 }) rnearN.n++
+        }
+    }
     // сброс слота строя у мили с целью — работа ТЕЛОМ, остаётся написание А (v452, пункт Д — разбиение оператора)
     val melee = meleeOnlyBorn(creep)
     val meleeMate: Creep? = if (melee) strat.inp.combatArmy.filter { it.id != creep.id && meleeOnlyLive(it) && canMove(it) }.minByOrNull { getRange(creep, it) } else null
@@ -2194,6 +2205,18 @@ internal val hwWhy = Gauges.labelled("hwwhy")
  *  за ранеными. Его собственный вердикт читается вместе с `hexp=` — доля тиков, когда лекарь всё-таки в зоне. */
 /** БЕЖАТЬ НЕКУДА (v519, `fuse=` безнадёжных / всего проверок у поддержки в бою): ни одна клетка шага не выходит
  *  из досягаемости его вооружённых после их шага. Прибор правки «лекарь, которому есть кого лечить, не бежит». */
+/** СТРЕЛОК ПОД ЕГО МИЛИ (v522, `rnear=` крип-тиков вооружённого стрелка в двух клетках от его живого мили / всего
+ *  его боевых крип-тиков): прибор РЕЗУЛЬТАТА стойки `closeIn`, в отличие от `close3`, который меряет её повод. */
+/** ПЕРЕРАЗДАЧА КЛЕТКИ (v522, `repass=` сохранено / всего проходов мили, стрелка и раздетого): сколько раз боевая
+ *  раскладка НЕ стала затирать клетку, уже выданную проходом отхода или ротации. Прибор правки USE_RETREAT_CELL_STICKS. */
+internal val repassKept = Gauges.counter("repass")
+
+internal val repassAll = Gauges.counter("repass", 1)
+
+internal val rnearN = Gauges.counter("rnear")
+
+internal val rnearAll = Gauges.counter("rnear", 1)
+
 internal val fuseN = Gauges.counter("fuse")
 
 internal val fuseAll = Gauges.counter("fuse", 1)
