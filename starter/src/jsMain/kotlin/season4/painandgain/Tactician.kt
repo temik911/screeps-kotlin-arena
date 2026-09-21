@@ -217,6 +217,23 @@ internal fun rotateByFocus(army: List<Creep>, combatEnemies: List<Creep>) {
     // (v331), другое правило. Три причины отказа разделены, потому что лечатся они по-разному: окно ещё не
     // наполнено, модель «наименьшая доля» не выиграла у адресной, или мы отстаём по счёту — последнее поставлено
     // в v295 ради штурма, и в этих матчах он отстаёт по нашей вине ровно с того тика, где он взял центральный флаг
+    // ЛЕКАРЬ УХОДИТ ИЗ-ПОД ЕГО СТРЕЛКОВ ПО СВОЕЙ ПРИЧИНЕ, А НЕ ПО ЧУЖОЙ (v518, см. USE_HEALERS_OUT_OF_REACH).
+    // `huntsWounded` управляло ДВУМЯ решениями сразу — выходом раненого из боя и выводом лекаря из досягаемости, —
+    // и для второго его условие перевёрнуто: `huntsWounded = false` означает, что выиграла АДРЕСНАЯ модель, то есть
+    // «он бьёт лекаря, если тот в досягаемости, иначе ближайшего». Ровно против такого соперника лекарю и нельзя
+    // стоять под его стволами, а бот там его и оставлял: в контакте `reachNow` сужается до клеток вплотную к его
+    // мили, клетки под стрелками остаются разрешёнными, и ступень бегства `supportInReach` в них не срабатывает.
+    // Числа (21.09.2026, 35 реплеев против MetalicaX#17 и 1382 лога серий): `hwwhy=addrModel` в 7 руках из 8, а
+    // когда наш вооружённый лекарь был в его тройке, он стрелял именно в лекаря в 61 % из 2523 случаев (мы в той же
+    // позиции — 43 %). Экспозиция лекаря `hexp` 22,5 % в 106 победах против 54,9 % в 307 поражениях; по реплеям в
+    // окне 0..60 тиков боя — 41 % в победах против 77 % в аннигиляциях, а дистанция лекаря до ближайшего врага
+    // 6,1 против 3,1 клетки. Цена стояния на тройке — ноль: раненых вплотную у лекаря 1,24 против 1,27, в трёх
+    // клетках 4,59 против 4,55, то есть доставка та же, а под огнём он 42 % тиков вместо 12 %.
+    // Выход раненого остаётся под `huntsWounded`: там довод v294 верен — уведённый из боя раненый есть огонь,
+    // потерянный даром, если его всё равно не ищут.
+    TacticianState.healersOutOfReach = USE_HEALERS_OUT_OF_REACH && Memory.addrHits.size >= STALL_TICKS && addrN >= fracN
+    horAll.n++
+    if (TacticianState.healersOutOfReach) horOn.n++
     hwAll.n++
     if (TacticianState.huntsWounded) hwOn.n++
     hwWhy.bump(
@@ -961,7 +978,18 @@ internal class Stride(val turn: Turn, val aim: Aim) {
         }
     }
     val mustFlee = MUST_FLEE.c("supportAloneNearFoe", turn.support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
-        MUST_FLEE.c("supportInReach", turn.support && inReach) ||
+        // ...НО ЛЕЧАЩИЙ ВПЛОТНУЮ НЕ БЕЖИТ (v518, см. USE_HEALERS_OUT_OF_REACH). У шага изъятие на этот случай есть с
+        // v234 (`carveBase` ниже), у бегства не было: пока зону сужали до клеток вплотную к его мили (v294), лекарь
+        // в неё почти не попадал, и отсутствие изъятия не проявлялось. С расширением зоны эта ступень становится
+        // главным путём лекаря, и без изъятия она уводила бы его ровно из той клетки, где он даёт 72 лечения в тик.
+        // Граница ровно по арифметике: остаётся только ВПЛОТНУЮ (72), дальнее лечение (24) достаётся и снаружи зоны —
+        // контрфакт v511 по четырём поражениям дал «вне огня дальним» 440/288/288/460 против фактических 404/240/264/456
+        // Изъятие действует ТОЛЬКО в том состоянии, которое правка и создаёт (`healersOutOfReach`): под тумблером
+        // целиком оно меняло и старое поведение при узкой зоне — гейт назвал цену сразу, match13:brawl+heals
+        // 4842:822 (армия врага уничтожена на t=389) превращался в 14356:15094 к пределу тиков
+        MUST_FLEE.c("supportInReach", turn.support && inReach &&
+            !(TacticianState.healersOutOfReach && turn.healer && turn.healMate != null &&
+                turn.healMate.hits < turn.healMate.hitsMax && getRange(creep, turn.healMate) <= 1)) ||
         MUST_FLEE.c("stepOutInReach", turn.stepOut && (creep.key) in targ.zones.reachCells) ||
         MUST_FLEE.c("bleeding", lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
         MUST_FLEE.c("ghostDamage", turn.ghost > 0 && creep.hits <= turn.ghost)
@@ -1861,7 +1889,10 @@ internal class TargetsZones(private val ctx: Ctx, private val meas: ArmyMeasures
     // 0/20/0/0 % в победах, и на эти тики приходится 61-93 % всех выстрелов по нашим лекарям
     val noFront = meas.forces.allies.none { hasMelee(it) }
     init { nofrontAll.n++; if (noFront) nofrontN.n++ }
-    val reachNow = if (!meas.fight.contact || TacticianState.huntsWounded || (USE_REACH_FULL_WITHOUT_FRONT && noFront)) reachCells else meleeReachCells
+    // ...И КОГДА ЕГО СТВОЛЫ АДРЕСУЮТСЯ ЛЕКАРЮ (v518, см. USE_HEALERS_OUT_OF_REACH и healersOutOfReach): это тот же
+    // набор, что даёт ступень бегства `supportInReach`, поэтому одна строка закрывает и вход в зону, и выход из неё
+    val reachNow = if (!meas.fight.contact || TacticianState.huntsWounded || TacticianState.healersOutOfReach ||
+        (USE_REACH_FULL_WITHOUT_FRONT && noFront)) reachCells else meleeReachCells
     private val fireCells = HashSet<Int>()
     init {
         for (e in meas.forces.combatEnemies) for (dx in sym(RANGED_RANGE)) for (dy in sym(RANGED_RANGE)) {
@@ -2100,6 +2131,12 @@ internal val hwAll = Gauges.counter("hw", 1)
  *  мы отстаём по счёту (условие v295) / сработало. */
 internal val hwWhy = Gauges.labelled("hwwhy")
 
+/** ЛЕКАРЬ ВНЕ ДОСЯГАЕМОСТИ ЕГО СТРЕЛКОВ (v518, `hor=` сработало / всего): своё правило лекаря, отделённое от охоты
+ *  за ранеными. Его собственный вердикт читается вместе с `hexp=` — доля тиков, когда лекарь всё-таки в зоне. */
+internal val horOn = Gauges.counter("hor")
+
+internal val horAll = Gauges.counter("hor", 1)
+
 internal val hexpN = Gauges.counter("hexp")
 
 internal val hexpAll = Gauges.counter("hexp", 1)
@@ -2216,4 +2253,8 @@ internal object TacticianState {
     /** Его стволы, по сверке с фактом, бьют нашего с наименьшей долей хитов в досягаемости — охотятся за ранеными (v294,
      *  см. rotateByFocus): тогда раненые уходят к лекарям позади, а лекари стоят вне его досягаемости. */
     internal var huntsWounded = false
+    /** Лекарь стоит ВНЕ досягаемости его стрелков (v518, см. USE_HEALERS_OUT_OF_REACH): отдельная величина от
+     *  [huntsWounded], потому что решения разные. Уводить РАНЕНОГО из боя стоит только против того, кто бьёт
+     *  наименьшую долю хитов; уводить ЛЕКАРЯ — против того, кто бьёт лекаря, то есть в точно противоположном случае. */
+    internal var healersOutOfReach = false
 }
