@@ -53,6 +53,18 @@ import kotlin.reflect.*
  */
 
 /** Флаг очков в этом тике: владелец, тип дебаффа, очки, кто стоит на клетке и чья охрана рядом. */
+/**
+ * ФЛАГ, НА КОТОРЫЙ ОДИНОЧНОМУ БЕГУНУ НЕ ВСТАТЬ (v537, см. USE_FLAG_DENIED_BY_FIRE): либо на клетке стоит его тело,
+ * либо урон, который он доставит на эту клетку за два тика, больше лечения, которое там будет. Вторая половина —
+ * та же мера, которой хранитель в режиме пар решает уйти (v366, keeperLeaves): одна величина, два правила.
+ */
+internal fun flagDenied(ctx: Ctx, f: FlagInfo): Boolean {
+    if (f.occupant != null && f.occupant?.my != true) return true
+    if (!USE_FLAG_DENIED_BY_FIRE) return false
+    return InfluenceMap.damageSoonAt(f.pos.x, f.pos.y, ctx.combatEnemies, 0) >
+        InfluenceMap.healAt(f.pos.x, f.pos.y, ctx.armyWithHeal)
+}
+
 internal class FlagInfo(val flag: ScoreFlag, val mine: Boolean?, val type: String, val score: Int, val occupant: Creep?, val guards: List<Creep>) {
     val id: String get() = flag.id
     val pos: Position get() = flag
@@ -1106,8 +1118,14 @@ internal fun readSignals(ctx: Ctx) {
     // けろびー 4 %, Coldkimchi#2 и MetalicaX по 1 %, а System и 恒哥吊 66 %; стендовые фермеры (scatter, camp, farm+weak)
     // сажают крипа на каждый свой флаг — там пары ходили впустую, а ядру не хватало силы отбить занятый H4
     // (match33:scatter 22 377:24 235, FAIL гейта)
+    // ...И «ДЕРЖИТ ТЕЛОМ» ЗНАЧИТ «ОДИНОЧКЕ НЕ ВСТАТЬ», А НЕ «ТЕЛО НА КЛЕТКЕ» (v537, см. USE_FLAG_DENIED_BY_FIRE).
+    // Замер 67 матчей против ricardo18informatica2020#16: его тело НА клетке — 19,7 % флаго-тиков, а стражи рядом —
+    // 73,3 %, в среднем два на флаг. Страж M8A8 — это 240 урона в тик, бегун M1 — сто хитов: флаг под стражей
+    // неберущийся ровно так же, как флаг под телом, но правило считало только тела, режим пар включался, армия
+    // дробилась на бегунов (12 -> 5 -> 3 к 600-му тику), а брать им было нечего. Мера взята существующая — та, которой
+    // хранитель решает уйти (v366): урон, который он доставит на клетку за два тика, против лечения, которое там будет
     val hisFlagsNow = ctx.flags.count { it.theirs }
-    val hisSitNow = ctx.flags.count { it.theirs && it.occupant != null && it.occupant?.my != true }
+    val hisSitNow = ctx.flags.count { it.theirs && flagDenied(ctx, it) }
     Memory.flagSitHist.addLast(hisFlagsNow * 8 + hisSitNow)
     while (Memory.flagSitHist.size > GROUP_WINDOW) Memory.flagSitHist.removeFirst()
     val sitHis = Memory.flagSitHist.sumOf { it / 8 }
