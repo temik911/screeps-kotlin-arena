@@ -218,7 +218,18 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
             val anyWounded =  candidates.any { it.hitsMax - it.hits > 0 }
             val closeTarget0 = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
                 .maxWithOrNull(compareBy<Creep>({ gain(it, nearHeal) }, { rank(it) }))
-            val closeTarget = closeTarget0
+            // ...И ВПЛОТНУЮ ПРИКАЗ ТОЖЕ ДЕЙСТВУЕТ (v523, см. USE_HEAL_ORDER_ADJACENT). Обещание v183 выше — «приказ
+            // действует на ВСЕЙ лечебной дальности» — исполнено ровно наполовину: `ordered` спрашивает только дальняя
+            // ветка, а ближняя выбирает соседа местным рангом и до дальней не доходит вовсе (`continue`). Вышло
+            // зеркальное к описанному: приказ работает, только пока пациент НЕ вплотную. Командир назначает пациента,
+            // зная, кого добивают и кого лечение спасёт (`commandHeal`: умирающий и спасаемый, затем вернувшаяся
+            // оружейная часть); местный ранг соседей не знает ни того, ни другого. Цена ошибки — вся разница между
+            // 72 вплотную и 24 с трёх, отданная не тому
+            val closeTarget = if (USE_HEAL_ORDER_ADJACENT)
+                (ordered?.takeIf { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
+                    ?.also { healOrderAdj.n++ } ?: closeTarget0)
+            else closeTarget0
+            if (closeTarget0 != null) healOrderAll.n++
             if (closeTarget != null) {
                 Executor.heal(creep, closeTarget)
                 book(closeTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * HEAL_POWER.toDouble()).toInt())
@@ -749,6 +760,12 @@ internal val hwallYield = Gauges.counter("hwallx")
 internal val hwallHeals = Gauges.counter("hwallh")
 
 internal val hwallHealsAll = Gauges.counter("hwallh", 1)
+
+/** ПРИКАЗ ЛЕЧЕНИЯ ВПЛОТНУЮ (v523, `heord=` взят приказ / всего выборов ближней ветки): до правки ближняя ветка
+ *  приказа не спрашивала вовсе, и числитель был бы нулём по построению. */
+internal val healOrderAdj = Gauges.counter("heord")
+
+internal val healOrderAll = Gauges.counter("heord", 1)
 
 /** Перекрытие (v391, прибор ovl=): сколько наших стрелков ДОСТАЁТ лучшую его цель — против `conc`, который считает,
  *  сколько выстрелов в неё легло. Разница между «могло» и «легло» и есть предмет боя с кулаком. */
