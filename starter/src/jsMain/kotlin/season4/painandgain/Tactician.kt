@@ -1680,7 +1680,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
         val burst = pool.fireAvailableAt(e) * InfluenceMap.takenOf(e)
         return if (USE_KILLABLE_SAME_RULE) e.hits + healCoverOn(meas.forces.combatEnemies, e) <= burst else e.hits <= burst
     }
-    private val focusCmp = compareBy<Creep> { if (killableNowAt(it)) 1 else 0 }
+    private val focusCmpBase = compareBy<Creep> { if (killableNowAt(it)) 1 else 0 }
         // ЛЕКАРЬ В ДОСЯГАЕМОСТИ — ЦЕЛЬ ПЕРВЫМ (v224, см. USE_FOCUS_ANY_HEALER): правило соперника, снятое с реплеев
         // обеих сторон, — его ствол при нашем лекаре в досягаемости бьёт лекаря в 82–97 % выстрелов
         // ...И ТОЛЬКО ТОТ ЛЕКАРЬ, КОТОРОГО ДОТЯГИВАЮЩИЙСЯ ОГОНЬ ПРОБИВАЕТ (v224, серия): без этого условия ярус
@@ -1756,9 +1756,32 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
         // вплотную; выше — цель, к которой лекари ДАЛЕКО (оператор, 05.09.2026: «лекари к ней далеки — не вылечат
         // близким хилом и потеряют ход») и которую достают больше наших стволов
         .thenBy { threatOf(it) / it.hits.coerceAtLeast(1) }
+
+    /** Ступень запаса и два хвоста (v531): боевой порядок и тот же без ступени — для прибора `froom=`. */
+    private val focusCmp = focusCmpBase
+        // ...И СРЕДИ РАВНЫХ — ТОТ, У КОГО БОЛЬШЕ ОРУЖЕЙНОГО ЗАПАСА (v531, см. USE_FOCUS_BY_ROOM). Последняя ступень
+        // звала НАИМЕНЬШИЕ хиты, то есть ближайшего к смерти. Но урон ест тело спереди, а оружие стоит первым: у
+        // цели с хитами чуть выше 100 x хвоста оружейная часть осталась ОДНА, и весь залп сверх неё уходит в MOVE.
+        // Цель с полным запасом принимает тот же залп ЧАСТЯМИ ОРУЖИЯ. Ярус «добиваемые за тик» наверху не трогается:
+        // добитое тело не лечится обратно, а раздетое его лекари возвращают в строй
+        .thenBy { if (USE_FOCUS_BY_ROOM) minOf(pool.fireAvailableAt(it), InfluenceMap.weaponRoom(it)) else 0.0 }
+        .thenByDescending { it.hits }
+        .thenByDescending { getRange(it, strat.threats.centroid) }
+
+    /** Тот же порядок БЕЗ ступени запаса — только для прибора `froom=` (v531). */
+    private val focusCmpNoRoom = focusCmpBase
         .thenByDescending { it.hits }
         .thenByDescending { getRange(it, strat.threats.centroid) }
     private val focusBest = pool.focusPool.maxWithOrNull(focusCmp)
+    // ПРИБОР ПРАВКИ (v531, см. USE_FOCUS_BY_ROOM): своя цель у каждой версии сравнения, и считается доля тиков,
+    // где ступень «оружейный запас» назвала ДРУГУЮ цель. Без него правку нечем судить — урок v521
+    init {
+        if (USE_FOCUS_BY_ROOM && pool.focusPool.size > 1) {
+            froomAll.n++
+            val plain = pool.focusPool.maxWithOrNull(focusCmpNoRoom)
+            if (plain != null && focusBest != null && plain.id != focusBest.id) froomDiff.n++
+        }
+    }
     // прибор яруса «лекарь первым» (v224): его лекарь в досягаемости наших стволов был / фокус лёг на лекаря
     // ...и прибор v266 (fself=): его лекарь в досягаемости наших стволов, которого модель без самолечения читала
     // пробиваемым, а с ним — нет, то есть сколько решений о добиваемости правка поменяла
@@ -2262,6 +2285,12 @@ internal val repassAll = Gauges.counter("repass", 1)
 /** Расхождение выбора подопечного (v527, см. USE_WARD_BY_FIREPOWER): лекаре-тиков, где правило по сохранённому
  *  выходу назвало ДРУГОГО подопечного, чем прежнее «самый раненый», и всего тиков с выбором. */
 /** Щит из раздетых (v529, см. USE_STRIPPED_SCREEN): крипо-тиков раздетых в контакте, где щит назначен, и всего. */
+/** Расхождение выбора цели по оружейному запасу (v531, см. USE_FOCUS_BY_ROOM): тиков с выбором, где ступень
+ *  запаса назвала другую цель, и всех тиков с выбором. */
+internal val froomDiff = Gauges.counter("froom")
+
+internal val froomAll = Gauges.counter("froom", 1)
+
 internal val screenOn = Gauges.counter("shield")
 
 internal val screenAll = Gauges.counter("shield", 1)
