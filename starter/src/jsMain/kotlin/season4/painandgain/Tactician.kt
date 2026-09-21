@@ -1634,7 +1634,17 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
         getRange(h, c) <= HEAL_RANGE && killTicks(c).isInfinite() }
     // стволов, достающих цель (v70, см. USE_FOCUS_GUNS)
     private fun gunsAt(e: Creep?) = if (e == null) 0 else strat.inp.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE }
-    private val focusCmp = compareBy<Creep> { if (it.hits <= pool.fireAvailableAt(it) * InfluenceMap.takenOf(it)) 1 else 0 }
+    // ⚠️ ДОБИВАЕМОСТЬ СЧИТАЕТСЯ ОДИНАКОВО ВЕЗДЕ (v525, см. USE_KILLABLE_SAME_RULE). Седьмой случай класса «одна
+    // величина — несколько правил», и самый влиятельный: приказ командира (`commandFire.killable`) вычитает
+    // лечение, которое враг получит на цели (`healCoverOn`), а этот ярус — верхний в сравнении фокуса — не
+    // вычитал ничего. Расхождение постоянное, пока у него жив хоть один лекарь: три его лекаря вплотную дают
+    // 216 в тик, и цель, «добиваемая» по голым хитам, переживает залп. Тогда фокус ставит наверх того, кого мы
+    // не убьём, огонь армии уходит в него, а мили ради такой цели ещё и нарушает приказ (`strike.focusDying`)
+    private fun killableNowAt(e: Creep): Boolean {
+        val burst = pool.fireAvailableAt(e) * InfluenceMap.takenOf(e)
+        return if (USE_KILLABLE_SAME_RULE) e.hits + healCoverOn(meas.forces.combatEnemies, e) <= burst else e.hits <= burst
+    }
+    private val focusCmp = compareBy<Creep> { if (killableNowAt(it)) 1 else 0 }
         // ЛЕКАРЬ В ДОСЯГАЕМОСТИ — ЦЕЛЬ ПЕРВЫМ (v224, см. USE_FOCUS_ANY_HEALER): правило соперника, снятое с реплеев
         // обеих сторон, — его ствол при нашем лекаре в досягаемости бьёт лекаря в 82–97 % выстрелов
         // ...И ТОЛЬКО ТОТ ЛЕКАРЬ, КОТОРОГО ДОТЯГИВАЮЩИЙСЯ ОГОНЬ ПРОБИВАЕТ (v224, серия): без этого условия ярус
@@ -1744,7 +1754,7 @@ internal class TargetsFocus(private val ctx: Ctx, private val meas: ArmyMeasures
     private val focusPrevId = focusId
     private val focusPrev = focusId?.let { id -> pool.focusPool.firstOrNull { it.id == id } ?: meas.forces.combatEnemies.firstOrNull { it.id == id } }
     private fun gunsNear(e: Creep) = strat.inp.combatArmy.count { hasRanged(it) && it.getRangeTo(e) <= RANGED_RANGE + 1 }
-    private val killableNow = focusBest != null && focusBest.hits <= pool.fireAvailableAt(focusBest) * InfluenceMap.takenOf(focusBest)
+    private val killableNow = focusBest != null && killableNowAt(focusBest)   // одно правило добиваемости (v525)
     // …и не к мили, чья угроза схлопнулась (v49): матч 91 (Coldkimchi, 430 тиков боя) — его мили тычет вплотную (угроза 240,
     // фокус на нём), отходит к лекарям, и фокус на нём держится: 395 выстрелов в мили под 727 его лечений вплотную, 101 в
     // стрелков (35 % при стрелке в трёх, у него 71 %). Мили держится, пока вплотную или идёт (см. threatOf); «отпускать

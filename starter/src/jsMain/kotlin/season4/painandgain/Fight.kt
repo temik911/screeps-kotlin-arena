@@ -59,7 +59,15 @@ import kotlin.reflect.*
 internal fun strike(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, focusOrder: List<Creep>) {
     if (!hasMelee(creep)) return
     val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
-    val focusDying = focusTarget != null && creep.getRangeTo(focusTarget) <= 1 && focusTarget.hits <= InfluenceMap.profileOf(creep).melee
+    // ...И «ДОБИВАЮ» ЗНАЧИТ ТО ЖЕ, ЧТО В ПРИКАЗЕ (v525, см. USE_KILLABLE_SAME_RULE): свой удар считался голым —
+    // без множителя полученного урона (`takenOf`, дебаффы флагов) и без лечения, которое цель получит в этот тик.
+    // Ради цели, которую на самом деле вылечат, мили нарушал приказ командира — то самое исключение, ради
+    // которого ветка и заведена
+    val focusDying = focusTarget != null && creep.getRangeTo(focusTarget) <= 1 &&
+        (if (USE_KILLABLE_SAME_RULE)
+            focusTarget.hits + healCoverOn(enemyCreeps, focusTarget) <=
+                InfluenceMap.profileOf(creep).melee * InfluenceMap.takenOf(focusTarget)
+        else focusTarget.hits <= InfluenceMap.profileOf(creep).melee)
     val ordered = FireBook.fireOf[creep.id]?.let { id -> adjacent.firstOrNull { it.id == id } }
     val target: Creep? = when {
         // приказ командира и для удара (v161): цель назначена по всей армии, а не по тому, кто оказался рядом.
