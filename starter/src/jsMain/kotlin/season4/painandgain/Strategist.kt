@@ -304,6 +304,12 @@ internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, asker: CapA
 internal val capqAsked = Gauges.counter("capq", 1)
 
 /** Вето дебаффа выхода при целой его армии (v530, см. USE_NO_OUTPUT_DEBUFF_WHOLE_ARMY): запретов и пропусков. */
+/** Сброс отряда по погасшему ярлыку «фермер» (v533, см. FARMER_OFF_TICKS): роспусков и тиков, когда признак был
+ *  ложен при живом отряде (то есть случаев, которые окно теперь переживает). */
+internal val farmOffRecall = Gauges.counter("farmoff")
+
+internal val farmOffHeld = Gauges.counter("farmoff", 1)
+
 internal val debuffVeto = Gauges.counter("dbfveto")
 
 internal val debuffPass = Gauges.counter("dbfveto", 1)
@@ -2210,7 +2216,10 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
     init { farmerOffTicks = if (farmer) 0 else farmerOffTicks + 1 }
     // сброс отряда по «не фермер» — только продержавшись FARMER_OFF_TICKS (v115): одноткового моргания признака не хватает
     init {
-        if (!farmer) { if (farmerOffTicks >= FARMER_OFF_TICKS) Squads.recallAll(Squads.Source.STRATEGIST) }
+        if (!farmer && Squads.detachedIds.isNotEmpty()) farmOffHeld.n++
+        if (!farmer) { if (farmerOffTicks >= FARMER_OFF_TICKS) {
+            if (Squads.detachedIds.isNotEmpty()) farmOffRecall.n++
+            Squads.recallAll(Squads.Source.STRATEGIST) } }
         // ...и ОТПУСКАЕТ ЛИ ОТРЯД — решает командир (v164): механика выпуска проверена годом замеров и остаётся, но
         // включает её его режим, а не собственные условия. Полная замена командирской раздачей отвергнута замером:
         // 133 из 135 (roost 7 615:24 325, camp 22 304:23 966) — прежняя логика знает и сухую охоту, и гонку, и
@@ -2811,7 +2820,25 @@ internal const val COMMAND_MIN_FOES = 6
 internal const val COMPACT_MIN = 4
 
 // SCATTER_OFF_SHARE = 3/4: сбор — крупнейшая группа не меньше трёх четвертей его вооружённых (целочисленно: ×4 ≥ ×3)
-internal const val FARMER_OFF_TICKS = 1
+/** ОКНО СБРОСА ОТРЯДА ПО ПОГАСШЕМУ ЯРЛЫКУ (v533; до этого — 1, то есть окна не было вовсе).
+ *
+ *  Комментарий у правила (v115) говорит «одноткового моргания признака не хватает», а константа равнялась ЕДИНИЦЕ,
+ *  и счётчик растёт ПЕРЕД проверкой: `farmerOffTicks = if (farmer) 0 else farmerOffTicks + 1`, затем
+ *  `farmerOffTicks >= FARMER_OFF_TICKS`. То есть первого же тика без признака хватало, чтобы распустить ВЕСЬ отряд.
+ *  Правило было записано и не действовало.
+ *
+ *  Замер (けろびー#19, матч 6ab13c63, 1700 тиков, проигран 17 244:23 857): признак «фермер» ложен 1 032 тика из
+ *  1 700 (61 %), отряд выпускался и распускался ДЕВЯТЬ раз, медиана окна 60 тиков, минимум 11, четыре окна короче
+ *  шестидесяти — при том что до дальних флагов идти 30-60 клеток. Темп очков: наш +12..+14 в тик, пока отряд
+ *  держался (на 600-м тике вели 8 224:5 377), и +7 против его +18 в последней трети, где качель участилась.
+ *  И отдельно: путь «ярлык погас» — ЕДИНСТВЕННЫЙ отзыв, который не ставит `detachRecallTick`, то есть не выжидает
+ *  паузу перед новым выпуском; три остальных её ставят. Отсюда колебание с периодом 8-30 тиков: распустили,
+ *  выпустили, распустили, — и бегуны разворачиваются, не дойдя.
+ *
+ *  Значение взято уже существующее — `DETACH_WINDOW`, то самое окно, которым код меряет «отряду нечего делать».
+ *  Новых чисел правка не вводит. Настоящая опасность ядру снимается не этим правилом, а отзывом по мощи выше: он
+ *  считается КАЖДЫЙ тик и возвращает по одному, начиная с сильнейшего. */
+internal const val FARMER_OFF_TICKS = DETACH_WINDOW
 
 internal const val TOUCH_MIN = 0.05        // ниже этой доли мили считается недостающим (замер дал 0,01)
 
