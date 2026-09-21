@@ -167,7 +167,13 @@ internal object Strategist {
         // гарнизоном и сам не подходит, этого не случается вовсе: обе армии стоят в 13 клетках при дальности выстрела
         // три, и счёт замерзает. Когда проекция на конец матча против нас, а флага, который армия могла бы взять, нет,
         // отказ от размена — уже не осторожность, а гарантированный проигрыш
-        val engageLost = USE_ENGAGE_WHEN_RACE_LOST && i.raceLostNothingToTake && !i.fewFoes && !pre.withdrawing
+        // ...И ГАРНИЗОН НЕ ПОКАЗЫВАЕТ МАССЫ (v540, см. USE_ENGAGE_VS_FEW). Условие `!fewFoes` («его боевых рядом не
+        // меньше COMMAND_MIN_FOES или он сомкнут») писалось против погони за одиночками, но против того, кто рассадил
+        // армию по флагам, оно запрещает размен по построению: `massed=false` в 66 матчах из 67, и причина режима в
+        // логе — `cmd=1/300:few`. Прибор правки v538/v539 держался на 2 % тиков решения именно из-за него. Цель
+        // размена здесь — страж у флага, а не кулак, и «мало врагов рядом» — это описание гарнизона, а не довод
+        val engageLost = USE_ENGAGE_WHEN_RACE_LOST && i.raceLostNothingToTake && !pre.withdrawing &&
+            (!i.fewFoes || (USE_ENGAGE_VS_FEW && i.hisFlagsGuarded))
         engageAll.n++
         if (engageLost) engageOn.n++
         val fightNow = (!pushing && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
@@ -2674,10 +2680,13 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
      *  ...И «НЕЧЕГО» — ЭТО ТАКЖЕ «ЕСТЬ, НО НЕ ВЗЯТЬ» (v539, см. USE_ENGAGE_VS_GARRISON). Первая редакция требовала
      *  пустой цели и потому включалась в 2 % тиков решения: в дебюте цель у армии есть всегда, а берётся она или нет —
      *  вопрос охраны. Большинство его флагов под вооружённой охраной — значит бегунами гонку не вернуть. */
-    private val hisFlagsGuarded = run {
+    /** Большинство его флагов охраняется СБОКУ, а не занято телом (v539/v540): клетка свободна, и разоружённый страж
+     *  её открывает. Сидящий на клетке — другой случай: там разоружение не освобождает ничего, и размен не окупается
+     *  (гейт поймал это строкой `match19:scatter`, где фермер сидит на 95,8 % своих флаго-тиков). */
+    val hisFlagsGuarded = run {
         val his = ctx.flags.filter { it.theirs }
-        val guarded = his.count { f -> f.guards.any { hasWeapon(it) } }
-        his.isNotEmpty() && guarded * 2 > his.size
+        val guardedFree = his.count { f -> f.occupant == null && f.guards.any { hasWeapon(it) } }
+        his.isNotEmpty() && guardedFree * 2 > his.size
     }
     val raceLostNothingToTake = lostRaceNow(meas.view) &&
         (obj.objective == null || (USE_ENGAGE_VS_GARRISON && hisFlagsGuarded))
