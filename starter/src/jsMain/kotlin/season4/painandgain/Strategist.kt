@@ -162,8 +162,16 @@ internal object Strategist {
         // взят из того же живого замера, которым правило и обосновано: в победах в момент боя у нас 12 560 хитов
         // против его 5 719 — мы впереди вдвое и добиваем, в поражениях 8 133 против 9 935 — мы уже позади, и строй
         // проигранный размен не выправляет. Поэтому запрет действует только позади по хитам: впереди — бьём строем
-        val fightNow = !pushing && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
-            !(i.enemyMassed && USE_NO_FIST_FIGHT)
+        // ...И РАЗМЕН НАЧИНАЕТСЯ НЕ ТОЛЬКО В ОТВЕТ (v538, см. USE_ENGAGE_WHEN_RACE_LOST). Условие боя требовало
+        // `underTheirFire` — то есть бот входил в бой, лишь когда по нему УЖЕ стреляют. Против того, кто держит флаги
+        // гарнизоном и сам не подходит, этого не случается вовсе: обе армии стоят в 13 клетках при дальности выстрела
+        // три, и счёт замерзает. Когда проекция на конец матча против нас, а флага, который армия могла бы взять, нет,
+        // отказ от размена — уже не осторожность, а гарантированный проигрыш
+        val engageLost = USE_ENGAGE_WHEN_RACE_LOST && i.raceLostNothingToTake && !i.fewFoes && !pre.withdrawing
+        engageAll.n++
+        if (engageLost) engageOn.n++
+        val fightNow = (!pushing && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
+            !(i.enemyMassed && USE_NO_FIST_FIGHT)) || engageLost
         val case = ModeCase(i, fightNow)
         val mode = walk(MODE_RULES, case, modeTally).act(case)
         // ...и причина берётся из той же цепочки (v215): прибор, повторяющий решение своим порядком, врёт ровно тогда,
@@ -2659,6 +2667,10 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     val outmatched = outmatchedTicks >= BREAK_OFF_TICKS
     /** ни сомкнутой армии, ни COMMAND_MIN_FOES у руки */
     val fewFoes = !(meas.forces.enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES)
+
+    /** ГОНКА ПРОИГРАНА, А БРАТЬ НЕЧЕГО (v538, см. USE_ENGAGE_WHEN_RACE_LOST): проекция на конец матча против нас, и
+     *  флага, который армия могла бы взять, в этот тик нет. Тогда отказ от размена — гарантированный проигрыш. */
+    val raceLostNothingToTake = lostRaceNow(meas.view) && obj.objective == null
     /** его вооружённые сомкнуты в кулак И мы уже позади по суммарным хитам (v352, см. fightNow) */
     // ...И «ПОЗАДИ» МЕРЯЕТСЯ МОЩЬЮ, А НЕ ХИТАМИ (v382). Гейт строевого боя (v352) читал сумму хитов, и разбор 5
     // реплеев против топ-3 показал, насколько это тонко: худшая ПОБЕДА отличается от лучшего ПОРАЖЕНИЯ на 282
@@ -3102,6 +3114,11 @@ internal val unwipeAll = Gauges.counter("unwipe", 1)
 internal val hkeepHeal = Gauges.counter("hkeep")
 
 internal val hkeepAll = Gauges.counter("hkeep", 1)
+
+/** Прибор v538: в скольких тиках решения размен начат нами, потому что гонка проиграна и брать нечего. */
+internal val engageOn = Gauges.counter("engage")
+
+internal val engageAll = Gauges.counter("engage", 1)
 
 /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
 internal val pushHeldTicks = Gauges.counter("pushheld")
