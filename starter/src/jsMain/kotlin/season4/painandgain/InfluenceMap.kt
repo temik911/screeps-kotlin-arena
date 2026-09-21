@@ -119,6 +119,32 @@ object InfluenceMap {
     fun weaponRank(a: Creep, delivered: Double): Int =
         if (!USE_HEAL_BY_FIREPOWER) 0 else if (restoredPower(a, delivered) > 0.0) 2 else if (armedNow(a)) 1 else 0
 
+    /** ЦЕНА ВОССТАНОВЛЕННОЙ ЧАСТИ С УЧЁТОМ ДОСЯГАЕМОСТИ (v527, см. USE_WARD_BY_FIREPOWER).
+     *  `restoredPower` даёт СЫРУЮ мощь части: у мили 30, у стрелка 10, у лекаря 12. Но часть работает только тогда,
+     *  когда её оружие достаёт: мили бьёт на 1, стрелок на 3, лечение нужно всегда. Замер 26 реплеев против
+     *  MetalicaX#17: мили смежен с врагом 20-22 % тиков решающего окна, стрелок держит цель в тройке 51-83 %. Сырая
+     *  мощь поэтому и совпадала со старым «самый раненый» — самый раненый и есть мили; множитель её разводит. */
+    fun restoredValue(a: Creep, delivered: Double, enemies: List<Creep>): Double {
+        val p = restoredPower(a, delivered)
+        if (p <= 0.0) return 0.0
+        val q = potentialOf(a)
+        if (q.melee <= 0.0 && q.ranged <= 0.0) return p
+        val reach = if (q.melee > 0.0) 1 else RANGED_RANGE
+        return if (enemies.any { getRange(a, it) <= reach }) p else p * WEAPON_IDLE_SHARE
+    }
+
+    /** ОРУЖЕЙНЫЙ ЗАПАС ЦЕЛИ (v528, см. USE_FAN_BY_ROOM): сколько ещё хитов этого крипа стоят ОРУЖЕЙНЫХ частей.
+     *  Та же арифметика, что у restoredPower, только в обратную сторону: части держат по 100 хитов, урон съедает
+     *  тело СПЕРЕДИ, оружие стоит первым — значит всё, что ниже 100 x хвоста, это MOVE, и урон туда не снимает с
+     *  врага ничего. Отсюда и цена выстрела: не нанесённый урон, а min(урон, запас). */
+    fun weaponRoom(a: Creep): Double {
+        var weapons = 0
+        for (p in a.body) if (p.type == ATTACK || p.type == RANGED_ATTACK || p.type == HEAL) weapons++
+        if (weapons == 0) return 0.0
+        val tail = (a.body.size - weapons) * 100.0
+        return maxOf(0.0, a.hits - tail)
+    }
+
     fun restoredPower(a: Creep, delivered: Double): Double {
         if (delivered <= 0.0) return 0.0
         val total = a.body.size

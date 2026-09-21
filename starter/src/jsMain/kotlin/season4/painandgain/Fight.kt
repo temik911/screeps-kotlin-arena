@@ -170,6 +170,12 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
     // уже безоружных 38-52 % своего лечения, победитель 14-21 %, в каждом матче и без перекрытия; до первой
     // вернувшейся оружейной части уходит вхолостую 193 хита (медиана у нас) и 340 у него
     fun gain(target: Creep, deliver: Double): Int = InfluenceMap.weaponRank(target, deliver)
+    // ...И ТА ЖЕ ВЕЛИЧИНА РЕШАЕТ ДОСТАВКУ, ЧТО И ШАГ (v527, см. USE_WARD_BY_FIREPOWER): шаг лекаря выбирает
+    // подопечного по цене восстановленной части с учётом досягаемости её оружия; если бы доставка считала иначе,
+    // лекарь шёл бы к одному, а лил в другого — одна величина по двум правилам. Ноль у всех, пока доставка не
+    // переводит никого через границу части, и тогда порядок в точности прежний
+    fun gainV(target: Creep, deliver: Double): Double =
+        if (USE_WARD_BY_FIREPOWER) InfluenceMap.restoredValue(target, deliver, enemyCreeps) else 0.0
     for (creep in active) {
         strike(creep, enemyCreeps, focusTarget, focusOrder)
         val healParts = creep.body.count { it.type == HEAL && it.hits > 0 }
@@ -225,7 +231,7 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
             // случаев рядом стоял крип с потерей 900–1 060. Полный сосед лечится, только если раненых нет вовсе
             val anyWounded =  candidates.any { it.hitsMax - it.hits > 0 }
             val closeTarget0 = candidates.filter { creep.getRangeTo(it) <= 1 && (!anyWounded || it.hitsMax - it.hits > 0) }
-                .maxWithOrNull(compareBy<Creep>({ gain(it, nearHeal) }, { rank(it) }))
+                .maxWithOrNull(compareBy<Creep>({ gainV(it, nearHeal) }, { gain(it, nearHeal) }, { rank(it) }))
             // ...И ВПЛОТНУЮ ПРИКАЗ ТОЖЕ ДЕЙСТВУЕТ (v523, см. USE_HEAL_ORDER_ADJACENT). Обещание v183 выше — «приказ
             // действует на ВСЕЙ лечебной дальности» — исполнено ровно наполовину: `ordered` спрашивает только дальняя
             // ветка, а ближняя выбирает соседа местным рангом и до дальней не доходит вовсе (`continue`). Вышло
@@ -245,7 +251,7 @@ internal fun healAndShoot(active: List<Creep>, allies: List<Creep>, enemyCreeps:
                 continue
             }
             val farTarget = ordered?.takeIf { creep.getRangeTo(it) <= HEAL_RANGE }
-                ?: candidates.filter { it.hitsMax - it.hits > 0  }.maxWithOrNull(compareBy<Creep>({ gain(it, farHeal) }, { rank(it) }))
+                ?: candidates.filter { it.hitsMax - it.hits > 0  }.maxWithOrNull(compareBy<Creep>({ gainV(it, farHeal) }, { gain(it, farHeal) }, { rank(it) }))
             if (farTarget != null) {
                 Executor.rangedHeal(creep, farTarget)
                 book(farTarget, InfluenceMap.modified(creep, EFF_HEAL_MODIFIER, healParts * RANGED_HEAL_POWER.toDouble()).toInt())
@@ -304,7 +310,17 @@ internal fun shoot(creep: Creep, enemyCreeps: List<Creep>, focusTarget: Creep?, 
     // пробиваемым тем, что до него дотягивается (это и есть «четыре-пять стволов» из записанного порога),
     // веер развёл бы их обратно и отдал бы цель его лекарям. Побочно ветка чинит и ПРИБОР: веерный выстрел
     // не кладёт ничего в `shotsAt`, поэтому такие тики не входили в `conc` даже знаменателем (см. concfan)
-    if (massValue > (if (enemyHeals) 2.5 else 1.0)) {
+    // ...И ВЫБОР СЧИТАЕТСЯ ЦЕНОЙ РАЗРУШЕННОГО (v528, см. USE_FAN_BY_ROOM): убийство не снимает выхода — оружие
+    // уничтожено раньше тела, — значит полезен только урон в ОРУЖЕЙНЫЙ ЗАПАС цели, а лечение врага общее на армию
+    // и вычитает те же 216 при любом распределении. Веер стоит сумму min(доля x мощь, запас), выстрел — min(мощь,
+    // запас лучшей цели)
+    val myRanged = InfluenceMap.profileOf(creep).ranged
+    val fanGain = massPool.sumOf { minOf(InfluenceMap.rangedRate(creep.getRangeTo(it)) * myRanged, InfluenceMap.weaponRoom(it)) }
+    val oneGain = massPool.maxOfOrNull { minOf(myRanged, InfluenceMap.weaponRoom(it)) } ?: 0.0
+    val fanOld = massValue > (if (enemyHeals) 2.5 else 1.0)
+    val fanNew = if (USE_FAN_BY_ROOM) fanGain > oneGain else fanOld
+    fanRoomAll.n++; if (fanNew != fanOld) fanRoomDiff.n++
+    if (fanNew) {
         Executor.rangedMassAttack(creep); lastFireTick = getTicks(); fanShots.n++; fireShots.n++
     } else {
         // ПЕРЕБОЙ (v140, приём из литературы по микроменеджменту RTS): выстрел в цель, которая и так умрёт от уже
@@ -801,6 +817,12 @@ internal val concAllTicks = Gauges.counter("concall", 1)
  *  `shotsAt`, поэтому тик, где все стрелки ушли в веер, НЕ ПОПАДАЕТ ДАЖЕ В ЗНАМЕНАТЕЛЬ `conc` — измеренные
  *  1,67–1,94 ствола на цель сняты по подмножеству тиков, и без этой пары их нельзя читать. */
 internal val fanShots = Gauges.counter("concfan")
+
+/** Расхождение выбора «веер или выстрел» (v528, см. USE_FAN_BY_ROOM): крипо-тиков огня, где цена разрушенного
+ *  назвала другое решение, чем прежний порог по числу целей, и всех крипо-тиков с выбором. */
+internal val fanRoomDiff = Gauges.counter("fanroom")
+
+internal val fanRoomAll = Gauges.counter("fanroom", 1)
 
 internal val fireShots = Gauges.counter("concfan", 1)
 

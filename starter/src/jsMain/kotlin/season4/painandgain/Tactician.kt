@@ -840,7 +840,9 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         }
         medic
             ?: (if (HEAL_MATE.c("victim.saveable", Wall.victimSaveable)) Wall.victimNow?.takeIf { v -> HEAL_MATE.c("victim.notMe", v.id != creep.id) && HEAL_MATE.c("victim.inReach", getRange(creep, v) <= HEAL_RANGE + 1) } else null)
-            ?: near.maxByOrNull { it.hitsMax - it.hits }
+            // ...И ПОДОПЕЧНЫЙ — ПО СОХРАНЁННОМУ ВЫХОДУ (v527, см. USE_WARD_BY_FIREPOWER): «самый раненый» — это
+            // всегда мили, а восстановленная ему часть ATTACK работает 20 % тиков против 74 % у части RANGED
+            ?: pickWard(creep, near, meas.forces.combatEnemies)
             ?: fighters.filter { canMove(it) }.minByOrNull { getRange(creep, it) }
             ?: fighters.minByOrNull { getRange(creep, it) }
             ?: patients.minByOrNull { getRange(creep, it) }
@@ -1108,6 +1110,20 @@ internal class Stride(val turn: Turn, val aim: Aim) {
     private val waitedOut = cohesionHold && getTicks() - (Memory.holdSince[creep.id] ?: getTicks()) >= COHESION_PATIENCE
     init { Memory.impatientLatch.update(creep.id, enter = waitedOut, exit = !cohesionHold) }
     val hold = (cohesionHold && creep.id !in Memory.impatientIds) || turn.formHold || retreatHold
+}
+
+/** ВЫБОР ПОДОПЕЧНОГО (v527, см. USE_WARD_BY_FIREPOWER): среди своих рядом — тот, кому доставка этого лекаря вернёт
+ *  больше всего огневой мощи (`restoredPower` — величина v496, которую шаг лекаря не спрашивал); при равенстве —
+ *  самый раненый, как было до правки. Прибор `ward=` считает, в скольких лекаре-тиках выбор РАЗОШЁЛСЯ со старым. */
+internal fun pickWard(healer: Creep, near: List<Creep>, enemies: List<Creep>): Creep? {
+    val old = near.maxByOrNull { it.hitsMax - it.hits } ?: return null
+    if (!USE_WARD_BY_FIREPOWER) return old
+    val deliver = InfluenceMap.profileOf(healer).heal
+    val fresh = near.maxWithOrNull(
+        compareBy<Creep>({ InfluenceMap.restoredValue(it, deliver, enemies) }, { it.hitsMax - it.hits })) ?: return old
+    wardAll.n++
+    if (fresh.id != old.id) wardDiff.n++
+    return fresh
 }
 
 /** Свободный шаг (строка `free` цепочки шага): прежнее тело ветки дословно. Имена: локальная → [Stride] → [Turn] → [ArmyTick]. */
@@ -2232,6 +2248,12 @@ internal val hwWhy = Gauges.labelled("hwwhy")
 internal val repassKept = Gauges.counter("repass")
 
 internal val repassAll = Gauges.counter("repass", 1)
+
+/** Расхождение выбора подопечного (v527, см. USE_WARD_BY_FIREPOWER): лекаре-тиков, где правило по сохранённому
+ *  выходу назвало ДРУГОГО подопечного, чем прежнее «самый раненый», и всего тиков с выбором. */
+internal val wardDiff = Gauges.counter("ward")
+
+internal val wardAll = Gauges.counter("ward", 1)
 
 internal val rnearN = Gauges.counter("rnear")
 
