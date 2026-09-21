@@ -1083,6 +1083,19 @@ internal fun readSignals(ctx: Ctx) {
     Memory.groupDmgHist.addLast(groupDmg)
     while (Memory.groupDmgHist.size > GROUP_WINDOW) Memory.groupDmgHist.removeFirst()
     Signals.groupDmgWindow = Memory.groupDmgHist.sum()
+    // ПИКОВЫЙ ТЕМП УРОНА, КОТОРЫЙ ОН ПОКАЗАЛ ЗА МАТЧ (v534, см. USE_UNWIPEABLE_OPENS). Берётся максимум по окну
+    // GROUP_WINDOW, а не среднее: вопрос «успеет ли он нас уничтожить» отвечается допущением, что остаток матча он
+    // будет драться так же сильно, как в самый сильный свой отрезок, — среднее по матчу такое допущение занижает.
+    // Урон берётся ПОЛНЫЙ (`ourDamageTaken`, вся армия), а не групповой: уничтожение считается по всем телам.
+    Memory.takenHist.addLast(ourDamageTaken)
+    while (Memory.takenHist.size > GROUP_WINDOW + 1) Memory.takenHist.removeFirst()
+    if (Memory.takenHist.size > GROUP_WINDOW) {
+        val window = Memory.takenHist.last() - Memory.takenHist.first()
+        if (window > peakTakenWindow) peakTakenWindow = window
+    }
+    Signals.hisPeakDamage = peakTakenWindow.toDouble() / GROUP_WINDOW
+    Signals.ourHealRate = ctx.myCreeps.sumOf { InfluenceMap.profileOf(it).heal }
+    Signals.ourHitsNow = ourHitsSum
     val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
     val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
@@ -1245,6 +1258,7 @@ internal var lastHurtTick = 0                          // последний т�
 
 internal var firstNearTick = -1                        // первый тик с его вооружённым в ENGAGE_RANGE + RANGED_RANGE (v72: признаки фермера — от него)
 
+internal var peakTakenWindow = 0                       // самое сильное окно GROUP_WINDOW урона по нам за матч (v534)
 internal var ourDamageTaken = 0                        // снято с нас за матч (см. USE_PUSH_LEDGER)
 
 internal var enemyDamageTaken = 0                      // снято с него за матч
@@ -1333,4 +1347,7 @@ internal object Signals {
     internal var enemyMassedSignal = false
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
     internal var groupDmgWindow = 0
+    internal var hisPeakDamage = 0.0                       // v534: пиковый его урон по нам, хитов в тик (см. USE_UNWIPEABLE_OPENS)
+    internal var ourHealRate = 0.0                         // v534: наше лечение в тик, с нынешними дебаффами наших флагов
+    internal var ourHitsNow = 0                            // v534: хиты всей нашей армии сейчас
 }

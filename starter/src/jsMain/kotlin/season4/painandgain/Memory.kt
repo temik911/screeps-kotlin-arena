@@ -96,6 +96,9 @@ internal object Memory {
     /** ...и обе половины отдельно: признак отхода спрашивает ОТНОШЕНИЕ потерь, а не разность. */
     val ourLostHist = ArrayDeque<Int>()
     val hisLostHist = ArrayDeque<Int>()
+    /** Снимки `ourDamageTaken` за последние GROUP_WINDOW тиков — из них берётся ПИКОВОЕ окно урона по нам за матч
+     *  (v534, см. USE_UNWIPEABLE_OPENS). Окно то же, что у groupSafe: длительность одного сближения. */
+    val takenHist = ArrayDeque<Int>()
     val aggressiveIds = perCreepSet()
     val aggressiveLatch = Latch(aggressiveIds)
     val lastHits = perCreepMap<Int>()

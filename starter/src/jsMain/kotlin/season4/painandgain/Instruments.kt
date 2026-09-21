@@ -299,7 +299,7 @@ internal val T_LINE = listOf(
     "capopp", "ffight", "fmassed", "stray", "sout", "hold", "gsafe", "fguard", "route", "man", "gcov", "garscout", "courier", "hunt",
     "toothless", "sit", "keep2", "keep3", "scout", "spotm", "spothold", "sym", "split", "recall", "healgap", "nomedic",
     "flip", "aggro", "pushheld", "lethal", "ledgerw", "breakoff", "race", "poisedcost", "objnone", "objdrop", "objns", "budget",
-    "runner", "mrun", "hw", "hwwhy", "hor", "fuse", "rnear", "repass", "heord", "ward", "fanroom", "shield", "dbfveto", "froom", "farmoff", "hfront", "nofront", "hstep", "cmdwhy", "ovl", "conc", "concall", "concmax", "concfan", "ehshot", "rfoc", "ehrch", "shotnet", "okill", "okkill", "lostrace", "gather", "close3", "guard", "gstrip", "warm",
+    "runner", "mrun", "hw", "hwwhy", "hor", "fuse", "rnear", "repass", "heord", "ward", "fanroom", "shield", "dbfveto", "froom", "farmoff", "unwipe", "hfront", "nofront", "hstep", "cmdwhy", "ovl", "conc", "concall", "concmax", "concfan", "ehshot", "rfoc", "ehrch", "shotnet", "okill", "okkill", "lostrace", "gather", "close3", "guard", "gstrip", "warm",
     "warmann", "warmhold", "warmcmd", "warmfight", "warmcap", "mconc", "mconcmax", "mpack", "pack", "mpackon", "kchase",
     "kveto", "gathera", "annempty", "shooters", "abort", "srch", "deals", "srchd", "pin", "fself", "rotf", "rotfm", "meet",
     "fsw", "ffoc", "ovw", "conf", "rtr", "pflip", "mquiet", "mquietc", "maj", "surv", "adr", "rad", "simd", "fhl", "mrush", "zlb",
@@ -393,7 +393,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v533"
+internal const val BOT_VERSION = "v534"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и

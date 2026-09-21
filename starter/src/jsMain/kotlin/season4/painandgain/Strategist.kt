@@ -610,7 +610,16 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         // match34:scatter (21 979 : 24 321 по очкам): россыпь тоже дерётся — стычками у флагов по одному-два крипа, и целиком
         // она не приходит никогда. Различитель — история ЭТОГО матча: он хоть раз дрался с нами СОМКНУТЫМ (fightMassedSeen)
         // и не спит; фермер, который не бьёт вовсе (kills=0, fire=0 за матч), и россыпь сюда не попадают
-        foughtFoe = USE_GATE_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy
+        // ...И ЗАЩЁЛКА СНИМАЕТСЯ ЗАМЕРОМ (v534, см. USE_UNWIPEABLE_OPENS): «он дрался сомкнутым» — одно событие, а
+        // вопрос ворот в том, решит ли он матч боем. Цена ЭТОГО флага входит в собственный замер: лечение берётся с
+        // его дебаффом лечения, урон — с его множителем получаемого урона
+        val hypo = hypoModsFor(ctx, f, true)
+        val unwipeable = cannotWipeUs(hypo.heal, 1.0 / hypo.hits.coerceAtLeast(0.01))
+        if (USE_GATE_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy) {
+            unwipeAll.n++
+            if (unwipeable) unwipeOpen.n++
+        }
+        foughtFoe = USE_GATE_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy && !unwipeable
         opp = if (foughtFoe) ctx.combatEnemies else oppLocal
         capOppSum.n += opp.size
         capAllSum.n += ctx.combatEnemies.size
@@ -714,27 +723,52 @@ internal fun planCapture(ctx: Ctx, step: Position?) {
     ctx.flags.firstOrNull { !it.ours && it.pos.x == step.x && it.pos.y == step.y }?.let { WorldState.announceCapture(it.id) }
 }
 
+/**
+ * ОН НЕ УСПЕВАЕТ РЕШИТЬ МАТЧ БОЕМ (v534, см. USE_UNWIPEABLE_OPENS).
+ *
+ * Величина вместо защёлки `fightMassedSeen`: хватит ли ему оставшихся тиков, чтобы снять с нас все хиты, если
+ * остаток матча он будет драться так же сильно, как в самый сильный свой отрезок за этот матч. Лечение — общим
+ * котлом по телам (уничтожают армию целиком), урон — пиковым окном GROUP_WINDOW. [healMul] и [takenMul] — доля
+ * «после» к «сейчас» для берущегося флага: дебафф, за который отвечает решение, входит в собственную цену.
+ *
+ * До первого размена пик равен нулю и мерить нечего, поэтому ворота молчат, пока размена не было и пока после
+ * него не прошло GROUP_WINDOW — то есть пока пик не успел записаться хотя бы одним полным окном.
+ */
+internal fun cannotWipeUs(healMul: Double, takenMul: Double): Boolean {
+    if (!USE_UNWIPEABLE_OPENS) return false
+    if (firstFightTick <= 0 || getTicks() - firstFightTick < GROUP_WINDOW) return false
+    val left = arenaInfo.ticksLimit - getTicks()
+    if (left <= 0) return true
+    val net = Signals.hisPeakDamage * takenMul - Signals.ourHealRate * healMul
+    if (net <= 0.0) return true
+    return Signals.ourHitsNow / net > left
+}
+
 /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;
  *  вражья — без них, если флаги были его. */
 internal fun powerAfter(ctx: Ctx, f: FlagInfo): Pair<Double, Double> =
     powerAfterFor(ctx, ctx.side, ctx.combatEnemies, f)
 
 /** То же для заданной стороны и группы врага (v95: пул проверяет ядро без крипа с дебаффом его флага-цели). */
-internal fun powerAfterFor(ctx: Ctx, side: List<Creep>, opp: List<Creep>, f: FlagInfo): Pair<Double, Double> {
+/** Множители стороны в состоянии «после захвата [f]» (и тех флагов, на которые мы шагаем в этот тик): отношение
+ *  дебаффов «после» к нынешним. Вынесено из [powerAfterFor] в v534 — той же величиной пользуются ворота
+ *  «он не успевает нас уничтожить» (см. cannotWipeUs); тело не тронуто. */
+internal fun hypoModsFor(ctx: Ctx, f: FlagInfo, mine: Boolean): HypoMods {
     val taking = HashSet(WorldState.plannedCaptures); taking.add(f.id)
     // и флаг-цель армии (v121): захват, который уже идёт, — часть состояния «после»
-    fun mods(mine: Boolean): HypoMods {
-        fun k(type: String): Double {
-            val now = ctx.flags.count { it.mine == mine && it.type == type }
-            // его флаги В ПОЛЁТЕ (v128, USE_HIS_FLAGS_IN_FLIGHT): свободный флаг с его вооружённым вплотную — его в состоянии «после»,
-            // и пол паритета видит симметричный размен, а не наш дебафф против его чистой армии (гастролёр берёт D5 на 39–41-м)
-            val after = ctx.flags.count { it.type == type && (if (mine) (it.ours || it.id in taking) else ((it.theirs && it.id !in taking))) }
-            return stackMul(type, after) / stackMul(type, now).coerceAtLeast(0.01)
-        }
-        return HypoMods(ranged = k(EFF_RANGED_ATTACK_MODIFIER), melee = k(EFF_ATTACK_MODIFIER), heal = k(EFF_HEAL_MODIFIER), hits = 1.0 / k(EFF_DAMAGE_TAKEN_MODIFIER))
+    fun k(type: String): Double {
+        val now = ctx.flags.count { it.mine == mine && it.type == type }
+        // его флаги В ПОЛЁТЕ (v128, USE_HIS_FLAGS_IN_FLIGHT): свободный флаг с его вооружённым вплотную — его в состоянии «после»,
+        // и пол паритета видит симметричный размен, а не наш дебафф против его чистой армии (гастролёр берёт D5 на 39–41-м)
+        val after = ctx.flags.count { it.type == type && (if (mine) (it.ours || it.id in taking) else ((it.theirs && it.id !in taking))) }
+        return stackMul(type, after) / stackMul(type, now).coerceAtLeast(0.01)
     }
-    val ourMods = mods(true)
-    val theirMods = mods(false)
+    return HypoMods(ranged = k(EFF_RANGED_ATTACK_MODIFIER), melee = k(EFF_ATTACK_MODIFIER), heal = k(EFF_HEAL_MODIFIER), hits = 1.0 / k(EFF_DAMAGE_TAKEN_MODIFIER))
+}
+
+internal fun powerAfterFor(ctx: Ctx, side: List<Creep>, opp: List<Creep>, f: FlagInfo): Pair<Double, Double> {
+    val ourMods = hypoModsFor(ctx, f, true)
+    val theirMods = hypoModsFor(ctx, f, false)
     // для captureAllowed сторона — армия с вооружёнными и лечащими бегунами (v59): паритет захвата — страховка от
     // аннигиляции стороны, а отряженные в бегуны (см. USE_DETACH) живы и вооружены. Ядро без пяти отряжённых стояло в
     // паритете (2918 против 2954), захват был запрещён ВСЕМ, и четверо отряжённых 800 тиков стояли POISED в клетке от
@@ -1358,7 +1392,10 @@ internal class RaceRoster(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // ...И НЕ ПРОТИВ ТОГО, КТО УЖЕ ДРАЛСЯ С НАМИ СОМКНУТЫМ (v438, см. USE_PAIRS_NOT_VS_FIGHTER): тот же различитель, что у ворот
     // захвата с v434, — признак «не бьёт» говорит о прошлом за GROUP_WINDOW, а цену раздробленной армии платит бой, который
     // случится; гейт match33:camp: после первого боя его блок отошёл и раздробился, режим пар отпустил семерых из двенадцати
-    val safe = Signals.groupSafe && !(USE_PAIRS_NOT_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy)
+    // ...И ЗДЕСЬ ТА ЖЕ ЗАЩЁЛКА СНИМАЕТСЯ ТЕМ ЖЕ ЗАМЕРОМ (v534, см. USE_UNWIPEABLE_OPENS): величина одна — «решит ли он
+    // матч боем», — и правил на неё было два. Дебаффа режим пар не покупает, поэтому множители единичные
+    val safe = Signals.groupSafe && !(USE_PAIRS_NOT_VS_FIGHTER && fightMassedSeen && !ctx.passiveEnemy &&
+        !cannotWipeUs(1.0, 1.0))
     // ...и мера ядра в режиме пар — его КРУПНЕЙШАЯ ГРУППА, а не «двое с оружием» (v301): доктрина паритета остаётся, меняется
     // только опора — та же локализация, что у ворот захвата с v214 и у отзыва с v296. «Двое с оружием» (первая редакция)
     // отпускали столько, что ядро переставало брать флаг, на котором сидит его крип: стендовый фермер scatter держал
@@ -3027,6 +3064,11 @@ internal val chaseKills = Gauges.counter("kills")
 internal val capOppSum = Gauges.counter("capopp")
 
 internal val capAllSum = Gauges.counter("capopp", 1)
+
+/** Прибор v534: из скольких спросов, где защёлка «он дрался сомкнутым» держала ворота, замер её снял. */
+internal val unwipeOpen = Gauges.counter("unwipe")
+
+internal val unwipeAll = Gauges.counter("unwipe", 1)
 
 /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
 internal val pushHeldTicks = Gauges.counter("pushheld")
