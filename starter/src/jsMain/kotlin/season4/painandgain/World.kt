@@ -1106,6 +1106,9 @@ internal fun readSignals(ctx: Ctx) {
         if (window > peakTakenWindow) peakTakenWindow = window
     }
     Signals.hisPeakDamage = peakTakenWindow.toDouble() / GROUP_WINDOW
+    // ...И УСТОЙЧИВЫЙ ТЕМП — ЭТО СРЕДНЕЕ ЗА МАТЧ, А НЕ ПИК (v541, см. USE_WIPE_BY_SUSTAINED). Пик за сорок тиков
+    // отвечает на вопрос «как сильно он ударил однажды», а уничтожение требует держать темп до конца матча
+    Signals.hisSustainedDamage = ourDamageTaken.toDouble() / maxOf(1, getTicks())
     Signals.ourHitsNow = ourHitsSum
     // тела: сколько их было на старте и сколько сейчас (v536, см. wipeByBodies)
     Signals.ourBodiesNow = ctx.myCreeps.size
@@ -1368,6 +1371,7 @@ internal object Signals {
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
     internal var groupDmgWindow = 0
     internal var hisPeakDamage = 0.0                       // v534: пиковый его ЧИСТЫЙ урон по нам, хитов в тик (уже за вычетом лечения)
+    internal var hisSustainedDamage = 0.0                  // v541: тот же урон, но средний за матч — устойчивый темп
     internal var ourHitsNow = 0                            // v534: хиты всей нашей армии сейчас
     internal var ourBodiesNow = 0                          // v536: тел сейчас
     internal var ourBodiesStart = 0                        // v536: тел было на старте

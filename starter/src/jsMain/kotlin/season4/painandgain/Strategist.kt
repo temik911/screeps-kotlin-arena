@@ -760,7 +760,10 @@ internal fun cannotWipeUs(healMul: Double, takenMul: Double): Boolean {
  *  `ourDamageTaken` — хитов, которых армия НЕДОСЧИТАЛАСЬ, то есть УЖЕ за вычетом лечения; поэтому лечение здесь не
  *  вычитается (v534 вычитала его второй раз). Дебафф лечения берущегося флага поднимает будущий чистый темп — делим. */
 internal fun wipeByHits(healMul: Double, takenMul: Double): Double {
-    val rate = Signals.hisPeakDamage * takenMul / healMul.coerceAtLeast(0.01)
+    // ...и темп берётся УСТОЙЧИВЫЙ, а не пиковый (v541, см. USE_WIPE_BY_SUSTAINED): уничтожение требует держать
+    // темп до конца матча, а пик за сорок тиков говорит лишь о том, как сильно он ударил однажды
+    val base = if (USE_WIPE_BY_SUSTAINED) Signals.hisSustainedDamage else Signals.hisPeakDamage
+    val rate = base * takenMul / healMul.coerceAtLeast(0.01)
     if (rate <= 0.0) return Double.MAX_VALUE
     return Signals.ourHitsNow / rate
 }

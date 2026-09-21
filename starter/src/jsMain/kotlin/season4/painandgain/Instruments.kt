@@ -348,7 +348,7 @@ private fun declareLine() {
         val byHits = wipeByHits(1.0, 1.0)
         val byBodies = wipeByBodies()
         fun cap(x: Double) = if (x >= 1e9) "inf" else "${x.toInt()}"
-        "${Signals.hisPeakDamage.toInt()}/${cap(byHits)}/${cap(byBodies)}/${arenaInfo.ticksLimit - getTicks()}"
+        "${Signals.hisSustainedDamage.toInt()}:${Signals.hisPeakDamage.toInt()}/${cap(byHits)}/${cap(byBodies)}/${arenaInfo.ticksLimit - getTicks()}"
     }
     Gauges.computed("ledgerw") { "${Prev.ledgerWindow}/${Prev.exchange.ourLostWindow}/${Prev.hisLostWindow}" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
@@ -401,7 +401,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v540"
+internal const val BOT_VERSION = "v541"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и
