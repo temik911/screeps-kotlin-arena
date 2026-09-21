@@ -2669,8 +2669,18 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     val fewFoes = !(meas.forces.enemyMassedNow || foesAtHand >= COMMAND_MIN_FOES)
 
     /** ГОНКА ПРОИГРАНА, А БРАТЬ НЕЧЕГО (v538, см. USE_ENGAGE_WHEN_RACE_LOST): проекция на конец матча против нас, и
-     *  флага, который армия могла бы взять, в этот тик нет. Тогда отказ от размена — гарантированный проигрыш. */
-    val raceLostNothingToTake = lostRaceNow(meas.view) && obj.objective == null
+     *  флага, который армия могла бы взять, в этот тик нет.
+     *
+     *  ...И «НЕЧЕГО» — ЭТО ТАКЖЕ «ЕСТЬ, НО НЕ ВЗЯТЬ» (v539, см. USE_ENGAGE_VS_GARRISON). Первая редакция требовала
+     *  пустой цели и потому включалась в 2 % тиков решения: в дебюте цель у армии есть всегда, а берётся она или нет —
+     *  вопрос охраны. Большинство его флагов под вооружённой охраной — значит бегунами гонку не вернуть. */
+    private val hisFlagsGuarded = run {
+        val his = ctx.flags.filter { it.theirs }
+        val guarded = his.count { f -> f.guards.any { hasWeapon(it) } }
+        his.isNotEmpty() && guarded * 2 > his.size
+    }
+    val raceLostNothingToTake = lostRaceNow(meas.view) &&
+        (obj.objective == null || (USE_ENGAGE_VS_GARRISON && hisFlagsGuarded))
     /** его вооружённые сомкнуты в кулак И мы уже позади по суммарным хитам (v352, см. fightNow) */
     // ...И «ПОЗАДИ» МЕРЯЕТСЯ МОЩЬЮ, А НЕ ХИТАМИ (v382). Гейт строевого боя (v352) читал сумму хитов, и разбор 5
     // реплеев против топ-3 показал, насколько это тонко: худшая ПОБЕДА отличается от лучшего ПОРАЖЕНИЯ на 282
