@@ -1909,7 +1909,9 @@ internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasure
             if (meas.forces.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
             if (!captureAllowed(ctx, f, meas.view, CapAsker.ARMY)) continue
             // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
-            val near = meas.chase.mobileArmy.filter { getRange(it, f.pos) <= 3 && (hasWeapon(it)) }
+            // ...А В РЕЖИМЕ ПАР — И ЛЕКАРЬ (v535, см. USE_HEALER_HOLDS_FLAG): шаг на свободный флаг в трёх клетках
+            val near = meas.chase.mobileArmy.filter { getRange(it, f.pos) <= 3 &&
+                (hasWeapon(it) || (USE_HEALER_HOLDS_FLAG && Signals.groupSafe)) }
                 .minByOrNull { getRange(it, f.pos) } ?: continue
             grabberOf[near.id] = f.id
         }

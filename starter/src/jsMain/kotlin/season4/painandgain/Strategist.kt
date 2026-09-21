@@ -1184,7 +1184,8 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         if (occ.my != true || army.none { it.id == occ.id } || occ.id in Squads.keeperIds) continue
         // ...и хранителем не становится лекарь (v215, см. USE_HEALER_NEVER_PINNED): ветка `keeper` первая в
         // цепочке целей, и пришпиленный к флагу лекарь выключается из боя целиком
-        if (army.any { it.id == occ.id && healerOnly(it) }) continue
+        // ...НО В РЕЖИМЕ ПАР БОЯ НЕТ, И ВЫКЛЮЧАТЬСЯ НЕ ИЗ ЧЕГО (v535, см. USE_HEALER_HOLDS_FLAG)
+        if (!(USE_HEALER_HOLDS_FLAG && Signals.groupSafe) && army.any { it.id == occ.id && healerOnly(it) }) continue
         if (Squads.runnerFlag.values.contains(f.id)) continue
         if (!Signals.groupSafe && enemyCreeps(ctx).none { getRange(f.pos, it) <= KEEP_RANGE }) continue
         val cand = army.firstOrNull { it.id == occ.id } ?: continue
@@ -1201,6 +1202,11 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         keepOn.n++
         if (Signals.groupSafe) core = core.without(occ)
         if (DEBUG_LOG) println("keeper t=${getTicks()}: ${occ.id} keeps ${f.id} at (${f.pos.x},${f.pos.y})")
+    }
+    // прибор v535: крипо-тиков хранителя-лекаря из всех крипо-тиков хранителя
+    for (id in Squads.keeperIds.keys) {
+        hkeepAll.n++
+        if (army.any { it.id == id && healerOnly(it) }) hkeepHeal.n++
     }
 }
 
@@ -1360,7 +1366,13 @@ internal fun commandRace(ctx: Ctx, meas: ArmyMeasures, army: List<Creep>, armedE
         if (c.id in Squads.chaseOf) { raceExclChase.n++; return false }
         return true
     }
-    val free = mine.filter { canMove(it) && !it.spawning && hasWeapon(it) && raceFit(it) }.toMutableList()
+    // ...И В РЕЖИМЕ ПАР В СОСТАВ ВХОДЯТ ЛЕКАРИ (v535, см. USE_HEALER_HOLDS_FLAG): `hasWeapon` держал трёх лекарей в ядре
+    // всегда — правило v214 («лекари всегда остаются в основной армии») написано для боя, а режим пар и означает, что
+    // боя нет. Тело на флаге держит его в шесть раз надёжнее пустого (замер по 59 матчам с けろびー#19: наш флаг с нашим
+    // телом теряется в 8,3 % срезов, пустой — в 49,8 %), а лекарь — лучшее тело для этого: h6m6 это 1200 хитов и 72
+    // лечения себе в тик. Уходит он по тому же правилу, что и всякий хранитель в режиме пар (см. keeperLeaves)
+    val healersJoin = USE_HEALER_HOLDS_FLAG && roster.safe
+    val free = mine.filter { canMove(it) && !it.spawning && (hasWeapon(it) || (healersJoin && healerOnly(it))) && raceFit(it) }.toMutableList()
     if (free.isEmpty()) { if (hadOut) raceExitFree.n++; return }
     // очистка набора командира — ЗДЕСЬ, за ранними выходами (v465, дефект 4; до того — в RaceRoster.init): на выходах выше прежний
     // состав переживает тик; ниже набор строится заново — держатели (RaceBudget), отряды в пути (RaceRoutes), гарнизон, горстки
@@ -3069,6 +3081,11 @@ internal val capAllSum = Gauges.counter("capopp", 1)
 internal val unwipeOpen = Gauges.counter("unwipe")
 
 internal val unwipeAll = Gauges.counter("unwipe", 1)
+
+/** Прибор v535: крипо-тиков хранителя-лекаря из всех крипо-тиков хранителя. */
+internal val hkeepHeal = Gauges.counter("hkeep")
+
+internal val hkeepAll = Gauges.counter("hkeep", 1)
 
 /** Пара «тиков, где наступление удержано сроком / тиков с решением» (v215). */
 internal val pushHeldTicks = Gauges.counter("pushheld")
