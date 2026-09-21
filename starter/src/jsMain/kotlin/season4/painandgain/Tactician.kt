@@ -748,7 +748,12 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // `enemyMassedNow` (не меньше шести его вооружённых, две трети из них в MASS_RANGE от их центроида),
     // новых сущностей не заводится
     private val foeMeleeLive = meas.forces.enemyMassedNow && localEnemies.any { hasMelee(it) && InfluenceMap.profileOf(it).melee > 0.0 }
-    val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
+    // ⚠️ ...И ТЕПЕРЬ ЭТО ПРАВИЛО НАКОНЕЦ ДЕЙСТВУЕТ (v521, см. USE_HOLD_THREE_VS_MELEE). Всё, что описано выше, было
+    // вычислено в `foeMeleeLive` и потрачено ТОЛЬКО НА ПРИБОР: сам `closeIn` этой величины не спрашивал. Четвёртый
+    // случай класса «правило измеряется, но не действует». Его собственный прибор `close3` (сколько агрессивных
+    // тиков стрелка пришлось на живого мили сомкнутого врага) делит исходы резче почти всего в своде: 27,2 %
+    // в 316 поражениях против 2,1 % в 108 победах
+    val closeIn = if (localAggressive && !(USE_HOLD_THREE_VS_MELEE && foeMeleeLive)) CLOSE_STANDOFF else RANGED_RANGE
     init { if (hasRanged(creep) && localAggressive) { closeTicks.n++; if (foeMeleeLive) closeHeld.n++ } }
     // сброс слота строя у мили с целью — работа ТЕЛОМ, остаётся написание А (v452, пункт Д — разбиение оператора)
     val melee = meleeOnlyBorn(creep)
