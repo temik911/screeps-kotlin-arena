@@ -302,6 +302,11 @@ internal fun captureBlock(ctx: Ctx, f: FlagInfo, view: ExchangeView, asker: CapA
  *  приборов в головах ворот (`rush.approach.expired`, `contact.edge.lifted`) — печать `capq=`, `capu=`, `capqu=`, `capeval=`,
  *  `capidle=`. */
 internal val capqAsked = Gauges.counter("capq", 1)
+
+/** Вето дебаффа выхода при целой его армии (v530, см. USE_NO_OUTPUT_DEBUFF_WHOLE_ARMY): запретов и пропусков. */
+internal val debuffVeto = Gauges.counter("dbfveto")
+
+internal val debuffPass = Gauges.counter("dbfveto", 1)
 internal val capqVeto = Gauges.counter("capq")
 internal val capquAsked = Gauges.counter("capqu", 1)
 internal val capquVeto = Gauges.counter("capqu")
@@ -437,6 +442,30 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
             if (Signals.unflaggedRushNow) { kvetoAll.n++; if (kiteChaseSeen) kvetoHit.n++ }
             return@Gate Verdict.Veto(if (Signals.unflaggedRushNow) "rush.unflagged" else "rush.approach")
         }
+        Verdict.Next
+    },
+    Gate("debuff.whole") {
+        // ДЕБАФФ СОБСТВЕННОГО ВЫХОДА НЕ БЕРЁТСЯ, ПОКА ЕГО АРМИЯ ЦЕЛА (v530, см. USE_NO_OUTPUT_DEBUFF_WHOLE_ARMY).
+        // Ворота `rush` и `contact.mass` ниже говорят ровно это, но обе включаются ПОСЛЕ начала боя, а флаг берётся
+        // бегуном на первых сорока тиках — и дебафф въезжает в решающий размен. Замер 32 живых матчей: флаг RANGED
+        // (-20 % стрелкам за 3 очка в тик) наш в 46-50 % тиков окна 1-120, флагов ATTACK и HEAL у НЕГО ноль, а
+        // уязвимость (+10 % входящего за 5 очков) он держит в 45-54 %. Цена дебаффа за одно очко счёта по нашему же
+        // замеру: уязвимость 6,4, лечение 9,5, RANGED 13,0, ATTACK 13,3. И очки в этом окне не стоят ничего:
+        // поражения кончаются на 350-м тике при 842 очках, победы идут 1275 тиков при 21 929
+        // ...и УЗКО, чтобы не повторить урок v526 (одни ворота на два решения): вето держится только ДО ПЕРВОГО
+        // РАЗМЕНА и только пока его целая армия идёт на нас. Именно этот флаг въезжает в решающий бой; после начала
+        // боя решают прежние ворота `rush` и `contact.mass`. Широкая редакция (без срока) уронила match33:camp —
+        // 23 050:23 371, 114 отказов за матч: лагерь надо давить очками весь матч. Одного срока не хватило: в лагере
+        // размена НЕ БЫВАЕТ ВОВСЕ (`ffight=0`), и «до первого размена» там вечно, — поэтому второе условие: он
+        // должен СТРЕЛЯТЬ (`enemyNotFightingNow` — молчание длиной STALL_TICKS, признак фермера и лагеря). И этого
+        // тоже не хватило — счёт лагеря не сдвинулся ни на очко в обеих редакциях, — поэтому третье и решающее:
+        // ОКНО ПЕРВОГО СТОЛКНОВЕНИЯ. Замер: флаг берётся бегуном на 20-40-м тике, первый размен около 60-го,
+        // поражение кончается на 350-м. Вне этого окна решают прежние ворота, и лагерь давится очками весь матч
+        if (USE_NO_OUTPUT_DEBUFF_WHOLE_ARMY && f.type != EFF_DAMAGE_TAKEN_MODIFIER &&
+            ctx.threats.size >= MASS_ARMED_MIN && Signals.approachingNow &&
+            firstFightTick == 0 && !Signals.enemyNotFightingNow &&
+            getTicks() <= FIRST_CLASH_TICKS) { debuffVeto.n++; return@Gate Verdict.Veto("debuff.whole") }
+        debuffPass.n++
         Verdict.Next
     },
     Gate("contact.mass") {

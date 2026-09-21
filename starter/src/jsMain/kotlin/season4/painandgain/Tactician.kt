@@ -407,6 +407,9 @@ internal fun ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<Row<Turn, Aim
     Row("evade", { posture == Posture.EVADE && t.strat.obj.evadeTo != null }) { Aim(t.strat.obj.evadeTo!!, 1) },
     Row("retreat", { posture == Posture.RETREAT && t.strat.dec.retreatTo != null }) { Aim(t.strat.dec.retreatTo!!, 1) },
     Row("formGo", { formGo }, why = FORMING) { Aim(InfluenceMap.cell(t.targ.form.formVan!!.x, t.targ.form.formVan!!.y), 1) },
+    // ЩИТ ВЫШЕ УХОДА К ЛЕКАРЮ (v529, см. USE_STRIPPED_SCREEN): раздетому лечение сперва чинит MOVE, а телом он
+    // закрывает вооружённых прямо сейчас
+    Row("screen", { screenFoe != null }) { Aim(screenFoe!!, 1, nearFlow = true) },
     Row("wounded", { stripped && healerNear != null }) { Aim(healerNear!!, 1, avoid = true, nearFlow = true) },
     Row("rotate", { rotating && healerNear != null }, why = ROT_GATE) { Aim(healerNear!!, 1, avoid = true, nearFlow = true) },
     // сбор пачки (см. USE_REGROUP, REGROUP_TICKS): одинокий мили под смертельным огнём — к ближайшему мили-напарнику
@@ -871,6 +874,13 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
         (meas.forces.combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 && getRange(creep, it) <= ENGAGE_RANGE })
             .minByOrNull { getRange(creep, it) }
     } else null
+    // РАЗДЕТЫЙ — ЭТО ЩИТ, А НЕ ЭВАКУИРОВАННЫЙ (v529, см. USE_STRIPPED_SCREEN): цель — его ближайший к нашему
+    // ядру мили, встать вплотную и принимать удары вместо вооружённых. Хранители флагов и бегуны не трогаются:
+    // тело на флаге приносит очки, а очки — второй способ выиграть
+    val screenFoe: Creep? = if (!USE_STRIPPED_SCREEN || !stripped || !meas.fight.contact ||
+        creep.id in Squads.keeperIds || strat.inp.combatArmy.count { it.id != creep.id && hasWeapon(it) } < 2) null
+    else targ.pool.meleeEnemies.minByOrNull { getRange(it, targ.takers.armedCentroid) }
+    init { if (stripped && meas.fight.contact) { screenAll.n++; if (screenFoe != null) screenOn.n++ } }
     val healerNear: Creep? = if (stripped || rotating) {
         val hs = ctx.army.filter { it.id != creep.id && healerOnly(it) }
         hs.minByOrNull { getRange(creep, it) }
@@ -2251,6 +2261,11 @@ internal val repassAll = Gauges.counter("repass", 1)
 
 /** Расхождение выбора подопечного (v527, см. USE_WARD_BY_FIREPOWER): лекаре-тиков, где правило по сохранённому
  *  выходу назвало ДРУГОГО подопечного, чем прежнее «самый раненый», и всего тиков с выбором. */
+/** Щит из раздетых (v529, см. USE_STRIPPED_SCREEN): крипо-тиков раздетых в контакте, где щит назначен, и всего. */
+internal val screenOn = Gauges.counter("shield")
+
+internal val screenAll = Gauges.counter("shield", 1)
+
 internal val wardDiff = Gauges.counter("ward")
 
 internal val wardAll = Gauges.counter("ward", 1)
