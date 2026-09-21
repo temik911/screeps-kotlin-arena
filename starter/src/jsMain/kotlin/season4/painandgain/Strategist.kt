@@ -739,9 +739,25 @@ internal fun cannotWipeUs(healMul: Double, takenMul: Double): Boolean {
     if (firstFightTick <= 0 || getTicks() - firstFightTick < GROUP_WINDOW) return false
     val left = arenaInfo.ticksLimit - getTicks()
     if (left <= 0) return true
-    val net = Signals.hisPeakDamage * takenMul - Signals.ourHealRate * healMul
-    if (net <= 0.0) return true
-    return Signals.ourHitsNow / net > left
+    return minOf(wipeByHits(healMul, takenMul), wipeByBodies()) > left
+}
+
+/** Оценка «сколько тиков ему нужно на наши хиты» (v536, см. USE_WIPE_BY_NET_LOSS). `hisPeakDamage` считается из
+ *  `ourDamageTaken` — хитов, которых армия НЕДОСЧИТАЛАСЬ, то есть УЖЕ за вычетом лечения; поэтому лечение здесь не
+ *  вычитается (v534 вычитала его второй раз). Дебафф лечения берущегося флага поднимает будущий чистый темп — делим. */
+internal fun wipeByHits(healMul: Double, takenMul: Double): Double {
+    val rate = Signals.hisPeakDamage * takenMul / healMul.coerceAtLeast(0.01)
+    if (rate <= 0.0) return Double.MAX_VALUE
+    return Signals.ourHitsNow / rate
+}
+
+/** Вторая оценка той же величины — по ТЕЛАМ (v536): при темпе, с каким он их снимает с начала матча, хватит ли ему
+ *  тиков на оставшиеся. Тела — итог, которого модель хитов не видит: лечение не спасает того, кого сосредоточили. */
+internal fun wipeByBodies(): Double {
+    if (!USE_WIPE_BY_NET_LOSS) return Double.MAX_VALUE
+    val lost = Signals.ourBodiesStart - Signals.ourBodiesNow
+    if (lost <= 0) return Double.MAX_VALUE
+    return getTicks().toDouble() * Signals.ourBodiesNow / lost
 }
 
 /** Мощь сторон, если мы возьмём ещё этот флаг (и те, на которые уже шагаем в этот тик): наша — с их дебаффами;

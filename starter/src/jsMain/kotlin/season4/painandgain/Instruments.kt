@@ -299,7 +299,7 @@ internal val T_LINE = listOf(
     "capopp", "ffight", "fmassed", "stray", "sout", "hold", "gsafe", "fguard", "route", "man", "gcov", "garscout", "courier", "hunt",
     "toothless", "sit", "keep2", "keep3", "scout", "spotm", "spothold", "sym", "split", "recall", "healgap", "nomedic",
     "flip", "aggro", "pushheld", "lethal", "ledgerw", "breakoff", "race", "poisedcost", "objnone", "objdrop", "objns", "budget",
-    "runner", "mrun", "hw", "hwwhy", "hor", "fuse", "rnear", "repass", "heord", "ward", "fanroom", "shield", "dbfveto", "froom", "farmoff", "unwipe", "hkeep", "hfront", "nofront", "hstep", "cmdwhy", "ovl", "conc", "concall", "concmax", "concfan", "ehshot", "rfoc", "ehrch", "shotnet", "okill", "okkill", "lostrace", "gather", "close3", "guard", "gstrip", "warm",
+    "runner", "mrun", "hw", "hwwhy", "hor", "fuse", "rnear", "repass", "heord", "ward", "fanroom", "shield", "dbfveto", "froom", "farmoff", "unwipe", "hkeep", "wipe", "hfront", "nofront", "hstep", "cmdwhy", "ovl", "conc", "concall", "concmax", "concfan", "ehshot", "rfoc", "ehrch", "shotnet", "okill", "okkill", "lostrace", "gather", "close3", "guard", "gstrip", "warm",
     "warmann", "warmhold", "warmcmd", "warmfight", "warmcap", "mconc", "mconcmax", "mpack", "pack", "mpackon", "kchase",
     "kveto", "gathera", "annempty", "shooters", "abort", "srch", "deals", "srchd", "pin", "fself", "rotf", "rotfm", "meet",
     "fsw", "ffoc", "ovw", "conf", "rtr", "pflip", "mquiet", "mquietc", "maj", "surv", "adr", "rad", "simd", "fhl", "mrush", "zlb",
@@ -342,6 +342,14 @@ private fun declareLine() {
     Gauges.computed("ffight") { "$firstFightTick" }
     Gauges.computed("fmassed") { "${if (fightMassedSeen) 1 else 0}" }
     Gauges.computed("gsafe", 1) { "${Signals.groupDmgWindow}" }
+    // v536: пиковый ЧИСТЫЙ урон по нам (хитов в тик) / оценка тиков до уничтожения по хитам / она же по телам /
+    // остаток тиков. По этим четырём видно, на чём именно ворота «он не решит матч боем» приняли решение
+    Gauges.computed("wipe") {
+        val byHits = wipeByHits(1.0, 1.0)
+        val byBodies = wipeByBodies()
+        fun cap(x: Double) = if (x >= 1e9) "inf" else "${x.toInt()}"
+        "${Signals.hisPeakDamage.toInt()}/${cap(byHits)}/${cap(byBodies)}/${arenaInfo.ticksLimit - getTicks()}"
+    }
     Gauges.computed("ledgerw") { "${Prev.ledgerWindow}/${Prev.exchange.ourLostWindow}/${Prev.hisLostWindow}" }
     Gauges.computed("race") { "${race100.ifEmpty { "-" }}/${race200.ifEmpty { "-" }}" }
     // приборы v221: тёплый контакт (пары к USE_FIGHT_BY_LEDGER), концентрация и цель мили, погоня за
@@ -393,7 +401,7 @@ private val mstripReach = Gauges.counter("mstrip", 2)
 
 // ---------- отладка ----------
 // версия играющей сборки — первой строкой лога матча: по ней матч привязывается к коду (см. правила сессий)
-internal const val BOT_VERSION = "v535"
+internal const val BOT_VERSION = "v536"
 
 /** Печать приборов полей влияния. Сверка со ЗНАЧЕНИЯМИ (chk против прямого пересчёта по крипам,
  *  fldcmp против переносимого incNext) сняла свой вопрос и удалена на этапе 8: 0 из 304 950 клеток и

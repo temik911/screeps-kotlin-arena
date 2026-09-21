@@ -1094,8 +1094,10 @@ internal fun readSignals(ctx: Ctx) {
         if (window > peakTakenWindow) peakTakenWindow = window
     }
     Signals.hisPeakDamage = peakTakenWindow.toDouble() / GROUP_WINDOW
-    Signals.ourHealRate = ctx.myCreeps.sumOf { InfluenceMap.profileOf(it).heal }
     Signals.ourHitsNow = ourHitsSum
+    // тела: сколько их было на старте и сколько сейчас (v536, см. wipeByBodies)
+    Signals.ourBodiesNow = ctx.myCreeps.size
+    if (Signals.ourBodiesNow > Signals.ourBodiesStart) Signals.ourBodiesStart = Signals.ourBodiesNow
     val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
     val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
@@ -1347,7 +1349,8 @@ internal object Signals {
     internal var enemyMassedSignal = false
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
     internal var groupDmgWindow = 0
-    internal var hisPeakDamage = 0.0                       // v534: пиковый его урон по нам, хитов в тик (см. USE_UNWIPEABLE_OPENS)
-    internal var ourHealRate = 0.0                         // v534: наше лечение в тик, с нынешними дебаффами наших флагов
+    internal var hisPeakDamage = 0.0                       // v534: пиковый его ЧИСТЫЙ урон по нам, хитов в тик (уже за вычетом лечения)
     internal var ourHitsNow = 0                            // v534: хиты всей нашей армии сейчас
+    internal var ourBodiesNow = 0                          // v536: тел сейчас
+    internal var ourBodiesStart = 0                        // v536: тел было на старте
 }
