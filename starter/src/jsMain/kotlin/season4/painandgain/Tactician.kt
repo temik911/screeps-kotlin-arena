@@ -977,6 +977,38 @@ internal class Stride(val turn: Turn, val aim: Aim) {
             if (d <= 2) madjStep.n++
         }
     }
+    /** БЕГСТВО НЕ РАБОТАЕТ, КОГДА БЕЖАТЬ НЕКУДА (v519, см. USE_HEALER_STANDS): ни одна из восьми клеток шага не
+     *  выходит из досягаемости его вооружённых ПОСЛЕ их собственного шага (стрелок 3 + 1, мили 1 + 1). Тела арены
+     *  несут MOVE ровно в половину тела, то есть преследователь ходит с той же скоростью, и в этом состоянии уход
+     *  дистанции не даёт вовсе. Считается из состояния, соперник в условии не назван. */
+    val fleeHopeless = USE_HEALER_STANDS && turn.support && run {
+        val guns = meas.forces.armedEnemies
+        if (guns.isEmpty()) false else {
+            // ожидаемый входящий в клетку ПОСЛЕ его шага: стрелок достаёт 3 + 1, мили 1 + 1
+            fun incoming(x: Int, y: Int): Double = guns.sumOf { g ->
+                val q = InfluenceMap.profileOf(g)
+                val rr = if (q.ranged > 0.0) RANGED_RANGE + 1 else 0
+                val rm = if (q.melee > 0.0) 2 else 0
+                val d = maxOf(abs(x - g.x), abs(y - g.y))
+                (if (rr > 0 && d <= rr) q.ranged else 0.0) + (if (rm > 0 && d <= rm) q.melee else 0.0)
+            }
+            val here = incoming(creep.x, creep.y)
+            // ...И ВЫИГРЫШ ШАГА СРАВНИВАЕТСЯ С ЦЕНОЙ УХОДА В ТЕХ ЖЕ ЕДИНИЦАХ. Оставшись, лекарь доставляет
+            // подопечному 72 вплотную и 24 в двух-трёх клетках; уйдя, он доставляет ноль и снижает входящий на
+            // `here - best`. Уходить стоит только когда снятого урона БОЛЬШЕ, чем несделанного лечения: уход
+            // из-под одного стрелка снимает 60 и не окупает 72, из-под двух — 120 и окупает
+            val mate = turn.healMate
+            val deliver = if (!turn.healer || mate == null) 0.0
+                else InfluenceMap.healOf(creep) * (if (getRange(creep, mate) <= 1) 1.0 else 1.0 / 3.0)
+            val best = dirsNow().filter { (dx, dy) -> dx != 0 || dy != 0 }
+                .mapNotNull { (dx, dy) ->
+                    val x = creep.x + dx; val y = creep.y + dy
+                    if (x in 0..99 && y in 0..99) incoming(x, y) else null
+                }.minOrNull() ?: here
+            here > 0.0 && here - best <= deliver
+        }
+    }
+    init { if (turn.support && inCombat) { fuseAll.n++; if (fleeHopeless) fuseN.n++ } }
     val mustFlee = MUST_FLEE.c("supportAloneNearFoe", turn.support && nearbyEnemies.any { getRange(creep, it) <= RANGED_RANGE + 1 } && ctx.army.none { it.id != creep.id && getRange(creep, it) <= HEAL_RANGE }) ||
         // ...НО ЛЕЧАЩИЙ ВПЛОТНУЮ НЕ БЕЖИТ (v518, см. USE_HEALERS_OUT_OF_REACH). У шага изъятие на этот случай есть с
         // v234 (`carveBase` ниже), у бегства не было: пока зону сужали до клеток вплотную к его мили (v294), лекарь
@@ -987,7 +1019,17 @@ internal class Stride(val turn: Turn, val aim: Aim) {
         // Изъятие действует ТОЛЬКО в том состоянии, которое правка и создаёт (`healersOutOfReach`): под тумблером
         // целиком оно меняло и старое поведение при узкой зоне — гейт назвал цену сразу, match13:brawl+heals
         // 4842:822 (армия врага уничтожена на t=389) превращался в 14356:15094 к пределу тиков
+        // ⚠️ ...И ЛЕКАРЬ, КОТОРОМУ ЕСТЬ КОГО ЛЕЧИТЬ, НЕ БЕЖИТ ВООБЩЕ (v519, см. USE_HEALER_STANDS). Это вывод из
+        // отказа v518, и он арифметический. Тела арены несут MOVE ровно в половину тела, значит КАЖДЫЙ крип ходит
+        // клетку в тик — и преследователь тоже. Бегущий лекарь дистанции не набирает: он даёт НОЛЬ лечения
+        // (`fleeStep` уводит от врага, а подопечные — у врага) и получает тот же входящий. Стоящий даёт 72 в тик
+        // вплотную. Размен решается без всякой серии: 72 против нуля при одинаковом уроне.
+        // Прибор назвал цену прямо: в поражениях лекаря ведёт бегство в 35-50 % шагов (`hstep=flee` 192/239/428 из
+        // 553/666/864), в победах — в 0,1-0,3 % (3/5/11 из 3300/3900/3900). И строя в поражениях нет вовсе
+        // (`lay=FREE:54,ROWS:11` против `ROWS:41,FREE:36` в победе): бегство и есть то, что его разбирает
         MUST_FLEE.c("supportInReach", turn.support && inReach &&
+            !(USE_HEALER_STANDS && fleeHopeless && turn.healer && turn.healMate != null &&
+                turn.healMate.hits < turn.healMate.hitsMax && getRange(creep, turn.healMate) <= HEAL_RANGE) &&
             !(TacticianState.healersOutOfReach && turn.healer && turn.healMate != null &&
                 turn.healMate.hits < turn.healMate.hitsMax && getRange(creep, turn.healMate) <= 1)) ||
         MUST_FLEE.c("stepOutInReach", turn.stepOut && (creep.key) in targ.zones.reachCells) ||
@@ -2133,6 +2175,12 @@ internal val hwWhy = Gauges.labelled("hwwhy")
 
 /** ЛЕКАРЬ ВНЕ ДОСЯГАЕМОСТИ ЕГО СТРЕЛКОВ (v518, `hor=` сработало / всего): своё правило лекаря, отделённое от охоты
  *  за ранеными. Его собственный вердикт читается вместе с `hexp=` — доля тиков, когда лекарь всё-таки в зоне. */
+/** БЕЖАТЬ НЕКУДА (v519, `fuse=` безнадёжных / всего проверок у поддержки в бою): ни одна клетка шага не выходит
+ *  из досягаемости его вооружённых после их шага. Прибор правки «лекарь, которому есть кого лечить, не бежит». */
+internal val fuseN = Gauges.counter("fuse")
+
+internal val fuseAll = Gauges.counter("fuse", 1)
+
 internal val horOn = Gauges.counter("hor")
 
 internal val horAll = Gauges.counter("hor", 1)
