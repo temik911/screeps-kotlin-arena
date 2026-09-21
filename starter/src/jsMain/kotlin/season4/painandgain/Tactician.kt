@@ -855,7 +855,8 @@ internal class Turn(val creep: Creep, val ctx: Ctx, val t: ArmyTick) {
     // вес огня лекаря: подопечный в бою — только разница между клетками (HEALER_W_DAMAGE_FIGHT); место за
     // подопечным и шаг от мили задают HEALER_W_FRONT и HEALER_W_MELEE, а вес 0.05 в бою держал лекаря на кромке
     // огня в 2–3 клетках (лечение 24 вместо 72) и проиграл рубки sleeper на картах 4 и 8
-    val healerFireW = if (healer && healMate != null && meas.forces.combatEnemies.any { getRange(healMate, it) <= RANGED_RANGE + 1 }) HEALER_W_DAMAGE_FIGHT else HEALER_W_DAMAGE
+    val healerFireW = if (USE_HEALER_DANGER_FLOW) HEALER_W_FLOW
+        else if (healer && healMate != null && meas.forces.combatEnemies.any { getRange(healMate, it) <= RANGED_RANGE + 1 }) HEALER_W_DAMAGE_FIGHT else HEALER_W_DAMAGE
     // сбор: по полю марша (флаг-цель или пост, в обход врагов) авангард — самый продвинутый из ходячих
     // вооружённых (при равном поле — меньший id); кто дальше RALLY_RANGE от авангарда, идёт к нему
     // только на марше к флагу-цели: в HOLD цель — точка, к ней сходятся и так, а в ANNIHILATE ожидание
@@ -1994,6 +1995,17 @@ internal const val COHESION_PATIENCE = 30
  *  статичный впереди — боковой шаг), хвост отставал ещё больше, и уход от равного по скорости врага шёл на
  *  0,5 клетки/тик — догнан в 46 тиках при запасе 13 (стенд m11 sleeper). */
 internal const val RETREAT_GAP = 3
+
+/** ЦЕНА ОГНЯ ПО ЛЕКАРЮ — ПОТОК, А НЕ РАЗОВАЯ ВЕЛИЧИНА (v520, см. USE_HEALER_DANGER_FLOW). Вес выводится, а не
+ *  назначается. В шкале оценки клетки лекаря «шаг к подопечному» стоит 10 (см. HEALER_W_DAMAGE ниже), а стоит он
+ *  прироста доставки с 24 до 72, то есть 48 лечения — значит единица шкалы это примерно 4,8 лечения. Сто урона по
+ *  лекарю убивает часть HEAL, а часть — это 12 лечения в тик, и не на один тик, а до конца матча: за горизонт
+ *  HEALER_FLOW_TICKS это 12 × 10 = 120 лечения, то есть 25 единиц шкалы на каждые 100 урона — вес 0,25.
+ *  Прежние 0,02 и 0,05 отвечают горизонту меньше одного тика, то есть считают потерю частей разовой. */
+internal const val HEAL_POWER_PER_PART = 12.0
+internal const val HEALER_STEP_VALUE = 4.8
+internal const val HEALER_FLOW_TICKS = 10
+internal const val HEALER_W_FLOW = HEAL_POWER_PER_PART * HEALER_FLOW_TICKS / (100.0 * HEALER_STEP_VALUE)
 
 /** Вес фактического огня в оценке клетки ЛЕКАРЯ: шаг к подопечному (10) стоит двух стрелков (120 → 6), трёх
  *  уже нет. Тело H×6 M×6 теряет лечение с первого попадания — каждые 100 урона это −12 лечения в тик до конца
