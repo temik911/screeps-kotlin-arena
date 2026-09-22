@@ -86,7 +86,21 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     dispNow = Strategist.summary(disposition)
     Orders.missionOf.clear()
     for (sq in disposition.squads) for (id in sq.members) Orders.missionOf[id] = sq.mission.tag
-    if (commanderNow) {
+    // НАЧАТЫЙ РАЗМЕН ВНЕ КОНТАКТА — МАРШ НА НЕГО, А НЕ БОЕВАЯ РАЗДАЧА (v569, см. USE_MARCH_INTO_ENGAGE). Перебор
+    // замыслов вне досягаемости оценивает любой шаг внутрь как «первым получить залп» и держит строй на дистанции;
+    // марш ведёт ядро колонной, с лекарями, по полю к его ближайшему вооружённому. С контактом — обычная раздача
+    val engageMarch = commanderNow && USE_MARCH_INTO_ENGAGE && Signals.engagingGarrison && !meas.fight.contact &&
+        meas.forces.armedEnemies.isNotEmpty() && meas.chase.mobileArmy.size >= 2
+    if (engageMarch) {
+        val (mx, my) = Formation.median(meas.chase.mobileArmy)
+        val prey = meas.forces.armedEnemies.minByOrNull { maxOf(abs(it.x - mx), abs(it.y - my)) }!!
+        val steps = HashMap<String, Position>()
+        commandMarch(ctx, notCmdDetached(meas.chase.mobileArmy), InfluenceMap.cell(prey.x, prey.y), steps)
+        Orders.commandOf.clear()
+        Orders.commandOf.putAll(steps)
+        Orders.source = "engage"
+        engageMarchN.n++
+    } else if (commanderNow) {
         // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
         // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
         // дважды кончилось `Script execution timed out` (матчи 6aa085d7 и 6aa086d3): тик пропал целиком, армия
@@ -310,6 +324,9 @@ internal val cmdHealGiven = Gauges.counter("cmdheal")
  *  v220 прочёл его как причину текущего тика и приписал разгромам «отход»; честная картина по тикам —
  *  гистограмма `cmdwhy` (v221). */
 internal var cmdBlocked = "-"
+
+/** Тиков, где командир вёл начатый размен маршем на его армию, а не боевой раздачей (v569, `engmarch=`). */
+internal val engageMarchN = Gauges.counter("engmarch")
 
 // счётчики аудита приказов: считает `orderAudit` (пока в Instruments.kt; этап 4 второго шага переносит его сюда — он снимает приказы, то
 // есть стадия, а не прибор), читает строка `sim` командира — объявление у читателя-стадии: стадия не импортирует Instruments
