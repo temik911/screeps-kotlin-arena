@@ -829,7 +829,15 @@ internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Dou
         objDropN.n++
         if (f.ours) { objDrop.bump("ours"); continue }
         if (onlyFlagId != null && f.id != onlyFlagId) { objDrop.bump("cpu"); continue }   // страховка CPU (v131c)
-        if (!captureAllowed(ctx, f, view, CapAsker.ARMY)) { objDrop.bump("gate"); continue }
+        // ...И К ОХРАНЯЕМОМУ ФЛАГУ АРМИЯ ИДЁТ ДАЖЕ БЕЗ ПРАВА ЗАХВАТА (v542, см. USE_MARCH_TO_GUARD). Ворота захвата
+        // оценивают ДЕБАФФ, который мы приобретём, встав на клетку; поход к стражу не приобретает ничего — он снимает
+        // с него оружие, и только это открывает клетку бегуну. Замер: правило размена v540 срабатывало в 73-82 %
+        // тиков в худших поражениях, а досягаемость держалась 0,0-2,5 % — бот решал драться и не доходил, потому что
+        // идти было некуда: цель похода выбирают эти самые ворота
+        val marchToGuard = USE_MARCH_TO_GUARD && lostRaceNow(view) && f.theirs &&
+            f.occupant == null && f.guards.any { hasWeapon(it) }
+        if (!marchToGuard && !captureAllowed(ctx, f, view, CapAsker.ARMY)) { objDrop.bump("gate"); continue }
+        if (marchToGuard) marchGuard.n++
         // СВОЯ ПОЛОВИНА (v312, см. GROUP_SAFE_DMG): против фермера гонка решается не числом захватов, а числом
         // УДЕРЖАННЫХ флагов, а удержать можно те, до которых ему дальше, чем нам. Свои R3, A3, H4 и центральный D5 — это
         // 15 очков в тик против его 10; контрфакт разбора (гарнизоны на своих R3, A3 и обоих H4) давал 30,4 тыс. : 18,1 тыс.
@@ -3136,6 +3144,9 @@ internal val unwipeAll = Gauges.counter("unwipe", 1)
 internal val hkeepHeal = Gauges.counter("hkeep")
 
 internal val hkeepAll = Gauges.counter("hkeep", 1)
+
+/** Прибор v542: сколько раз цель похода оставлена за охраняемым флагом мимо ворот захвата. */
+internal val marchGuard = Gauges.counter("mguard")
 
 /** Прибор v538: в скольких тиках решения размен начат нами, потому что гонка проиграна и брать нечего. */
 internal val engageOn = Gauges.counter("engage")
