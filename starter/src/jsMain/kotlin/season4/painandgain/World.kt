@@ -644,6 +644,15 @@ internal fun pathStep(creep: Creep, target: Position, range: Int, dangerMatrix: 
     return result.path.firstOrNull()
 }
 
+/** БЕГСТВО К СВОИМ (v571, правило оператора 22.09.2026, см. USE_FLEE_TO_GROUP): крип дальше радиуса «со своими»
+ *  бежит не «прочь от врага», а путём к центру своих вооружённых по карте опасности, которая обводит его зоны огня.
+ *  null — рядом со своими уже или пути нет: тогда прежнее бегство. */
+internal fun fleeToGroup(creep: Creep, group: Position?, ctx: Ctx): Position? {
+    if (!USE_FLEE_TO_GROUP || group == null) return null
+    if (getRange(creep, group) <= FIST_RADIUS + STRAGGLER_SLACK) return null
+    return pathStep(creep, group, 1, ctx.dangerMatrix)?.also { fleeGroupN.n++ }
+}
+
 internal fun fleeStep(creep: Creep, enemies: List<Creep>, dangerMatrix: CostMatrix, range: Int = RANGED_RANGE): Position? {
     if (enemies.isEmpty()) return null
     val goals = enemies.map { e -> SearchGoal(pos = InfluenceMap.cell(e.x, e.y), range = range) }.toTypedArray()
@@ -1232,6 +1241,9 @@ internal val groupSafeTicks = Gauges.counter("gsafe")
 
 /** Прибор v553: тиков, когда большинство его стволов в одной группе. */
 internal val enemyFistTicks = Gauges.counter("fist2")
+
+/** Бегств, ушедших к своим, а не прочь от врага (v571, `fgrp=`). */
+internal val fleeGroupN = Gauges.counter("fgrp")
 
 internal val flagSitOcc = Gauges.counter("sit")
 

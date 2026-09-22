@@ -283,7 +283,8 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 // клеток, и флаг стоит пустым все двадцать тиков дороги туда и обратно; из четырёх-семи закреплённых стоит
                 // в среднем 2,4. Достаточно выйти за дальность его стрелка — вернётся он через два-три тика
                 val fleeTo = if (Signals.groupSafe && Squads.garrisonOf[s.id] != null) RANGED_RANGE + 1 else SCOUT_FLEE_RANGE
-                val step = fleeStep(s, foes, ctx.dangerMatrix, fleeTo) ?: greedyFlee(ctx, s, foes, force = danger)
+                val step = (if (fleeTo == SCOUT_FLEE_RANGE) fleeToGroup(s, ctx.ourCentroid, ctx) else null)
+                    ?: fleeStep(s, foes, ctx.dangerMatrix, fleeTo) ?: greedyFlee(ctx, s, foes, force = danger)
                 if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
                 dbg(s, "FLEE", f, step)
                 continue

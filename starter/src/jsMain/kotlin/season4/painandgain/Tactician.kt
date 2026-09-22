@@ -1261,7 +1261,8 @@ internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stri
     // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
     Row("flee", { mustFlee }, RowMark.SURVIVE, why = MUST_FLEE) {
         if (Orders.commandOf.containsKey(creep.id)) orderFled.n++
-        fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (turn.support || turn.stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, t.strat.dec.retreatTo ?: t.strat.dec.post, 1, ctx.dangerMatrix)
+        fleeToGroup(creep, t.targ.takers.armedCentroid, ctx)
+            ?: fleeStep(creep, nearbyEnemies, ctx.dangerMatrix, if (turn.support || turn.stepOut) RANGED_RANGE + 1 else RANGED_RANGE) ?: pathStep(creep, t.strat.dec.retreatTo ?: t.strat.dec.post, 1, ctx.dangerMatrix)
     },
     // ХРАНИТЕЛЬ ТОЖЕ СЛУШАЕТ ПРИКАЗ (v173, оператор): «уйти с флага крип должен только если командир решит
     // собрать отряд, или если крип может попасть в опасность». Прежде хранитель стоял всегда и приказа не
