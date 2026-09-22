@@ -172,10 +172,15 @@ internal object Strategist {
         // армию по флагам, оно запрещает размен по построению: `massed=false` в 66 матчах из 67, и причина режима в
         // логе — `cmd=1/300:few`. Прибор правки v538/v539 держался на 2 % тиков решения именно из-за него. Цель
         // размена здесь — страж у флага, а не кулак, и «мало врагов рядом» — это описание гарнизона, а не довод
-        val engageLost = USE_ENGAGE_WHEN_RACE_LOST && i.raceLostNothingToTake && !pre.withdrawing &&
+        // ...И УКЛОНЕНИЕ ОТ ТОГО, КТО НЕ ПОДХОДИТ, РАЗМЕНА НЕ ЗАПИРАЕТ (v566, см. USE_ENGAGE_OVER_IDLE_EVADE). Уклонение —
+        // ответ на армию, которая идёт на нас; от запаркованной оно только доводит часы до недостижимого отрыва.
+        // Отступление (RETREAT) не тронуто: это уход из боя, который проигрывается
+        val idleEvade = USE_ENGAGE_OVER_IDLE_EVADE && pre == Posture.EVADE && !Signals.approachingNow
+        val engageLost = USE_ENGAGE_WHEN_RACE_LOST && i.raceLostNothingToTake && (!pre.withdrawing || idleEvade) &&
             (!i.fewFoes || (USE_ENGAGE_VS_FEW && i.hisFlagsGuarded))
         engageAll.n++
         if (engageLost) engageOn.n++
+        if (idleEvade) { engIdleAll.n++; if (engageLost) engIdleOn.n++ }
         // ...И ПОКА ИДЁТ ЭТОТ РАЗМЕН, АРМИЮ НЕ ДРОБИМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING): решение драться и
         // решение растащить армию по флагам — об одной величине, и до сих пор они принимались порознь
         Signals.engagingGarrison = engageLost
@@ -349,6 +354,11 @@ internal val engBarAll = Gauges.counter("engbar", 1)
 
 /** Хранитель снят, потому что группа ушла дальше радиуса «со своими» при его кулаке (v565, `kaway=` хранителе-тиков). */
 internal val keepAway = Gauges.counter("kaway")
+
+/** Размен начат из уклонения от неподходящего (v566, `engidle=` тиков, где размен открыт / тиков праздного уклонения). */
+internal val engIdleOn = Gauges.counter("engidle")
+
+internal val engIdleAll = Gauges.counter("engidle", 1)
 internal var capquTick = -1
 internal val capquSeen = Gauges.marks("capqu")
 internal val capqEval = Gauges.counter("capeval")
