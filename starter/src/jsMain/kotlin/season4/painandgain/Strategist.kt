@@ -1493,7 +1493,11 @@ internal class RaceRoster(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // восемь-одиннадцать крипов из двенадцати — он бродит рядом весь матч, — и на флагах стояло полтора наших тела.
     // Режим и открывается только против того, кто группы не бьёт (см. GROUP_SAFE_DMG); начнёт бить — окно в сто тиков
     // закрывает режим, и все возвращаются в кулак
-    fun coreHolds(without: List<Creep>) = if (safe) without.count { hasWeapon(it) } >= 2
+    // ...И ПРОТИВ ГАРНИЗОНА ЯДРО ДЕРЖИТСЯ ПАРИТЕТОМ, А НЕ ДВОЙКОЙ (v551, см. USE_CORE_PARITY_VS_GARRISON). Мера
+    // «двое с оружием» писана под фермера, который наших не бьёт. У того, кто охраняет флаги вооружёнными, она
+    // растаскивает армию по частям: замер 16 игр на v550 — в поражениях назначений горстки 40 против 13,8 в победах
+    // при ОДИНАКОВОМ их размере (2,6), ядро 3,4 против 6,4, бегунов 6,0 против 4,0. Пол паритета уже есть рядом
+    fun coreHolds(without: List<Creep>) = if (safe && !(USE_CORE_PARITY_VS_GARRISON && garrisonFoe(ctx))) without.count { hasWeapon(it) } >= 2
         else without.any { hasWeapon(it) } && ourPowerOf(without, armedEnemies) >= enemyPowerOf(armedEnemies, without) * PARITY_FLOOR
     // В БОЮ НЕ ОТПУСКАЕМ НИКОГО (v215, см. USE_NO_SPLIT_IN_FIGHT). Проверки «мы в контакте» здесь не было вовсе,
     // а RACE — ветка `else` в выборе режима, то есть значение по умолчанию: достаточно, чтобы по нам на тик
