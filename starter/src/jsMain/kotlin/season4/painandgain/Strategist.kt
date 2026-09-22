@@ -742,6 +742,11 @@ internal fun lostRaceNow(view: ExchangeView): Boolean {
  * размен с гарнизоном (см. USE_ENGAGE_VS_GARRISON), поход к стражу (USE_MARCH_TO_GUARD) и уход хранителя
  * (USE_KEEPER_LEAVES_ON_REAL_HIT).
  */
+/** Урон по крипу НАСТУПИЛ недавно (v545/v546): он терял хиты в пределах `STALL_TICKS` — окна, которым файл уже
+ *  определяет «размен был недавно». Отличает состоявшийся урон от возможного; обе меры нужны, но решать должна эта. */
+internal fun hurtRecently(id: String): Boolean =
+    getTicks() - (Memory.lastHurtAt[id] ?: -9999) <= STALL_TICKS
+
 internal fun garrisonFoe(ctx: Ctx): Boolean {
     val his = ctx.flags.filter { it.theirs }
     val guardedFree = his.count { f -> f.occupant == null && f.guards.any { hasWeapon(it) } }
@@ -1206,7 +1211,7 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         // хитов 98,3 %. То есть хранитель сходит с флага под угрозой, которая не наступает
         // «урон наступил» — в пределах окна STALL_TICKS, которым файл уже определяет «размен был недавно»: один тик
         // слишком узок (прибор дал kthreat=0/70 — правило выключалось целиком и гейт падал на match33:camp)
-        val hurtNow = c != null && getTicks() - (Memory.lastHurtAt[c.id] ?: -9999) <= STALL_TICKS
+        val hurtNow = c != null && hurtRecently(c.id)
         val threat = c != null && Signals.groupSafe &&
             InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
             InfluenceMap.healAt(c.x, c.y, ctx.armyWithHeal)

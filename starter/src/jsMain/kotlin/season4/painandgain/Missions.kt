@@ -258,8 +258,14 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             // достающих клетку (с его дебаффами), healAt — лечение наших лекарей в дальности (с нашими)
             val incoming = InfluenceMap.damageAt(s.x, s.y, ctx.combatEnemies)
             val healing = InfluenceMap.healAt(s.x, s.y, ctx.armyWithHeal)
+            // ...И ГАРНИЗОН ОСТАЁТСЯ ПО УРОНУ СЛУЧИВШЕМУСЯ, А НЕ ВОЗМОЖНОМУ (v546, см. USE_KEEPER_LEAVES_ON_REAL_HIT).
+            // Та же мера, что у хранителя в v545, и тот же дефект: `incoming` — возможный урон, а у одиночки на флаге
+            // лечение равно нулю, поэтому любой его ствол в радиусе сгонял тело с клетки. Замер 102 матчей: флагов с
+            // нашим телом 2,25 -> 1,82 в поражениях против 2,44 -> 3,00 в победах, при том что из четырёх закреплённых
+            // гарнизонных стоит в среднем двое, а при одном нашем флаге к t=400 побед 0 из 17
+            val garrisonReal = USE_KEEPER_LEAVES_ON_REAL_HIT && garrisonFoe(ctx) && !hurtRecently(s.id)
             val garrisonStays = Signals.groupSafe && Squads.garrisonOf[s.id] != null && match.holds.containsKey(s.id) &&
-                s.hits * 2 >= s.hitsMax && incoming <= healing
+                s.hits * 2 >= s.hitsMax && (incoming <= healing || garrisonReal)
             if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay.n++
             if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay.n++
             if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned && !garrisonStays) {
