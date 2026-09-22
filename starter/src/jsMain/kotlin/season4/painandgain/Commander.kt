@@ -235,7 +235,11 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         val restCore = notCmdDetached(meas.chase.mobileArmy)
         val hunting = commandHunt(ctx, restCore, meas.forces.armedEnemies, Orders.commandOf)
         if (hunting) Orders.source = "hunt"
-        if (!hunting && meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } }) {
+        // КОЛОННА НЕ РАСПУСКАЕТСЯ ПРИ ЕГО КУЛАКЕ (v572, см. USE_COLUMN_VS_FIST): марш ведёт ядро, пока его вооружённые
+        // дальше MARCH_SAFE; ближе — каждый крип идёт по своей ступени, армия рассыпается, и одиночек он собирает
+        val columnHolds = USE_COLUMN_VS_FIST && Signals.enemyFistNow
+        if (columnHolds) columnTicks.n++
+        if (!hunting && (columnHolds || meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } })) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
             val goal = commandGoal(ctx, meas.view, strat.obj.approachRate, strat.detach.farmerQuietNow, meas.chase.mobileArmy, meas.forces.armedEnemies)
             cpuMark("p.goal")
@@ -331,6 +335,9 @@ internal var cmdBlocked = "-"
 
 /** Тиков, где командир вёл начатый размен маршем на его армию, а не боевой раздачей (v569, `engmarch=`). */
 internal val engageMarchN = Gauges.counter("engmarch")
+
+/** Тиков гонки, где колонна держится при его кулаке ближе MARCH_SAFE (v572, `column=`). */
+internal val columnTicks = Gauges.counter("column")
 
 // счётчики аудита приказов: считает `orderAudit` (пока в Instruments.kt; этап 4 второго шага переносит его сюда — он снимает приказы, то
 // есть стадия, а не прибор), читает строка `sim` командира — объявление у читателя-стадии: стадия не импортирует Instruments
