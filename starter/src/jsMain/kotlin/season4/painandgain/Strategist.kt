@@ -1555,8 +1555,16 @@ internal class RaceRoutes(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // ...а пара (v298) — только на свободную клетку: флаг, на котором сидит его крип, берёт армия силой. Первая редакция
     // слала пары и на занятые — стендовый фермер scatter держит на каждом своём флаге по крипу, пары весь матч ходили к ним и
     // бежали, ядро из шести флагов не брало, и match28/19:scatter проиграны по очкам (18 873:24 312, 14 925:24 322)
-    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it, meas.view, CapAsker.ARMY) && !(roster.safe && it.occupant != null) &&
-        !(roster.safe && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
+    // ...И ПРОТИВ ГАРНИЗОНА СПИСОК НЕ СУЖАЕТСЯ РЕЖИМОМ ПАР (v550, решение оператора 22.09.2026, см.
+    // USE_WANTED_VS_GARRISON). Два сужения писались под фермера, который СИДИТ на флагах: «не идти на занятую клетку»
+    // (v298) и «сперва своя половина» (v312). У того, кто охраняет флаги СБОКУ, они выбрасывают из списка почти всё, и
+    // прибор это показал: `party=0/0` — расчёт размера горстки (v549) не срабатывал НИ РАЗУ, потому что брать было
+    // нечего по построению. Размер горстки теперь считается так, чтобы стражей превзойти, — значит и список должен
+    // включать охраняемые флаги
+    private val garrison = USE_WANTED_VS_GARRISON && garrisonFoe(ctx)
+    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it, meas.view, CapAsker.ARMY) &&
+        !(roster.safe && !garrison && it.occupant != null) &&
+        !(roster.safe && !garrison && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
             flags.any { o -> !o.ours && getRange(o.pos, ctx.home) <= getRange(o.pos, ctx.enemyHome) }) }
 
         .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
