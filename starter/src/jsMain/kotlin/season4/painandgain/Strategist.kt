@@ -1735,7 +1735,13 @@ internal class RaceParties(private val ctx: Ctx, private val meas: ArmyMeasures,
             // `M8A8` (240 урона в тик каждый) этого не может, а отказ ниже пропускал такой флаг совсем
             val pack0 = foesInEngage(armedEnemies, f.pos)
             val byRange0 = free.sortedBy { getRange(it, f.pos) }
-            val need = if (USE_PARTY_BEATS_GUARDS && garrisonFoe(ctx) && pack0.isNotEmpty()) {
+            // ...И ЭТО ВЕРНО НЕ ТОЛЬКО ПРОТИВ ГАРНИЗОНА (v552, см. USE_PARTY_BEATS_ANY). Правило писалось под стражей у
+            // флага, но арифметика та же для любой его группы рядом: послать двоих против девяти — значит кормить его.
+            // Замер けろびー#22 (0-14): его армия сбита в кулак (сомкнут 77 % тиков, крупнейшая группа 10,2 крипа), и он
+            // отлавливает наших отряжённых поодиночке — первая наша смерть на t=279 против t=1674 у его прежней сборки,
+            // к концу у нас 4 тела против его 12. При этом на t=300 его сила ПРОТИВ НАШЕГО ЯДРА равна 289 при нашей
+            // 1069: кулак не у ядра, он ест тех, кого мы выпустили
+            val need = if (USE_PARTY_BEATS_GUARDS && (garrisonFoe(ctx) || USE_PARTY_BEATS_ANY) && pack0.isNotEmpty()) {
                 var n = 2
                 while (n < byRange0.size && enemyPowerOf(pack0, byRange0.take(n)) >= ourPowerOf(byRange0.take(n), pack0)) n++
                 partyNeed.n += n; partyAll.n++
