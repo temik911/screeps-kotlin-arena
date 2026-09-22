@@ -358,6 +358,9 @@ internal val defendOn = Gauges.counter("defend")
 
 internal val defendAll = Gauges.counter("defend", 1)
 
+/** Захватов, пропущенных строкой `tourer` ворот (v574, `tour=`). */
+internal val tourOpen = Gauges.counter("tour")
+
 /** Хранитель снят, потому что группа ушла дальше радиуса «со своими» при его кулаке (v565, `kaway=` хранителе-тиков). */
 internal val keepAway = Gauges.counter("kaway")
 
@@ -459,6 +462,15 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         ticksLeft = arenaInfo.ticksLimit - getTicks()
         val losingAtTheEnd = (ourScore - enemyScore) + (WorldState.ourRate - WorldState.enemyRate) * ticksLeft <= 0
         if ((WorldState.behindOnScore || losingAtTheEnd) && ticksLeft <= LAST_CALL_TICKS) return@Gate Verdict.Allow
+        Verdict.Next
+    },
+    Gate("tourer") {
+        // ПРОТИВ ОБЪЕЗДЧИКА ФЛАГ БЕРЁТ ГРУППА, КОТОРАЯ ЕГО И ДЕРЖИТ (v574, см. USE_TOUR_CAPTURE_VS_FIST): его армия — один
+        // кулак, его вооружённых нет в ENGAGE_RANGE от флага, а центр нашей группы в радиусе «со своими» — тогда
+        // паритет и прочие вето не спрашиваются: дебафф платится боем, а бой у этого флага будет с нашей группой
+        if (USE_TOUR_CAPTURE_VS_FIST && Signals.enemyFistNow &&
+            ctx.combatEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
+            getRange(f.pos, ctx.ourCentroid) <= FIST_RADIUS + STRAGGLER_SLACK) { tourOpen.n++; return@Gate Verdict.Allow }
         Verdict.Next
     },
     Gate("rush") {
