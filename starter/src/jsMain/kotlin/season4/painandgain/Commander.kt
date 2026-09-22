@@ -89,7 +89,11 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // НАЧАТЫЙ РАЗМЕН ВНЕ КОНТАКТА — МАРШ НА НЕГО, А НЕ БОЕВАЯ РАЗДАЧА (v569, см. USE_MARCH_INTO_ENGAGE). Перебор
     // замыслов вне досягаемости оценивает любой шаг внутрь как «первым получить залп» и держит строй на дистанции;
     // марш ведёт ядро колонной, с лекарями, по полю к его ближайшему вооружённому. С контактом — обычная раздача
-    val engageMarch = commanderNow && USE_MARCH_INTO_ENGAGE && Signals.engagingGarrison && !meas.fight.contact &&
+    // ...и «вне досягаемости» — это ни один наш не достаёт ни одного его вооружённого, а не `meas.fight.contact`:
+    // контакт в боте — его вооружённый в RANGED_RANGE + 1, и строи стоят фронтами ровно на этой клетке, «в контакте»
+    // и без единого выстрела (v570: первая редакция включала марш 21–51 тик из 77–443 тиков начатого размена)
+    val outOfReach = meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= RANGED_RANGE } }
+    val engageMarch = commanderNow && USE_MARCH_INTO_ENGAGE && Signals.engagingGarrison && outOfReach &&
         meas.forces.armedEnemies.isNotEmpty() && meas.chase.mobileArmy.size >= 2
     if (engageMarch) {
         val (mx, my) = Formation.median(meas.chase.mobileArmy)
