@@ -1147,6 +1147,10 @@ internal fun readSignals(ctx: Ctx) {
     // против 97,3 % у けろびー). Ни постоянного гарнизона, ни правила ухода, ни курьера против топ-1 не работало.
     // Запрет на занятые флаги живёт там, где он и нужен: пара и курьер не идут на клетку под его телом
     Signals.groupSafe = getTicks() >= GROUP_WINDOW && Signals.groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (Signals.groupSafe || splitNow)
+    // ...И РЕЖИМ ПАР НЕ ВКЛЮЧАЕТСЯ, ПОКА МЫ САМИ ВЕДЁМ РАЗМЕН С ГАРНИЗОНОМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING).
+    // В проигранной руке v542 армия ужалась до ДВУХ тел при включённом режиме пар: бот решал драться и одновременно
+    // растаскивал армию по флагам, которых без разоружения стража не взять. Разоружено там 1 крип против 4-8 в победах
+    if (USE_NO_PAIRS_WHILE_ENGAGING && Signals.engagingGarrison) Signals.groupSafe = false
     if (Signals.groupSafe) groupSafeTicks.n++
     flagSitOcc.n = sitOcc; flagSitAll.n = sitHis
     val enemyNear = armedNow.any { e -> ctx.army.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
@@ -1372,6 +1376,7 @@ internal object Signals {
     internal var groupDmgWindow = 0
     internal var hisPeakDamage = 0.0                       // v534: пиковый его ЧИСТЫЙ урон по нам, хитов в тик (уже за вычетом лечения)
     internal var hisSustainedDamage = 0.0                  // v541: тот же урон, но средний за матч — устойчивый темп
+    internal var engagingGarrison = false                  // v543: мы сами ведём размен с гарнизоном (см. fightNow)
     internal var ourHitsNow = 0                            // v534: хиты всей нашей армии сейчас
     internal var ourBodiesNow = 0                          // v536: тел сейчас
     internal var ourBodiesStart = 0                        // v536: тел было на старте

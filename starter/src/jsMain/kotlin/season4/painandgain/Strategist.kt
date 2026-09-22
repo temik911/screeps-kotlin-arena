@@ -176,6 +176,9 @@ internal object Strategist {
             (!i.fewFoes || (USE_ENGAGE_VS_FEW && i.hisFlagsGuarded))
         engageAll.n++
         if (engageLost) engageOn.n++
+        // ...И ПОКА ИДЁТ ЭТОТ РАЗМЕН, АРМИЮ НЕ ДРОБИМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING): решение драться и
+        // решение растащить армию по флагам — об одной величине, и до сих пор они принимались порознь
+        Signals.engagingGarrison = engageLost
         val fightNow = (!pushing && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
             !(i.enemyMassed && USE_NO_FIST_FIGHT)) || engageLost
         val case = ModeCase(i, fightNow)
