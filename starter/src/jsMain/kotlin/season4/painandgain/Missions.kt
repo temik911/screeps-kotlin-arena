@@ -263,7 +263,11 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             // лечение равно нулю, поэтому любой его ствол в радиусе сгонял тело с клетки. Замер 102 матчей: флагов с
             // нашим телом 2,25 -> 1,82 в поражениях против 2,44 -> 3,00 в победах, при том что из четырёх закреплённых
             // гарнизонных стоит в среднем двое, а при одном нашем флаге к t=400 побед 0 из 17
-            val garrisonReal = USE_KEEPER_LEAVES_ON_REAL_HIT && garrisonFoe(ctx) && !hurtRecently(s.id)
+            // ⚠️ ОТВЕРГНУТО ЖИВЫМ ЗАМЕРОМ (22.09.2026): с правкой 3-7, контроль v545 5-5 на двадцати руках. Хранителя
+            // (v545) удержание спасает, а гарнизонного СКАУТА убивает: у него сто хитов против 240 урона в тик у его
+            // мили, и «урон наступил» для него означает «уже поздно». Что должно быть верно, чтобы правило заработало:
+            // мера должна различать тело, которое переживёт удар, и тело, которое нет, — то есть входить хитами крипа
+            val garrisonReal = USE_GARRISON_STAYS_ON_REAL_HIT && garrisonFoe(ctx) && !hurtRecently(s.id)
             val garrisonStays = Signals.groupSafe && Squads.garrisonOf[s.id] != null && match.holds.containsKey(s.id) &&
                 s.hits * 2 >= s.hitsMax && (incoming <= healing || garrisonReal)
             if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay.n++

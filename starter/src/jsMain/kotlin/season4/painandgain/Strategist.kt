@@ -1646,7 +1646,13 @@ internal class RaceGarrison(private val ctx: Ctx, private val flags: List<FlagIn
             }
             for (f in homeFlags) {
                 if (Squads.garrisonOf.values.contains(f.id)) continue
-                val sc = scoutsFree.minByOrNull { getRange(it, f.pos) }
+                // ...НО НЕ ПРОТИВ ГАРНИЗОНА (v548, см. USE_ARMED_GARRISON_VS_GARRISON). Скаут как тело (v341) верен там,
+                // где боя нет: у けろびー стражи не стреляют. У того, кто охраняет флаги вооружёнными, скаут на клетке —
+                // свободное убийство: сто хитов против 240 урона в тик у его мили, гибель за один тик, и флаг
+                // переворачивается. Боец держит ту же клетку при 1 200-1 600 хитах. Замер: флагов с нашим телом 1,82 в
+                // поражениях против 3,00 в победах, при одном флаге к t=400 побед 0 из 17
+                val sc = if (USE_ARMED_GARRISON_VS_GARRISON && garrisonFoe(ctx)) null
+                    else scoutsFree.minByOrNull { getRange(it, f.pos) }
                 if (sc != null && scoutsFree.size >= homeFlags.count { fl -> !Squads.garrisonOf.values.contains(fl.id) }) {
                     Squads.garrisonOf[sc.id] = f.id; scoutsFree.remove(sc); continue
                 }
@@ -1710,18 +1716,32 @@ internal class RaceParties(private val ctx: Ctx, private val meas: ArmyMeasures,
             // ...а флаг, который уже берёт бегун, командир не дублирует: засчитывать бегуна в группу и досылать бойца
             // замерено хуже — 131 из 135 против 133 (roost трижды, camp)
             if (ctx.runners.any { r -> Squads.runnerFlag[r.id] == f.id }) continue
-            val need = if (roster.safe || guarded) 2 else if (loose) RACE_PARTY else 1
+            // ...И ПРОТИВ ГАРНИЗОНА РАЗМЕР СЧИТАЕТСЯ ПО ЕГО СТРАЖАМ (v549, решение оператора 22.09.2026, см.
+            // USE_PARTY_BEATS_GUARDS). Крипу НЕ НУЖНО стоять на флаге, чтобы шли очки: флаг захватывается мгновенно
+            // вставшим на него и остаётся нашим после схода. Значит стоять телом, теряя оружейные части, незачем —
+            // надо отходить и возвращаться группой, способной отбить флаг И ПРОГНАТЬ его стражей. Двойка против двух
+            // `M8A8` (240 урона в тик каждый) этого не может, а отказ ниже пропускал такой флаг совсем
+            val pack0 = foesInEngage(armedEnemies, f.pos)
+            val byRange0 = free.sortedBy { getRange(it, f.pos) }
+            val need = if (USE_PARTY_BEATS_GUARDS && garrisonFoe(ctx) && pack0.isNotEmpty()) {
+                var n = 2
+                while (n < byRange0.size && enemyPowerOf(pack0, byRange0.take(n)) >= ourPowerOf(byRange0.take(n), pack0)) n++
+                partyNeed.n += n; partyAll.n++
+                n
+            } else if (roster.safe || guarded) 2 else if (loose) RACE_PARTY else 1
             if (purse.budget < need) continue
             // ...а пара — со стрелком (v298): два мили не отвечают его стрелку, который бьёт их с трёх клеток
-            val party = if (roster.safe) run {
+            val party = if (roster.safe && need <= 2) run {
                 val byRange = free.sortedBy { getRange(it, f.pos) }
                 val r = byRange.firstOrNull { hasRanged(it) }
                 if (r == null) byRange.take(2) else listOf(r) + byRange.filter { it.id != r.id }.take(1)
             } else free.sortedBy { getRange(it, f.pos) }.take(need)
             if (party.size < need) continue
+            // ...и отказ «его стражи сильнее» остаётся отказом ТОЛЬКО если группа не набралась: размер уже считался
+            // так, чтобы её превзойти, и повторный отказ отменял бы собственный расчёт (v549)
             if (roster.safe) {
                 val pack = foesInEngage(armedEnemies, f.pos)
-                if (pack.isNotEmpty() && enemyPowerOf(pack, party) >= ourPowerOf(party, pack)) continue
+                if (pack.isNotEmpty() && enemyPowerOf(pack, party) >= ourPowerOf(party, pack)) { partyShort.n++; continue }
             }
             // ...и ЯДРО ОБЯЗАНО ОСТАТЬСЯ СИЛЬНЕЕ ЕГО АРМИИ — та же проверка, которой держится отряд (см. USE_DETACH):
             // аннигиляция проигрывает матч при любом счёте, поэтому отпускать можно лишь до тех пор, пока оставшиеся
@@ -3176,6 +3196,13 @@ internal val unwipeAll = Gauges.counter("unwipe", 1)
 internal val hkeepHeal = Gauges.counter("hkeep")
 
 internal val hkeepAll = Gauges.counter("hkeep", 1)
+
+/** Прибор v549: сумма назначенных размеров горстки / число назначений / отказов «стражи сильнее». */
+internal val partyNeed = Gauges.counter("party")
+
+internal val partyAll = Gauges.counter("party", 1)
+
+internal val partyShort = Gauges.counter("party", 2)
 
 /** Прибор v544: из скольких тиков «угроза по клетке хранителя» урон действительно наносился. */
 internal val keepThreatHit = Gauges.counter("kthreat")
