@@ -909,18 +909,26 @@ internal object ScoutEvade {
         val why: String
         if (flag != null) { target = flag.pos.key; why = "flag" }
         else {
-            // клетка области, которую он обстреляет позже всех; чужие флаги (не цель) и занятые клетки — не цель
+            // клетка области, которую он обстреляет позже всех; чужие флаги (не цель) и занятые клетки — не цель. И НЕ У КРАЯ
+            // (v577): все 20 скаутов блока v576 погибли в углах карты — самая поздно обстреливаемая клетка оказывалась углом,
+            // а из угла, когда он подходит с открытой стороны, выхода нет. Цель — клетки не ближе FLEE_EDGE_MIN к краю;
+            // таких в области нет — любая
             target = here
-            var bestF = fire[here]
+            var bestF = Int.MIN_VALUE
             var bestT = 0
+            var bestInner = false
             for (c in 0 until N) {
                 val t = walkDist[c]
                 if (t >= INF || blocked[c]) continue
+                val cx = c / 100; val cy = c % 100
+                val inner = minOf(minOf(cx, 99 - cx), minOf(cy, 99 - cy)) >= FLEE_EDGE_MIN
                 val fc = fire[c]
-                if (fc > bestF || (fc == bestF && t < bestT)) { target = c; bestF = fc; bestT = t }
+                val better = (inner && !bestInner) || (inner == bestInner && (fc > bestF || (fc == bestF && t < bestT)))
+                if (better) { target = c; bestF = fc; bestT = t; bestInner = inner }
             }
+            if (target == here && fire[here] > SCOUT_FLAG_MARGIN) { scoutEvadeWhy.bump("stay"); return RefugeMove(null, "stay") }
             if (target == here) {
-                // область пуста: соседняя клетка, которую он обстреляет позже всех (лучше шаг, чем стоять под выстрелом)
+                // стоять нельзя — его выстрел вот-вот: соседняя клетка, которую он обстреляет позже всех
                 var best = -1
                 var bf = fire[here]
                 for ((dx, dy) in dirsNow()) {
