@@ -104,6 +104,9 @@ internal object Memory {
     val lastHits = perCreepMap<Int>()
     val theirsHist = ArrayDeque<Double>()   // его мощь против армии за MEASURE_WINDOW тиков (см. USE_CORE_MEASURE_WINDOW)
     val lastCell = perCreepMap<Int>()
+    /** Клетки наших боевых прошлого тика (v579, см. USE_NO_LONERS_VS_HUNTER): по ним признак «он добил нашего одиночку»
+     *  узнаёт, где погиб пропавший и сколько своих было рядом. Переписывается целиком каждый тик. */
+    val ourPrevCells = HashMap<String, Int>()
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()

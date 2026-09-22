@@ -1297,7 +1297,7 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         // ...И ХРАНИТЕЛЬ УХОДИТ ВМЕСТЕ С ГРУППОЙ, ПОКА ЕГО АРМИЯ — ОДИН КУЛАК (v565, см. USE_KEEPER_STAYS_WITH_GROUP).
         // Флаг остаётся нашим после схода с клетки (оператор 22.09.2026), а убежать в этой арене нельзя: скорость у
         // всех одна. «Со своими» — тот же радиус, которым кулак (v490) определяет отставшего
-        val groupAway = USE_KEEPER_STAYS_WITH_GROUP && Signals.enemyFistNow && c != null && core.isNotEmpty() &&
+        val groupAway = ((USE_KEEPER_STAYS_WITH_GROUP && Signals.enemyFistNow) || Signals.lonerHunted) && c != null && core.isNotEmpty() &&
             Formation.median(core).let { (mx, my) -> maxOf(abs(c.x - mx), abs(c.y - my)) } > FIST_RADIUS + STRAGGLER_SLACK
         if (groupAway) keepAway.n++
         // ...И ПРИ НАСТУПЛЕНИИ ВРАГА ХРАНИТЕЛЬ ОТХОДИТ К СВОИМ, ПОКА ЕЩЁ УСПЕВАЕТ (v567, правило оператора 22.09.2026,
@@ -1638,7 +1638,7 @@ internal class RaceBudget(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // ЦЕЛИКОМ, не распускаясь, — и тогда локального превосходства он не получает. Замер けろびー#22: сомкнут 77 %
     // тиков, крупнейшая его группа 10,2 крипа, и он отлавливает отряжённых поодиночке — 0-14 базы и 0-12 после v552,
     // которая лишь увеличила горстки с 2 до 3,8-4,3 (прибор `party`), но кулак из десяти съедает и четверых
-    val huntingFist = USE_NO_DETACH_VS_HUNTING_FIST && Signals.enemyFistNow
+    val huntingFist = USE_NO_DETACH_VS_HUNTING_FIST && (Signals.enemyFistNow || Signals.lonerHunted)
     var budget = if (huntingFist) 0 else if (roster.safe) free.size - 2 else free.size - core
     init { if (!meas.fight.fightOnNow) { budgetSum.n += maxOf(0, budget); budgetTicks.n++ } }
     init {
@@ -2507,6 +2507,7 @@ internal class StrategyDetach(private val ctx: Ctx, private val meas: ArmyMeasur
             // держатели (v297) стоят на своих флагах, которые в `unmanned` уже не считаются: выпуск меряется без них
             val holdingDet = ctx.runners.count { it.id in Squads.detachedIds && heldFlag(ctx, it) != null }
             for (c in pool) {
+                if (Signals.lonerHunted) break   // v579: против охотника за одиночками не выпускаем (см. USE_NO_LONERS_VS_HUNTER)
                 if (Squads.detachedIds.size - holdingDet >= unmanned) break
                 if (viaRace && Squads.detachedIds.size >= raceSlots) break
                 val without = remaining.filter { it.id != c.id }

@@ -796,6 +796,31 @@ internal object ScoutEvade {
     private const val N = 10000
     private val wall: BooleanArray by lazy { BooleanArray(N) { DistanceMap.isWall(it / 100, it % 100) } }
     private val swamp: BooleanArray by lazy { BooleanArray(N) { DistanceMap.isSwamp(it / 100, it % 100) } }
+    /** Простор клетки (v577): расстояние по Чебышеву до ближайшей стены или края карты. Карман между стенами и угол — мал. */
+    private val room: IntArray by lazy {
+        val d = IntArray(N) { -1 }
+        val q = IntArray(N)
+        var head = 0
+        var tail = 0
+        for (c in 0 until N) {
+            val x = c / 100; val y = c % 100
+            if (wall[c]) { d[c] = 0; q[tail++] = c }
+            else if (x == 0 || y == 0 || x == 99 || y == 99) { d[c] = 1; q[tail++] = c }
+        }
+        while (head < tail) {
+            val c = q[head++]
+            val cx = c / 100; val cy = c % 100
+            for (dx in -1..1) for (dy in -1..1) {
+                val nx = cx + dx; val ny = cy + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val n = key(nx, ny)
+                if (d[n] >= 0) continue
+                d[n] = d[c] + 1
+                q[tail++] = n
+            }
+        }
+        d
+    }
     // рабочие массивы — одни на все тики (без мусора в куче)
     private val hunt = IntArray(N)
     private val rows = IntArray(N)
@@ -909,10 +934,11 @@ internal object ScoutEvade {
         val why: String
         if (flag != null) { target = flag.pos.key; why = "flag" }
         else {
-            // клетка области, которую он обстреляет позже всех; чужие флаги (не цель) и занятые клетки — не цель. И НЕ У КРАЯ
-            // (v577): все 20 скаутов блока v576 погибли в углах карты — самая поздно обстреливаемая клетка оказывалась углом,
-            // а из угла, когда он подходит с открытой стороны, выхода нет. Цель — клетки не ближе FLEE_EDGE_MIN к краю;
-            // таких в области нет — любая
+            // клетка области, которую он обстреляет позже всех; чужие флаги (не цель) и занятые клетки — не цель. И НА ПРОСТОРЕ
+            // (v577): все 20 скаутов блока v576 погибли в углах карты, а в первой руке v577 одного его стрелка хватило на
+            // двоих в кармане у нашей базы — самая поздно обстреливаемая клетка оказывалась тупиком, из которого, когда он
+            // подходит со стороны выхода, выхода нет. Цель — клетки, от которых до стены и края не меньше дальности выстрела
+            // + 1 (есть куда уйти вбок от стрелка); таких в области нет — любая
             target = here
             var bestF = Int.MIN_VALUE
             var bestT = 0
@@ -920,8 +946,7 @@ internal object ScoutEvade {
             for (c in 0 until N) {
                 val t = walkDist[c]
                 if (t >= INF || blocked[c]) continue
-                val cx = c / 100; val cy = c % 100
-                val inner = minOf(minOf(cx, 99 - cx), minOf(cy, 99 - cy)) >= FLEE_EDGE_MIN
+                val inner = room[c] > RANGED_RANGE
                 val fc = fire[c]
                 val better = (inner && !bestInner) || (inner == bestInner && (fc > bestF || (fc == bestF && t < bestT)))
                 if (better) { target = c; bestF = fc; bestT = t; bestInner = inner }
@@ -953,6 +978,9 @@ internal object ScoutEvade {
         return RefugeMove(InfluenceMap.cell(c / 100, c % 100), why)
     }
 }
+
+/** Тик, на котором сработал признак «он добил нашего одиночку» (v579, `lonerhunt=`; 0 — не сработал). */
+internal val lonerHuntTick = Gauges.counter("lonerhunt")
 
 /** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / hide / cornered / stay). */
 internal val scoutEvadeWhy = Gauges.labelled("scev")
@@ -1438,6 +1466,23 @@ internal fun readSignals(ctx: Ctx) {
     // обратная `splitNow`, и считается тем же способом. Против такого выпускать отряжённых нечем: он их и ест
     Signals.enemyFistNow = hisW.size >= 3 && largestW * 2 > hisW.size
     if (Signals.enemyFistNow) enemyFistTicks.n++
+    // ОН ДОБИВАЕТ ОДИНОЧЕК (v579, см. USE_NO_LONERS_VS_HUNTER): наш боевой, пропавший с прошлого тика, стоял с не больше чем
+    // одним своим в радиусе «со своими», а у его клетки сейчас трое его и больше — это и есть охота на одиночку. Защёлка до
+    // конца матча: раз он так играет, выпущенный поодиночке — его добыча
+    if (USE_NO_LONERS_VS_HUNTER && !Signals.lonerHunted) {
+        val alive = HashSet<String>()
+        for (c in ctx.myCreeps) alive.add(c.id)
+        val near = FIST_RADIUS + STRAGGLER_SLACK
+        for ((id, cell) in Memory.ourPrevCells) {
+            if (id in alive) continue
+            val cx = cell / 100; val cy = cell % 100
+            val mates = Memory.ourPrevCells.count { (o, k) -> o != id && maxOf(abs(k / 100 - cx), abs(k % 100 - cy)) <= near }
+            val his = ctx.combatEnemies.count { maxOf(abs(it.x - cx), abs(it.y - cy)) <= near }
+            if (mates <= 1 && his >= 3) { Signals.lonerHunted = true; lonerHuntTick.n = getTicks() }
+        }
+    }
+    Memory.ourPrevCells.clear()
+    for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     // ...И НЕ ПРОТИВ ТОГО, КТО ДЕРЖИТ СВОИ ФЛАГИ ТЕЛОМ (v302): на занятую клетку пара не встанет, такой флаг отбирает
     // только сила ядра, и дробить армию парами не за чем. Замер по 44 реплеям: его флаго-тики с его крипом НА клетке —
     // けろびー 4 %, Coldkimchi#2 и MetalicaX по 1 %, а System и 恒哥吊 66 %; стендовые фермеры (scatter, camp, farm+weak)
@@ -1706,6 +1751,7 @@ internal object Signals {
     internal var hisSustainedDamage = 0.0                  // v541: тот же урон, но средний за матч — устойчивый темп
     internal var engagingGarrison = false                  // v543: мы сами ведём размен с гарнизоном (см. fightNow)
     internal var enemyFistNow = false                      // v553: большинство его стволов в одной группе (см. USE_NO_DETACH_VS_HUNTING_FIST)
+    internal var lonerHunted = false                       // v579: он уже добил нашего одиночку — до конца матча (см. USE_NO_LONERS_VS_HUNTER)
     internal var ourHitsNow = 0                            // v534: хиты всей нашей армии сейчас
     internal var ourBodiesNow = 0                          // v536: тел сейчас
     internal var ourBodiesStart = 0                        // v536: тел было на старте
