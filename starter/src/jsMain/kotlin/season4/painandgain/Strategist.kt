@@ -355,6 +355,14 @@ internal val engBarAll = Gauges.counter("engbar", 1)
 /** Хранитель снят, потому что группа ушла дальше радиуса «со своими» при его кулаке (v565, `kaway=` хранителе-тиков). */
 internal val keepAway = Gauges.counter("kaway")
 
+/** Хранитель отошёл к своим при наступлении врага, который его перебивает (v567, `kback=` хранителе-тиков). */
+internal val keepBack = Gauges.counter("kback")
+
+/** Натиск по начатому размену (v568, `pusheng=` тиков, где натиск дал только размен / тиков начатого размена). */
+internal val pushEngOn = Gauges.counter("pusheng")
+
+internal val pushEngAll = Gauges.counter("pusheng", 1)
+
 /** Размен начат из уклонения от неподходящего (v566, `engidle=` тиков, где размен открыт / тиков праздного уклонения). */
 internal val engIdleOn = Gauges.counter("engidle")
 
@@ -1266,8 +1274,21 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         val groupAway = USE_KEEPER_STAYS_WITH_GROUP && Signals.enemyFistNow && c != null && core.isNotEmpty() &&
             Formation.median(core).let { (mx, my) -> maxOf(abs(c.x - mx), abs(c.y - my)) } > FIST_RADIUS + STRAGGLER_SLACK
         if (groupAway) keepAway.n++
+        // ...И ПРИ НАСТУПЛЕНИИ ВРАГА ХРАНИТЕЛЬ ОТХОДИТ К СВОИМ, ПОКА ЕЩЁ УСПЕВАЕТ (v567, правило оператора 22.09.2026,
+        // см. USE_KEEPER_FALLS_BACK_ON_ADVANCE). Стоящий враг ухода не вызывает — флаг держится телом; идущий и
+        // перебивающий хранителя — вызывает, как только он ближе, чем «до своих + радиус со своими»: скорость у всех
+        // одна, и позже до группы уже не дойти
+        val advancing = if (!USE_KEEPER_FALLS_BACK_ON_ADVANCE || c == null || core.isEmpty()) emptyList() else {
+            val (mx, my) = Formation.median(core)
+            val toGroup = maxOf(abs(c.x - mx), abs(c.y - my))
+            if (toGroup <= FIST_RADIUS + STRAGGLER_SLACK) emptyList()
+            else armedEnemies.filter { e -> !stationary(e) && getRange(e, c) <= toGroup + FIST_RADIUS + STRAGGLER_SLACK }
+        }
+        val fallBack = c != null && advancing.isNotEmpty() &&
+            enemyPowerOf(advancing, listOf(c)) > ourPowerOf(listOf(c), advancing)
+        if (fallBack) keepBack.n++
         val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax ||
-            (threat && (hurtNow || !(USE_KEEPER_LEAVES_ON_REAL_HIT && garrison))) || groupAway)
+            (threat && (hurtNow || !(USE_KEEPER_LEAVES_ON_REAL_HIT && garrison))) || groupAway || fallBack)
         val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && !keeperLeaves
         val stay = onFlag && (if (Signals.groupSafe) coreHolds(core)
             else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
@@ -2522,7 +2543,13 @@ internal class StrategyPush(private val ctx: Ctx, private val meas: ArmyMeasures
     init { leadHoldsWas = leadHolds }
     // ...и В РЕЖИМЕ ПАР АРМИЯ НЕ ГОНИТСЯ (v304): он уходит от групп (646 шагов прочь против 67 навстречу), догнать его
     // нельзя, а наступление держит постуру ДОБИТЬ, и та снимает флаг-цель — 179 тиков из 322 «без цели» несут именно его
-    private val pushRaw = PUSH_RAW.c("notStalled", !meas.chase.stalled) && PUSH_RAW.c("leadDoesNotHold", !leadHolds) && PUSH_RAW.c("notPairsMode", !Signals.groupSafe) && (PUSH_RAW.c("sweep", thr.sweep) || (PUSH_RAW.c("exchangePaying", meas.exchange.exchangePaying) && PUSH_RAW.c("noChaseVeto", !chaseVeto) && PUSH_RAW.c("huntable", meas.chase.huntable.isNotEmpty()) && PUSH_RAW.c("strikers", meas.forces.strikers.isNotEmpty()) && PUSH_RAW.c("pushPower", packs.oursPush >= packs.theirsPush * (if (pushing) thr.pushRelease else thr.pushRatio))))
+    private val pushByPower = PUSH_RAW.c("notStalled", !meas.chase.stalled) && PUSH_RAW.c("leadDoesNotHold", !leadHolds) && PUSH_RAW.c("notPairsMode", !Signals.groupSafe) && (PUSH_RAW.c("sweep", thr.sweep) || (PUSH_RAW.c("exchangePaying", meas.exchange.exchangePaying) && PUSH_RAW.c("noChaseVeto", !chaseVeto) && PUSH_RAW.c("huntable", meas.chase.huntable.isNotEmpty()) && PUSH_RAW.c("strikers", meas.forces.strikers.isNotEmpty()) && PUSH_RAW.c("pushPower", packs.oursPush >= packs.theirsPush * (if (pushing) thr.pushRelease else thr.pushRatio))))
+    // РАЗМЕН, НАЧАТЫЙ ПРИ ПРОИГРАННОЙ ГОНКЕ, — ЭТО НАТИСК (v568, см. USE_PUSH_WHEN_ENGAGED). Решение драться (v538:
+    // «размен начинаем мы») принято постурой прошлого тика — `Signals.engagingGarrison`; без натиска боевой строй
+    // держит дистанцию, и оба войска стоят в шести клетках друг от друга до недостижимого отрыва
+    private val pushEngaged = USE_PUSH_WHEN_ENGAGED && Signals.engagingGarrison && meas.forces.strikers.isNotEmpty()
+    init { if (pushEngaged) { pushEngAll.n++; if (!pushByPower) pushEngOn.n++ } }
+    private val pushRaw = pushByPower || pushEngaged
     // ...и СРОК (v215, см. USE_PUSH_DWELL): начатое наступление живёт минимум PUSH_DWELL тиков, и снимают его
     // досрочно только затор и настоящая слабость — мощь ниже порога отпускания. Мигание любого из пяти прочих
     // множителей за этот срок армию не разворачивает.
