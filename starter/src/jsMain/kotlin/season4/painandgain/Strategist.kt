@@ -340,6 +340,12 @@ internal val capquWhy = Gauges.labelled("capu")
 internal val capFreeLost = Gauges.counter("capfree")
 
 internal val capFreeAll = Gauges.counter("capfree", 1)
+
+/** ФАНТОМНАЯ ЦЕЛЬ (v563, `engbar=` тиков, где цель армии запрещена воротами / из них с проигранной гонкой, то есть
+ *  тех, где размен теперь открыт). Пара к `engage=`, который в замёрзшем хвосте стоял на месте 494 тика. */
+internal val engBarOn = Gauges.counter("engbar")
+
+internal val engBarAll = Gauges.counter("engbar", 1)
 internal var capquTick = -1
 internal val capquSeen = Gauges.marks("capqu")
 internal val capqEval = Gauges.counter("capeval")
@@ -2800,8 +2806,15 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
      *  её открывает. Сидящий на клетке — другой случай: там разоружение не освобождает ничего, и размен не окупается
      *  (гейт поймал это строкой `match19:scatter`, где фермер сидит на 95,8 % своих флаго-тиков). */
     val hisFlagsGuarded = garrisonFoe(ctx)
+    /** ...И «НЕ ВЗЯТЬ» — ЭТО ПРЕЖДЕ ВСЕГО ЦЕЛЬ, КОТОРУЮ ЗАПРЕЩАЮТ ВОРОТА ЗАХВАТА (v563, см. USE_ENGAGE_VS_BARRED_OBJECTIVE).
+     *  Марш к охраняемому флагу (v542/v554) выбирает цель в обход ворот, а шаг на клетку ворота потом не пускают — и
+     *  цель становится фантомной: взять её нельзя, но она есть, и размен при проигранной гонке молчит. Спрашивается
+     *  не всерьёз (`serious = false`): это вопрос о цели, а не заявка на захват, и счётчики ворот он не трогает. */
+    private val objectiveBarred = USE_ENGAGE_VS_BARRED_OBJECTIVE &&
+        obj.objective?.let { captureBlock(ctx, it.flag, meas.view, CapAsker.ARMY, serious = false) != null } == true
     val raceLostNothingToTake = lostRaceNow(meas.view) &&
-        (obj.objective == null || (USE_ENGAGE_VS_GARRISON && hisFlagsGuarded))
+        (obj.objective == null || (USE_ENGAGE_VS_GARRISON && hisFlagsGuarded) || objectiveBarred)
+    init { if (objectiveBarred) { engBarAll.n++; if (raceLostNothingToTake) engBarOn.n++ } }
     /** его вооружённые сомкнуты в кулак И мы уже позади по суммарным хитам (v352, см. fightNow) */
     // ...И «ПОЗАДИ» МЕРЯЕТСЯ МОЩЬЮ, А НЕ ХИТАМИ (v382). Гейт строевого боя (v352) читал сумму хитов, и разбор 5
     // реплеев против топ-3 показал, насколько это тонко: худшая ПОБЕДА отличается от лучшего ПОРАЖЕНИЯ на 282
