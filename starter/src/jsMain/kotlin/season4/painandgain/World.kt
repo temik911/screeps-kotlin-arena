@@ -1117,6 +1117,10 @@ internal fun readSignals(ctx: Ctx) {
     val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
     val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
+    // ОХОТЯЩИЙСЯ КУЛАК (v553, см. USE_NO_DETACH_VS_HUNTING_FIST): большинство его стволов в ОДНОЙ группе — величина,
+    // обратная `splitNow`, и считается тем же способом. Против такого выпускать отряжённых нечем: он их и ест
+    Signals.enemyFistNow = hisW.size >= 3 && largestW * 2 > hisW.size
+    if (Signals.enemyFistNow) enemyFistTicks.n++
     // ...И НЕ ПРОТИВ ТОГО, КТО ДЕРЖИТ СВОИ ФЛАГИ ТЕЛОМ (v302): на занятую клетку пара не встанет, такой флаг отбирает
     // только сила ядра, и дробить армию парами не за чем. Замер по 44 реплеям: его флаго-тики с его крипом НА клетке —
     // けろびー 4 %, Coldkimchi#2 и MetalicaX по 1 %, а System и 恒哥吊 66 %; стендовые фермеры (scatter, camp, farm+weak)
@@ -1225,6 +1229,9 @@ internal var packTicksTick = -1
 // Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
 
 internal val groupSafeTicks = Gauges.counter("gsafe")
+
+/** Прибор v553: тиков, когда большинство его стволов в одной группе. */
+internal val enemyFistTicks = Gauges.counter("fist2")
 
 internal val flagSitOcc = Gauges.counter("sit")
 
@@ -1378,6 +1385,7 @@ internal object Signals {
     internal var hisPeakDamage = 0.0                       // v534: пиковый его ЧИСТЫЙ урон по нам, хитов в тик (уже за вычетом лечения)
     internal var hisSustainedDamage = 0.0                  // v541: тот же урон, но средний за матч — устойчивый темп
     internal var engagingGarrison = false                  // v543: мы сами ведём размен с гарнизоном (см. fightNow)
+    internal var enemyFistNow = false                      // v553: большинство его стволов в одной группе (см. USE_NO_DETACH_VS_HUNTING_FIST)
     internal var ourHitsNow = 0                            // v534: хиты всей нашей армии сейчас
     internal var ourBodiesNow = 0                          // v536: тел сейчас
     internal var ourBodiesStart = 0                        // v536: тел было на старте

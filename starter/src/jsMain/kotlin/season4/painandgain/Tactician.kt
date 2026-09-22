@@ -138,7 +138,7 @@ internal class ArmyTick(
     /** Центр кулака этого тика (v490, см. USE_FIST_EVERY_STEP): медиана боевых, пока бой идёт; вне боя кулака нет и
      *  запрет не действует — армия ходит за флагами, и стягивать её незачем. */
     val fistNow: Pair<Int, Int>? =
-        if (!USE_FIST_EVERY_STEP || !meas.fight.contact) null
+        if (!USE_FIST_EVERY_STEP || !(meas.fight.contact || (USE_FIST_VS_HUNTING_FIST && Signals.enemyFistNow))) null
         else strat.inp.combatArmy.ifEmpty { null }?.let { Formation.median(it) }
 }
 
@@ -1075,6 +1075,21 @@ internal class Stride(val turn: Turn, val aim: Aim) {
         MUST_FLEE.c("bleeding", lostLastTick * 2 >= creep.hits && creep.hits * 3 < creep.hitsMax) ||
         MUST_FLEE.c("ghostDamage", turn.ghost > 0 && creep.hits <= turn.ghost)
 
+    // ЗАХВАТ В ОДНОМ ШАГЕ (v556, см. USE_CAPTURE_OUTRANKS_ORDER): не наш флаг вплотную, клетка свободна, ворота
+    // захвата — тот же вызов, что у бегуна и что у `submit`, — разрешают. Исполняет строка `capture` цепочки шага,
+    // стоящая выше приказа командира; бегство и пост хранителя остаются выше неё
+    private val captureFlag: FlagInfo? = if (!USE_CAPTURE_OUTRANKS_ORDER) null
+        else ctx.flags.firstOrNull { !it.ours && it.occupant == null && getRange(creep, it.pos) == 1 }
+    private val captureVeto: String? = captureFlag?.let { captureBlock(ctx, it, meas.view, CapAsker.ARMY) }
+    val captureStep: Position? = if (captureFlag != null && captureVeto == null) captureFlag.pos else null
+    init {
+        if (captureFlag != null) {
+            capNear.n++
+            if (captureVeto == null) capAllowed.n++
+            else capWhy.bump(if (captureVeto.startsWith("parity(")) "parity" else captureVeto)
+        }
+    }
+
     // сплочение: авангард ждёт отставших группы (в тиках ИХ хода), пока сам не под огнём и напарник
     // не в бою; при враге в досягаемости зазор тесный — собираемся ДО входа под огонь
     val myFlow = flow[creep.key]
@@ -1253,6 +1268,11 @@ internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stri
     // видел вовсе — он был вне командира по построению (mobileArmy исключает keeperIds)
     Row("keeperOrder", { turn.keeper && Orders.commandOf.containsKey(creep.id) }) { ruleCount.bump(Orders.source); Orders.commandOf[creep.id]!!.takeIf { it.x != creep.x || it.y != creep.y } },
     Row("keeperStay", { turn.keeper }) { TrafficManager.pin(creep.id); null },
+    // ЗАХВАТ ВЫШЕ ПРИКАЗА (v556, см. USE_CAPTURE_OUTRANKS_ORDER): послабление «клетка чужого флага открыта
+    // назначенному захватчику» жило только в `freeStep`, то есть в ПОСЛЕДНЕЙ строке, а приказ командира стоит
+    // выше и отдаёт свою клетку буквально. Разбор 6ab28988: семь целых тел 494 тика вокруг его свободного
+    // R3 (85,49), один вплотную, `stray` не растёт — шага на флаг не предлагал никто. Ворота не обойдены
+    Row("capture", { captureStep != null }) { capTook.n++; captureStep },
     // ПРИКАЗ — ЗАКОН (v172, оператор): «все крипы должны двигаться ТОЛЬКО по приказу командира… нельзя не
     // слушаться приказов командира». Приказ исполняется БУКВАЛЬНО: назначенная клетка и есть шаг. Прежняя
     // попытка сделать так провалилась (гейт 133, исполнение 3 %) потому, что командир раздавал клетки, не
@@ -1904,10 +1924,16 @@ internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasure
     // флаг рядом (не наш, свободный, без врага в дальности, разрешён) — на него шагает ближайший из наших
     val grabberOf = HashMap<String, String>()
     init {
+        // ...И ПРОТИВ ОХОТЯЩЕГОСЯ КУЛАКА НА ФЛАГ ШАГАЕТ АРМИЯ (v555, см. USE_ARMY_GRABS_VS_FIST). В коде записано
+        // прямо: «вооружённый крип, приведённый к флагу как боец, флага НЕ БЕРЁТ — захват делают бегуны», а против
+        // кулака бегунов нет вовсе (v553). Замер: `mguard=4801` — армия доходит до его флагов, тел в конце 8, а
+        // флагов НОЛЬ, счёт 2 692 : 19 262. Здесь же стоял пропуск флага-цели армии: до него армия идёт и проходит
+        // мимо. Флаг остаётся нашим после схода с клетки, поэтому шаг на него и есть весь захват
+        val fistTour = USE_ARMY_GRABS_VS_FIST && Signals.enemyFistNow
         for (f in ctx.flags) {
-            if (f.ours || f.occupant != null || f.id == objectiveFlagId) continue
-            if (meas.forces.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
-            if (!captureAllowed(ctx, f, meas.view, CapAsker.ARMY)) continue
+            if (f.ours || f.occupant != null || (!fistTour && f.id == objectiveFlagId)) continue
+            if (!fistTour && meas.forces.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue
+            if (!fistTour && !captureAllowed(ctx, f, meas.view, CapAsker.ARMY)) continue
             // ...и НЕ ЛЕКАРЬ (v215, см. USE_HEALER_NEVER_PINNED): тот же отбор, что строкой выше у захватчика цели
             // ...А В РЕЖИМЕ ПАР — И ЛЕКАРЬ (v535, см. USE_HEALER_HOLDS_FLAG): шаг на свободный флаг в трёх клетках
             val near = meas.chase.mobileArmy.filter { getRange(it, f.pos) <= 3 &&
@@ -2222,6 +2248,18 @@ internal val soutTicks = Gauges.counter("sout", 2)
 
 /** Шаг бойца на клетку чужого флага при закрытых воротах захвата (v282, stray=): столько раз крип остался стоять. */
 internal val strayCapRefused = Gauges.counter("stray")
+
+/** ЗАХВАТ В ОДНОМ ШАГЕ (v556, `cap3=` взят/разрешён/вплотную): крип стоял вплотную к не нашему свободному флагу;
+ *  из них воротам захвата он подошёл; из них строка `capture` выиграла лестницу шага и крип шагнул на флаг. */
+internal val capTook = Gauges.counter("cap3")
+
+internal val capAllowed = Gauges.counter("cap3", 1)
+
+internal val capNear = Gauges.counter("cap3", 2)
+
+/** ...и ПОЧЕМУ ворота отказали одношаговому захвату (v557, `cap3why=`): 416 возможностей на матч против けろびー#22,
+ *  разрешено 8. Разбивка по причине называет то единственное правило, которое здесь и решает. */
+internal val capWhy = Gauges.labelled("cap3why")
 
 /** Прибор: мили-тиков, где перевес открыл ворота. Пара к edge=, который считает, где их открыть стоило. */
 internal val spotMeleeTicks = Gauges.counter("spotm")

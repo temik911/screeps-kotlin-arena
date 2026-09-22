@@ -334,6 +334,12 @@ internal val capqVeto = Gauges.counter("capq")
 internal val capquAsked = Gauges.counter("capqu", 1)
 internal val capquVeto = Gauges.counter("capqu")
 internal val capquWhy = Gauges.labelled("capu")
+
+/** НЕЗАЩИЩЁННЫЙ ЗАХВАТ И ПОСЛАБЛЕННЫЙ ПОЛ (v559, `capfree=` вопросов о флаге вне его досягаемости / из них с
+ *  проигранной проекцией, то есть по полу PARITY_FLOOR_LOST). Пара к `cap3why=`, где паритет давал 58 % отказов. */
+internal val capFreeLost = Gauges.counter("capfree")
+
+internal val capFreeAll = Gauges.counter("capfree", 1)
 internal var capquTick = -1
 internal val capquSeen = Gauges.marks("capqu")
 internal val capqEval = Gauges.counter("capeval")
@@ -655,7 +661,14 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         // при 0.96 был проигран (стенд m6 sleeper); порог один
         // проигранная гонка с тем, кто ни разу не ударил (v63, см. PARITY_FLOOR_LOST)
         val lostRace = lostRaceNow(view)
-        floor = if (lostRace) PARITY_FLOOR_LOST else if (view.stalled) PARITY_FLOOR_STALLED else PARITY_FLOOR
+        // ПРИ ПРОИГРАННОЙ ПРОЕКЦИИ НЕЗАЩИЩЁННЫЙ ФЛАГ БЕРЁТСЯ ПО ПОСЛАБЛЕННОМУ ПОЛУ (v559, см.
+        // USE_LOST_RACE_FLOOR_UNCONTESTED): клапан `lostRaceNow` требует, чтобы за окно мы потеряли меньше
+        // STALL_DAMAGE, — это защита армии в БОЮ, и у флага, до которого его стволам не достать, защищать нечего
+        val uncontested = USE_LOST_RACE_FLOOR_UNCONTESTED && f.occupant == null &&
+            ctx.combatEnemies.none { getRange(it, f.pos) <= RANGED_RANGE + 1 }
+        val freeLost = uncontested && losingProjection()
+        if (uncontested) { capFreeAll.n++; if (freeLost) capFreeLost.n++ }
+        floor = if (lostRace || freeLost) PARITY_FLOOR_LOST else if (view.stalled) PARITY_FLOOR_STALLED else PARITY_FLOOR
         // ПАРА К КЛАПАНУ (v218, см. lostRaceOpened): «послабление решило исход» — флаг прошёл по PARITY_FLOOR_LOST
         // и НЕ прошёл бы по PARITY_FLOOR. Считается ЗДЕСЬ, а не у признака, потому что вопрос прибора не «был ли
         // признак истинен», а «изменил ли он хоть один отказ»
@@ -706,11 +719,17 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
     },
 ).also { captureGateRows = it }
 
+/** ПРОЕКЦИЯ ГОНКИ НА КОНЕЦ МАТЧА: при нынешних темпах мы проигрываем по очкам. Половина `lostRaceNow`, вынесенная
+ *  отдельно, потому что её спрашивает ещё и пол паритета незащищённого захвата (см. USE_LOST_RACE_FLOOR_UNCONTESTED). */
+internal fun losingProjection(): Boolean {
+    val ticksLeft = arenaInfo.ticksLimit - getTicks()
+    return (ourScore - enemyScore) + (WorldState.ourRate - WorldState.enemyRate) * ticksLeft <= 0
+}
+
 /** Проигранная гонка (v63/v88): проигрыш по проекции на конец матча при PASSIVE_TICKS без удара по нам (v99: одна и та же
  *  для порога захвата и для стаи у свободного флага, см. USE_LOST_RACE_PACK_PARITY). */
 internal fun lostRaceNow(view: ExchangeView): Boolean {
-    val ticksLeft = arenaInfo.ticksLimit - getTicks()
-    val losingAtTheEnd = (ourScore - enemyScore) + (WorldState.ourRate - WorldState.enemyRate) * ticksLeft <= 0
+    val losingAtTheEnd = losingProjection()
     val quiet = lastHurtTick == 0 || getTicks() - lastHurtTick >= FARMER_QUIET   // тишина (v65, см. FARMER_QUIET)
     // КЛАПАН ПО РАЗМЕНУ, А НЕ ПО ТИШИНЕ (v218, решение оператора). Здесь стояло `quietShort` — «сто тиков
     // ПОДРЯД без единого полученного удара». Против бота, чей пикет нас постоянно задевает, такой тишины не
@@ -855,8 +874,14 @@ internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Dou
         // с него оружие, и только это открывает клетку бегуну. Замер: правило размена v540 срабатывало в 73-82 %
         // тиков в худших поражениях, а досягаемость держалась 0,0-2,5 % — бот решал драться и не доходил, потому что
         // идти было некуда: цель похода выбирают эти самые ворота
+        // ...И ПРОТИВ ОХОТЯЩЕГОСЯ КУЛАКА АРМИЯ ИДЁТ НА ЛЮБОЙ ЕГО ФЛАГ (v554, см. USE_ARMY_TOURS_VS_FIST). v553
+        // перестала дробить армию против кулака и тем остановила кровотечение — тел в конце 8 вместо 2-4, — но брать
+        // флаги стало некому: счёт 5 389 : 19 510, то есть 3,8 очка в тик на один удерживаемый флаг. Флаг остаётся
+        // нашим после схода с клетки, поэтому армия объезжает флаги ЦЕЛИКОМ; ворота захвата оценивают дебафф, а не
+        // этот поход
         val marchToGuard = USE_MARCH_TO_GUARD && lostRaceNow(view) && f.theirs &&
-            f.occupant == null && f.guards.any { hasWeapon(it) }
+            ((USE_ARMY_TOURS_VS_FIST && Signals.enemyFistNow) ||
+                (f.occupant == null && f.guards.any { hasWeapon(it) }))
         if (!marchToGuard && !captureAllowed(ctx, f, view, CapAsker.ARMY)) { objDrop.bump("gate"); continue }
         if (marchToGuard) marchGuard.n++
         // СВОЯ ПОЛОВИНА (v312, см. GROUP_SAFE_DMG): против фермера гонка решается не числом захватов, а числом
@@ -1536,7 +1561,13 @@ internal class RaceBudget(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // его боевых рядом, и против けろびー это 4–6 крипов независимо от того, что он с ядром не дерётся, — на флагах стоит
     // полтора наших тела из четырнадцати при его пяти флагах. В режиме пар в ядре остаются двое с оружием, остальные идут
     // на флаги; ярлык режима и означает «он не бьёт наших в группе», а начнёт — окно в сто тиков его закроет
-    var budget = if (roster.safe) free.size - 2 else free.size - core
+    // ...И ПРОТИВ ОХОТЯЩЕГОСЯ КУЛАКА НЕ ВЫПУСКАЕМ НИКОГО (v553, см. USE_NO_DETACH_VS_HUNTING_FIST). Флаг остаётся
+    // нашим после схода с клетки (правило арены, решение оператора 22.09.2026), поэтому армия может объезжать флаги
+    // ЦЕЛИКОМ, не распускаясь, — и тогда локального превосходства он не получает. Замер けろびー#22: сомкнут 77 %
+    // тиков, крупнейшая его группа 10,2 крипа, и он отлавливает отряжённых поодиночке — 0-14 базы и 0-12 после v552,
+    // которая лишь увеличила горстки с 2 до 3,8-4,3 (прибор `party`), но кулак из десяти съедает и четверых
+    val huntingFist = USE_NO_DETACH_VS_HUNTING_FIST && Signals.enemyFistNow
+    var budget = if (huntingFist) 0 else if (roster.safe) free.size - 2 else free.size - core
     init { if (!meas.fight.fightOnNow) { budgetSum.n += maxOf(0, budget); budgetTicks.n++ } }
     init {
         for (h in roster.holding) {
