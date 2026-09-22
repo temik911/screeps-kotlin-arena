@@ -785,6 +785,170 @@ internal fun refugeMove(s: Creep, ctx: Ctx): RefugeMove? {
     return RefugeMove(step, why)
 }
 
+/** УКЛОНЕНИЕ СКАУТА ПО ОБЛАСТИ ПРЕСЛЕДУЕМОГО (v576, см. USE_SCOUT_MARGIN_EVADE). Для каждой клетки — когда его стволы смогут
+ *  её обстрелять: путь его боевого тела (равнина — клетка за тик, болото — за SWAMP_COST) плюс дальность выстрела. Область
+ *  скаута — клетки, куда он (одни MOVE: клетка за тик везде) приходит раньше этого срока: поиск в ширину от скаута ходит
+ *  только по ним. В области скаут берёт ближайший не наш свободный флаг, если приходит на него с запасом SCOUT_FLAG_MARGIN;
+ *  свой держит, пока запас на нём не меньше; иначе идёт в клетку области, которую он обстреляет позже всех (при равной —
+ *  ближнюю). Болото, где его тела вязнут, отодвигает срок само; угол, к которому он подходит с открытой стороны, — нет. */
+internal object ScoutEvade {
+    private const val INF = Int.MAX_VALUE / 4
+    private const val N = 10000
+    private val wall: BooleanArray by lazy { BooleanArray(N) { DistanceMap.isWall(it / 100, it % 100) } }
+    private val swamp: BooleanArray by lazy { BooleanArray(N) { DistanceMap.isSwamp(it / 100, it % 100) } }
+    // рабочие массивы — одни на все тики (без мусора в куче)
+    private val hunt = IntArray(N)
+    private val rows = IntArray(N)
+    private val fire = IntArray(N)
+    private val walkDist = IntArray(N)
+    private val parent = IntArray(N)
+    private val queue = IntArray(N)
+    private val nodeCell = IntArray(N * 9)
+    private val nodeNext = IntArray(N * 9)
+    private var fireTick = -1
+
+    /** Время его стволов до клетки: алгоритм Дейкстры с вёдрами по цене входа (1 на равнине, SWAMP_COST на болоте). */
+    private fun hunterTimes(hunters: List<Creep>) {
+        val sc = DistanceMap.SWAMP_COST
+        val heads = IntArray(sc + 1) { -1 }
+        var pool = 0
+        hunt.fill(INF)
+        var pending = 0
+        for (h in hunters) {
+            val k = key(h.x, h.y)
+            if (hunt[k] == 0) continue
+            hunt[k] = 0
+            nodeCell[pool] = k; nodeNext[pool] = heads[0]; heads[0] = pool; pool++; pending++
+        }
+        var current = 0
+        while (pending > 0) {
+            val b = current % (sc + 1)
+            while (heads[b] >= 0) {
+                val node = heads[b]
+                heads[b] = nodeNext[node]
+                pending--
+                val c = nodeCell[node]
+                if (hunt[c] != current) continue
+                val cx = c / 100; val cy = c % 100
+                for (dx in -1..1) for (dy in -1..1) {
+                    if (dx == 0 && dy == 0) continue
+                    val nx = cx + dx; val ny = cy + dy
+                    if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                    val n = key(nx, ny)
+                    if (wall[n]) continue
+                    val next = current + if (swamp[n]) sc else 1
+                    if (next < hunt[n] && pool < nodeCell.size) {
+                        hunt[n] = next
+                        val nb = next % (sc + 1)
+                        nodeCell[pool] = n; nodeNext[pool] = heads[nb]; heads[nb] = pool; pool++; pending++
+                    }
+                }
+            }
+            current++
+        }
+    }
+
+    /** Срок обстрела клетки: минимум его времени по окну дальности выстрела (разделимый минимум — строки, затем столбцы). */
+    private fun fireTimes(reach: Int) {
+        for (x in 0 until 100) for (y in 0 until 100) {
+            var m = INF
+            for (d in -reach..reach) { val xx = x + d; if (xx in 0..99) { val v = hunt[key(xx, y)]; if (v < m) m = v } }
+            rows[key(x, y)] = m
+        }
+        for (x in 0 until 100) for (y in 0 until 100) {
+            var m = INF
+            for (d in -reach..reach) { val yy = y + d; if (yy in 0..99) { val v = rows[key(x, yy)]; if (v < m) m = v } }
+            fire[key(x, y)] = m
+        }
+    }
+
+    /** Область скаута: поиск в ширину от него только по клеткам, куда он приходит раньше срока обстрела (с родителями для шага). */
+    private fun region(start: Int) {
+        walkDist.fill(INF)
+        var head = 0
+        var tail = 0
+        walkDist[start] = 0
+        parent[start] = -1
+        queue[tail++] = start
+        while (head < tail) {
+            val c = queue[head++]
+            val cx = c / 100; val cy = c % 100
+            val t = walkDist[c] + 1
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = cx + dx; val ny = cy + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val n = key(nx, ny)
+                if (wall[n] || walkDist[n] != INF || fire[n] <= t) continue
+                walkDist[n] = t
+                parent[n] = c
+                queue[tail++] = n
+            }
+        }
+    }
+
+    fun move(s: Creep, ctx: Ctx): RefugeMove? {
+        val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        if (hunters.isEmpty()) return null
+        val tick = getTicks()
+        if (fireTick != tick) { hunterTimes(hunters); fireTimes(RANGED_RANGE); fireTick = tick }
+        val here = key(s.x, s.y)
+        // на своём флаге: держим, пока до обстрела клетки не меньше запаса
+        if (ctx.flags.any { it.ours && it.pos.x == s.x && it.pos.y == s.y } && fire[here] >= SCOUT_FLAG_MARGIN) {
+            scoutEvadeWhy.bump("hold"); return RefugeMove(null, "hold")
+        }
+        region(here)
+        val blocked = BooleanArray(N)
+        for (o in ctx.myCreeps) if (o.id != s.id) blocked[o.key] = true
+        for (o in ctx.enemyCreeps) blocked[o.key] = true
+        for (k in ctx.flagCells) blocked[k] = true
+        // ближайший не наш свободный флаг области, куда успеваем с запасом
+        val flag = ctx.flags.filter { f -> !f.ours && f.occupant == null && walkDist[f.pos.key] < INF &&
+                fire[f.pos.key] - walkDist[f.pos.key] >= SCOUT_FLAG_MARGIN }.minByOrNull { walkDist[it.pos.key] }
+        var target: Int
+        val why: String
+        if (flag != null) { target = flag.pos.key; why = "flag" }
+        else {
+            // клетка области, которую он обстреляет позже всех; чужие флаги (не цель) и занятые клетки — не цель
+            target = here
+            var bestF = fire[here]
+            var bestT = 0
+            for (c in 0 until N) {
+                val t = walkDist[c]
+                if (t >= INF || blocked[c]) continue
+                val fc = fire[c]
+                if (fc > bestF || (fc == bestF && t < bestT)) { target = c; bestF = fc; bestT = t }
+            }
+            if (target == here) {
+                // область пуста: соседняя клетка, которую он обстреляет позже всех (лучше шаг, чем стоять под выстрелом)
+                var best = -1
+                var bf = fire[here]
+                for ((dx, dy) in dirsNow()) {
+                    if (dx == 0 && dy == 0) continue
+                    val x = s.x + dx; val y = s.y + dy
+                    if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                    val k = key(x, y)
+                    if (wall[k] || blocked[k]) continue
+                    if (fire[k] > bf) { best = k; bf = fire[k] }
+                }
+                if (best < 0) { scoutEvadeWhy.bump("stay"); return RefugeMove(null, "stay") }
+                scoutEvadeWhy.bump("cornered")
+                return RefugeMove(InfluenceMap.cell(best / 100, best % 100), "cornered")
+            }
+            why = "hide"
+        }
+        // первый шаг пути в области: вверх по родителям от цели
+        var c = target
+        while (parent[c] != here && parent[c] >= 0) c = parent[c]
+        if (parent[c] != here) { scoutEvadeWhy.bump("stay"); return RefugeMove(null, "stay") }
+        scoutEvadeWhy.bump(why)
+        return RefugeMove(InfluenceMap.cell(c / 100, c % 100), why)
+    }
+}
+
+/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / hide / cornered / stay). */
+internal val scoutEvadeWhy = Gauges.labelled("scev")
+
 /** Приборы убежища (v575): `refuge=` — ветки хода скаута (go / run / stay / dodge / late), `rfcells=` — клеток убежища. */
 internal val refugeWhy = Gauges.labelled("refuge")
 internal val refugeCells = Gauges.counter("rfcells")
