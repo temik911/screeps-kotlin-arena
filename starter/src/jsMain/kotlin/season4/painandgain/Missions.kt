@@ -108,6 +108,7 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
     init {
         if (!cpuGuard) for (s in runners) {
             if (s.id in holds || s.id in guards || s.id in orders) continue
+            if (USE_SCOUT_SWAMP_REFUGE && !bornCombatant(s) && Refuge.cells.isNotEmpty()) continue   // приманка (v575): живёт в убежище
             val currentId = Squads.runnerFlag[s.id]
             val armedRunner = hasWeapon(s)
             for (f in ctx.flags) {
@@ -272,6 +273,17 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 s.hits * 2 >= s.hitsMax && (incoming <= healing || garrisonReal)
             if (garrisonStays && (underFire || threats.isNotEmpty())) holdArmedStay.n++
             if (canMove(s) && (underFire || threats.isNotEmpty()) && !outgunned) holdArmedStay.n++
+            // УБЕЖИЩЕ СКАУТА (v575, см. USE_SCOUT_SWAMP_REFUGE): безоружный скаут, до которого его стволы дойдут раньше, чем он
+            // до болотной клетки вне досягаемости с равнины, идёт туда или стоит там, а не бежит прочь — в угол, где его и
+            // добивали (22 погони из 24 кончились в 3–9 клетках от края)
+            if (canMove(s) && !bornCombatant(s)) {
+                val mv = refugeMove(s, ctx)
+                if (mv != null) {
+                    if (mv.step != null) TrafficManager.request(s, mv.step, Arbiter.RUNNER_PRIORITY)
+                    dbg(s, "REFUGE:${mv.why}", f, mv.step)
+                    continue
+                }
+            }
             if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned && !garrisonStays) {
                 // поиск пути бегства может не дать шага (скаут в матче 3 «бежал» на месте три тика и погиб) —
                 // тогда жадно: соседняя клетка подальше от врагов и под меньшим огнём; в опасности шаг делается ВСЕГДА,

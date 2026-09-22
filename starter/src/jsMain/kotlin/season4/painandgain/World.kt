@@ -653,6 +653,142 @@ internal fun fleeToGroup(creep: Creep, group: Position?, ctx: Ctx): Position? {
     return pathStep(creep, group, 1, ctx.dangerMatrix)?.also { fleeGroupN.n++ }
 }
 
+/** БОЛОТНОЕ УБЕЖИЩЕ (v575, см. USE_SCOUT_SWAMP_REFUGE): глубина клетки — расстояние по Чебышеву до ближайшей клетки
+ *  равнины; болотная клетка глубиной не меньше REFUGE_DEPTH недосягаема для стрелка, стоящего на равнине (выстрел идёт
+ *  через стены, поэтому стены в счёт не берутся), а войти в болото его боевое тело может лишь клеткой за пять тиков.
+ *  Убежища — связные группы таких клеток. Местность статична — считается один раз, при первом вопросе. */
+internal object Refuge {
+    private var depth: IntArray? = null
+    private var cellsCache: IntArray? = null
+    private var groupsCache: List<IntArray>? = null
+    private fun build(): IntArray {
+        depth?.let { return it }
+        val d = IntArray(10000) { -1 }
+        val queue = IntArray(10000)
+        var head = 0
+        var tail = 0
+        for (x in 0 until 100) for (y in 0 until 100)
+            if (!DistanceMap.isSwamp(x, y) && !DistanceMap.isWall(x, y)) { d[key(x, y)] = 0; queue[tail++] = key(x, y) }
+        while (head < tail) {
+            val c = queue[head++]
+            val cx = c / 100; val cy = c % 100
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = cx + dx; val ny = cy + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val n = key(nx, ny)
+                if (d[n] >= 0) continue
+                d[n] = d[c] + 1
+                queue[tail++] = n
+            }
+        }
+        depth = d
+        val cells = (0 until 10000).filter { DistanceMap.isSwamp(it / 100, it % 100) && d[it] >= REFUGE_DEPTH }.toIntArray()
+        cellsCache = cells
+        // группы — по соседству клеток (8-связность)
+        val inCell = HashSet<Int>().apply { cells.forEach { add(it) } }
+        val seen = HashSet<Int>()
+        val groups = ArrayList<IntArray>()
+        for (c in cells) {
+            if (!seen.add(c)) continue
+            val g = ArrayList<Int>()
+            val stack = ArrayList<Int>().apply { add(c) }
+            while (stack.isNotEmpty()) {
+                val a = stack.removeAt(stack.size - 1)
+                g.add(a)
+                for (dx in -1..1) for (dy in -1..1) {
+                    val n = key(a / 100 + dx, a % 100 + dy)
+                    if (n in inCell && seen.add(n)) stack.add(n)
+                }
+            }
+            groups.add(g.toIntArray())
+        }
+        groupsCache = groups
+        refugeCells.n = cells.size
+        return d
+    }
+    fun depthAt(x: Int, y: Int): Int = build()[key(x, y)]
+    val cells: IntArray get() { build(); return cellsCache!! }
+    val groups: List<IntArray> get() { build(); return groupsCache!! }
+}
+
+/** Ход скаута у убежища: `step == null` — стоять на месте; `why` — ветка для прибора `refuge=`. */
+internal class RefugeMove(val step: Position?, val why: String)
+
+/** УБЕЖИЩЕ-ПРИМАНКА СКАУТА (v575, см. USE_SCOUT_SWAMP_REFUGE): группа убежища, назначенная этому скауту. Скауты — по id,
+ *  убежища — от самого далёкого от флагов (приманка тянет его армию туда, где флагов нет), при равных — ближе к нашему дому;
+ *  i-й скаут берёт i-е; без памяти
+ *  между тиками: назначение считается заново из живых скаутов и неизменной карты. */
+internal fun lureGroupOf(s: Creep, ctx: Ctx): IntArray? {
+    val groups = Refuge.groups
+    if (groups.isEmpty()) return null
+    val scouts = ctx.runners.filter { !bornCombatant(it) }.sortedBy { it.id.toString() }
+    val i = scouts.indexOfFirst { it.id == s.id }
+    if (i < 0) return null
+    fun flagDist(g: IntArray) = g.minOf { c -> ctx.flags.minOfOrNull { f -> maxOf(abs(f.pos.x - c / 100), abs(f.pos.y - c % 100)) } ?: 0 }
+    fun homeDist(g: IntArray) = g.minOf { c -> maxOf(abs(ctx.home.x - c / 100), abs(ctx.home.y - c % 100)) }
+    val order = groups.sortedWith(compareByDescending<IntArray> { flagDist(it) }.thenBy { homeDist(it) }.thenBy { it.first() })
+    return order[i % order.size]
+}
+
+/** ХОД СКАУТА-ПРИМАНКИ (v575, см. USE_SCOUT_SWAMP_REFUGE). null — убежищ на карте нет или не успеть: прежние ветки бегуна.
+ *  Скаут живёт в своём убежище: идёт к ближайшей его клетке путём по карте опасности (болото ему — как равнина), стоит в
+ *  нём и уступает клетку по болоту его крипу, вошедшему ближе дальности выстрела с шагом. Если его ствол выйдет на
+ *  дальность раньше, чем скаут дойдёт до своего убежища, — к любой клетке убежища, до которой скаут ближе всех его
+ *  стволов; нет такой — прежнее бегство. */
+internal fun refugeMove(s: Creep, ctx: Ctx): RefugeMove? {
+    if (!USE_SCOUT_SWAMP_REFUGE) return null
+    val cells = Refuge.cells
+    if (cells.isEmpty()) return null
+    val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+    val nearest = hunters.minOfOrNull { getRange(s, it) } ?: Int.MAX_VALUE
+    val here = Refuge.depthAt(s.x, s.y)
+    if (here >= REFUGE_DEPTH) {
+        // вошедший в болото ближе дальности выстрела с шагом: соседняя клетка болота, дальняя от ближайшего, глубже — лучше
+        if (nearest <= RANGED_RANGE + 1) {
+            val occupied = (ctx.myCreeps + ctx.enemyCreeps).mapTo(HashSet()) { it.key }
+            var best: Position? = null
+            var bestRange = nearest
+            var bestDepth = here
+            for ((dx, dy) in dirsNow()) {
+                if (dx == 0 && dy == 0) continue
+                val x = s.x + dx; val y = s.y + dy
+                if (x < 0 || y < 0 || x > 99 || y > 99 || !DistanceMap.isSwamp(x, y) || key(x, y) in occupied) continue
+                val pos = InfluenceMap.cell(x, y)
+                val r = hunters.minOf { getRange(pos, it) }
+                val dep = Refuge.depthAt(x, y)
+                if (r > bestRange || (r == bestRange && dep > bestDepth)) { best = pos; bestRange = r; bestDepth = dep }
+            }
+            refugeWhy.bump("dodge")
+            return RefugeMove(best, "dodge")
+        }
+        refugeWhy.bump("stay")
+        return RefugeMove(null, "stay")
+    }
+    fun travelTo(c: Int) = maxOf(abs(s.x - c / 100), abs(s.y - c % 100))
+    fun marginOf(c: Int) = (hunters.minOfOrNull { maxOf(abs(it.x - c / 100), abs(it.y - c % 100)) } ?: Int.MAX_VALUE / 2) - travelTo(c)
+    val own = lureGroupOf(s, ctx)?.minByOrNull { travelTo(it) }
+    // своё убежище, пока скаут ближе к нему всех его стволов и ни один не стоит в шаге от дальности выстрела; иначе — любое,
+    // до которого скаут ближе
+    var target = own
+    var why = "go"
+    if (own == null || marginOf(own) < 1 || nearest <= RANGED_RANGE + REFUGE_SLACK) {
+        val best = cells.maxWithOrNull(compareBy<Int>({ marginOf(it) }, { -travelTo(it) }))
+        if (best == null || marginOf(best) < 1) { refugeWhy.bump("late"); return null }
+        target = best
+        why = "run"
+    }
+    val goal = SearchGoal(pos = InfluenceMap.cell(target!! / 100, target % 100), range = 0)
+    val step = searchPath(s, goal, SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 1, swampCost = 1)).path.firstOrNull()
+        ?: return null
+    refugeWhy.bump(why)
+    return RefugeMove(step, why)
+}
+
+/** Приборы убежища (v575): `refuge=` — ветки хода скаута (go / run / stay / dodge / late), `rfcells=` — клеток убежища. */
+internal val refugeWhy = Gauges.labelled("refuge")
+internal val refugeCells = Gauges.counter("rfcells")
+
 internal fun fleeStep(creep: Creep, enemies: List<Creep>, dangerMatrix: CostMatrix, range: Int = RANGED_RANGE): Position? {
     if (enemies.isEmpty()) return null
     val goals = enemies.map { e -> SearchGoal(pos = InfluenceMap.cell(e.x, e.y), range = range) }.toTypedArray()
