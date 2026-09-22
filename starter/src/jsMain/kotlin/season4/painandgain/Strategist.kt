@@ -346,6 +346,9 @@ internal val capFreeAll = Gauges.counter("capfree", 1)
 internal val engBarOn = Gauges.counter("engbar")
 
 internal val engBarAll = Gauges.counter("engbar", 1)
+
+/** Хранитель снят, потому что группа ушла дальше радиуса «со своими» при его кулаке (v565, `kaway=` хранителе-тиков). */
+internal val keepAway = Gauges.counter("kaway")
 internal var capquTick = -1
 internal val capquSeen = Gauges.marks("capqu")
 internal val capqEval = Gauges.counter("capeval")
@@ -1247,8 +1250,14 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
             InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
             InfluenceMap.healAt(c.x, c.y, ctx.armyWithHeal)
         if (threat) { keepThreatAll.n++; if (hurtNow) keepThreatHit.n++ }
+        // ...И ХРАНИТЕЛЬ УХОДИТ ВМЕСТЕ С ГРУППОЙ, ПОКА ЕГО АРМИЯ — ОДИН КУЛАК (v565, см. USE_KEEPER_STAYS_WITH_GROUP).
+        // Флаг остаётся нашим после схода с клетки (оператор 22.09.2026), а убежать в этой арене нельзя: скорость у
+        // всех одна. «Со своими» — тот же радиус, которым кулак (v490) определяет отставшего
+        val groupAway = USE_KEEPER_STAYS_WITH_GROUP && Signals.enemyFistNow && c != null && core.isNotEmpty() &&
+            Formation.median(core).let { (mx, my) -> maxOf(abs(c.x - mx), abs(c.y - my)) } > FIST_RADIUS + STRAGGLER_SLACK
+        if (groupAway) keepAway.n++
         val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax ||
-            (threat && (hurtNow || !(USE_KEEPER_LEAVES_ON_REAL_HIT && garrison))))
+            (threat && (hurtNow || !(USE_KEEPER_LEAVES_ON_REAL_HIT && garrison))) || groupAway)
         val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && !keeperLeaves
         val stay = onFlag && (if (Signals.groupSafe) coreHolds(core)
             else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
