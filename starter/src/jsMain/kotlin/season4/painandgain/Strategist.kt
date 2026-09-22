@@ -735,6 +735,19 @@ internal fun lostRaceNow(view: ExchangeView): Boolean {
     return losingAtTheEnd && quietShort
 }
 
+/**
+ * ГАРНИЗОН: большинство его флагов охраняется СБОКУ, а клетка при этом свободна (v539-v545). Разоружённый страж
+ * такую клетку открывает — в отличие от флага, на котором он СИДИТ (стендовый лагерь держит тело на 95,8 %
+ * флаго-тиков, и там удержание не окупается: гейт ловит это строкой `match33:camp`). Одна величина на три правила —
+ * размен с гарнизоном (см. USE_ENGAGE_VS_GARRISON), поход к стражу (USE_MARCH_TO_GUARD) и уход хранителя
+ * (USE_KEEPER_LEAVES_ON_REAL_HIT).
+ */
+internal fun garrisonFoe(ctx: Ctx): Boolean {
+    val his = ctx.flags.filter { it.theirs }
+    val guardedFree = his.count { f -> f.occupant == null && f.guards.any { hasWeapon(it) } }
+    return his.isNotEmpty() && guardedFree * 2 > his.size
+}
+
 internal fun planCapture(ctx: Ctx, step: Position?) {
     if (step == null) return
     ctx.flags.firstOrNull { !it.ours && it.pos.x == step.x && it.pos.y == step.y }?.let { WorldState.announceCapture(it.id) }
@@ -1159,6 +1172,10 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
     // снимало хранителя от гуляющей мимо ТРОЙКИ ЕГО ЛЕКАРЕЙ — те в `combatEnemies` входят, а бить некого: 1,72 наших
     // флага против 2,39 у v306, счёт 7–10 тыс. против 11–17 тыс. В режиме пар хранителя снимает только нужда ядра и
     // собственные хиты ниже половины: пока его не бьют, флаг стоит очков каждый тик
+    // ...и послабление v544 действует только против ГАРНИЗОНА — того, кто охраняет флаги СБОКУ, оставляя клетку
+    // свободной. Тот, кто СИДИТ на флагах (стендовый лагерь, 95,8 % флаго-тиков под телом), — другой случай: там
+    // удержание не окупается, и гейт это поймал строкой match33:camp (20 210 : 23 644). Разделитель тот же, что в v540
+    val garrison = garrisonFoe(ctx)
     var core = army.filter { it.id !in Squads.keeperIds }
     val iter = Squads.keeperIds.entries.iterator()
     while (iter.hasNext()) {
@@ -1182,9 +1199,20 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         // фермера хранитель стоит один, помощи нет ни от лекаря (медиана 16 клеток), ни от своих стволов (16 клеток,
         // 15–23 тика хода), и уход — единственное, что у него есть; в бою с кулаком он стоит в строю, где уход с
         // клетки рушит строй и отдаёт флаг. Вне режима пар порог остаётся прежним — половина хитов
-        val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax || (Signals.groupSafe &&
+        // ...И УХОД ТРЕБУЕТ УРОНА СЛУЧИВШЕГОСЯ, А НЕ ТОЛЬКО ВОЗМОЖНОГО (v544, см. USE_KEEPER_LEAVES_ON_REAL_HIT).
+        // Против `ricardo18informatica2020#16+` замер 102 матчей: расхождение исходов начинается на t≈250 и несёт его
+        // УДЕРЖАНИЕ флагов (свинг темпа с 200 по 400 тик +4,32 в победах против −2,94 в поражениях, флагов с нашим
+        // телом на клетке 2,44->3,00 против 2,25->1,82), причём теряются они при ПОЛНОЙ армии: на t=300 убийств 0,04,
+        // хитов 98,3 %. То есть хранитель сходит с флага под угрозой, которая не наступает
+        // «урон наступил» — в пределах окна STALL_TICKS, которым файл уже определяет «размен был недавно»: один тик
+        // слишком узок (прибор дал kthreat=0/70 — правило выключалось целиком и гейт падал на match33:camp)
+        val hurtNow = c != null && getTicks() - (Memory.lastHurtAt[c.id] ?: -9999) <= STALL_TICKS
+        val threat = c != null && Signals.groupSafe &&
             InfluenceMap.damageSoonAt(c.x, c.y, ctx.combatEnemies, keepLeadFor(c)) >
-            InfluenceMap.healAt(c.x, c.y, ctx.armyWithHeal)))
+            InfluenceMap.healAt(c.x, c.y, ctx.armyWithHeal)
+        if (threat) { keepThreatAll.n++; if (hurtNow) keepThreatHit.n++ }
+        val keeperLeaves = c != null && (c.hits * 2 < c.hitsMax ||
+            (threat && (hurtNow || !(USE_KEEPER_LEAVES_ON_REAL_HIT && garrison))))
         val onFlag = c != null && f != null && f.ours && c.x == f.pos.x && c.y == f.pos.y && !keeperLeaves
         val stay = onFlag && (if (Signals.groupSafe) coreHolds(core)
             else enemyCreeps(ctx).any { it.id != c!!.id && getRange(f!!.pos, it) <= KEEP_RELEASE } &&
@@ -2697,11 +2725,7 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     /** Большинство его флагов охраняется СБОКУ, а не занято телом (v539/v540): клетка свободна, и разоружённый страж
      *  её открывает. Сидящий на клетке — другой случай: там разоружение не освобождает ничего, и размен не окупается
      *  (гейт поймал это строкой `match19:scatter`, где фермер сидит на 95,8 % своих флаго-тиков). */
-    val hisFlagsGuarded = run {
-        val his = ctx.flags.filter { it.theirs }
-        val guardedFree = his.count { f -> f.occupant == null && f.guards.any { hasWeapon(it) } }
-        his.isNotEmpty() && guardedFree * 2 > his.size
-    }
+    val hisFlagsGuarded = garrisonFoe(ctx)
     val raceLostNothingToTake = lostRaceNow(meas.view) &&
         (obj.objective == null || (USE_ENGAGE_VS_GARRISON && hisFlagsGuarded))
     /** его вооружённые сомкнуты в кулак И мы уже позади по суммарным хитам (v352, см. fightNow) */
@@ -3147,6 +3171,11 @@ internal val unwipeAll = Gauges.counter("unwipe", 1)
 internal val hkeepHeal = Gauges.counter("hkeep")
 
 internal val hkeepAll = Gauges.counter("hkeep", 1)
+
+/** Прибор v544: из скольких тиков «угроза по клетке хранителя» урон действительно наносился. */
+internal val keepThreatHit = Gauges.counter("kthreat")
+
+internal val keepThreatAll = Gauges.counter("kthreat", 1)
 
 /** Прибор v542: сколько раз цель похода оставлена за охраняемым флагом мимо ворот захвата. */
 internal val marchGuard = Gauges.counter("mguard")

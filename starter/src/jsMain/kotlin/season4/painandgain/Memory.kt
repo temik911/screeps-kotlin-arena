@@ -135,6 +135,8 @@ internal object Memory {
     val stepOutIds = HashSet<String>()
     /** Хиты каждого нашего крипа на прошлом тике и урон по «группе» за последние GROUP_WINDOW тиков (v298, см. groupSafe). */
     val groupHitsPrev = HashMap<String, Int>()
+    /** Тик, когда крип в последний раз потерял хиты (v544, см. USE_KEEPER_LEAVES_ON_REAL_HIT). */
+    val lastHurtAt = HashMap<String, Int>()
     val groupDmgHist = ArrayDeque<Int>()
     /** Его флаги и из них занятые его крипом за последние GROUP_WINDOW тиков, упаковано как флаги * 8 + занятые (v302). */
     val flagSitHist = ArrayDeque<Int>()

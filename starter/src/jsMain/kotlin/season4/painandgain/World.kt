@@ -1090,6 +1090,7 @@ internal fun readSignals(ctx: Ctx) {
     for (c in ctx.myCreeps) {
         val prev = Memory.groupHitsPrev[c.id]
         if (prev != null && c.hits < prev && oursArmed.any { it.id != c.id && getRange(it, c) <= 2 }) groupDmg += prev - c.hits
+        if (prev != null && c.hits < prev) Memory.lastHurtAt[c.id] = getTicks()   // v544: когда его в последний раз ударили
         Memory.groupHitsPrev[c.id] = c.hits
     }
     Memory.groupDmgHist.addLast(groupDmg)
