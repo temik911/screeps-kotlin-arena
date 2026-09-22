@@ -84,6 +84,7 @@ internal object Strategist {
     /** ПРАВИЛА ПОСТУРЫ (v445): порядок списка = приоритет. Строка выигрывает — её действие называет постуру; условие истинно, а
      *  выиграла строка выше — `shadowed`: так видно, например, сколько тиков уклонение перекрыто целью-флагом. */
     private val POSTURE_RULES: List<Row<StrategyInputs, Posture>> by lazy { listOf<Row<StrategyInputs, Posture>>(
+        Row("defend", { defendHeld }) { Posture.HOLD },
         Row("annihilate", { annihilate }) { Posture.ANNIHILATE },
         Row("flag", { hasObjective }) { Posture.FLAG },
         Row("evade", { evade }) { Posture.EVADE },
@@ -351,6 +352,11 @@ internal val capFreeAll = Gauges.counter("capfree", 1)
 internal val engBarOn = Gauges.counter("engbar")
 
 internal val engBarAll = Gauges.counter("engbar", 1)
+
+/** Тиков, где группа держит свой флаг при его подходе (v573, `defend=` таких тиков / тиков решения). */
+internal val defendOn = Gauges.counter("defend")
+
+internal val defendAll = Gauges.counter("defend", 1)
 
 /** Хранитель снят, потому что группа ушла дальше радиуса «со своими» при его кулаке (v565, `kaway=` хранителе-тиков). */
 internal val keepAway = Gauges.counter("kaway")
@@ -748,6 +754,14 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
 
 /** ПРОЕКЦИЯ ГОНКИ НА КОНЕЦ МАТЧА: при нынешних темпах мы проигрываем по очкам. Половина `lostRaceNow`, вынесенная
  *  отдельно, потому что её спрашивает ещё и пол паритета незащищённого захвата (см. USE_LOST_RACE_FLOOR_UNCONTESTED). */
+/** ФЛАГ, КОТОРЫЙ ГРУППА ДЕРЖИТ ПРИ ЕГО ПОДХОДЕ (v573, см. USE_DEFEND_HELD_FLAG): наш флаг в радиусе «со своими» от
+ *  центра группы, пока его армия — один кулак и его вооружённые рядом. Одно решение на трёх читателей: постура
+ *  (строка `defend`), точка стояния (`post`) и марш командира в гонке. */
+internal fun defendedFlag(ctx: Ctx, enemyNear: Boolean): FlagInfo? =
+    if (!USE_DEFEND_HELD_FLAG || !Signals.enemyFistNow || !enemyNear) null
+    else ctx.flags.filter { it.ours && getRange(it.pos, ctx.ourCentroid) <= FIST_RADIUS + STRAGGLER_SLACK }
+        .minByOrNull { getRange(it.pos, ctx.ourCentroid) }
+
 internal fun losingProjection(): Boolean {
     val ticksLeft = arenaInfo.ticksLimit - getTicks()
     return (ourScore - enemyScore) + (WorldState.ourRate - WorldState.enemyRate) * ticksLeft <= 0
@@ -2852,6 +2866,9 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
      *  её открывает. Сидящий на клетке — другой случай: там разоружение не освобождает ничего, и размен не окупается
      *  (гейт поймал это строкой `match19:scatter`, где фермер сидит на 95,8 % своих флаго-тиков). */
     val hisFlagsGuarded = garrisonFoe(ctx)
+    /** Группа держит свой флаг при его подходе (v573, см. defendedFlag) — строка `defend` таблицы постур. */
+    val defendHeld = defendedFlag(ctx, meas.fight.enemyNear) != null
+    init { defendAll.n++; if (defendHeld) defendOn.n++ }
     /** ...И «НЕ ВЗЯТЬ» — ЭТО ПРЕЖДЕ ВСЕГО ЦЕЛЬ, КОТОРУЮ ЗАПРЕЩАЮТ ВОРОТА ЗАХВАТА (v563, см. USE_ENGAGE_VS_BARRED_OBJECTIVE).
      *  Марш к охраняемому флагу (v542/v554) выбирает цель в обход ворот, а шаг на клетку ворота потом не пускают — и
      *  цель становится фантомной: взять её нельзя, но она есть, и размен при проигранной гонке молчит. Спрашивается
@@ -2949,7 +2966,7 @@ internal class StrategyDecide(private val ctx: Ctx, private val meas: ArmyMeasur
     // отправляет крипа на `post` — центроид наших флагов, стояние на котором не даёт НИ ОДНОГО очка.
     // `standingFlag` уже делает половину работы: при враге рядом постом становится наш флаг под ногами.
     init { postAll.n++ }
-    val post = standingFlag?.pos ?: if (thr.interceptFlag?.ours == true) thr.interceptFlag.pos else postPoint(ctx)
+    val post = defendedFlag(ctx, meas.fight.enemyNear)?.pos ?: standingFlag?.pos ?: if (thr.interceptFlag?.ours == true) thr.interceptFlag.pos else postPoint(ctx)
     private val postureKey = "$newPosture:${objectiveFlagId ?: ""}"
     init {
         if (DEBUG_LOG && (postureKey != postureLogged || getTicks() % (LOG_EVERY * 10) == 0)) {
