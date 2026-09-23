@@ -288,8 +288,9 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
 }
 
 /** ПРИМАНКА И РЕЗЕРВ (v587–v589, см. USE_BAIT_VS_DEBUFFED): армия делится пополам по id — лекари поровну, вооружённые через
- *  одного, так что в каждой половине есть лечение. На линии «центр его вооружённых -> медиана нашей армии» приманка встаёт в
- *  ENGAGE_RANGE от его центра, резерв — ещё на MASS_RANGE + FIST_RADIUS дальше (ближайшие проходимые клетки). Приказы — шаги пути. */
+ *  одного, так что в каждой половине есть лечение. Приманка берёт ближайший к ней его флаг (v591) и стоит на нём — или на нашем,
+ *  если он уже есть; флага нет — встаёт в ENGAGE_RANGE от центра его вооружённых на линии к нашей армии. Резерв — в
+ *  MASS_RANGE + FIST_RADIUS дальше от его центра (ближайшие проходимые клетки). Приказы — шаги пути. */
 internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out: MutableMap<String, Position>) {
     val core = mobileOf(army).filter { bornCombatant(it) }
     if (core.size < 2 * BAIT_MIN || hisArmed.isEmpty()) return
@@ -318,10 +319,22 @@ internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out
         }
         return InfluenceMap.cell(tx.coerceIn(1, 98), ty.coerceIn(1, 98))
     }
-    val baitAt = walkableNear((fx + ux * ENGAGE_RANGE).toInt().coerceIn(2, 97), (fy + uy * ENGAGE_RANGE).toInt().coerceIn(2, 97))
-    val reserveAt = walkableNear((fx + ux * (ENGAGE_RANGE + gap)).toInt().coerceIn(2, 97), (fy + uy * (ENGAGE_RANGE + gap)).toInt().coerceIn(2, 97))
+    // ПРИМАНКА НА ФЛАГЕ (v591): его армия, держащая всё, стоит на месте — идти ему некуда. Приманка берёт ближайший к ней
+    // его флаг (не у его стаи) и стоит на нём; наш флаг уже есть — стоит на нём. Он идёт отбивать и находит там половину
+    // армии, а резерв — в MASS_RANGE + FIST_RADIUS дальше от центра его вооружённых
+    val (bmx, bmy) = Formation.median(bait)
+    val flag = ctx.flags.firstOrNull { it.ours }
+        ?: ctx.flags.filter { it.theirs && hisArmed.none { e -> getRange(e, it.pos) <= ENGAGE_RANGE } }
+            .minByOrNull { maxOf(abs(it.pos.x - bmx), abs(it.pos.y - bmy)) }
+    val baitAt = flag?.pos ?: walkableNear((fx + ux * ENGAGE_RANGE).toInt().coerceIn(2, 97), (fy + uy * ENGAGE_RANGE).toInt().coerceIn(2, 97))
+    val ax = (baitAt.x - fx).toDouble(); val ay = (baitAt.y - fy).toDouble()
+    val an = maxOf(abs(ax), abs(ay)).coerceAtLeast(1.0)
+    val reserveAt = walkableNear((baitAt.x + ax / an * gap).toInt().coerceIn(2, 97), (baitAt.y + ay / an * gap).toInt().coerceIn(2, 97))
     val matrix = crowdMatrixOf(ctx, -1)
-    for (c in bait) if (getRange(c, baitAt) > FIST_RADIUS / 2) pathStep(c, baitAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
+    // на клетку флага ведёт тот из приманки, кто к ней ближе; остальные — вокруг
+    val grabber = if (flag != null && !flag.ours) bait.minByOrNull { getRange(it, flag.pos) } else null
+    if (grabber != null) pathStep(grabber, flag!!.pos, 0, crowdMatrixOf(ctx, flag.pos.key))?.let { out[grabber.id] = it }
+    for (c in bait) if (c !== grabber && getRange(c, baitAt) > FIST_RADIUS / 2) pathStep(c, baitAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
     for (c in reserve) if (getRange(c, reserveAt) > FIST_RADIUS / 2) pathStep(c, reserveAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
 }
 

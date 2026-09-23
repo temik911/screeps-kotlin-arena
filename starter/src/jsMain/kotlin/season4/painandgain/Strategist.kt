@@ -455,7 +455,9 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
     Gate("bait") {
         // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): пока он держит все флаги, кроме одного, наш захват снимает с него
         // дебафф и вешает его на нас — ровно то, что переворачивает размен
-        if (Signals.baitPhase) return@Gate Verdict.Veto("bait")
+        // ...но ОДИН флаг приманка берёт сама (v591): его армия, держащая всё, стоит и никуда не идёт — пусковой крючок
+        // его атаки в победе 6ab32882 был наш захват его Ab, за которым он пошёл отбивать и нашёл нашу шестёрку
+        if (Signals.baitPhase && ctx.flags.count { it.ours } >= 1) return@Gate Verdict.Veto("bait")
         Verdict.Next
     },
     Gate("seventh") {
