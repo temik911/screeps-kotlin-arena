@@ -1159,7 +1159,7 @@ internal object Garrisons {
             // третий — самый дорогой из оставшихся, из равных — ближний ко второму (v607: D5 и оба H — 13 против 12; до v607 —
             // ближний ко второму, 12 против 13)
             val third = if (second == null) null else ctx.flags.filter { it.pos.key != contested.pos.key && it.pos.key != second.pos.key }
-                .sortedWith(compareBy<FlagInfo>({ if (USE_PASSIVE_GATE) -it.score else 0 },
+                .sortedWith(compareBy<FlagInfo>({ if (USE_PASSIVE_GATE || USE_LEAVE_WHEN_CLEAR) -it.score else 0 },
                     { maxOf(abs(it.pos.x - second.pos.x), abs(it.pos.y - second.pos.y)) }, { -it.score })).firstOrNull()
             val targets = listOf(contested.pos.key, second?.pos?.key ?: -1, third?.pos?.key ?: -1)
             // ВОРОТА ЕГО ПОКОЯ (v607, см. USE_PASSIVE_GATE): план стартует, когда у него флагов не меньше PASSIVE_FLAGS плюс
@@ -1190,13 +1190,21 @@ internal object Garrisons {
             if (s[2] < 0) s[2] = d   // путь в начале этапа (счётчик лагеря в этапах больше не нужен)
             return now - s[1] > 3 * maxOf(s[2], GARRISON_SETTLE)
         }
+        // УХОД — КОГДА ЕГО ГРУППЫ НЕТ РЯДОМ (v609, см. USE_LEAVE_WHEN_CLEAR): стоящая четвёрка гибла, когда остальные уходили от
+        // неё при его армии у флага (живой блок v608: у D5 его 7–12 при уходе восьмёрки — четыре руки из восьми)
+        fun clear(fk: Int): Boolean {
+            if (!USE_LEAVE_WHEN_CLEAR || fk < 0) return true
+            val his = ctx.enemyCreeps.filter { bornCombatant(it) }
+            return his.none { e -> maxOf(abs(e.x - fk / 100), abs(e.y - fk % 100)) <= 2 * BAIT_STANDOFF &&
+                his.count { o -> o !== e && getRange(o, e) <= MASS_RANGE } >= GARRISON_SIZE - 1 }
+        }
         when (s[0]) {
             1 -> if (ctx.myCreeps.any { it.key == s[3] } || !alive(0) || overdue(0, s[3])) { s[0] = 2; s[1] = now; s[2] = -1 }
-            2 -> if (now - s[1] >= GARRISON_SETTLE) {
+            2 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[3])) {
                 if (s[4] < 0) s[0] = 6 else { s[0] = 3; s[1] = now; s[2] = -1; retarget(1, s[4]) }
             }
             3 -> if (on(1, s[4]) || !alive(1) || overdue(1, s[4])) { s[0] = 4; s[1] = now; s[2] = -1 }
-            4 -> if (now - s[1] >= GARRISON_SETTLE) {
+            4 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[4])) {
                 if (s[5] < 0) s[0] = 6 else { s[0] = 5; retarget(2, s[5]) }
             }
         }
