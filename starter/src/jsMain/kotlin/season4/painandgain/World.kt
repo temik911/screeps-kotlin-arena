@@ -947,6 +947,35 @@ internal object ScoutEvade {
         return RefugeMove(InfluenceMap.cell(c / 100, c % 100), why)
     }
 
+    /** Взгляд отряда-налётчика (v617, см. USE_RAID_BY_FIRE): область отряда — клетки, куда его самый открытый крип приходит
+     *  раньше срока его обстрела; `home` — ближняя клетка области в FIST_RADIUS от центра своего отряда; опасно, когда его
+     *  обстрел клетки отряда ближе двойного пути домой с запасом (та же мера, что у вооружённого бегуна v594), а своих в
+     *  области нет — когда он обстреляет её раньше RAID_DANGER; флаг годится, если отряд успевает на него с запасом.
+     *  null — у него нет стволов. Читать `flagOk` до следующего вызова: области общие. */
+    class SquadView(val danger: Boolean, val home: Int, val hide: Int, val flagOk: (Int) -> Boolean)
+
+    fun squadView(sq: List<Creep>, ctx: Ctx, mates: List<Pair<Int, Int>>): SquadView? {
+        val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        if (hunters.isEmpty() || sq.isEmpty()) return null
+        val tick = getTicks()
+        if (fireTick != tick) { hunterTimes(hunters); fireTimes(RANGED_RANGE); fireTick = tick }
+        val lead = sq.minByOrNull { fire[it.key] }!!
+        val here = lead.key
+        region(here, sq.maxOf { plainPeriod(it) }.coerceIn(1, 25), sq.maxOf { swampPeriod(it) }.coerceIn(1, 25))
+        var homeCell = -1
+        var homeT = INF
+        var hideCell = here
+        var hideFire = fire[here]
+        for (c in 0 until N) {
+            val t = walkDist[c]
+            if (t >= INF) continue
+            if (t < homeT && mates.any { (x, y) -> maxOf(abs(c / 100 - x), abs(c % 100 - y)) <= FIST_RADIUS }) { homeCell = c; homeT = t }
+            if (fire[c] > hideFire) { hideCell = c; hideFire = fire[c] }
+        }
+        val danger = if (homeCell >= 0) fire[here] <= 2 * homeT + SCOUT_FLAG_MARGIN else fire[here] <= RAID_DANGER
+        return SquadView(danger, homeCell, hideCell) { fk -> walkDist[fk] < INF && fire[fk] - walkDist[fk] >= SCOUT_FLAG_MARGIN }
+    }
+
     /** Размер области скаута, пришедшего в клетку start на тике t0 (v596): поиск в ширину по клеткам, куда он приходит раньше
      *  срока обстрела с запасом margin; счёт обрывается на cap — места хватает. Заливки нет: клетка помечена поколением. */
     private fun regionSize(start: Int, t0: Int, margin: Int, cap: Int): Int {
@@ -1348,6 +1377,30 @@ internal object Garrisons {
                 continue
             }
             Memory.raidTogether[si] = false
+            // ПО СРОКУ ЕГО ОБСТРЕЛА (v617, см. USE_RAID_BY_FIRE): опасность, путь к своим и годные флаги — по области отряда
+            if (USE_RAID_BY_FIRE) {
+                val mates = medians.withIndex().filter { (i, m) -> i != si && m != null }.map { it.value!! }
+                val view = ScoutEvade.squadView(sq, ctx, mates)
+                if (view != null && view.danger) {
+                    target = if (view.home >= 0) view.home else view.hide
+                    why = if (view.home >= 0) "refuge" else "away"
+                    Memory.raidRefuge[si] = true
+                } else {
+                    // цели — как в v616 (его группа у флага и на пути): срок обстрела с запасом отсекал на стенде почти все флаги,
+                    // и отряды стояли (camp m30: hold 3 926 из 4 320 отрядо-тиков, 12 043 : 23 998 против 23 954 : 7 462)
+                    val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) }
+                        .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE && routeSafe(it.first.pos.key) }
+                        .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
+                    if (next != null) { target = next.pos.key; why = "go" } else { target = current; why = "hold" }
+                    Memory.raidRefuge[si] = false
+                }
+                if (target >= 0) {
+                    claimed.add(target)
+                    for (c in sq) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
+                }
+                raidWhy.bump(why)
+                continue
+            }
             if (near) {
                 val mates = medians.withIndex().filter { (i, m) -> i != si && m != null }
                     .map { (_, m) -> m!! }
