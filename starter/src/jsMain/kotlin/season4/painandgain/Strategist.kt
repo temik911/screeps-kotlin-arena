@@ -1425,6 +1425,10 @@ internal fun loneHealerGoal(ctx: Ctx, army: List<Creep>, armedEnemies: List<Cree
     return InfluenceMap.cell(prey.x, prey.y)
 }
 
+/** Тиков натиска «отстаём дольше терпения и сильнее» / из них — только им (v582, `pushbeh=`). */
+internal val pushBehindAll = Gauges.counter("pushbeh", 1)
+internal val pushBehindOn = Gauges.counter("pushbeh")
+
 /** Хранителей, снятых правилом «против охотника за одиночками хранителей нет» (v581, `nokeep=`). */
 internal val keepersDropped = Gauges.counter("nokeep")
 
@@ -2604,7 +2608,14 @@ internal class StrategyPush(private val ctx: Ctx, private val meas: ArmyMeasures
     // держит дистанцию, и оба войска стоят в шести клетках друг от друга до недостижимого отрыва
     private val pushEngaged = USE_PUSH_WHEN_ENGAGED && Signals.engagingGarrison && meas.forces.strikers.isNotEmpty()
     init { if (pushEngaged) { pushEngAll.n++; if (!pushByPower) pushEngOn.n++ } }
-    private val pushRaw = pushByPower || pushEngaged
+    // ОТСТАЁМ ДОЛЬШЕ ТЕРПЕНИЯ И СИЛЬНЕЕ ЕГО — НАТИСК И БЕЗ РАЗМЕНА (v582, см. USE_PUSH_WHEN_BEHIND_AND_STRONGER). Натиск по мощи
+    // требует идущего размена (`exchangePaying`) и не-простоя, а размена нет, пока никто не стреляет: армии стоят в семи
+    // клетках, и флаг между ними переходит из рук в руки каждые двенадцать тиков, пока он фермит остальные шесть
+    private val pushBehind = USE_PUSH_WHEN_BEHIND_AND_STRONGER && behindTicks >= BEHIND_PATIENCE &&
+        meas.forces.strikers.isNotEmpty() && meas.forces.armedEnemies.isNotEmpty() &&
+        packs.oursPush >= packs.theirsPush * (if (pushing) thr.pushRelease else thr.pushRatio)
+    init { if (pushBehind) { pushBehindAll.n++; if (!pushByPower && !pushEngaged) pushBehindOn.n++ } }
+    private val pushRaw = pushByPower || pushEngaged || pushBehind
     // ...и СРОК (v215, см. USE_PUSH_DWELL): начатое наступление живёт минимум PUSH_DWELL тиков, и снимают его
     // досрочно только затор и настоящая слабость — мощь ниже порога отпускания. Мигание любого из пяти прочих
     // множителей за этот срок армию не разворачивает.
