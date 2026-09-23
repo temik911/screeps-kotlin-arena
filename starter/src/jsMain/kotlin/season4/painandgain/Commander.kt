@@ -102,7 +102,15 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // досягаемости 800 тиков при фазе приманки 931 тик, и приманка вела только 112
     val baitNow = Signals.baitPhase && outOfReach && meas.forces.armedEnemies.isNotEmpty()
     if (Signals.baitPhase && !outOfReach) Memory.baitPatrol[3] = 0   // контакт в фазе — он нападает, терпение с начала
+    if (!baitNow) Memory.baitPatrol[5] = 0                            // раскладка — заново с каждого выхода приманки
     Orders.holdIds.clear()
+    // РЕЗЕРВ СТОИТ И В КОНТАКТЕ ПРИМАНКИ (v599, см. USE_MOVING_BAIT): в v598 контакт переводил в бой всю армию, резерв
+    // подходил, и он уходил без потерь (три боя из четырёх с отдельной приманкой); во всех разгромах его армии наших в
+    // 15 клетках от атакованной группы не было. Боец резерва, которого достаёт он сам, дерётся
+    if (USE_MOVING_BAIT && Signals.baitPhase && !outOfReach) {
+        val reserve = baitSplit(ctx, meas.chase.mobileArmy).second
+        for (c in reserve) if (meas.forces.armedEnemies.none { getRange(it, c) <= RANGED_RANGE + 1 }) Orders.holdIds.add(c.id)
+    }
     if (baitNow) {
         Orders.commandOf.clear()
         if (USE_MOVING_BAIT) commandMovingBait(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies, Orders.commandOf, Orders.holdIds)
@@ -356,33 +364,42 @@ internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out
  *  MASS_RANGE и не дальше BAIT_LEASH от резерва; без резерва центр — сама приманка, сдвинутая к BAIT_STANDOFF от него, и тогда
  *  отрезок едет вместе с ней — она обходит его по кругу. На конце отрезка или без сдвига BAIT_STUCK тиков — разворот. */
 internal fun commandMovingBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out: MutableMap<String, Position>, hold: MutableSet<String>) {
-    val core = mobileOf(army).filter { bornCombatant(it) }
-    if (core.size < BAIT_MIN || hisArmed.isEmpty()) return
-    val hisCount = ctx.enemyCreeps.count { bornCombatant(it) }
-    val ordered = core.sortedWith(compareBy<Creep>({ if (healerOnly(it)) 0 else if (hasRanged(it)) 2 else 1 }, { it.id }))
-    val size = (hisCount / BAIT_RATIO).toInt().coerceIn(BAIT_MIN, ordered.size)
-    val whole = ordered.size - size < BAIT_RESERVE_MIN
-    val bait = if (whole) ordered else ordered.take(size)
-    val reserve = if (whole) emptyList() else ordered.drop(size)
+    val (bait, reserve) = baitSplit(ctx, army)
+    if (bait.size < BAIT_MIN || hisArmed.isEmpty()) return
+    val memo = Memory.baitPatrol
+    val matrix = crowdMatrixOf(ctx, -1)
     val (bx, by) = Formation.median(bait)
     val (ax, ay) = if (reserve.isEmpty()) Pair(bx, by) else Formation.median(reserve)
-    val near = hisArmed.minByOrNull { maxOf(abs(it.x - ax), abs(it.y - ay)) }!!
-    val vx = (ax - near.x).toDouble(); val vy = (ay - near.y).toDouble()
+    // «ОН» — центр его крупнейшей группы (v599): его одиночки держатся в 5–7 клетках от нашей группы, и отсчёт от ближайшего
+    // вооружённого ставил приманку в 4–9 клетках от них, в 6–8 от резерва — одной кучкой из 10–11 (87 % окон v598)
+    val him = clusterCentroid(hisArmed) ?: InfluenceMap.cell(hisArmed[0].x, hisArmed[0].y)
+    val vx = (ax - him.x).toDouble(); val vy = (ay - him.y).toDouble()
     val dist = maxOf(abs(vx), abs(vy)).coerceAtLeast(1.0)
     val ux = vx / dist; val uy = vy / dist   // от него к нам
     val px = -uy; val py = ux                // поперёк
     val cx: Double
     val cy: Double
     if (reserve.isEmpty()) {
-        val shift = (maxOf(abs(bx - near.x), abs(by - near.y)) - BAIT_STANDOFF).toDouble().coerceIn(-2.0, 2.0)
+        val shift = (maxOf(abs(bx - him.x), abs(by - him.y)) - BAIT_STANDOFF).toDouble().coerceIn(-2.0, 2.0)
         cx = bx - ux * shift; cy = by - uy * shift
     } else {
-        val k = (dist - BAIT_STANDOFF).coerceIn(MASS_RANGE.toDouble(), BAIT_LEASH.toDouble())
+        // РАСКЛАДКА (v599): резерв не ближе BAIT_STANDOFF + MASS_RANGE + 2 от него, иначе приманка в BAIT_STANDOFF от него
+        // сольётся с резервом; пока ближе — армия отходит вся, но не дольше BAIT_SETUP тиков подряд (он может идти следом)
+        val setup = BAIT_STANDOFF + MASS_RANGE + 2
+        if (dist < setup && memo[5] < BAIT_SETUP) {
+            memo[5]++
+            val back = walkableNear((ax + ux * (setup - dist + 2)).roundToInt().coerceIn(2, 97),
+                (ay + uy * (setup - dist + 2)).roundToInt().coerceIn(2, 97), BAIT_LEG)
+            for (c in bait + reserve) if (getRange(c, back) > FIST_RADIUS / 2) pathStep(c, back, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
+            movingBaitWhy.bump("setup")
+            return
+        }
+        for (c in reserve) hold.add(c.id)
+        val k = (dist - BAIT_STANDOFF).coerceIn((MASS_RANGE + 2).toDouble(), BAIT_LEASH.toDouble())
         cx = ax - ux * k; cy = ay - uy * k
     }
     fun endOf(side: Int): Position = walkableNear((cx + px * side * BAIT_LEG).roundToInt().coerceIn(2, 97),
         (cy + py * side * BAIT_LEG).roundToInt().coerceIn(2, 97), BAIT_LEG)
-    val memo = Memory.baitPatrol
     if (memo[0] == 0) memo[0] = 1
     val here = key(bx, by)
     memo[2] = if (memo[1] == here) memo[2] + 1 else 0
@@ -394,10 +411,24 @@ internal fun commandMovingBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep
         target = endOf(memo[0])
         movingBaitWhy.bump("flip")
     }
-    val matrix = crowdMatrixOf(ctx, -1)
     for (c in bait) if (getRange(c, target) > 1) pathStep(c, target, 1, matrix)?.let { out[c.id] = it }
-    for (c in reserve) hold.add(c.id)
     movingBaitWhy.bump(if (reserve.isEmpty()) "all" else "split")
+}
+
+/** РАЗДЕЛ АРМИИ НА ПРИМАНКУ И РЕЗЕРВ (v598–v599, см. USE_MOVING_BAIT). Приманка — лекари, затем ОДИН стрелок (v599: во всех
+ *  десяти разгромах его армии в нашей группе был стрелок, а в двух из пяти атакованных приманок v598 без стрелка он перестреливал
+ *  нас втрое), затем мили, затем прочие стрелки — столько, чтобы его армия видела перевес BAIT_RATIO, но не меньше BAIT_MIN.
+ *  Резерв меньше BAIT_RESERVE_MIN — одиночки, на которых он охотится, — тогда приманка вся армия. */
+internal fun baitSplit(ctx: Ctx, army: List<Creep>): Pair<List<Creep>, List<Creep>> {
+    val core = mobileOf(army).filter { bornCombatant(it) }
+    val hisCount = ctx.enemyCreeps.count { bornCombatant(it) }
+    val firstRanged = core.filter { !healerOnly(it) && hasRanged(it) }.minByOrNull { it.id }
+    val ordered = core.sortedWith(compareBy<Creep>({
+        when { healerOnly(it) -> 0; it === firstRanged -> 1; !hasRanged(it) -> 2; else -> 3 }
+    }, { it.id }))
+    val size = (hisCount / BAIT_RATIO).toInt().coerceIn(minOf(BAIT_MIN, ordered.size), ordered.size)
+    if (ordered.size - size < BAIT_RESERVE_MIN) return Pair(ordered, emptyList())
+    return Pair(ordered.take(size), ordered.drop(size))
 }
 
 /** Ближайшая проходимая клетка к (tx, ty) кольцами до reach; не нашлось — сама точка в пределах карты. */
