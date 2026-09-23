@@ -1117,8 +1117,10 @@ internal object Garrisons {
         }
         val cx = contested?.pos?.x ?: 50
         val cy = contested?.pos?.y ?: 50
+        // ...а из равных и по цене, и по удалению от него — ближний к нашей базе: короче поход (v603)
         val flags = ctx.flags.filter { it !== contested }
-            .sortedWith(compareBy<FlagInfo>({ -it.score }, { -maxOf(abs(it.pos.x - cx), abs(it.pos.y - cy)) })).take(n)
+            .sortedWith(compareBy<FlagInfo>({ -it.score }, { -maxOf(abs(it.pos.x - cx), abs(it.pos.y - cy)) },
+                { maxOf(abs(it.pos.x - ctx.home.x), abs(it.pos.y - ctx.home.y)) })).take(n)
         val squads = List(flags.size) { ArrayList<Creep>() }
         val pool = fighters.filter { healerOnly(it) }.sortedBy { it.id } +
             fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
