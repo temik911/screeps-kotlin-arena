@@ -1475,10 +1475,10 @@ internal fun readSignals(ctx: Ctx) {
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
-    // мы держим не больше одного; у обоих хватает бойцов на кулак и на приманку с резервом
+    // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом
     Signals.baitPhase = USE_BAIT_VS_DEBUFFED &&
         ctx.flags.count { it.theirs } >= ctx.flags.size - 1 && ctx.flags.count { it.ours } <= 1 &&
-        ctx.army.count { bornCombatant(it) && canMove(it) } >= 2 * BAIT_MIN && ctx.combatEnemies.count { hasWeapon(it) } >= 2 * BAIT_MIN
+        ctx.army.count { bornCombatant(it) && canMove(it) } >= 2 * BAIT_MIN && ctx.enemyCreeps.count { bornCombatant(it) } >= 2 * BAIT_MIN
     if (Signals.baitPhase) baitPhaseTicks.n++
     // ...и УЖЕ ВЫПУЩЕННЫЕ ВОЗВРАЩАЮТСЯ (v580): запрет выпуска не трогал тех, кто вышел до срабатывания, — в первой руке v579
     // после t=446 погибли ещё четверо одиночек: хранитель у Ha, лекарь-бегун, двое у D5. Отзыв — из обоих наборов, каждый тик
