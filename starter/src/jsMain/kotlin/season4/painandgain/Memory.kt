@@ -111,6 +111,9 @@ internal object Memory {
      *  тиков подряд без сдвига медианы, тиков приманки без контакта (см. BAIT_PATIENCE), 1 — терпение кончилось до конца матча,
      *  тиков раскладки подряд (v599, см. BAIT_SETUP)]. */
     val baitPatrol = IntArray(6)
+    /** Стоящие гарнизоны (v600, см. USE_STANDING_GARRISONS): крип -> клетка флага его отряда; раскладка один раз за матч
+     *  (`Garrisons.assign`), посты внутри отряда не закреплены. */
+    val garrisonFlag = HashMap<String, Int>()
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()

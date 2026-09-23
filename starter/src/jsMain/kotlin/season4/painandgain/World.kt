@@ -1097,6 +1097,78 @@ internal object ScoutEvade {
     }
 }
 
+/** СТОЯЩИЕ ГАРНИЗОНЫ (v600, см. USE_STANDING_GARRISONS). Раскладка — один раз, на первом тике с бойцами: отрядов столько,
+ *  сколько раз GARRISON_SIZE укладывается в число бойцов; флаги — столько же самых дорогих (при равной цене — ближний к
+ *  нашей медиане); бойцы по кругу — лекари, мили, стрелки, — так что лекарь в каждом отряде, пока лекарей хватает. Пост
+ *  мили — клетка флага (крепче тела нет), прочих — проходимые соседи флага. Шаг к посту — по полю потока к флагу (одно поле
+ *  на флаг, кэш), последние две клетки — путём к самой клетке поста. На посту крип закреплён и не сходит с него до конца
+ *  матча: стоящую группу он не трогает, а сход с поста возвращает её под правило «движется — бей». */
+internal object Garrisons {
+    fun assign(ctx: Ctx) {
+        if (!USE_STANDING_GARRISONS || Memory.garrisonFlag.isNotEmpty()) return
+        val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
+        val n = fighters.size / GARRISON_SIZE
+        if (n == 0 || ctx.flags.isEmpty()) return
+        val (mx, my) = Formation.median(fighters)
+        val flags = ctx.flags.sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) })).take(n)
+        val squads = List(flags.size) { ArrayList<Creep>() }
+        val pool = fighters.filter { healerOnly(it) }.sortedBy { it.id } +
+            fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
+            fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }
+        pool.forEachIndexed { i, c -> squads[i % squads.size].add(c) }
+        for ((si, sq) in squads.withIndex()) for (c in sq) Memory.garrisonFlag[c.id] = flags[si].pos.key
+    }
+
+    /** Клетки отряда: клетка флага и её проходимые соседи. */
+    private fun cellsOf(fk: Int): List<Int> {
+        val fx = fk / 100; val fy = fk % 100
+        val cells = arrayListOf(fk)
+        for ((dx, dy) in dirsNow()) {
+            if (dx == 0 && dy == 0) continue
+            val x = fx + dx; val y = fy + dy
+            if (x in 1..98 && y in 1..98 && !DistanceMap.isWall(x, y)) cells.add(key(x, y))
+        }
+        return cells
+    }
+
+    /** Шаг бойца гарнизона; null — стоит (на клетке отряда или шага нет). Отряд есть — `true` вторым членом.
+     *  Посты не закреплены за крипом (v600, стенд: мили с постом на клетке флага пришёл последним, соседние клетки заняли и
+     *  закрепили свои, и флаг Ha стоял ничьим до конца): кто на клетке отряда — стоит; клетка флага свободна — на неё шагает
+     *  сосед флага из отряда с наименьшим id; кто не дошёл — идёт к флагу по полю, а у флага — к ближайшей свободной клетке. */
+    fun step(creep: Creep, ctx: Ctx): Pair<Position?, Boolean> {
+        if (!USE_STANDING_GARRISONS) return Pair(null, false)
+        val fk = Memory.garrisonFlag[creep.id] ?: return Pair(null, false)
+        val fx = fk / 100; val fy = fk % 100
+        val here = creep.key
+        if (here == fk) { garrisonWhy.bump("post"); return Pair(null, true) }
+        val cells = cellsOf(fk)
+        val taken = HashSet<Int>()
+        for (c in ctx.myCreeps) taken.add(c.key)
+        for (c in ctx.enemyCreeps) taken.add(c.key)
+        if (here in cells) {
+            if (fk !in taken) {
+                val first = ctx.myCreeps.filter { Memory.garrisonFlag[it.id] == fk && it.key in cells }.minByOrNull { it.id }
+                if (first?.id == creep.id) { garrisonWhy.bump("onflag"); return Pair(InfluenceMap.cell(fx, fy), true) }
+            }
+            garrisonWhy.bump("post")
+            return Pair(null, true)
+        }
+        if (maxOf(abs(creep.x - fx), abs(creep.y - fy)) > 2) {
+            val flow = flowTo(ctx, InfluenceMap.cell(fx, fy))
+            val enemies = ctx.enemyCreeps.mapTo(HashSet()) { it.key }
+            DistanceMap.flowStep(flow, creep.x, creep.y, 1, taken, enemies)?.let { garrisonWhy.bump("march"); return Pair(it, true) }
+        }
+        val free = cells.filter { it !in taken }.minByOrNull { maxOf(abs(it / 100 - creep.x), abs(it % 100 - creep.y)) }
+        if (free == null) { garrisonWhy.bump("full"); return Pair(null, true) }
+        val s = pathStep(creep, InfluenceMap.cell(free / 100, free % 100), 0, crowdMatrixOf(ctx, free))
+        garrisonWhy.bump(if (s == null) "blocked" else "near")
+        return Pair(s, true)
+    }
+}
+
+/** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full). */
+internal val garrisonWhy = Gauges.labelled("gar")
+
 /** Тиков фазы приманки (v587, `bait=` — фаза / из них командир вёл приманку). */
 internal val baitPhaseTicks = Gauges.counter("bait", 1)
 internal val baitLedTicks = Gauges.counter("bait")
@@ -1609,6 +1681,7 @@ internal fun readSignals(ctx: Ctx) {
     }
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
+    Garrisons.assign(ctx)   // стоящие гарнизоны (v600): раскладка один раз за матч
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
     // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом
     // ...а приманке на ходу (v598, см. USE_MOVING_BAIT) хватает BAIT_MIN наших (меньше резерва — приманка вся армия) и

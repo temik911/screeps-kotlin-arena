@@ -236,6 +236,15 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                     ctx.enemyCreeps.filter { getRange(s, it) <= 1 }.minByOrNull { it.hits }?.let { Executor.attack(s, it) }
                 }
             }
+            // СТОЯЩИЙ ГАРНИЗОН (v600, см. USE_STANDING_GARRISONS): боец гарнизона и бегуном идёт на свой пост и стоит на нём
+            if (USE_STANDING_GARRISONS && canMove(s)) {
+                val (gs, has) = Garrisons.step(s, ctx)
+                if (has) {
+                    if (gs != null) TrafficManager.request(s, gs, Arbiter.RUNNER_PRIORITY) else TrafficManager.pin(s.id)
+                    dbg(s, "GARRISON", f, gs)
+                    continue
+                }
+            }
             // захватчик без замены: от врага «с боем» ближе SCOUT_FLEE_TRIGGER — прочь (пустой MOVE ходит клетку за тик и
             // по болоту, где стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
             val threats = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER && threatening(it, ctx.enemyCreeps) }
