@@ -1138,7 +1138,12 @@ internal object Garrisons {
             val contested = contestedFlag(ctx) ?: return
             val camp = ctx.enemyCreeps.count { bornCombatant(it) && getRange(it, contested.pos) <= FIST_RADIUS + 2 }
             s[2] = if (camp >= CAMP_MIN) s[2] + 1 else 0
-            if (s[2] < CAMP_TICKS) return
+            // ...или РАНО (v606): живой блок v605 — лагерь сложился лишь в трёх руках из восьми и поздно (t=660–970), а к t=400
+            // он забирал флаги 1:6 в шести руках из восьми, хотя на t=200 мы вели во всех (флаги 3:1, тела 12:12). План стартует,
+            // когда его дебютный бросок к оспариваемому флагу успел дойти и схлынуть — двойной путь от его базы, — пока у нас
+            // все бойцы
+            val rushOver = now >= 2 * maxOf(abs(ctx.enemyHome.x - contested.pos.x), abs(ctx.enemyHome.y - contested.pos.y))
+            if (s[2] < CAMP_TICKS && !(USE_EARLY_CAMP_BREAK && rushOver)) return
             val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
             val n = minOf(3, fighters.size / GARRISON_SIZE)
             if (n == 0) return
