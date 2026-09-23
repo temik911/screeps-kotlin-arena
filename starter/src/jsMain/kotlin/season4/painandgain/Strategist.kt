@@ -1403,6 +1403,25 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
  *  objectiveFlagId считается раньше, отдельной логикой ценности флага. Здесь цель — его решение, и по его же
  *  правилам: флаг, который БРАТЬ МОЖНО (флаг дебаффает владельца, поэтому мимо гейта захвата ходить незачем),
  *  ближайший к армии, со штрафом за его вооружённых рядом — заслонённый берётся боем, а не строевым шагом. */
+/** ЕГО ЛЕКАРИ ОДНИ — ЦЕЛЬ МАРША (v580, см. USE_MARCH_ON_LONE_HEALERS). Его крип только с лечением, у которого никого из
+ *  его вооружённых нет в ENGAGE_RANGE, который не уходит (`catchable`) и до которого центр нашей армии ближе всех его
+ *  вооружённых — мы приходим раньше его защиты. Ближайший к центру; null — таких нет. */
+internal fun loneHealerGoal(ctx: Ctx, army: List<Creep>, armedEnemies: List<Creep>): Position? {
+    if (!USE_MARCH_ON_LONE_HEALERS || army.isEmpty()) return null
+    val centre = centroidOf(army) ?: return null
+    val chasers = army.filter { hasWeapon(it) }
+    if (chasers.isEmpty()) return null
+    val prey = ctx.enemyCreeps.filter { e ->
+        healerOnly(e) && armedEnemies.none { getRange(it, e) <= ENGAGE_RANGE } && catchable(e, chasers) &&
+            getRange(centre, e) < (armedEnemies.minOfOrNull { getRange(it, e) } ?: Int.MAX_VALUE)
+    }.minByOrNull { getRange(centre, it) } ?: return null
+    healHuntTicks.n++
+    return InfluenceMap.cell(prey.x, prey.y)
+}
+
+/** Тиков, когда целью марша были его одинокие лекари (v580, `healhunt=`). */
+internal val healHuntTicks = Gauges.counter("healhunt")
+
 internal fun commandGoal(ctx: Ctx, view: ExchangeView, approachRate: Double, farmerQuietNow: Boolean, army: List<Creep>, armedEnemies: List<Creep>): Position? {
     if (army.isEmpty()) return null
     // ...и оценку флага командир не изобретает заново, а ВЫЗЫВАЕТ: chooseFlagObjective считает ценность, путь,

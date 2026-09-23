@@ -241,7 +241,8 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         if (columnHolds) columnTicks.n++
         if (!hunting && (columnHolds || meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } })) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
-            val goal = defendedFlag(ctx, meas.fight.enemyNear)?.pos
+            val goal = loneHealerGoal(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies)
+                ?: defendedFlag(ctx, meas.fight.enemyNear)?.pos
                 ?: commandGoal(ctx, meas.view, strat.obj.approachRate, strat.detach.farmerQuietNow, meas.chase.mobileArmy, meas.forces.armedEnemies)
             cpuMark("p.goal")
             val steps = HashMap<String, Position>()

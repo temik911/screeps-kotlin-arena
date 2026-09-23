@@ -722,7 +722,7 @@ internal class RefugeMove(val step: Position?, val why: String)
 internal fun lureGroupOf(s: Creep, ctx: Ctx): IntArray? {
     val groups = Refuge.groups
     if (groups.isEmpty()) return null
-    val scouts = ctx.runners.filter { !bornCombatant(it) }.sortedBy { it.id.toString() }
+    val scouts = ctx.runners.filter { !bornCombatant(it) }.sortedBy { it.id }
     val i = scouts.indexOfFirst { it.id == s.id }
     if (i < 0) return null
     fun flagDist(g: IntArray) = g.minOf { c -> ctx.flags.minOfOrNull { f -> maxOf(abs(f.pos.x - c / 100), abs(f.pos.y - c % 100)) } ?: 0 }
@@ -778,7 +778,7 @@ internal fun refugeMove(s: Creep, ctx: Ctx): RefugeMove? {
         target = best
         why = "run"
     }
-    val goal = SearchGoal(pos = InfluenceMap.cell(target!! / 100, target % 100), range = 0)
+    val goal = SearchGoal(pos = InfluenceMap.cell(target / 100, target % 100), range = 0)
     val step = searchPath(s, goal, SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 1, swampCost = 1)).path.firstOrNull()
         ?: return null
     refugeWhy.bump(why)
@@ -789,38 +789,14 @@ internal fun refugeMove(s: Creep, ctx: Ctx): RefugeMove? {
  *  её обстрелять: путь его боевого тела (равнина — клетка за тик, болото — за SWAMP_COST) плюс дальность выстрела. Область
  *  скаута — клетки, куда он (одни MOVE: клетка за тик везде) приходит раньше этого срока: поиск в ширину от скаута ходит
  *  только по ним. В области скаут берёт ближайший не наш свободный флаг, если приходит на него с запасом SCOUT_FLAG_MARGIN;
- *  свой держит, пока запас на нём не меньше; иначе идёт в клетку области, которую он обстреляет позже всех (при равной —
- *  ближнюю). Болото, где его тела вязнут, отодвигает срок само; угол, к которому он подходит с открытой стороны, — нет. */
+ *  свой держит, пока запас на нём не меньше; иначе идёт к своим — в клетку области, ближайшую к центру нашей армии (v580:
+ *  прежняя цель, клетка, которую он обстреляет позже всех, оказывалась углом с нашей базой). Болото, где его тела вязнут,
+ *  отодвигает срок само, поэтому область скаута через болото шире. */
 internal object ScoutEvade {
     private const val INF = Int.MAX_VALUE / 4
     private const val N = 10000
     private val wall: BooleanArray by lazy { BooleanArray(N) { DistanceMap.isWall(it / 100, it % 100) } }
     private val swamp: BooleanArray by lazy { BooleanArray(N) { DistanceMap.isSwamp(it / 100, it % 100) } }
-    /** Простор клетки (v577): расстояние по Чебышеву до ближайшей стены или края карты. Карман между стенами и угол — мал. */
-    private val room: IntArray by lazy {
-        val d = IntArray(N) { -1 }
-        val q = IntArray(N)
-        var head = 0
-        var tail = 0
-        for (c in 0 until N) {
-            val x = c / 100; val y = c % 100
-            if (wall[c]) { d[c] = 0; q[tail++] = c }
-            else if (x == 0 || y == 0 || x == 99 || y == 99) { d[c] = 1; q[tail++] = c }
-        }
-        while (head < tail) {
-            val c = q[head++]
-            val cx = c / 100; val cy = c % 100
-            for (dx in -1..1) for (dy in -1..1) {
-                val nx = cx + dx; val ny = cy + dy
-                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
-                val n = key(nx, ny)
-                if (d[n] >= 0) continue
-                d[n] = d[c] + 1
-                q[tail++] = n
-            }
-        }
-        d
-    }
     // рабочие массивы — одни на все тики (без мусора в куче)
     private val hunt = IntArray(N)
     private val rows = IntArray(N)
@@ -934,22 +910,18 @@ internal object ScoutEvade {
         val why: String
         if (flag != null) { target = flag.pos.key; why = "flag" }
         else {
-            // клетка области, которую он обстреляет позже всех; чужие флаги (не цель) и занятые клетки — не цель. И НА ПРОСТОРЕ
-            // (v577): все 20 скаутов блока v576 погибли в углах карты, а в первой руке v577 одного его стрелка хватило на
-            // двоих в кармане у нашей базы — самая поздно обстреливаемая клетка оказывалась тупиком, из которого, когда он
-            // подходит со стороны выхода, выхода нет. Цель — клетки, от которых до стены и края не меньше дальности выстрела
-            // + 1 (есть куда уйти вбок от стрелка); таких в области нет — любая
+            // К СВОИМ (v580): флага, до которого успеваем с запасом, нет — клетка области, ближайшая к центру нашей армии.
+            // Прежняя цель — клетка, которую он обстреляет позже всех, — оказывалась углом с нашей базой: в v576–v579 скауты
+            // гибли там 24 раза из 26; а у группы из четырёх и больше он держится в пяти-семи клетках (разбор 13 реплеев)
+            val home = ctx.ourCentroid
             target = here
-            var bestF = Int.MIN_VALUE
+            var bestD = maxOf(abs(s.x - home.x), abs(s.y - home.y))
             var bestT = 0
-            var bestInner = false
             for (c in 0 until N) {
                 val t = walkDist[c]
                 if (t >= INF || blocked[c]) continue
-                val inner = room[c] > RANGED_RANGE
-                val fc = fire[c]
-                val better = (inner && !bestInner) || (inner == bestInner && (fc > bestF || (fc == bestF && t < bestT)))
-                if (better) { target = c; bestF = fc; bestT = t; bestInner = inner }
+                val d = maxOf(abs(c / 100 - home.x), abs(c % 100 - home.y))
+                if (d < bestD || (d == bestD && t < bestT)) { target = c; bestD = d; bestT = t }
             }
             if (target == here && fire[here] > SCOUT_FLAG_MARGIN) { scoutEvadeWhy.bump("stay"); return RefugeMove(null, "stay") }
             if (target == here) {
@@ -968,7 +940,7 @@ internal object ScoutEvade {
                 scoutEvadeWhy.bump("cornered")
                 return RefugeMove(InfluenceMap.cell(best / 100, best % 100), "cornered")
             }
-            why = "hide"
+            why = "home"
         }
         // первый шаг пути в области: вверх по родителям от цели
         var c = target
@@ -979,10 +951,11 @@ internal object ScoutEvade {
     }
 }
 
-/** Тик, на котором сработал признак «он добил нашего одиночку» (v579, `lonerhunt=`; 0 — не сработал). */
+/** Тик, на котором сработал признак «он добил нашего одиночку» (v579, `lonerhunt=`; 0 — не сработал) / отозвано после (v580). */
 internal val lonerHuntTick = Gauges.counter("lonerhunt")
+internal val lonerRecalled = Gauges.counter("lonerhunt", 1)
 
-/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / hide / cornered / stay). */
+/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / home / cornered / stay). */
 internal val scoutEvadeWhy = Gauges.labelled("scev")
 
 /** Приборы убежища (v575): `refuge=` — ветки хода скаута (go / run / stay / dodge / late), `rfcells=` — клеток убежища. */
@@ -1483,6 +1456,9 @@ internal fun readSignals(ctx: Ctx) {
     }
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
+    // ...и УЖЕ ВЫПУЩЕННЫЕ ВОЗВРАЩАЮТСЯ (v580): запрет выпуска не трогал тех, кто вышел до срабатывания, — в первой руке v579
+    // после t=446 погибли ещё четверо одиночек: хранитель у Ha, лекарь-бегун, двое у D5. Отзыв — из обоих наборов, каждый тик
+    if (Signals.lonerHunted) lonerRecalled.n += Squads.recallAllBut(emptySet())
     // ...И НЕ ПРОТИВ ТОГО, КТО ДЕРЖИТ СВОИ ФЛАГИ ТЕЛОМ (v302): на занятую клетку пара не встанет, такой флаг отбирает
     // только сила ядра, и дробить армию парами не за чем. Замер по 44 реплеям: его флаго-тики с его крипом НА клетке —
     // けろびー 4 %, Coldkimchi#2 и MetalicaX по 1 %, а System и 恒哥吊 66 %; стендовые фермеры (scatter, camp, farm+weak)
