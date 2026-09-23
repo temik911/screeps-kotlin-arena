@@ -116,10 +116,10 @@ internal object Memory {
     val garrisonFlag = HashMap<String, Int>()
     /** Снять лагерь (v605, см. USE_CAMP_BREAK): крип -> отряд, крип -> флаг, который отряд держит в конце; этапы
      *  [этап, тик начала этапа, тиков его лагеря подряд (на этапах — путь отряда в начале этапа), флаг первого, второго,
-     *  третьего отряда]. */
+     *  третьего отряда, клетка засады (v615), тик прихода в засаду (v615)]. */
     val garrisonSquad = HashMap<String, Int>()
     val garrisonHome = HashMap<String, Int>()
-    val campBreak = IntArray(6)
+    val campBreak = IntArray(8)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()

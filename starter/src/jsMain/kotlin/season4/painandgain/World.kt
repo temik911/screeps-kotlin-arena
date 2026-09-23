@@ -1212,11 +1212,36 @@ internal object Garrisons {
             val left = listOf(s[4], s[5]).count { fk -> fk >= 0 && ctx.flags.any { it.pos.key == fk && it.theirs } }
             return ctx.flags.count { it.theirs } >= PASSIVE_FLAGS + left
         }
+        // ЗАСАДА У УГЛА (v615, см. USE_CORNER_STRIKE): его вооружённая группа ближе 2 × BAIT_STANDOFF к первому гарнизону и
+        // ближе к нему, чем центр наших вне гарнизона
+        fun coming(): Boolean {
+            val fk = s[3]
+            val his = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) && maxOf(abs(it.x - fk / 100), abs(it.y - fk % 100)) <= 2 * BAIT_STANDOFF }
+            if (his.size < GARRISON_SIZE - 1) return false
+            val ours = ctx.myCreeps.filter { (Memory.garrisonSquad[it.id] ?: 0) >= 1 }
+            if (ours.isEmpty()) return true
+            val (ox, oy) = Formation.median(ours)
+            val hisNear = his.minOf { maxOf(abs(it.x - fk / 100), abs(it.y - fk % 100)) }
+            return hisNear < maxOf(abs(ox - fk / 100), abs(oy - fk % 100))
+        }
         when (s[0]) {
             1 -> if (ctx.myCreeps.any { it.key == s[3] } || !alive(0) || overdue(0, s[3])) { s[0] = 2; s[1] = now; s[2] = -1 }
             2 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[3]) && passive()) {
-                if (s[4] < 0) s[0] = 6 else { s[0] = 3; s[1] = now; s[2] = -1; retarget(1, s[4]) }
+                if (s[4] < 0) s[0] = 6
+                else if (USE_CORNER_STRIKE && lurkCell(ctx, s[3], s[4]) >= 0) {
+                    s[6] = lurkCell(ctx, s[3], s[4]); s[7] = -1; s[0] = 7; s[1] = now; s[2] = -1; retarget(1, s[6])
+                } else { s[0] = 3; s[1] = now; s[2] = -1; retarget(1, s[4]) }
             }
+            // засада: восьмёрка стоит в LURK_DIST от первого гарнизона по пути ко второму флагу; он идёт на гарнизон — удар;
+            // не пришёл за LURK_TICKS с прихода в засаду — дальше по плану
+            7 -> {
+                if (s[7] < 0 && ctx.myCreeps.any { Memory.garrisonSquad[it.id] == 1 && maxOf(abs(it.x - s[6] / 100), abs(it.y - s[6] % 100)) <= 1 }) s[7] = now
+                if (coming()) { s[0] = 8; s[1] = now; s[2] = -1; retarget(1, s[3]); campWhy.bump("strike") }
+                else if ((s[7] >= 0 && now - s[7] >= LURK_TICKS) || overdue(1, s[6])) { s[0] = 3; s[1] = now; s[2] = -1; retarget(1, s[4]) }
+            }
+            // удар: восьмёрка идёт к первому гарнизону, бой ведут обычные ветки огня; его группы нет в 2 × BAIT_STANDOFF
+            // GARRISON_SETTLE тиков — дальше по плану
+            8 -> if (clear(s[3])) { if (s[2] < 0) s[2] = now; if (now - s[2] >= GARRISON_SETTLE) { s[0] = 3; s[1] = now; s[2] = -1; retarget(1, s[4]) } } else s[2] = -1
             3 -> if (on(1, s[4]) || !alive(1) || overdue(1, s[4])) { s[0] = 4; s[1] = now; s[2] = -1 }
             4 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[4]) && passive()) {
                 if (s[5] < 0) s[0] = 6 else { s[0] = 5; retarget(2, s[5]) }
@@ -1228,6 +1253,26 @@ internal object Garrisons {
 
     /** Метка третьей цели плана «налётчик» (v613): не клетка — отрицательная, как «цели нет». */
     private const val RAID_MARK = -2
+
+    /** Клетка засады (v615): LURK_DIST шагов спуска по полю от первого флага ко второму; -1 — пути нет. */
+    private fun lurkCell(ctx: Ctx, from: Int, to: Int): Int {
+        val flow = flowTo(ctx, InfluenceMap.cell(to / 100, to % 100))
+        var x = from / 100; var y = from % 100
+        repeat(LURK_DIST) {
+            val here = flow[key(x, y)]
+            if (here <= 0) return key(x, y)
+            var bx = -1; var by = -1; var bv = here
+            for (dx in -1..1) for (dy in -1..1) {
+                val nx = x + dx; val ny = y + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val v = flow[key(nx, ny)]
+                if (v in 0 until bv) { bv = v; bx = nx; by = ny }
+            }
+            if (bx < 0) return -1
+            x = bx; y = by
+        }
+        return key(x, y)
+    }
 
     /** Предел спуска по полю в проверке пути налётчика: путь по карте 100×100 короче двухсот клеток. */
     private const val N_ROUTE = 200
