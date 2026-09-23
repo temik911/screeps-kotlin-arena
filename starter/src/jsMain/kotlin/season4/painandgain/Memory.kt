@@ -126,6 +126,8 @@ internal object Memory {
     val raidTogether = BooleanArray(3)
     /** Крипы отряда, отданные обычным веткам боя (v620, шар в бою): гарнизонный шаг их не ведёт. */
     val garrisonReleased = HashSet<String>()
+    /** Тик, с которого один из трёх наших флагов — его (v623, см. USE_PUSH_PARKED); -1 — все три не его. */
+    val pushSince = intArrayOf(-1)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()

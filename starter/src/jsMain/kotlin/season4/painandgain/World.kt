@@ -1361,6 +1361,23 @@ internal object Garrisons {
         val squads = (0..2).map { si -> ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si } }
         val medians = squads.map { if (it.isEmpty()) null else Formation.median(it) }
         val claimed = HashSet<Int>()
+        // ВЫДАВИТЬ ВСЕМИ (v623, см. USE_PUSH_PARKED): самый дорогой из трёх наших флагов (оспариваемый и два самых дорогих
+        // после него), который его GARRISON_SETTLE тиков и дольше, — цель всех отрядов разом; натиска всей армии он не держит
+        if (USE_PUSH_PARKED && USE_BALL_HOLDS_CENTER) {
+            val contested = contestedFlag(ctx)
+            val keep = (listOfNotNull(contested) + ctx.flags.filter { it !== contested }.sortedByDescending { it.score }.take(2))
+            val parked = keep.filter { it.theirs }.maxByOrNull { it.score }
+            if (parked == null) Memory.pushSince[0] = -1
+            else if (Memory.pushSince[0] < 0) Memory.pushSince[0] = getTicks()
+            if (parked != null && getTicks() - Memory.pushSince[0] >= GARRISON_SETTLE) {
+                for (sq in squads) for (c in sq) {
+                    Memory.garrisonReleased.remove(c.id)
+                    Memory.garrisonFlag[c.id] = parked.pos.key; Memory.garrisonHome[c.id] = parked.pos.key
+                }
+                raidWhy.bump("push")
+                return
+            }
+        }
         for ((si, sq) in squads.withIndex()) {
             if (sq.isEmpty()) continue
             val (mx, my) = medians[si]!!
