@@ -1429,9 +1429,14 @@ internal object Garrisons {
                     val mate = medians.withIndex().filter { (i, m) -> i != si && m != null }
                         .minByOrNull { (_, m) -> maxOf(abs(m!!.first - mx), abs(m.second - my)) }?.value
                     val contested = contestedFlag(ctx)
-                    target = if (near && mate != null) key(mate.first, mate.second) else contested?.pos?.key ?: current
-                    why = if (near && mate != null) "refuge" else "center"
-                    Memory.raidRefuge[si] = near
+                    // УХОД ШАРА ПО СРОКУ ЕГО ОБСТРЕЛА (v624, см. USE_BALL_FIRE_REFUGE): к своим — когда его обстрел клетки шара
+                    // ближе двойного пути до своих с запасом, путём внутри области, куда шар успевает раньше его
+                    val view = if (USE_BALL_FIRE_REFUGE && mate != null) ScoutEvade.squadView(sq, ctx, listOf(mate)) else null
+                    val flee = if (view != null) view.danger else near && mate != null
+                    target = if (flee && view != null) (if (view.home >= 0) view.home else view.hide)
+                        else if (flee && mate != null) key(mate.first, mate.second) else contested?.pos?.key ?: current
+                    why = if (flee) "refuge" else "center"
+                    Memory.raidRefuge[si] = flee
                     if (target >= 0) {
                         claimed.add(target)
                         for (c in sq) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
