@@ -908,7 +908,21 @@ internal object ScoutEvade {
                 fire[f.pos.key] - walkDist[f.pos.key] >= SCOUT_FLAG_MARGIN }.minByOrNull { walkDist[it.pos.key] }
         var target: Int
         val why: String
+        // К СВОИМ, КОГДА ОН ИДЁТ (v585, правило оператора «при наступлении врага убегать к своим»): клетка области в радиусе
+        // кулака от центра армии, ближайшая по пути. Скаут уходит туда, когда его выстрел по клетке скаута ближе, чем
+        // двойной путь домой с запасом (за время пути шагают обе стороны), — пока путь ещё в области; иначе он приманка
+        val armyAt = ctx.ourCentroid
+        var homeCell = -1
+        var homeT = INF
+        if (USE_SCOUT_RUNS_HOME) for (c in 0 until N) {
+            val t = walkDist[c]
+            if (t >= INF || blocked[c] || t >= homeT) continue
+            if (maxOf(abs(c / 100 - armyAt.x), abs(c % 100 - armyAt.y)) <= FIST_RADIUS) { homeCell = c; homeT = t }
+        }
+        val comeHome = homeCell >= 0 && fire[here] <= 2 * homeT + SCOUT_FLAG_MARGIN
         if (flag != null) { target = flag.pos.key; why = "flag" }
+        else if (comeHome && homeCell == here) { scoutEvadeWhy.bump("home"); return RefugeMove(null, "home") }
+        else if (comeHome) { target = homeCell; why = "home" }
         else {
             // ПРИМАНКА — ВДАЛИ ОТ НЕГО (v581): флага, до которого успеваем с запасом, нет — клетка области, которую он обстреляет
             // позже всех. Цель «к своим» (v580) отвергнута двумя руками: скаут у армии перестаёт быть одиночкой, приманка
@@ -955,7 +969,7 @@ internal object ScoutEvade {
 internal val lonerHuntTick = Gauges.counter("lonerhunt")
 internal val lonerRecalled = Gauges.counter("lonerhunt", 1)
 
-/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / hide / cornered / stay). */
+/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / home / hide / cornered / stay). */
 internal val scoutEvadeWhy = Gauges.labelled("scev")
 
 /** Приборы убежища (v575): `refuge=` — ветки хода скаута (go / run / stay / dodge / late), `rfcells=` — клеток убежища. */
