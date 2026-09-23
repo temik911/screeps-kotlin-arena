@@ -290,7 +290,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
 /** ПРИМАНКА И РЕЗЕРВ (v587–v589, см. USE_BAIT_VS_DEBUFFED): армия делится пополам по id — лекари поровну, вооружённые через
  *  одного, так что в каждой половине есть лечение. Приманка берёт ближайший к ней его флаг (v591) и стоит на нём — или на нашем,
  *  если он уже есть; флага нет — встаёт в ENGAGE_RANGE от центра его вооружённых на линии к нашей армии. Резерв — в
- *  MASS_RANGE + FIST_RADIUS дальше от его центра (ближайшие проходимые клетки). Приказы — шаги пути. */
+ *  ENGAGE_RANGE + MASS_RANGE + FIST_RADIUS от приманки прочь от его центра (v592; ближайшие проходимые клетки). Приказы — шаги пути. */
 internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out: MutableMap<String, Position>) {
     val core = mobileOf(army).filter { bornCombatant(it) }
     if (core.size < 2 * BAIT_MIN || hisArmed.isEmpty()) return
@@ -329,7 +329,10 @@ internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out
     val baitAt = flag?.pos ?: walkableNear((fx + ux * ENGAGE_RANGE).toInt().coerceIn(2, 97), (fy + uy * ENGAGE_RANGE).toInt().coerceIn(2, 97))
     val ax = (baitAt.x - fx).toDouble(); val ay = (baitAt.y - fy).toDouble()
     val an = maxOf(abs(ax), abs(ay)).coerceAtLeast(1.0)
-    val reserveAt = walkableNear((baitAt.x + ax / an * gap).toInt().coerceIn(2, 97), (baitAt.y + ay / an * gap).toInt().coerceIn(2, 97))
+    // ...и резерв — за любым радиусом, в котором он считает наших у цели (v592): в первой руке v591 резерв встал в 8–9 клетках
+    // от приманки на Ab, он видел у флага одиннадцать и 850 тиков стоял на D5 в 26 клетках
+    val far = ENGAGE_RANGE + gap
+    val reserveAt = walkableNear((baitAt.x + ax / an * far).toInt().coerceIn(2, 97), (baitAt.y + ay / an * far).toInt().coerceIn(2, 97))
     val matrix = crowdMatrixOf(ctx, -1)
     // на клетку флага ведёт тот из приманки, кто к ней ближе; остальные — вокруг
     val grabber = if (flag != null && !flag.ours) bait.minByOrNull { getRange(it, flag.pos) } else null
