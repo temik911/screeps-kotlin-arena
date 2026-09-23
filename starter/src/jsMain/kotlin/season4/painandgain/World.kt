@@ -816,7 +816,8 @@ internal object ScoutEvade {
     /** Скаут не берёт ЕГО флаг, если у него после этого останется меньше PASSIVE_FLAGS, — с начала плана (v607, см.
      *  USE_PASSIVE_GATE): его покой держится на его числе флагов, а наши гарнизоны живы, пока он спокоен. */
     private fun mayTake(ctx: Ctx, f: FlagInfo): Boolean =
-        !(USE_PASSIVE_GATE && Memory.campBreak[0] > 0 && f.theirs && ctx.flags.count { it.theirs } <= PASSIVE_FLAGS)
+        !(USE_PASSIVE_GATE && Memory.campBreak[0] > 0 && f.theirs && ctx.flags.count { it.theirs } <= PASSIVE_FLAGS) &&
+            Garrisons.floorAllows(ctx, f)
 
     /** Время его стволов до клетки: алгоритм Дейкстры с вёдрами по цене входа (1 на равнине, SWAMP_COST на болоте). */
     private fun hunterTimes(hunters: List<Creep>) {
@@ -1139,7 +1140,12 @@ internal object ScoutEvade {
  *  матча: стоящую группу он не трогает, а сход с поста возвращает её под правило «движется — бей». */
 internal object Garrisons {
     /** Боец под гарнизонной раскладкой (v600 или v605): его шаг — шаг к клетке отряда, выше бегства, приказа и кулака. */
-    fun active(id: String) = (USE_STANDING_GARRISONS || USE_CAMP_BREAK) && Memory.garrisonFlag.containsKey(id)
+    fun active(id: String) = (USE_STANDING_GARRISONS || USE_CAMP_BREAK) && Memory.garrisonFlag.containsKey(id) &&
+        id !in Memory.garrisonReleased
+
+    /** ПОЛ ЕГО ФЛАГОВ (v620, см. USE_FLAG_FLOOR): флаг брать можно, если после этого не наших останется не меньше BALL_FLAGS —
+     *  шар бьётся с ним, пока он под своими дебаффами. */
+    fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || f.ours || ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
 
     /** ОСПАРИВАЕМЫЙ ФЛАГ (живые блоки v600–v601: отряд D5 погибал на флаге в 16 руках из 16 — в дебюте он ведёт к D5 всю
      *  армию, а с t≈250–400 до конца матча его кучка из 9 СТОИТ на D5 во всех восьми разобранных руках): флаг с наименьшим
@@ -1153,6 +1159,13 @@ internal object Garrisons {
         val squads = List(n) { ArrayList<Creep>() }
         // РАСКЛАДКА ПО СТРЕЛКАМ (v618, см. USE_RANGED_SQUADS): налётчикам (отряды 1..n-1) — по два стрелка и по мили, пока
         // хватает; шару (отряд 0) — все лекари, остальные мили и стрелки
+        // ШАР БЕЗ СТРЕЛКОВ (v620, см. USE_MELEE_BALL): отряд 0 — все мили и лекари; стрелки — по кругу в меньший из прочих
+        if (USE_MELEE_BALL && n >= 2) {
+            squads[0].addAll(fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id })
+            squads[0].addAll(fighters.filter { healerOnly(it) }.sortedBy { it.id })
+            for (c in fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }) squads.drop(1).minByOrNull { it.size }!!.add(c)
+            return squads
+        }
         // ...или РАВНЫМИ ОТРЯДАМИ (v619, см. USE_EVEN_RANGED_SQUADS): стрелки, затем мили, затем лекари — по кругу, каждый
         // следующий в самый малый отряд; стрелков по два на отряд, пока их хватает, — число отрядов считает вызов
         if (USE_EVEN_RANGED_SQUADS) {
@@ -1202,7 +1215,8 @@ internal object Garrisons {
             val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
             // ...и при воротах покоя отряд может быть тройкой (v608, живой блок v607: к старту плана у нас 10–11 бойцов, два
             // отряда держали D5 и H до конца без потерь, а третьего не было — 9 очков против 16 вместо 13 против 12)
-            val n = if (USE_EVEN_RANGED_SQUADS) minOf(3, fighters.size / GARRISON_SIZE, fighters.count { !healerOnly(it) && hasRanged(it) } / 2)
+            val n = if (USE_MELEE_BALL) minOf(3, 1 + fighters.count { !healerOnly(it) && hasRanged(it) } / 2)
+                else if (USE_EVEN_RANGED_SQUADS) minOf(3, fighters.size / GARRISON_SIZE, fighters.count { !healerOnly(it) && hasRanged(it) } / 2)
                 else minOf(3, fighters.size / (if (USE_PASSIVE_TRIPLES) GARRISON_SIZE - 1 else GARRISON_SIZE))
             if (n == 0) return
             val (mx, my) = Formation.median(fighters)
@@ -1383,6 +1397,16 @@ internal object Garrisons {
             // ВМЕСТЕ ПРИ НЁМ (стенд v616: его группа тенью в 7 клетках от нашей массы держала опасность у всех трёх отрядов, и
             // они стояли друг при друге до конца): восемь и больше наших рядом он не атакует — такой отряд идёт при нём
             // к общей с соседом цели, без проверки пути
+            // ШАР В БОЙ (v620, см. USE_MELEE_BALL): его группа у шара, у него BALL_FLAGS флагов и больше — шар отдан обычным
+            // веткам боя (они выигрывали драки v556–v586), пока его группа рядом
+            if (USE_MELEE_BALL && si == 0) {
+                if (near && ctx.flags.count { it.theirs } >= BALL_FLAGS) {
+                    for (c in sq) Memory.garrisonReleased.add(c.id)
+                    raidWhy.bump("fight")
+                    continue
+                }
+                for (c in sq) Memory.garrisonReleased.remove(c.id)
+            }
             val strong = ctx.myCreeps.count { bornCombatant(it) && maxOf(abs(it.x - mx), abs(it.y - my)) <= MASS_RANGE } >= 2 * GARRISON_SIZE
             // ...кроме отряда с двумя стрелками (v619): его он и один на один не трогает, слияние только вдвое сокращает налёт
             val armedRanged = USE_RANGED_SQUADS && sq.count { hasRanged(it) } >= 2
@@ -1390,7 +1414,7 @@ internal object Garrisons {
                 val mate = (0 until si).firstOrNull { j -> medians[j] != null && Memory.raidTogether[j] &&
                     maxOf(abs(medians[j]!!.first - mx), abs(medians[j]!!.second - my)) <= MASS_RANGE }
                 target = if (mate != null) Memory.garrisonFlag[squads[mate][0].id] ?: current
-                    else ctx.flags.filter { !it.ours && it.pos.key !in claimed }
+                    else ctx.flags.filter { !it.ours && it.pos.key !in claimed && floorAllows(ctx, it) }
                         .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
                         .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first?.pos?.key ?: current
                 why = if (mate != null) "with" else "mass"
@@ -1405,9 +1429,10 @@ internal object Garrisons {
             // ДВА СТРЕЛКА — ЕГО НЕ ЖДЁМ (v618, см. USE_RANGED_SQUADS): группу с двумя стрелками и больше он не трогает (разбор
             // 40 рук: 4 из 251), поэтому такой отряд не бежит и не проверяет путь — только флаг без его группы
             if (USE_RANGED_SQUADS && sq.count { hasRanged(it) } >= 2) {
-                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, FIST_RADIUS) }
+                // под полом (v620) — самые дорогие флаги первыми: нам остаётся не больше трёх
+                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, FIST_RADIUS) && floorAllows(ctx, it) }
                     .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
-                    .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
+                    .minWithOrNull(if (USE_FLAG_FLOOR) compareBy({ -it.first.score }, { it.second }) else compareBy({ it.second }, { -it.first.score }))?.first
                 target = next?.pos?.key ?: current
                 why = if (next != null) "go" else "hold"
                 Memory.raidRefuge[si] = false
@@ -1438,7 +1463,7 @@ internal object Garrisons {
                 } else {
                     // цели — как в v616 (его группа у флага и на пути): срок обстрела с запасом отсекал на стенде почти все флаги,
                     // и отряды стояли (camp m30: hold 3 926 из 4 320 отрядо-тиков, 12 043 : 23 998 против 23 954 : 7 462)
-                    val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) }
+                    val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) && floorAllows(ctx, it) }
                         .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE && routeSafe(it.first.pos.key) }
                         .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
                     if (next != null) { target = next.pos.key; why = "go" } else { target = current; why = "hold" }
@@ -1461,7 +1486,7 @@ internal object Garrisons {
                 why = if (mates != null) "refuge" else "away"
                 Memory.raidRefuge[si] = true
             } else {
-                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) }
+                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) && floorAllows(ctx, it) }
                     .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE && routeSafe(it.first.pos.key) }
                     .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
                 if (next != null) { target = next.pos.key; why = "go" } else { target = current; why = "hold" }

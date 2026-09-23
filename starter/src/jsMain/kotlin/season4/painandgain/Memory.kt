@@ -124,6 +124,8 @@ internal object Memory {
     val raidRefuge = BooleanArray(3)
     /** Отряд-налётчик идёт при нём вместе с соседом (v616): на этом тике — к общей цели. */
     val raidTogether = BooleanArray(3)
+    /** Крипы отряда, отданные обычным веткам боя (v620, шар в бою): гарнизонный шаг их не ведёт. */
+    val garrisonReleased = HashSet<String>()
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()
