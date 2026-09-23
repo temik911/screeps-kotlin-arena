@@ -1161,7 +1161,13 @@ internal object Garrisons {
             val third = if (second == null) null else ctx.flags.filter { it.pos.key != contested.pos.key && it.pos.key != second.pos.key }
                 .sortedWith(compareBy<FlagInfo>({ if (USE_PASSIVE_GATE || USE_LEAVE_WHEN_CLEAR) -it.score else 0 },
                     { maxOf(abs(it.pos.x - second.pos.x), abs(it.pos.y - second.pos.y)) }, { -it.score })).firstOrNull()
-            val targets = listOf(contested.pos.key, second?.pos?.key ?: -1, third?.pos?.key ?: -1)
+            // НАЛЁТЧИК (v613, см. USE_RAIDER): оспариваемый флаг — его лагерь, и гарнизонов там нет; два гарнизона — на два самых
+            // дорогих из прочих (из равных — ближний к нашей армии первым), третий отряд — налётчик
+            val targets = if (USE_RAIDER) {
+                val rest = ctx.flags.filter { it.pos.key != contested.pos.key }
+                    .sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) }))
+                listOf(rest.getOrNull(0)?.pos?.key ?: -1, rest.getOrNull(1)?.pos?.key ?: -1, RAID_MARK)
+            } else listOf(contested.pos.key, second?.pos?.key ?: -1, third?.pos?.key ?: -1)
             // ВОРОТА ЕГО ПОКОЯ (v607, см. USE_PASSIVE_GATE): план стартует, когда у него флагов не меньше PASSIVE_FLAGS плюс
             // флаги плана, которые сейчас его, — чтобы после плана у него осталось не меньше PASSIVE_FLAGS
             if (USE_PASSIVE_GATE) {
@@ -1194,7 +1200,8 @@ internal object Garrisons {
         // неё при его армии у флага (живой блок v608: у D5 его 7–12 при уходе восьмёрки — четыре руки из восьми)
         fun clear(fk: Int): Boolean {
             if (!USE_LEAVE_WHEN_CLEAR || fk < 0) return true
-            val his = ctx.enemyCreeps.filter { bornCombatant(it) }
+            // ...считая только ВООРУЖЁННЫХ (v613, см. USE_CLEAR_BY_ARMED): его лекари-тень стоят в 7 клетках от нашей группы
+            val his = ctx.enemyCreeps.filter { bornCombatant(it) && !(USE_CLEAR_BY_ARMED && healerOnly(it)) }
             return his.none { e -> maxOf(abs(e.x - fk / 100), abs(e.y - fk % 100)) <= 2 * BAIT_STANDOFF &&
                 his.count { o -> o !== e && getRange(o, e) <= MASS_RANGE } >= GARRISON_SIZE - 1 }
         }
@@ -1216,6 +1223,46 @@ internal object Garrisons {
             }
         }
         campWhy.bump("s" + s[0])
+        raid(ctx)
+    }
+
+    /** Метка третьей цели плана «налётчик» (v613): не клетка — отрицательная, как «цели нет». */
+    private const val RAID_MARK = -2
+
+    /** НАЛЁТЧИК (v613, см. USE_RAIDER): после посадки обоих гарнизонов третий отряд берёт не наш флаг, у которого нет его
+     *  вооружённой группы в RAID_DANGER клетках, — ближний по полю; его группа у налётчика — уходит к ближнему живому гарнизону
+     *  и стоит при нём, пока её нет в RAID_DANGER + FIST_RADIUS; целей нет — стоит на последнем взятом. */
+    private fun raid(ctx: Ctx) {
+        val s = Memory.campBreak
+        if (!USE_RAIDER || s[0] != 6 || s[5] != RAID_MARK) return
+        val raiders = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == 2 }
+        if (raiders.isEmpty()) return
+        val (mx, my) = Formation.median(raiders)
+        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        fun group(x: Int, y: Int, r: Int) = armed.count { maxOf(abs(it.x - x), abs(it.y - y)) <= r } >= GARRISON_SIZE - 1
+        val homes = listOf(s[3], s[4]).filter { fk ->
+            fk >= 0 && ctx.myCreeps.any { Memory.garrisonSquad[it.id] != 2 && Memory.garrisonHome[it.id] == fk } }
+        fun travel(fk: Int): Int {
+            val flow = flowTo(ctx, InfluenceMap.cell(fk / 100, fk % 100))
+            var worst = 0
+            for (c in raiders) { val d = flow[c.key]; if (d < 0) return Int.MAX_VALUE; if (d > worst) worst = d }
+            return worst
+        }
+        val current = Memory.garrisonFlag[raiders[0].id] ?: -1
+        val sheltered = current in homes
+        val target: Int
+        val why: String
+        if (homes.isNotEmpty() && group(mx, my, if (sheltered) RAID_DANGER + FIST_RADIUS else RAID_DANGER)) {
+            target = homes.minByOrNull { travel(it) }!!; why = "refuge"
+        } else {
+            val next = ctx.flags.filter { !it.ours && it.pos.key !in homes && !group(it.pos.x, it.pos.y, RAID_DANGER) }
+                .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
+                .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
+            if (next != null) { target = next.pos.key; why = "go" }
+            else { target = current; why = "hold" }
+        }
+        for (c in raiders) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
+        raidWhy.bump(why)
     }
 
     fun assign(ctx: Ctx) {
@@ -1303,6 +1350,9 @@ internal object Garrisons {
 
 /** Прибор снятия лагеря (v605): `camp=` — старт раскладки и тики по этапам (s1…s6). */
 internal val campWhy = Gauges.labelled("camp")
+
+/** Прибор налётчика (v613): `raid=` — тики налёта (go) / при гарнизоне от его группы (refuge) / на последнем взятом (hold). */
+internal val raidWhy = Gauges.labelled("raid")
 
 /** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere) / застрял и обходит своих (detour). */
 internal val garrisonWhy = Gauges.labelled("gar")
