@@ -95,7 +95,17 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     val outOfReach = meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= RANGED_RANGE } }
     val engageMarch = commanderNow && USE_MARCH_INTO_ENGAGE && Signals.engagingGarrison && outOfReach &&
         meas.forces.armedEnemies.isNotEmpty() && meas.chase.mobileArmy.size >= 2
-    if (engageMarch) {
+    // ПРИМАНКА ПРОТИВ ОСЛАБЛЕННОГО (v587–v590, см. USE_BAIT_VS_DEBUFFED): половина армии с лекарями встаёт в ENGAGE_RANGE от
+    // его кулака, вторая — ещё на MASS_RANGE + FIST_RADIUS дальше. Ведёт, пока ни один его вооружённый не достаёт наших
+    // выстрелом; достал — обычный бой всей армией. Впереди режима боя (v590): в руке v589 режим боя держал армию строем вне
+    // досягаемости 800 тиков при фазе приманки 931 тик, и приманка вела только 112
+    val baitNow = Signals.baitPhase && outOfReach && meas.forces.armedEnemies.isNotEmpty()
+    if (baitNow) {
+        Orders.commandOf.clear()
+        commandBait(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies, Orders.commandOf)
+        Orders.source = "bait"
+        baitLedTicks.n++
+    } else if (engageMarch) {
         val (mx, my) = Formation.median(meas.chase.mobileArmy)
         val prey = meas.forces.armedEnemies.minByOrNull { maxOf(abs(it.x - mx), abs(it.y - my)) }!!
         val steps = HashMap<String, Position>()
@@ -194,13 +204,6 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
             Forecast.simPending.keys.filter { it < getTicks() }.forEach { Forecast.simPending.remove(it) }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash fled=$orderFled branch=$orderBranch lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (Forecast.simErrN > 0) (Forecast.simErrSum / Forecast.simErrN).toInt() else 0} wrongSign=${Forecast.simErrWrongSign}/${Forecast.simErrN}")
         }
-    } else if (Signals.baitPhase && !meas.fight.contact && meas.forces.armedEnemies.isNotEmpty()) {
-        // ПРИМАНКА ПРОТИВ ОСЛАБЛЕННОГО (v587, см. USE_BAIT_VS_DEBUFFED): половина армии с лекарями стоит, вторая — в
-        // MASS_RANGE + FIST_RADIUS клетках дальше от его кулака; при контакте бой ведёт обычный режим боя всей армией
-        Orders.commandOf.clear()
-        commandBait(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies, Orders.commandOf)
-        Orders.source = "bait"
-        baitLedTicks.n++
     // ⚠️ Здесь стояла ветка «в бою, пока по нам не стреляют, командир тоже отпускает за флагами». Она
     // НЕДОСТИЖИМА ДВАЖДЫ: стоит в `else` от `if (commanderNow)`, то есть `commanderNow` здесь ложно по
     // построению, — и вдобавок сам режим боя требует `underTheirFire`, поэтому `commanderNow && !underTheirFire`
