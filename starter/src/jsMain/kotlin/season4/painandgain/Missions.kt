@@ -285,6 +285,16 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                     continue
                 }
             }
+            // УКЛОНЕНИЕ ОТРЯЖЁННОГО (v594, см. USE_EVASIVE_RUNNERS): вооружённый бегун уходит к своим по области, куда он приходит
+            // раньше его выстрела, — пока путь открыт, а не бежит прочь, когда охотники уже рядом
+            if (USE_EVASIVE_RUNNERS && canMove(s) && bornCombatant(s)) {
+                val mv = ScoutEvade.evadeArmed(s, ctx, f)
+                if (mv != null) {
+                    if (mv.step != null) TrafficManager.request(s, mv.step, Arbiter.RUNNER_PRIORITY)
+                    dbg(s, "EVADE:" + mv.why, f, mv.step)
+                    continue
+                }
+            }
             if (canMove(s) && (underFire || threats.isNotEmpty()) && outgunned && !garrisonStays) {
                 // поиск пути бегства может не дать шага (скаут в матче 3 «бежал» на месте три тика и погиб) —
                 // тогда жадно: соседняя клетка подальше от врагов и под меньшим огнём; в опасности шаг делается ВСЕГДА,
