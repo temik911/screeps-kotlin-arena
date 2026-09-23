@@ -1145,7 +1145,18 @@ internal object Garrisons {
 
     /** ПОЛ ЕГО ФЛАГОВ (v620, см. USE_FLAG_FLOOR): флаг брать можно, если после этого не наших останется не меньше BALL_FLAGS —
      *  шар бьётся с ним, пока он под своими дебаффами. */
-    fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || f.ours || ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
+    fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || farmer(ctx) || f.ours || ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
+
+    /** ФЕРМЕР (v626, см. USE_STRIKE_FARMER): у него FARMER_FLAGS флагов и больше, у каждого — не меньше двух его вооружённых в
+     *  FIST_RADIUS − 1; признак держится до конца матча. */
+    fun farmer(ctx: Ctx): Boolean {
+        if (!USE_STRIKE_FARMER) return false
+        if (Memory.farmerSeen[0] > 0) return true
+        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        val guarded = ctx.flags.count { f -> f.theirs && armed.count { getRange(it, f.pos) <= FIST_RADIUS - 1 } >= 2 }
+        if (guarded >= FARMER_FLAGS) { Memory.farmerSeen[0] = getTicks(); raidWhy.bump("farmer") }
+        return Memory.farmerSeen[0] > 0
+    }
 
     /** ОСПАРИВАЕМЫЙ ФЛАГ (живые блоки v600–v601: отряд D5 погибал на флаге в 16 руках из 16 — в дебюте он ведёт к D5 всю
      *  армию, а с t≈250–400 до конца матча его кучка из 9 СТОИТ на D5 во всех восьми разобранных руках): флаг с наименьшим
@@ -1361,6 +1372,25 @@ internal object Garrisons {
         val squads = (0..2).map { si -> ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si } }
         val medians = squads.map { if (it.isEmpty()) null else Formation.median(it) }
         val claimed = HashSet<Int>()
+        // КУЛАК ПРОТИВ ФЕРМЕРА (v626, см. USE_STRIKE_FARMER): все отряды — на его флаг с самым малым гарнизоном (его крипы в
+        // FIST_RADIUS + 2), из равных — ближний к центру нашей армии; бой — обычные ветки огня
+        if (farmer(ctx)) {
+            val all = squads.flatten()
+            if (all.isNotEmpty()) {
+                val (ax, ay) = Formation.median(all)
+                val target = ctx.flags.filter { it.theirs || !it.ours }
+                    .minWithOrNull(compareBy({ f -> ctx.enemyCreeps.count { getRange(it, f.pos) <= FIST_RADIUS + 2 } },
+                        { f -> maxOf(abs(f.pos.x - ax), abs(f.pos.y - ay)) }))
+                if (target != null) {
+                    for (c in all) {
+                        Memory.garrisonReleased.remove(c.id)
+                        Memory.garrisonFlag[c.id] = target.pos.key; Memory.garrisonHome[c.id] = target.pos.key
+                    }
+                    raidWhy.bump("strike")
+                    return
+                }
+            }
+        }
         // ВЫДАВИТЬ ВСЕМИ (v623, см. USE_PUSH_PARKED): самый дорогой из трёх наших флагов (оспариваемый и два самых дорогих
         // после него), который его GARRISON_SETTLE тиков и дольше, — цель всех отрядов разом; натиска всей армии он не держит
         if (USE_PUSH_PARKED && USE_BALL_HOLDS_CENTER) {

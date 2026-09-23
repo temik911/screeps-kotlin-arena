@@ -128,6 +128,8 @@ internal object Memory {
     val garrisonReleased = HashSet<String>()
     /** Тик, с которого один из трёх наших флагов — его (v623, см. USE_PUSH_PARKED); -1 — все три не его. */
     val pushSince = intArrayOf(-1)
+    /** Тик, когда соперник показал почерк фермера (v626, см. USE_STRIKE_FARMER); 0 — не показал. */
+    val farmerSeen = intArrayOf(0)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()
