@@ -112,7 +112,7 @@ internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView, fist: Pair<Int, I
     val flagAt = p.step?.let { s -> ctx.flags.firstOrNull { !it.ours && it.pos.x == s.x && it.pos.y == s.y } }
     // ...кроме бойца СТОЯЩЕГО ГАРНИЗОНА на флаг своего отряда (v600, см. USE_STANDING_GARRISONS): живой блок v600 — ворота
     // отказывали шагу на Ha/Hb, уже взятые его бегунами, и отряд стоял у флага 200+ тиков (`gar=onflag` +2 за тик)
-    val ownPost = flagAt != null && USE_STANDING_GARRISONS && Memory.garrisonFlag[p.creep.id] == flagAt.pos.key
+    val ownPost = flagAt != null && Garrisons.active(p.creep.id) && Memory.garrisonFlag[p.creep.id] == flagAt.pos.key
     val step0 = if (flagAt != null && !ownPost && captureBlock(ctx, flagAt, view, CapAsker.ARMY) != null) { strayCapRefused.n++; null } else p.step
     // КУЛАК ДЕЙСТВУЕТ НА ВСЯКИЙ ШАГ В БОЮ (v490, см. USE_FIST_EVERY_STEP). Запрет уходить дальше `FIST_RADIUS +
     // STRAGGLER_SLACK` от медианы боевых живёт внутри командирской раздачи (`Formation.fist`, зовётся из `Deal.kt:72`),
@@ -124,7 +124,7 @@ internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView, fist: Pair<Int, I
     // (v384/v385, 12-20 против 6-10): те раздавали клетки, этот ограничивает движение
     // ...и боец СТОЯЩЕГО ГАРНИЗОНА (v600, см. USE_STANDING_GARRISONS) идёт на свой флаг, а не к кулаку: отряды на Ha и Hb без
     // этого исключения на стенде стояли в 6–7 клетках от D5, и их шаг наружу обнулялся каждый тик
-    val garrisonMarch = USE_STANDING_GARRISONS && Memory.garrisonFlag.containsKey(p.creep.id)
+    val garrisonMarch = Garrisons.active(p.creep.id)
     val step = if (!USE_FIST_EVERY_STEP || fist == null || step0 == null || p.priority == Priority.SURVIVE || garrisonMarch) step0 else {
         val now = maxOf(abs(p.creep.x - fist.first), abs(p.creep.y - fist.second))
         val next = maxOf(abs(step0.x - fist.first), abs(step0.y - fist.second))
@@ -1270,7 +1270,7 @@ internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stri
     // `fled=` (приказов, перебитых бегством) и `step=flee` в гистограмме шагов
     // СТОЯЩИЙ ГАРНИЗОН ВЫШЕ ВСЕГО (v600, см. USE_STANDING_GARRISONS): стоящую группу он не трогает, а бегство, приказ и строй
     // сдвинули бы её с поста — под правило «движется — бей»
-    Row("garrison", { USE_STANDING_GARRISONS && Memory.garrisonFlag.containsKey(creep.id) }) {
+    Row("garrison", { Garrisons.active(creep.id) }) {
         val (s, _) = Garrisons.step(creep, ctx)
         if (s == null) TrafficManager.pin(creep.id)
         s

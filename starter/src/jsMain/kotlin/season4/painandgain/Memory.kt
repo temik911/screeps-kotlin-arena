@@ -114,6 +114,12 @@ internal object Memory {
     /** Стоящие гарнизоны (v600, см. USE_STANDING_GARRISONS): крип -> клетка флага его отряда; раскладка один раз за матч
      *  (`Garrisons.assign`), посты внутри отряда не закреплены. */
     val garrisonFlag = HashMap<String, Int>()
+    /** Снять лагерь (v605, см. USE_CAMP_BREAK): крип -> отряд, крип -> флаг, который отряд держит в конце; этапы
+     *  [этап, тик начала этапа, тиков его лагеря подряд (на этапах — путь отряда в начале этапа), флаг первого, второго,
+     *  третьего отряда]. */
+    val garrisonSquad = HashMap<String, Int>()
+    val garrisonHome = HashMap<String, Int>()
+    val campBreak = IntArray(6)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()

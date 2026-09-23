@@ -237,7 +237,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 }
             }
             // СТОЯЩИЙ ГАРНИЗОН (v600, см. USE_STANDING_GARRISONS): боец гарнизона и бегуном идёт на свой пост и стоит на нём
-            if (USE_STANDING_GARRISONS && canMove(s)) {
+            if (Garrisons.active(s.id) && canMove(s)) {
                 val (gs, has) = Garrisons.step(s, ctx)
                 if (has) {
                     if (gs != null) TrafficManager.request(s, gs, Arbiter.RUNNER_PRIORITY) else TrafficManager.pin(s.id)

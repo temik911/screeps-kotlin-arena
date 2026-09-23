@@ -1104,29 +1104,99 @@ internal object ScoutEvade {
  *  на флаг, кэш), последние две клетки — путём к самой клетке поста. На посту крип закреплён и не сходит с него до конца
  *  матча: стоящую группу он не трогает, а сход с поста возвращает её под правило «движется — бей». */
 internal object Garrisons {
+    /** Боец под гарнизонной раскладкой (v600 или v605): его шаг — шаг к клетке отряда, выше бегства, приказа и кулака. */
+    fun active(id: String) = (USE_STANDING_GARRISONS || USE_CAMP_BREAK) && Memory.garrisonFlag.containsKey(id)
+
+    /** ОСПАРИВАЕМЫЙ ФЛАГ (живые блоки v600–v601: отряд D5 погибал на флаге в 16 руках из 16 — в дебюте он ведёт к D5 всю
+     *  армию, а с t≈250–400 до конца матча его кучка из 9 СТОИТ на D5 во всех восьми разобранных руках): флаг с наименьшим
+     *  «дальним из двух расстояний до баз». */
+    fun contestedFlag(ctx: Ctx): FlagInfo? = ctx.flags.minByOrNull { f ->
+        maxOf(maxOf(abs(f.pos.x - ctx.home.x), abs(f.pos.y - ctx.home.y)), maxOf(abs(f.pos.x - ctx.enemyHome.x), abs(f.pos.y - ctx.enemyHome.y)))
+    }
+
+    /** Отряды по кругу — лекари, мили, стрелки: лекарь в каждом отряде, пока лекарей хватает. */
+    private fun squadsOf(fighters: List<Creep>, n: Int): List<List<Creep>> {
+        val squads = List(n) { ArrayList<Creep>() }
+        val pool = fighters.filter { healerOnly(it) }.sortedBy { it.id } +
+            fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
+            fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }
+        pool.forEachIndexed { i, c -> squads[i % n].add(c) }
+        return squads
+    }
+
+    /** СНЯТЬ ЛАГЕРЬ (v605, см. USE_CAMP_BREAK). Этапы `Memory.campBreak[0]`: 0 — прежнее поведение, пока его CAMP_MIN боевых
+     *  не простоят у оспариваемого флага CAMP_TICKS тиков подряд; тогда армия делится на отряды по GARRISON_SIZE, и 1 — все идут
+     *  на оспариваемый флаг (натиск всей армией); 2 — первый отряд на флаге, остальные стоят рядом GARRISON_SETTLE тиков, пока он
+     *  устаивается; 3 — остальные идут на второй флаг (самый дорогой, из равных — ближний к нашей армии); 4 — второй отряд на
+     *  нём, третий стоит рядом GARRISON_SETTLE; 5 — третий идёт на свой флаг (ближний ко второму, из равных — дороже).
+     *  Погиб отряд, которого ждёт этап, — этап пропускается. */
+    fun campBreak(ctx: Ctx) {
+        if (!USE_CAMP_BREAK || USE_STANDING_GARRISONS) return
+        val s = Memory.campBreak
+        val now = getTicks()
+        if (s[0] == 0) {
+            val contested = contestedFlag(ctx) ?: return
+            val camp = ctx.enemyCreeps.count { bornCombatant(it) && getRange(it, contested.pos) <= FIST_RADIUS + 2 }
+            s[2] = if (camp >= CAMP_MIN) s[2] + 1 else 0
+            if (s[2] < CAMP_TICKS) return
+            val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
+            val n = minOf(3, fighters.size / GARRISON_SIZE)
+            if (n == 0) return
+            val (mx, my) = Formation.median(fighters)
+            val second = ctx.flags.filter { it.pos.key != contested.pos.key }
+                .sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) })).firstOrNull()
+            val third = if (second == null) null else ctx.flags.filter { it.pos.key != contested.pos.key && it.pos.key != second.pos.key }
+                .sortedWith(compareBy<FlagInfo>({ maxOf(abs(it.pos.x - second.pos.x), abs(it.pos.y - second.pos.y)) }, { -it.score })).firstOrNull()
+            val targets = listOf(contested.pos.key, second?.pos?.key ?: -1, third?.pos?.key ?: -1)
+            for ((si, sq) in squadsOf(fighters, n).withIndex()) for (c in sq) {
+                Memory.garrisonSquad[c.id] = si
+                Memory.garrisonHome[c.id] = targets[si]
+                Memory.garrisonFlag[c.id] = targets[0]
+            }
+            s[3] = targets[0]; s[4] = if (n >= 2) targets[1] else -1; s[5] = if (n >= 3) targets[2] else -1
+            s[0] = 1; s[1] = now; s[2] = -1
+            campWhy.bump("start")
+            return
+        }
+        fun alive(si: Int) = ctx.myCreeps.any { Memory.garrisonSquad[it.id] == si }
+        fun on(si: Int, fk: Int) = ctx.myCreeps.any { Memory.garrisonSquad[it.id] == si && it.key == fk }
+        fun retarget(from: Int, fk: Int) { for (c in ctx.myCreeps) if ((Memory.garrisonSquad[c.id] ?: -1) >= from) Memory.garrisonFlag[c.id] = fk }
+        // ПРЕДЕЛ ЭТАПА (v605, стенд camp m30: крип заглушки стоял на клетке второго флага до конца, и этап 3 длился 1 600 тиков):
+        // флаг не взят за тройной путь отряда до него — этап закрыт, отряд стоит у флага, план идёт дальше
+        fun overdue(si: Int, fk: Int): Boolean {
+            val d = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si }
+                .maxOfOrNull { maxOf(abs(it.x - fk / 100), abs(it.y - fk % 100)) } ?: 0
+            if (s[2] < 0) s[2] = d   // путь в начале этапа (счётчик лагеря в этапах больше не нужен)
+            return now - s[1] > 3 * maxOf(s[2], GARRISON_SETTLE)
+        }
+        when (s[0]) {
+            1 -> if (ctx.myCreeps.any { it.key == s[3] } || !alive(0) || overdue(0, s[3])) { s[0] = 2; s[1] = now; s[2] = -1 }
+            2 -> if (now - s[1] >= GARRISON_SETTLE) {
+                if (s[4] < 0) s[0] = 6 else { s[0] = 3; s[1] = now; s[2] = -1; retarget(1, s[4]) }
+            }
+            3 -> if (on(1, s[4]) || !alive(1) || overdue(1, s[4])) { s[0] = 4; s[1] = now; s[2] = -1 }
+            4 -> if (now - s[1] >= GARRISON_SETTLE) {
+                if (s[5] < 0) s[0] = 6 else { s[0] = 5; retarget(2, s[5]) }
+            }
+        }
+        campWhy.bump("s" + s[0])
+    }
+
     fun assign(ctx: Ctx) {
         if (!USE_STANDING_GARRISONS || Memory.garrisonFlag.isNotEmpty()) return
         val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
         val n = fighters.size / GARRISON_SIZE
         if (n == 0 || ctx.flags.isEmpty()) return
-        // ОСПАРИВАЕМЫЙ ФЛАГ (живые блоки v600–v601: отряд D5 погибал на флаге в 16 руках из 16 — в дебюте он ведёт к D5 всю
-        // армию, а с t≈250–400 до конца матча его кучка из 9 СТОИТ на D5 во всех восьми разобранных руках): флаг с наименьшим
-        // «дальним из двух расстояний до баз». Он не наш; остальные — по цене, при равной — дальше от оспариваемого
-        val contested = ctx.flags.minByOrNull { f ->
-            maxOf(maxOf(abs(f.pos.x - ctx.home.x), abs(f.pos.y - ctx.home.y)), maxOf(abs(f.pos.x - ctx.enemyHome.x), abs(f.pos.y - ctx.enemyHome.y)))
-        }
+        // Оспариваемый флаг не наш; остальные — по цене, при равной — дальше от оспариваемого
+        val contested = contestedFlag(ctx)
         val cx = contested?.pos?.x ?: 50
         val cy = contested?.pos?.y ?: 50
         // ...а из равных и по цене, и по удалению от него — ближний к нашей базе: короче поход (v603)
         val flags = ctx.flags.filter { it !== contested }
             .sortedWith(compareBy<FlagInfo>({ -it.score }, { -maxOf(abs(it.pos.x - cx), abs(it.pos.y - cy)) },
                 { maxOf(abs(it.pos.x - ctx.home.x), abs(it.pos.y - ctx.home.y)) })).take(n)
-        val squads = List(flags.size) { ArrayList<Creep>() }
-        val pool = fighters.filter { healerOnly(it) }.sortedBy { it.id } +
-            fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
-            fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }
-        pool.forEachIndexed { i, c -> squads[i % squads.size].add(c) }
-        for ((si, sq) in squads.withIndex()) for (c in sq) Memory.garrisonFlag[c.id] = flags[si].pos.key
+        if (flags.isEmpty()) return
+        for ((si, sq) in squadsOf(fighters, flags.size).withIndex()) for (c in sq) Memory.garrisonFlag[c.id] = flags[si].pos.key
     }
 
     /** Клетки отряда: клетка флага и её проходимые соседи. */
@@ -1146,7 +1216,7 @@ internal object Garrisons {
      *  закрепили свои, и флаг Ha стоял ничьим до конца): кто на клетке отряда — стоит; клетка флага свободна — на неё шагает
      *  сосед флага из отряда с наименьшим id; кто не дошёл — идёт к флагу по полю, а у флага — к ближайшей свободной клетке. */
     fun step(creep: Creep, ctx: Ctx): Pair<Position?, Boolean> {
-        if (!USE_STANDING_GARRISONS) return Pair(null, false)
+        if (!active(creep.id)) return Pair(null, false)
         val fk = Memory.garrisonFlag[creep.id] ?: return Pair(null, false)
         val fx = fk / 100; val fy = fk % 100
         val here = creep.key
@@ -1157,7 +1227,9 @@ internal object Garrisons {
         for (c in ctx.enemyCreeps) taken.add(c.key)
         if (here in cells) {
             if (fk !in taken) {
-                val first = ctx.myCreeps.filter { Memory.garrisonFlag[it.id] == fk && it.key in cells }.minByOrNull { it.id }
+                // на клетку флага — из того отряда, чей это флаг навсегда (v605: на время натиска у флага стоит вся армия)
+                val first = ctx.myCreeps.filter { (Memory.garrisonHome[it.id] ?: Memory.garrisonFlag[it.id]) == fk && it.key in cells }
+                    .minByOrNull { it.id }
                 if (first?.id == creep.id) { garrisonWhy.bump("onflag"); return Pair(InfluenceMap.cell(fx, fy), true) }
             }
             garrisonWhy.bump("post")
@@ -1167,20 +1239,29 @@ internal object Garrisons {
             val flow = flowTo(ctx, InfluenceMap.cell(fx, fy))
             // ОТРЯД ИДЁТ КУЧНО (v602; живой блок v601: отряды растягивались, и ушедшего вперёд мили он добивал одного —
             // t=46–63, «наших в 6» ноль): кто впереди отстающего товарища больше чем на 2 клетки по полю — ждёт
+            // ...внутри СВОЕГО отряда и в радиусе кулака (v605, стенд: при натиске всей армией на один флаг передние ждали
+            // задних, а задние не могли их обойти — пробка на 1 600 тиков)
             val mine = flow[key(creep.x, creep.y)]
-            val last = ctx.myCreeps.filter { Memory.garrisonFlag[it.id] == fk && it.key !in cells }
+            val squad = Memory.garrisonSquad[creep.id]
+            val last = ctx.myCreeps.filter { (if (squad != null) Memory.garrisonSquad[it.id] == squad else Memory.garrisonFlag[it.id] == fk) &&
+                    it.key !in cells }
                 .maxOfOrNull { flow[key(it.x, it.y)] } ?: mine
-            if (mine >= 0 && last - mine > 2) { garrisonWhy.bump("cohere"); return Pair(null, true) }
+            if (mine >= 0 && last - mine > FIST_RADIUS) { garrisonWhy.bump("cohere"); return Pair(null, true) }
             val enemies = ctx.enemyCreeps.mapTo(HashSet()) { it.key }
             DistanceMap.flowStep(flow, creep.x, creep.y, 1, taken, enemies)?.let { garrisonWhy.bump("march"); return Pair(it, true) }
         }
-        val free = cells.filter { it !in taken }.minByOrNull { maxOf(abs(it / 100 - creep.x), abs(it % 100 - creep.y)) }
+        // клетка флага — только тому отряду, чей это флаг навсегда (v605, стенд: крип другого отряда встал на неё первым)
+        val homeHere = (Memory.garrisonHome[creep.id] ?: fk) == fk
+        val free = cells.filter { it !in taken && (homeHere || it != fk) }.minByOrNull { maxOf(abs(it / 100 - creep.x), abs(it % 100 - creep.y)) }
         if (free == null) { garrisonWhy.bump("full"); return Pair(null, true) }
         val s = pathStep(creep, InfluenceMap.cell(free / 100, free % 100), 0, crowdMatrixOf(ctx, free))
         garrisonWhy.bump(if (s == null) "blocked" else "near")
         return Pair(s, true)
     }
 }
+
+/** Прибор снятия лагеря (v605): `camp=` — старт раскладки и тики по этапам (s1…s6). */
+internal val campWhy = Gauges.labelled("camp")
 
 /** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere). */
 internal val garrisonWhy = Gauges.labelled("gar")
@@ -1698,6 +1779,7 @@ internal fun readSignals(ctx: Ctx) {
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     Garrisons.assign(ctx)   // стоящие гарнизоны (v600): раскладка один раз за матч
+    Garrisons.campBreak(ctx)   // снять лагерь (v605): этапы посадки гарнизонов под прикрытием армии
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
     // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом
     // ...а приманке на ходу (v598, см. USE_MOVING_BAIT) хватает BAIT_MIN наших (меньше резерва — приманка вся армия) и
