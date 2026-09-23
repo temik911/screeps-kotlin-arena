@@ -1229,6 +1229,9 @@ internal object Garrisons {
     /** Метка третьей цели плана «налётчик» (v613): не клетка — отрицательная, как «цели нет». */
     private const val RAID_MARK = -2
 
+    /** Предел спуска по полю в проверке пути налётчика: путь по карте 100×100 короче двухсот клеток. */
+    private const val N_ROUTE = 200
+
     /** НАЛЁТЧИК (v613, см. USE_RAIDER): после посадки обоих гарнизонов третий отряд берёт не наш флаг, у которого нет его
      *  вооружённой группы в RAID_DANGER клетках, — ближний по полю; его группа у налётчика — уходит к ближнему живому гарнизону
      *  и стоит при нём, пока её нет в RAID_DANGER + FIST_RADIUS; целей нет — стоит на последнем взятом. */
@@ -1248,6 +1251,29 @@ internal object Garrisons {
             for (c in raiders) { val d = flow[c.key]; if (d < 0) return Int.MAX_VALUE; if (d > worst) worst = d }
             return worst
         }
+        // ПУТЬ БЕЗ НЕГО (v614, см. RAID_ROUTE): спуск по полю от центра налётчика до флага — ни одной клетки с его группой в
+        // RAID_DANGER (живой блок v613: флаг был чист, а путь к нему шёл в 15 клетках от его пятерых, и налётчик ходил
+        // маятником между гарнизоном и целью половину матча)
+        fun routeSafe(fk: Int): Boolean {
+            if (!RAID_ROUTE) return true
+            val flow = flowTo(ctx, InfluenceMap.cell(fk / 100, fk % 100))
+            var x = mx; var y = my
+            repeat(N_ROUTE) {
+                if (group(x, y, RAID_DANGER)) return false
+                val here = flow[key(x, y)]
+                if (here <= 0) return true
+                var bx = -1; var by = -1; var bv = here
+                for (dx in -1..1) for (dy in -1..1) {
+                    val nx = x + dx; val ny = y + dy
+                    if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                    val v = flow[key(nx, ny)]
+                    if (v in 0 until bv) { bv = v; bx = nx; by = ny }
+                }
+                if (bx < 0) return true
+                x = bx; y = by
+            }
+            return true
+        }
         val current = Memory.garrisonFlag[raiders[0].id] ?: -1
         val sheltered = current in homes
         val target: Int
@@ -1256,7 +1282,7 @@ internal object Garrisons {
             target = homes.minByOrNull { travel(it) }!!; why = "refuge"
         } else {
             val next = ctx.flags.filter { !it.ours && it.pos.key !in homes && !group(it.pos.x, it.pos.y, RAID_DANGER) }
-                .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
+                .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE && routeSafe(it.first.pos.key) }
                 .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
             if (next != null) { target = next.pos.key; why = "go" }
             else { target = current; why = "hold" }
