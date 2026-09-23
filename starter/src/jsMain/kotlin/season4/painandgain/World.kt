@@ -1198,13 +1198,20 @@ internal object Garrisons {
             return his.none { e -> maxOf(abs(e.x - fk / 100), abs(e.y - fk % 100)) <= 2 * BAIT_STANDOFF &&
                 his.count { o -> o !== e && getRange(o, e) <= MASS_RANGE } >= GARRISON_SIZE - 1 }
         }
+        // ...И КОГДА ОН СПОКОЕН (v610, см. USE_HOLD_UNTIL_PASSIVE): у него флагов не меньше PASSIVE_FLAGS плюс ещё не наши
+        // флаги плана, которые мы у него заберём
+        fun passive(): Boolean {
+            if (!USE_HOLD_UNTIL_PASSIVE) return true
+            val left = listOf(s[4], s[5]).count { fk -> fk >= 0 && ctx.flags.any { it.pos.key == fk && it.theirs } }
+            return ctx.flags.count { it.theirs } >= PASSIVE_FLAGS + left
+        }
         when (s[0]) {
             1 -> if (ctx.myCreeps.any { it.key == s[3] } || !alive(0) || overdue(0, s[3])) { s[0] = 2; s[1] = now; s[2] = -1 }
-            2 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[3])) {
+            2 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[3]) && passive()) {
                 if (s[4] < 0) s[0] = 6 else { s[0] = 3; s[1] = now; s[2] = -1; retarget(1, s[4]) }
             }
             3 -> if (on(1, s[4]) || !alive(1) || overdue(1, s[4])) { s[0] = 4; s[1] = now; s[2] = -1 }
-            4 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[4])) {
+            4 -> if (now - s[1] >= GARRISON_SETTLE && clear(s[4]) && passive()) {
                 if (s[5] < 0) s[0] = 6 else { s[0] = 5; retarget(2, s[5]) }
             }
         }
