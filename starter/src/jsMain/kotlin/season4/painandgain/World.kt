@@ -1151,7 +1151,7 @@ internal object Garrisons {
             val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
             // ...и при воротах покоя отряд может быть тройкой (v608, живой блок v607: к старту плана у нас 10–11 бойцов, два
             // отряда держали D5 и H до конца без потерь, а третьего не было — 9 очков против 16 вместо 13 против 12)
-            val n = minOf(3, fighters.size / (if (USE_PASSIVE_GATE) GARRISON_SIZE - 1 else GARRISON_SIZE))
+            val n = minOf(3, fighters.size / (if (USE_PASSIVE_TRIPLES) GARRISON_SIZE - 1 else GARRISON_SIZE))
             if (n == 0) return
             val (mx, my) = Formation.median(fighters)
             val second = ctx.flags.filter { it.pos.key != contested.pos.key }
@@ -1805,6 +1805,8 @@ internal fun readSignals(ctx: Ctx) {
     // ОН ДОБИВАЕТ ОДИНОЧЕК (v579, см. USE_NO_LONERS_VS_HUNTER): наш боевой, пропавший с прошлого тика, стоял с не больше чем
     // одним своим в радиусе «со своими», а у его клетки сейчас трое его и больше — это и есть охота на одиночку. Защёлка до
     // конца матча: раз он так играет, выпущенный поодиночке — его добыча
+    // ...а под планом снятия лагеря — С ПЕРВОГО ТИКА (v611, см. USE_BLOB_UNTIL_PLAN): до плана армия держится одной массой
+    if (USE_BLOB_UNTIL_PLAN && USE_CAMP_BREAK && !Signals.lonerHunted) Signals.lonerHunted = true
     if (USE_NO_LONERS_VS_HUNTER && !Signals.lonerHunted) {
         val alive = HashSet<String>()
         for (c in ctx.myCreeps) alive.add(c.id)
