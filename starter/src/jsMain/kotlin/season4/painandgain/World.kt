@@ -1149,7 +1149,9 @@ internal object Garrisons {
             // все бойцы
             val rushOver = now >= 2 * maxOf(abs(ctx.enemyHome.x - contested.pos.x), abs(ctx.enemyHome.y - contested.pos.y))
             val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
-            val n = minOf(3, fighters.size / GARRISON_SIZE)
+            // ...и при воротах покоя отряд может быть тройкой (v608, живой блок v607: к старту плана у нас 10–11 бойцов, два
+            // отряда держали D5 и H до конца без потерь, а третьего не было — 9 очков против 16 вместо 13 против 12)
+            val n = minOf(3, fighters.size / (if (USE_PASSIVE_GATE) GARRISON_SIZE - 1 else GARRISON_SIZE))
             if (n == 0) return
             val (mx, my) = Formation.median(fighters)
             val second = ctx.flags.filter { it.pos.key != contested.pos.key }
