@@ -194,6 +194,13 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
             Forecast.simPending.keys.filter { it < getTicks() }.forEach { Forecast.simPending.remove(it) }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("sim t=${getTicks()}: intent=$bestIntent score=${bestScore.toInt()} obey=$orderAuditOk/$orderAuditN closer=$orderAuditCloser same=$orderAuditSame far=$orderFar clash=$orderClash fled=$orderFled branch=$orderBranch lost=stay$lostStay/stuck$lostStuck/fat$lostFatigue/else$lostElsewhere err=${if (Forecast.simErrN > 0) (Forecast.simErrSum / Forecast.simErrN).toInt() else 0} wrongSign=${Forecast.simErrWrongSign}/${Forecast.simErrN}")
         }
+    } else if (Signals.baitPhase && !meas.fight.contact && meas.forces.armedEnemies.isNotEmpty()) {
+        // ПРИМАНКА ПРОТИВ ОСЛАБЛЕННОГО (v587, см. USE_BAIT_VS_DEBUFFED): половина армии с лекарями стоит, вторая — в
+        // MASS_RANGE + FIST_RADIUS клетках дальше от его кулака; при контакте бой ведёт обычный режим боя всей армией
+        Orders.commandOf.clear()
+        commandBait(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies, Orders.commandOf)
+        Orders.source = "bait"
+        baitLedTicks.n++
     // ⚠️ Здесь стояла ветка «в бою, пока по нам не стреляют, командир тоже отпускает за флагами». Она
     // НЕДОСТИЖИМА ДВАЖДЫ: стоит в `else` от `if (commanderNow)`, то есть `commanderNow` здесь ложно по
     // построению, — и вдобавок сам режим боя требует `underTheirFire`, поэтому `commanderNow && !underTheirFire`
@@ -275,6 +282,43 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // КОЛЛИЗИИ ПРИКАЗОВ (v172, оператор: «не должно быть такого, что по приказам командира в одну клетку
     // собрались двое»). Внутри одной раздачи это исключено множеством taken, но приказы приходят из РАЗНЫХ
     // мест — бой, гонка, марш ядра, — и вот там пересечение возможно; здесь оно считается
+}
+
+/** ПРИМАНКА И РЕЗЕРВ (v587, см. USE_BAIT_VS_DEBUFFED): армия делится пополам по id — лекари поровну, вооружённые через одного,
+ *  так что в каждой половине есть лечение. Приманка стоит у своей медианы; резерв идёт в точку в MASS_RANGE + FIST_RADIUS
+ *  клетках от медианы приманки прочь от центра его вооружённых (ближайшая проходимая клетка) и стоит там. Приказы — шаги пути. */
+internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out: MutableMap<String, Position>) {
+    val core = mobileOf(army).filter { bornCombatant(it) }
+    if (core.size < 2 * BAIT_MIN || hisArmed.isEmpty()) return
+    val healers = core.filter { healerOnly(it) }.sortedBy { it.id }
+    val armed = core.filter { !healerOnly(it) }.sortedBy { it.id }
+    val bait = ArrayList<Creep>()
+    val reserve = ArrayList<Creep>()
+    healers.forEachIndexed { i, c -> if (i % 2 == 0) bait.add(c) else reserve.add(c) }
+    armed.forEachIndexed { i, c -> if (i % 2 == 0) bait.add(c) else reserve.add(c) }
+    val (bx, by) = Formation.median(bait)
+    val fx = hisArmed.sumOf { it.x } / hisArmed.size
+    val fy = hisArmed.sumOf { it.y } / hisArmed.size
+    val gap = MASS_RANGE + FIST_RADIUS
+    val dx = (bx - fx).let { if (it > 0) 1 else if (it < 0) -1 else 0 }
+    val dy = (by - fy).let { if (it > 0) 1 else if (it < 0) -1 else 0 }
+    val tx = (bx + dx * gap).coerceIn(2, 97)
+    val ty = (by + dy * gap).coerceIn(2, 97)
+    // ближайшая проходимая клетка к точке резерва (кольцами)
+    var rx = tx; var ry = ty
+    run search@{
+        for (r in 0..gap) for (ox in -r..r) for (oy in -r..r) {
+            if (maxOf(abs(ox), abs(oy)) != r) continue
+            val x = tx + ox; val y = ty + oy
+            if (x < 1 || y < 1 || x > 98 || y > 98 || DistanceMap.isWall(x, y)) continue
+            rx = x; ry = y; return@search
+        }
+    }
+    val baitAt = InfluenceMap.cell(bx, by)
+    val reserveAt = InfluenceMap.cell(rx, ry)
+    val matrix = crowdMatrixOf(ctx, -1)
+    for (c in bait) if (getRange(c, baitAt) > FIST_RADIUS / 2) pathStep(c, baitAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
+    for (c in reserve) if (getRange(c, reserveAt) > FIST_RADIUS / 2) pathStep(c, reserveAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
 }
 
 /** ПУБЛИКАЦИЯ ВЫБРАННОЙ РАЗДАЧИ (v449, пункт В оператора): поле нужды выбранной раздачи уходит в мир (`InfluenceMap.published`),

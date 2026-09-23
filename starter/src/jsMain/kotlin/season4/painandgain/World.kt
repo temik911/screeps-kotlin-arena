@@ -965,6 +965,10 @@ internal object ScoutEvade {
     }
 }
 
+/** Тиков фазы приманки (v587, `bait=` — фаза / из них командир вёл приманку). */
+internal val baitPhaseTicks = Gauges.counter("bait", 1)
+internal val baitLedTicks = Gauges.counter("bait")
+
 /** Тик, на котором сработал признак «он добил нашего одиночку» (v579, `lonerhunt=`; 0 — не сработал) / отозвано после (v580). */
 internal val lonerHuntTick = Gauges.counter("lonerhunt")
 internal val lonerRecalled = Gauges.counter("lonerhunt", 1)
@@ -1470,6 +1474,12 @@ internal fun readSignals(ctx: Ctx) {
     }
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
+    // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
+    // мы держим не больше одного; у обоих хватает бойцов на кулак и на приманку с резервом
+    Signals.baitPhase = USE_BAIT_VS_DEBUFFED &&
+        ctx.flags.count { it.theirs } >= ctx.flags.size - 1 && ctx.flags.count { it.ours } <= 1 &&
+        ctx.army.count { bornCombatant(it) && canMove(it) } >= 2 * BAIT_MIN && ctx.combatEnemies.count { hasWeapon(it) } >= 2 * BAIT_MIN
+    if (Signals.baitPhase) baitPhaseTicks.n++
     // ...и УЖЕ ВЫПУЩЕННЫЕ ВОЗВРАЩАЮТСЯ (v580): запрет выпуска не трогал тех, кто вышел до срабатывания, — в первой руке v579
     // после t=446 погибли ещё четверо одиночек: хранитель у Ha, лекарь-бегун, двое у D5. Отзыв — из обоих наборов, каждый тик
     if (Signals.lonerHunted) lonerRecalled.n += Squads.recallAllBut(emptySet())
@@ -1742,6 +1752,7 @@ internal object Signals {
     internal var engagingGarrison = false                  // v543: мы сами ведём размен с гарнизоном (см. fightNow)
     internal var enemyFistNow = false                      // v553: большинство его стволов в одной группе (см. USE_NO_DETACH_VS_HUNTING_FIST)
     internal var lonerHunted = false                       // v579: он уже добил нашего одиночку — до конца матча (см. USE_NO_LONERS_VS_HUNTER)
+    internal var baitPhase = false                         // v587: он держит все флаги, кроме одного, мы — не больше одного (см. USE_BAIT_VS_DEBUFFED)
     internal var ourHitsNow = 0                            // v534: хиты всей нашей армии сейчас
     internal var ourBodiesNow = 0                          // v536: тел сейчас
     internal var ourBodiesStart = 0                        // v536: тел было на старте

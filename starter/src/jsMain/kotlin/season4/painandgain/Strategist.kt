@@ -452,6 +452,12 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         if (ctx.combatEnemies.isEmpty()) return@Gate Verdict.Allow
         Verdict.Next
     },
+    Gate("bait") {
+        // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): пока он держит все флаги, кроме одного, наш захват снимает с него
+        // дебафф и вешает его на нас — ровно то, что переворачивает размен
+        if (Signals.baitPhase) return@Gate Verdict.Veto("bait")
+        Verdict.Next
+    },
     Gate("seventh") {
         // седьмой флаг — никогда при живой его армии (v127, USE_NO_SEVENTH_FLAG): все дебаффы наши, ни одного его
         if (ctx.flags.count { it.ours } + 1 >= ctx.flags.size) return@Gate Verdict.Veto("seventh")
