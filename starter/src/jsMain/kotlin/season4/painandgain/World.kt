@@ -1400,7 +1400,7 @@ internal object Garrisons {
             // ШАР В БОЙ (v620, см. USE_MELEE_BALL): его группа у шара, у него BALL_FLAGS флагов и больше — шар отдан обычным
             // веткам боя (они выигрывали драки v556–v586), пока его группа рядом
             if (USE_MELEE_BALL && si == 0) {
-                if (near && ctx.flags.count { it.theirs } >= BALL_FLAGS) {
+                if (USE_BALL_RELEASE && near && ctx.flags.count { it.theirs } >= BALL_FLAGS) {
                     for (c in sq) Memory.garrisonReleased.add(c.id)
                     raidWhy.bump("fight")
                     continue
