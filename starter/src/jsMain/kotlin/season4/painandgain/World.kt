@@ -1182,6 +1182,8 @@ internal object Garrisons {
             }
             s[3] = targets[0]; s[4] = if (n >= 2) targets[1] else -1; s[5] = if (n >= 3) targets[2] else -1
             s[0] = 1; s[1] = now; s[2] = -1
+            // все отряды — налётчики (v616): посадок нет, налёт с первого тика плана
+            if (USE_ALL_RAIDERS) { s[0] = 6; s[3] = RAID_MARK; s[4] = RAID_MARK; s[5] = RAID_MARK }
             campWhy.bump("start")
             return
         }
@@ -1280,8 +1282,99 @@ internal object Garrisons {
     /** НАЛЁТЧИК (v613, см. USE_RAIDER): после посадки обоих гарнизонов третий отряд берёт не наш флаг, у которого нет его
      *  вооружённой группы в RAID_DANGER клетках, — ближний по полю; его группа у налётчика — уходит к ближнему живому гарнизону
      *  и стоит при нём, пока её нет в RAID_DANGER + FIST_RADIUS; целей нет — стоит на последнем взятом. */
+    /** ВСЕ ОТРЯДЫ — НАЛЁТЧИКИ (v616, см. USE_ALL_RAIDERS): у каждого отряда своя цель — ближний не наш флаг, который не
+     *  выбрал отряд раньше него, без его группы в RAID_DANGER у флага и на пути; его группа у отряда — отряд уходит к тому из
+     *  своих, к которому мы ближе, чем он (своих нет — к флагу, до которого он дальше всего сверх нашего пути), и стоит при
+     *  нём, пока её нет в RAID_DANGER + FIST_RADIUS; целей нет — стоит на последней. */
+    private fun raidAll(ctx: Ctx) {
+        val s = Memory.campBreak
+        if (!USE_ALL_RAIDERS || s[0] != 6) return
+        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        fun group(x: Int, y: Int, r: Int) = armed.count { maxOf(abs(it.x - x), abs(it.y - y)) <= r } >= GARRISON_SIZE - 1
+        fun hisDist(x: Int, y: Int) = armed.minOfOrNull { maxOf(abs(it.x - x), abs(it.y - y)) } ?: 99
+        val squads = (0..2).map { si -> ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si } }
+        val medians = squads.map { if (it.isEmpty()) null else Formation.median(it) }
+        val claimed = HashSet<Int>()
+        for ((si, sq) in squads.withIndex()) {
+            if (sq.isEmpty()) continue
+            val (mx, my) = medians[si]!!
+            fun travel(fk: Int): Int {
+                val flow = flowTo(ctx, InfluenceMap.cell(fk / 100, fk % 100))
+                var worst = 0
+                for (c in sq) { val d = flow[c.key]; if (d < 0) return Int.MAX_VALUE; if (d > worst) worst = d }
+                return worst
+            }
+            fun routeSafe(fk: Int): Boolean {
+                val flow = flowTo(ctx, InfluenceMap.cell(fk / 100, fk % 100))
+                var x = mx; var y = my
+                repeat(N_ROUTE) {
+                    if (group(x, y, RAID_DANGER)) return false
+                    val here = flow[key(x, y)]
+                    if (here <= 0) return true
+                    var bx = -1; var by = -1; var bv = here
+                    for (dx in -1..1) for (dy in -1..1) {
+                        val nx = x + dx; val ny = y + dy
+                        if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                        val v = flow[key(nx, ny)]
+                        if (v in 0 until bv) { bv = v; bx = nx; by = ny }
+                    }
+                    if (bx < 0) return true
+                    x = bx; y = by
+                }
+                return true
+            }
+            val current = Memory.garrisonFlag[sq[0].id] ?: -1
+            val sheltered = Memory.raidRefuge[si]
+            val target: Int
+            val why: String
+            val near = group(mx, my, if (sheltered) RAID_DANGER + FIST_RADIUS else RAID_DANGER)
+            // ВМЕСТЕ ПРИ НЁМ (стенд v616: его группа тенью в 7 клетках от нашей массы держала опасность у всех трёх отрядов, и
+            // они стояли друг при друге до конца): восемь и больше наших рядом он не атакует — такой отряд идёт при нём
+            // к общей с соседом цели, без проверки пути
+            val strong = ctx.myCreeps.count { bornCombatant(it) && maxOf(abs(it.x - mx), abs(it.y - my)) <= MASS_RANGE } >= 2 * GARRISON_SIZE
+            if (near && strong) {
+                val mate = (0 until si).firstOrNull { j -> medians[j] != null && Memory.raidTogether[j] &&
+                    maxOf(abs(medians[j]!!.first - mx), abs(medians[j]!!.second - my)) <= MASS_RANGE }
+                target = if (mate != null) Memory.garrisonFlag[squads[mate][0].id] ?: current
+                    else ctx.flags.filter { !it.ours && it.pos.key !in claimed }
+                        .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
+                        .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first?.pos?.key ?: current
+                why = if (mate != null) "with" else "mass"
+                Memory.raidRefuge[si] = false
+                Memory.raidTogether[si] = true
+                if (target >= 0) for (c in sq) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
+                if (mate == null && target >= 0) claimed.add(target)
+                raidWhy.bump(why)
+                continue
+            }
+            Memory.raidTogether[si] = false
+            if (near) {
+                val mates = medians.withIndex().filter { (i, m) -> i != si && m != null }
+                    .map { (_, m) -> m!! }
+                    .filter { (x, y) -> hisDist(x, y) > maxOf(abs(x - mx), abs(y - my)) }
+                    .minByOrNull { (x, y) -> maxOf(abs(x - mx), abs(y - my)) }
+                target = if (mates != null) key(mates.first, mates.second)
+                    else ctx.flags.maxByOrNull { hisDist(it.pos.x, it.pos.y) - maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) }?.pos?.key ?: current
+                why = if (mates != null) "refuge" else "away"
+                Memory.raidRefuge[si] = true
+            } else {
+                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) }
+                    .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE && routeSafe(it.first.pos.key) }
+                    .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
+                if (next != null) { target = next.pos.key; why = "go" } else { target = current; why = "hold" }
+                Memory.raidRefuge[si] = false
+            }
+            if (target >= 0) {
+                claimed.add(target)
+                for (c in sq) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
+            }
+            raidWhy.bump(why)
+        }
+    }
+
     private fun raid(ctx: Ctx) {
         val s = Memory.campBreak
+        if (USE_ALL_RAIDERS) { raidAll(ctx); return }
         if (!USE_RAIDER || s[0] != 6 || s[5] != RAID_MARK) return
         val raiders = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == 2 }
         if (raiders.isEmpty()) return

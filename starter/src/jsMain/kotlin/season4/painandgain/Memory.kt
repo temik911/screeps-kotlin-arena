@@ -120,6 +120,10 @@ internal object Memory {
     val garrisonSquad = HashMap<String, Int>()
     val garrisonHome = HashMap<String, Int>()
     val campBreak = IntArray(8)
+    /** Отряд-налётчик ушёл к своим от его группы (v616, см. USE_ALL_RAIDERS): гистерезис опасности по отряду. */
+    val raidRefuge = BooleanArray(3)
+    /** Отряд-налётчик идёт при нём вместе с соседом (v616): на этом тике — к общей цели. */
+    val raidTogether = BooleanArray(3)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()
