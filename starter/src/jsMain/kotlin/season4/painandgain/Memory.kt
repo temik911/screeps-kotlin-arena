@@ -130,6 +130,8 @@ internal object Memory {
     val pushSince = intArrayOf(-1)
     /** Тик, когда соперник показал почерк фермера (v626, см. USE_STRIKE_FARMER); 0 — не показал. */
     val farmerSeen = intArrayOf(0)
+    /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
+    val strikeFlag = intArrayOf(-1)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()

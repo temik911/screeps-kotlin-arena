@@ -1378,15 +1378,23 @@ internal object Garrisons {
             val all = squads.flatten()
             if (all.isNotEmpty()) {
                 val (ax, ay) = Formation.median(all)
-                val target = ctx.flags.filter { it.theirs || !it.ours }
+                // ЦЕЛЬ ДЕРЖИТСЯ, ПОКА ФЛАГ НЕ НАШ (v627, живой блок v626: цель перескакивала, пока его кучки ходили, и армия
+                // маршировала весь матч — `gar=march` 10–14 тысяч, на флаг ступала 6–48 раз)
+                val held = if (USE_STRIKE_STICKY) ctx.flags.firstOrNull { it.pos.key == Memory.strikeFlag[0] && !it.ours } else null
+                val target = held ?: ctx.flags.filter { it.theirs || !it.ours }
                     .minWithOrNull(compareBy({ f -> ctx.enemyCreeps.count { getRange(it, f.pos) <= FIST_RADIUS + 2 } },
                         { f -> maxOf(abs(f.pos.x - ax), abs(f.pos.y - ay)) }))
                 if (target != null) {
+                    Memory.strikeFlag[0] = target.pos.key
+                    // ...и БЬЁМ ЗАЩИТНИКА (v627): его крип на клетке флага — армия идёт на него (стенд: защитник «в двух клетках»
+                    // уводил армию в погоню за разбегающимися, scatter m33 проигран 20 719 : 24 276)
+                    val guard = if (USE_STRIKE_STICKY) ctx.enemyCreeps.firstOrNull { it.key == target.pos.key } else null
+                    val cell = target.pos.key
                     for (c in all) {
                         Memory.garrisonReleased.remove(c.id)
-                        Memory.garrisonFlag[c.id] = target.pos.key; Memory.garrisonHome[c.id] = target.pos.key
+                        Memory.garrisonFlag[c.id] = cell; Memory.garrisonHome[c.id] = cell
                     }
-                    raidWhy.bump("strike")
+                    raidWhy.bump(if (guard != null) "guard" else "strike")
                     return
                 }
             }
