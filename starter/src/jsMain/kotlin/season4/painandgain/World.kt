@@ -789,9 +789,9 @@ internal fun refugeMove(s: Creep, ctx: Ctx): RefugeMove? {
  *  её обстрелять: путь его боевого тела (равнина — клетка за тик, болото — за SWAMP_COST) плюс дальность выстрела. Область
  *  скаута — клетки, куда он (одни MOVE: клетка за тик везде) приходит раньше этого срока: поиск в ширину от скаута ходит
  *  только по ним. В области скаут берёт ближайший не наш свободный флаг, если приходит на него с запасом SCOUT_FLAG_MARGIN;
- *  свой держит, пока запас на нём не меньше; иначе идёт к своим — в клетку области, ближайшую к центру нашей армии (v580:
- *  прежняя цель, клетка, которую он обстреляет позже всех, оказывалась углом с нашей базой). Болото, где его тела вязнут,
- *  отодвигает срок само, поэтому область скаута через болото шире. */
+ *  свой держит, пока запас на нём не меньше; иначе идёт в клетку области, которую он обстреляет позже всех (при равной —
+ *  ближнюю): одинокий скаут вдали — приманка, за которой ходит его армия (v580 «к своим» отвергнута, см. USE_SCOUT_MARGIN_EVADE).
+ *  Болото, где его тела вязнут, отодвигает срок само, поэтому область скаута через болото шире. */
 internal object ScoutEvade {
     private const val INF = Int.MAX_VALUE / 4
     private const val N = 10000
@@ -910,18 +910,18 @@ internal object ScoutEvade {
         val why: String
         if (flag != null) { target = flag.pos.key; why = "flag" }
         else {
-            // К СВОИМ (v580): флага, до которого успеваем с запасом, нет — клетка области, ближайшая к центру нашей армии.
-            // Прежняя цель — клетка, которую он обстреляет позже всех, — оказывалась углом с нашей базой: в v576–v579 скауты
-            // гибли там 24 раза из 26; а у группы из четырёх и больше он держится в пяти-семи клетках (разбор 13 реплеев)
-            val home = ctx.ourCentroid
+            // ПРИМАНКА — ВДАЛИ ОТ НЕГО (v581): флага, до которого успеваем с запасом, нет — клетка области, которую он обстреляет
+            // позже всех. Цель «к своим» (v580) отвергнута двумя руками: скаут у армии перестаёт быть одиночкой, приманка
+            // пропадает, и первый его флаг — на t=60 в обеих (в v576 — 126–278, с отрывом на t=400 во всех десяти руках).
+            // Цена — скауты гибнут в углу с нашей базой (t=107–763), и она меньше, чем флаги, которые он берёт без приманки
             target = here
-            var bestD = maxOf(abs(s.x - home.x), abs(s.y - home.y))
+            var bestF = fire[here]
             var bestT = 0
             for (c in 0 until N) {
                 val t = walkDist[c]
                 if (t >= INF || blocked[c]) continue
-                val d = maxOf(abs(c / 100 - home.x), abs(c % 100 - home.y))
-                if (d < bestD || (d == bestD && t < bestT)) { target = c; bestD = d; bestT = t }
+                val fc = fire[c]
+                if (fc > bestF || (fc == bestF && t < bestT)) { target = c; bestF = fc; bestT = t }
             }
             if (target == here && fire[here] > SCOUT_FLAG_MARGIN) { scoutEvadeWhy.bump("stay"); return RefugeMove(null, "stay") }
             if (target == here) {
@@ -940,7 +940,7 @@ internal object ScoutEvade {
                 scoutEvadeWhy.bump("cornered")
                 return RefugeMove(InfluenceMap.cell(best / 100, best % 100), "cornered")
             }
-            why = "home"
+            why = "hide"
         }
         // первый шаг пути в области: вверх по родителям от цели
         var c = target
@@ -955,7 +955,7 @@ internal object ScoutEvade {
 internal val lonerHuntTick = Gauges.counter("lonerhunt")
 internal val lonerRecalled = Gauges.counter("lonerhunt", 1)
 
-/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / home / cornered / stay). */
+/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / hide / cornered / stay). */
 internal val scoutEvadeWhy = Gauges.labelled("scev")
 
 /** Приборы убежища (v575): `refuge=` — ветки хода скаута (go / run / stay / dodge / late), `rfcells=` — клеток убежища. */

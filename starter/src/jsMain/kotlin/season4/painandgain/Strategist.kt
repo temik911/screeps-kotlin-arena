@@ -1233,6 +1233,12 @@ internal fun fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
 }
 
 internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
+    // ПРОТИВ ОХОТНИКА ЗА ОДИНОЧКАМИ ХРАНИТЕЛЕЙ ИЗ АРМИИ НЕТ (v581, см. USE_NO_KEEPERS_VS_HUNTER): флаг остаётся нашим после
+    // схода с клетки, а тело на клетке он берёт, как только группа отойдёт
+    if (USE_NO_KEEPERS_VS_HUNTER && Signals.lonerHunted) {
+        if (Squads.keeperIds.isNotEmpty()) { keepersDropped.n += Squads.keeperIds.size; Squads.keeperIds.clear() }
+        return
+    }
     val armedEnemies = ctx.threats
     // упреждение ухода — только против СОМКНУТОГО и только ОДИНОКОМУ (v357, см. KEEP_LEAD): обе проверки нужны, и
     // каждая отвергла свою отдельную редакцию живым замером
@@ -1418,6 +1424,9 @@ internal fun loneHealerGoal(ctx: Ctx, army: List<Creep>, armedEnemies: List<Cree
     healHuntTicks.n++
     return InfluenceMap.cell(prey.x, prey.y)
 }
+
+/** Хранителей, снятых правилом «против охотника за одиночками хранителей нет» (v581, `nokeep=`). */
+internal val keepersDropped = Gauges.counter("nokeep")
 
 /** Тиков, когда целью марша были его одинокие лекари (v580, `healhunt=`). */
 internal val healHuntTicks = Gauges.counter("healhunt")
