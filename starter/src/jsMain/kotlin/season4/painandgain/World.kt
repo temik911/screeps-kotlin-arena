@@ -1153,6 +1153,15 @@ internal object Garrisons {
         val squads = List(n) { ArrayList<Creep>() }
         // РАСКЛАДКА ПО СТРЕЛКАМ (v618, см. USE_RANGED_SQUADS): налётчикам (отряды 1..n-1) — по два стрелка и по мили, пока
         // хватает; шару (отряд 0) — все лекари, остальные мили и стрелки
+        // ...или РАВНЫМИ ОТРЯДАМИ (v619, см. USE_EVEN_RANGED_SQUADS): стрелки, затем мили, затем лекари — по кругу, каждый
+        // следующий в самый малый отряд; стрелков по два на отряд, пока их хватает, — число отрядов считает вызов
+        if (USE_EVEN_RANGED_SQUADS) {
+            val order = fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id } +
+                fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
+                fighters.filter { healerOnly(it) }.sortedBy { it.id }
+            for (c in order) squads.minByOrNull { it.size }!!.add(c)
+            return squads
+        }
         if (USE_RANGED_SQUADS && n >= 2) {
             val ranged = fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }.toMutableList()
             val melee = fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id }.toMutableList()
@@ -1193,7 +1202,8 @@ internal object Garrisons {
             val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
             // ...и при воротах покоя отряд может быть тройкой (v608, живой блок v607: к старту плана у нас 10–11 бойцов, два
             // отряда держали D5 и H до конца без потерь, а третьего не было — 9 очков против 16 вместо 13 против 12)
-            val n = minOf(3, fighters.size / (if (USE_PASSIVE_TRIPLES) GARRISON_SIZE - 1 else GARRISON_SIZE))
+            val n = if (USE_EVEN_RANGED_SQUADS) minOf(3, fighters.size / GARRISON_SIZE, fighters.count { !healerOnly(it) && hasRanged(it) } / 2)
+                else minOf(3, fighters.size / (if (USE_PASSIVE_TRIPLES) GARRISON_SIZE - 1 else GARRISON_SIZE))
             if (n == 0) return
             val (mx, my) = Formation.median(fighters)
             val second = ctx.flags.filter { it.pos.key != contested.pos.key }
@@ -1374,7 +1384,9 @@ internal object Garrisons {
             // они стояли друг при друге до конца): восемь и больше наших рядом он не атакует — такой отряд идёт при нём
             // к общей с соседом цели, без проверки пути
             val strong = ctx.myCreeps.count { bornCombatant(it) && maxOf(abs(it.x - mx), abs(it.y - my)) <= MASS_RANGE } >= 2 * GARRISON_SIZE
-            if (near && strong) {
+            // ...кроме отряда с двумя стрелками (v619): его он и один на один не трогает, слияние только вдвое сокращает налёт
+            val armedRanged = USE_RANGED_SQUADS && sq.count { hasRanged(it) } >= 2
+            if (near && strong && !(USE_EVEN_RANGED_SQUADS && armedRanged)) {
                 val mate = (0 until si).firstOrNull { j -> medians[j] != null && Memory.raidTogether[j] &&
                     maxOf(abs(medians[j]!!.first - mx), abs(medians[j]!!.second - my)) <= MASS_RANGE }
                 target = if (mate != null) Memory.garrisonFlag[squads[mate][0].id] ?: current
