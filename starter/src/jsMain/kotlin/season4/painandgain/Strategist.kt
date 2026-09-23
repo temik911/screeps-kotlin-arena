@@ -915,9 +915,15 @@ internal fun captureCost(ctx: Ctx, f: FlagInfo): Double {
     return (powerAfter(ctx, f).first / now).coerceIn(0.0, 1.0)
 }
 
+/** Флаг оспаривается (v583, см. USE_CONTESTED_FLAG_LAST): пока он не бьёт наши группы (`groupSafe`), а его вооружённые стоят в
+ *  ENGAGE_RANGE от флага, — взятый флаг он перебьёт, едва наш крип сойдёт с клетки. */
+internal fun contestedFlag(ctx: Ctx, f: FlagInfo): Boolean = USE_CONTESTED_FLAG_LAST && Signals.groupSafe &&
+    ctx.combatEnemies.any { hasWeapon(it) && getRange(it, f.pos) <= ENGAGE_RANGE }
+
 internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Double, farmerQuietNow: Boolean, group: List<Creep>, pushRatio: Double, escapeNeeded: Boolean = false, onlyFlagId: String? = null): Objective? {
     if (group.isEmpty()) return null
     var best: Objective? = null
+    var bestContested: Objective? = null
     for (f in ctx.flags) {
         objDropN.n++
         if (f.ours) { objDrop.bump("ours"); continue }
@@ -941,8 +947,11 @@ internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Dou
         // УДЕРЖАННЫХ флагов, а удержать можно те, до которых ему дальше, чем нам. Свои R3, A3, H4 и центральный D5 — это
         // 15 очков в тик против его 10; контрфакт разбора (гарнизоны на своих R3, A3 и обоих H4) давал 30,4 тыс. : 18,1 тыс.
         // и 20 побед из 21. Флаг его половины берётся, только когда своя уже наша
+        // ...И ФЛАГ, У КОТОРОГО СТОЯТ ЕГО ВООРУЖЁННЫЕ, СВОЮ ПОЛОВИНУ НЕ ДЕРЖИТ (v583, см. USE_CONTESTED_FLAG_LAST): D5 посередине
+        // считается нашей половиной, его армия сидит на нём и перебивает флаг каждые 12 тиков — и все флаги его половины
+        // оставались «далёкими» до конца матча
         if (Signals.groupSafe && getRange(f.pos, ctx.home) > getRange(f.pos, ctx.enemyHome) &&
-            ctx.flags.any { !it.ours && getRange(it.pos, ctx.home) <= getRange(it.pos, ctx.enemyHome) }) {
+            ctx.flags.any { !it.ours && getRange(it.pos, ctx.home) <= getRange(it.pos, ctx.enemyHome) && !contestedFlag(ctx, it) }) {
             objDrop.bump("far"); continue
         }
         // ЦЕЛЬ АРМИИ НЕ ДУБЛИРУЕТ ФЛАГ БЕГУНА (v216). Обе соседние раздачи это уже проверяют — `commandRace`
@@ -988,10 +997,16 @@ internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Dou
         objDrop.bump("taken")
         // гистерезис: текущая цель ценнее на четверть, чтобы не прыгать между равными; дорогой по силе — позже
         val value = f.swing * captureCost(ctx, f) / (travel + 10) * (if (current) 1.25 else 1.0)
-        if (best == null || value > best.value) best = Objective(f, pack, value, travel)
+        // ОСПАРИВАЕМЫЙ — ВО ВТОРОЙ ЯРУС (v583): берётся, только если неоспариваемого нет
+        if (contestedFlag(ctx, f)) { if (bestContested == null || value > bestContested.value) bestContested = Objective(f, pack, value, travel) }
+        else if (best == null || value > best.value) best = Objective(f, pack, value, travel)
     }
-    return best
+    if (best == null && bestContested != null) objContested.n++
+    return best ?: bestContested
 }
+
+/** Тиков выбора, когда целью стал оспариваемый флаг за неимением другого (v583, `objcont=`). */
+internal val objContested = Gauges.counter("objcont")
 
 internal fun retreatPoint(ctx: Ctx): Position {
     val enemy = ctx.enemyCentroid ?: return ctx.home
