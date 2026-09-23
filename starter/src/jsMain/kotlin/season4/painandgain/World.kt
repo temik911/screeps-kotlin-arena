@@ -807,6 +807,11 @@ internal object ScoutEvade {
     private val nodeCell = IntArray(N * 9)
     private val nodeNext = IntArray(N * 9)
     private var fireTick = -1
+    // область шага (v596): метка поколения вместо заливки массива на каждый поиск
+    private val mark = IntArray(N)
+    private var markGen = 0
+    private val stepDist = IntArray(N)
+    private val stepQueue = IntArray(N)
 
     /** Время его стволов до клетки: алгоритм Дейкстры с вёдрами по цене входа (1 на равнине, SWAMP_COST на болоте). */
     private fun hunterTimes(hunters: List<Creep>) {
@@ -937,12 +942,90 @@ internal object ScoutEvade {
         return RefugeMove(InfluenceMap.cell(c / 100, c % 100), why)
     }
 
+    /** Размер области скаута, пришедшего в клетку start на тике t0 (v596): поиск в ширину по клеткам, куда он приходит раньше
+     *  срока обстрела с запасом margin; счёт обрывается на cap — места хватает. Заливки нет: клетка помечена поколением. */
+    private fun regionSize(start: Int, t0: Int, margin: Int, cap: Int): Int {
+        markGen++
+        var head = 0
+        var tail = 0
+        mark[start] = markGen
+        stepDist[start] = t0
+        stepQueue[tail++] = start
+        while (head < tail && tail < cap) {
+            val c = stepQueue[head++]
+            val cx = c / 100; val cy = c % 100
+            val t = stepDist[c] + 1
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = cx + dx; val ny = cy + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val n = key(nx, ny)
+                if (wall[n] || mark[n] == markGen || fire[n] <= t + margin) continue
+                mark[n] = markGen
+                stepDist[n] = t
+                stepQueue[tail++] = n
+            }
+        }
+        return minOf(tail, cap)
+    }
+
+    /** ШАГ К ПРОСТОРУ (v596, см. USE_SCOUT_OPEN_EVADE): из стояния и восьми шагов — тот, после которого область скаута
+     *  больше (до SCOUT_OPEN_CELLS: больше — места хватает). При равной — стоять, если на клетке безопасно, иначе клетка,
+     *  которую он обстреляет позже. Шаг в клетку, куда его выстрел приходит к следующему тику с запасом меньше
+     *  SCOUT_STEP_MARGIN, области не имеет. */
+    private fun openStep(s: Creep, ctx: Ctx, here: Int): RefugeMove {
+        val occupied = BooleanArray(N)
+        for (o in ctx.myCreeps) if (o.id != s.id) occupied[o.key] = true
+        for (o in ctx.enemyCreeps) occupied[o.key] = true
+        var best = here
+        var bestSize = -1
+        var bestStay = 0
+        var bestFire = -1
+        for ((dx, dy) in dirsNow()) {
+            val x = s.x + dx; val y = s.y + dy
+            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+            val k = key(x, y)
+            if (k != here && (wall[k] || occupied[k])) continue
+            val size = if (fire[k] > 1 + SCOUT_STEP_MARGIN) regionSize(k, 1, SCOUT_STEP_MARGIN, SCOUT_OPEN_CELLS) else 0
+            val stay = if (k == here && size > 0) 1 else 0
+            if (size > bestSize || (size == bestSize && (stay > bestStay || (stay == bestStay && fire[k] > bestFire)))) {
+                best = k; bestSize = size; bestStay = stay; bestFire = fire[k]
+            }
+        }
+        val why = when {
+            bestSize <= 0 -> "cornered"
+            best == here -> "stay"
+            bestSize >= SCOUT_OPEN_CELLS -> "open"
+            else -> "room"
+        }
+        scoutEvadeWhy.bump(why)
+        return RefugeMove(if (best == here) null else InfluenceMap.cell(best / 100, best % 100), why)
+    }
+
     fun move(s: Creep, ctx: Ctx): RefugeMove? {
         val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
         if (hunters.isEmpty()) return null
         val tick = getTicks()
         if (fireTick != tick) { hunterTimes(hunters); fireTimes(RANGED_RANGE); fireTick = tick }
         val here = key(s.x, s.y)
+        if (USE_SCOUT_OPEN_EVADE) {
+            // флаг — только если успеваем на него с запасом и в момент прихода там места хватает (область с флага не меньше
+            // SCOUT_OPEN_CELLS): флаг в кармане, куда он подходит, — ловушка
+            region(here)
+            val flag = ctx.flags.filter { f -> !f.ours && f.occupant == null && walkDist[f.pos.key] < INF &&
+                    fire[f.pos.key] - walkDist[f.pos.key] >= SCOUT_FLAG_MARGIN &&
+                    regionSize(f.pos.key, walkDist[f.pos.key], SCOUT_STEP_MARGIN, SCOUT_OPEN_CELLS) >= SCOUT_OPEN_CELLS }
+                .minByOrNull { walkDist[it.pos.key] }
+            if (flag != null) {
+                var c = flag.pos.key
+                while (parent[c] != here && parent[c] >= 0) c = parent[c]
+                if (parent[c] == here) {
+                    scoutEvadeWhy.bump("flag")
+                    return RefugeMove(InfluenceMap.cell(c / 100, c % 100), "flag")
+                }
+            }
+            return openStep(s, ctx, here)
+        }
         // на своём флаге: держим, пока до обстрела клетки не меньше запаса
         if (ctx.flags.any { it.ours && it.pos.x == s.x && it.pos.y == s.y } && fire[here] >= SCOUT_FLAG_MARGIN) {
             scoutEvadeWhy.bump("hold"); return RefugeMove(null, "hold")
@@ -1025,7 +1108,7 @@ internal val lonerRecalled = Gauges.counter("lonerhunt", 1)
 /** Прибор уклонения отряжённого (v594): `rev=` — ветки (home). */
 internal val runnerEvadeWhy = Gauges.labelled("rev")
 
-/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / home / hide / cornered / stay). */
+/** Прибор уклонения скаута (v576): `scev=` — ветки хода (flag / hold / home / hide / cornered / stay; v596: open / room). */
 internal val scoutEvadeWhy = Gauges.labelled("scev")
 
 /** Приборы убежища (v575): `refuge=` — ветки хода скаута (go / run / stay / dodge / late), `rfcells=` — клеток убежища. */
