@@ -813,6 +813,11 @@ internal object ScoutEvade {
     private val stepDist = IntArray(N)
     private val stepQueue = IntArray(N)
 
+    /** Скаут не берёт ЕГО флаг, если у него после этого останется меньше PASSIVE_FLAGS, — с начала плана (v607, см.
+     *  USE_PASSIVE_GATE): его покой держится на его числе флагов, а наши гарнизоны живы, пока он спокоен. */
+    private fun mayTake(ctx: Ctx, f: FlagInfo): Boolean =
+        !(USE_PASSIVE_GATE && Memory.campBreak[0] > 0 && f.theirs && ctx.flags.count { it.theirs } <= PASSIVE_FLAGS)
+
     /** Время его стволов до клетки: алгоритм Дейкстры с вёдрами по цене входа (1 на равнине, SWAMP_COST на болоте). */
     private fun hunterTimes(hunters: List<Creep>) {
         val sc = DistanceMap.SWAMP_COST
@@ -1012,7 +1017,7 @@ internal object ScoutEvade {
             // флаг — только если успеваем на него с запасом и в момент прихода там места хватает (область с флага не меньше
             // SCOUT_OPEN_CELLS): флаг в кармане, куда он подходит, — ловушка
             region(here)
-            val flag = ctx.flags.filter { f -> !f.ours && f.occupant == null && walkDist[f.pos.key] < INF &&
+            val flag = ctx.flags.filter { f -> !f.ours && f.occupant == null && mayTake(ctx, f) && walkDist[f.pos.key] < INF &&
                     fire[f.pos.key] - walkDist[f.pos.key] >= SCOUT_FLAG_MARGIN &&
                     regionSize(f.pos.key, walkDist[f.pos.key], SCOUT_STEP_MARGIN, SCOUT_OPEN_CELLS) >= SCOUT_OPEN_CELLS }
                 .minByOrNull { walkDist[it.pos.key] }
@@ -1036,7 +1041,7 @@ internal object ScoutEvade {
         for (o in ctx.enemyCreeps) blocked[o.key] = true
         for (k in ctx.flagCells) blocked[k] = true
         // ближайший не наш свободный флаг области, куда успеваем с запасом
-        val flag = ctx.flags.filter { f -> !f.ours && f.occupant == null && walkDist[f.pos.key] < INF &&
+        val flag = ctx.flags.filter { f -> !f.ours && f.occupant == null && mayTake(ctx, f) && walkDist[f.pos.key] < INF &&
                 fire[f.pos.key] - walkDist[f.pos.key] >= SCOUT_FLAG_MARGIN }.minByOrNull { walkDist[it.pos.key] }
         var target: Int
         val why: String
@@ -1143,16 +1148,25 @@ internal object Garrisons {
             // когда его дебютный бросок к оспариваемому флагу успел дойти и схлынуть — двойной путь от его базы, — пока у нас
             // все бойцы
             val rushOver = now >= 2 * maxOf(abs(ctx.enemyHome.x - contested.pos.x), abs(ctx.enemyHome.y - contested.pos.y))
-            if (s[2] < CAMP_TICKS && !(USE_EARLY_CAMP_BREAK && rushOver)) return
             val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
             val n = minOf(3, fighters.size / GARRISON_SIZE)
             if (n == 0) return
             val (mx, my) = Formation.median(fighters)
             val second = ctx.flags.filter { it.pos.key != contested.pos.key }
                 .sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) })).firstOrNull()
+            // третий — самый дорогой из оставшихся, из равных — ближний ко второму (v607: D5 и оба H — 13 против 12; до v607 —
+            // ближний ко второму, 12 против 13)
             val third = if (second == null) null else ctx.flags.filter { it.pos.key != contested.pos.key && it.pos.key != second.pos.key }
-                .sortedWith(compareBy<FlagInfo>({ maxOf(abs(it.pos.x - second.pos.x), abs(it.pos.y - second.pos.y)) }, { -it.score })).firstOrNull()
+                .sortedWith(compareBy<FlagInfo>({ if (USE_PASSIVE_GATE) -it.score else 0 },
+                    { maxOf(abs(it.pos.x - second.pos.x), abs(it.pos.y - second.pos.y)) }, { -it.score })).firstOrNull()
             val targets = listOf(contested.pos.key, second?.pos?.key ?: -1, third?.pos?.key ?: -1)
+            // ВОРОТА ЕГО ПОКОЯ (v607, см. USE_PASSIVE_GATE): план стартует, когда у него флагов не меньше PASSIVE_FLAGS плюс
+            // флаги плана, которые сейчас его, — чтобы после плана у него осталось не меньше PASSIVE_FLAGS
+            if (USE_PASSIVE_GATE) {
+                val his = ctx.flags.count { it.theirs }
+                val planHis = ctx.flags.count { f -> f.theirs && targets.take(n).contains(f.pos.key) }
+                if (his < PASSIVE_FLAGS + planHis) return
+            } else if (s[2] < CAMP_TICKS && !(USE_EARLY_CAMP_BREAK && rushOver)) return
             for ((si, sq) in squadsOf(fighters, n).withIndex()) for (c in sq) {
                 Memory.garrisonSquad[c.id] = si
                 Memory.garrisonHome[c.id] = targets[si]
@@ -1252,6 +1266,11 @@ internal object Garrisons {
                     it.key !in cells }
                 .maxOfOrNull { flow[key(it.x, it.y)] } ?: mine
             if (mine >= 0 && last - mine > FIST_RADIUS) { garrisonWhy.bump("cohere"); return Pair(null, true) }
+            // ОБХОД СВОИХ (v607, стенд: восьмёрка шла к H сквозь D5, где стоят закреплённые бойцы первого гарнизона, — поле ведёт
+            // прямо, обмен с закреплённым невозможен, и отряд топтался 120+ тиков): застрявший идёт путём по матрице толпы
+            if (TrafficManager.isStuck(creep.id)) {
+                pathStep(creep, InfluenceMap.cell(fx, fy), 1, crowdMatrixOf(ctx, fk))?.let { garrisonWhy.bump("detour"); return Pair(it, true) }
+            }
             val enemies = ctx.enemyCreeps.mapTo(HashSet()) { it.key }
             DistanceMap.flowStep(flow, creep.x, creep.y, 1, taken, enemies)?.let { garrisonWhy.bump("march"); return Pair(it, true) }
         }
@@ -1268,7 +1287,7 @@ internal object Garrisons {
 /** Прибор снятия лагеря (v605): `camp=` — старт раскладки и тики по этапам (s1…s6). */
 internal val campWhy = Gauges.labelled("camp")
 
-/** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere). */
+/** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere) / застрял и обходит своих (detour). */
 internal val garrisonWhy = Gauges.labelled("gar")
 
 /** Тиков фазы приманки (v587, `bait=` — фаза / из них командир вёл приманку). */
