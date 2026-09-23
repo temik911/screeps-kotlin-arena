@@ -1109,36 +1109,22 @@ internal object Garrisons {
         val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
         val n = fighters.size / GARRISON_SIZE
         if (n == 0 || ctx.flags.isEmpty()) return
-        val (mx, my) = Formation.median(fighters)
-        val flags = ctx.flags.sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) })).take(n)
+        // ОСПАРИВАЕМЫЙ ФЛАГ (живые блоки v600–v601: отряд D5 погибал на флаге в 16 руках из 16 — в дебюте он ведёт к D5 всю
+        // армию, а с t≈250–400 до конца матча его кучка из 9 СТОИТ на D5 во всех восьми разобранных руках): флаг с наименьшим
+        // «дальним из двух расстояний до баз». Он не наш; остальные — по цене, при равной — дальше от оспариваемого
+        val contested = ctx.flags.minByOrNull { f ->
+            maxOf(maxOf(abs(f.pos.x - ctx.home.x), abs(f.pos.y - ctx.home.y)), maxOf(abs(f.pos.x - ctx.enemyHome.x), abs(f.pos.y - ctx.enemyHome.y)))
+        }
+        val cx = contested?.pos?.x ?: 50
+        val cy = contested?.pos?.y ?: 50
+        val flags = ctx.flags.filter { it !== contested }
+            .sortedWith(compareBy<FlagInfo>({ -it.score }, { -maxOf(abs(it.pos.x - cx), abs(it.pos.y - cy)) })).take(n)
         val squads = List(flags.size) { ArrayList<Creep>() }
         val pool = fighters.filter { healerOnly(it) }.sortedBy { it.id } +
             fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
             fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }
         pool.forEachIndexed { i, c -> squads[i % squads.size].add(c) }
         for ((si, sq) in squads.withIndex()) for (c in sq) Memory.garrisonFlag[c.id] = flags[si].pos.key
-        // ОСПАРИВАЕМЫЙ ФЛАГ (живой блок v600: отряд D5 погиб на флаге во всех восьми руках, на t=44–105, от 9–12 его крипов —
-        // в дебюте он ведёт к D5 всю армию, а обе армии идут туда ~40 тиков): флаг с наименьшим «дальним из двух расстояний до
-        // баз». Его отряд выходит, когда его группа побывала у флага и ушла (см. update)
-        val contested = flags.minByOrNull { f ->
-            maxOf(maxOf(abs(f.pos.x - ctx.home.x), abs(f.pos.y - ctx.home.y)), maxOf(abs(f.pos.x - ctx.enemyHome.x), abs(f.pos.y - ctx.enemyHome.y)))
-        }
-        Memory.garrisonGate[0] = 0
-        Memory.garrisonGate[1] = contested?.pos?.key ?: -1
-    }
-
-    /** Ворота выхода отряда оспариваемого флага (v600): 0 — ждём его группу (боевой, у которого GARRISON_SIZE − 1 своих в
-     *  MASS_RANGE) у флага, в 2 × BAIT_STANDOFF; 1 — она там; 2 — ушла или так и не пришла за двойной путь от его базы — идём. */
-    fun update(ctx: Ctx) {
-        val g = Memory.garrisonGate
-        if (!USE_STANDING_GARRISONS || g[0] == 2 || g[1] < 0 || Memory.garrisonFlag.isEmpty()) return
-        val fx = g[1] / 100; val fy = g[1] % 100
-        val his = ctx.enemyCreeps.filter { bornCombatant(it) }
-        val near = his.any { e -> maxOf(abs(e.x - fx), abs(e.y - fy)) <= 2 * BAIT_STANDOFF &&
-            his.count { o -> o !== e && getRange(o, e) <= MASS_RANGE } >= GARRISON_SIZE - 1 }
-        if (g[0] == 0 && near) g[0] = 1
-        else if (g[0] == 1 && !near) g[0] = 2
-        if (g[0] == 0 && getTicks() > 2 * maxOf(abs(ctx.enemyHome.x - fx), abs(ctx.enemyHome.y - fy))) g[0] = 2
     }
 
     /** Клетки отряда: клетка флага и её проходимые соседи. */
@@ -1163,7 +1149,6 @@ internal object Garrisons {
         val fx = fk / 100; val fy = fk % 100
         val here = creep.key
         if (here == fk) { garrisonWhy.bump("post"); return Pair(null, true) }
-        if (fk == Memory.garrisonGate[1] && Memory.garrisonGate[0] != 2) { garrisonWhy.bump("wait"); return Pair(null, true) }
         val cells = cellsOf(fk)
         val taken = HashSet<Int>()
         for (c in ctx.myCreeps) taken.add(c.key)
@@ -1178,6 +1163,12 @@ internal object Garrisons {
         }
         if (maxOf(abs(creep.x - fx), abs(creep.y - fy)) > 2) {
             val flow = flowTo(ctx, InfluenceMap.cell(fx, fy))
+            // ОТРЯД ИДЁТ КУЧНО (v602; живой блок v601: отряды растягивались, и ушедшего вперёд мили он добивал одного —
+            // t=46–63, «наших в 6» ноль): кто впереди отстающего товарища больше чем на 2 клетки по полю — ждёт
+            val mine = flow[key(creep.x, creep.y)]
+            val last = ctx.myCreeps.filter { Memory.garrisonFlag[it.id] == fk && it.key !in cells }
+                .maxOfOrNull { flow[key(it.x, it.y)] } ?: mine
+            if (mine >= 0 && last - mine > 2) { garrisonWhy.bump("cohere"); return Pair(null, true) }
             val enemies = ctx.enemyCreeps.mapTo(HashSet()) { it.key }
             DistanceMap.flowStep(flow, creep.x, creep.y, 1, taken, enemies)?.let { garrisonWhy.bump("march"); return Pair(it, true) }
         }
@@ -1189,7 +1180,7 @@ internal object Garrisons {
     }
 }
 
-/** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / отряд оспариваемого флага ждёт (wait). */
+/** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere). */
 internal val garrisonWhy = Gauges.labelled("gar")
 
 /** Тиков фазы приманки (v587, `bait=` — фаза / из них командир вёл приманку). */
@@ -1705,7 +1696,6 @@ internal fun readSignals(ctx: Ctx) {
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     Garrisons.assign(ctx)   // стоящие гарнизоны (v600): раскладка один раз за матч
-    Garrisons.update(ctx)   // ...и ворота выхода отряда оспариваемого флага
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
     // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом
     // ...а приманке на ходу (v598, см. USE_MOVING_BAIT) хватает BAIT_MIN наших (меньше резерва — приманка вся армия) и

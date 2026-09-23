@@ -114,8 +114,6 @@ internal object Memory {
     /** Стоящие гарнизоны (v600, см. USE_STANDING_GARRISONS): крип -> клетка флага его отряда; раскладка один раз за матч
      *  (`Garrisons.assign`), посты внутри отряда не закреплены. */
     val garrisonFlag = HashMap<String, Int>()
-    /** Ворота выхода отряда оспариваемого флага (v600, `Garrisons.update`): [состояние 0/1/2, клетка флага]. */
-    val garrisonGate = IntArray(2)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()
