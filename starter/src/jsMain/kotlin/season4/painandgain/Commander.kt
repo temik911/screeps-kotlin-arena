@@ -43,6 +43,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlin.reflect.*
 
@@ -100,11 +101,16 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // выстрелом; достал — обычный бой всей армией. Впереди режима боя (v590): в руке v589 режим боя держал армию строем вне
     // досягаемости 800 тиков при фазе приманки 931 тик, и приманка вела только 112
     val baitNow = Signals.baitPhase && outOfReach && meas.forces.armedEnemies.isNotEmpty()
+    if (Signals.baitPhase && !outOfReach) Memory.baitPatrol[3] = 0   // контакт в фазе — он нападает, терпение с начала
+    Orders.holdIds.clear()
     if (baitNow) {
         Orders.commandOf.clear()
-        commandBait(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies, Orders.commandOf)
+        if (USE_MOVING_BAIT) commandMovingBait(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies, Orders.commandOf, Orders.holdIds)
+        else commandBait(ctx, meas.chase.mobileArmy, meas.forces.armedEnemies, Orders.commandOf)
         Orders.source = "bait"
         baitLedTicks.n++
+        // ТЕРПЕНИЕ ПРИМАНКИ (v598, см. BAIT_PATIENCE): тики приманки без контакта; вышли — фаза закрыта до конца матча
+        if (USE_MOVING_BAIT && ++Memory.baitPatrol[3] > BAIT_PATIENCE) { Memory.baitPatrol[4] = 1; movingBaitWhy.bump("spent") }
     } else if (engageMarch) {
         val (mx, my) = Formation.median(meas.chase.mobileArmy)
         val prey = meas.forces.armedEnemies.minByOrNull { maxOf(abs(it.x - mx), abs(it.y - my)) }!!
@@ -340,6 +346,73 @@ internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out
     for (c in bait) if (c !== grabber && getRange(c, baitAt) > FIST_RADIUS / 2) pathStep(c, baitAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
     for (c in reserve) if (getRange(c, reserveAt) > FIST_RADIUS / 2) pathStep(c, reserveAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
 }
+
+/** ПРИМАНКА НА ХОДУ (v598, см. USE_MOVING_BAIT). Его правило нападения по разбору 81 реплея: он бьёт ДВИЖУЩУЮСЯ группу, малую
+ *  против всей его армии (перевес BAIT_RATIO и больше), наших дальше MASS_RANGE от неё не считает, своих дебаффов не учитывает.
+ *  Приманка — лекари, затем мили, затем стрелки: столько, чтобы его армия видела перевес BAIT_RATIO, но не меньше BAIT_MIN;
+ *  остальные — резерв, который СТОИТ (стоящую группу он не трогает, ступень тактика `baitHold`). Резерв меньше BAIT_RESERVE_MIN —
+ *  одиночки, на которых он охотится, — тогда приманка вся армия. Приманка ходит взад-вперёд по отрезку поперёк направления на
+ *  его ближайшего вооружённого: с резервом центр отрезка — на линии «резерв -> он», в BAIT_STANDOFF от него, но не ближе
+ *  MASS_RANGE и не дальше BAIT_LEASH от резерва; без резерва центр — сама приманка, сдвинутая к BAIT_STANDOFF от него, и тогда
+ *  отрезок едет вместе с ней — она обходит его по кругу. На конце отрезка или без сдвига BAIT_STUCK тиков — разворот. */
+internal fun commandMovingBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out: MutableMap<String, Position>, hold: MutableSet<String>) {
+    val core = mobileOf(army).filter { bornCombatant(it) }
+    if (core.size < BAIT_MIN || hisArmed.isEmpty()) return
+    val hisCount = ctx.enemyCreeps.count { bornCombatant(it) }
+    val ordered = core.sortedWith(compareBy<Creep>({ if (healerOnly(it)) 0 else if (hasRanged(it)) 2 else 1 }, { it.id }))
+    val size = (hisCount / BAIT_RATIO).toInt().coerceIn(BAIT_MIN, ordered.size)
+    val whole = ordered.size - size < BAIT_RESERVE_MIN
+    val bait = if (whole) ordered else ordered.take(size)
+    val reserve = if (whole) emptyList() else ordered.drop(size)
+    val (bx, by) = Formation.median(bait)
+    val (ax, ay) = if (reserve.isEmpty()) Pair(bx, by) else Formation.median(reserve)
+    val near = hisArmed.minByOrNull { maxOf(abs(it.x - ax), abs(it.y - ay)) }!!
+    val vx = (ax - near.x).toDouble(); val vy = (ay - near.y).toDouble()
+    val dist = maxOf(abs(vx), abs(vy)).coerceAtLeast(1.0)
+    val ux = vx / dist; val uy = vy / dist   // от него к нам
+    val px = -uy; val py = ux                // поперёк
+    val cx: Double
+    val cy: Double
+    if (reserve.isEmpty()) {
+        val shift = (maxOf(abs(bx - near.x), abs(by - near.y)) - BAIT_STANDOFF).toDouble().coerceIn(-2.0, 2.0)
+        cx = bx - ux * shift; cy = by - uy * shift
+    } else {
+        val k = (dist - BAIT_STANDOFF).coerceIn(MASS_RANGE.toDouble(), BAIT_LEASH.toDouble())
+        cx = ax - ux * k; cy = ay - uy * k
+    }
+    fun endOf(side: Int): Position = walkableNear((cx + px * side * BAIT_LEG).roundToInt().coerceIn(2, 97),
+        (cy + py * side * BAIT_LEG).roundToInt().coerceIn(2, 97), BAIT_LEG)
+    val memo = Memory.baitPatrol
+    if (memo[0] == 0) memo[0] = 1
+    val here = key(bx, by)
+    memo[2] = if (memo[1] == here) memo[2] + 1 else 0
+    memo[1] = here
+    var target = endOf(memo[0])
+    if (maxOf(abs(target.x - bx), abs(target.y - by)) <= 2 || memo[2] >= BAIT_STUCK) {
+        memo[0] = -memo[0]
+        memo[2] = 0
+        target = endOf(memo[0])
+        movingBaitWhy.bump("flip")
+    }
+    val matrix = crowdMatrixOf(ctx, -1)
+    for (c in bait) if (getRange(c, target) > 1) pathStep(c, target, 1, matrix)?.let { out[c.id] = it }
+    for (c in reserve) hold.add(c.id)
+    movingBaitWhy.bump(if (reserve.isEmpty()) "all" else "split")
+}
+
+/** Ближайшая проходимая клетка к (tx, ty) кольцами до reach; не нашлось — сама точка в пределах карты. */
+private fun walkableNear(tx: Int, ty: Int, reach: Int): Position {
+    for (r in 0..reach) for (ox in -r..r) for (oy in -r..r) {
+        if (maxOf(abs(ox), abs(oy)) != r) continue
+        val x = tx + ox; val y = ty + oy
+        if (x < 1 || y < 1 || x > 98 || y > 98 || DistanceMap.isWall(x, y)) continue
+        return InfluenceMap.cell(x, y)
+    }
+    return InfluenceMap.cell(tx.coerceIn(1, 98), ty.coerceIn(1, 98))
+}
+
+/** Прибор приманки на ходу (v598): `mbait=` — тики с резервом (split) / всей армией (all) / развороты (flip) / терпение кончилось (spent). */
+internal val movingBaitWhy = Gauges.labelled("mbait")
 
 /** ПУБЛИКАЦИЯ ВЫБРАННОЙ РАЗДАЧИ (v449, пункт В оператора): поле нужды выбранной раздачи уходит в мир (`InfluenceMap.published`),
  *  её пробы вливаются в приборы (DealRecord.mergeInto); пробы всех раздач тика считаются отдельно — прибор `deals=выбрано/сыграно`.
@@ -607,6 +680,7 @@ internal fun orderAudit(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ:
 /** ПРИКАЗЫ КОМАНДИРА (v459, второй шаг архитектуры, этап 6): словари одного тика, которые живут весь матч и чистятся на своих местах — перенесены из `object PainAndGain` как есть. С v469 тик без армии сбрасывает их операцией [dismiss] (до неё `commandOf` переживал такой тик — `runArmy` выходит раньше раздачи). Владелец — в списке починки после оборванного тика. */
 internal object Orders {
     internal val commandOf = HashMap<String, Position>()   // крип → клетка, назначенная командиром (v137)
+    internal val holdIds = HashSet<String>()               // крипы, которым командир велел стоять (v598, резерв приманки на ходу)
     internal val missionOf = HashMap<String, Char>()      // крип → буква задания его отряда этим тиком (v252, из Strategist.snapshot)
     internal val orderWas = HashMap<String, Pair<Int, Int>>()   // где крип стоял в момент приказа (v170)
     internal val orderFatigue = HashMap<String, Int>()
@@ -631,7 +705,7 @@ internal object Orders {
             staleTicks.n++; staleOrders.n += commandOf.size
             staleLive.n += commandOf.keys.count { id -> living.any { it.id == id } }
         }
-        commandOf.clear(); missionOf.clear(); orderWas.clear(); orderFatigue.clear(); orderDist.clear(); source = "none"
+        commandOf.clear(); holdIds.clear(); missionOf.clear(); orderWas.clear(); orderFatigue.clear(); orderDist.clear(); source = "none"
     }
     internal val staleTicks = Gauges.counter("cmdstale")
     internal val staleOrders = Gauges.counter("cmdstale", 1)

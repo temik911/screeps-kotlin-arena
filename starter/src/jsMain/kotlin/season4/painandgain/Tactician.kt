@@ -374,6 +374,9 @@ private var ladderRows: List<Row<Turn, Aim>>? = null
 internal fun ladder(): List<Row<Turn, Aim>> = ladderRows ?: listOf<Row<Turn, Aim>>(
     Row("keeper", { keeper }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
     Row("slotHold", { slotHold }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
+    // РЕЗЕРВ ПРИМАНКИ НА ХОДУ СТОИТ (v598, см. USE_MOVING_BAIT): стоящую группу он не трогает — приказ «стой» бойцу ниже
+    // проваливался бы к кайту и отходу
+    Row("baitHold", { creep.id in Orders.holdIds }) { Aim(InfluenceMap.cell(creep.x, creep.y), 0) },
     // приказ командира раньше всего боевого: он уже учёл, кто где встанет и что будет опасно (v137)
     // ...и ЛЕКАРЮ ПРИКАЗ «СТОЯТЬ» — ТОЖЕ ПРИКАЗ (v436, см. USE_COMMANDER_HEALERS_IN_CONTACT): раздача разрешает свою
     // клетку («стой»), но здесь такой приказ молча проваливался ниже, к healMate, и лекарь уходил с клетки, которую

@@ -107,6 +107,9 @@ internal object Memory {
     /** Клетки наших боевых прошлого тика (v579, см. USE_NO_LONERS_VS_HUNTER): по ним признак «он добил нашего одиночку»
      *  узнаёт, где погиб пропавший и сколько своих было рядом. Переписывается целиком каждый тик. */
     val ourPrevCells = HashMap<String, Int>()
+    /** Патруль приманки на ходу (v598, см. USE_MOVING_BAIT): [сторона отрезка ±1, клетка медианы приманки прошлого тика,
+     *  тиков подряд без сдвига медианы, тиков приманки без контакта (см. BAIT_PATIENCE), 1 — терпение кончилось до конца матча]. */
+    val baitPatrol = IntArray(5)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()

@@ -1611,9 +1611,13 @@ internal fun readSignals(ctx: Ctx) {
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
     // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом
-    Signals.baitPhase = USE_BAIT_VS_DEBUFFED &&
+    // ...а приманке на ходу (v598, см. USE_MOVING_BAIT) хватает BAIT_MIN наших (меньше резерва — приманка вся армия) и
+    // его армии, которая видит перед приманкой перевес BAIT_RATIO
+    val baitOurs = if (USE_MOVING_BAIT) BAIT_MIN else 2 * BAIT_MIN
+    val baitHis = if (USE_MOVING_BAIT) ceil(BAIT_MIN * BAIT_RATIO).toInt() else 2 * BAIT_MIN
+    Signals.baitPhase = (USE_BAIT_VS_DEBUFFED || USE_MOVING_BAIT) && Memory.baitPatrol[4] == 0 &&
         ctx.flags.count { it.theirs } >= ctx.flags.size - 1 && ctx.flags.count { it.ours } <= 1 &&
-        ctx.army.count { bornCombatant(it) && canMove(it) } >= 2 * BAIT_MIN && ctx.enemyCreeps.count { bornCombatant(it) } >= 2 * BAIT_MIN
+        ctx.army.count { bornCombatant(it) && canMove(it) } >= baitOurs && ctx.enemyCreeps.count { bornCombatant(it) } >= baitHis
     if (Signals.baitPhase) baitPhaseTicks.n++
     // ...и УЖЕ ВЫПУЩЕННЫЕ ВОЗВРАЩАЮТСЯ (v580): запрет выпуска не трогал тех, кто вышел до срабатывания, — в первой руке v579
     // после t=446 погибли ещё четверо одиночек: хранитель у Ha, лекарь-бегун, двое у D5. Отзыв — из обоих наборов, каждый тик
