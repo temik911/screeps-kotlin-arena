@@ -284,9 +284,9 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // мест — бой, гонка, марш ядра, — и вот там пересечение возможно; здесь оно считается
 }
 
-/** ПРИМАНКА И РЕЗЕРВ (v587, см. USE_BAIT_VS_DEBUFFED): армия делится пополам по id — лекари поровну, вооружённые через одного,
- *  так что в каждой половине есть лечение. Приманка стоит у своей медианы; резерв идёт в точку в MASS_RANGE + FIST_RADIUS
- *  клетках от медианы приманки прочь от центра его вооружённых (ближайшая проходимая клетка) и стоит там. Приказы — шаги пути. */
+/** ПРИМАНКА И РЕЗЕРВ (v587–v589, см. USE_BAIT_VS_DEBUFFED): армия делится пополам по id — лекари поровну, вооружённые через
+ *  одного, так что в каждой половине есть лечение. На линии «центр его вооружённых -> медиана нашей армии» приманка встаёт в
+ *  ENGAGE_RANGE от его центра, резерв — ещё на MASS_RANGE + FIST_RADIUS дальше (ближайшие проходимые клетки). Приказы — шаги пути. */
 internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out: MutableMap<String, Position>) {
     val core = mobileOf(army).filter { bornCombatant(it) }
     if (core.size < 2 * BAIT_MIN || hisArmed.isEmpty()) return
@@ -296,26 +296,27 @@ internal fun commandBait(ctx: Ctx, army: List<Creep>, hisArmed: List<Creep>, out
     val reserve = ArrayList<Creep>()
     healers.forEachIndexed { i, c -> if (i % 2 == 0) bait.add(c) else reserve.add(c) }
     armed.forEachIndexed { i, c -> if (i % 2 == 0) bait.add(c) else reserve.add(c) }
-    val (bx, by) = Formation.median(bait)
+    val (mx, my) = Formation.median(core)
     val fx = hisArmed.sumOf { it.x } / hisArmed.size
     val fy = hisArmed.sumOf { it.y } / hisArmed.size
+    // ЛИНИЯ «ЕГО КУЛАК -> НАША АРМИЯ» (v589): приманка встаёт на ней в ENGAGE_RANGE от центра его вооружённых — там, куда он
+    // подходит к группам, — а резерв на той же линии ещё на MASS_RANGE + FIST_RADIUS дальше. В первой руке v588 приманка
+    // стояла там, где была армия, в 22 клетках от его кулака, и за 800 тиков он к ней не подошёл ни разу
+    val vx = (mx - fx).toDouble(); val vy = (my - fy).toDouble()
+    val norm = maxOf(abs(vx), abs(vy)).coerceAtLeast(1.0)
+    val ux = vx / norm; val uy = vy / norm
     val gap = MASS_RANGE + FIST_RADIUS
-    val dx = (bx - fx).let { if (it > 0) 1 else if (it < 0) -1 else 0 }
-    val dy = (by - fy).let { if (it > 0) 1 else if (it < 0) -1 else 0 }
-    val tx = (bx + dx * gap).coerceIn(2, 97)
-    val ty = (by + dy * gap).coerceIn(2, 97)
-    // ближайшая проходимая клетка к точке резерва (кольцами)
-    var rx = tx; var ry = ty
-    run search@{
+    fun walkableNear(tx: Int, ty: Int): Position {
         for (r in 0..gap) for (ox in -r..r) for (oy in -r..r) {
             if (maxOf(abs(ox), abs(oy)) != r) continue
             val x = tx + ox; val y = ty + oy
             if (x < 1 || y < 1 || x > 98 || y > 98 || DistanceMap.isWall(x, y)) continue
-            rx = x; ry = y; return@search
+            return InfluenceMap.cell(x, y)
         }
+        return InfluenceMap.cell(tx.coerceIn(1, 98), ty.coerceIn(1, 98))
     }
-    val baitAt = InfluenceMap.cell(bx, by)
-    val reserveAt = InfluenceMap.cell(rx, ry)
+    val baitAt = walkableNear((fx + ux * ENGAGE_RANGE).toInt().coerceIn(2, 97), (fy + uy * ENGAGE_RANGE).toInt().coerceIn(2, 97))
+    val reserveAt = walkableNear((fx + ux * (ENGAGE_RANGE + gap)).toInt().coerceIn(2, 97), (fy + uy * (ENGAGE_RANGE + gap)).toInt().coerceIn(2, 97))
     val matrix = crowdMatrixOf(ctx, -1)
     for (c in bait) if (getRange(c, baitAt) > FIST_RADIUS / 2) pathStep(c, baitAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
     for (c in reserve) if (getRange(c, reserveAt) > FIST_RADIUS / 2) pathStep(c, reserveAt, FIST_RADIUS / 2, matrix)?.let { out[c.id] = it }
