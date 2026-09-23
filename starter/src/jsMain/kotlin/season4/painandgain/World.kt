@@ -1117,6 +1117,28 @@ internal object Garrisons {
             fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }
         pool.forEachIndexed { i, c -> squads[i % squads.size].add(c) }
         for ((si, sq) in squads.withIndex()) for (c in sq) Memory.garrisonFlag[c.id] = flags[si].pos.key
+        // ОСПАРИВАЕМЫЙ ФЛАГ (живой блок v600: отряд D5 погиб на флаге во всех восьми руках, на t=44–105, от 9–12 его крипов —
+        // в дебюте он ведёт к D5 всю армию, а обе армии идут туда ~40 тиков): флаг с наименьшим «дальним из двух расстояний до
+        // баз». Его отряд выходит, когда его группа побывала у флага и ушла (см. update)
+        val contested = flags.minByOrNull { f ->
+            maxOf(maxOf(abs(f.pos.x - ctx.home.x), abs(f.pos.y - ctx.home.y)), maxOf(abs(f.pos.x - ctx.enemyHome.x), abs(f.pos.y - ctx.enemyHome.y)))
+        }
+        Memory.garrisonGate[0] = 0
+        Memory.garrisonGate[1] = contested?.pos?.key ?: -1
+    }
+
+    /** Ворота выхода отряда оспариваемого флага (v600): 0 — ждём его группу (боевой, у которого GARRISON_SIZE − 1 своих в
+     *  MASS_RANGE) у флага, в 2 × BAIT_STANDOFF; 1 — она там; 2 — ушла или так и не пришла за двойной путь от его базы — идём. */
+    fun update(ctx: Ctx) {
+        val g = Memory.garrisonGate
+        if (!USE_STANDING_GARRISONS || g[0] == 2 || g[1] < 0 || Memory.garrisonFlag.isEmpty()) return
+        val fx = g[1] / 100; val fy = g[1] % 100
+        val his = ctx.enemyCreeps.filter { bornCombatant(it) }
+        val near = his.any { e -> maxOf(abs(e.x - fx), abs(e.y - fy)) <= 2 * BAIT_STANDOFF &&
+            his.count { o -> o !== e && getRange(o, e) <= MASS_RANGE } >= GARRISON_SIZE - 1 }
+        if (g[0] == 0 && near) g[0] = 1
+        else if (g[0] == 1 && !near) g[0] = 2
+        if (g[0] == 0 && getTicks() > 2 * maxOf(abs(ctx.enemyHome.x - fx), abs(ctx.enemyHome.y - fy))) g[0] = 2
     }
 
     /** Клетки отряда: клетка флага и её проходимые соседи. */
@@ -1141,6 +1163,7 @@ internal object Garrisons {
         val fx = fk / 100; val fy = fk % 100
         val here = creep.key
         if (here == fk) { garrisonWhy.bump("post"); return Pair(null, true) }
+        if (fk == Memory.garrisonGate[1] && Memory.garrisonGate[0] != 2) { garrisonWhy.bump("wait"); return Pair(null, true) }
         val cells = cellsOf(fk)
         val taken = HashSet<Int>()
         for (c in ctx.myCreeps) taken.add(c.key)
@@ -1166,7 +1189,7 @@ internal object Garrisons {
     }
 }
 
-/** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full). */
+/** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / отряд оспариваемого флага ждёт (wait). */
 internal val garrisonWhy = Gauges.labelled("gar")
 
 /** Тиков фазы приманки (v587, `bait=` — фаза / из них командир вёл приманку). */
@@ -1682,6 +1705,7 @@ internal fun readSignals(ctx: Ctx) {
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     Garrisons.assign(ctx)   // стоящие гарнизоны (v600): раскладка один раз за матч
+    Garrisons.update(ctx)   // ...и ворота выхода отряда оспариваемого флага
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
     // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом
     // ...а приманке на ходу (v598, см. USE_MOVING_BAIT) хватает BAIT_MIN наших (меньше резерва — приманка вся армия) и

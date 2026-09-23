@@ -110,7 +110,10 @@ internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView, fist: Pair<Int, I
     // рождается интент шага армии, поэтому проверка одна на все ветки: разрешённый захват проходит как прежде
     // (planCapture), запрещённый — крип стоит, как POISED-бегун
     val flagAt = p.step?.let { s -> ctx.flags.firstOrNull { !it.ours && it.pos.x == s.x && it.pos.y == s.y } }
-    val step0 = if (flagAt != null && captureBlock(ctx, flagAt, view, CapAsker.ARMY) != null) { strayCapRefused.n++; null } else p.step
+    // ...кроме бойца СТОЯЩЕГО ГАРНИЗОНА на флаг своего отряда (v600, см. USE_STANDING_GARRISONS): живой блок v600 — ворота
+    // отказывали шагу на Ha/Hb, уже взятые его бегунами, и отряд стоял у флага 200+ тиков (`gar=onflag` +2 за тик)
+    val ownPost = flagAt != null && USE_STANDING_GARRISONS && Memory.garrisonFlag[p.creep.id] == flagAt.pos.key
+    val step0 = if (flagAt != null && !ownPost && captureBlock(ctx, flagAt, view, CapAsker.ARMY) != null) { strayCapRefused.n++; null } else p.step
     // КУЛАК ДЕЙСТВУЕТ НА ВСЯКИЙ ШАГ В БОЮ (v490, см. USE_FIST_EVERY_STEP). Запрет уходить дальше `FIST_RADIUS +
     // STRAGGLER_SLACK` от медианы боевых живёт внутри командирской раздачи (`Formation.fist`, зовётся из `Deal.kt:72`),
     // а она правит 5–20 % крипо-тиков — значит то единственное, что держит армию вместе, на остальных четырёх пятых не
