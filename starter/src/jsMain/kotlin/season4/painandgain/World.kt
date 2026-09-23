@@ -1151,6 +1151,19 @@ internal object Garrisons {
     /** Отряды по кругу — лекари, мили, стрелки: лекарь в каждом отряде, пока лекарей хватает. */
     private fun squadsOf(fighters: List<Creep>, n: Int): List<List<Creep>> {
         val squads = List(n) { ArrayList<Creep>() }
+        // РАСКЛАДКА ПО СТРЕЛКАМ (v618, см. USE_RANGED_SQUADS): налётчикам (отряды 1..n-1) — по два стрелка и по мили, пока
+        // хватает; шару (отряд 0) — все лекари, остальные мили и стрелки
+        if (USE_RANGED_SQUADS && n >= 2) {
+            val ranged = fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }.toMutableList()
+            val melee = fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id }.toMutableList()
+            for (si in 1 until n) {
+                repeat(2) { if (ranged.isNotEmpty()) squads[si].add(ranged.removeAt(0)) }
+                if (melee.isNotEmpty()) squads[si].add(melee.removeAt(0))
+            }
+            squads[0].addAll(fighters.filter { healerOnly(it) }.sortedBy { it.id })
+            squads[0].addAll(melee); squads[0].addAll(ranged)
+            return squads
+        }
         val pool = fighters.filter { healerOnly(it) }.sortedBy { it.id } +
             fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
             fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }
@@ -1377,6 +1390,31 @@ internal object Garrisons {
                 continue
             }
             Memory.raidTogether[si] = false
+            // ДВА СТРЕЛКА — ЕГО НЕ ЖДЁМ (v618, см. USE_RANGED_SQUADS): группу с двумя стрелками и больше он не трогает (разбор
+            // 40 рук: 4 из 251), поэтому такой отряд не бежит и не проверяет путь — только флаг без его группы
+            if (USE_RANGED_SQUADS && sq.count { hasRanged(it) } >= 2) {
+                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, FIST_RADIUS) }
+                    .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
+                    .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
+                target = next?.pos?.key ?: current
+                why = if (next != null) "go" else "hold"
+                Memory.raidRefuge[si] = false
+                if (target >= 0) {
+                    claimed.add(target)
+                    for (c in sq) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
+                }
+                raidWhy.bump(why)
+                continue
+            }
+            // ШАР ПРИНИМАЕТ БОЙ (v618, см. USE_BALL_FIGHT): его группа рядом, у него BALL_FLAGS флагов и больше, нас в отряде
+            // не меньше пяти — стоим и бьёмся там, где стоим
+            if (USE_BALL_FIGHT && near && sq.size >= GARRISON_SIZE + 1 && ctx.flags.count { it.theirs } >= BALL_FLAGS) {
+                target = key(mx, my); why = "fight"
+                Memory.raidRefuge[si] = false
+                for (c in sq) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
+                raidWhy.bump(why)
+                continue
+            }
             // ПО СРОКУ ЕГО ОБСТРЕЛА (v617, см. USE_RAID_BY_FIRE): опасность, путь к своим и годные флаги — по области отряда
             if (USE_RAID_BY_FIRE) {
                 val mates = medians.withIndex().filter { (i, m) -> i != si && m != null }.map { it.value!! }
