@@ -1406,6 +1406,22 @@ internal object Garrisons {
                     continue
                 }
                 for (c in sq) Memory.garrisonReleased.remove(c.id)
+                // ШАР ДЕРЖИТ ЦЕНТР (v621, см. USE_BALL_HOLDS_CENTER): цель шара — оспариваемый флаг (открытая середина, откуда
+                // есть куда уйти), к нему при его группе и меньше BALL_FLAGS его флагов — к ближней группе стрелков
+                if (USE_BALL_HOLDS_CENTER) {
+                    val mate = medians.withIndex().filter { (i, m) -> i != si && m != null }
+                        .minByOrNull { (_, m) -> maxOf(abs(m!!.first - mx), abs(m.second - my)) }?.value
+                    val contested = contestedFlag(ctx)
+                    target = if (near && mate != null) key(mate.first, mate.second) else contested?.pos?.key ?: current
+                    why = if (near && mate != null) "refuge" else "center"
+                    Memory.raidRefuge[si] = near
+                    if (target >= 0) {
+                        claimed.add(target)
+                        for (c in sq) { Memory.garrisonFlag[c.id] = target; Memory.garrisonHome[c.id] = target }
+                    }
+                    raidWhy.bump(why)
+                    continue
+                }
             }
             val strong = ctx.myCreeps.count { bornCombatant(it) && maxOf(abs(it.x - mx), abs(it.y - my)) <= MASS_RANGE } >= 2 * GARRISON_SIZE
             // ...кроме отряда с двумя стрелками (v619): его он и один на один не трогает, слияние только вдвое сокращает налёт
@@ -1430,7 +1446,10 @@ internal object Garrisons {
             // 40 рук: 4 из 251), поэтому такой отряд не бежит и не проверяет путь — только флаг без его группы
             if (USE_RANGED_SQUADS && sq.count { hasRanged(it) } >= 2) {
                 // под полом (v620) — самые дорогие флаги первыми: нам остаётся не больше трёх
-                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, FIST_RADIUS) && floorAllows(ctx, it) }
+                // ...и оспариваемый флаг — шару (v621)
+                val center = if (USE_BALL_HOLDS_CENTER) contestedFlag(ctx)?.pos?.key ?: -1 else -1
+                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && it.pos.key != center &&
+                        !group(it.pos.x, it.pos.y, FIST_RADIUS) && floorAllows(ctx, it) }
                     .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
                     .minWithOrNull(if (USE_FLAG_FLOOR) compareBy({ -it.first.score }, { it.second }) else compareBy({ it.second }, { -it.first.score }))?.first
                 target = next?.pos?.key ?: current
