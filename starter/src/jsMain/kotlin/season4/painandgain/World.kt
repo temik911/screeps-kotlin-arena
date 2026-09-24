@@ -1145,8 +1145,18 @@ internal object Garrisons {
 
     /** ПОЛ ЕГО ФЛАГОВ (v620, см. USE_FLAG_FLOOR): флаг брать можно, если после этого не наших останется не меньше BALL_FLAGS —
      *  шар бьётся с ним, пока он под своими дебаффами. */
-    fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || farmer(ctx) || farmerSign(ctx) || f.ours ||
-        ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
+    fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || (USE_TOURER_SWITCH && Memory.campBreak[0] == 0) ||
+        farmer(ctx) || farmerSign(ctx) || f.ours || ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
+
+    /** ПОЧЕРК ОБЪЕЗДЧИКА (v633, см. USE_TOURER_SWITCH): защёлка до конца матча; правило признака — `tourerRule`. */
+    fun tourer(ctx: Ctx): Boolean {
+        if (Memory.tourerSeen[0] > 0) return true
+        if (tourerRule(ctx)) { Memory.tourerSeen[0] = getTicks(); raidWhy.bump("tourer") }
+        return Memory.tourerSeen[0] > 0
+    }
+
+    /** Правило признака объездчика — пока пусто: переключатель выключен, план не стартует, игра прежняя. */
+    private fun tourerRule(ctx: Ctx): Boolean = false
 
     /** ПОЧЕРК ФЕРМЕРА (v630, см. USE_FARMER_SWAP): тот же признак, что у кулака (v626), без кулака; держится до конца матча. */
     fun farmerSign(ctx: Ctx): Boolean {
@@ -1225,6 +1235,8 @@ internal object Garrisons {
         if (!USE_CAMP_BREAK || USE_STANDING_GARRISONS) return
         val s = Memory.campBreak
         val now = getTicks()
+        // ПЕРЕКЛЮЧАТЕЛЬ (v633, см. USE_TOURER_SWITCH): план — только против объездчика; до его почерка — прежняя игра
+        if (s[0] == 0 && USE_TOURER_SWITCH && !tourer(ctx)) return
         if (s[0] == 0) {
             val contested = contestedFlag(ctx) ?: return
             val camp = ctx.enemyCreeps.count { bornCombatant(it) && getRange(it, contested.pos) <= FIST_RADIUS + 2 }
@@ -2298,7 +2310,8 @@ internal fun readSignals(ctx: Ctx) {
     // одним своим в радиусе «со своими», а у его клетки сейчас трое его и больше — это и есть охота на одиночку. Защёлка до
     // конца матча: раз он так играет, выпущенный поодиночке — его добыча
     // ...а под планом снятия лагеря — С ПЕРВОГО ТИКА (v611, см. USE_BLOB_UNTIL_PLAN): до плана армия держится одной массой
-    if (USE_BLOB_UNTIL_PLAN && USE_CAMP_BREAK && !Signals.lonerHunted) Signals.lonerHunted = true
+    if (USE_BLOB_UNTIL_PLAN && USE_CAMP_BREAK && (!USE_TOURER_SWITCH || Memory.tourerSeen[0] > 0) && !Signals.lonerHunted)
+        Signals.lonerHunted = true
     if (USE_NO_LONERS_VS_HUNTER && !Signals.lonerHunted) {
         val alive = HashSet<String>()
         for (c in ctx.myCreeps) alive.add(c.id)
