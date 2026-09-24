@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 89
+    private const val BOT_VERSION = 90
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1067,6 +1067,7 @@ object SpawnAndSwamp {
             if (getTicks() % (LOG_EVERY * 5) == 0) {   // cumulative, so every fifty ticks loses nothing
                 println(reachLine("spawn", spawnReach))
                 println(reachLine("posture", postureReach))
+                if (pileWhy.isNotEmpty()) println(reachLine("pile", pileWhy))
             }
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
@@ -4794,6 +4795,8 @@ object SpawnAndSwamp {
     private var pileJob: PileJob? = null
     private val pileBuilderIds = HashSet<String>()
     private var pileOrderedAt = -1
+    /** Why the waiting builder found no job, per reason, over the match (printed as `reach pile`, v90). */
+    private val pileWhy = LinkedHashMap<String, Int>()
     /** MOVE in front (damage takes the legs before the trade), 2 WORK for 10 a tick: M4C4W2, 600. Empty it weighs its
      *  WORK only — a cell a tick on plain, three on swamp. */
     private val PILE_BODY: Array<BodyPartType> = arrayOf(MOVE, MOVE, MOVE, MOVE, CARRY, CARRY, CARRY, CARRY, WORK, WORK)
@@ -4847,24 +4850,32 @@ object SpawnAndSwamp {
         val swampPace = periodOn(work, PILE_BODY.count { it == MOVE }, 10)   // empty: only WORK weighs
         var best: PileJob? = null
         var bestWalk = Int.MAX_VALUE
+        val why = if (builder != null) pileWhy else null
+        fun no(k: String) { if (why != null) why[k] = (why[k] ?: 0) + 1 }
         for (site in ctx.sites) {
             val c = site.container ?: continue
             val life = site.ticksToDecay ?: continue          // permanent containers are the fleet's
-            if (!site.ours || !site.safe) continue
-            if (haulerSite.values.any { it == site.id }) continue   // our fleet is already taking it
-            // enough to build the spawn after the pile's own decay (2 a tick above 1000) over the build
-            if (site.energy < price + 2 * buildTicks) continue
+            if (!site.ours) { no("his"); continue }
+            if (!site.safe) { no("unsafe"); continue }
+            // WHAT THE FLEET WILL TAKE IS NOT THE BUILDER'S (v90): the haulers already sent carry away their free
+            // capacity; the rest must still pay for the spawn and the pile's decay over the build. v89 skipped any
+            // container a single hauler was sent to — and against marlyman123#96 that was every fresh one on our
+            // half: in four games the builder never got a job
+            val fleetTakes = ctx.haulers.filter { haulerSite[it.id] == site.id }.sumOf { it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0 }
+            if (site.energy - fleetTakes < price + 2 * buildTicks) { no(if (fleetTakes > 0) "hauled" else "thin"); continue }
             val walk = if (builder != null) pathTicks(builder, flowTo(ctx, c), builder.x * 100 + builder.y)
                 else bornIn + ctx.stepsToSpawn[c.x * 100 + c.y].let { if (it < 0) Int.MAX_VALUE / 4 else it * swampPace }
-            if (walk >= Int.MAX_VALUE / 4) continue
-            val dump = ceil(site.energy / dumpRate).toInt()
-            if (life < walk + dump + 3) continue              // it rots before it is on the ground
+            if (walk >= Int.MAX_VALUE / 4) { no("noway"); continue }
+            val dump = ceil((site.energy - fleetTakes) / dumpRate).toInt()
+            if (life < walk + dump + 3) { no("late"); continue }  // it rots before it is on the ground
             val work0 = walk + dump + buildTicks
             // nobody of his armed reaches it before the job is done (at his plain pace — the optimistic one for him)
-            if (ctx.combatEnemies.any { getRange(it, c).toLong() * plainPeriod(it).coerceAtMost(10) <= work0 }) continue
-            val cells = pileCells(ctx, c) ?: continue
+            if (ctx.combatEnemies.any { getRange(it, c).toLong() * plainPeriod(it).coerceAtMost(10) <= work0 }) { no("threat"); continue }
+            val cells = pileCells(ctx, c)
+            if (cells == null) { no("cells"); continue }
             if (walk < bestWalk) { bestWalk = walk; best = PileJob(site.id, InfluenceMap.cell(c.x, c.y), cells.first, cells.second) }
         }
+        if (best != null) no("found")
         return best
     }
 
