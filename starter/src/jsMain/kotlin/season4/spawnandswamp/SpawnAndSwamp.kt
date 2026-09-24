@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 81
+    private const val BOT_VERSION = 82
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -684,6 +684,17 @@ object SpawnAndSwamp {
      *  энергией в кулдауне хода от неё (см. towerFed). Некормленная башня не стреляет и не считается. */
     private class TowerInfo(val pos: Position, val fed: Boolean, val cooldown: Int, val obj: StructureTower? = null)
 
+    /**
+     * HIS RAMPARTS BY CELL (v82): hits of every enemy rampart, keyed x*100+y, refreshed each tick. A rampart shields
+     * EVERYTHING on its cell — a tower, a spawn, a creep standing on it: our damage there goes into the rampart first,
+     * and nothing repairs it (the Arena creep has no `repair`). The siege simulation knew this only for the rampart on
+     * the spawn; the fortress of the v73 series (marlyman123, ricardo) puts one on the tower and three to four more
+     * under its defenders, so `sim=win` sent waves at 13000 of tower work it priced at 3000, and 18-62 % of their fire
+     * against structures went into the tower's rampart.
+     */
+    private val enemyShield = HashMap<Int, Int>()
+    private fun shieldAt(p: Position) = enemyShield[p.x * 100 + p.y] ?: 0
+
     /** Строящаяся башня врага: площадка и через сколько тиков достроится — по наблюдаемому темпу, а
      *  пока темпа нет, по WORK строителей рядом. Для симуляции осады башня, которая встанет до конца
      *  осады, — башня: волна ушла при площадке 945/1250 и была отозвана через 35 тиков, когда башня
@@ -864,6 +875,8 @@ object SpawnAndSwamp {
         val blockedForEnemy: List<Position> = walls + ramparts.filter { it.my != false } + structures
 
         InfluenceMap.setProtectedCells(ramparts.filter { it.my == true }.mapTo(HashSet()) { it.x * 100 + it.y })
+        enemyShield.clear()
+        for (r in ramparts) if (r.my != true && (r.hits ?: 0) > 0) enemyShield[r.x * 100 + r.y] = (enemyShield[r.x * 100 + r.y] ?: 0) + (r.hits ?: 0)
         InfluenceMap.setEnemyBlocked(blockedForEnemy.mapTo(HashSet()) { it.x * 100 + it.y })
         cpuMark("objects")
         val dangerMatrix = InfluenceMap.dangerCostMatrix(enemyCreeps, blocked)
@@ -2690,11 +2703,14 @@ object SpawnAndSwamp {
                 mendWave()
             }
         } else if (!absorb(attrition)) return SIEGE_LOSE
-        class Def(val hits: Double, val dps: Double, val heal: Double)
+        // a defender on his rampart is killed through it: `shield` goes first, at our full damage (heal restores a
+        // creep, never a rampart), and only then the creep's hits against our damage minus his heal (see enemyShield)
+        class Def(val hits: Double, val dps: Double, val heal: Double, val shield: Double)
         val defs = ArrayDeque(defenders
             .sortedWith(compareByDescending<Creep> { InfluenceMap.profileOf(it).heal }.thenBy { it.hits })
-            .map { Def(it.hits.toDouble(), effectiveDps(it, wave, spawn), InfluenceMap.profileOf(it).heal) })
+            .map { Def(it.hits.toDouble(), effectiveDps(it, wave, spawn), InfluenceMap.profileOf(it).heal, shieldAt(it).toDouble()) })
         var defHits = defs.firstOrNull()?.hits ?: 0.0
+        var defShield = defs.firstOrNull()?.shield ?: 0.0
         // башня — цель с хитами: её огонь идёт, пока она жива, и наш урон её снимает (см. кольцо ниже)
         class Gun(val tower: TowerInfo, val shot: Double, var next: Int, var hits: Double)
         // ЧЕМ БЛИЖЕ СТОИМ, ТЕМ СИЛЬНЕЕ ВЫСТРЕЛ. Дистанция башни считается от дистанции, с которой мы
@@ -2704,7 +2720,7 @@ object SpawnAndSwamp {
         val standoff = if (extra != null && extra.none { it == RANGED_ATTACK } && extra.any { it == ATTACK }) 1 else RANGED_RANGE
         val guns = towers.mapTo(ArrayList()) {
             Gun(it, InfluenceMap.towerShot(towerRangeFor(it, listOf(spawn), standoff)), maxOf(0, it.cooldown),
-                (it.obj?.hits ?: TOWER_HITS).toDouble())
+                (it.obj?.hits ?: TOWER_HITS).toDouble() + shieldAt(it.pos))   // its rampart is part of its hits
         }
         var lost = 0.0
         fun fire(t: Int, shotOf: (Gun) -> Double) {
@@ -2780,13 +2796,20 @@ object SpawnAndSwamp {
             val ourDps = units.sumOf { it.dps() }
             if (ourDps <= 0.0) return SiegeResult(false, i, lost.toInt())
             if (defs.isNotEmpty()) {
-                val net = units.sumOf { it.creepDps() } - defs.sumOf { it.heal }
-                if (net <= 0.0) return SiegeResult(false, i, lost.toInt())
-                defHits -= net
+                if (defShield > 0.0) {
+                    defShield -= units.sumOf { it.creepDps() }
+                    if (defShield < 0.0) { defHits += defShield; defShield = 0.0 }
+                } else {
+                    val net = units.sumOf { it.creepDps() } - defs.sumOf { it.heal }
+                    if (net <= 0.0) return SiegeResult(false, i, lost.toInt())
+                    defHits -= net
+                }
                 while (defHits <= 0.0 && defs.isNotEmpty()) {
                     val carry = -defHits
                     defs.removeFirst()
-                    defHits = (defs.firstOrNull()?.hits ?: 0.0) - carry
+                    defShield = defs.firstOrNull()?.shield ?: 0.0
+                    defHits = (defs.firstOrNull()?.hits ?: 0.0) - (if (defShield > 0.0) 0.0 else carry)
+                    if (defShield > 0.0) defShield -= carry
                 }
             } else {
                 // защитников нет — БАШНЯ перед спавном: пока она жива, её выстрел ложится каждый кулдаун
@@ -3481,8 +3504,10 @@ object SpawnAndSwamp {
         // сравнивать башню надо с настоящей работой (3000 + 10000), а не с голой табличкой спавна
         val enemySpawnHits = (enemySpawn?.hits ?: 0) + spawnRampartHits(ctx)
         val liveTowers = ctx.enemyTowers.filter { it.fed && (it.obj?.hits ?: 0) > 0 }
-        val towerTarget = if (liveTowers.sumOf { it.obj?.hits ?: 0 } > enemySpawnHits) null
-            else liveTowers.minByOrNull { it.obj?.hits ?: Int.MAX_VALUE }?.obj
+        // …and a tower's work is its rampart too (v82, see enemyShield): 3000 + 10000 is not cheaper than the spawn
+        fun towerWork(t: TowerInfo) = (t.obj?.hits ?: 0) + shieldAt(t.pos)
+        val towerTarget = if (liveTowers.sumOf { towerWork(it) } > enemySpawnHits) null
+            else liveTowers.minByOrNull { if (it.obj == null) Int.MAX_VALUE else towerWork(it) }?.obj
         healAndShoot(fighters, allies, enemyCreeps, enemySpawn, focusTarget, pushing, wallTarget, towerTarget)
         return ourOffense
     }
