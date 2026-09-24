@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 85
+    private const val BOT_VERSION = 86
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -130,8 +130,15 @@ object SpawnAndSwamp {
      *  and our own breacher (M6A6, five ticks a swamp cell) makes even M4H2 "faster". What decided Ranamar#2 was the
      *  march — his fast army meets the melee before the spawn — and that belongs to the siege's attrition, not here. */
     private const val USE_MELEE_SHARE = false
-    /** The siege target is kept until it falls; only a spawn on our half takes it from one on his (tick, v85). */
-    private const val USE_TARGET_HOLD = true
+    /** The siege target is kept until it falls; only a spawn on our half takes it from one on his (tick, v85).
+     *  OFF — measured live 25.09.2026 and rejected: four unrated games against marlyman123#96 went 0-2-2 where every
+     *  earlier build drew. Held on his fortress, the army went at 13000 of work it cannot do — fifteen waves in one
+     *  game — and the house fell behind it; chasing his forward spawns had at least cost him his economy. Holding a
+     *  target is only right while a wave is out against it (USE_TARGET_COMMIT). */
+    private const val USE_TARGET_HOLD = false
+    /** The target is kept while a wave is out against it (in the field or holding): a spawn he puts up during the
+     *  march does not pull the wave off; between waves the target is chosen as before (tick, v86). */
+    private const val USE_TARGET_COMMIT = true
     /** The last call's deadline walks and works every spawn he has, not only the target (goNeed, v85). */
     private const val USE_TOUR_CLOCK = true
     private var siegeTargetId: String? = null
@@ -791,6 +798,8 @@ object SpawnAndSwamp {
         val onOurHalf: (StructureSpawn) -> Boolean = { s -> enemyHome != null && getRange(s, mySpawn) < getRange(s, enemyHome) }
         val intruder = enemySpawns.filter { onOurHalf(it) }.minByOrNull { getRange(mySpawn, it) }
         val enemySpawn = when {
+            // committed: a wave is out against the held target (the wave map outlives the tick; see runFighters)
+            USE_TARGET_COMMIT && held != null && wave.isNotEmpty() -> held
             !USE_TARGET_HOLD || held == null -> enemySpawns.minByOrNull { getRange(mySpawn, it) }
             intruder != null && !onOurHalf(held) -> intruder
             else -> held
