@@ -40,6 +40,14 @@ that — the client is not a transport, the API is one call away. Then:
         fifty ticks, his largest group was 4–7 of nine — a melee on R3, a ranged on D5 and a ranged on A3 in the same
         tick — and the army chased the centroid of a dispersed farmer. That is v56 (USE_DETACH, FARMER_MOVE).
 
+    tools/replay.py builds <replay.json.gz> [--us temik911]
+        Spawn and Swamp: every construction site of both sides (what it becomes — the enemy's too —, when placed, how
+        far built, by which bodies, how it ended), every structure that appeared, and every energy PILE on the ground
+        (when, where, how big, who stood beside it, which container beside it emptied at that moment, where it went).
+        The operator, 24.09.2026: opponents build forward spawns by dumping a container on the ground and building
+        from the pile, so no analysis of an opponent is complete without this. Needs a replay fetched after 24.09.2026
+        (`match-log.py replay --refresh <id>`) — older files wrote piles and sites as a constant 0.
+
     tools/replay.py block <replay.json.gz> t0 t1 [--pics t1,t2]
         his BLOCK in the frame of the axis from his armed centroid to ours: depth and lateral offset per role, the share
         of his fighters with a healer adjacent, his centroid's step along the axis per tick against our nearest melee's
@@ -462,7 +470,9 @@ def built(doc):
     out = []
     starting = set(initial_spawns(doc).values())
     for o in doc['objects']:
-        if o['kind'] in ('constructionSite', 'container') or o['id'] in starting:
+        # a pile on the ground (`energy`) is not a structure either; since 24.09.2026 piles and sites carry their
+        # amount/progress in `s`, so without this line every dropped pile would read as something "built"
+        if o['kind'] in ('constructionSite', 'container', 'energy') or o['id'] in starting:
             continue
         t = firstseen.get(o['id'])
         if t is not None and t > 1:
@@ -593,6 +603,130 @@ def cmd_spawns(args):
         for t, body, cost in q:
             total += cost
             print(f"  t={t:<5} {body:<28} {role(body):<7} {cost:>5}  running {total}")
+
+
+def cmd_builds(args):
+    """Everything each side BUILT and every PILE it put on the ground — the operator's rule of 24.09.2026: Spawn and
+    Swamp opponents build forward spawns by walking to a container, dumping it on the ground and building from the
+    pile (a temporary container lives 99 ticks, a pile far longer), so an opponent's strategy is unreadable without
+    both. Sites: what they become (the enemy's too — the record names the prototype), when placed, how far built, by
+    whom (the `build` actions at the cell) and how it ended. Piles: when and where one appeared, how big, who stood
+    next to it, which container beside it emptied in the same ticks (drop/withdraw are not in the action log, so the
+    source is inferred from the neighbourhood and said to be inferred), and where it went. Needs a replay fetched
+    after 24.09.2026 (`match-log.py replay --refresh <id>`): older files wrote piles and sites as a constant 0."""
+    doc, meta, names = load(args.replay)
+    us = our_side(meta, args.us)
+    header(meta, names, us)
+    objs = {o['id']: o for o in doc['objects']}
+    series = {}
+    for tick in doc['ticks']:
+        for s in tick.get('s', []):
+            series.setdefault(s[0], []).append((tick['k'], s[1], s[2]))
+    if not any(series.get(o['id']) for o in doc['objects'] if o['kind'] in ('energy', 'constructionSite')):
+        print("\n(!) no pile or site in this replay carries a time series — it was fetched before 24.09.2026; "
+              f"re-fetch it: tools/match-log.py replay --refresh {meta.get('gameId') or '<id>'}")
+    tag = lambda s: '-' if s is None else ('OURS ' if s == us else 'ENEMY')
+    # who acted at a cell, and who stood where when a pile appeared
+    builders = {}                       # (x, y) -> Counter((side, body))
+    build_ticks = {}                    # (x, y) -> [first, last, count]
+    pile_ids = {o['id'] for o in doc['objects'] if o['kind'] == 'energy'}
+    pile_first = {pid: ser[0][0] for pid, ser in series.items() if pid in pile_ids and ser}
+    appear_at = {}
+    for pid, t in pile_first.items():
+        appear_at.setdefault(t, []).append(pid)
+    pile_near = {}
+    container_e = {o['id']: o.get('energy') or 0 for o in doc['objects'] if o['kind'] == 'container'}
+    recent_drops = []                   # (tick, container id, amount lost)
+    for k, start, now, acts, raw, tick in frames(doc):
+        for sid, hits, e in [(x[0], x[1], x[2]) for x in tick.get('s', [])]:
+            if sid in container_e:
+                if e < container_e[sid]:
+                    recent_drops.append((k, sid, container_e[sid] - e))
+                container_e[sid] = e
+        for a in raw:
+            if a[1] == 'build' and len(a) >= 4:
+                c = now.get(a[0]) or start.get(a[0])
+                cell = (a[2], a[3])
+                if c:
+                    builders.setdefault(cell, Counter())[(c['side'], c['body'])] += 1
+                bt = build_ticks.setdefault(cell, [k, k, 0])
+                bt[1], bt[2] = k, bt[2] + 1
+        for pid in appear_at.get(k, []):
+            p = objs[pid]
+            near = [c for c in list(start.values()) + list(now.values()) if rng((c['x'], c['y']), (p['x'], p['y'])) <= 1]
+            seen, who = set(), []
+            for c in near:
+                key = (c['side'], c['body'], c['x'], c['y'])
+                if key not in seen:
+                    seen.add(key)
+                    who.append(c)
+            src = [(t, cid, d) for t, cid, d in recent_drops if k - 5 <= t <= k and
+                   rng((objs[cid]['x'], objs[cid]['y']), (p['x'], p['y'])) <= 1]
+            pile_near[pid] = (who, src)
+        recent_drops = [r for r in recent_drops if r[0] >= k - 5]
+
+    def life(oid):
+        ser = series.get(oid) or []
+        if not ser:
+            return None
+        first, last = ser[0][0], ser[-1][0]
+        peak = max(e for _, _, e in ser)
+        gone = ser[-1][2] == 0 and ser[-1][1] == 0
+        return first, last, peak, ser[0][2], gone
+
+    print("\nSITES (what each side started building; progress/total, the builders by body and side):")
+    sites = sorted((o for o in doc['objects'] if o['kind'] == 'constructionSite'), key=lambda o: (life(o['id']) or (0,))[0])
+    finished = {(b[3], b[4]): b for b in built(doc)}
+    for o in sites:
+        lf = life(o['id'])
+        cell = (o['x'], o['y'])
+        kind = (o.get('structure') or '?').replace('Structure', '')
+        total = o.get('energyCapacity') or 0
+        if lf:
+            first, last, peak, _, gone = lf
+            done = finished.get(cell)
+            fate = (f"-> {done[1]} at t={done[5]}" if done and gone and abs(done[5] - last) <= 2
+                    else f"gone t={last} at {peak}" if gone else f"still {peak} at the end")
+            when = f"t={first}..{last}"
+        else:
+            fate, when, peak = "(no series)", "t=?", 0
+        bt = build_ticks.get(cell)
+        rate = f" rate={peak / max(1, bt[1] - bt[0] + 1):.1f}/tick over {bt[1] - bt[0] + 1}t ({bt[2]} build acts)" if bt else ""
+        who = ', '.join(f"{tag(s)}{b}x{n}" for (s, b), n in (builders.get(cell) or Counter()).most_common(3))
+        print(f"  {tag(o['side'])} {kind:<9} ({o['x']},{o['y']}) {when:<14} {peak}/{total} {fate}{rate}{'  by ' + who if who else ''}")
+    print("\nSTRUCTURES that appeared during the match (hits at the end, or the tick they fell):")
+    for oid, kind, side, x, y, t in sorted(built(doc), key=lambda b: b[5]):
+        ser = series.get(oid) or []
+        fell = next((tt for tt, h, e in ser if h == 0 and e == 0), None)
+        end = f"fell t={fell}" if fell else f"hits {ser[-1][1] if ser else '?'} at the end"
+        print(f"  {tag(side)} {kind:<15} ({x},{y}) t={t:<5} {end}")
+    print("\nPILES on the ground (first..last seen, size at birth / peak, fate; who stood beside it at birth;"
+          " a container beside it that lost energy in the five ticks before = its inferred source):")
+    dumped = Counter()
+    for pid in sorted(pile_ids, key=lambda i: pile_first.get(i, 10 ** 9)):
+        p = objs[pid]
+        lf = life(pid)
+        if not lf:
+            print(f"  ({p['x']},{p['y']}) no series")
+            continue
+        first, last, peak, born, gone = lf
+        ser = series[pid]
+        falls = [ser[i][2] - ser[i + 1][2] for i in range(len(ser) - 1) if ser[i + 1][2] < ser[i][2]]
+        slow = [d for d in falls if d <= 5]
+        decay = f" decays ~{statistics.median(slow):.0f}/tick" if len(slow) >= 5 else ""
+        who, src = pile_near.get(pid, ([], []))
+        sides = Counter(c['side'] for c in who)
+        owner = max(sides, key=sides.get) if sides else None
+        whos = ' '.join(f"{tag(c['side'])}{c['body']}" for c in who[:4]) or 'nobody'
+        srcs = ' '.join(f"C({objs[cid]['x']},{objs[cid]['y']})-{d:.0f}@{t}" for t, cid, d in src[:3])
+        if src and owner is not None:
+            dumped[owner] += peak           # the pile is fed a carry at a time, so its peak is what was moved
+        fate = f"gone t={last}" if gone else "still there at the end"
+        print(f"  ({p['x']},{p['y']}) t={first}..{last} {born}/{peak} {fate}{decay} | beside: {whos}"
+              f"{' | from ' + srcs if srcs else ''}")
+    for s in (0, 1):
+        if dumped[s]:
+            print(f"\n{tag(s)} {names[s]}: {dumped[s]:.0f} energy put on the ground beside a container that emptied at that moment")
 
 
 def cmd_scenario(args):
@@ -909,7 +1043,7 @@ def main():
     for name, fn, need_window in (('summary', cmd_summary, False), ('silent', cmd_silent, True), ('focus', cmd_focus, True), ('trace', cmd_trace, True),
                                   ('choice', cmd_choice, False), ('track', cmd_track, False),
                                   ('economy', cmd_economy, False), ('spawns', cmd_spawns, False),
-                                  ('scenario', cmd_scenario, False),
+                                  ('builds', cmd_builds, False), ('scenario', cmd_scenario, False),
                                   ('block', cmd_block, True), ('dance', cmd_dance, True), ('persist', cmd_persist, True),
                                   ('brawl', cmd_brawl, True), ('bodies', cmd_bodies, False), ('swings', cmd_swings, True)):
         p = sub.add_parser(name)

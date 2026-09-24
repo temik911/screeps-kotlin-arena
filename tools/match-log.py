@@ -464,16 +464,35 @@ class ReplayNormalizer:
                 side = self.side_of(o.get("user"))
                 hits = o.get("hits") if isinstance(o.get("hits"), (int, float)) else 0
                 store = o.get("store") or {}
-                energy = store.get("energy") if isinstance(store.get("energy"), (int, float)) else 0
+                energy = store.get("energy")
+                cap = (o.get("storeCapacityResource") or {}).get("energy")
+                # THE "ENERGY" OF A PILE AND OF A SITE (24.09.2026). A dropped pile (`type: energy`, a Resource)
+                # carries its amount in its own `energy` field, and a construction site its build in `progress` of
+                # `progressTotal` — neither has a `store`, so both used to be written as a constant 0 and their whole
+                # time series was lost: when a pile appeared, how big, when it was picked up; how fast a site grew.
+                # That is exactly how Spawn and Swamp opponents build forward spawns (the operator, 24.09.2026: walk
+                # to a container, dump it on the ground, build the spawn from the pile — the container vanishes), so
+                # the record now carries them in the same `energy` slot, and the site its target and its prototype.
+                if not isinstance(energy, (int, float)):
+                    energy = o.get("energy") if o.get("type") == "energy" else \
+                        o.get("progress") if o.get("type") == "constructionSite" else 0
+                    energy = energy if isinstance(energy, (int, float)) else 0
+                if o.get("type") == "constructionSite":
+                    cap = o.get("progressTotal")
                 st = self.structs.get(oid)
                 if st is None:
-                    cap = (o.get("storeCapacityResource") or {}).get("energy")
                     self.objects[oid] = {"id": oid, "kind": o.get("type"), "side": side, "x": o.get("x"),
                                          "y": o.get("y"), "hits": hits,
                                          "hitsMax": o.get("hitsMax") if isinstance(o.get("hitsMax"), (int, float)) else 0,
                                          "energy": energy, "energyCapacity": cap if isinstance(cap, (int, float)) else 0,
                                          "controlledBy": o.get("controlledBy")}
+                    if o.get("structurePrototypeName"):   # a site names what it will become, the enemy's too
+                        self.objects[oid]["structure"] = o.get("structurePrototypeName")
                     self.structs[oid] = [hits, energy, side]
+                    # the tick it APPEARED, which the first-state record above does not say: a pile or a site
+                    # born mid-match must be datable, and `s` is where every reader looks for a first sighting
+                    if k > 0 and (hits or energy):
+                        sdelta.append([oid, hits, energy])
                 else:
                     if st[0] != hits or st[1] != energy:
                         sdelta.append([oid, hits, energy])
@@ -495,7 +514,8 @@ class ReplayNormalizer:
         for cid in dead:
             del self.creeps[cid]
         for sid, st in self.structs.items():
-            if sid in alive_s or st[0] == 0:
+            # gone = hits AND energy to zero; a pile or a site has no hits, and judged by hits alone it never died
+            if sid in alive_s or (st[0] == 0 and st[1] == 0):
                 continue
             st[0], st[1] = 0, 0
             sdelta.append([sid, 0, 0])
