@@ -140,6 +140,12 @@ internal object Memory {
     val tourerOff = intArrayOf(0)
     /** Тик, когда соперник показал почерк Chemoautotroph (v638, см. USE_CHEMO_SENTRIES); 0 — не показал. */
     val chemoSeen = intArrayOf(0)
+    /** Почерк дробящего фермера (v644, см. USE_FARMER_TRIPLES): [0] — тик защёлки (0 — нет), [1] — раскладка троек сделана. */
+    val fragSeen = intArrayOf(0, 0)
+    /** Тик, когда его разведчик впервые стоял на клетке H (v644); 0 — не стоял. */
+    val fragScoutH = intArrayOf(0)
+    /** Срезов, на которых его армия была раздроблена (v644). */
+    val fragSplits = intArrayOf(0)
     /** Тик, когда соперник показал почерк MetalicaX (v639, см. USE_METALICA_HOLD); 0 — не показал. */
     val metalSeen = intArrayOf(0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
@@ -239,3 +245,6 @@ internal fun chemoMode() = Memory.chemoSeen[0] > 0
 
 /** РЕЖИМ ПРОТИВ MetalicaX (v639, см. USE_METALICA_HOLD): его почерк встал. */
 internal fun metalicaMode() = Memory.metalSeen[0] > 0
+
+/** РЕЖИМ ПРОТИВ ДРОБЯЩЕГО ФЕРМЕРА (v644, см. USE_FARMER_TRIPLES): его почерк встал. */
+internal fun fragMode() = Memory.fragSeen[0] > 0

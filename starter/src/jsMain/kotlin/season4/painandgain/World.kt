@@ -805,6 +805,22 @@ internal fun meleeIn(cs: List<Creep>) = cs.filter { !healerOnly(it) && !hasRange
 
 /** Флаги, кроме данного (оспариваемого). */
 internal fun flagsBut(ctx: Ctx, f: FlagInfo?) = ctx.flags.filter { it !== f }
+/** Флаги H (v644): самые дорогие после оспариваемого. */
+internal fun hFlagsOf(ctx: Ctx): List<FlagInfo> {
+    val rest = flagsBut(ctx, Garrisons.contestedFlag(ctx))
+    val top = rest.maxOfOrNull { it.score } ?: return emptyList()
+    return rest.filter { it.score == top }
+}
+/** Связные группы крипов (v644): соседи не дальше `link`. */
+internal fun groupsOf(cs: List<Creep>, link: Int): List<List<Creep>> {
+    val left = cs.toMutableList(); val out = ArrayList<List<Creep>>()
+    while (left.isNotEmpty()) {
+        val g = arrayListOf(left.removeAt(0)); var i = 0
+        while (i < g.size) { val a = g[i++]; val near = left.filter { getRange(a, it) <= link }; g.addAll(near); left.removeAll(near) }
+        out.add(g)
+    }
+    return out
+}
 
 /** Наши крипы отряда плана с номером si. */
 internal fun squadMembers(ctx: Ctx, si: Int) = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si }
@@ -1173,7 +1189,7 @@ internal object ScoutEvade {
  *  матча: стоящую группу он не трогает, а сход с поста возвращает её под правило «движется — бей». */
 internal object Garrisons {
     /** Боец под гарнизонной раскладкой (v600 или v605): его шаг — шаг к клетке отряда, выше бегства, приказа и кулака. */
-    fun active(id: String) = (USE_STANDING_GARRISONS || USE_CAMP_BREAK) && Memory.garrisonFlag.containsKey(id) &&
+    fun active(id: String) = (USE_STANDING_GARRISONS || USE_CAMP_BREAK || USE_FARMER_TRIPLES) && Memory.garrisonFlag.containsKey(id) &&
         id !in Memory.garrisonReleased
 
     /** ПОЛ ЕГО ФЛАГОВ (v620, см. USE_FLAG_FLOOR): флаг брать можно, если после этого не наших останется не меньше BALL_FLAGS —
@@ -1203,6 +1219,87 @@ internal object Garrisons {
         val contested = contestedFlag(ctx) ?: return
         if (maxOf(abs(contested.pos.x - mx), abs(contested.pos.y - my)) > METAL_TO_D5) return
         Memory.metalSeen[0] = getTicks(); raidWhy.bump("metal")
+    }
+
+    /** ПОЧЕРК ДРОБЯЩЕГО ФЕРМЕРА (v644, см. USE_FARMER_TRIPLES; разбор 62 игр против ricardo#13/#19 и 2 074 реплеев субагентом
+     *  Opus, 24.09.2026): его разведчик стоял на клетке H не позже FRAG_SCOUT_BY, и на срезах FRAG_FROM..FRAG_TO через
+     *  FRAG_STEP его боевые (связь FRAG_LINK) не меньше FRAG_SAMPLES раз разбиты на FRAG_GROUPS+ групп по двое и больше при
+     *  крупнейшей не больше FRAG_MAX. Не встаёт при почерке объездчика и Chemoautotroph (у них свои раскладки). Защёлка. */
+    fun fragFarmer(ctx: Ctx) {
+        if (!USE_FARMER_TRIPLES || Memory.fragSeen[0] > 0 || tourerMode() || chemoMode()) return
+        val now = getTicks()
+        if (now > FRAG_TO) return
+        if (Memory.fragScoutH[0] == 0 && now <= FRAG_SCOUT_BY) {
+            val hs = hFlagsOf(ctx)
+            if (enemyScoutsOf(ctx).any { sc -> hs.any { it.pos.key == sc.key } }) Memory.fragScoutH[0] = now
+        }
+        if (now < FRAG_FROM || now % FRAG_STEP != 0) return
+        val sizes = groupsOf(combatEnemiesBorn(ctx), FRAG_LINK).map { it.size }
+        if (sizes.count { it >= 2 } >= FRAG_GROUPS && (sizes.maxOrNull() ?: 0) <= FRAG_MAX) Memory.fragSplits[0]++
+        if (Memory.fragScoutH[0] > 0 && Memory.fragSplits[0] >= FRAG_SAMPLES) { Memory.fragSeen[0] = now; raidWhy.bump("frag") }
+    }
+
+    /** ГАРНИЗОНЫ-ТРОЙКИ ПРОТИВ ДРОБЯЩЕГО ФЕРМЕРА (v644, см. USE_FARMER_TRIPLES): при его почерке — раскладка один раз, затем
+     *  каждый тик слияние отряда меньше TRIPLE_SIZE с ближайшим и зачистка клетки поста от его крипа. */
+    fun farmerTriples(ctx: Ctx) {
+        if (!USE_FARMER_TRIPLES || !fragMode()) return
+        if (Memory.fragSeen[1] == 0) { Memory.fragSeen[1] = 1; tripleAssign(ctx) }
+        tripleMerge(ctx)
+        tripleClear(ctx)
+    }
+
+    /** Отрядов ⌊бойцы / TRIPLE_SIZE⌋; флаги — оспариваемый, оба H, затем A/R с наименьшим числом его вооружённых в
+     *  FRAG_GUARD_RANGE; в отряд флага — ближайший к нему вооружённый и ближайшие к нему прочие; остаток — к ближайшему флагу. */
+    private fun tripleAssign(ctx: Ctx) {
+        val fighters = readyFighters(ctx).toMutableList()
+        val n = fighters.size / TRIPLE_SIZE
+        if (n == 0) return
+        val contested = contestedFlag(ctx)
+        val hs = hFlagsOf(ctx)
+        val armed = armedEnemiesOf(ctx)
+        val rest = ctx.flags.filter { f -> f !== contested && hs.none { it === f } }
+            .sortedBy { f -> armed.count { getRange(it, f.pos) <= FRAG_GUARD_RANGE } }
+        val flags = (listOfNotNull(contested) + hs + rest).take(n)
+        val squads = ArrayList<ArrayList<Creep>>()
+        for (f in flags) {
+            val seed = fighters.filter { !healerOnly(it) }.minByOrNull { getRange(it, f.pos) }
+                ?: fighters.minByOrNull { getRange(it, f.pos) } ?: break
+            val sq = arrayListOf(seed); fighters.remove(seed)
+            repeat(TRIPLE_SIZE - 1) { fighters.minByOrNull { getRange(it, f.pos) }?.let { sq.add(it); fighters.remove(it) } }
+            squads.add(sq)
+        }
+        for (c in fighters) squads.indices.minByOrNull { getRange(c, flags[it].pos) }?.let { squads[it].add(c) }
+        for ((si, sq) in squads.withIndex()) for (c in sq) {
+            Memory.garrisonSquad[c.id] = si; Memory.garrisonHome[c.id] = flags[si].pos.key; Memory.garrisonFlag[c.id] = flags[si].pos.key
+        }
+        raidWhy.bump("triples")
+    }
+
+    /** Отряд, где живых меньше TRIPLE_SIZE, вливается в отряд с ближайшим флагом (по одному за тик): одиночек и пар он бьёт. */
+    private fun tripleMerge(ctx: Ctx) {
+        val bySquad = readyFighters(ctx).filter { it.id in Memory.garrisonSquad }.groupBy { Memory.garrisonSquad[it.id]!! }
+        if (bySquad.size < 2) return
+        val small = bySquad.entries.firstOrNull { it.value.size < TRIPLE_SIZE } ?: return
+        val home = Memory.garrisonHome[small.value[0].id] ?: return
+        val to = bySquad.entries.filter { it.key != small.key }.minByOrNull { e ->
+            val fk = Memory.garrisonHome[e.value[0].id] ?: home
+            maxOf(abs(fk / 100 - home / 100), abs(fk % 100 - home % 100))
+        } ?: return
+        val fk = Memory.garrisonHome[to.value[0].id] ?: return
+        for (c in small.value) { Memory.garrisonSquad[c.id] = to.key; Memory.garrisonHome[c.id] = fk; Memory.garrisonFlag[c.id] = fk }
+        raidWhy.bump("tmerge")
+    }
+
+    /** Его крип на клетке поста — цель каждого бойца отряда, который достаёт (как USE_POST_CLEAR v629; стадия огня позже
+     *  перепишет, если найдёт вооружённую цель): безоружного разведчика на клетке H огонь по вооружённым не бьёт. */
+    private fun tripleClear(ctx: Ctx) {
+        for (c in readyFighters(ctx)) {
+            val fk = Memory.garrisonFlag[c.id] ?: continue
+            val occ = ctx.enemyCreeps.firstOrNull { it.key == fk } ?: continue
+            val r = getRange(c, occ)
+            if (hasRanged(c) && r <= RANGED_RANGE) Executor.rangedAttack(c, occ)
+            if (hasMelee(c) && r <= 1) Executor.attack(c, occ)
+        }
     }
 
     /** ПОЧЕРК CHEMOAUTOTROPH (v638, см. USE_CHEMO_SENTRIES; разбор 15 игр и 685 игр других ботов субагентом Opus, 24.09.2026):
@@ -2454,6 +2551,8 @@ internal fun readSignals(ctx: Ctx) {
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     Garrisons.assign(ctx)   // стоящие гарнизоны (v600): раскладка один раз за матч
     Garrisons.chemo(ctx)   // почерк Chemoautotroph (v638): часовые на H
+    Garrisons.fragFarmer(ctx)   // почерк дробящего фермера (v644): гарнизоны-тройки
+    Garrisons.farmerTriples(ctx)
     Garrisons.metalica(ctx)   // почерк MetalicaX (v639): свои флаги — после боя
     Garrisons.campBreak(ctx)   // снять лагерь (v605): этапы посадки гарнизонов под прикрытием армии
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
