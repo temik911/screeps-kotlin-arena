@@ -6,6 +6,69 @@ reaches a live match, and the landing tag `spawn-and-swamp-vN` matches it.
 
 Owner: the Spawn and Swamp session. Code: `starter/src/jsMain/kotlin/season4/spawnandswamp/`. Only this bot's session edits this file (see the parallel-sessions rules in `CLAUDE.md`).
 
+## Состояние и что дальше (24.09.2026)
+
+**Где бот.** В `main` v73 — поведение v64, к которому откатились 08.09 (тег `spawn-and-swamp-v73`); с 08.09 в арене не
+сыграно ни одного матча. Рейтинг 1 271, **седьмое место** (08.09 было второе, 07.09 на v51 — первое). Таблица арены
+(`GET /api/arena/<arenaId>/leaderboard` из страницы клиента) на 24.09:
+
+| # | бот | рейтинг | игр | последняя версия |
+|---|---|---|---|---|
+| 1 | けろびー | 2 337 | 2 085 | #50 (08.09 была #19) |
+| 2 | live @ yt/marlyman123 | 2 292 | 7 376 | #430 |
+| 3 | ricardo18informatica2020 | 2 225 | 1 738 | #45 |
+| 4 | Darth Rick | 1 513 | 126 | #7 |
+| 5 | ●ω<♥♪ | 1 355 | 75 | #6 |
+| 6 | Ranamar | 1 311 | 132 | #9 |
+| 7 | **temik911 (мы)** | 1 271 | 622 | #62 |
+
+Первая тройка на тысячу выше нас и за две недели сменила от тридцати до сотен версий; v73 рассчитан на поле 08.09.
+
+**Почему работа встала 08–09.09** (разделы ниже, от «The control that broke the day's arithmetic» до «The shelf
+re-judged»): шесть сборок подряд (v65–v75) были лучше на всех офлайн-приборах и хуже в арене, лига из трёх соперников
+перестала давать ложные «лучше», но арену не предсказывает, а self-play различает только дебют. Отдельно: вердикты по
+полке сделаны блоками по 5–30 игр, а тот же v64 сыграл 6-7-3 и 1-8-3 одним кодом — опыт Pain and Gain (побайтово тот же
+код против одного бота: 12-4, 11-5, 3-9; различение начинается около 64 на 64) говорит, что большинство этих вердиктов не
+доказано ни в одну сторону. Полку не воскрешать вслепую, но и «хуже» у неё не установлено.
+
+**Как работаем теперь** — по опыту Pain and Gain (до топ-1 за 21–24.09), переложенному на эту арену:
+
+- **Живые тестовые игры — главный измеритель**, стенд — оракул тождества. `play.py spawn-and-swamp --test 'Имя#N'`
+  бесплатен (рейтинг не двигает); `--ab <refA> <refB> --test 'Имя#N' -n N` чередует руки двух сборок; `--ab main HEAD
+  --dry` доказывает, что против прочих игра не изменилась (гейт обеих сборок плюс `logdiff.py` стенда).
+- **Рост — из правил конкретных ботов**: по реплеям многих игр найти, что он строит и когда, куда ведёт армию, на кого
+  охотится, чего не трогает; раскладка против него — только за признаком его почерка в первые тики, с долей ложных
+  срабатываний, замеренной по всему хранилищу. Второй источник — правки входа решения из арифметики арены (усталость по
+  типу частей, болото, башня 1000/−50 за клетку, ATTACK 30 за 80 против RANGED 10 за 150, реген спавна 1 в тик), а не
+  веса внутри боя по разделителю побед и поражений.
+- **Прибор до правки**: какая ветка решения реально ведёт крипа или заказ спавна в решающем окне — правка в ветку, которая
+  ничего не ведёт, инертна.
+- **Порядок в клиенте**: гейт и живая серия — по очереди; ворктри не пересобирать посреди серии (клиентская папка смотрит
+  на её сборку симлинком); рейтинговые игры не вклинивать в замер на пойманном боте (они вытесняют его из `recent`).
+
+**План.**
+
+0. *Инструменты (без правок поведения).* `logdiff.py` в стенд S&S, чтобы `--ab --dry` сравнивал логи, а не только строку
+   гейта; сухой A/B сборки против самой себя обязан дать ноль расхождений. Снимок `snapshot.sh v73` для лиги заново
+   (`opponents/` пропала вместе со старым ворктри) — лига остаётся вспомогательной. Правки `tools/` — в `main` сразу.
+1. *Разведка поля.* Рейтинговая серия из 20 на v73 как есть (`play.py spawn-and-swamp -n 20 --logs runs/`) — базовая
+   линия против нынешнего поля и заполнение `recent`; `series.py foes`, `ledger.py` по `имя#версия`; разбор всех
+   поражений субагентами Opus по группам соперника (`match-log.py replay`, `replay.py economy/spawns`) с вопросом «какое
+   у этого бота правило». Затем ловля свежих версий топ-3 в `--test-list` рейтинговыми по одной и базовый блок 16+
+   тестовых рук на каждом пойманном.
+2. *Приборы.* Счётчики достижимости на ветки решений (заказ спавна: носильщик / боец / ломатель / хранитель / башня /
+   точка доставки; постура: DEFEND / PUSH / hold / join / last call; источник шага крипа по роли); экспериментальные
+   правила — за тумблерами `USE_X` с вердиктом в KDoc; диагноз S&S в `autopsy.py` (кто и когда снёс спавн, гонка
+   экономик, потери носильщиков); калибровка непрерывного предиктора исхода на сыгранных логах против конкретного бота
+   (d > 1 — мерить им, d < 0,5 — играть счёт).
+3. *Цикл.* Правило соперника → раскладка за признаком → гейт и `--ab --dry` → механический прибор правки сдвинулся →
+   `--ab` тестовыми руками против этого бота → вердикт по объединённым блокам или откалиброванному предиктору → серия 20.
+4. *Архитектура — по надобности.* Файл режется по смыслу (экономика и спавн, стройка, армия и постура, осадная
+   симуляция) только когда правки начнут задевать друг друга, и начинается это с прибора, а не с переноса кода.
+
+**Цели:** вернуться в тройку; устойчивый перевес над свежей версией каждого из тройки (от 60 % на 32+ тестовых играх);
+затем первое место.
+
 ## Measured rules and design
 
 **`season4/spawnandswamp/`** — Season 4 "Spawn and Swamp" (basic) bot. Measured rules (02.09.2026): spawn starts with 1000 energy, regen 1/tick; permanent 2500-energy containers in the map corners, plus a pair of temporary 2000-energy containers (99-tick decay) appearing every 50 ticks anywhere; ~1/3 swamp, ~1/3 walls, spawns sit in wall pockets so **path distance, never Chebyshev**. **Breach first**: each spawn has a 5000-energy container locked behind `StructureWall`s (10000 hits, attackable) nine cells away — `breachPlan` runs Dijkstra treating structure walls as passable at a wall-count-first cost, a melee `[MOVE,ATTACK]×k` breacher (k ≈ √(hits/180), spawn+break time minimum) is spawned before anything else, idle home fighters shoot the current wall, and `DistanceMap.syncWalls` drops the static wall cache when a wall dies (the stub run: wall down at t≈95, income 4→25/tick, enemy spawn dead at t=391 instead of 648). Economy: hauler fleet sized from the income the spawn can convert into fighters (`targetIncome` = full fighter cost / spawn ticks) vs the projected income of the fleet over the nearest sites (`fleetTrip`); site choice by energy-per-trip with in-flight accounting and decay checks; energy split hauler/fighter is hedged 1:1 after the initial 1000 (`HAULER_LEAD`) — the opening 1000 goes entirely to haulers (a lost match on 02.09 showed the opponent doing exactly that and out-hauling a 500-hauler + 500-guard opening 2:1); a visible enemy army overrides (fighter first, no waiting for bigger bodies while enemy fighters exist). Army: fighter body = the (RANGED blocks, TOUGH+MOVE pairs) pair maximizing damage×HP at 1:1 MOVE (T3 M7 R4 at 1000; no HEAL), and **only full bodies** while income flows (a second lost match: thirteen 300-cost bodies vs three M5R5 lost on equal energy — mass attack punishes swarms). DEFEND post at the spawn; enemies inside the spawn alarm radius are fought by **everyone** regardless of ratio (nine fighters once watched three die from the post); sorties away from home only on **local** superiority (allies within 8 vs enemies within 11, ratio 1.3), then close to range 2 with the damage penalty dropped (the first lost fight: 130 dps vs 80 and lost because fighters sat at range 4-5 while the front one was focused); while a stronger enemy camps the spawn, accumulate to a full body instead of feeding it; body parts are interleaved MOVE/RANGED after TOUGH (a front-loaded MOVE block left crippled 4-RANGED turrets that blocked three waves in a corridor), creeps with no working MOVE are obstacles for pathing and never request moves, the melee breacher stays home and its power is kite-discounted for push decisions, and when the spawn (not energy) is the bottleneck the body is chosen per spawn-tick (M5R5) rather than per energy (T3M7R4); PUSH only against the enemy army **expected at arrival** (current power + observed growth × march time) and in **waves** (a vanguard waits for wave-mates that fall behind by path ticks, never by centroid — a centroid on a wall cell once froze the whole squad), engage blocking enemies on local superiority, "last call" push before the 2000-tick draw. Copies of `InfluenceMap`/`DistanceMap`/`TrafficManager` from spawnstrike (DistanceMap gained a `swampCost` parameter + `stepFieldTo` for empty haulers). `DEBUG_MAP` prints the map, `sites` lines print container appearances, `t=` lines the economy, `enemy creeps` lines (every 50 ticks) enemy bodies as `T10M4R3H1`, `moves:` lines (every 100) the TrafficManager audit (issued moves per kind free/chain/swap, ok/fail by next-tick position), `stuck` lines the first time a creep asks the same step for 8 ticks without moving (who blocks it and what the blocker wants) — so a live run doubles as a probe.
