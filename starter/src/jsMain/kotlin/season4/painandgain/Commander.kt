@@ -94,6 +94,9 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
     // контакт в боте — его вооружённый в RANGED_RANGE + 1, и строи стоят фронтами ровно на этой клетке, «в контакте»
     // и без единого выстрела (v570: первая редакция включала марш 21–51 тик из 77–443 тиков начатого размена)
     val outOfReach = meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= RANGED_RANGE } }
+    // ядро изготовки: армия командира без отпущенных за флагами (v183; v653 — и в режиме боя до первого его ствола)
+    // (считается в момент вызова: гонка перед изготовкой меняет `Squads.cmdDetach` в том же тике)
+    fun braceCore() = meas.chase.commandArmy.filter { it.id !in Squads.cmdDetach }
     val engageMarch = commanderNow && USE_MARCH_INTO_ENGAGE && Signals.engagingGarrison && outOfReach &&
         meas.forces.armedEnemies.isNotEmpty() && meas.chase.mobileArmy.size >= 2
     // ПРИМАНКА ПРОТИВ ОСЛАБЛЕННОГО (v587–v590, см. USE_BAIT_VS_DEBUFFED): половина армии с лекарями встаёт в ENGAGE_RANGE от
@@ -128,6 +131,13 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         Orders.commandOf.putAll(steps)
         Orders.source = "engage"
         engageMarchN.n++
+    } else if (USE_BRACE_BEFORE_CONTACT && commanderNow && outOfReach && meas.forces.enemyMassedNow && !tourerMode()) {
+        // ИЗГОТОВКА И В РЕЖИМЕ БОЯ, ПОКА ЕГО СТВОЛЫ НАС НЕ ДОСТАЮТ (v653, см. USE_BRACE_BEFORE_CONTACT): режим боя включается
+        // за 20–60 тиков до контакта, и боевая раздача ставила стрелков впереди мили; строй по ролям держится до первого ствола
+        cmdTicks++
+        Orders.source = "brace"
+        Formation.brace(unitsNow, braceCore(), meas.forces.armedEnemies, Orders.commandOf)
+        braceFightTicks.n++
     } else if (commanderNow) {
         // СТРАХОВКА ПО ВРЕМЕНИ И ДЛЯ КОМАНДИРА (v158): она стояла на бегунах и на выборе цели, а на самой
         // дорогой части — переборе замыслов с прогоном каждого — не стояла. В рейтинговой серии 09.09.2026 это
@@ -240,7 +250,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         // копия «приказов гонки» в обход изготовки — копия пустого словаря; `Formation.brace` чистит приказы сам)
         Orders.source = "brace"
         commandRace(ctx, meas, meas.chase.commandArmy, meas.forces.armedEnemies, ctx.flags)
-        Formation.brace(unitsNow, meas.chase.commandArmy.filter { it.id !in Squads.cmdDetach }, meas.forces.armedEnemies, Orders.commandOf)
+        Formation.brace(unitsNow, braceCore(), meas.forces.armedEnemies, Orders.commandOf)
     } else if (raceCommandNow) {
         cmdTicks++
         // приказы прошлого тика снимаются ЗДЕСЬ (v470): до того это делал `out.clear()` первой строкой гонки — единственное, что
@@ -505,6 +515,9 @@ internal var cmdBlocked = "-"
 
 /** Тиков, где командир вёл начатый размен маршем на его армию, а не боевой раздачей (v569, `engmarch=`). */
 internal val engageMarchN = Gauges.counter("engmarch")
+
+/** Тиков режима боя, где до первого его ствола строй держала изготовка (v653, `bracefight=`, см. USE_BRACE_BEFORE_CONTACT). */
+internal val braceFightTicks = Gauges.counter("bracefight")
 
 /** Тиков гонки, где колонна держится при его кулаке ближе MARCH_SAFE (v572, `column=`). */
 internal val columnTicks = Gauges.counter("column")
