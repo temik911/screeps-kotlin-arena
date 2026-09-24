@@ -1150,7 +1150,7 @@ internal object Garrisons {
 
     /** ПОЧЕРК ФЕРМЕРА (v630, см. USE_FARMER_SWAP): тот же признак, что у кулака (v626), без кулака; держится до конца матча. */
     fun farmerSign(ctx: Ctx): Boolean {
-        if (!USE_FARMER_SWAP) return false
+        if (!USE_FARMER_SWAP && !USE_FARMER_MERGE) return false
         if (Memory.farmerSeen[0] > 0) return true
         val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
         val guarded = ctx.flags.count { f -> f.theirs && armed.count { getRange(it, f.pos) <= FIST_RADIUS - 1 } >= 2 }
@@ -1429,6 +1429,15 @@ internal object Garrisons {
         }
         // ОБМЕН ПОСТАМИ ПРОТИВ ФЕРМЕРА (v630, см. USE_FARMER_SWAP): шар встаёт на пост меньшей группы стрелков, она — на
         // оспариваемый флаг
+        // ПЯТЬ СТРЕЛКОВ НА ОДИН H ПРОТИВ ФЕРМЕРА (v631, см. USE_FARMER_MERGE): при почерке фермера обе группы стрелков получают
+        // один пост — тот из двух самых дорогих флагов вне оспариваемого, у которого больше его вооружённых в 2 × BAIT_STANDOFF
+        if (USE_FARMER_MERGE && USE_H_POSTS && farmerSign(ctx) && Memory.farmerSeen[1] == 0) {
+            val contested = contestedFlag(ctx)
+            val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+            val hot = ctx.flags.filter { it !== contested }.sortedByDescending { it.score }.take(2)
+                .maxByOrNull { f -> armed.count { getRange(it, f.pos) <= 2 * BAIT_STANDOFF } }
+            if (hot != null) { for (i in 1 until Memory.raidPost.size) Memory.raidPost[i] = hot.pos.key; Memory.farmerSeen[1] = 1 }
+        }
         val swapWeak = if (USE_FARMER_SWAP && USE_H_POSTS && farmerSign(ctx))
             (1 until squads.size).filter { squads[it].isNotEmpty() && Memory.raidPost[it] >= 0 }.minByOrNull { squads[it].size } else null
         for ((si, sq) in squads.withIndex()) {

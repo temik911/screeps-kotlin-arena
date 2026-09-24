@@ -129,7 +129,7 @@ internal object Memory {
     /** Тик, с которого один из трёх наших флагов — его (v623, см. USE_PUSH_PARKED); -1 — все три не его. */
     val pushSince = intArrayOf(-1)
     /** Тик, когда соперник показал почерк фермера (v626, см. USE_STRIKE_FARMER); 0 — не показал. */
-    val farmerSeen = intArrayOf(0)
+    val farmerSeen = intArrayOf(0, 0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
     val strikeFlag = intArrayOf(-1)
     /** Постоянный пост группы стрелков по номеру отряда (v628, см. USE_H_POSTS); -1 — не выбран. */
