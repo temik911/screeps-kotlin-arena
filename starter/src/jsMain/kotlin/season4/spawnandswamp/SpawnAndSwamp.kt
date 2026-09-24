@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 92
+    private const val BOT_VERSION = 93
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -815,7 +815,6 @@ object SpawnAndSwamp {
         }
         siegeTargetId = enemySpawn?.id
         siteStepsCache.clear()
-        flowCache.clear()
         assaultCache.clear()
 
         if (!greeted) {
@@ -953,15 +952,23 @@ object SpawnAndSwamp {
         // видит вовсе, а «наша половина» не может переезжать оттого, что он построил спавн в центре
         if (enemyHome != null) DistanceMap.ensureBuilt(mySpawn, enemyHome)
 
-        val loadedToSpawn = DistanceMap.flowFieldTo(mySpawn, blocked)
+        // FIELDS OUTLIVE THE TICK WHILE THE OBSTACLES DO (v93; v79 did it for the drop cells). A flow or step field
+        // is a pure function of its target, the terrain and `blocked` (structure walls included), so both caches live
+        // until the SET of blocked cells changes. With v92's pile spawns the bot held six and more spawns, and the two
+        // fields per spawn per tick (nearestField) took 17 ms of the slow ticks — 222 overruns in one game
+        val blockedSig = blocked.mapTo(HashSet()) { it.x * 100 + it.y }.sorted().toIntArray()
+        if (!blockedSig.contentEquals(cellStepsSig)) { cellStepsCache.clear(); flowCache.clear(); cellStepsSig = blockedSig }
+        fun flowF(t: Position) = flowCache.getOrPut(t.x * 100 + t.y) { DistanceMap.flowFieldTo(t, blocked) }
+        fun stepF(t: Position) = cellStepsCache.getOrPut(t.x * 100 + t.y) { DistanceMap.stepFieldTo(t, blocked) }
+        val loadedToSpawn = flowF(mySpawn)
         /** Поэлементный минимум полей до всех наших спавнов: рейс считается до того, куда сдают. */
         fun nearestField(steps: Boolean): IntArray {
-            if (mySpawns.size <= 1) return if (steps) DistanceMap.stepFieldTo(mySpawn, blocked) else loadedToSpawn
+            if (mySpawns.size <= 1) return if (steps) stepF(mySpawn) else loadedToSpawn
             var acc: IntArray? = null
             for (sp in mySpawns) {
-                val f = if (steps) DistanceMap.stepFieldTo(sp, blocked) else DistanceMap.flowFieldTo(sp, blocked)
+                val f = if (steps) stepF(sp) else flowF(sp)
                 val cur = acc
-                if (cur == null) acc = f
+                if (cur == null) acc = f.copyOf()   // a copy: the minimum is taken in place, and f is a cached field
                 else for (i in cur.indices) {
                     val a = cur[i]
                     val b = f[i]
@@ -970,8 +977,7 @@ object SpawnAndSwamp {
             }
             return acc ?: loadedToSpawn
         }
-        flowCache[mySpawn.x * 100 + mySpawn.y] = loadedToSpawn
-        val stepsToSpawn = DistanceMap.stepFieldTo(mySpawn, blocked)
+        val stepsToSpawn = stepF(mySpawn)
         val haulLoaded = nearestField(false)
         val haulSteps = if (mySpawns.size <= 1) stepsToSpawn else nearestField(true)
         val enemyApproach = DistanceMap.flowFieldTo(mySpawn, blockedForEnemy)
@@ -985,9 +991,6 @@ object SpawnAndSwamp {
         val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, haulLoaded, haulSteps, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, myExtensions, mySites)
 
         rememberDrops(sites)
-        // the step fields to the drop cells outlive the tick while the obstacles do (v79, see cellStepsSig)
-        val blockedSig = blocked.mapTo(HashSet()) { it.x * 100 + it.y }.sorted().toIntArray()
-        if (!blockedSig.contentEquals(cellStepsSig)) { cellStepsCache.clear(); cellStepsSig = blockedSig }
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
         measureDelivery(ctx)
@@ -3058,6 +3061,7 @@ object SpawnAndSwamp {
         // после всех стычек и ещё одной такой же (запас на ошибку оценки) хиты остаются, а по
         // Ланчестеру остаток сильнее стоящих у врага дома. Прежний счёт «мощь против мощи» не знал
         // цены пути: пара M8R4 ушла при 438 против 437 и легла об два M5R5 подряд (матч 8)
+        cpuMark("f.pre")
         val production = enemyProductionPerTick(getTicks(), combatEnemies + ctx.pendingEnemies)
         val massing = combatEnemies.filter { it.id !in approachingIds }
         val massingPower = enemyPowerOf(massing, strikers)
@@ -3116,6 +3120,7 @@ object SpawnAndSwamp {
         // ход считается ДО прогонов: он им теперь нужен — по нему разносится урон марша (см. approach)
         val startTravel = travelTicksOf(staging, assaultFlow, spawnFlow)
         val frontTravel = travelTicksOf(waveFront, assaultFlow, spawnFlow)
+        cpuMark("f.march")
         val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = startTravel) else SIEGE_LOSE
         val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel) else SIEGE_LOSE
         // the front fires the way its winning plan does (v83): past his shielded defenders and his towers, at the spawn
@@ -3483,6 +3488,7 @@ object SpawnAndSwamp {
         // враг У ДОМА (в радиусе тревоги по его пути к спавну): выбора нет — дерёмся всем составом,
         // одной целью, без оглядки на соотношение. Матч 02.09: трое врагов в пяти клетках от спавна,
         // в дальности трое наших, девять сидели на посту «без перевеса не идём» и смотрели.
+        cpuMark("f.posture")
         val homeTarget = homeThreats.minWithOrNull(compareBy<Creep>({ arrivalOf(it) }, { getRange(it, centroid) }))
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
@@ -3667,6 +3673,7 @@ object SpawnAndSwamp {
             lastCell[creep.id] = creep.x * 100 + creep.y
         }
 
+        cpuMark("f.creeps")
         prevShooters = combatEnemies.map { val p = InfluenceMap.profileOf(it); Shooter(it.x * 100 + it.y, p.ranged, p.melee) }
         // БАШНЯ — ЦЕЛЬ ПЕРЕД СПАВНОМ, но после крипов: порядок тот же, что в симуляции осады (мягкие
         // вперёд — они и стреляют, и умирают быстрее), и разнобой между стрельбой и симуляцией как раз
