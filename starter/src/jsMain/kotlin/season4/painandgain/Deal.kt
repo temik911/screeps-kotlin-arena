@@ -138,6 +138,23 @@ internal class Deal(
     /** Опасность клетки ДЛЯ ЭТОГО крипа: адресная при тумблере, иначе поле E — байт в байт прежняя раздача. */
     fun danOf(c: Creep, key: Int): Double =
         InfluenceMap.dangerAt(key)
+    /** Его мили, уже стоящие вплотную к нашему боевому, и кто из наших к каждому вплотную (v647, см. USE_MELEE_COVER). */
+    private val engagedMelee: List<Pair<Creep, List<Creep>>> = if (!USE_MELEE_COVER) emptyList() else
+        combatEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
+            .map { e -> e to army.filter { getRange(it, e) <= 1 } }.filter { it.second.isNotEmpty() }
+    /** ОПАСНОСТЬ КЛЕТКИ ДЛЯ НАШЕГО МИЛИ (v647, см. USE_MELEE_COVER): без удара его мили, который уже стоит вплотную к другому
+     *  нашему, — этот удар армия платит, кто бы ни встал рядом, а наш мили рядом переносит его с оружия стрелка на своё. */
+    fun danMeleeOf(c: Creep, key: Int): Double {
+        val base = danOf(c, key)
+        if (engagedMelee.isEmpty()) return base
+        val x = key / 100; val y = key % 100
+        var d = base
+        for ((e, adj) in engagedMelee) {
+            if (maxOf(abs(e.x - x), abs(e.y - y)) > 2 || adj.none { it.id != c.id }) continue
+            d -= InfluenceMap.profileOf(e).melee
+        }
+        return maxOf(0.0, d)
+    }
     val goal = ensureGoalField(fighters, combatEnemies)
     /** Цена клетки по направлению: сколько тиков пути от неё до ближайшего очага. */
     fun goalCost(key: Int): Double {
@@ -410,7 +427,7 @@ internal class Deal(
         // лечение минус полученный урон»): клетка, из которой мили достаёт вооружённого, приносит армии его удар с
         // поправкой на входящий модификатор цели, и этот удар конкурирует с опасностью честно, а не через вес
         val strike = if (!USE_MELEE_STRIKE_VALUE) 0.0 else strikeValue(c, p)
-        return -W_ATT * att * pull - strike + W_DAN * dan * danOf(c, key) -
+        return -W_ATT * att * pull - strike + W_DAN * dan * danMeleeOf(c, key) -
             W_FRONT * InfluenceMap.vulnerabilityOf(key) - W_SAG * sagAt(key) -
             W_HEALCOVER * InfluenceMap.healReachAt(key) +
             CLAIM_COST * claimAt(key) - stayBonus(c, p)

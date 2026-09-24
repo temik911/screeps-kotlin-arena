@@ -805,6 +805,28 @@ internal fun meleeIn(cs: List<Creep>) = cs.filter { !healerOnly(it) && !hasRange
 
 /** Флаги, кроме данного (оспариваемого). */
 internal fun flagsBut(ctx: Ctx, f: FlagInfo?) = ctx.flags.filter { it !== f }
+/** УПУЩЕННЫЕ ПРИКРЫТИЯ (v647, прибор `cover=`, см. USE_MELEE_COVER): его мили вплотную к нашему стрелку или лекарю, нашего
+ *  мили вплотную к нему нет, а наш вооружённый мили в двух клетках от него, сам ни с кем не в контакте, и у него есть
+ *  свободная клетка рядом с тем мили в один шаг. Число таких наших мили за тик. */
+internal fun missedCovers(ctx: Ctx): Int {
+    val ours = ctx.army
+    val ourMelee = ours.filter { hasMelee(it) }
+    val his = ctx.combatEnemies
+    val taken = HashSet<Int>()
+    for (c in ctx.myCreeps) taken.add(c.key)
+    for (c in ctx.enemyCreeps) taken.add(c.key)
+    var n = 0
+    for (e in his) {
+        if (!hasMelee(e) || ours.none { !hasMelee(it) && getRange(it, e) <= 1 } || ourMelee.any { getRange(it, e) <= 1 }) continue
+        n += ourMelee.count { m ->
+            getRange(m, e) == 2 && his.none { getRange(it, m) <= 1 } && (-1..1).any { dx -> (-1..1).any { dy ->
+                val x = e.x + dx; val y = e.y + dy
+                (dx != 0 || dy != 0) && maxOf(abs(x - m.x), abs(y - m.y)) <= 1 && key(x, y) !in taken && !DistanceMap.isWall(x, y)
+            } }
+        }
+    }
+    return n
+}
 /** Флаги H (v644): самые дорогие после оспариваемого. */
 internal fun hFlagsOf(ctx: Ctx): List<FlagInfo> {
     val rest = flagsBut(ctx, Garrisons.contestedFlag(ctx))
@@ -2038,6 +2060,10 @@ internal val picketArmy = Gauges.counter("pkarmy")
  *  против кулака снят, потому что его стволы уже достают нашу армию. */
 internal val fistReachTicks = Gauges.counter("fistreach")
 
+/** Прибор прикрытия (v647, см. USE_MELEE_COVER): `cover=` — наших мили-тиков, упустивших шаг к его мили, который рубит нашего
+ *  стрелка или лекаря (см. `missedCovers`). */
+internal val coverMissed = Gauges.counter("cover")
+
 /** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere) / застрял и обходит своих (detour). */
 internal val garrisonWhy = Gauges.labelled("gar")
 
@@ -2576,6 +2602,7 @@ internal fun readSignals(ctx: Ctx) {
     Garrisons.fragFarmer(ctx)   // почерк дробящего фермера (v644): гарнизоны-тройки
     Garrisons.farmerTriples(ctx)
     Garrisons.leadKeeper(ctx)   // почерк хранителя отрыва (v646): режим пар
+    coverMissed.n += missedCovers(ctx)   // прибор прикрытия (v647)
     Garrisons.metalica(ctx)   // почерк MetalicaX (v639): свои флаги — после боя
     Garrisons.campBreak(ctx)   // снять лагерь (v605): этапы посадки гарнизонов под прикрытием армии
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
