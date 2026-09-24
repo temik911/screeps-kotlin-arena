@@ -816,6 +816,12 @@ internal fun fightDecided(ctx: Ctx): Boolean {
     return 2 * minOf(ours, his) <= maxOf(ours, his)
 }
 
+/** Его боевые (с оружием или лечением по рождению) — для почерков соперника. */
+internal fun combatEnemiesBorn(ctx: Ctx) = ctx.enemyCreeps.filter { bornCombatant(it) }
+
+/** Его разведчики — крипы из одной части MOVE. */
+internal fun enemyScoutsOf(ctx: Ctx) = ctx.enemyCreeps.filter { c -> c.body.size == 1 && c.body[0].type == MOVE }
+
 /** Наши боевые, уже рождённые, — кого раскладывает план. */
 internal fun readyFighters(ctx: Ctx) = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
 
@@ -1188,11 +1194,11 @@ internal object Garrisons {
      *  плотным блоком. Защёлка до конца. */
     fun metalica(ctx: Ctx) {
         if (!USE_METALICA_HOLD || Memory.metalSeen[0] > 0 || getTicks() != METAL_CHECK_TICK) return
-        val his = ctx.enemyCreeps.filter { bornCombatant(it) }
+        val his = combatEnemiesBorn(ctx)
         if (his.size < 3 * GARRISON_SIZE) return
         val (mx, my) = medianOf(his)
         if (his.any { maxOf(abs(it.x - mx), abs(it.y - my)) > METAL_BLOCK }) return
-        val scouts = ctx.enemyCreeps.filter { c -> c.body.size == 1 && c.body[0].type == MOVE }
+        val scouts = enemyScoutsOf(ctx)
         if (scouts.none { maxOf(abs(it.x - mx), abs(it.y - my)) >= METAL_SCOUT_BEHIND }) return
         val contested = contestedFlag(ctx) ?: return
         if (maxOf(abs(contested.pos.x - mx), abs(contested.pos.y - my)) > METAL_TO_D5) return
@@ -1206,7 +1212,7 @@ internal object Garrisons {
         if (!USE_CHEMO_SENTRIES || Memory.chemoSeen[0] > 0) return
         val now = getTicks()
         if (now < CHEMO_CHECK_FROM || now > CHEMO_CHECK_TO || now % 2 != 0) return
-        val his = ctx.enemyCreeps.filter { bornCombatant(it) }
+        val his = combatEnemiesBorn(ctx)
         val seen = HashSet<String>()
         for (c in his) {
             if (c.id in seen) continue
@@ -1232,7 +1238,7 @@ internal object Garrisons {
         val ids = Memory.tourerScouts
         if (Memory.tourerOff[0] > 0 || now > TOURER_CHECK_TICKS) return false
         if (ids[0] == null) {
-            val scouts = ctx.enemyCreeps.filter { c -> c.body.size == 1 && c.body[0].type == MOVE }.sortedBy { it.id }
+            val scouts = enemyScoutsOf(ctx).sortedBy { it.id }
             if (scouts.size != 2) { Memory.tourerOff[0] = 1; return false }
             for (i in 0..1) { ids[i] = scouts[i].id; Memory.tourerStart[i] = scouts[i].key; Memory.tourerCell[i] = scouts[i].key; Memory.tourerMoved[i] = now }
             return false
