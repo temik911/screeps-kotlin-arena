@@ -1175,6 +1175,29 @@ internal object Garrisons {
         return Memory.tourerSeen[0] > 0
     }
 
+    /** ПОЧЕРК CHEMOAUTOTROPH (v638, см. USE_CHEMO_SENTRIES; разбор 15 игр и 685 игр других ботов субагентом Opus, 24.09.2026):
+     *  на чётном тике из CHEMO_CHECK_FROM..CHEMO_CHECK_TO среди его боевых есть цепочка (соседи не дальше FIST_RADIUS) ровно из
+     *  GARRISON_SIZE крипов с одним лекарем, а все прочие его боевые не ближе CHEMO_APART к каждому из них. Защёлка до конца. */
+    fun chemo(ctx: Ctx) {
+        if (!USE_CHEMO_SENTRIES || Memory.chemoSeen[0] > 0) return
+        val now = getTicks()
+        if (now < CHEMO_CHECK_FROM || now > CHEMO_CHECK_TO || now % 2 != 0) return
+        val his = ctx.enemyCreeps.filter { bornCombatant(it) }
+        val seen = HashSet<String>()
+        for (c in his) {
+            if (c.id in seen) continue
+            val grp = ArrayList<Creep>(); val stack = arrayListOf(c); seen.add(c.id)
+            while (stack.isNotEmpty()) {
+                val x = stack.removeAt(stack.size - 1); grp.add(x)
+                for (o in his) if (o.id !in seen && getRange(o, x) <= FIST_RADIUS) { seen.add(o.id); stack.add(o) }
+            }
+            if (grp.size != GARRISON_SIZE || grp.count { healerOnly(it) } != 1) continue
+            if (his.filter { o -> grp.none { it.id == o.id } }.all { o -> grp.all { getRange(o, it) >= CHEMO_APART } }) {
+                Memory.chemoSeen[0] = now; raidWhy.bump("chemo"); return
+            }
+        }
+    }
+
     /** ЕГО РАЗВЕДЧИКИ СТОЯТ ПАРОЙ В НОГУ (v634, см. USE_TOURER_SWITCH; разбор 182 реплеев #22 и 1 828 других ботов субагентом
      *  Opus, 24.09.2026). На первом тике — двое его крипов из одной части MOVE, их стартовые клетки и смещение второго от
      *  первого; дальше тик последнего сдвига каждого. Признак — до TOURER_CHECK_TICKS: оба не сдвигались TOURER_STILL тиков,
@@ -1859,6 +1882,9 @@ internal val campWhy = Gauges.labelled("camp")
 /** Прибор налётчика (v613): `raid=` — тики налёта (go) / при гарнизоне от его группы (refuge) / на последнем взятом (hold). */
 internal val raidWhy = Gauges.labelled("raid")
 
+/** Прибор часовых против Chemoautotroph (v638): `chemos=` — назначений разведчика на H. */
+internal val chemoSentry = Gauges.counter("chemos")
+
 /** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere) / застрял и обходит своих (detour). */
 internal val garrisonWhy = Gauges.labelled("gar")
 
@@ -2378,6 +2404,7 @@ internal fun readSignals(ctx: Ctx) {
     Memory.ourPrevCells.clear()
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     Garrisons.assign(ctx)   // стоящие гарнизоны (v600): раскладка один раз за матч
+    Garrisons.chemo(ctx)   // почерк Chemoautotroph (v638): часовые на H
     Garrisons.campBreak(ctx)   // снять лагерь (v605): этапы посадки гарнизонов под прикрытием армии
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
     // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом

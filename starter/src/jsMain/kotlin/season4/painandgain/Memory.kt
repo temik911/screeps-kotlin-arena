@@ -138,6 +138,8 @@ internal object Memory {
     val tourerCell = IntArray(2)
     val tourerMoved = IntArray(2)
     val tourerOff = intArrayOf(0)
+    /** Тик, когда соперник показал почерк Chemoautotroph (v638, см. USE_CHEMO_SENTRIES); 0 — не показал. */
+    val chemoSeen = intArrayOf(0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
     val strikeFlag = intArrayOf(-1)
     /** Постоянный пост группы стрелков по номеру отряда (v628, см. USE_H_POSTS); -1 — не выбран. */
@@ -229,3 +231,6 @@ internal object Prev {
 /** РЕЖИМ ОБЪЕЗДЧИКА (v637, см. USE_TOURER_SWITCH): его почерк встал — включены правила v552–v612, сделанные против него;
  *  до признака и против прочих ботов они молчат, и игра — v551. */
 internal fun tourerMode() = Memory.tourerSeen[0] > 0
+
+/** РЕЖИМ ПРОТИВ CHEMOAUTOTROPH (v638, см. USE_CHEMO_SENTRIES): его почерк встал. */
+internal fun chemoMode() = Memory.chemoSeen[0] > 0

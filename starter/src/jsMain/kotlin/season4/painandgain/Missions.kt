@@ -85,6 +85,20 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
     // скаут уходил, а его крип вставал на клетку через 11–15 тиков
     val holds = HashMap<String, FlagInfo>()
     init { for (s in runners) heldFlag(ctx, s)?.let { holds[s.id] = it } }
+    // ЧАСОВЫЕ НА H (v638, см. USE_CHEMO_SENTRIES): против Chemoautotroph каждый разведчик держит свой из двух самых дорогих
+    // флагов вне оспариваемого — ближний к нему из свободных; это его назначение раньше удержания и паросочетания
+    init {
+        if (USE_CHEMO_SENTRIES && chemoMode()) {
+            val contested = Garrisons.contestedFlag(ctx)
+            val posts = flagsBut(ctx, contested).sortedByDescending { it.score }.take(2).toMutableList()
+            for (s in runners.filter { !bornCombatant(it) }.sortedBy { it.id }) {
+                val p = posts.minByOrNull { getRange(s, it.pos) } ?: break
+                posts.remove(p)
+                holds[s.id] = p
+                chemoSentry.n++
+            }
+        }
+    }
     // ...И ОХРАНА ПРИ НЁМ (v298, см. GROUP_SAFE_DMG): второй из пары стоит рядом с флагом, который взял первый
     private val guards = HashMap<String, FlagInfo>()
     // ...и ОХРАНА ТОЛЬКО ОТ БЕЗДЕЛЬЯ (v335): вооружённый рядом с уже нашим флагом не приносит ничего, а стоит тела.
@@ -247,7 +261,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             }
             // захватчик без замены: от врага «с боем» ближе SCOUT_FLEE_TRIGGER — прочь (пустой MOVE ходит клетку за тик и
             // по болоту, где стрелок вязнет), даже с флага: флаг останется нашим, пока враг сам на него не встанет
-            val threats = ctx.combatEnemies.filter { getRange(s, it) <= SCOUT_FLEE_TRIGGER && threatening(it, ctx.enemyCreeps) }
+            val threats = ctx.combatEnemies.filter { getRange(s, it) <= (if (USE_CHEMO_SENTRIES && chemoMode() && !bornCombatant(s)) CHEMO_SCOUT_FLEE else SCOUT_FLEE_TRIGGER) && threatening(it, ctx.enemyCreeps) }
             // ...а ВООРУЖЁННЫЙ бегун бежит от силы, а не от всякого (v297, см. HOLD_WATCH): его одиночный стрелок или мили в
             // восьми клетках снимал нашего бойца с флага, хотя тот бьёт его один на один; уходит, когда его стволы рядом
             // перевешивают наших в досягаемости
