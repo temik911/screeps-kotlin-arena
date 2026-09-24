@@ -627,8 +627,7 @@ def cmd_builds(args):
               f"re-fetch it: tools/match-log.py replay --refresh {meta.get('gameId') or '<id>'}")
     tag = lambda s: '-' if s is None else ('OURS ' if s == us else 'ENEMY')
     # who acted at a cell, and who stood where when a pile appeared
-    builders = {}                       # (x, y) -> Counter((side, body))
-    build_ticks = {}                    # (x, y) -> [first, last, count]
+    build_events = {}                   # (x, y) -> [(tick, side, body)] — a cell can host a tower, then its rampart
     pile_ids = {o['id'] for o in doc['objects'] if o['kind'] == 'energy'}
     pile_first = {pid: ser[0][0] for pid, ser in series.items() if pid in pile_ids and ser}
     appear_at = {}
@@ -646,11 +645,7 @@ def cmd_builds(args):
         for a in raw:
             if a[1] == 'build' and len(a) >= 4:
                 c = now.get(a[0]) or start.get(a[0])
-                cell = (a[2], a[3])
-                if c:
-                    builders.setdefault(cell, Counter())[(c['side'], c['body'])] += 1
-                bt = build_ticks.setdefault(cell, [k, k, 0])
-                bt[1], bt[2] = k, bt[2] + 1
+                build_events.setdefault((a[2], a[3]), []).append((k, c['side'] if c else None, c['body'] if c else '?'))
         for pid in appear_at.get(k, []):
             p = objs[pid]
             near = [c for c in list(start.values()) + list(now.values()) if rng((c['x'], c['y']), (p['x'], p['y'])) <= 1]
@@ -676,24 +671,30 @@ def cmd_builds(args):
 
     print("\nSITES (what each side started building; progress/total, the builders by body and side):")
     sites = sorted((o for o in doc['objects'] if o['kind'] == 'constructionSite'), key=lambda o: (life(o['id']) or (0,))[0])
-    finished = {(b[3], b[4]): b for b in built(doc)}
+    finished = {}
+    for b in built(doc):
+        finished.setdefault((b[3], b[4]), []).append(b)
+    idle = Counter()
     for o in sites:
         lf = life(o['id'])
         cell = (o['x'], o['y'])
         kind = (o.get('structure') or '?').replace('Structure', '')
         total = o.get('energyCapacity') or 0
-        if lf:
-            first, last, peak, _, gone = lf
-            done = finished.get(cell)
-            fate = (f"-> {done[1]} at t={done[5]}" if done and gone and abs(done[5] - last) <= 2
-                    else f"gone t={last} at {peak}" if gone else f"still {peak} at the end")
-            when = f"t={first}..{last}"
-        else:
-            fate, when, peak = "(no series)", "t=?", 0
-        bt = build_ticks.get(cell)
-        rate = f" rate={peak / max(1, bt[1] - bt[0] + 1):.1f}/tick over {bt[1] - bt[0] + 1}t ({bt[2]} build acts)" if bt else ""
-        who = ', '.join(f"{tag(s)}{b}x{n}" for (s, b), n in (builders.get(cell) or Counter()).most_common(3))
-        print(f"  {tag(o['side'])} {kind:<9} ({o['x']},{o['y']}) {when:<14} {peak}/{total} {fate}{rate}{'  by ' + who if who else ''}")
+        if not lf:                      # placed and never built a single point: a plan, counted, not listed
+            idle[(o['side'], kind)] += 1
+            continue
+        first, last, peak, _, gone = lf
+        done = next((b for b in finished.get(cell, []) if b[1] == kind.lower() and abs(b[5] - last) <= 2), None)
+        fate = (f"-> {done[1]} at t={done[5]}" if done and gone
+                else f"gone t={last} at {peak}" if gone else f"still {peak} at the end")
+        acts = [e for e in build_events.get(cell, []) if first - 1 <= e[0] <= last + 1]
+        span = acts[-1][0] - acts[0][0] + 1 if acts else 0
+        rate = f" {peak / span:.1f}/tick over {span}t ({len(acts)} build acts)" if acts else ""
+        who = ', '.join(f"{tag(s)}{b}x{n}" for (s, b), n in Counter((e[1], e[2]) for e in acts).most_common(3))
+        print(f"  {tag(o['side'])} {kind:<9} ({o['x']},{o['y']}) t={first}..{last:<6} {peak}/{total} {fate}{rate}"
+              f"{'  by ' + who if who else ''}")
+    for (s, kind), n in sorted(idle.items(), key=lambda kv: str(kv[0])):
+        print(f"  {tag(s)} {kind:<9} x{n} placed and never started")
     print("\nSTRUCTURES that appeared during the match (hits at the end, or the tick they fell):")
     for oid, kind, side, x, y, t in sorted(built(doc), key=lambda b: b[5]):
         ser = series.get(oid) or []

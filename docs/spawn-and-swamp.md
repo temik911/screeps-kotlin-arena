@@ -70,6 +70,69 @@ re-judged»): шесть сборок подряд (v65–v75) были лучш
 **Цели:** вернуться в тройку; устойчивый перевес над свежей версией каждого из тройки (от 60 % на 32+ тестовых играх);
 затем первое место.
 
+### Серия v73 против поля 24.09.2026: 3–6–11, и что показали все семнадцать не-побед
+
+Двадцать рейтинговых на v73 как есть (`runs/ss-v73-rating/`, рейтинг 1271 → 1230): **3 победы, 6 поражений, 11 ничьих**.
+Разбирались все не-победы — поражения и ничьи, — по реплеям, пятью разборщиками по боту соперника.
+
+| бот соперника | игр | итог | что он делает |
+|---|---|---|---|
+| live @ yt/marlyman123 #96 / #114 / #142 | 6 / 2 / 1 | 0–0–9 | крепость: рампарт на спавне к t≈240, башня рядом к ≈350 под своим рампартом, ещё 3–4 рампарта-поста; гарнизон и кормилец башни стоят на рампартах; с t≈470 передовые спавны у выгруженных контейнеров (у #142 — кластер из четырёх, 29 тыс. энергии через них), дороги; на наших носильщиков не охотится |
+| けろびー #18 (#11 — контроль, победа) | 3 (+1) | 0–3–0 | строитель M2C2W2 ставит спавн у каждого свежего временного контейнера (11 за три матча), армия M5R5/M5H3 копится до ≈8 тел и идёт на наш спавн; башен и рампартов нет |
+| Ranamar #2 | 2 | 0–2–0 | всё боевое с MOVE ×5 (M10R2, M10H2, M15A3) — клетка за тик по болоту; рампарт на спавне; армия встаёт лагерем на дорогах наших носильщиков |
+| ricardo18informatica2020 #32 | 1 | 0–1–0 | рампарт на спавне к t≈206, две башни под рампартами, пять передовых спавнов каждый со своим рампартом (один — в нашем углу), удар мили с юга |
+| stachu3478 #16 | 1 | 0–0–1 | передовой спавн у контейнера на НАШЕЙ половине к t=385 и поток M4R3H1 из него |
+| 76561198870429455 #35 | 1 | 0–0–1 | лёгкая армия с лекарями садится блоком у нашего выхода и не бьёт |
+| AlbaVika #6, 宰 #3 | 1 + 1 | 2–0–0 | — |
+
+**Как соперники строят экономику — и почему у нас её нет (наблюдение оператора, подтверждено реплеями).** Строитель
+(M2C2W2 у けろびー, M6W2C4 у ricardo, M5C5W5 у stachu, M7W3C4 у marlyman) приходит к временному контейнеру в первые
+5–60 тиков его жизни, **выкладывает его на землю** (≈45 в тик: контейнер в 2000 пустеет за 20–44 тика) и одновременно
+строит из кучи спавн за 1000 — ровно 100 действий по 10, иногда рампарт на него. Контейнер живёт 99 тиков, куча тает на
+`ceil(e/1000)` в тик — 1680 живут около 1300 тиков; так энергия, которая иначе сгнила бы, становится спавном, его
+регенерацией, второй очередью производства и запасом (остаток кучи ≈700 уходит в новый спавн). Для основной экономики
+такой спавн бесплатен: строитель один на весь матч. За матч это 6–8 тыс. энергии у けろびー, 8,4 тыс. у ricardo, 24–48
+тыс. через временные контейнеры у marlyman. Все пять попыток нашей «точки доставки» (v49–v70) упирались ровно в
+«источник, который не гниёт за 99 тиков»; ответ поля — положить его на землю. Инструмент: `tools/replay.py builds`
+(каждая площадка обеих сторон с типом, темпом, строителем и исходом; каждая куча — когда, где, сколько, кто стоял рядом,
+какой контейнер рядом опустел); реплеи с кучами и прогрессом площадок пишутся с 24.09.2026, старые — `match-log.py
+replay --refresh`.
+
+**Наши дефекты — общие для многих соперников, выведены из кода и строк лога, не из разделителя побед:**
+
+1. **Тик не укладывается в CPU.** `Script execution timed out` в 11 матчах из 20; в пяти — 180–424 тика (0c6b0c 355,
+   0c6b0e 355, 0c6b14 424, 0c6b16 180, 0c6b34 213). Армия стоит замороженной по 140–300 тиков подряд, в том числе
+   ровно тогда, когда нужен отзыв домой (поражение от ricardo, t=1600–1628). Горячие места по разборам: отрисовка
+   `drawDebug` (в v73 `DEBUG_VISUALS = true`), `towerFireField` в `assaultTo`, `pathTicks → periodAt`, `bodyWeight`,
+   `InfluenceMap.wallBetween`, `DistanceMap.bfs`.
+2. **Цель — ближайший спавн, а побеждает только снос всех.** Каждый его новый передовой спавн (для него бесплатный)
+   перехватывает цель и уводит волну от крепости, которая тем временем обрастает стрелками на рампартах; «последний
+   звонок» считает ход и осаду одного ближайшего спавна по пустой дороге, а стояло их 3–6; отзыв домой считается по
+   кольцу тревоги в 40 тиков при пути домой около 120.
+3. **Осада не видит рампартов, кроме рампарта на спавне.** Рампарт на клетке башни (башня — 13 000 работы, а не 3000),
+   защитники на рампартах (симуляция убивает их по хитам крипа, стрельба тратится на неуязвимых) — отсюда `sim=win` у
+   волн, которые гибнут у его спавна.
+4. **Мили ценится без скорости.** `meleeFactor` даёт мили полную силу, если у врага есть хоть один мили; против армии,
+   которая по болоту втрое быстрее (Ranamar), наши M12A5 были вплотную 1 % тиков, а рампарт на его спавне включал их
+   покупку (3,3–3,9 тыс. энергии в тела, не нанёсшие урона).
+5. **Лекарь запирает волну** (возврат дефекта v17): безоружного лекаря цель шлёт домой, а волна, держа кромку, ждёт
+   отстающего — 400–480 тиков стояния при собственной симуляции `melee=win`.
+6. **Оценка его роста.** Производство отсчитывается от первого боевого тела — его безногого A3 на t≈20, — а лекарь при
+   рождении добавляет мощи 0: против けろびー#18 волна ушла при расчёте +170/100t, а он рос +393/100t; `siegeHold` без
+   башен означает «иди дальше», и вернуть волну некому.
+7. **Домашний бой не начинается.** `homeReady` пускает в бой только того, чей путь до угрозы короче `fightTicks`, —
+   `[0/4]`, `[0/5]` в обеих ничьих с «сидящей» армией, хотя пост идёт вместе.
+8. **Ложный «боец первым» в дебюте.** Почти каждый соперник открывается ломателем своей стены (A3, M2A3, M3A6, M1A5,
+   M10R2, T1M6A5); мобильный ломатель читается как атака, на t=2 уходит тысяча в бойца, первый носильщик — на t=202, к
+   t=400 сдано 300 энергии против его 5000.
+
+**Порядок работы.** Первым — CPU: дефект, у которого нет цены по поведению и который бьёт по половине матчей. Затем цель
+и условие победы (все спавны, крепость против приманок, отзыв гонкой), затем слепые пятна осады и волны (3–7), дебют (8)
+и экономика через кучи. Раскладки против отдельных ботов — только после этого и только за их признаком: M2A3 третьим
+рождением к t≈38 (marlyman, 9 из 9, ложных 0 из ≈31), A3 на t≈19 плюс M2C2W2 на t≈28 (けろびー, 9 реплеев, ложных 0),
+M8R2M2 на t=1 (Ranamar), M3A6 на t≈20 и площадка за 200 на клетке его спавна к t=50 (ricardo), M1A5 на t=1 и рой M1C1
+(stachu).
+
 ## Measured rules and design
 
 **`season4/spawnandswamp/`** — Season 4 "Spawn and Swamp" (basic) bot. Measured rules (02.09.2026): spawn starts with 1000 energy, regen 1/tick; permanent 2500-energy containers in the map corners, plus a pair of temporary 2000-energy containers (99-tick decay) appearing every 50 ticks anywhere; ~1/3 swamp, ~1/3 walls, spawns sit in wall pockets so **path distance, never Chebyshev**. **Breach first**: each spawn has a 5000-energy container locked behind `StructureWall`s (10000 hits, attackable) nine cells away — `breachPlan` runs Dijkstra treating structure walls as passable at a wall-count-first cost, a melee `[MOVE,ATTACK]×k` breacher (k ≈ √(hits/180), spawn+break time minimum) is spawned before anything else, idle home fighters shoot the current wall, and `DistanceMap.syncWalls` drops the static wall cache when a wall dies (the stub run: wall down at t≈95, income 4→25/tick, enemy spawn dead at t=391 instead of 648). Economy: hauler fleet sized from the income the spawn can convert into fighters (`targetIncome` = full fighter cost / spawn ticks) vs the projected income of the fleet over the nearest sites (`fleetTrip`); site choice by energy-per-trip with in-flight accounting and decay checks; energy split hauler/fighter is hedged 1:1 after the initial 1000 (`HAULER_LEAD`) — the opening 1000 goes entirely to haulers (a lost match on 02.09 showed the opponent doing exactly that and out-hauling a 500-hauler + 500-guard opening 2:1); a visible enemy army overrides (fighter first, no waiting for bigger bodies while enemy fighters exist). Army: fighter body = the (RANGED blocks, TOUGH+MOVE pairs) pair maximizing damage×HP at 1:1 MOVE (T3 M7 R4 at 1000; no HEAL), and **only full bodies** while income flows (a second lost match: thirteen 300-cost bodies vs three M5R5 lost on equal energy — mass attack punishes swarms). DEFEND post at the spawn; enemies inside the spawn alarm radius are fought by **everyone** regardless of ratio (nine fighters once watched three die from the post); sorties away from home only on **local** superiority (allies within 8 vs enemies within 11, ratio 1.3), then close to range 2 with the damage penalty dropped (the first lost fight: 130 dps vs 80 and lost because fighters sat at range 4-5 while the front one was focused); while a stronger enemy camps the spawn, accumulate to a full body instead of feeding it; body parts are interleaved MOVE/RANGED after TOUGH (a front-loaded MOVE block left crippled 4-RANGED turrets that blocked three waves in a corridor), creeps with no working MOVE are obstacles for pathing and never request moves, the melee breacher stays home and its power is kite-discounted for push decisions, and when the spawn (not energy) is the bottleneck the body is chosen per spawn-tick (M5R5) rather than per energy (T3M7R4); PUSH only against the enemy army **expected at arrival** (current power + observed growth × march time) and in **waves** (a vanguard waits for wave-mates that fall behind by path ticks, never by centroid — a centroid on a wall cell once froze the whole squad), engage blocking enemies on local superiority, "last call" push before the 2000-tick draw. Copies of `InfluenceMap`/`DistanceMap`/`TrafficManager` from spawnstrike (DistanceMap gained a `swampCost` parameter + `stepFieldTo` for empty haulers). `DEBUG_MAP` prints the map, `sites` lines print container appearances, `t=` lines the economy, `enemy creeps` lines (every 50 ticks) enemy bodies as `T10M4R3H1`, `moves:` lines (every 100) the TrafficManager audit (issued moves per kind free/chain/swap, ok/fail by next-tick position), `stuck` lines the first time a creep asks the same step for 8 ticks without moving (who blocks it and what the blocker wants) — so a live run doubles as a probe.
