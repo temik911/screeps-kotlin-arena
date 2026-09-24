@@ -254,7 +254,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             if (Garrisons.active(s.id) && canMove(s)) {
                 val (gs, has) = Garrisons.step(s, ctx)
                 if (has) {
-                    if (gs != null) TrafficManager.request(s, gs, Arbiter.RUNNER_PRIORITY) else TrafficManager.pin(s.id)
+                    if (gs != null) TrafficManager.request(s, gs, Arbiter.RUNNER_PRIORITY) else Garrisons.pinIfHeld(s)
                     dbg(s, "GARRISON", f, gs)
                     continue
                 }

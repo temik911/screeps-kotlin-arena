@@ -1372,7 +1372,17 @@ internal object Garrisons {
     fun pinnedOnPost(c: Creep): Boolean {
         if (!active(c.id)) return false
         val fk = Memory.garrisonFlag[c.id] ?: return false
+        // ...а при тройках — только держатель клетки флага (v660, см. USE_PIN_FLAG_ONLY)
+        if (pinFlagOnly()) return c.key == fk
         return maxOf(abs(c.x - fk / 100), abs(c.y - fk % 100)) <= 1
+    }
+
+    /** Закрепляется ли на посту только держатель клетки флага (v660, см. USE_PIN_FLAG_ONLY): при раскладке тройками. */
+    fun pinFlagOnly() = USE_PIN_FLAG_ONLY && fragMode()
+
+    /** Закрепить гарнизонного крипа, который стоит (v660): при тройках — только на клетке своего флага. */
+    fun pinIfHeld(c: Creep) {
+        if (!pinFlagOnly() || c.key == Memory.garrisonFlag[c.id]) TrafficManager.pin(c.id)
     }
 
     /** Его крип на клетке поста — цель каждого бойца отряда, который достаёт (как USE_POST_CLEAR v629; стадия огня позже

@@ -1272,7 +1272,7 @@ internal fun steps(): List<Row<Stride, Position?>> = stepRows ?: listOf<Row<Stri
     // сдвинули бы её с поста — под правило «движется — бей»
     Row("garrison", { Garrisons.active(creep.id) }) {
         val (s, _) = Garrisons.step(creep, ctx)
-        if (s == null) TrafficManager.pin(creep.id)
+        if (s == null) Garrisons.pinIfHeld(creep)
         s
     },
     Row("flee", { mustFlee }, RowMark.SURVIVE, why = MUST_FLEE) {
