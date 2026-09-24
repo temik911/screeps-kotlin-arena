@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 78
+    private const val BOT_VERSION = 79
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -901,7 +901,9 @@ object SpawnAndSwamp {
         val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, haulLoaded, haulSteps, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, myExtensions, mySites)
 
         rememberDrops(sites)
-        cellStepsCache.clear()
+        // the step fields to the drop cells outlive the tick while the obstacles do (v79, see cellStepsSig)
+        val blockedSig = blocked.mapTo(HashSet()) { it.x * 100 + it.y }.sorted().toIntArray()
+        if (!blockedSig.contentEquals(cellStepsSig)) { cellStepsCache.clear(); cellStepsSig = blockedSig }
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
         measureDelivery(ctx)
@@ -1122,7 +1124,18 @@ object SpawnAndSwamp {
 
     private val cellStepsCache = HashMap<Int, IntArray>()
 
-    /** Поле шагов ДО клетки, кэш на тик — и для кучи из истории, и для склада площадки. */
+    /**
+     * WHAT THE CACHE ABOVE IS VALID FOR (v79). A step field is a pure function of its target, the terrain, the
+     * structure walls (DistanceMap's static layer) and `ctx.blocked` — and the walls are in `ctx.blocked` too. The cache
+     * used to be cleared every tick, so `collectRate` rebuilt a full 10000-cell BFS for every cell in `dropHistory` on
+     * every tick the forward-spawn placement was asked (every tick against an opponent with two spawns): the live trace
+     * of v78 put that block at 50 ms of a 100 ms tick on its slow ticks, and the tick ran out of cpu 115 and 210 times in
+     * two games. The fields are now kept while the SET of blocked cells is unchanged — the same arrays the per-tick
+     * cache would have rebuilt, so no decision changes.
+     */
+    private var cellStepsSig = IntArray(0)
+
+    /** Поле шагов ДО клетки — и для кучи из истории, и для склада площадки; живёт, пока не меняются преграды (cellStepsSig). */
     private fun cellSteps(ctx: Ctx, key: Int): IntArray =
         cellStepsCache.getOrPut(key) { DistanceMap.stepFieldTo(InfluenceMap.cell(key / 100, key % 100), ctx.blocked) }
 
