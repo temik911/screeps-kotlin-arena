@@ -402,7 +402,16 @@ object InfluenceMap {
      * Стоимости опасности накапливаются от перекрывающихся врагов.
      */
     fun dangerCostMatrix(enemies: List<Creep>, blocked: List<Position>): CostMatrix {
-        val matrix = CostMatrix()
+        // THE SUMS ARE KEPT HERE AND WRITTEN ONCE (v81, CPU). CostMatrix is a game object: live, every get/set crosses
+        // into the engine's isolate, and this loop made two of them per cell per enemy (81 cells each) and per cell of
+        // every tower's 43×43 circle — up to 25 ms of a 100 ms tick in the v79 trace. The local array repeats the same
+        // integer arithmetic the matrix held (values 0..255, stored exactly in its Uint8), then each touched cell is set
+        // once, so the matrix handed to searchPath is the same one.
+        val cost = IntArray(FIELD_MAX * 100 + FIELD_MAX + 1)
+        val matrix = object {
+            fun get(x: Int, y: Int) = cost[x * 100 + y]
+            fun set(x: Int, y: Int, v: Int) { cost[x * 100 + y] = v }
+        }
         for (enemy in enemies) {
             val profile = profileOf(enemy)
             if (profile.melee + profile.ranged + profile.heal <= 0.0) continue
@@ -451,7 +460,9 @@ object InfluenceMap {
         for (cell in blocked) {
             if (cell.x in 0..FIELD_MAX && cell.y in 0..FIELD_MAX) matrix.set(cell.x, cell.y, BLOCKED)
         }
-        return matrix
+        val out = CostMatrix()
+        for (i in cost.indices) if (cost[i] != 0) out.set(i / 100, i % 100, cost[i])
+        return out
     }
 
     /**
