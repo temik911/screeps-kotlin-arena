@@ -1518,6 +1518,15 @@ internal object Garrisons {
                 if (post >= 0) {
                     claimed.add(post)
                     for (c in sq) { Memory.garrisonFlag[c.id] = post; Memory.garrisonHome[c.id] = post }
+                    // СИДЯЩЕГО НА КЛЕТКЕ — БИТЬ (v629, см. USE_POST_CLEAR): его крип на клетке поста — цель всех, кто достаёт
+                    if (USE_POST_CLEAR) ctx.enemyCreeps.firstOrNull { it.key == post }?.let { occ ->
+                        for (c in sq) {
+                            val r = getRange(c, occ)
+                            if (hasRanged(c) && r <= RANGED_RANGE) Executor.rangedAttack(c, occ)
+                            if (hasMelee(c) && r <= 1) Executor.attack(c, occ)
+                        }
+                        raidWhy.bump("clear")
+                    }
                     raidWhy.bump("post")
                     continue
                 }
@@ -1708,7 +1717,8 @@ internal object Garrisons {
             return Pair(null, true)
         }
         if (maxOf(abs(creep.x - fx), abs(creep.y - fy)) > 2) {
-            val flow = flowTo(ctx, InfluenceMap.cell(fx, fy))
+            // к посту — в обход его стоящих групп (v629, см. USE_POST_AVOID)
+            val flow = flowTo(ctx, InfluenceMap.cell(fx, fy), avoid = USE_POST_AVOID && fk in Memory.raidPost)
             // ОТРЯД ИДЁТ КУЧНО (v602; живой блок v601: отряды растягивались, и ушедшего вперёд мили он добивал одного —
             // t=46–63, «наших в 6» ноль): кто впереди отстающего товарища больше чем на 2 клетки по полю — ждёт
             // ...внутри СВОЕГО отряда и в радиусе кулака (v605, стенд: при натиске всей армией на один флаг передние ждали
