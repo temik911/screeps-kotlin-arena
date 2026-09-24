@@ -49,6 +49,7 @@ import screeps.api.RAMPART_HITS
 import screeps.api.createConstructionSite
 import screeps.api.arenaInfo
 import screeps.api.get
+import screeps.api.getCpuTime
 import screeps.api.getObjectsByPrototype
 import screeps.api.getRange
 import screeps.api.getTerrainAt
@@ -113,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 76
+    private const val BOT_VERSION = 77
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -256,8 +257,51 @@ object SpawnAndSwamp {
     // ---------- отладка ----------
     private const val DEBUG_LOG = true
     private const val DEBUG_MAP = true
-    private const val DEBUG_VISUALS = true
+    /** The influence-map overlay (InfluenceMap.drawDebug): OFF in live matches since v77. It cost a tick's CPU budget in
+     *  real matches — `Script execution timed out` in 11 of the 20 games of the v73 series (24.09.2026), 180-424 ticks in
+     *  five of them, the army frozen 140-300 ticks at a stretch — and ~156 of one loss's 355 overruns were spent drawing
+     *  it after the moves were resolved. It decides nothing; turn it on only to look at a single game. */
+    private const val DEBUG_VISUALS = false
     private const val LOG_EVERY = 10
+
+    /**
+     * CPU BY PHASE (v77, copied from Pain and Gain's `cpuMark`/`cpuSummary`, 07.09.2026). The arena gives a tick
+     * `cpuTimeLimit` (50 ms) and kills the script past it; the bot had no measure of its own CPU at all. Every phase of
+     * [tick] is marked; once a tick has spent more than [CPU_WARN_MS] every further mark is printed at once as
+     * `cpu t=N <phase> at=<ms>` — so the last such line before a `Script execution timed out` names the last phase that
+     * finished, and the one after it is the culprit. At the end of a slow tick (over [CPU_SLOW_MS]), on the first three
+     * ticks and every hundred ticks the whole split is printed (`cpu t=N total=…: phase=ms …`), and every hundred ticks
+     * the slowest tick since the last report. getCpuTime() is nanoseconds since the tick started; the stub answers 0,
+     * so the gate's logs stay deterministic.
+     */
+    private const val CPU_WARN_MS = 35.0
+    private const val CPU_SLOW_MS = 25.0
+    private val cpuPhases = ArrayList<Pair<String, Double>>()
+    private var cpuMaxMs = 0.0
+    private var cpuMaxTick = 0
+    private var cpuSlowTicks = 0
+    private fun cpuMs(): Double = try { getCpuTime() / 1_000_000.0 } catch (e: Throwable) { 0.0 }
+    private fun cpuMark(phase: String) {
+        val now = cpuMs()
+        cpuPhases.add(phase to now)
+        if (DEBUG_LOG && now > CPU_WARN_MS) println("cpu t=${getTicks()} $phase at=${(now * 10).toInt() / 10.0}")
+    }
+    private fun cpuSummary() {
+        val ms = cpuMs()
+        if (ms > cpuMaxMs) { cpuMaxMs = ms; cpuMaxTick = getTicks() }
+        if (ms > CPU_SLOW_MS) cpuSlowTicks++
+        if (DEBUG_LOG && (getTicks() <= 3 || ms > CPU_SLOW_MS || getTicks() % 100 == 0)) {
+            var prev = 0.0
+            val parts = cpuPhases.joinToString(" ") { (ph, at) -> val d = at - prev; prev = at; "$ph=${(d * 10).toInt() / 10.0}" }
+            println("cpu t=${getTicks()} total=${(ms * 10).toInt() / 10.0}: $parts")
+        }
+        cpuPhases.clear()
+        if (DEBUG_LOG && getTicks() % 100 == 0) {
+            println("cpu t=${getTicks()} max=${(cpuMaxMs * 10).toInt() / 10.0} at=$cpuMaxTick slow=$cpuSlowTicks " +
+                "limit=${arenaInfo.cpuTimeLimit / 1_000_000}/${arenaInfo.cpuTimeLimitFirstTick / 1_000_000}")
+            cpuMaxMs = 0.0; cpuMaxTick = 0; cpuSlowTicks = 0
+        }
+    }
 
     private val DIRECTIONS = listOf(
         0 to 0, -1 to -1, 0 to -1, 1 to -1, -1 to 0, 1 to 0, -1 to 1, 0 to 1, 1 to 1,
@@ -814,7 +858,9 @@ object SpawnAndSwamp {
 
         InfluenceMap.setProtectedCells(ramparts.filter { it.my == true }.mapTo(HashSet()) { it.x * 100 + it.y })
         InfluenceMap.setEnemyBlocked(blockedForEnemy.mapTo(HashSet()) { it.x * 100 + it.y })
+        cpuMark("objects")
         val dangerMatrix = InfluenceMap.dangerCostMatrix(enemyCreeps, blocked)
+        cpuMark("danger")
 
         DistanceMap.syncWalls(walls.size) // снесённая стена пролома открывает проход — поля заново
         // геометрия — по ИСХОДНОМУ спавну: ensureBuilt кэширует поле по подписи рампартов и цели не
@@ -845,6 +891,7 @@ object SpawnAndSwamp {
         val enemyApproach = DistanceMap.flowFieldTo(mySpawn, blockedForEnemy)
         val enemyLoaded = enemyHome?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
 
+        cpuMark("fields")
         val sites = collectSites(combatEnemies, loadedToSpawn, enemyLoaded)
         // ПОТОЛОК ТЕЛА этого тика: спавн плюс досягаемые экстеншены. Считается ДО любого выбора тела
         bodyCap = SPAWN_ENERGY_CAPACITY +
@@ -859,6 +906,7 @@ object SpawnAndSwamp {
         measureSupply(ctx)
         measureSiteWork(ctx)
         measureHaulerLoss(ctx)
+        cpuMark("measure")
         val breach = breachPlan(ctx)
         if (DEBUG_LOG && breach != null && !breachLogged) {
             breachLogged = true
@@ -881,9 +929,11 @@ object SpawnAndSwamp {
         val threatsSoon = combatEnemies + enemyPending
         val enemyArrival = enemyArrivalTicks(ctx)
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
+        cpuMark("threat")
         measureHomeFight(ctx)
         measureExchange(ctx)
         foeHeal = foeHealPerBody(ctx)
+        cpuMark("home")
         // ВТОРОЙ СПАВН ПРОИЗВОДИТ, ТОЛЬКО ЕСЛИ ЕГО СПРАШИВАЮТ. Функция брала ОДИН спавн на тик, и пока
         // спавн был один, это было одно и то же; со вторым — нет: энергия делится между складами
         // (хаулеры сдают в ближайший), а заказ по-прежнему уходит в один, отчего ни один не набирает
@@ -895,18 +945,24 @@ object SpawnAndSwamp {
         else freeSpawns.forEachIndexed { i, sp ->
             spawnIfNeeded(ctx, defenders, threatsSoon, alarm, enemyArrival, spawnUnderFire, sp, i == 0)
         }
+        cpuMark("spawn")
         runTowers(ctx)
         runHaulers(ctx)
+        cpuMark("haulers")
         runBuilders(ctx)
+        cpuMark("builders")
         val ourOffense = runFighters(ctx, enemyPower, alarm)
+        cpuMark("fighters")
 
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
+        cpuMark("traffic")
         InfluenceMap.pruneStances(myCreeps.mapTo(HashSet()) { it.id })
         enemyPrevCell.clear()
         for (e in enemyCreeps) enemyPrevCell[e.id] = e.x * 100 + e.y
         if (DEBUG_LOG) logStuck(active, enemyCreeps)
 
         if (DEBUG_VISUALS) InfluenceMap.drawDebug(fighters, myCreeps, enemyCreeps)
+        cpuMark("debug")
 
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
             val carried = haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
@@ -925,6 +981,7 @@ object SpawnAndSwamp {
             }
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
+        cpuSummary()
     }
 
     // ==================== экономика ====================
