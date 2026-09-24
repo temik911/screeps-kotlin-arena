@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 87
+    private const val BOT_VERSION = 88
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -865,7 +865,7 @@ object SpawnAndSwamp {
 
         // СТРОИТЕЛЬ — крип с WORK: он не возит в спавн и не воюет. Тип по телу, а не по живым частям:
         // с выбитыми WORK он всё ещё не хаулер (маршрут у него свой), и кормить башню он может дальше
-        val builders = active.filter { c -> c.body.any { it.type == WORK } }
+        val builders = active.filter { c -> c.body.any { it.type == WORK } && !isPileBuilder(c) }
         val haulers = active.filter { c -> c.body.any { it.type == CARRY } && c.body.none { it.type == WORK } }
         val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } }
         // армия врага — И лекари: M4H2 без оружия считался «мягкой» целью, как хаулер, и бойцы шли за ним
@@ -978,7 +978,7 @@ object SpawnAndSwamp {
         val enemyLoaded = enemyHome?.let { DistanceMap.flowFieldTo(it, blockedForEnemy) }
 
         cpuMark("fields")
-        val sites = collectSites(combatEnemies, loadedToSpawn, enemyLoaded)
+        val sites = collectSites(combatEnemies, loadedToSpawn, enemyLoaded).filter { !reservedForPile(it) }
         // ПОТОЛОК ТЕЛА этого тика: спавн плюс досягаемые экстеншены. Считается ДО любого выбора тела
         bodyCap = SPAWN_ENERGY_CAPACITY +
             myExtensions.count { getRange(it, mySpawn) <= EXTENSION_REACH } * EXTENSION_ENERGY_CAPACITY
@@ -1038,6 +1038,7 @@ object SpawnAndSwamp {
         runHaulers(ctx)
         cpuMark("haulers")
         runBuilders(ctx)
+        if (USE_PILE_SPAWN) runPileBuilder(ctx)
         cpuMark("builders")
         val ourOffense = runFighters(ctx, enemyPower, alarm)
         cpuMark("fighters")
@@ -1908,7 +1909,7 @@ object SpawnAndSwamp {
                 println("fwd gates: t=${getTicks()} sites=${ctx.mySites.size} spawns=${ctx.mySpawns.size} budget=$budget/$fwdKeeper " +
                     "deficit=${deficit.toInt()} needHauler=$needHauler fighterFirst=$fighterFirst alarm=$alarm")
             }
-            if (ctx.mySites.isEmpty() && ctx.mySpawns.size < FORWARD_SPAWNS &&
+            if (!USE_PILE_SPAWN && ctx.mySites.isEmpty() && ctx.mySpawns.size < FORWARD_SPAWNS &&
                 // ЦЕНУ СМОТРИТЕЛЯ СПРАШИВАЛИ ДВАЖДЫ — И ОДИН РАЗ НЕ ВОВРЕМЯ. Она уже стоит в price у
                 // forwardWorth, то есть в ответе на «окупится ли»; а здесь её же требовали НАЛИЧНЫМИ в
                 // момент постановки, когда площадки ещё нет и смотритель ещё не нужен. Спавн столько не
@@ -2029,6 +2030,27 @@ object SpawnAndSwamp {
             }
             if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} live=$liveHaulers/$liveFighters mark=${fleetMark}/${(fleetMarkIncome * 10).toInt() / 10.0} err=${r.error}")
             return
+        }
+        // THE PILE BUILDER (v88, see USE_PILE_SPAWN): one at a time, bought once the fleet's delivery is measured,
+        // there is no threat to answer and the match still has a whole job in it; it lives in the field and waits for
+        // a fresh container (born at home it reaches almost none in time: 99 ticks of life, three a cell on swamp).
+        // It is paid from the spawn but its work is paid by energy that would rot. Never saved for: a fighter takes
+        // the turn when the energy is short.
+        val pileJobTicks = PILE_BODY.size * CREEP_SPAWN_TIME + ceil(buildCost("StructureSpawn").toDouble() / (BUILD_POWER * PILE_BODY.count { it == WORK })).toInt()
+        // …and only while our half has been QUIET for the whole production window (homeShare: ticks under alarm in it):
+        // "no alarm this tick" bought it in the lull between two raids of the gate's siege6 (six hunters every sixty
+        // ticks), it stood under fire by the house, and the 600 it cost was the tower site's 750 left dead
+        if (USE_PILE_SPAWN && ctx.myCreeps.none { isPileBuilder(it) } && !fighterFirst && !alarm && deficit <= 0.0 && realised >= 0.0 &&
+            homeShare() <= 0.0 &&
+            arenaInfo.ticksLimit - getTicks() > 2 * pileJobTicks) {
+            val price = PILE_BODY.sumOf { cost(it) }
+            if (energy >= price) {
+                val r = spawn.spawnCreep(PILE_BODY)
+                reach(if (r.error == null) "pbBuy" else "err")
+                r.`object`?.let { pileBuilderIds.add(it.id); pileOrderedAt = getTicks() }
+                if (DEBUG_LOG) println("spawn: pile builder cost=$price energy=$energy err=${r.error}")
+                return
+            }
         }
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
         if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return reach("hQueue")
@@ -4753,6 +4775,177 @@ object SpawnAndSwamp {
      *  в ней выстрел. Он безоружен и от огня уходит, как хаулер, продолжая работать на ходу (стройка и
      *  передача — интенты, шагу они не мешают). Энергию спавна берёт, только когда она не нужна бойцу
      *  прямо сейчас: под «бойцом первым» тысяча в спавне принадлежит бойцу. */
+    // ==================== кучи: спавн из выгруженного контейнера (v88) ====================
+
+    /**
+     * A FORWARD SPAWN FROM A DUMPED CONTAINER (v88). How the top of the field builds its economy — the operator's
+     * observation of 24.09.2026, confirmed by every replay of the v73 series: a builder walks to a fresh temporary
+     * container, empties it onto the ground next to itself (≈25·CARRY−5 a tick: 2000 in 20-44 ticks) and builds a
+     * spawn from the pile — a hundred acts of 10 with two WORK — then carries what is left into the new spawn.
+     * けろびー#18 put up eleven that way in three games, ricardo five, marlyman123 a cluster that took 29 thousand.
+     * A temporary container lives 99 ticks and a pile ~1300, so the spawn is paid by energy that would otherwise rot:
+     * to the home economy the whole thing costs one builder (600) per match. All five of our delivery-point attempts
+     * (v49-v70) failed on exactly "a supply that does not rot in 99 ticks"; this is that supply.
+     * Which container (pileCandidate): a live temporary one on our side, safe, not being hauled by our fleet, that the
+     * builder reaches and empties before it rots and that no armed creep of his can reach before the work is done.
+     */
+    private const val USE_PILE_SPAWN = true
+    private class PileJob(val containerId: String, val c: Position, val p: Position, val s: Position)
+    private var pileJob: PileJob? = null
+    private val pileBuilderIds = HashSet<String>()
+    private var pileOrderedAt = -1
+    /** MOVE in front (damage takes the legs before the trade), 2 WORK for 10 a tick: M4C4W2, 600. Empty it weighs its
+     *  WORK only — a cell a tick on plain, three on swamp. */
+    private val PILE_BODY: Array<BodyPartType> = arrayOf(MOVE, MOVE, MOVE, MOVE, CARRY, CARRY, CARRY, CARRY, WORK, WORK)
+
+    private fun isPileBuilder(c: Creep) = c.id in pileBuilderIds
+
+    /** The pile of the job: energy on the builder's cell. */
+    private fun pileOf(job: PileJob): Resource? = getObjectsByPrototype(Resource::class)
+        .firstOrNull { it.exists && it.resourceType == RESOURCE_ENERGY && it.x == job.p.x && it.y == job.p.y }
+
+    /** Cells for a job at container c: P next to c where the builder stands (and the pile lies), S next to P for the
+     *  spawn, with at least three free cells around it for the creeps it will bear. Null — no room. */
+    private fun pileCells(ctx: Ctx, c: Position): Pair<Position, Position>? {
+        val taken = HashSet<Int>()
+        for (p in ctx.blocked) taken.add(p.x * 100 + p.y)
+        for (s in getObjectsByPrototype(ConstructionSite::class)) if (s.exists) taken.add(s.x * 100 + s.y)
+        for (s in getObjectsByPrototype(StructureContainer::class)) if (s.exists) taken.add(s.x * 100 + s.y)
+        fun open(x: Int, y: Int) = x in 1..98 && y in 1..98 && (x * 100 + y) !in taken &&
+            getTerrainAt(InfluenceMap.cell(x, y)) != TERRAIN_WALL
+        for (dx in -1..1) for (dy in -1..1) {
+            val px = c.x + dx; val py = c.y + dy
+            if ((dx == 0 && dy == 0) || !open(px, py)) continue
+            for (ex in -1..1) for (ey in -1..1) {
+                val sx = px + ex; val sy = py + ey
+                if ((ex == 0 && ey == 0) || (sx == c.x && sy == c.y) || !open(sx, sy)) continue
+                var exits = 0
+                for (fx in -1..1) for (fy in -1..1) {
+                    val nx = sx + fx; val ny = sy + fy
+                    if ((fx == 0 && fy == 0) || (nx == px && ny == py) || (nx == c.x && ny == c.y)) continue
+                    if (open(nx, ny)) exits++
+                }
+                if (exits >= 3) return InfluenceMap.cell(px, py) to InfluenceMap.cell(sx, sy)
+            }
+        }
+        return null
+    }
+
+    /** The best job for a builder that is at `from` (or will be born at the home spawn in `bornIn` ticks): nearest
+     *  by walk among the containers that pass all the timing tests (see USE_PILE_SPAWN). */
+    private fun pileCandidate(ctx: Ctx, builder: Creep?, bornIn: Int): PileJob? {
+        val carry = PILE_BODY.count { it == CARRY }
+        val work = PILE_BODY.count { it == WORK }
+        val price = buildCost("StructureSpawn")
+        val dumpRate = CARRY_CAPACITY / 2.0 * carry - BUILD_POWER.toDouble()   // withdraw one tick, drop the next
+        val buildTicks = ceil(price.toDouble() / (BUILD_POWER * work)).toInt()
+        val swampPace = periodOn(work, PILE_BODY.count { it == MOVE }, 10)   // empty: only WORK weighs
+        var best: PileJob? = null
+        var bestWalk = Int.MAX_VALUE
+        for (site in ctx.sites) {
+            val c = site.container ?: continue
+            val life = site.ticksToDecay ?: continue          // permanent containers are the fleet's
+            if (!site.ours || !site.safe) continue
+            if (haulerSite.values.any { it == site.id }) continue   // our fleet is already taking it
+            // enough to build the spawn after the pile's own decay (2 a tick above 1000) over the build
+            if (site.energy < price + 2 * buildTicks) continue
+            val walk = if (builder != null) pathTicks(builder, flowTo(ctx, c), builder.x * 100 + builder.y)
+                else bornIn + ctx.stepsToSpawn[c.x * 100 + c.y].let { if (it < 0) Int.MAX_VALUE / 4 else it * swampPace }
+            if (walk >= Int.MAX_VALUE / 4) continue
+            val dump = ceil(site.energy / dumpRate).toInt()
+            if (life < walk + dump + 3) continue              // it rots before it is on the ground
+            val work0 = walk + dump + buildTicks
+            // nobody of his armed reaches it before the job is done (at his plain pace — the optimistic one for him)
+            if (ctx.combatEnemies.any { getRange(it, c).toLong() * plainPeriod(it).coerceAtMost(10) <= work0 }) continue
+            val cells = pileCells(ctx, c) ?: continue
+            if (walk < bestWalk) { bestWalk = walk; best = PileJob(site.id, InfluenceMap.cell(c.x, c.y), cells.first, cells.second) }
+        }
+        return best
+    }
+
+    /** Where an idle pile builder waits: among the cells where containers have dropped so far (dropHistory) on our
+     *  side of the map, the one nearest the middle of them all — so the next fresh one is as few ticks away as the
+     *  map lets it be. Home while nothing has dropped on our side yet. */
+    private fun pileWaitCell(ctx: Ctx): Position {
+        val ours = dropHistory.keys.filter { k -> DistanceMap.inOurHalf(k / 100, k % 100) && ctx.loadedToSpawn[k] >= 0 }
+        if (ours.isEmpty()) return ctx.mySpawn
+        val mx = ours.sumOf { it / 100 } / ours.size
+        val my = ours.sumOf { it % 100 } / ours.size
+        val k = ours.minByOrNull { maxOf(kotlin.math.abs(it / 100 - mx), kotlin.math.abs(it % 100 - my)) }!!
+        return InfluenceMap.cell(k / 100, k % 100)
+    }
+
+    /** The job's container and pile are the builder's: the fleet does not claim them (tick, v88). */
+    private fun reservedForPile(site: EnergySite): Boolean {
+        val job = pileJob ?: return false
+        return site.id == job.containerId || (site.resource != null && site.pos.x == job.p.x && site.pos.y == job.p.y)
+    }
+
+    private fun runPileBuilder(ctx: Ctx) {
+        // the creep ordered THIS tick is not in the snapshot the tick began with: keep its id until the next one
+        if (pileOrderedAt != getTicks()) pileBuilderIds.retainAll(ctx.myCreeps.mapTo(HashSet()) { it.id })
+        val b = ctx.active.firstOrNull { isPileBuilder(it) }
+        if (b == null) { if (pileBuilderIds.isEmpty()) pileJob = null; return }
+        val work = b.body.count { it.type == WORK && it.hits > 0 }
+        var job = pileJob
+        if (job != null) {
+            val j: PileJob = job
+            val cont = getObjectsByPrototype(StructureContainer::class).firstOrNull { it.exists && it.id == j.containerId }
+            val site = ctx.mySites.firstOrNull { it.x == j.s.x && it.y == j.s.y }
+            val spawnThere = ctx.mySpawns.firstOrNull { it.x == j.s.x && it.y == j.s.y }
+            val pile = pileOf(j)
+            val spawnFull = spawnThere != null && (spawnThere.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) <= 0
+            val carrying = b.store[RESOURCE_ENERGY] ?: 0
+            val finished = spawnThere != null && (pile == null || spawnFull) && (carrying <= 0 || spawnFull)
+            // the container rotted or was taken before a site stood: nothing to build from
+            val lost = site == null && spawnThere == null && pile == null && (cont == null || (cont.store[RESOURCE_ENERGY] ?: 0) <= 0)
+            if (finished || lost) {
+                spawnReach[if (finished) "pbDone" else "pbLost"] = (spawnReach[if (finished) "pbDone" else "pbLost"] ?: 0) + 1
+                pileJob = null
+                job = null
+            }
+        }
+        if (job == null) {
+            job = pileCandidate(ctx, b, 0)
+            pileJob = job
+        }
+        val incoming = InfluenceMap.damageAt(b.x, b.y, ctx.combatEnemies)
+        val step: Position? = when {
+            incoming > 0.0 -> fleeStep(b, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(b, ctx.mySpawn, 1, ctx.dangerMatrix)
+            job == null -> pileWaitCell(ctx).let { w -> if (getRange(b, w) > PARK_RANGE) pathStep(b, w, PARK_RANGE, ctx.dangerMatrix) else null }
+            b.x != job.p.x || b.y != job.p.y -> pathStep(b, job.p, 0, ctx.dangerMatrix)
+            else -> null
+        }
+        if (step != null && canMove(b)) TrafficManager.request(b, step, HAULER_LOADED_PRIORITY)
+        if (job != null && b.x == job.p.x && b.y == job.p.y) {
+            val j: PileJob = job
+            val site = ctx.mySites.firstOrNull { it.x == j.s.x && it.y == j.s.y }
+            val spawnThere = ctx.mySpawns.firstOrNull { it.x == j.s.x && it.y == j.s.y }
+            if (site == null && spawnThere == null) {
+                val r = createConstructionSite(j.s.x, j.s.y, StructureSpawn::class.js)
+                if (DEBUG_LOG) println("pile spawn: site at (${j.s.x},${j.s.y}) from container (${j.c.x},${j.c.y}) err=${r.error}")
+            }
+            val carrying = b.store[RESOURCE_ENERGY] ?: 0
+            val free = b.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
+            if (site != null && carrying > 0) b.build(site)
+            val cont = getObjectsByPrototype(StructureContainer::class).firstOrNull { it.exists && it.id == j.containerId }
+            if (cont != null && (cont.store[RESOURCE_ENERGY] ?: 0) > 0) {
+                // alternate: fill up from the container, then put all but one build's worth on the ground
+                if (free > 0) b.withdraw(cont, RESOURCE_ENERGY)
+                else b.drop(RESOURCE_ENERGY, (carrying - BUILD_POWER * work).coerceAtLeast(0))
+            } else {
+                val pile = pileOf(j)
+                if (pile != null && free > 0) b.pickup(pile)
+                if (spawnThere != null && carrying > 0) b.transfer(spawnThere, RESOURCE_ENERGY)
+            }
+        }
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
+            val j = job
+            println("  pb${b.id} (${b.x},${b.y}) carry=${b.store[RESOURCE_ENERGY] ?: 0} job=${j?.let { "c(${it.c.x},${it.c.y})p(${it.p.x},${it.p.y})s(${it.s.x},${it.s.y})" } ?: "-"} " +
+                "pile=${j?.let { pileOf(it)?.amount } ?: "-"} fire=${incoming.toInt()} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
+        }
+    }
+
     private fun runBuilders(ctx: Ctx) {
         if (ctx.builders.isEmpty()) return
         val spawn = ctx.mySpawn

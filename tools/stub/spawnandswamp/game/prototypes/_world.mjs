@@ -74,7 +74,14 @@ export class Creep extends GameObject { constructor(x,y,my,body){ super(x,y); th
     if(range(this,site)>3) return C.ERR_NOT_IN_RANGE; if(this.store.energy<=0) return C.ERR_NOT_ENOUGH_ENERGY;
     const a=Math.min(C.BUILD_POWER*w, this.store.energy, site.progressTotal-site.progress); if(a<=0) return C.ERR_FULL;
     site.progress+=a; this.store.energy-=a; if(site.progress>=site.progressTotal) finishSite(site, this.my); return 0; }
-  harvest(){ return 0; } drop(){ return 0; } pull(){ return 0; } }
+  harvest(){ return 0; }
+  // DROP (25.09.2026): it used to do nothing, so a hauler fleeing into swamp lost its load silently and a creep that
+  // dumps a container onto the ground — how the field builds its forward spawns — could not be modelled at all. The
+  // energy lands on the creep's cell and merges with a pile already there, as in the engine
+  drop(type,amount){ const a=Math.min(this.store.energy, amount===undefined?this.store.energy:amount); if(a<=0) return C.ERR_NOT_ENOUGH_RESOURCES;
+    this.store.energy-=a; const r=world.objects.find(o=>o instanceof Resource&&o.exists&&o.x===this.x&&o.y===this.y);
+    if(r) r.amount+=a; else new Resource(this.x,this.y,a); return 0; }
+  pull(){ return 0; } }
 export function endTick(){
   // спавн: доводим рождение, ставим крипа на свободную соседнюю клетку
   for(const o of world.objects){ if(o instanceof StructureSpawn && o.spawning){ o.spawning.remainingTime--; if(o.spawning.remainingTime<=0){ const c=o.spawning.creep;
@@ -102,6 +109,8 @@ export function endTick(){
   world.intents=[];
   // урон снимает части спереди: пересчитываем hits частей от общего hits
   for(const o of world.objects){ if(o instanceof Creep && o.hits<o.hitsMax){ const n=o.body.length; for(let i=0;i<n;i++){ o.body[i].hits=Math.max(0,Math.min(100,o.hits-100*(n-1-i))); } } }
+  // a pile on the ground decays by ceil(amount/1000) a tick (the engine; 1680 lives about 1300 ticks) — it never did here
+  for(const o of world.objects){ if(o instanceof Resource&&o.exists){ o.amount-=Math.ceil(o.amount/1000); if(o.amount<=0) o.exists=false; } }
   for(const o of world.objects){ if(o.hits!==undefined&&o.hits<=0) o.exists=false; if(o.ticksToDecay!==undefined){ o.ticksToDecay--; if(o.ticksToDecay<=0) o.exists=false; } }
   world.objects=world.objects.filter(o=>o.exists);
   world.tick++;
