@@ -2088,6 +2088,11 @@ internal val fistReachTicks = Gauges.counter("fistreach")
  *  стрелка или лекаря (см. `missedCovers`). */
 internal val coverMissed = Gauges.counter("cover")
 
+/** Прибор причины упущенного прикрытия (v650): `covwhy=` — у мили была клетка прикрытия (см. `missedCovers`), а командир дал
+ *  другую; метка — слагаемое цены клетки, сильнее всего склонившее выбор (pull, strike, dan, front, sag, heal, claim, stay),
+ *  или `ttl` — клетки прикрытия отсеяны сроком жизни. */
+internal val coverWhyGauge = Gauges.labelled("covwhy")
+
 /** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere) / застрял и обходит своих (detour). */
 internal val garrisonWhy = Gauges.labelled("gar")
 

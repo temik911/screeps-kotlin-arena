@@ -414,6 +414,45 @@ internal class Deal(
     // МИЛИ: к тому, что достанет ногами; по гребню фронта и туда, где он проседает; не выходя из-под лечения.
     // «Не выходя из-под лечения» было ЗАПРЕТОМ (inHealReach) и потому либо не давало клеток вовсе, либо
     // отбрасывалось молча; здесь это слагаемое, и оно конкурирует с притяжением честно
+    /** СЛАГАЕМЫЕ ЦЕНЫ КЛЕТКИ МИЛИ (v650, только прибор `covwhy=`): те же, что в `scoreMelee`, по отдельности — притяжение,
+     *  удар, опасность, фронт, провис, лечение, бронь, стояние. */
+    private val meleeTermNames = arrayOf("pull", "strike", "dan", "front", "sag", "heal", "claim", "stay")
+    private fun meleeTerms(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): DoubleArray {
+        val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, true) else InfluenceMap.attMeleeAt(key)
+        val strike = if (!USE_MELEE_STRIKE_VALUE) 0.0 else strikeValue(c, p)
+        return doubleArrayOf(-W_ATT * att * pull, -strike, W_DAN * dan * danMeleeOf(c, key), -W_FRONT * InfluenceMap.vulnerabilityOf(key),
+            -W_SAG * sagAt(key), -W_HEALCOVER * InfluenceMap.healReachAt(key), CLAIM_COST * claimAt(key), -stayBonus(c, p))
+    }
+    /** Клетки прикрытия для мили `c` (v650): свободная клетка в шаг от него, вплотную к его мили, который стоит вплотную к
+     *  нашему стрелку или лекарю и которого не закрывает ни один наш мили. */
+    private fun coverCellsOf(c: Creep): List<Position> {
+        val out = ArrayList<Position>()
+        val ourMelee = army.filter { hasMelee(it) }
+        for (e in combatEnemies) {
+            if (!hasMelee(e) || army.none { !hasMelee(it) && getRange(it, e) <= 1 } || ourMelee.any { getRange(it, e) <= 1 }) continue
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val x = e.x + dx; val y = e.y + dy
+                if (x !in 1..98 || y !in 1..98 || DistanceMap.isWall(x, y) || maxOf(abs(x - c.x), abs(y - c.y)) > 1) continue
+                if (key(x, y) in enemyAt || army.any { it.id != c.id && it.x == x && it.y == y }) continue
+                out.add(InfluenceMap.cell(x, y))
+            }
+        }
+        return out
+    }
+    /** Прибор (v650): мили, у которого была клетка прикрытия, встал не на неё — какое слагаемое сильнее всего склонило выбор. */
+    private fun coverWhy(c: Creep, q: Position, lvl: Int, att: Double, dan: Double, focus: Creep?) {
+        val covers = coverCellsOf(c)
+        if (covers.isEmpty() || covers.any { it.x == q.x && it.y == q.y }) return
+        val ok = covers.filter { ttlAt(c, it.key, it) >= lvl }
+        if (ok.isEmpty()) { coverWhyGauge.bump("ttl"); return }
+        val tq = meleeTerms(c, q.key, q, att, dan, focus)
+        val best = ok.minByOrNull { meleeTerms(c, it.key, it, att, dan, focus).sum() } ?: return
+        val tb = meleeTerms(c, best.key, best, att, dan, focus)
+        val i = tq.indices.minByOrNull { tq[it] - tb[it] } ?: return
+        coverWhyGauge.bump(meleeTermNames[i])
+    }
+
     fun scoreMelee(c: Creep, key: Int, p: Position, att: Double, dan: Double, focus: Creep?): Double {
         val pull = if (focus != null) InfluenceMap.attractionTo(focus, p.x, p.y, true) else InfluenceMap.attMeleeAt(key)
         // УДАР ВХОДИТ В ЦЕНУ КЛЕТКИ ЯВНО И В ЕДИНИЦАХ УРОНА (v425). Ранг мили складывал притяжение `attMeleeAt` с
@@ -651,6 +690,7 @@ internal class Deal(
                     ttlAt(c, p.key, p) >= lvl
             }, rank)
             if (ok) {
+                if (role == 0) out[c.id]?.let { q -> coverWhy(c, q, lvl, att, dan, focus) }
                 // ПРИБОР ПРЕДМЕТА (v482): даёт ли назначенная стрелку клетка выстрел, который ЧТО-ТО добавляет к
                 // чистому урону армии. Считается при обоих положениях тумблера — это мера, а не правка
                 if (role == 1) out[c.id]?.let { q ->
