@@ -648,7 +648,7 @@ internal fun pathStep(creep: Creep, target: Position, range: Int, dangerMatrix: 
  *  бежит не «прочь от врага», а путём к центру своих вооружённых по карте опасности, которая обводит его зоны огня.
  *  null — рядом со своими уже или пути нет: тогда прежнее бегство. */
 internal fun fleeToGroup(creep: Creep, group: Position?, ctx: Ctx): Position? {
-    if (!USE_FLEE_TO_GROUP || group == null) return null
+    if (!(USE_FLEE_TO_GROUP && tourerMode()) || group == null) return null
     if (getRange(creep, group) <= FIST_RADIUS + STRAGGLER_SLACK) return null
     return pathStep(creep, group, 1, ctx.dangerMatrix)?.also { fleeGroupN.n++ }
 }
@@ -2363,7 +2363,7 @@ internal fun readSignals(ctx: Ctx) {
     // ...а под планом снятия лагеря — С ПЕРВОГО ТИКА (v611, см. USE_BLOB_UNTIL_PLAN): до плана армия держится одной массой
     if (USE_BLOB_UNTIL_PLAN && USE_CAMP_BREAK && (!USE_TOURER_SWITCH || Memory.tourerSeen[0] > 0) && !Signals.lonerHunted)
         Signals.lonerHunted = true
-    if (USE_NO_LONERS_VS_HUNTER && !Signals.lonerHunted) {
+    if ((USE_NO_LONERS_VS_HUNTER && tourerMode()) && !Signals.lonerHunted) {
         val alive = HashSet<String>()
         for (c in ctx.myCreeps) alive.add(c.id)
         val near = FIST_RADIUS + STRAGGLER_SLACK

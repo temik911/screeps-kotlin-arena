@@ -108,7 +108,7 @@ internal class RunnerMatch(private val ctx: Ctx, private val runners: List<Creep
     init {
         if (!cpuGuard) for (s in runners) {
             if (s.id in holds || s.id in guards || s.id in orders) continue
-            if (USE_SCOUT_MARGIN_EVADE && !bornCombatant(s)) continue   // скаут сам выбирает флаг по запасу времени (v576)
+            if ((USE_SCOUT_MARGIN_EVADE && tourerMode()) && !bornCombatant(s)) continue   // скаут сам выбирает флаг по запасу времени (v576)
             if (USE_SCOUT_SWAMP_REFUGE && !bornCombatant(s) && Refuge.cells.isNotEmpty()) continue   // приманка (v575): живёт в убежище
             val currentId = Squads.runnerFlag[s.id]
             val armedRunner = hasWeapon(s)
@@ -287,10 +287,10 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             // до болотной клетки вне досягаемости с равнины, идёт туда или стоит там, а не бежит прочь — в угол, где его и
             // добивали (22 погони из 24 кончились в 3–9 клетках от края)
             if (canMove(s) && !bornCombatant(s)) {
-                val mv = if (USE_SCOUT_MARGIN_EVADE) ScoutEvade.move(s, ctx) else refugeMove(s, ctx)
+                val mv = if ((USE_SCOUT_MARGIN_EVADE && tourerMode())) ScoutEvade.move(s, ctx) else refugeMove(s, ctx)
                 if (mv != null) {
                     if (mv.step != null) TrafficManager.request(s, mv.step, Arbiter.RUNNER_PRIORITY)
-                    dbg(s, (if (USE_SCOUT_MARGIN_EVADE) "EVADE:" else "REFUGE:") + mv.why, f, mv.step)
+                    dbg(s, (if ((USE_SCOUT_MARGIN_EVADE && tourerMode())) "EVADE:" else "REFUGE:") + mv.why, f, mv.step)
                     continue
                 }
             }

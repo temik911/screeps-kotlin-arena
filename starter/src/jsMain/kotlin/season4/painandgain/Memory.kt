@@ -225,3 +225,7 @@ internal object Prev {
     /** Режим командира (пишет `StrategyDecide`) — для строки `t=` (поле `mode`), которая печатается и в тике без армии. */
     var cmdMode = CmdMode.MARCH
 }
+
+/** РЕЖИМ ОБЪЕЗДЧИКА (v637, см. USE_TOURER_SWITCH): его почерк встал — включены правила v552–v612, сделанные против него;
+ *  до признака и против прочих ботов они молчат, и игра — v551. */
+internal fun tourerMode() = Memory.tourerSeen[0] > 0

@@ -476,7 +476,7 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         // ПРОТИВ ОБЪЕЗДЧИКА ФЛАГ БЕРЁТ ГРУППА, КОТОРАЯ ЕГО И ДЕРЖИТ (v574, см. USE_TOUR_CAPTURE_VS_FIST): его армия — один
         // кулак, его вооружённых нет в ENGAGE_RANGE от флага, а центр нашей группы в радиусе «со своими» — тогда
         // паритет и прочие вето не спрашиваются: дебафф платится боем, а бой у этого флага будет с нашей группой
-        if (USE_TOUR_CAPTURE_VS_FIST && Signals.enemyFistNow &&
+        if ((USE_TOUR_CAPTURE_VS_FIST && tourerMode()) && Signals.enemyFistNow &&
             ctx.combatEnemies.none { getRange(it, f.pos) <= ENGAGE_RANGE } &&
             getRange(f.pos, ctx.ourCentroid) <= FIST_RADIUS + STRAGGLER_SLACK) { tourOpen.n++; return@Gate Verdict.Allow }
         Verdict.Next
@@ -925,7 +925,7 @@ internal fun captureCost(ctx: Ctx, f: FlagInfo): Double {
 
 /** Флаг оспаривается (v583, см. USE_CONTESTED_FLAG_LAST): пока он не бьёт наши группы (`groupSafe`), а его вооружённые стоят в
  *  ENGAGE_RANGE от флага, — взятый флаг он перебьёт, едва наш крип сойдёт с клетки. */
-internal fun contestedFlag(ctx: Ctx, f: FlagInfo): Boolean = USE_CONTESTED_FLAG_LAST && Signals.groupSafe &&
+internal fun contestedFlag(ctx: Ctx, f: FlagInfo): Boolean = (USE_CONTESTED_FLAG_LAST && tourerMode()) && Signals.groupSafe &&
     ctx.combatEnemies.any { hasWeapon(it) && getRange(it, f.pos) <= ENGAGE_RANGE }
 
 internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Double, farmerQuietNow: Boolean, group: List<Creep>, pushRatio: Double, escapeNeeded: Boolean = false, onlyFlagId: String? = null): Objective? {
@@ -947,7 +947,7 @@ internal fun chooseFlagObjective(ctx: Ctx, view: ExchangeView, approachRate: Dou
         // нашим после схода с клетки, поэтому армия объезжает флаги ЦЕЛИКОМ; ворота захвата оценивают дебафф, а не
         // этот поход
         val marchToGuard = USE_MARCH_TO_GUARD && lostRaceNow(view) && f.theirs &&
-            ((USE_ARMY_TOURS_VS_FIST && Signals.enemyFistNow) ||
+            (((USE_ARMY_TOURS_VS_FIST && tourerMode()) && Signals.enemyFistNow) ||
                 (f.occupant == null && f.guards.any { hasWeapon(it) }))
         if (!marchToGuard && !captureAllowed(ctx, f, view, CapAsker.ARMY)) { objDrop.bump("gate"); continue }
         if (marchToGuard) marchGuard.n++
@@ -1258,7 +1258,7 @@ internal fun fleePoint(ctx: Ctx, armed: List<Creep>): Position? {
 internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
     // ПРОТИВ ОХОТНИКА ЗА ОДИНОЧКАМИ ХРАНИТЕЛЕЙ ИЗ АРМИИ НЕТ (v581, см. USE_NO_KEEPERS_VS_HUNTER): флаг остаётся нашим после
     // схода с клетки, а тело на клетке он берёт, как только группа отойдёт
-    if (USE_NO_KEEPERS_VS_HUNTER && Signals.lonerHunted) {
+    if ((USE_NO_KEEPERS_VS_HUNTER && tourerMode()) && Signals.lonerHunted) {
         if (Squads.keeperIds.isNotEmpty()) { keepersDropped.n += Squads.keeperIds.size; Squads.keeperIds.clear() }
         return
     }
@@ -1333,7 +1333,7 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         // см. USE_KEEPER_FALLS_BACK_ON_ADVANCE). Стоящий враг ухода не вызывает — флаг держится телом; идущий и
         // перебивающий хранителя — вызывает, как только он ближе, чем «до своих + радиус со своими»: скорость у всех
         // одна, и позже до группы уже не дойти
-        val advancing = if (!USE_KEEPER_FALLS_BACK_ON_ADVANCE || c == null || core.isEmpty()) emptyList() else {
+        val advancing = if (!(USE_KEEPER_FALLS_BACK_ON_ADVANCE && tourerMode()) || c == null || core.isEmpty()) emptyList() else {
             val (mx, my) = medianOf(core)
             val toGroup = maxOf(abs(c.x - mx), abs(c.y - my))
             if (toGroup <= FIST_RADIUS + STRAGGLER_SLACK) emptyList()
@@ -1693,7 +1693,7 @@ internal class RaceBudget(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // ЦЕЛИКОМ, не распускаясь, — и тогда локального превосходства он не получает. Замер けろびー#22: сомкнут 77 %
     // тиков, крупнейшая его группа 10,2 крипа, и он отлавливает отряжённых поодиночке — 0-14 базы и 0-12 после v552,
     // которая лишь увеличила горстки с 2 до 3,8-4,3 (прибор `party`), но кулак из десяти съедает и четверых
-    val huntingFist = USE_NO_DETACH_VS_HUNTING_FIST && (Signals.enemyFistNow || Signals.lonerHunted)
+    val huntingFist = (USE_NO_DETACH_VS_HUNTING_FIST && tourerMode()) && (Signals.enemyFistNow || Signals.lonerHunted)
     var budget = if (huntingFist) 0 else if (roster.safe) free.size - 2 else free.size - core
     init { if (!meas.fight.fightOnNow) { budgetSum.n += maxOf(0, budget); budgetTicks.n++ } }
     init {
@@ -1899,7 +1899,7 @@ internal class RaceParties(private val ctx: Ctx, private val meas: ArmyMeasures,
             // отлавливает наших отряжённых поодиночке — первая наша смерть на t=279 против t=1674 у его прежней сборки,
             // к концу у нас 4 тела против его 12. При этом на t=300 его сила ПРОТИВ НАШЕГО ЯДРА равна 289 при нашей
             // 1069: кулак не у ядра, он ест тех, кого мы выпустили
-            val need = if (USE_PARTY_BEATS_GUARDS && (garrisonFoe(ctx) || USE_PARTY_BEATS_ANY) && pack0.isNotEmpty()) {
+            val need = if (USE_PARTY_BEATS_GUARDS && (garrisonFoe(ctx) || (USE_PARTY_BEATS_ANY && tourerMode())) && pack0.isNotEmpty()) {
                 var n = 2
                 while (n < byRange0.size && enemyPowerOf(pack0, byRange0.take(n)) >= ourPowerOf(byRange0.take(n), pack0)) n++
                 partyNeed.n += n; partyAll.n++
@@ -2948,7 +2948,7 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
      *  Марш к охраняемому флагу (v542/v554) выбирает цель в обход ворот, а шаг на клетку ворота потом не пускают — и
      *  цель становится фантомной: взять её нельзя, но она есть, и размен при проигранной гонке молчит. Спрашивается
      *  не всерьёз (`serious = false`): это вопрос о цели, а не заявка на захват, и счётчики ворот он не трогает. */
-    private val objectiveBarred = USE_ENGAGE_VS_BARRED_OBJECTIVE &&
+    private val objectiveBarred = (USE_ENGAGE_VS_BARRED_OBJECTIVE && tourerMode()) &&
         obj.objective?.let { captureBlock(ctx, it.flag, meas.view, CapAsker.ARMY, serious = false) != null } == true
     val raceLostNothingToTake = lostRaceNow(meas.view) &&
         (obj.objective == null || (USE_ENGAGE_VS_GARRISON && hisFlagsGuarded) || objectiveBarred)

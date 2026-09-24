@@ -125,7 +125,7 @@ internal fun submit(p: Proposal, ctx: Ctx, view: ExchangeView, fist: Pair<Int, I
     // ...и боец СТОЯЩЕГО ГАРНИЗОНА (v600, см. USE_STANDING_GARRISONS) идёт на свой флаг, а не к кулаку: отряды на Ha и Hb без
     // этого исключения на стенде стояли в 6–7 клетках от D5, и их шаг наружу обнулялся каждый тик
     val garrisonMarch = Garrisons.active(p.creep.id)
-    val step = if (!USE_FIST_EVERY_STEP || fist == null || step0 == null || p.priority == Priority.SURVIVE || garrisonMarch) step0 else {
+    val step = if (!(USE_FIST_EVERY_STEP && tourerMode()) || fist == null || step0 == null || p.priority == Priority.SURVIVE || garrisonMarch) step0 else {
         val now = maxOf(abs(p.creep.x - fist.first), abs(p.creep.y - fist.second))
         val next = maxOf(abs(step0.x - fist.first), abs(step0.y - fist.second))
         fistAll.n++
@@ -144,7 +144,7 @@ internal class ArmyTick(
     /** Центр кулака этого тика (v490, см. USE_FIST_EVERY_STEP): медиана боевых, пока бой идёт; вне боя кулака нет и
      *  запрет не действует — армия ходит за флагами, и стягивать её незачем. */
     val fistNow: Pair<Int, Int>? =
-        if (!USE_FIST_EVERY_STEP || !(meas.fight.contact || (USE_FIST_VS_HUNTING_FIST && Signals.enemyFistNow))) null
+        if (!(USE_FIST_EVERY_STEP && tourerMode()) || !(meas.fight.contact || ((USE_FIST_VS_HUNTING_FIST && tourerMode()) && Signals.enemyFistNow))) null
         else strat.inp.combatArmy.ifEmpty { null }?.let { Formation.median(it) }
 }
 
@@ -1087,7 +1087,7 @@ internal class Stride(val turn: Turn, val aim: Aim) {
     // ЗАХВАТ В ОДНОМ ШАГЕ (v556, см. USE_CAPTURE_OUTRANKS_ORDER): не наш флаг вплотную, клетка свободна, ворота
     // захвата — тот же вызов, что у бегуна и что у `submit`, — разрешают. Исполняет строка `capture` цепочки шага,
     // стоящая выше приказа командира; бегство и пост хранителя остаются выше неё
-    private val captureFlag: FlagInfo? = if (!USE_CAPTURE_OUTRANKS_ORDER) null
+    private val captureFlag: FlagInfo? = if (!(USE_CAPTURE_OUTRANKS_ORDER && tourerMode())) null
         else ctx.flags.firstOrNull { !it.ours && it.occupant == null && getRange(creep, it.pos) == 1 }
     private val captureVeto: String? = captureFlag?.let { captureBlock(ctx, it, meas.view, CapAsker.ARMY) }
     val captureStep: Position? = if (captureFlag != null && captureVeto == null) captureFlag.pos else null
@@ -1946,7 +1946,7 @@ internal class TargetsTakers(private val ctx: Ctx, private val meas: ArmyMeasure
         // кулака бегунов нет вовсе (v553). Замер: `mguard=4801` — армия доходит до его флагов, тел в конце 8, а
         // флагов НОЛЬ, счёт 2 692 : 19 262. Здесь же стоял пропуск флага-цели армии: до него армия идёт и проходит
         // мимо. Флаг остаётся нашим после схода с клетки, поэтому шаг на него и есть весь захват
-        val fistTour = USE_ARMY_GRABS_VS_FIST && Signals.enemyFistNow
+        val fistTour = (USE_ARMY_GRABS_VS_FIST && tourerMode()) && Signals.enemyFistNow
         for (f in ctx.flags) {
             if (f.ours || f.occupant != null || (!fistTour && f.id == objectiveFlagId)) continue
             if (!fistTour && meas.forces.combatEnemies.any { getRange(it, f.pos) <= RANGED_RANGE + 1 }) continue

@@ -261,7 +261,7 @@ internal fun armyCommand(ctx: Ctx, meas: ArmyMeasures, strat: ArmyStrategy, targ
         if (hunting) Orders.source = "hunt"
         // КОЛОННА НЕ РАСПУСКАЕТСЯ ПРИ ЕГО КУЛАКЕ (v572, см. USE_COLUMN_VS_FIST): марш ведёт ядро, пока его вооружённые
         // дальше MARCH_SAFE; ближе — каждый крип идёт по своей ступени, армия рассыпается, и одиночек он собирает
-        val columnHolds = USE_COLUMN_VS_FIST && Signals.enemyFistNow
+        val columnHolds = (USE_COLUMN_VS_FIST && tourerMode()) && Signals.enemyFistNow
         if (columnHolds) columnTicks.n++
         if (!hunting && (columnHolds || meas.forces.armedEnemies.none { e -> meas.chase.mobileArmy.any { getRange(e, it) <= MARCH_SAFE } })) {
             // цель марша — своя (v164): раньше здесь стояла objectiveFlagId, посчитанная до командира
