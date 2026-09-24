@@ -1251,7 +1251,7 @@ internal object Garrisons {
      *  FRAG_STEP его боевые (связь FRAG_LINK) не меньше FRAG_SAMPLES раз разбиты на FRAG_GROUPS+ групп по двое и больше при
      *  крупнейшей не больше FRAG_MAX. Не встаёт при почерке объездчика и Chemoautotroph (у них свои раскладки). Защёлка. */
     fun fragFarmer(ctx: Ctx) {
-        if (!USE_FARMER_TRIPLES || Memory.fragSeen[0] > 0 || tourerMode() || chemoMode()) return
+        if (!USE_FARMER_TRIPLES || Memory.fragSeen[0] > 0 || tourerMode() || (chemoMode() && !USE_TRIPLES_OVER_CHEMO)) return
         val now = getTicks()
         if (now > FRAG_TO) return
         if (USE_FLIPPER_TRIPLES && flipperRule(ctx, now)) { Memory.fragSeen[0] = now; raidWhy.bump("flip"); return }
