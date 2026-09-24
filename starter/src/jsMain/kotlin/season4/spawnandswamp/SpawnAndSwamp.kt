@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 84
+    private const val BOT_VERSION = 85
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -130,6 +130,13 @@ object SpawnAndSwamp {
      *  and our own breacher (M6A6, five ticks a swamp cell) makes even M4H2 "faster". What decided Ranamar#2 was the
      *  march — his fast army meets the melee before the spawn — and that belongs to the siege's attrition, not here. */
     private const val USE_MELEE_SHARE = false
+    /** The siege target is kept until it falls; only a spawn on our half takes it from one on his (tick, v85). */
+    private const val USE_TARGET_HOLD = true
+    /** The last call's deadline walks and works every spawn he has, not only the target (goNeed, v85). */
+    private const val USE_TOUR_CLOCK = true
+    private var siegeTargetId: String? = null
+    /** The tick a hauler was last ordered, by any of our spawns (spawnIfNeeded, v85). */
+    private var haulerOrderedAt = -1
     /** The home fight's window is measured from the first of us to arrive, not from now (homeReady).
      *  OFF — measured 25.09.2026 and not landed: it breaks the gate's `siege6` fixture (six hunters every sixty ticks
      *  at our gates): counted from the first arrival, three and then two of the garrison read "ready", the home fight
@@ -773,7 +780,22 @@ object SpawnAndSwamp {
         // нашей половине спавн рождает армию у нас за спиной (けろびー#17 ставил два таких)
         val enemySpawns = getObjectsByPrototype(StructureSpawn::class).filter { it.my == false && it.exists }
         val enemyHome = enemySpawns.firstOrNull()
-        val enemySpawn = enemySpawns.minByOrNull { getRange(mySpawn, it) }
+        // THE TARGET HOLDS UNTIL IT FALLS (v85). Re-chosen every tick as the nearest, the target was taken by every
+        // spawn he put up: thirteen switches in four games against marlyman123#96, each new forward spawn pulling the
+        // wave off the edge of his main one, which got 0, 57, 1300 and 0 damage — and a draw on every clock. His
+        // forward spawns are free to him (a container dumped on the ground) and cheap to us (3000 hits, no rampart),
+        // his main is built once and never repaired: it is the one a whole group must be kept on. So the target, once
+        // chosen, is kept while it stands; the one exception is a spawn on OUR half while the target is on his — it
+        // breeds his army behind our back (ricardo's at our corner, stachu's on our half) and is also on the way.
+        val held = enemySpawns.firstOrNull { it.id == siegeTargetId }
+        val onOurHalf: (StructureSpawn) -> Boolean = { s -> enemyHome != null && getRange(s, mySpawn) < getRange(s, enemyHome) }
+        val intruder = enemySpawns.filter { onOurHalf(it) }.minByOrNull { getRange(mySpawn, it) }
+        val enemySpawn = when {
+            !USE_TARGET_HOLD || held == null -> enemySpawns.minByOrNull { getRange(mySpawn, it) }
+            intruder != null && !onOurHalf(held) -> intruder
+            else -> held
+        }
+        siegeTargetId = enemySpawn?.id
         siteStepsCache.clear()
         flowCache.clear()
         assaultCache.clear()
@@ -1968,7 +1990,9 @@ object SpawnAndSwamp {
         // частей живого флота против цены уцелевших частей живых вооружённых
         val liveHaulers = ctx.haulers.sumOf { liveCost(it) }
         val liveFighters = defenders.sumOf { liveCost(it) }
-        val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD
+        // ONE HAULER A TICK FROM ALL SPAWNS (v85): every free spawn runs this cascade on the same snapshot, and the
+        // creep ordered by the first is not in it — two spawns bought `hauler #8` in one tick (24.09.2026)
+        val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD && haulerOrderedAt != getTicks()
 
         if (haulerTurn) {
             val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
@@ -1979,6 +2003,7 @@ object SpawnAndSwamp {
             val r = spawn.spawnCreep(haulerBody(affordable))
             reach(if (r.error == null) "hBuy" else "err")
             if (r.error == null) {
+                haulerOrderedAt = getTicks()
                 spentHaulers += affordable * blockCost()
                 fleetMark = ctx.haulers.sumOf { capacityOf(it) }
                 fleetMarkIncome = realised
@@ -3096,9 +3121,30 @@ object SpawnAndSwamp {
         // ход считается по маршруту подхода и СВОИМ телом (pathTicks), а не по цене поля: цена поля
         // под огнём — это урон, а часам нужны тики. Пустое поле или недостижимая цель — прежний ответ
         val never = Long.MAX_VALUE / 4
+        // THE CLOCK COUNTS EVERY SPAWN HE HAS (v85). Only the fall of the LAST of his spawns wins (the replays: his
+        // original fell at t=688 with three more standing and the match ran to a draw), yet the deadline priced the
+        // walk and siege of one: the last call of 0c6bf0 fired at t=1600 with three alive. After the target, the rest
+        // are taken nearest-next, each walked at the group's slowest swamp pace (pessimistic, by Chebyshev) and worked
+        // down, rampart included, by the group's damage to structures.
+        val tourGroup = (waveFront + staging).ifEmpty { siegeCrew }
+        val tourDps = tourGroup.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+        val tour: Long = if (!USE_TOUR_CLOCK || enemySpawn == null) 0L else {
+            val period = tourGroup.maxOfOrNull { swampPeriod(it) } ?: 1
+            var t = 0L
+            var from: Position = enemySpawn
+            val rest = ctx.enemySpawns.filter { it.id != enemySpawn.id }.toMutableList()
+            while (rest.isNotEmpty()) {
+                if (tourDps <= 0.0) { t = never; break }
+                val next = rest.minByOrNull { getRange(from, it) }!!
+                t += getRange(from, next).toLong() * period + ceil(((next.hits ?: SPAWN_HITS) + shieldAt(next)) / tourDps).toLong()
+                from = next
+                rest.remove(next)
+            }
+            t
+        }
         val goNeed = minOf(
             if (staging.isEmpty()) never else budget(startTravel, siegeStart),
-            if (waveFront.isEmpty()) never else budget(frontTravel, siegeGo))
+            if (waveFront.isEmpty()) never else budget(frontTravel, siegeGo)).let { if (it >= never || tour >= never) never else it + tour }
         val lastCall = goNeed < never && remaining <= goNeed + LATE_MARGIN
         siegeEndsIn = goNeed
         // Может ли враг ещё отнять у нас спавн за остаток: его ближайший боец доходит за enemyApproach и
@@ -4298,7 +4344,10 @@ object SpawnAndSwamp {
         for (h in ctx.haulers) {
             val store = h.store[RESOURCE_ENERGY] ?: 0
             val was = haulerStore[h.id]
-            if (was != null && was > store && getRange(h, ctx.mySpawn) <= 1) sum += was - store
+            // into ANY of our spawns (v85): a hauler hands over at the nearest one (dropOff), and counted at home only,
+            // the forward spawn (2,97) of 0c6b11 took 3405 while the log read real=6 — and v64's guard on fleet growth
+            // read that as delivery falling
+            if (was != null && was > store && ctx.mySpawns.any { getRange(h, it) <= 1 }) sum += was - store
             haulerStore[h.id] = store
         }
         haulerStore.keys.retainAll(ctx.haulers.mapTo(HashSet()) { it.id })
