@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 90
+    private const val BOT_VERSION = 91
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4791,6 +4791,8 @@ object SpawnAndSwamp {
      * builder reaches and empties before it rots and that no armed creep of his can reach before the work is done.
      */
     private const val USE_PILE_SPAWN = true
+    /** The pile builder's job outranks the haulers sent to its container (pileCandidate, v91). */
+    private const val USE_PILE_RIGHT_OF_WAY = true
     private class PileJob(val containerId: String, val c: Position, val p: Position, val s: Position)
     private var pileJob: PileJob? = null
     private val pileBuilderIds = HashSet<String>()
@@ -4861,7 +4863,11 @@ object SpawnAndSwamp {
             // capacity; the rest must still pay for the spawn and the pile's decay over the build. v89 skipped any
             // container a single hauler was sent to — and against marlyman123#96 that was every fresh one on our
             // half: in four games the builder never got a job
-            val fleetTakes = ctx.haulers.filter { haulerSite[it.id] == site.id }.sumOf { it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0 }
+            // v91: v90's subtraction left no job either — in four games 583-982 rejections as "hauled" and no site.
+            // The builder has the right of way: a job reserves its container (reservedForPile) and the haulers sent
+            // to it are sent elsewhere. The fleet brings one load a hauler before the container rots; dumped, the
+            // whole of it becomes a spawn with its regeneration, a production point by the sources, and ~700 in it
+            val fleetTakes = if (USE_PILE_RIGHT_OF_WAY) 0 else ctx.haulers.filter { haulerSite[it.id] == site.id }.sumOf { it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0 }
             if (site.energy - fleetTakes < price + 2 * buildTicks) { no(if (fleetTakes > 0) "hauled" else "thin"); continue }
             val walk = if (builder != null) pathTicks(builder, flowTo(ctx, c), builder.x * 100 + builder.y)
                 else bornIn + ctx.stepsToSpawn[c.x * 100 + c.y].let { if (it < 0) Int.MAX_VALUE / 4 else it * swampPace }
