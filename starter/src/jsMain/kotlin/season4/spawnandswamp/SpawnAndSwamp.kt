@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 79
+    private const val BOT_VERSION = 80
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -281,6 +281,11 @@ object SpawnAndSwamp {
     private var cpuMaxTick = 0
     private var cpuSlowTicks = 0
     private fun cpuMs(): Double = try { getCpuTime() / 1_000_000.0 } catch (e: Throwable) { 0.0 }
+    /** The arena's per-tick limit in ms (100 in Spawn and Swamp, read from arenaInfo; 50 if it says nothing). */
+    private fun cpuBudgetMs(): Double = (arenaInfo.cpuTimeLimit.toDouble() / 1_000_000.0).let { if (it > 0.0) it else 50.0 }
+    /** Share of the tick the optional forward-spawn search may start a step under (see forwardSpot): the phases after
+     *  it took up to ~50 ms on the slowest live ticks of v79. */
+    private const val FWD_CPU_SHARE = 0.45
     private fun cpuMark(phase: String) {
         val now = cpuMs()
         cpuPhases.add(phase to now)
@@ -2115,6 +2120,20 @@ object SpawnAndSwamp {
         val carry = (ctx.builders.maxOfOrNull { b -> b.body.count { it.type == CARRY && it.hits > 0 } }
             ?: keeper.count { it == CARRY }) * CARRY_CAPACITY
         if (carry <= 0) return null.also { why?.append(" noCarry") }
+        // THE QUESTION CAN WAIT A TICK, THE TICK CANNOT (v80). Every collectRate below reads a step field to EVERY
+        // drop cell, and after the blocked set changes they are all rebuilt at once — 71 ms of a 100 ms tick in the
+        // v79 trace, while the rest of the tick needs up to ~50 — and a tick past the limit is killed with every order
+        // in it. So the fields are built here first, one at a time, and the search is put off the moment the tick has
+        // spent its share: what was built stays cached (cellStepsSig), and the same answer comes a tick or two later
+        // on a warm cache. The stub's clock reads 0 and never defers. Counted as `fwdCpu` in `reach spawn`.
+        for (key in dropHistory.keys) {
+            if (key !in cellStepsCache && cpuMs() > cpuBudgetMs() * FWD_CPU_SHARE) {
+                spawnReach["fwdCpu"] = (spawnReach["fwdCpu"] ?: 0) + 1
+                why?.append(" cpu")
+                return null
+            }
+            cellSteps(ctx, key)
+        }
         var best: Position? = null
         var bestRate = collectRate(ctx, ctx.mySpawn as Position, capacity)
         var unsafe = 0; var thin = 0; var dying = 0; var noCell = 0; var his = 0; var slower = 0
