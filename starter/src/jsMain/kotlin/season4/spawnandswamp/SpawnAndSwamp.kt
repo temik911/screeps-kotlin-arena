@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 91
+    private const val BOT_VERSION = 92
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4793,6 +4793,13 @@ object SpawnAndSwamp {
     private const val USE_PILE_SPAWN = true
     /** The pile builder's job outranks the haulers sent to its container (pileCandidate, v91). */
     private const val USE_PILE_RIGHT_OF_WAY = true
+    /** A job is refused if any armed creep of his could reach the container before the work is done.
+     *  OFF — measured live 25.09.2026 (v91, four games against marlyman123#96): with Chebyshev distance at his plain
+     *  pace against ~130 ticks of work every armed creep on most of the map "reached" it, and the builder, waiting at
+     *  (35,47), refused fresh containers at (47,47) and (44,37) 328-1103 times a game: not one job in four games. The
+     *  honest test would need his real path to the cell; what is known is kept — the cell is safe now (site.safe), and
+     *  a builder under fire runs and drops the job. */
+    private const val USE_PILE_THREAT_ETA = false
     private class PileJob(val containerId: String, val c: Position, val p: Position, val s: Position)
     private var pileJob: PileJob? = null
     private val pileBuilderIds = HashSet<String>()
@@ -4876,7 +4883,7 @@ object SpawnAndSwamp {
             if (life < walk + dump + 3) { no("late"); continue }  // it rots before it is on the ground
             val work0 = walk + dump + buildTicks
             // nobody of his armed reaches it before the job is done (at his plain pace — the optimistic one for him)
-            if (ctx.combatEnemies.any { getRange(it, c).toLong() * plainPeriod(it).coerceAtMost(10) <= work0 }) { no("threat"); continue }
+            if (USE_PILE_THREAT_ETA && ctx.combatEnemies.any { getRange(it, c).toLong() * plainPeriod(it).coerceAtMost(10) <= work0 }) { no("threat"); continue }
             val cells = pileCells(ctx, c)
             if (cells == null) { no("cells"); continue }
             if (walk < bestWalk) { bestWalk = walk; best = PileJob(site.id, InfluenceMap.cell(c.x, c.y), cells.first, cells.second) }
