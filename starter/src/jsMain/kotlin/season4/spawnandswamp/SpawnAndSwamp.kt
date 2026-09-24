@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 86
+    private const val BOT_VERSION = 87
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -139,6 +139,15 @@ object SpawnAndSwamp {
     /** The target is kept while a wave is out against it (in the field or holding): a spawn he puts up during the
      *  march does not pull the wave off; between waves the target is chosen as before (tick, v86). */
     private const val USE_TARGET_COMMIT = true
+    /** The siege's defenders are those of his that can reach the target within our approach and the siege,
+     *  not his whole army wherever it stands (runFighters, v87). */
+    private const val USE_LOCAL_DEFENDERS = true
+    /** Two losing sieges are compared by the work left on the target: nothing repairs a rampart or a spawn, so a
+     *  siege that does more of the work is progress even when it fails (SiegeResult.better, v87).
+     *  OFF — measured on the gate 25.09.2026: it alone takes tower+stream 574 -> 1229, tower+healball 521 -> 905 and
+     *  fortress 1583 -> 1916. Losing runs compared by work left prefer the melee body wherever nothing wins yet, and
+     *  melee is bought into a siege that more guns would have won — the v72 effect again, by another road. */
+    private const val USE_PROGRESS_COMPARE = false
     /** The last call's deadline walks and works every spawn he has, not only the target (goNeed, v85). */
     private const val USE_TOUR_CLOCK = true
     private var siegeTargetId: String? = null
@@ -2622,14 +2631,14 @@ object SpawnAndSwamp {
 
     /** `direct` — the plan that won the comparison in [siegeOutcome]: the spawn straight away, past his shielded
      *  defenders and his towers, rather than them first. */
-    private class SiegeResult(val win: Boolean, val ticks: Int, val hitsLost: Int, val direct: Boolean = false) {
+    private class SiegeResult(val win: Boolean, val ticks: Int, val hitsLost: Int, val direct: Boolean = false, val left: Double = Double.MAX_VALUE) {
         override fun toString() = "${if (win) "win" else "lose"}/${ticks}t/-$hitsLost${if (direct) "/direct" else ""}"
 
         /** Лучше — та осада, что кончается ПОБЕДОЙ раньше; при равном сроке — дешевле по хитам. Два
          *  проигрыша не сравниваются вовсе: «продержаться на десять тиков дольше» — не причина менять
          *  состав армии, и первая попытка сравнивать их сроком выбирала мили там, где осады нет. */
         fun better(other: SiegeResult): Boolean =
-            if (!win) false
+            if (!win) (USE_PROGRESS_COMPARE && !other.win && left < other.left)
             else if (!other.win) true
             else ticks < other.ticks || (ticks == other.ticks && hitsLost < other.hitsLost)
     }
@@ -2878,14 +2887,14 @@ object SpawnAndSwamp {
             }
             lost = maxOf(0.0, lost - mendWave())
             val ourDps = units.sumOf { it.dps() }
-            if (ourDps <= 0.0) return SiegeResult(false, i, lost.toInt())
+            if (ourDps <= 0.0) return SiegeResult(false, i, lost.toInt(), direct, spawnHits)
             if (defs.isNotEmpty()) {
                 if (defShield > 0.0) {
                     defShield -= units.sumOf { it.creepDps() }
                     if (defShield < 0.0) { defHits += defShield; defShield = 0.0 }
                 } else {
                     val net = units.sumOf { it.creepDps() } - defs.sumOf { it.heal } - skippedHeal
-                    if (net <= 0.0) return SiegeResult(false, i, lost.toInt(), direct)
+                    if (net <= 0.0) return SiegeResult(false, i, lost.toInt(), direct, spawnHits)
                     defHits -= net
                 }
                 while (defHits <= 0.0 && defs.isNotEmpty()) {
@@ -2918,7 +2927,7 @@ object SpawnAndSwamp {
                 }
             }
         }
-        return SiegeResult(false, SIEGE_LIMIT, lost.toInt())
+        return SiegeResult(false, SIEGE_LIMIT, lost.toInt(), direct, spawnHits)
     }
 
     // ==================== армия ====================
@@ -3029,6 +3038,15 @@ object SpawnAndSwamp {
         val production = enemyProductionPerTick(getTicks(), combatEnemies + ctx.pendingEnemies)
         val massing = combatEnemies.filter { it.id !in approachingIds }
         val massingPower = enemyPowerOf(massing, strikers)
+        // THE SIEGE IS DEFENDED BY WHO CAN GET THERE (v87). `massing` is every armed creep of his not walking at us,
+        // wherever it stands — against marlyman123#96 `massing=1999` put his field army, forty cells away, into the
+        // siege of his main spawn, and every siege of it read `lose`. A defender of the target is one that reaches it
+        // within our approach and the siege (at its plain pace, the optimistic one for him); the rest are the field
+        // army, which the march already pays for (attrition, maxPack) and the posture weighs (massingPower).
+        val siegeDefenders = if (!USE_LOCAL_DEFENDERS || enemySpawn == null) massing else {
+            val within = (minOf(travel, arenaInfo.ticksLimit) + SIEGE_LIMIT / 4).toLong()
+            massing.filter { getRange(it, enemySpawn).toLong() * plainPeriod(it).coerceAtMost(10) <= within }
+        }
         val waveDps = offensive.sumOf { InfluenceMap.profileOf(it).ranged }
         val waveHits = offensive.sumOf { it.hits }
         val siege = if (enemySpawn != null && waveDps > 0.0) ((enemySpawn.hits ?: SPAWN_HITS) / waveDps).toInt() else 0
@@ -3075,13 +3093,13 @@ object SpawnAndSwamp {
         // ход считается ДО прогонов: он им теперь нужен — по нему разносится урон марша (см. approach)
         val startTravel = travelTicksOf(staging, assaultFlow, spawnFlow)
         val frontTravel = travelTicksOf(waveFront, assaultFlow, spawnFlow)
-        val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = startTravel) else SIEGE_LOSE
-        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel) else SIEGE_LOSE
+        val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = startTravel) else SIEGE_LOSE
+        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel) else SIEGE_LOSE
         // the front fires the way its winning plan does (v83): past his shielded defenders and his towers, at the spawn
         stormDirect = siegeGo.win && siegeGo.direct
         // осада фронтом ВМЕСТЕ с группой поста: когда волна держит кромку, подкрепление уходит к ней, если
         // сумма выигрывает (с запасом на выход, как siegeStart)
-        val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
+        val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1) else SIEGE_LOSE
         // КАКОЕ ТЕЛО КОНЧИТ ОСАДУ РАНЬШЕ — спрашивается тем же прогоном; ответ читают отбор волны и
         // спавн на следующем тике.
         // ГРУППА ЗДЕСЬ — ВСЯ АРМИЯ, а не фронт, и это не мелочь. Прогон отвечает на «а если ЕЩЁ ОДНО
@@ -3104,7 +3122,7 @@ object SpawnAndSwamp {
             // под спавном, — иначе лекарь снова оценивается там, где он не нужен
             val crewTravel = travelTicksOf(siegeCrew, assaultFlow, spawnFlow)
             fun run(extra: Array<BodyPartType>) =
-                siegeOutcome(siegeCrew, attrition, massing, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = extra, approach = crewTravel)
+                siegeOutcome(siegeCrew, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = extra, approach = crewTravel)
             val withRanged = run(fighterBody(SPAWN_ENERGY_CAPACITY))
             val withMelee = if (armoured) run(guardBody(SPAWN_ENERGY_CAPACITY)) else SIEGE_LOSE
             // ЛЕКАРЬ спрашивается всегда, когда осада вообще считается. Он ничего не ломает, значит по
