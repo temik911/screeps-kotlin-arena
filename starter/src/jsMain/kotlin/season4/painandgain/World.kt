@@ -1145,7 +1145,18 @@ internal object Garrisons {
 
     /** ПОЛ ЕГО ФЛАГОВ (v620, см. USE_FLAG_FLOOR): флаг брать можно, если после этого не наших останется не меньше BALL_FLAGS —
      *  шар бьётся с ним, пока он под своими дебаффами. */
-    fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || farmer(ctx) || f.ours || ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
+    fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || farmer(ctx) || farmerSign(ctx) || f.ours ||
+        ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
+
+    /** ПОЧЕРК ФЕРМЕРА (v630, см. USE_FARMER_SWAP): тот же признак, что у кулака (v626), без кулака; держится до конца матча. */
+    fun farmerSign(ctx: Ctx): Boolean {
+        if (!USE_FARMER_SWAP) return false
+        if (Memory.farmerSeen[0] > 0) return true
+        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        val guarded = ctx.flags.count { f -> f.theirs && armed.count { getRange(it, f.pos) <= FIST_RADIUS - 1 } >= 2 }
+        if (guarded >= FARMER_FLAGS) { Memory.farmerSeen[0] = getTicks(); raidWhy.bump("farmer") }
+        return Memory.farmerSeen[0] > 0
+    }
 
     /** ФЕРМЕР (v626, см. USE_STRIKE_FARMER): у него FARMER_FLAGS флагов и больше, у каждого — не меньше двух его вооружённых в
      *  FIST_RADIUS − 1; признак держится до конца матча. */
@@ -1416,9 +1427,32 @@ internal object Garrisons {
                 return
             }
         }
+        // ОБМЕН ПОСТАМИ ПРОТИВ ФЕРМЕРА (v630, см. USE_FARMER_SWAP): шар встаёт на пост меньшей группы стрелков, она — на
+        // оспариваемый флаг
+        val swapWeak = if (USE_FARMER_SWAP && USE_H_POSTS && farmerSign(ctx))
+            (1 until squads.size).filter { squads[it].isNotEmpty() && Memory.raidPost[it] >= 0 }.minByOrNull { squads[it].size } else null
         for ((si, sq) in squads.withIndex()) {
             if (sq.isEmpty()) continue
             val (mx, my) = medians[si]!!
+            if (swapWeak != null && (si == 0 || si == swapWeak)) {
+                val cell = if (si == 0) Memory.raidPost[swapWeak] else contestedFlag(ctx)?.pos?.key ?: -1
+                if (cell >= 0) {
+                    claimed.add(cell)
+                    for (c in sq) {
+                        Memory.garrisonReleased.remove(c.id)
+                        Memory.garrisonFlag[c.id] = cell; Memory.garrisonHome[c.id] = cell
+                    }
+                    if (USE_POST_CLEAR) ctx.enemyCreeps.firstOrNull { it.key == cell }?.let { occ ->
+                        for (c in sq) {
+                            val r = getRange(c, occ)
+                            if (hasRanged(c) && r <= RANGED_RANGE) Executor.rangedAttack(c, occ)
+                            if (hasMelee(c) && r <= 1) Executor.attack(c, occ)
+                        }
+                    }
+                    raidWhy.bump("swap")
+                    continue
+                }
+            }
             fun travel(fk: Int): Int {
                 val flow = flowTo(ctx, InfluenceMap.cell(fk / 100, fk % 100))
                 var worst = 0
