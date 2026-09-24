@@ -114,7 +114,29 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 83
+    private const val BOT_VERSION = 84
+
+    // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
+    /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
+    private const val USE_HEALER_WARD = true
+    /** A body without a single MOVE is not counted as army production (enemyProductionPerTick). */
+    private const val USE_LEGLESS_NOT_ARMY = true
+    /** A born healer's heal counts in its production power like damage (enemyProductionPerTick). */
+    private const val USE_HEAL_IN_BIRTHS = true
+    /** A melee's value is the share of his hits it can reach, not all-or-nothing (meleeShare).
+     *  OFF — measured 25.09.2026 and not landed: on the gate it is the whole cause of `tower+healball` 521 -> 1264 and
+     *  `stream17` 888 -> 952 (swarm, stream and pairs got 10-20 ticks faster). Against the healball's slow M3R3 the melee
+     *  kills the damage and the healers left do nothing, so weighting by HITS undervalues exactly the melee that wins;
+     *  and our own breacher (M6A6, five ticks a swamp cell) makes even M4H2 "faster". What decided Ranamar#2 was the
+     *  march — his fast army meets the melee before the spawn — and that belongs to the siege's attrition, not here. */
+    private const val USE_MELEE_SHARE = false
+    /** The home fight's window is measured from the first of us to arrive, not from now (homeReady).
+     *  OFF — measured 25.09.2026 and not landed: it breaks the gate's `siege6` fixture (six hunters every sixty ticks
+     *  at our gates): counted from the first arrival, three and then two of the garrison read "ready", the home fight
+     *  started as `fight:wins(308/274[2/3])` and `fight:fire(206/185[1/2])` and lost the garrison by t=750, and the
+     *  tower site was left at 610/1250. The draw it came from (76561198870429455#35, a camp 40-48 ticks out that the
+     *  post beat 7:0 once it went) stays unexplained by the stub; it needs that opponent live. */
+    private const val USE_HOME_FIRST_ARRIVAL = false
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -3137,6 +3159,13 @@ object SpawnAndSwamp {
             val ourHits = homeAll.sumOf { it.hits }
             val fightTicks = if (theirDps <= 0.0) Int.MAX_VALUE / 4 else (ourHits / theirDps).toInt()
             val toThreat = flowTo(ctx, homeAnchor)
+            // THE FIGHT STARTS WHEN THE FIRST OF US GETS THERE, NOT NOW (v84). The window was measured from this
+            // tick, so against a camp 40-48 ticks out every fighter was "too far" for a line life of ~18 ticks and
+            // the garrison read [0/4], [0/5] for a thousand ticks — two draws of the v73 series against armies that
+            // our post, once it finally went at the last call, beat 7:0. The post walks together; a fighter is in the
+            // fight if it arrives within the line's life of the first arrival.
+            val walks = homeAll.associate { it.id to pathTicks(it, toThreat, it.x * 100 + it.y) }
+            val first = walks.values.filter { it < Int.MAX_VALUE / 4 }.minOrNull() ?: 0
             homeAll.filter { f ->
                 // ДОСТАЁТ ИЛИ ДОГОНИТ. Стрелок, который не достаёт до ближайшего из стаи и не может её
                 // догнать (она уходит и не медленнее его — см. catchable, замер по прошлому тику), в этом
@@ -3146,7 +3175,8 @@ object SpawnAndSwamp {
                 // им всё равно придётся (тогда они не отходят, и catchable верен сам собой)
                 val near = homePack.minByOrNull { getRange(f, it) }
                 val reachable = near == null || getRange(f, near) <= RANGED_RANGE || catchable(f, near)
-                reachable && pathTicks(f, toThreat, f.x * 100 + f.y) <= maxOf(fightTicks, RANGED_RANGE)
+                reachable && (walks[f.id] ?: Int.MAX_VALUE / 2).toLong() <=
+                    (if (USE_HOME_FIRST_ARRIVAL) first.toLong() else 0L) + maxOf(fightTicks, RANGED_RANGE)
             }
         }
         // с гистерезисом, как охота: начатый бой продолжаем при 0.9 — иначе первые потери переключали
@@ -3429,9 +3459,22 @@ object SpawnAndSwamp {
             val meleeHomeTarget = if (melee && homeFight) homeThreats.filter { catchable(creep, it) }.minByOrNull { getRange(creep, it) } else null
             val target: Position
             val standoff: Int
+            // A HEALER IN A WAVE WALKS WITH THE WAVE (v84). It carries no weapon, so the first row below sent it home —
+            // while the wave kept it as a member (inArms counts heal) and, holding the tower's edge, waited for it as
+            // a laggard: 400-480 ticks of standing in the v73 series against marlyman123#114, with the wave's own
+            // simulation saying `melee=win`. It follows the most damaged member by share of hits, or the vanguard
+            // (nearest the enemy spawn on the assault field) while nobody is hurt; a husk — no weapon AND no heal —
+            // still goes home.
+            val healer = USE_HEALER_WARD && !hasWeapon(creep) && hasHeal(creep)
+            val ward: Creep? = if (healer && marching) {
+                val mates = fighters.filter { it.id != creep.id && it.id in wave && inArms(it) }
+                mates.filter { it.hits < it.hitsMax }.minByOrNull { it.hits.toDouble() / it.hitsMax }
+                    ?: mates.minByOrNull { assaultFlow.getOrNull(it.x * 100 + it.y)?.takeIf { d -> d >= 0 } ?: Int.MAX_VALUE }
+            } else null
             // мили (бурильщик) на поводке: враг у дома, стена пролома, пост — и ничего дальше.
             // За целью «на нашей половине» он ушёл на другой край карты и стал турелью (02.09).
             when {
+                ward != null -> { target = ward; standoff = 1 }
                 !hasWeapon(creep) -> { target = mySpawn; standoff = HOME_STANDOFF + 1 }
                 homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
@@ -3467,7 +3510,7 @@ object SpawnAndSwamp {
             // и принимает выстрел, который иначе достался бы целому (стенд: боец с двумя RANGED убежал,
             // и осада, посчитанная с ним, откатилась)
             val sieging = marching && pushing && localTowers.isNotEmpty()
-            val mustFlee = (!hasWeapon(creep) && nearbyEnemies.isNotEmpty()) ||
+            val mustFlee = (!hasWeapon(creep) && ward == null && nearbyEnemies.isNotEmpty()) ||
                 creep.hits < InfluenceMap.netDamageAt(creep.x, creep.y, nearbyEnemies, allies) * 2 ||
                 (!sieging && creep.hits <= InfluenceMap.towerBurstAt(creep.x, creep.y)) ||
                 (ghost > 0 && creep.hits <= ghost)
@@ -3590,11 +3633,19 @@ object SpawnAndSwamp {
      *  Мощь одиночки — по полным хитам: рождённый цел, а фраги наши его темпа не меняют. */
     private fun enemyProductionPerTick(now: Int, combatEnemies: List<Creep>): Double {
         for (e in combatEnemies) {
+            // A BODY WITHOUT A SINGLE MOVE IS NOT ARMY (v84): けろびー's `A3` is carried to his own wall at t≈20 and
+            // breaks it there; counted as the first combat birth it started the production clock two hundred ticks
+            // before his army, so the rate came out at +170/100t while he grew +393/100t and our first wave left into
+            // it (three losses to けろびー#18, 24.09.2026). Never counted, never seen again: it cannot reach us.
+            if (USE_LEGLESS_NOT_ARMY && e.body.none { it.type == MOVE }) continue
             if (!enemySeen.add(e.id)) continue
             if (firstCombatSeen < 0) firstCombatSeen = now
             val p = InfluenceMap.profileOf(e)
             val dps = p.ranged + p.melee
-            enemyBirths.addLast(Birth(now, lanchester(dps, 0.0, e.hitsMax), e.hitsMax, dps, p.melee))
+            // a healer is born with no damage, and at power 0 his M5H3s did not exist for the estimate; what he adds
+            // to a fight is heal against our damage, the same currency in the damage race — so it enters as such
+            val strength = dps + (if (USE_HEAL_IN_BIRTHS) p.heal else 0.0)
+            enemyBirths.addLast(Birth(now, lanchester(strength, 0.0, e.hitsMax), e.hitsMax, dps, p.melee))
         }
         while (enemyBirths.isNotEmpty() && enemyBirths.first().tick < now - PRODUCTION_WINDOW) enemyBirths.removeFirst()
         if (firstCombatSeen < 0) return 0.0
@@ -3921,22 +3972,50 @@ object SpawnAndSwamp {
      * шли с дисконтом 0.1 — «гарнизон держит», и армия ушла волной от горящего спавна.
      */
     private fun meleeFactor(unit: Creep, opponents: List<Creep>, structure: Position?): Double {
-        if (opponents.any { hasMelee(it) || getRange(unit, it) <= MELEE_KEEP_RANGE }) return 1.0
         if (structure != null && getRange(unit, structure) <= 1) return 1.0
-        val ranged = opponents.filter { hasRanged(it) }
-        if (ranged.isEmpty()) return 1.0
-        val mine = swampPeriod(unit)
-        return if (ranged.any { swampPeriod(it) > mine }) 1.0 else MELEE_KITE_DISCOUNT
+        if (opponents.any { getRange(unit, it) <= MELEE_KEEP_RANGE }) return 1.0
+        if (!USE_MELEE_SHARE) return meleeSwitch(swampPeriod(unit), opponents)
+        return meleeShare(swampPeriod(unit), opponents)
     }
 
     /** То же, что meleeFactor, для ЕЩЁ НЕ КУПЛЕННОГО тела: позиции у него нет, значит нет и клаузы
      *  «уже вплотную», а болотный период считается по частям тела (гружёных CARRY у бойца не бывает). */
-    private fun meleeReach(body: Array<BodyPartType>, opponents: List<Creep>): Double {
+    private fun meleeReach(body: Array<BodyPartType>, opponents: List<Creep>): Double =
+        periodOn(body.count { it != MOVE && it != CARRY }, body.count { it == MOVE }, 10).let {
+            if (USE_MELEE_SHARE) meleeShare(it, opponents) else meleeSwitch(it, opponents)
+        }
+
+    /**
+     * THE SHARE A MELEE REACHES, NOT A SWITCH (v84). "Any melee among them → full value" was the rule, on the reasoning
+     * that melee meet melee; against Ranamar#2 one fast M15A3 in a group of fast M10R2 and M10H2 (all at one swamp cell a
+     * tick, ours at three) made our M12A5 worth its whole 150 in every price — and 3.3-3.9 thousand energy of them stood
+     * next to an enemy in 1 % of their ticks and landed nothing. What a melee reaches is: his melee (they come to us
+     * to strike, and are struck back), and those not faster than it on swamp, where the difference in speed lives. The
+     * factor is that share of his hits at full value and the rest at MELEE_KITE_DISCOUNT; all-melee or all-slower
+     * gives 1.0 and all-fast-ranged gives the discount, as before.
+     */
+    /** The rule before v84 (see meleeShare), kept for USE_MELEE_SHARE = false: any melee among them, or any
+     *  ranged slower than ours, gives full value to the whole group; otherwise the kite discount. */
+    private fun meleeSwitch(minePeriod: Int, opponents: List<Creep>): Double {
         if (opponents.any { hasMelee(it) }) return 1.0
         val ranged = opponents.filter { hasRanged(it) }
         if (ranged.isEmpty()) return 1.0
-        val mine = periodOn(body.count { it != MOVE && it != CARRY }, body.count { it == MOVE }, 10)
-        return if (ranged.any { swampPeriod(it) > mine }) 1.0 else MELEE_KITE_DISCOUNT
+        return if (ranged.any { swampPeriod(it) > minePeriod }) 1.0 else MELEE_KITE_DISCOUNT
+    }
+
+    private fun meleeShare(minePeriod: Int, opponents: List<Creep>): Double {
+        val armed = opponents.filter { hasMelee(it) || hasRanged(it) || hasHeal(it) }
+        if (armed.none { hasRanged(it) }) return 1.0
+        var reach = 0.0
+        var all = 0.0
+        for (o in armed) {
+            val h = o.hits.toDouble().coerceAtLeast(1.0)
+            all += h
+            if (hasMelee(o) || swampPeriod(o) >= minePeriod) reach += h   // not faster than it: it gets there
+        }
+        if (all <= 0.0) return 1.0
+        val share = reach / all
+        return share + (1.0 - share) * MELEE_KITE_DISCOUNT
     }
 
     /** Действенный урон крипа в тик против группы: стрельба целиком, мили — по meleeFactor. */
