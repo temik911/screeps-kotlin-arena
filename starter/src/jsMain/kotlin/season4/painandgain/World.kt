@@ -809,6 +809,13 @@ internal fun flagsBut(ctx: Ctx, f: FlagInfo?) = ctx.flags.filter { it !== f }
 /** Наши крипы отряда плана с номером si. */
 internal fun squadMembers(ctx: Ctx, si: Int) = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si }
 
+/** БОЙ РЕШЁН (v639, см. USE_METALICA_HOLD): живых частей ATTACK и RANGED_ATTACK у одной стороны не больше половины от другой. */
+internal fun fightDecided(ctx: Ctx): Boolean {
+    fun parts(cs: List<Creep>) = cs.sumOf { c -> c.body.count { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 } }
+    val ours = parts(ctx.army); val his = parts(ctx.combatEnemies)
+    return 2 * minOf(ours, his) <= maxOf(ours, his)
+}
+
 /** Наши боевые, уже рождённые, — кого раскладывает план. */
 internal fun readyFighters(ctx: Ctx) = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
 
@@ -1173,6 +1180,23 @@ internal object Garrisons {
         if (Memory.tourerSeen[0] > 0) return true
         if (tourerRule(ctx)) { Memory.tourerSeen[0] = getTicks(); raidWhy.bump("tourer") }
         return Memory.tourerSeen[0] > 0
+    }
+
+    /** ПОЧЕРК MetalicaX (v639, см. USE_METALICA_HOLD; разбор 11 игр против #19 и архива против #9–#18 субагентом Opus,
+     *  24.09.2026): на тике METAL_CHECK_TICK все его боевые (двенадцать) в METAL_BLOCK от их медианы, его дальний разведчик
+     *  не ближе METAL_SCOUT_BEHIND к ней, а медиана не дальше METAL_TO_D5 от оспариваемого флага: армия идёт на него одним
+     *  плотным блоком. Защёлка до конца. */
+    fun metalica(ctx: Ctx) {
+        if (!USE_METALICA_HOLD || Memory.metalSeen[0] > 0 || getTicks() != METAL_CHECK_TICK) return
+        val his = ctx.enemyCreeps.filter { bornCombatant(it) }
+        if (his.size < 3 * GARRISON_SIZE) return
+        val (mx, my) = medianOf(his)
+        if (his.any { maxOf(abs(it.x - mx), abs(it.y - my)) > METAL_BLOCK }) return
+        val scouts = ctx.enemyCreeps.filter { c -> c.body.size == 1 && c.body[0].type == MOVE }
+        if (scouts.none { maxOf(abs(it.x - mx), abs(it.y - my)) >= METAL_SCOUT_BEHIND }) return
+        val contested = contestedFlag(ctx) ?: return
+        if (maxOf(abs(contested.pos.x - mx), abs(contested.pos.y - my)) > METAL_TO_D5) return
+        Memory.metalSeen[0] = getTicks(); raidWhy.bump("metal")
     }
 
     /** ПОЧЕРК CHEMOAUTOTROPH (v638, см. USE_CHEMO_SENTRIES; разбор 15 игр и 685 игр других ботов субагентом Opus, 24.09.2026):
@@ -2405,6 +2429,7 @@ internal fun readSignals(ctx: Ctx) {
     for (c in ctx.myCreeps) if (bornCombatant(c)) Memory.ourPrevCells[c.id] = c.key
     Garrisons.assign(ctx)   // стоящие гарнизоны (v600): раскладка один раз за матч
     Garrisons.chemo(ctx)   // почерк Chemoautotroph (v638): часовые на H
+    Garrisons.metalica(ctx)   // почерк MetalicaX (v639): свои флаги — после боя
     Garrisons.campBreak(ctx)   // снять лагерь (v605): этапы посадки гарнизонов под прикрытием армии
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
     // мы держим не больше одного; у обоих хватает боевых тел (с лекарями: вооружённых у него всего девять) на кулак и на приманку с резервом

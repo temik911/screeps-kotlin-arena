@@ -553,6 +553,11 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         // флаг RANGED берётся НЕ в дебюте, а на 55-м тике — ПОСЛЕ первого размена (46-й): `fmassed` до 40-го равен
         // нулю, на 50-м единице, и к моменту захвата он уже не «подходит», а ДЕРЁТСЯ, отчего вето не взводилось ни
         // разу (`dbfveto=0/19939` живьём). Поэтому признак «он идёт» дополнен признаком «размен уже был»
+        // ...а ПРОТИВ MetalicaX — ДО РЕШЕНИЯ БОЯ (v639, см. USE_METALICA_HOLD): он стоит на D5 и ждёт, признак «он подходит»
+        // ложен, вето истекало на t≈54, и бегун брал свой R перед самым боем (4 боя из 4 при своём флаге проиграны)
+        if (USE_METALICA_HOLD && metalicaMode() && f.type != EFF_DAMAGE_TAKEN_MODIFIER && !fightDecided(ctx)) {
+            debuffVeto.n++; return@Gate Verdict.Veto("debuff.metal")
+        }
         if (USE_NO_OUTPUT_DEBUFF_WHOLE_ARMY && f.type != EFF_DAMAGE_TAKEN_MODIFIER &&
             ctx.threats.size >= MASS_ARMED_MIN && Signals.enemyMassedSignal &&
             (Signals.approachingNow || firstFightTick > 0) &&
