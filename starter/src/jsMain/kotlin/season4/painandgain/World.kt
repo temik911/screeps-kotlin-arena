@@ -1504,6 +1504,24 @@ internal object Garrisons {
             Memory.raidTogether[si] = false
             // ДВА СТРЕЛКА — ЕГО НЕ ЖДЁМ (v618, см. USE_RANGED_SQUADS): группу с двумя стрелками и больше он не трогает (разбор
             // 40 рук: 4 из 251), поэтому такой отряд не бежит и не проверяет путь — только флаг без его группы
+            // ВСТАЛ НА H — СТОЙ (v628, см. USE_H_POSTS): у группы стрелков постоянный пост — один из двух самых дорогих флагов
+            // вне оспариваемого (ближний к ней из свободных, выбор держится до конца матча); крип стоит на клетке флага
+            if (USE_H_POSTS && USE_RANGED_SQUADS && si > 0) {
+                if (Memory.raidPost[si] < 0) {
+                    val contested = contestedFlag(ctx)
+                    val taken = (1 until squads.size).filter { it != si }.map { Memory.raidPost[it] }.toSet()
+                    Memory.raidPost[si] = ctx.flags.filter { it !== contested }.sortedByDescending { it.score }.take(2)
+                        .filter { it.pos.key !in taken }
+                        .minByOrNull { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) }?.pos?.key ?: -1
+                }
+                val post = Memory.raidPost[si]
+                if (post >= 0) {
+                    claimed.add(post)
+                    for (c in sq) { Memory.garrisonFlag[c.id] = post; Memory.garrisonHome[c.id] = post }
+                    raidWhy.bump("post")
+                    continue
+                }
+            }
             if (USE_RANGED_SQUADS && sq.count { hasRanged(it) } >= 2) {
                 // под полом (v620) — самые дорогие флаги первыми: нам остаётся не больше трёх
                 // ...и оспариваемый флаг — шару (v621)

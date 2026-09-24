@@ -132,6 +132,8 @@ internal object Memory {
     val farmerSeen = intArrayOf(0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
     val strikeFlag = intArrayOf(-1)
+    /** Постоянный пост группы стрелков по номеру отряда (v628, см. USE_H_POSTS); -1 — не выбран. */
+    val raidPost = intArrayOf(-1, -1, -1)
     val lastFlagOwner = HashMap<String, Int>()
     // ---------- кэши на тик ----------
     val flowCache = HashMap<Int, IntArray>()
