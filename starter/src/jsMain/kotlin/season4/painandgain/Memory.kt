@@ -148,6 +148,11 @@ internal object Memory {
     val fragSplits = intArrayOf(0)
     /** Почерк «хранителя отрыва» (v646, см. USE_LEAD_KEEPER_PAIRS): [0] — тик защёлки (0 — нет), [1] — тиков подряд. */
     val leadKeeper = intArrayOf(0, 0)
+    /** Почерк «переворачивающего одиночек» (v657, см. USE_FLIPPER_TRIPLES): H, взятые его вооружённым на клетке к FLIP_H_BY;
+     *  прежний владелец каждого флага; [0] — наших флагов, перевёрнутых его вооружённым к FLIP_BY. */
+    val flipH = HashSet<String>()
+    val flagPrevMine = HashMap<String, Boolean?>()
+    val flipCount = intArrayOf(0)
     /** Тик, когда соперник показал почерк MetalicaX (v639, см. USE_METALICA_HOLD); 0 — не показал. */
     val metalSeen = intArrayOf(0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */

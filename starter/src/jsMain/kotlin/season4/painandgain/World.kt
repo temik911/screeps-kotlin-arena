@@ -1254,6 +1254,7 @@ internal object Garrisons {
         if (!USE_FARMER_TRIPLES || Memory.fragSeen[0] > 0 || tourerMode() || chemoMode()) return
         val now = getTicks()
         if (now > FRAG_TO) return
+        if (USE_FLIPPER_TRIPLES && flipperRule(ctx, now)) { Memory.fragSeen[0] = now; raidWhy.bump("flip"); return }
         if (Memory.fragScoutH[0] == 0 && now <= FRAG_SCOUT_BY) {
             val hs = hFlagsOf(ctx)
             if (enemyScoutsOf(ctx).any { sc -> hs.any { it.pos.key == sc.key } }) Memory.fragScoutH[0] = now
@@ -1280,6 +1281,18 @@ internal object Garrisons {
         val waiting = weLose && enemyScoutsOf(ctx).any { sc -> free.any { getRange(sc, it.pos) == 1 } }
         m[1] = if (waiting) m[1] + 1 else 0
         if (m[1] >= GROUP_WINDOW) { m[0] = getTicks(); raidWhy.bump("keeper") }
+    }
+
+    /** ПОЧЕРК «ПЕРЕВОРАЧИВАЮЩЕГО ОДИНОЧЕК» (v657, см. USE_FLIPPER_TRIPLES): оба H взяты его вооружённым, стоящим на клетке,
+     *  не позже FLIP_H_BY, и его вооружённые перевернули не меньше FLIP_MIN наших флагов не позже FLIP_BY. Ведётся каждый тик. */
+    private fun flipperRule(ctx: Ctx, now: Int): Boolean {
+        fun hisArmedOn(f: FlagInfo) = f.occupant?.let { o -> hasWeapon(o) && ctx.enemyCreeps.any { it === o } } == true
+        if (now <= FLIP_H_BY) for (f in hFlagsOf(ctx)) if (f.theirs && hisArmedOn(f)) Memory.flipH.add(f.id)
+        if (now <= FLIP_BY) for (f in ctx.flags) {
+            if (Memory.flagPrevMine[f.id] == true && f.theirs && hisArmedOn(f)) Memory.flipCount[0]++
+            Memory.flagPrevMine[f.id] = f.mine
+        }
+        return Memory.flipH.size >= 2 && Memory.flipCount[0] >= FLIP_MIN
     }
 
     /** ГАРНИЗОНЫ-ТРОЙКИ ПРОТИВ ДРОБЯЩЕГО ФЕРМЕРА (v644, см. USE_FARMER_TRIPLES): при его почерке — раскладка один раз, затем
