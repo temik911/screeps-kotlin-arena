@@ -208,7 +208,7 @@ for(let t=0;t<TICKS;t++){
     for(const c of live.slice(0,KILL_N)){ c.hits=0; c.exists=false; farmKilled++; }
   }
   if(HARASS && harassQueue.length && !en.spawning && t>=1){ const r=en.spawnCreep(harassQueue[0]); if(r.object){ r.object.harasser=true; harassQueue.shift(); } }
-  { const t0=performance.now(); loop(); const dt=performance.now()-t0; loopTotal+=dt; if(dt>loopMax) loopMax=dt; }
+  { const t0=performance.now(); world.tickStartNs=process.hrtime.bigint(); loop(); const dt=performance.now()-t0; loopTotal+=dt; if(dt>loopMax) loopMax=dt; }
   if(HARASS||SIEGE){ const mine=world.objects.filter(q=>q.exists&&q.my===true&&q instanceof Creep&&!q.spawning);
     const fighters=mine.filter(c=>c.body.some(p=>(p.type===C.RANGED_ATTACK||p.type===C.ATTACK)&&p.hits>0));
     for(const o of world.objects){ if(!(o instanceof Creep) || o.my || !o.harasser || !o.exists || o.spawning) continue;

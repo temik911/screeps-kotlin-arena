@@ -4,7 +4,9 @@ export function getObjectsByPrototype(proto){ return world.objects.filter(o=>o.e
 export function getObjects(){ return world.objects.filter(o=>o.exists); }
 export function getObjectById(id){ return world.objects.find(o=>o.id===id); }
 export function getTicks(){ return world.tick; }
-export function getCpuTime(){ return 0; }
+// CPUCLOCK=1 — the bot's own cpu trace (`cpu t=` lines) reads real time since the runner started this tick's loop(); off by
+// default, and then 0, so the gate's logs stay deterministic (24.09.2026, v78: the live trace named the spawn cascade)
+export function getCpuTime(){ return (process.env.CPUCLOCK && world.tickStartNs) ? Number(process.hrtime.bigint() - world.tickStartNs) : 0; }
 export function getHeapStatistics(){ return {}; }
 export function getRange(a,b){ return range(a,b); }
 export function getTerrainAt(p){ return terrainAt(p.x,p.y); }

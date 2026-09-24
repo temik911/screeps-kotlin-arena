@@ -53,6 +53,7 @@ for(let t=0;t<TICKS;t++){
   if(rushQueue.length && !en.spawning && t>=1){ const r=en.spawnCreep(rushQueue[0]); if(r.object){ r.object.camper=true; rushQueue.shift(); } }
   if(SCEN==='stream17'){ for(const [st,b] of sched17) if(t===st) s17Queue.push(b); if(t>825 && (t-825)%80===0) s17Queue.push(((t-825)/80)%2===1?M4H2:M3R3); }
   if(SCEN==='stream17' && s17Queue.length && !en.spawning){ const r=en.spawnCreep(s17Queue[0]); if(r.object){ r.object.hb=Math.floor(s17Count/2); s17Count++; s17Queue.shift(); } }
+  world.tickStartNs = process.hrtime.bigint();
   loop();
   for(const o of world.objects){ if(!(o instanceof Creep) || o.my || !o.camper || !o.exists || o.spawning) continue;
     const R=(a,b)=>Math.max(Math.abs(a.x-b.x),Math.abs(a.y-b.y));

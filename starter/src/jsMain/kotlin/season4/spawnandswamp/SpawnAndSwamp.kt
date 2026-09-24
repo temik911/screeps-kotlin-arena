@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 77
+    private const val BOT_VERSION = 78
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -718,6 +718,8 @@ object SpawnAndSwamp {
     )
 
     fun tick() {
+        // a tick killed by the cpu limit never reached cpuSummary, and its marks polluted the next tick's split
+        cpuPhases.clear()
         // Спавнов у нас может быть больше одного. Порядок getObjectsByPrototype — порядок создания,
         // поэтому первый и есть ДОМ: на нём держится вся геометрия, и она не переезжает от стройки
         val mySpawns = getObjectsByPrototype(StructureSpawn::class).filter { it.my == true && it.exists }
@@ -1679,6 +1681,7 @@ object SpawnAndSwamp {
         if (ctx.myCreeps.isEmpty() && getTicks() <= APPROACH_WINDOW / 2 && ctx.pendingEnemies.isEmpty() && ctx.enemySpawn?.spawning == null) return reach("open")
 
         val usable = usableSites(ctx)
+        cpuMark("sp.usable")
         // включая рождающихся; остов без живых CARRY флот не пополняет — место в лимите свободно
         val allHaulers = ctx.myCreeps.count { c -> c.body.none { it.type == WORK } && c.body.any { it.type == CARRY && it.hits > 0 } }
 
@@ -1686,6 +1689,7 @@ object SpawnAndSwamp {
         // мили-бурильщик первым: ATTACK бьёт структуры впятеро дешевле RANGED. Хаулеру оставляем
         // минимальное тело, чтобы он был готов к открытию.
         val income = projectedIncome(ctx, usable)
+        cpuMark("sp.income")
         // пол потока — регенерация спавна: при нуле хаулеров «время догнать» было бесконечным, и «боец
         // первым» либо замыкался сам на себя (стенд 02.09), либо запрещался вовсе — и против ранней атаки
         // спавн держал 262 энергии на бурильщика и хаулера (матч 12)
@@ -1704,7 +1708,9 @@ object SpawnAndSwamp {
         // ЧАСЫ ПЛОЩАДКИ — У КАЖДОЙ СВОИ. Готовая башня в сроке не нуждается — её надо только кормить;
         // недостроенная становится башней, лишь когда на неё довезут остаток, и при мёртвой экономике
         // это «никогда». Спавн-точка-сдачи судится другим сроком и кормится не из спавна (см. SiteJob)
+        cpuMark("sp.pre")
         siteJobs = buildJobs(ctx, spawnLife, flow, energy)
+        cpuMark("sp.jobs")
         val minFighter = cost(RANGED_ATTACK) + cost(MOVE)
         // БОЕЦ ПЕРВЫМ — держать энергию под полное тело, не покупая ничего, — только когда так боец
         // приходит раньше. «Держать» — полный боец из того, что в спавне и едет, при нынешнем потоке;
@@ -1717,7 +1723,9 @@ object SpawnAndSwamp {
         // следующего
         val holdReady = energyArrivalTicks(ctx, fullCost - budget, flow) + fullBody.size * CREEP_SPAWN_TIME
         val investReady = guardReadySim(ctx, breach, energy).toDouble()
+        cpuMark("sp.invest")
         val closesNow = budget >= minFighter && closesDeficit(fighterBody(budget), defenders, threats)
+        cpuMark("sp.closes")
         // тревога — тот же выбор, а не безусловный запрет: враг, вставший у ворот на тысячу тиков, держал
         // спавн на регенерации 1/тик без единого хаулера при открытом проломе в девяти клетках (стенд stream17)
         // под тревогой враг уже в SPAWN_ALARM_TICKS от спавна, даже если стоит: enemyArrival для стоящего
@@ -1749,6 +1757,7 @@ object SpawnAndSwamp {
             !(energy >= SPAWN_ENERGY_CAPACITY && carried > 0) &&
             (supplyBound || capacityBound(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) }, HAULER_BLOCKS_MIN * CARRY_CAPACITY)) &&
             projectedIncome(ctx, usable) < targetIncome()
+        cpuMark("sp.fleet")
 
         if (placeSites) {
             // ПЛОЩАДКИ — ДО ПОКУПОК, А НЕ ПОСЛЕ. Ни одна из трёх не тратит спавна, а стояли они за четырьмя
@@ -1791,6 +1800,7 @@ object SpawnAndSwamp {
                     }
                 }
             }
+            cpuMark("sp.tower")
             // ТОЧКА СДАЧИ — ПОКУПКА ИЗ ИЗЛИШКА, А НЕ СТАВКА НА ДЛИНУ МАТЧА. Горизонта матча бот не знает и
             // знать не может (четвёртая попытка требовала его от симуляции осады и получила «никогда»), но
             // вопрос снимается сам, если тысяча тратится ТОЛЬКО когда она иначе пролежит: спавн полон, флот
@@ -1836,6 +1846,7 @@ object SpawnAndSwamp {
             }
             // ПРОБА РАССТОЯНИЯ (EXT_PROBE): один экстеншен ДАЛЬШЕ спорного радиуса, и всё. Боевого
             // правила «строить экстеншены» здесь нет — потолок тела отвергнут замером (см. bodyCap)
+            cpuMark("sp.fwd")
             if (EXT_PROBE && !extProbeDone && ctx.myExtensions.isEmpty() && ctx.mySites.isEmpty() && !fighterFirst) {
                 val spot = extensionProbeSpot(ctx)
                 if (spot != null) {
@@ -1871,6 +1882,7 @@ object SpawnAndSwamp {
                 return
             }
         }
+        cpuMark("sp.breach")
         lastSpawnOutlivesFighter = spawnLife > fullBody.size * CREEP_SPAWN_TIME
         if (DEBUG_LOG && fighterFirst && energy < fullCost && getTicks() % 10 == 0) {
             println("spawn: fighter first — enemy arrives in $threatIn, hold=${holdReady.toInt()} invest=${investReady.toInt()} deficit=${deficit.toInt()} alarm=$alarm closes=$closesNow flow=${(flow * 10).toInt() / 10.0}")
@@ -2772,15 +2784,24 @@ object SpawnAndSwamp {
 
     // ==================== армия ====================
 
+    private var towerFireTick = -1
+    private var towerFire: IntArray? = null
+
     private fun flowTo(ctx: Ctx, target: Position): IntArray =
         flowCache.getOrPut(target.x * 100 + target.y) { DistanceMap.flowFieldTo(target, ctx.blocked) }
 
     /** Урон кормленных чужих башен по клеткам — цена клетки в поле подхода. Заполняются только клетки
      *  в круге каждой башни: за TOWER_FALLOFF_RANGE выстрел не долетает вовсе. */
     private fun towerFireField(ctx: Ctx): IntArray? {
+        // ONE FIELD A TICK (v78): the towers are fixed for the tick, and every assaultTo used to rebuild the whole
+        // 10000-cell field and its 43×43 circle per tower before it even looked at its own cache
+        if (towerFireTick == getTicks()) return towerFire
+        towerFireTick = getTicks()
+        towerFire = null
         val fed = ctx.enemyTowers.filter { it.fed }
         if (fed.isEmpty()) return null
         val fire = IntArray(10000)
+        towerFire = fire
         for (t in fed) {
             for (dx in -TOWER_FALLOFF_RANGE..TOWER_FALLOFF_RANGE) for (dy in -TOWER_FALLOFF_RANGE..TOWER_FALLOFF_RANGE) {
                 val x = t.pos.x + dx
@@ -3978,6 +3999,12 @@ object SpawnAndSwamp {
         if (cell < 0 || flow[cell] < 0) return Int.MAX_VALUE / 2
         var ticks = 0
         var steps = 0
+        // the body is the same at every step: its two periods once per walk, not a body count per cell (v78, CPU —
+        // this walk runs for every fighter and every enemy several times a tick, up to 400 cells each)
+        val weight = bodyWeight(creep)
+        val moves = liveMoves(creep)
+        val onPlain = periodOn(weight, moves, 2)
+        val onSwamp = periodOn(weight, moves, 10)
         while (flow[cell] > 0 && steps < 400) {
             val cx = cell / 100
             val cy = cell % 100
@@ -3993,7 +4020,7 @@ object SpawnAndSwamp {
             if (best < 0) break
             cell = best
             steps++
-            ticks += periodAt(creep, cell / 100, cell % 100)
+            ticks += if (DistanceMap.isSwamp(cell / 100, cell % 100)) onSwamp else onPlain
         }
         return ticks
     }

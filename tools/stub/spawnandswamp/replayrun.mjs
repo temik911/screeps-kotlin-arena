@@ -116,7 +116,7 @@ for (let t = 0; t < TICKS; t++) {
     spawned++;
   }
 
-  { const t0 = performance.now(); loop(); const dt = performance.now() - t0; if (dt > 200) lines.push('slow tick ' + t + ': ' + dt.toFixed(0) + 'ms'); }
+  { const t0 = performance.now(); world.tickStartNs = process.hrtime.bigint(); loop(); const dt = performance.now() - t0; if (dt > 200) lines.push('slow tick ' + t + ': ' + dt.toFixed(0) + 'ms'); }
 
   // --- his tactics ---------------------------------------------------------------------------------
   const ours = alive().filter(c => c.my === true);
