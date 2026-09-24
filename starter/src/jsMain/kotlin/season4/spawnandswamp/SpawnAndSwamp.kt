@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 88
+    private const val BOT_VERSION = 89
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4798,7 +4798,12 @@ object SpawnAndSwamp {
      *  WORK only — a cell a tick on plain, three on swamp. */
     private val PILE_BODY: Array<BodyPartType> = arrayOf(MOVE, MOVE, MOVE, MOVE, CARRY, CARRY, CARRY, CARRY, WORK, WORK)
 
-    private fun isPileBuilder(c: Creep) = c.id in pileBuilderIds
+    /** BY BODY, NOT BY ID (v89). The id taken from spawnCreep's result matched on the stub and never live: in the
+     *  six v88 games the builder was bought 5-13 times a match and run by runBuilders as a tower keeper, and no pile
+     *  site was ever placed. Nothing else of ours carries WORK with three or more CARRY (the keeper has two, a
+     *  hauler no WORK), so the body is the identity; the id set only covers the tick of the order. */
+    private fun isPileBuilder(c: Creep) = c.id in pileBuilderIds ||
+        (c.body.any { it.type == WORK } && c.body.count { it.type == CARRY } >= 3)
 
     /** The pile of the job: energy on the builder's cell. */
     private fun pileOf(job: PileJob): Resource? = getObjectsByPrototype(Resource::class)
