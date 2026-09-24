@@ -185,8 +185,12 @@ internal object Strategist {
         // ...И ПОКА ИДЁТ ЭТОТ РАЗМЕН, АРМИЮ НЕ ДРОБИМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING): решение драться и
         // решение растащить армию по флагам — об одной величине, и до сих пор они принимались порознь
         Signals.engagingGarrison = engageLost
+        // ...а ОТКАЗ ОТ БОЯ С КУЛАКОМ — ТОЛЬКО ПОКА ЕГО СТВОЛЫ НАС НЕ ДОСТАЮТ (v645, см. USE_FIST_FIGHT_IN_REACH): в контакте
+        // отказ дистанции не даёт (скорость равная), а наш огонь снимает
+        val fistInReach = USE_FIST_FIGHT_IN_REACH && !tourerMode() && i.hisGunsReach
+        if (i.enemyMassed && USE_NO_FIST_FIGHT && fistInReach) fistReachTicks.n++
         val fightNow = (!pushing && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
-            !(i.enemyMassed && USE_NO_FIST_FIGHT)) || engageLost
+            !(i.enemyMassed && USE_NO_FIST_FIGHT && !fistInReach)) || engageLost
         val case = ModeCase(i, fightNow)
         val mode = walk(MODE_RULES, case, modeTally).act(case)
         // ...и причина берётся из той же цепочки (v215): прибор, повторяющий решение своим порядком, врёт ровно тогда,
@@ -2907,6 +2911,8 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     // трёх снимали наших мили по одному (r→melee 132 из 180), а прижим считал «мили в трёх» атакой и молчал до 104-го
     val theirMeleeIn = meas.forces.combatEnemies.any { e -> InfluenceMap.profileOf(e).melee > 0.0 && combatArmy.any { hasWeapon(it) && getRange(e, it) <= 1 } }
     val underTheirFire = combatArmy.any { InfluenceMap.damageAt(it.x, it.y, meas.forces.combatEnemies) > 0.0 }
+    // его ствол уже достаёт нашу армию (v645, см. USE_FIST_FIGHT_IN_REACH): его вооружённый в дальности выстрела от нашего боевого
+    val hisGunsReach = meas.forces.armedEnemies.any { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE } }
     private val retreatByDistance = Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
     // ...и по ЕГО шагу (v222, см. USE_RETREAT_BY_HIS_STEP): его центр сейчас против его центра в начале окна, оба — от
     // нашего центра в начале окна

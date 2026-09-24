@@ -2016,6 +2016,10 @@ internal val chemoSentry = Gauges.counter("chemos")
  *  до первого боя и простоя не считал. */
 internal val picketArmy = Gauges.counter("pkarmy")
 
+/** Прибор боя с кулаком в досягаемости (v645, см. USE_FIST_FIGHT_IN_REACH): `fistreach=` — тиков, где отказ от строевого боя
+ *  против кулака снят, потому что его стволы уже достают нашу армию. */
+internal val fistReachTicks = Gauges.counter("fistreach")
+
 /** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere) / застрял и обходит своих (detour). */
 internal val garrisonWhy = Gauges.labelled("gar")
 
