@@ -1360,6 +1360,14 @@ internal object Garrisons {
         raidWhy.bump("tmerge")
     }
 
+    /** Тиков, что гарнизонный крип стоит на одной клетке (v658): считается раз в тик при вызове шага. */
+    private fun stillOf(c: Creep): Int {
+        val r = Memory.garrisonStill.getOrPut(c.id) { intArrayOf(-1, -1, 0) }
+        val now = getTicks()
+        if (r[0] != now) { r[2] = if (r[1] == c.key) r[2] + 1 else 0; r[1] = c.key; r[0] = now }
+        return r[2]
+    }
+
     /** Гарнизонный крип стоит на клетках своего поста (флаг и соседи) — трафик его не сдвигает (v649, см. USE_PINNED_WALL). */
     fun pinnedOnPost(c: Creep): Boolean {
         if (!active(c.id)) return false
@@ -2064,7 +2072,10 @@ internal object Garrisons {
             if (mine >= 0 && last - mine > FIST_RADIUS) { garrisonWhy.bump("cohere"); return Pair(null, true) }
             // ОБХОД СВОИХ (v607, стенд: восьмёрка шла к H сквозь D5, где стоят закреплённые бойцы первого гарнизона, — поле ведёт
             // прямо, обмен с закреплённым невозможен, и отряд топтался 120+ тиков): застрявший идёт путём по матрице толпы
-            if (TrafficManager.isStuck(creep.id)) {
+            // ...и ЗАСТРЯВШИЙ — ПО СВОЕМУ СЧЁТЧИКУ СТОЯНИЯ (v658, см. USE_GARRISON_STILL_DETOUR): `isStuck` требует одну и ту же
+            // просьбу STUCK_TICKS тиков, а у кольца чужого поста шаг по полю меняется каждый тик, и обход не включался никогда
+            val still = stillOf(creep)
+            if (TrafficManager.isStuck(creep.id) || (USE_GARRISON_STILL_DETOUR && still >= TrafficManager.STUCK_TICKS)) {
                 pathStep(creep, InfluenceMap.cell(fx, fy), 1, crowdMatrixOf(ctx, fk))?.let { garrisonWhy.bump("detour"); return Pair(it, true) }
             }
             val enemies = ctx.enemyCreeps.mapTo(HashSet()) { it.key }

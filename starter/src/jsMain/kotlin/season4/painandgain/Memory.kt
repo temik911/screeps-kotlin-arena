@@ -153,6 +153,8 @@ internal object Memory {
     val flipH = HashSet<String>()
     val flagPrevMine = HashMap<String, Boolean?>()
     val flipCount = intArrayOf(0)
+    /** Стояние гарнизонного крипа на марше (v658, см. USE_GARRISON_STILL_DETOUR): крип -> [тик, клетка, тиков на ней]. */
+    val garrisonStill = HashMap<String, IntArray>()
     /** Тик, когда соперник показал почерк MetalicaX (v639, см. USE_METALICA_HOLD); 0 — не показал. */
     val metalSeen = intArrayOf(0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
