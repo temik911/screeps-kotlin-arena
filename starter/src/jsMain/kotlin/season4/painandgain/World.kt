@@ -598,6 +598,9 @@ internal fun inContact(enemies: List<Creep>, ours: List<Creep>): Boolean =
 internal fun crowdMatrixOf(ctx: Ctx, allowCell: Int): CostMatrix {
     val crowdMatrix = ctx.rawDanger.clone()
     for (ally in ctx.active) {
+        // ЗАКРЕПЛЁННЫЙ НА ПОСТУ — СТЕНА (v649, см. USE_PINNED_WALL): гарнизонного крипа на клетках его поста трафик не
+        // сдвигает, и путь сквозь него — шаг, который не случится
+        if (USE_PINNED_WALL && Garrisons.pinnedOnPost(ally)) { crowdMatrix.set(ally.x, ally.y, 255); continue }
         val current = crowdMatrix.get(ally.x, ally.y)
         if (current < 255) crowdMatrix.set(ally.x, ally.y, minOf(254, current + CROWD_COST))
     }
@@ -1315,19 +1318,40 @@ internal object Garrisons {
         raidWhy.bump("triples")
     }
 
-    /** Отряд, где живых меньше TRIPLE_SIZE, вливается в отряд с ближайшим флагом (по одному за тик): одиночек и пар он бьёт. */
+    /** Отряд, где живых меньше TRIPLE_SIZE, вливается в отряд с ближайшим флагом (по одному за тик): одиночек и пар он бьёт.
+     *  ...а если есть пост дешевле его собственного, бросается ТОТ: бойцы самого дешёвого поста идут на пост повреждённого
+     *  отряда (v649, см. USE_MERGE_DROPS_CHEAPEST). */
     private fun tripleMerge(ctx: Ctx) {
         val bySquad = readyFighters(ctx).filter { it.id in Memory.garrisonSquad }.groupBy { Memory.garrisonSquad[it.id]!! }
         if (bySquad.size < 2) return
         val small = bySquad.entries.firstOrNull { it.value.size < TRIPLE_SIZE } ?: return
         val home = Memory.garrisonHome[small.value[0].id] ?: return
-        val to = bySquad.entries.filter { it.key != small.key }.minByOrNull { e ->
+        val others = bySquad.entries.filter { it.key != small.key }
+        if (USE_MERGE_DROPS_CHEAPEST) {
+            fun postOf(e: Map.Entry<Int, List<Creep>>) = Memory.garrisonHome[e.value[0].id] ?: home
+            fun scoreOf(fk: Int) = ctx.flags.firstOrNull { it.pos.key == fk }?.score ?: 0
+            val cheap = others.minWithOrNull(compareBy<Map.Entry<Int, List<Creep>>>(
+                { scoreOf(postOf(it)) }, { maxOf(abs(postOf(it) / 100 - home / 100), abs(postOf(it) % 100 - home % 100)) }))
+            if (cheap != null && scoreOf(postOf(cheap)) < scoreOf(home)) {
+                for (c in cheap.value) { Memory.garrisonSquad[c.id] = small.key; Memory.garrisonHome[c.id] = home; Memory.garrisonFlag[c.id] = home }
+                raidWhy.bump("tdrop")
+                return
+            }
+        }
+        val to = others.minByOrNull { e ->
             val fk = Memory.garrisonHome[e.value[0].id] ?: home
             maxOf(abs(fk / 100 - home / 100), abs(fk % 100 - home % 100))
         } ?: return
         val fk = Memory.garrisonHome[to.value[0].id] ?: return
         for (c in small.value) { Memory.garrisonSquad[c.id] = to.key; Memory.garrisonHome[c.id] = fk; Memory.garrisonFlag[c.id] = fk }
         raidWhy.bump("tmerge")
+    }
+
+    /** Гарнизонный крип стоит на клетках своего поста (флаг и соседи) — трафик его не сдвигает (v649, см. USE_PINNED_WALL). */
+    fun pinnedOnPost(c: Creep): Boolean {
+        if (!active(c.id)) return false
+        val fk = Memory.garrisonFlag[c.id] ?: return false
+        return maxOf(abs(c.x - fk / 100), abs(c.y - fk % 100)) <= 1
     }
 
     /** Его крип на клетке поста — цель каждого бойца отряда, который достаёт (как USE_POST_CLEAR v629; стадия огня позже
