@@ -564,7 +564,7 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         }
         if (USE_NO_OUTPUT_DEBUFF_WHOLE_ARMY && f.type != EFF_DAMAGE_TAKEN_MODIFIER &&
             ctx.threats.size >= MASS_ARMED_MIN && Signals.enemyMassedSignal &&
-            (Signals.approachingNow || firstFightTick > 0) &&
+            (Signals.approachingNow || firstFightTick > 0 || massedNearBeforeFight(ctx)) &&
             getTicks() <= FIRST_CLASH_TICKS) { debuffVeto.n++; return@Gate Verdict.Veto("debuff.whole") }
         debuffPass.n++
         Verdict.Next
@@ -934,6 +934,11 @@ internal fun captureCost(ctx: Ctx, f: FlagInfo): Double {
 
 /** Флаг оспаривается (v583, см. USE_CONTESTED_FLAG_LAST): пока он не бьёт наши группы (`groupSafe`), а его вооружённые стоят в
  *  ENGAGE_RANGE от флага, — взятый флаг он перебьёт, едва наш крип сойдёт с клетки. */
+/** ЕГО СОМКНУТАЯ АРМИЯ СТОИТ РЯДОМ ДО ПЕРВОГО БОЯ (v655, см. USE_DEBUFF_VETO_NEAR_MASS): размена ещё не было, а его
+ *  вооружённый — в BRACE_RANGE от нашей армии: он не «подходит» (стоит у D5 и ждёт), но бой на пороге. */
+internal fun massedNearBeforeFight(ctx: Ctx): Boolean = USE_DEBUFF_VETO_NEAR_MASS && firstFightTick == 0 &&
+    ctx.threats.any { e -> ctx.army.any { getRange(e, it) <= BRACE_RANGE } }
+
 internal fun contestedFlag(ctx: Ctx, f: FlagInfo): Boolean = (USE_CONTESTED_FLAG_LAST && tourerMode()) && Signals.groupSafe &&
     ctx.combatEnemies.any { hasWeapon(it) && getRange(it, f.pos) <= ENGAGE_RANGE }
 
