@@ -132,6 +132,12 @@ internal object Memory {
     val farmerSeen = intArrayOf(0, 0)
     /** Тик, когда соперник показал почерк объездчика (v633, см. USE_TOURER_SWITCH); 0 — не показал. */
     val tourerSeen = intArrayOf(0)
+    /** Его разведчики для признака объездчика (v634): id, стартовая клетка, последняя клетка, тик последнего сдвига; выключен. */
+    val tourerScouts = arrayOfNulls<String>(2)
+    val tourerStart = IntArray(2)
+    val tourerCell = IntArray(2)
+    val tourerMoved = IntArray(2)
+    val tourerOff = intArrayOf(0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
     val strikeFlag = intArrayOf(-1)
     /** Постоянный пост группы стрелков по номеру отряда (v628, см. USE_H_POSTS); -1 — не выбран. */

@@ -1155,8 +1155,37 @@ internal object Garrisons {
         return Memory.tourerSeen[0] > 0
     }
 
-    /** Правило признака объездчика — пока пусто: переключатель выключен, план не стартует, игра прежняя. */
-    private fun tourerRule(ctx: Ctx): Boolean = false
+    /** ЕГО РАЗВЕДЧИКИ СТОЯТ ПАРОЙ В НОГУ (v634, см. USE_TOURER_SWITCH; разбор 182 реплеев #22 и 1 828 других ботов субагентом
+     *  Opus, 24.09.2026). На первом тике — двое его крипов из одной части MOVE, их стартовые клетки и смещение второго от
+     *  первого; дальше тик последнего сдвига каждого. Признак — до TOURER_CHECK_TICKS: оба не сдвигались TOURER_STILL тиков,
+     *  между ними не больше TOURER_PAIR, каждый отошёл от старта не меньше TOURER_AWAY и шёл по диагонали (|dx − dy| ≤ 2), а
+     *  смещение пары то же, что на старте (±1 по каждой оси). Разведчик погиб до признака — признака не будет. */
+    private fun tourerRule(ctx: Ctx): Boolean {
+        val now = getTicks()
+        val ids = Memory.tourerScouts
+        if (Memory.tourerOff[0] > 0 || now > TOURER_CHECK_TICKS) return false
+        if (ids[0] == null) {
+            val scouts = ctx.enemyCreeps.filter { c -> c.body.size == 1 && c.body[0].type == MOVE }.sortedBy { it.id }
+            if (scouts.size != 2) { Memory.tourerOff[0] = 1; return false }
+            for (i in 0..1) { ids[i] = scouts[i].id; Memory.tourerStart[i] = scouts[i].key; Memory.tourerCell[i] = scouts[i].key; Memory.tourerMoved[i] = now }
+            return false
+        }
+        val scouts = (0..1).map { i -> ctx.enemyCreeps.firstOrNull { it.id == ids[i] } }
+        if (scouts.any { it == null }) { Memory.tourerOff[0] = 1; return false }
+        for (i in 0..1) if (scouts[i]!!.key != Memory.tourerCell[i]) { Memory.tourerCell[i] = scouts[i]!!.key; Memory.tourerMoved[i] = now }
+        fun x(k: Int) = k / 100
+        fun y(k: Int) = k % 100
+        val a = scouts[0]!!; val b = scouts[1]!!
+        if ((0..1).any { now - Memory.tourerMoved[it] < TOURER_STILL }) return false
+        if (maxOf(abs(a.x - b.x), abs(a.y - b.y)) > TOURER_PAIR) return false
+        for (i in 0..1) {
+            val c = scouts[i]!!
+            val dx = c.x - x(Memory.tourerStart[i]); val dy = c.y - y(Memory.tourerStart[i])
+            if (maxOf(abs(dx), abs(dy)) < TOURER_AWAY || abs(dx - dy) > 2) return false
+        }
+        val ox = x(Memory.tourerStart[1]) - x(Memory.tourerStart[0]); val oy = y(Memory.tourerStart[1]) - y(Memory.tourerStart[0])
+        return abs((b.x - a.x) - ox) <= 1 && abs((b.y - a.y) - oy) <= 1
+    }
 
     /** ПОЧЕРК ФЕРМЕРА (v630, см. USE_FARMER_SWAP): тот же признак, что у кулака (v626), без кулака; держится до конца матча. */
     fun farmerSign(ctx: Ctx): Boolean {
