@@ -113,7 +113,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 73
+    private const val BOT_VERSION = 76
 
     /** ДОСЯГАЕМОСТЬ ЭКСТЕНШЕНА до спавна — ИЗМЕРЕНО ДВУМЯ ЖИВЫМИ МАТЧАМИ 07.09.2026, и спор доков
      *  закрыт. Они противоречили себе на соседних строках: `spawnCreep` — «within SPAWN_RANGE» (20),
@@ -270,6 +270,23 @@ object SpawnAndSwamp {
     /** Волна в поле, а осада по фронту не сходится: волна держит кромку башни и ждёт подкрепления (см. newPushing). */
     private var siegeHold = false
     private var lastPushReason = ""
+
+    /**
+     * REACH COUNTERS — which named row of a decision ended it, counted over the whole match and printed as
+     * `reach spawn …` / `reach posture …` every 5×LOG_EVERY ticks (cumulative, so `series.py metrics --t1 N` reads the
+     * value at tick N). A change aimed at a row nobody reaches is inert; this is the instrument that says so BEFORE a
+     * match is played (the Pain and Gain lesson: three changes in a row went into a branch that moved nobody).
+     * Spawn rows: one per free spawn per tick, the `return` that ended [spawnIfNeeded], and `busy` for a tick in which
+     * no spawn was free (every one still growing a body) — so `busy` over the ticks is the production's utilisation.
+     * Posture rows: one per tick with an army — the posture (`defend`/`stronger`/`hold`/`lastCall`, see lastPushReason)
+     * and the home-fight verdict (`calm`/`hHold`/`hFire`/`hGates`/`hWins`, see homeMode). Nothing here changes a
+     * decision.
+     */
+    private val spawnReach = LinkedHashMap<String, Int>()
+    private val postureReach = LinkedHashMap<String, Int>()
+    private fun reach(row: String) { spawnReach[row] = (spawnReach[row] ?: 0) + 1 }
+    private fun reachLine(what: String, rows: Map<String, Int>) =
+        "reach $what t=${getTicks()} " + rows.entries.joinToString(" ") { "${it.key}=${it.value}" }
 
     /** id бойца -> номер волны, с которой он ушёл в наступление. Нет в карте — стоит на посту. */
     private val wave = HashMap<String, Int>()
@@ -902,6 +919,10 @@ object SpawnAndSwamp {
                     "push=$pushing($lastPushReason) alarm=$alarm home=$homeMode our=${ourOffense.toInt()}/${ourDefense.toInt()} enemy=${enemyPower.toInt()} pending=${enemyPending.size} arrival=${if (enemyArrival >= Int.MAX_VALUE / 4) "-" else enemyArrival.toString()} towers=${enemyTowers.count { it.fed }}/${enemyTowers.size}+${pendingTowers.size} enemySpawns=${enemySpawns.size}@${enemySpawn?.let { "${it.x},${it.y}" } ?: "-"} enemySpawnHits=${enemySpawn?.hits}+${spawnRampartHits(ctx)} " +
                     "mine=${myTowers.joinToString(",") { "T(${it.x},${it.y})h=${it.hits}e=${it.store[RESOURCE_ENERGY]}" }.ifEmpty { "-" }}${ctx.mySites.joinToString("") { "+site(${it.x},${it.y})${it.progress}/${it.progressTotal}" }} home=${(homeShare() * 100).toInt()}%"
             )
+            if (getTicks() % (LOG_EVERY * 5) == 0) {   // cumulative, so every fifty ticks loses nothing
+                println(reachLine("spawn", spawnReach))
+                println(reachLine("posture", postureReach))
+            }
             if (getTicks() % (LOG_EVERY * 10) == 0) println(TrafficManager.audit())
         }
     }
@@ -1598,7 +1619,7 @@ object SpawnAndSwamp {
         // окна оценки сближения — столько нужно, чтобы понять, идёт ли к нам уже стоящий в поле враг
         // (стенд freeze: неподвижные стражи в 60 тиках пути принимались за атаку). Дебют «бурильщик
         // первым» против ранней атаки проигрывает без вариантов (матч 12)
-        if (ctx.myCreeps.isEmpty() && getTicks() <= APPROACH_WINDOW / 2 && ctx.pendingEnemies.isEmpty() && ctx.enemySpawn?.spawning == null) return
+        if (ctx.myCreeps.isEmpty() && getTicks() <= APPROACH_WINDOW / 2 && ctx.pendingEnemies.isEmpty() && ctx.enemySpawn?.spawning == null) return reach("open")
 
         val usable = usableSites(ctx)
         // включая рождающихся; остов без живых CARRY флот не пополняет — место в лимите свободно
@@ -1769,7 +1790,7 @@ object SpawnAndSwamp {
         }
         // ТЕЛО ЗАКАЗЫВАТЬ НЕКУДА, ПОКА ВСЕ СПАВНЫ ЗАНЯТЫ. Всё, что ниже, — это spawnCreep и накопление
         // под него; площадки выше уже решены
-        if (free == null) return
+        if (free == null) return reach("busy")
 
         if (breach != null && !alarm && !fighterFirst && ctx.myCreeps.none { isMelee(it) }) {
             val order = breacherOrder(ctx, breach, usable, energy, carried, flow)
@@ -1780,9 +1801,10 @@ object SpawnAndSwamp {
                 val breacherCost = k * (cost(MOVE) + cost(ATTACK))
                 if (energy < breacherCost) {
                     if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: saving for breacher blocks=$k cost=$breacherCost energy=$energy carried=$carried flow=${(flow * 10).toInt() / 10.0} hold=${holdReady.toInt()} invest=${investReady.toInt()}")
-                    return
+                    return reach("brSave")
                 }
                 val r = spawn.spawnCreep(breacherBody(k))
+                reach(if (r.error == null) "brBuy" else "err")
                 if (r.error == null) spentFighters += breacherCost
                 if (DEBUG_LOG) {
                     val trace = StringBuilder()
@@ -1824,11 +1846,12 @@ object SpawnAndSwamp {
 
         if (haulerTurn) {
             val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
-            if (affordable < HAULER_BLOCKS_MIN) return // копим
+            if (affordable < HAULER_BLOCKS_MIN) return reach("hSave") // копим
             // копим на полного, если приток обещает; самого первого хаулера не ждём — без него притока нет
             val expected = minOf(HAULER_BLOCKS_MAX, (energy + carried) / blockCost())
-            if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return
+            if (ctx.haulers.isNotEmpty() && affordable < HAULER_BLOCKS_MAX && expected > affordable) return reach("hWait")
             val r = spawn.spawnCreep(haulerBody(affordable))
+            reach(if (r.error == null) "hBuy" else "err")
             if (r.error == null) {
                 spentHaulers += affordable * blockCost()
                 fleetMark = ctx.haulers.sumOf { capacityOf(it) }
@@ -1839,9 +1862,9 @@ object SpawnAndSwamp {
             return
         }
         // очередь хаулера, но энергии на бойца тоже нет — копим на того, кто первый по карману
-        if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return
+        if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return reach("hQueue")
 
-        if (budget < minFighter) return
+        if (budget < minFighter) return reach("poor")
 
         // СМОТРИТЕЛЬ — ЧАСТЬ ЦЕНЫ БАШНИ, И ЧАСЫ У НЕГО ТЕ ЖЕ. Под площадку, которая не достроится
         // в срок, он не покупается: в проигранном матче 22:22 он стоил 700 при притоке 2 в тик и
@@ -1856,11 +1879,12 @@ object SpawnAndSwamp {
             if (energy < builderCost) {
                 // копим на смотрителя, только пока спавн доживает до него — те же часы, что у правила
                 // лагеря ниже: копить под сносимым спавном нельзя ни на что
-                if (spawnLife <= energyArrivalTicks(ctx, builderCost - energy, flow)) return
+                if (spawnLife <= energyArrivalTicks(ctx, builderCost - energy, flow)) return reach("kDying")
                 if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: saving for builder cost=$builderCost energy=$energy")
-                return
+                return reach("kSave")
             }
             val r = spawn.spawnCreep(builder)
+            reach(if (r.error == null) "kBuy" else "err")
             if (r.error == null) spentBuild += builderCost
             if (DEBUG_LOG) println("spawn: builder work=${builder.count { it == WORK }} cost=$builderCost energy=$energy err=${r.error}")
             return
@@ -1872,7 +1896,7 @@ object SpawnAndSwamp {
         // правило копило до конца: матч 19 (05.09.2026) — с 850-го по 1000-й спавн набрал с 584 до 904
         // энергии и не построил НИЧЕГО, пока последние бойцы гибли по одному, и был снесён с 904 в банке
         if (alarm && ourPower < enemyPower && energy < SPAWN_ENERGY_CAPACITY &&
-            spawnLife > energyArrivalTicks(ctx, SPAWN_ENERGY_CAPACITY - energy, flow)) return
+            spawnLife > energyArrivalTicks(ctx, SPAWN_ENERGY_CAPACITY - energy, flow)) return reach("camp")
 
         // ожидаемая энергия — в спавне и В ПУТИ (хаулеры), не пул на земле: тот приедет за рейсы.
         // Копим на тело ценнее (урон×HP), если враг не успеет прийти за время накопления: тринадцать
@@ -1907,13 +1931,14 @@ object SpawnAndSwamp {
         val gap = bodyCap - budget
         if (gap > 0 && bodyValue(full) > bodyValue(body)) {
             val waitTicks = energyArrivalTicks(ctx, gap, flow)
-            if (deficit <= 0.0 || (enemyArrival > waitTicks && spawnLife > waitTicks)) return
+            if (deficit <= 0.0 || (enemyArrival > waitTicks && spawnLife > waitTicks)) return reach("wFull")
             // недомерок — только если САМ закрывает дефицит: тело, которое ничего не меняет, — корм
             // (матч 12: M2R1 и M5R1 по одному против трёх M5R1); под огнём спавна строим, что есть
-            if (!spawnUnderFire && !closesDeficit(body, defenders, threats)) return
+            if (!spawnUnderFire && !closesDeficit(body, defenders, threats)) return reach("wRunt")
         }
 
         val r = spawn.spawnCreep(body)
+        reach(if (r.error != null) "err" else if (guard) "gBuy" else if (healer) "heBuy" else "fBuy")
         if (r.error == null) spentFighters += body.sumOf { cost(it) }
         // ПРОБА: тело дороже, чем лежит в спавне, оплачивается только экстеншенами. Одна строка на
         // такой заказ — это и есть подтверждение (или опровержение) того, что они питают spawnCreep;
@@ -3074,6 +3099,10 @@ object SpawnAndSwamp {
             lastCall -> "lastCall"
             else -> "stronger"
         }
+        // reach: the posture of this tick and the home-fight verdict (see homeMode) — ticks with an army only
+        postureReach[lastPushReason] = (postureReach[lastPushReason] ?: 0) + 1
+        val homeRow = when (homeMode.substringBefore('(')) { "-" -> "calm"; "hold" -> "hHold"; "fight:fire" -> "hFire"; "fight:gates" -> "hGates"; else -> "hWins" }
+        postureReach[homeRow] = (postureReach[homeRow] ?: 0) + 1
 
         // ---- волны: в наступление уходят группой, пополнение копится на посту до следующей волны ----
         if (!pushing) {
