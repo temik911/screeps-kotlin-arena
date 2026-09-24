@@ -1915,6 +1915,10 @@ internal val raidWhy = Gauges.labelled("raid")
 /** Прибор часовых против Chemoautotroph (v638): `chemos=` — назначений разведчика на H. */
 internal val chemoSentry = Gauges.counter("chemos")
 
+/** Прибор пикета-армии (v643, см. USE_PICKET_GROUP): `pkarmy=` — тиков, где пикет по числу оказался краем всей его армии
+ *  до первого боя и простоя не считал. */
+internal val picketArmy = Gauges.counter("pkarmy")
+
 /** Прибор стоящих гарнизонов (v600): `gar=` — крипо-тики на клетке отряда (post) / шаг на клетку флага (onflag) / в походе по полю (march) / к свободной клетке у флага (near) / без шага (blocked) / клетки отряда заняты (full) / ждёт отстающего товарища (cohere) / застрял и обходит своих (detour). */
 internal val garrisonWhy = Gauges.labelled("gar")
 
@@ -2081,7 +2085,7 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     // тех, кто в досягаемости, вобрала всех его боевых и вооружённых в ней больше STALL_PICKET — это его целый сомкнутый
     // блок, в досягаемость которого вошёл только передний ряд, и разворот к флагам подставляет спину (MetalicaX: 7 таких
     // простоев, 7 поражений, группа — все его двенадцать). После первого боя стоящий лагерь — законный простой (стенд camp)
-    private val picketIsHisArmy = USE_PICKET_GROUP && firstFightTick == 0 && run {
+    private val picketIsHisArmy = USE_PICKET_GROUP && firstFightTick == 0 && !tourerMode() && run {
         val seeds = forces.armedEnemies.filter { e -> forces.strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
         val grp = seeds.toMutableList(); var i = 0
         while (i < grp.size) {
@@ -2090,8 +2094,9 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
         }
         forces.combatEnemies.all { e -> grp.any { it === e } } && grp.count { !healerOnly(it) } > STALL_PICKET
     }
-    private val picket = nearArmed >= 1 && nearCatchable <= STALL_PICKET && nearArmed * 2 < forces.armedEnemies.size &&
-        !picketIsHisArmy
+    private val picketByCount = nearArmed >= 1 && nearCatchable <= STALL_PICKET && nearArmed * 2 < forces.armedEnemies.size
+    init { if (picketByCount && picketIsHisArmy) picketArmy.n++ }
+    private val picket = picketByCount && !picketIsHisArmy
     init { preyNearTicks = if (picket) preyNearTicks + 1 else 0 }
     // ВТОРОЙ вид простоя — марш, который не идёт. Пикет ловит бесплодную погоню, только пока добыча ближе
     // ENGAGE_RANGE; за этой чертой армия «гналась» и стояла, а простой не считался ни разу. Идущая погоня обязана
