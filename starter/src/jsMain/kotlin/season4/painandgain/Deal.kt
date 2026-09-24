@@ -402,8 +402,10 @@ internal class Deal(
      * крип проживёт в клетке: экран своих тел входит ДЕЛИТЕЛЕМ входящего, лечение — вычитаемым, и на
      * собственное лечение уходящий крип не рассчитывает.
      */
-    fun ttlAt(c: Creep, key: Int, p: Position): Double {
-        val e = danOf(c, key)
+    fun ttlAt(c: Creep, key: Int, p: Position): Double = ttlOf(c, key, p, danOf(c, key))
+    /** Срок жизни клетки для НАШЕГО МИЛИ (v651, см. USE_MELEE_COVER): без удара его мили, уже занятого другим нашим. */
+    fun ttlMeleeAt(c: Creep, key: Int, p: Position): Double = ttlOf(c, key, p, danMeleeOf(c, key))
+    private fun ttlOf(c: Creep, key: Int, p: Position, e: Double): Double {
         if (e <= 0.0) return 99.0
         val heal = maxOf(0.0, InfluenceMap.healReachAt(key) - InfluenceMap.healFromSelf(c, p.x, p.y))
         val net = maxOf(0.0, e - heal) / (1.0 + SCREEN_SHARE * screenAt(c, p))
@@ -444,7 +446,7 @@ internal class Deal(
     private fun coverWhy(c: Creep, q: Position, lvl: Int, att: Double, dan: Double, focus: Creep?) {
         val covers = coverCellsOf(c)
         if (covers.isEmpty() || covers.any { it.x == q.x && it.y == q.y }) return
-        val ok = covers.filter { ttlAt(c, it.key, it) >= lvl }
+        val ok = covers.filter { ttlMeleeAt(c, it.key, it) >= lvl }
         if (ok.isEmpty()) { coverWhyGauge.bump("ttl"); return }
         val tq = meleeTerms(c, q.key, q, att, dan, focus)
         val best = ok.minByOrNull { meleeTerms(c, it.key, it, att, dan, focus).sum() } ?: return
@@ -687,7 +689,7 @@ internal class Deal(
         for (lvl in ttlMin downTo 1) {
             val ok = place(c, { p ->
                 (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
-                    ttlAt(c, p.key, p) >= lvl
+                    (if (role == 0) ttlMeleeAt(c, p.key, p) else ttlAt(c, p.key, p)) >= lvl
             }, rank)
             if (ok) {
                 if (role == 0) out[c.id]?.let { q -> coverWhy(c, q, lvl, att, dan, focus) }
