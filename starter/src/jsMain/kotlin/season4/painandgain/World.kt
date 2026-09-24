@@ -740,7 +740,7 @@ internal fun refugeMove(s: Creep, ctx: Ctx): RefugeMove? {
     if (!USE_SCOUT_SWAMP_REFUGE) return null
     val cells = Refuge.cells
     if (cells.isEmpty()) return null
-    val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+    val hunters = huntersOf(ctx)
     val nearest = hunters.minOfOrNull { getRange(s, it) } ?: Int.MAX_VALUE
     val here = Refuge.depthAt(s.x, s.y)
     if (here >= REFUGE_DEPTH) {
@@ -792,6 +792,26 @@ internal fun refugeMove(s: Creep, ctx: Ctx): RefugeMove? {
  *  свой держит, пока запас на нём не меньше; иначе идёт в клетку области, которую он обстреляет позже всех (при равной —
  *  ближнюю): одинокий скаут вдали — приманка, за которой ходит его армия (v580 «к своим» отвергнута, см. USE_SCOUT_MARGIN_EVADE).
  *  Болото, где его тела вязнут, отодвигает срок само, поэтому область скаута через болото шире. */
+/** Его стволы, от которых уходит скаут (v576): боевые, которые угрожают. */
+internal fun huntersOf(ctx: Ctx) = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+
+/** Его вооружённые — боевые без чистых лекарей (скауты не боевые). */
+internal fun armedEnemiesOf(ctx: Ctx) = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+
+/** Лекари, стрелки и мили из списка бойцов (раскладка отрядов плана). */
+internal fun healersIn(cs: List<Creep>) = cs.filter { healerOnly(it) }
+internal fun rangersIn(cs: List<Creep>) = cs.filter { !healerOnly(it) && hasRanged(it) }
+internal fun meleeIn(cs: List<Creep>) = cs.filter { !healerOnly(it) && !hasRanged(it) }
+
+/** Флаги, кроме данного (оспариваемого). */
+internal fun flagsBut(ctx: Ctx, f: FlagInfo?) = ctx.flags.filter { it !== f }
+
+/** Наши крипы отряда плана с номером si. */
+internal fun squadMembers(ctx: Ctx, si: Int) = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si }
+
+/** Наши боевые, уже рождённые, — кого раскладывает план. */
+internal fun readyFighters(ctx: Ctx) = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
+
 internal object ScoutEvade {
     private const val INF = Int.MAX_VALUE / 4
     private const val N = 10000
@@ -920,7 +940,7 @@ internal object ScoutEvade {
      *  запасом раньше его выстрела; стоит на своём, пока запас есть; когда его выстрел по клетке бегуна ближе двойного пути
      *  по области к своим — идёт к центру армии по области; иначе null — прежние ветки бегуна. */
     fun evadeArmed(s: Creep, ctx: Ctx, f: FlagInfo?): RefugeMove? {
-        val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        val hunters = huntersOf(ctx)
         if (hunters.isEmpty()) return null
         val tick = getTicks()
         if (fireTick != tick) { hunterTimes(hunters); fireTimes(RANGED_RANGE); fireTick = tick }
@@ -956,7 +976,7 @@ internal object ScoutEvade {
     class SquadView(val danger: Boolean, val home: Int, val hide: Int, val flagOk: (Int) -> Boolean)
 
     fun squadView(sq: List<Creep>, ctx: Ctx, mates: List<Pair<Int, Int>>): SquadView? {
-        val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        val hunters = huntersOf(ctx)
         if (hunters.isEmpty() || sq.isEmpty()) return null
         val tick = getTicks()
         if (fireTick != tick) { hunterTimes(hunters); fireTimes(RANGED_RANGE); fireTick = tick }
@@ -1038,7 +1058,7 @@ internal object ScoutEvade {
     }
 
     fun move(s: Creep, ctx: Ctx): RefugeMove? {
-        val hunters = ctx.combatEnemies.filter { threatening(it, ctx.enemyCreeps) }
+        val hunters = huntersOf(ctx)
         if (hunters.isEmpty()) return null
         val tick = getTicks()
         if (fireTick != tick) { hunterTimes(hunters); fireTimes(RANGED_RANGE); fireTick = tick }
@@ -1191,7 +1211,7 @@ internal object Garrisons {
     fun farmerSign(ctx: Ctx): Boolean {
         if (!USE_FARMER_SWAP && !USE_FARMER_MERGE) return false
         if (Memory.farmerSeen[0] > 0) return true
-        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        val armed = armedEnemiesOf(ctx)
         val guarded = ctx.flags.count { f -> f.theirs && armed.count { getRange(it, f.pos) <= FIST_RADIUS - 1 } >= 2 }
         if (guarded >= FARMER_FLAGS) { Memory.farmerSeen[0] = getTicks(); raidWhy.bump("farmer") }
         return Memory.farmerSeen[0] > 0
@@ -1202,7 +1222,7 @@ internal object Garrisons {
     fun farmer(ctx: Ctx): Boolean {
         if (!USE_STRIKE_FARMER) return false
         if (Memory.farmerSeen[0] > 0) return true
-        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        val armed = armedEnemiesOf(ctx)
         val guarded = ctx.flags.count { f -> f.theirs && armed.count { getRange(it, f.pos) <= FIST_RADIUS - 1 } >= 2 }
         if (guarded >= FARMER_FLAGS) { Memory.farmerSeen[0] = getTicks(); raidWhy.bump("farmer") }
         return Memory.farmerSeen[0] > 0
@@ -1222,34 +1242,34 @@ internal object Garrisons {
         // хватает; шару (отряд 0) — все лекари, остальные мили и стрелки
         // ШАР БЕЗ СТРЕЛКОВ (v620, см. USE_MELEE_BALL): отряд 0 — все мили и лекари; стрелки — по кругу в меньший из прочих
         if (USE_MELEE_BALL && n >= 2) {
-            squads[0].addAll(fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id })
-            squads[0].addAll(fighters.filter { healerOnly(it) }.sortedBy { it.id })
-            for (c in fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }) squads.drop(1).minByOrNull { it.size }!!.add(c)
+            squads[0].addAll(meleeIn(fighters).sortedBy { it.id })
+            squads[0].addAll(healersIn(fighters).sortedBy { it.id })
+            for (c in rangersIn(fighters).sortedBy { it.id }) squads.drop(1).minByOrNull { it.size }!!.add(c)
             return squads
         }
         // ...или РАВНЫМИ ОТРЯДАМИ (v619, см. USE_EVEN_RANGED_SQUADS): стрелки, затем мили, затем лекари — по кругу, каждый
         // следующий в самый малый отряд; стрелков по два на отряд, пока их хватает, — число отрядов считает вызов
         if (USE_EVEN_RANGED_SQUADS) {
-            val order = fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id } +
-                fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
-                fighters.filter { healerOnly(it) }.sortedBy { it.id }
+            val order = rangersIn(fighters).sortedBy { it.id } +
+                meleeIn(fighters).sortedBy { it.id } +
+                healersIn(fighters).sortedBy { it.id }
             for (c in order) squads.minByOrNull { it.size }!!.add(c)
             return squads
         }
         if (USE_RANGED_SQUADS && n >= 2) {
-            val ranged = fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }.toMutableList()
-            val melee = fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id }.toMutableList()
+            val ranged = rangersIn(fighters).sortedBy { it.id }.toMutableList()
+            val melee = meleeIn(fighters).sortedBy { it.id }.toMutableList()
             for (si in 1 until n) {
                 repeat(2) { if (ranged.isNotEmpty()) squads[si].add(ranged.removeAt(0)) }
                 if (melee.isNotEmpty()) squads[si].add(melee.removeAt(0))
             }
-            squads[0].addAll(fighters.filter { healerOnly(it) }.sortedBy { it.id })
+            squads[0].addAll(healersIn(fighters).sortedBy { it.id })
             squads[0].addAll(melee); squads[0].addAll(ranged)
             return squads
         }
-        val pool = fighters.filter { healerOnly(it) }.sortedBy { it.id } +
-            fighters.filter { !healerOnly(it) && !hasRanged(it) }.sortedBy { it.id } +
-            fighters.filter { !healerOnly(it) && hasRanged(it) }.sortedBy { it.id }
+        val pool = healersIn(fighters).sortedBy { it.id } +
+            meleeIn(fighters).sortedBy { it.id } +
+            rangersIn(fighters).sortedBy { it.id }
         pool.forEachIndexed { i, c -> squads[i % n].add(c) }
         return squads
     }
@@ -1275,7 +1295,7 @@ internal object Garrisons {
             // когда его дебютный бросок к оспариваемому флагу успел дойти и схлынуть — двойной путь от его базы, — пока у нас
             // все бойцы
             val rushOver = now >= 2 * maxOf(abs(ctx.enemyHome.x - contested.pos.x), abs(ctx.enemyHome.y - contested.pos.y))
-            val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
+            val fighters = readyFighters(ctx)
             // ...и при воротах покоя отряд может быть тройкой (v608, живой блок v607: к старту плана у нас 10–11 бойцов, два
             // отряда держали D5 и H до конца без потерь, а третьего не было — 9 очков против 16 вместо 13 против 12)
             val n = if (USE_MELEE_BALL) minOf(3, 1 + fighters.count { !healerOnly(it) && hasRanged(it) } / 2)
@@ -1283,7 +1303,7 @@ internal object Garrisons {
                 else minOf(3, fighters.size / (if (USE_PASSIVE_TRIPLES) GARRISON_SIZE - 1 else GARRISON_SIZE))
             if (n == 0) return
             val (mx, my) = Formation.median(fighters)
-            val second = ctx.flags.filter { it.pos.key != contested.pos.key }
+            val second = flagsBut(ctx, contested)
                 .sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) })).firstOrNull()
             // третий — самый дорогой из оставшихся, из равных — ближний ко второму (v607: D5 и оба H — 13 против 12; до v607 —
             // ближний ко второму, 12 против 13)
@@ -1293,7 +1313,7 @@ internal object Garrisons {
             // НАЛЁТЧИК (v613, см. USE_RAIDER): оспариваемый флаг — его лагерь, и гарнизонов там нет; два гарнизона — на два самых
             // дорогих из прочих (из равных — ближний к нашей армии первым), третий отряд — налётчик
             val targets = if (USE_RAIDER) {
-                val rest = ctx.flags.filter { it.pos.key != contested.pos.key }
+                val rest = flagsBut(ctx, contested)
                     .sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) }))
                 listOf(rest.getOrNull(0)?.pos?.key ?: -1, rest.getOrNull(1)?.pos?.key ?: -1, RAID_MARK)
             } else listOf(contested.pos.key, second?.pos?.key ?: -1, third?.pos?.key ?: -1)
@@ -1322,7 +1342,7 @@ internal object Garrisons {
         // ПРЕДЕЛ ЭТАПА (v605, стенд camp m30: крип заглушки стоял на клетке второго флага до конца, и этап 3 длился 1 600 тиков):
         // флаг не взят за тройной путь отряда до него — этап закрыт, отряд стоит у флага, план идёт дальше
         fun overdue(si: Int, fk: Int): Boolean {
-            val d = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si }
+            val d = squadMembers(ctx, si)
                 .maxOfOrNull { maxOf(abs(it.x - fk / 100), abs(it.y - fk % 100)) } ?: 0
             if (s[2] < 0) s[2] = d   // путь в начале этапа (счётчик лагеря в этапах больше не нужен)
             return now - s[1] > 3 * maxOf(s[2], GARRISON_SETTLE)
@@ -1418,10 +1438,10 @@ internal object Garrisons {
     private fun raidAll(ctx: Ctx) {
         val s = Memory.campBreak
         if (!USE_ALL_RAIDERS || s[0] != 6) return
-        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        val armed = armedEnemiesOf(ctx)
         fun group(x: Int, y: Int, r: Int) = armed.count { maxOf(abs(it.x - x), abs(it.y - y)) <= r } >= GARRISON_SIZE - 1
         fun hisDist(x: Int, y: Int) = armed.minOfOrNull { maxOf(abs(it.x - x), abs(it.y - y)) } ?: 99
-        val squads = (0..2).map { si -> ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == si } }
+        val squads = (0..2).map { si -> squadMembers(ctx, si) }
         val medians = squads.map { if (it.isEmpty()) null else Formation.median(it) }
         val claimed = HashSet<Int>()
         // КУЛАК ПРОТИВ ФЕРМЕРА (v626, см. USE_STRIKE_FARMER): все отряды — на его флаг с самым малым гарнизоном (его крипы в
@@ -1455,7 +1475,7 @@ internal object Garrisons {
         // после него), который его GARRISON_SETTLE тиков и дольше, — цель всех отрядов разом; натиска всей армии он не держит
         if (USE_PUSH_PARKED && USE_BALL_HOLDS_CENTER) {
             val contested = contestedFlag(ctx)
-            val keep = (listOfNotNull(contested) + ctx.flags.filter { it !== contested }.sortedByDescending { it.score }.take(2))
+            val keep = (listOfNotNull(contested) + flagsBut(ctx, contested).sortedByDescending { it.score }.take(2))
             val parked = keep.filter { it.theirs }.maxByOrNull { it.score }
             if (parked == null) Memory.pushSince[0] = -1
             else if (Memory.pushSince[0] < 0) Memory.pushSince[0] = getTicks()
@@ -1474,8 +1494,8 @@ internal object Garrisons {
         // один пост — тот из двух самых дорогих флагов вне оспариваемого, у которого больше его вооружённых в 2 × BAIT_STANDOFF
         if (USE_FARMER_MERGE && USE_H_POSTS && farmerSign(ctx) && Memory.farmerSeen[1] == 0) {
             val contested = contestedFlag(ctx)
-            val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
-            val hot = ctx.flags.filter { it !== contested }.sortedByDescending { it.score }.take(2)
+            val armed = armedEnemiesOf(ctx)
+            val hot = flagsBut(ctx, contested).sortedByDescending { it.score }.take(2)
                 .maxByOrNull { f -> armed.count { getRange(it, f.pos) <= 2 * BAIT_STANDOFF } }
             if (hot != null) { for (i in 1 until Memory.raidPost.size) Memory.raidPost[i] = hot.pos.key; Memory.farmerSeen[1] = 1 }
         }
@@ -1528,6 +1548,8 @@ internal object Garrisons {
                 }
                 return true
             }
+            /** Не наши флаги, не выбранные раньше, без его группы в RAID_DANGER, под полом. */
+            fun safeTargets() = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) && floorAllows(ctx, it) }
             val current = Memory.garrisonFlag[sq[0].id] ?: -1
             val sheltered = Memory.raidRefuge[si]
             val target: Int
@@ -1594,7 +1616,7 @@ internal object Garrisons {
                 if (Memory.raidPost[si] < 0) {
                     val contested = contestedFlag(ctx)
                     val taken = (1 until squads.size).filter { it != si }.map { Memory.raidPost[it] }.toSet()
-                    Memory.raidPost[si] = ctx.flags.filter { it !== contested }.sortedByDescending { it.score }.take(2)
+                    Memory.raidPost[si] = flagsBut(ctx, contested).sortedByDescending { it.score }.take(2)
                         .filter { it.pos.key !in taken }
                         .minByOrNull { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) }?.pos?.key ?: -1
                 }
@@ -1653,7 +1675,7 @@ internal object Garrisons {
                 } else {
                     // цели — как в v616 (его группа у флага и на пути): срок обстрела с запасом отсекал на стенде почти все флаги,
                     // и отряды стояли (camp m30: hold 3 926 из 4 320 отрядо-тиков, 12 043 : 23 998 против 23 954 : 7 462)
-                    val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) && floorAllows(ctx, it) }
+                    val next = safeTargets()
                         .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE && routeSafe(it.first.pos.key) }
                         .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
                     if (next != null) { target = next.pos.key; why = "go" } else { target = current; why = "hold" }
@@ -1676,7 +1698,7 @@ internal object Garrisons {
                 why = if (mates != null) "refuge" else "away"
                 Memory.raidRefuge[si] = true
             } else {
-                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && !group(it.pos.x, it.pos.y, RAID_DANGER) && floorAllows(ctx, it) }
+                val next = safeTargets()
                     .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE && routeSafe(it.first.pos.key) }
                     .minWithOrNull(compareBy({ it.second }, { -it.first.score }))?.first
                 if (next != null) { target = next.pos.key; why = "go" } else { target = current; why = "hold" }
@@ -1697,7 +1719,7 @@ internal object Garrisons {
         val raiders = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == 2 }
         if (raiders.isEmpty()) return
         val (mx, my) = Formation.median(raiders)
-        val armed = ctx.enemyCreeps.filter { bornCombatant(it) && !healerOnly(it) }
+        val armed = armedEnemiesOf(ctx)
         fun group(x: Int, y: Int, r: Int) = armed.count { maxOf(abs(it.x - x), abs(it.y - y)) <= r } >= GARRISON_SIZE - 1
         val homes = listOf(s[3], s[4]).filter { fk ->
             fk >= 0 && ctx.myCreeps.any { Memory.garrisonSquad[it.id] != 2 && Memory.garrisonHome[it.id] == fk } }
@@ -1749,7 +1771,7 @@ internal object Garrisons {
 
     fun assign(ctx: Ctx) {
         if (!USE_STANDING_GARRISONS || Memory.garrisonFlag.isNotEmpty()) return
-        val fighters = ctx.myCreeps.filter { bornCombatant(it) && !it.spawning }
+        val fighters = readyFighters(ctx)
         val n = fighters.size / GARRISON_SIZE
         if (n == 0 || ctx.flags.isEmpty()) return
         // Оспариваемый флаг не наш; остальные — по цене, при равной — дальше от оспариваемого
@@ -1757,7 +1779,7 @@ internal object Garrisons {
         val cx = contested?.pos?.x ?: 50
         val cy = contested?.pos?.y ?: 50
         // ...а из равных и по цене, и по удалению от него — ближний к нашей базе: короче поход (v603)
-        val flags = ctx.flags.filter { it !== contested }
+        val flags = flagsBut(ctx, contested)
             .sortedWith(compareBy<FlagInfo>({ -it.score }, { -maxOf(abs(it.pos.x - cx), abs(it.pos.y - cy)) },
                 { maxOf(abs(it.pos.x - ctx.home.x), abs(it.pos.y - ctx.home.y)) })).take(n)
         if (flags.isEmpty()) return
