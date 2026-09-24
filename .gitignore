@@ -11,6 +11,8 @@ arenas/**/typings
 # per-session tooling
 .claude/worktrees/
 tools/stub/**/out/
+# match consoles and stand outputs a session keeps (`play.py --logs runs/`); matches themselves live in the API store
+/runs/
 # saved opponent builds for the self-play stand: compiled output, made by snapshot.sh
 tools/stub/**/opponents/
 
