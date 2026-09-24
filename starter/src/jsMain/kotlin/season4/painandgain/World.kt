@@ -2077,7 +2077,20 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     // уходим в центр, не добив»): загнанный в угол остаток из трёх-четырёх вооружённых с лекарями четыре раза за матч
     // считался пикетом («picket of 3 armed in reach for 20 ticks — flags until +300», t=161, 547, 895, 1256), и армия на
     // триста тиков уходила за флагами. Когда в досягаемости не меньше половины его вооружённых, это его армия, а не пикет
-    private val picket = nearArmed >= 1 && nearCatchable <= STALL_PICKET && nearArmed * 2 < forces.armedEnemies.size
+    // ...и пикет — ОТДЕЛЬНАЯ ГРУППА, а не край его армии (v642, см. USE_PICKET_GROUP): связная группа его боевых вокруг
+    // тех, кто в досягаемости; вооружённых в ней больше STALL_PICKET — это его сомкнутый блок, в досягаемость которого
+    // вошёл только передний ряд, и разворот к флагам подставляет спину (MetalicaX: 7 таких простоев, 7 поражений)
+    private val picketGroupArmed = if (!USE_PICKET_GROUP) 0 else run {
+        val seeds = forces.armedEnemies.filter { e -> forces.strikers.any { getRange(it, e) <= ENGAGE_RANGE } }
+        val grp = seeds.toMutableList(); var i = 0
+        while (i < grp.size) {
+            val a = grp[i++]
+            for (b in forces.combatEnemies) if (grp.none { it === b } && getRange(a, b) <= PICKET_LINK) grp.add(b)
+        }
+        grp.count { !healerOnly(it) }
+    }
+    private val picket = nearArmed >= 1 && nearCatchable <= STALL_PICKET && nearArmed * 2 < forces.armedEnemies.size &&
+        picketGroupArmed <= STALL_PICKET
     init { preyNearTicks = if (picket) preyNearTicks + 1 else 0 }
     // ВТОРОЙ вид простоя — марш, который не идёт. Пикет ловит бесплодную погоню, только пока добыча ближе
     // ENGAGE_RANGE; за этой чертой армия «гналась» и стояла, а простой не считался ни разу. Идущая погоня обязана
