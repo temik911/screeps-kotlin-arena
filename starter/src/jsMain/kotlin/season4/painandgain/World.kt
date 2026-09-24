@@ -1302,7 +1302,7 @@ internal object Garrisons {
                 else if (USE_EVEN_RANGED_SQUADS) minOf(3, fighters.size / GARRISON_SIZE, fighters.count { !healerOnly(it) && hasRanged(it) } / 2)
                 else minOf(3, fighters.size / (if (USE_PASSIVE_TRIPLES) GARRISON_SIZE - 1 else GARRISON_SIZE))
             if (n == 0) return
-            val (mx, my) = Formation.median(fighters)
+            val (mx, my) = medianOf(fighters)
             val second = flagsBut(ctx, contested)
                 .sortedWith(compareBy<FlagInfo>({ -it.score }, { maxOf(abs(it.pos.x - mx), abs(it.pos.y - my)) })).firstOrNull()
             // третий — самый дорогой из оставшихся, из равных — ближний ко второму (v607: D5 и оба H — 13 против 12; до v607 —
@@ -1371,7 +1371,7 @@ internal object Garrisons {
             if (his.size < GARRISON_SIZE - 1) return false
             val ours = ctx.myCreeps.filter { (Memory.garrisonSquad[it.id] ?: 0) >= 1 }
             if (ours.isEmpty()) return true
-            val (ox, oy) = Formation.median(ours)
+            val (ox, oy) = medianOf(ours)
             val hisNear = his.minOf { maxOf(abs(it.x - fk / 100), abs(it.y - fk % 100)) }
             return hisNear < maxOf(abs(ox - fk / 100), abs(oy - fk % 100))
         }
@@ -1442,14 +1442,14 @@ internal object Garrisons {
         fun group(x: Int, y: Int, r: Int) = armed.count { maxOf(abs(it.x - x), abs(it.y - y)) <= r } >= GARRISON_SIZE - 1
         fun hisDist(x: Int, y: Int) = armed.minOfOrNull { maxOf(abs(it.x - x), abs(it.y - y)) } ?: 99
         val squads = (0..2).map { si -> squadMembers(ctx, si) }
-        val medians = squads.map { if (it.isEmpty()) null else Formation.median(it) }
+        val medians = squads.map { if (it.isEmpty()) null else medianOf(it) }
         val claimed = HashSet<Int>()
         // КУЛАК ПРОТИВ ФЕРМЕРА (v626, см. USE_STRIKE_FARMER): все отряды — на его флаг с самым малым гарнизоном (его крипы в
         // FIST_RADIUS + 2), из равных — ближний к центру нашей армии; бой — обычные ветки огня
         if (farmer(ctx)) {
             val all = squads.flatten()
             if (all.isNotEmpty()) {
-                val (ax, ay) = Formation.median(all)
+                val (ax, ay) = medianOf(all)
                 // ЦЕЛЬ ДЕРЖИТСЯ, ПОКА ФЛАГ НЕ НАШ (v627, живой блок v626: цель перескакивала, пока его кучки ходили, и армия
                 // маршировала весь матч — `gar=march` 10–14 тысяч, на флаг ступала 6–48 раз)
                 val held = if (USE_STRIKE_STICKY) ctx.flags.firstOrNull { it.pos.key == Memory.strikeFlag[0] && !it.ours } else null
@@ -1718,7 +1718,7 @@ internal object Garrisons {
         if (!USE_RAIDER || s[0] != 6 || s[5] != RAID_MARK) return
         val raiders = ctx.myCreeps.filter { Memory.garrisonSquad[it.id] == 2 }
         if (raiders.isEmpty()) return
-        val (mx, my) = Formation.median(raiders)
+        val (mx, my) = medianOf(raiders)
         val armed = armedEnemiesOf(ctx)
         fun group(x: Int, y: Int, r: Int) = armed.count { maxOf(abs(it.x - x), abs(it.y - y)) <= r } >= GARRISON_SIZE - 1
         val homes = listOf(s[3], s[4]).filter { fk ->

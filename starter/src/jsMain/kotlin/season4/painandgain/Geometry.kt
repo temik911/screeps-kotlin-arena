@@ -1,5 +1,6 @@
 package season4.painandgain
 
+import screeps.api.Creep
 import screeps.api.Position
 
 // ГЕОМЕТРИЯ КАРТЫ В СВОЕЙ СИСТЕМЕ КООРДИНАТ (v446, план архитектуры, этап 5) — уровень 1: ни от чего в пакете не зависит. До
@@ -21,6 +22,14 @@ internal var mirrorTL = false
 
 /** Обход −r..r в своей системе координат (см. mirrorTL): из (85,88) как был, из (12,9) — зеркально. */
 internal fun sym(r: Int): IntProgression = if (mirrorTL) r downTo -r else -r..r
+
+/** МЕДИАНА крипов покоординатно (v150, оператор; перенесена сюда из `Formation.median` в v636, чтобы план и стратег, стоящие
+ *  ниже строя, звали её без ребра вверх): средняя из двух при чётном — в своей системе координат (v286, см. mirrorTL). */
+internal fun medianOf(core: List<Creep>): Pair<Int, Int> {
+    val xs = core.map { it.x }.sorted(); val ys = core.map { it.y }.sorted()
+    val k = if (mirrorTL) (xs.size - 1) / 2 else xs.size / 2
+    return Pair(xs[k], ys[k])
+}
 
 /** Знак числа: −1, 0, 1. */
 internal fun sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0

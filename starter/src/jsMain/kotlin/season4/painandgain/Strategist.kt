@@ -1327,14 +1327,14 @@ internal fun updateKeepers(ctx: Ctx, army: List<Creep>) {
         // Флаг остаётся нашим после схода с клетки (оператор 22.09.2026), а убежать в этой арене нельзя: скорость у
         // всех одна. «Со своими» — тот же радиус, которым кулак (v490) определяет отставшего
         val groupAway = ((USE_KEEPER_STAYS_WITH_GROUP && Signals.enemyFistNow) || Signals.lonerHunted) && c != null && core.isNotEmpty() &&
-            Formation.median(core).let { (mx, my) -> maxOf(abs(c.x - mx), abs(c.y - my)) } > FIST_RADIUS + STRAGGLER_SLACK
+            medianOf(core).let { (mx, my) -> maxOf(abs(c.x - mx), abs(c.y - my)) } > FIST_RADIUS + STRAGGLER_SLACK
         if (groupAway) keepAway.n++
         // ...И ПРИ НАСТУПЛЕНИИ ВРАГА ХРАНИТЕЛЬ ОТХОДИТ К СВОИМ, ПОКА ЕЩЁ УСПЕВАЕТ (v567, правило оператора 22.09.2026,
         // см. USE_KEEPER_FALLS_BACK_ON_ADVANCE). Стоящий враг ухода не вызывает — флаг держится телом; идущий и
         // перебивающий хранителя — вызывает, как только он ближе, чем «до своих + радиус со своими»: скорость у всех
         // одна, и позже до группы уже не дойти
         val advancing = if (!USE_KEEPER_FALLS_BACK_ON_ADVANCE || c == null || core.isEmpty()) emptyList() else {
-            val (mx, my) = Formation.median(core)
+            val (mx, my) = medianOf(core)
             val toGroup = maxOf(abs(c.x - mx), abs(c.y - my))
             if (toGroup <= FIST_RADIUS + STRAGGLER_SLACK) emptyList()
             else armedEnemies.filter { e -> !stationary(e) && getRange(e, c) <= toGroup + FIST_RADIUS + STRAGGLER_SLACK }
