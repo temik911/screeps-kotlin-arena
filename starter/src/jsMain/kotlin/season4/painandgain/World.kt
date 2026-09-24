@@ -1239,6 +1239,24 @@ internal object Garrisons {
         if (Memory.fragScoutH[0] > 0 && Memory.fragSplits[0] >= FRAG_SAMPLES) { Memory.fragSeen[0] = now; raidWhy.bump("frag") }
     }
 
+    /** ПОЧЕРК ХРАНИТЕЛЯ ОТРЫВА (v646, см. USE_LEAD_KEEPER_PAIRS; разбор 63 игр против Coldkimchi#2 и 2 176 реплеев субагентом
+     *  Opus, 24.09.2026): его разведчик стоит вплотную к клетке флага, которая не его и никем не занята, наша проекция на
+     *  конец проиграна, и так GROUP_WINDOW тиков подряд он на клетку не шагнул. Не встаёт при почерке объездчика,
+     *  Chemoautotroph и дробящего фермера (у них свои раскладки). Защёлка. */
+    fun leadKeeper(ctx: Ctx) {
+        val m = Memory.leadKeeper
+        if (!USE_LEAD_KEEPER_PAIRS || m[0] > 0 || tourerMode() || chemoMode() || fragMode()) return
+        val ticksLeft = arenaInfo.ticksLimit - getTicks()
+        val weLose = (ourScore - enemyScore) + (WorldState.ourRate - WorldState.enemyRate) * ticksLeft < 0
+        val taken = HashSet<Int>()
+        for (c in ctx.myCreeps) taken.add(c.key)
+        for (c in ctx.enemyCreeps) taken.add(c.key)
+        val free = ctx.flags.filter { !it.theirs && it.pos.key !in taken }
+        val waiting = weLose && enemyScoutsOf(ctx).any { sc -> free.any { getRange(sc, it.pos) == 1 } }
+        m[1] = if (waiting) m[1] + 1 else 0
+        if (m[1] >= GROUP_WINDOW) { m[0] = getTicks(); raidWhy.bump("keeper") }
+    }
+
     /** ГАРНИЗОНЫ-ТРОЙКИ ПРОТИВ ДРОБЯЩЕГО ФЕРМЕРА (v644, см. USE_FARMER_TRIPLES): при его почерке — раскладка один раз, затем
      *  каждый тик слияние отряда меньше TRIPLE_SIZE с ближайшим и зачистка клетки поста от его крипа. */
     fun farmerTriples(ctx: Ctx) {
@@ -2557,6 +2575,7 @@ internal fun readSignals(ctx: Ctx) {
     Garrisons.chemo(ctx)   // почерк Chemoautotroph (v638): часовые на H
     Garrisons.fragFarmer(ctx)   // почерк дробящего фермера (v644): гарнизоны-тройки
     Garrisons.farmerTriples(ctx)
+    Garrisons.leadKeeper(ctx)   // почерк хранителя отрыва (v646): режим пар
     Garrisons.metalica(ctx)   // почерк MetalicaX (v639): свои флаги — после боя
     Garrisons.campBreak(ctx)   // снять лагерь (v605): этапы посадки гарнизонов под прикрытием армии
     // ФАЗА ПРИМАНКИ (v587, см. USE_BAIT_VS_DEBUFFED): он держит все флаги, кроме одного, — его армия под полными дебаффами;
@@ -2602,7 +2621,10 @@ internal fun readSignals(ctx: Ctx) {
     // пар ему подходит идеально, а сидит он на 47 % своих флаго-тиков — и режим не включался НИ РАЗУ (1,2 % тиков
     // против 97,3 % у けろびー). Ни постоянного гарнизона, ни правила ухода, ни курьера против топ-1 не работало.
     // Запрет на занятые флаги живёт там, где он и нужен: пара и курьер не идут на клетку под его телом
-    Signals.groupSafe = getTicks() >= GROUP_WINDOW && Signals.groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags && (Signals.groupSafe || splitNow)
+    // ...И ЕГО ПОЧЕРК «ХРАНИТЕЛЬ ОТРЫВА» ОТКРЫВАЕТ РЕЖИМ ПАР (v646, см. USE_LEAD_KEEPER_PAIRS): раскол его армии в тихий
+    // момент у бота, который держит армию одним блоком, — случайность, а флаги ему приносят только разведчики
+    Signals.groupSafe = getTicks() >= GROUP_WINDOW && Signals.groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags &&
+        (Signals.groupSafe || splitNow || (USE_LEAD_KEEPER_PAIRS && leadKeeperMode()))
     // ...И РЕЖИМ ПАР НЕ ВКЛЮЧАЕТСЯ, ПОКА МЫ САМИ ВЕДЁМ РАЗМЕН С ГАРНИЗОНОМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING).
     // В проигранной руке v542 армия ужалась до ДВУХ тел при включённом режиме пар: бот решал драться и одновременно
     // растаскивал армию по флагам, которых без разоружения стража не взять. Разоружено там 1 крип против 4-8 в победах

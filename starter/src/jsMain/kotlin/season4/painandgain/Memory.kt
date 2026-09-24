@@ -146,6 +146,8 @@ internal object Memory {
     val fragScoutH = intArrayOf(0)
     /** Срезов, на которых его армия была раздроблена (v644). */
     val fragSplits = intArrayOf(0)
+    /** Почерк «хранителя отрыва» (v646, см. USE_LEAD_KEEPER_PAIRS): [0] — тик защёлки (0 — нет), [1] — тиков подряд. */
+    val leadKeeper = intArrayOf(0, 0)
     /** Тик, когда соперник показал почерк MetalicaX (v639, см. USE_METALICA_HOLD); 0 — не показал. */
     val metalSeen = intArrayOf(0)
     /** Флаг, который бьёт кулак против фермера (v627); держится, пока не наш. */
@@ -248,3 +250,6 @@ internal fun metalicaMode() = Memory.metalSeen[0] > 0
 
 /** РЕЖИМ ПРОТИВ ДРОБЯЩЕГО ФЕРМЕРА (v644, см. USE_FARMER_TRIPLES): его почерк встал. */
 internal fun fragMode() = Memory.fragSeen[0] > 0
+
+/** РЕЖИМ ПРОТИВ ХРАНИТЕЛЯ ОТРЫВА (v646, см. USE_LEAD_KEEPER_PAIRS): его почерк встал. */
+internal fun leadKeeperMode() = Memory.leadKeeper[0] > 0
