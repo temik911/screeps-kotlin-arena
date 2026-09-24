@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 93
+    private const val BOT_VERSION = 94
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2044,8 +2044,13 @@ object SpawnAndSwamp {
         // …and only while our half has been QUIET for the whole production window (homeShare: ticks under alarm in it):
         // "no alarm this tick" bought it in the lull between two raids of the gate's siege6 (six hunters every sixty
         // ticks), it stood under fire by the house, and the 600 it cost was the tower site's 750 left dead
-        if (USE_PILE_SPAWN && ctx.myCreeps.none { isPileBuilder(it) } && !fighterFirst && !alarm && deficit <= 0.0 && realised >= 0.0 &&
-            homeShare() <= 0.0 &&
+        // a bare home spawn is a reason on its own (v94, see USE_SPAWN_RAMPART): no quiet window needed, only no threat
+        val wantRampart = bareSpawn(ctx)?.let { it.id == ctx.mySpawn.id } == true
+        if (USE_PILE_SPAWN && ctx.myCreeps.none { isPileBuilder(it) } && !fighterFirst && !alarm && deficit <= 0.0 &&
+            // …but never out of the opening: the house needs its rampart by his first strike (t≈600 for けろびー, ≈790 for
+            // Ranamar), the fleet needs the first thousand now — bought in the opening it took the stub's tower+stream
+            // 574 -> 1108; once delivery is measured the fleet stands
+            realised >= 0.0 && (wantRampart || homeShare() <= 0.0) &&
             arenaInfo.ticksLimit - getTicks() > 2 * pileJobTicks) {
             val price = PILE_BODY.sumOf { cost(it) }
             if (energy >= price) {
@@ -3558,7 +3563,14 @@ object SpawnAndSwamp {
             val melee = isMelee(creep) && !hasRanged(creep)
             // мили дома бьёт ту угрозу, которую догонит (см. catchable), ближайшую; не «самую раннюю» —
             // та может кайтить, пока другая стоит и бьёт спавн
-            val meleeHomeTarget = if (melee && homeFight) homeThreats.filter { catchable(creep, it) }.minByOrNull { getRange(creep, it) } else null
+            // THE ONE HITTING THE SPAWN FIRST (v94): it stands still while it swings, so it is always caught, and it is the
+            // one taking the match — in the v93 losses to Ranamar his lone M15A3 swung 33-34 times at our spawn while our
+            // melee chased his kiting healers two to twenty cells away
+            // only a MELEE next to the spawn: it stands to swing; a gun at three kites (the gate's siege6: our melee sent
+            // after six ranged hunters around the spawn lost the garrison and left the tower site dead)
+            val spawnHitters = if (USE_HOME_STRIKER_FIRST) homeThreats.filter { e -> hasMelee(e) && getRange(e, mySpawn) <= 1 } else emptyList()
+            val meleeHomeTarget = if (melee && homeFight) (spawnHitters.minByOrNull { getRange(creep, it) }
+                ?: homeThreats.filter { catchable(creep, it) }.minByOrNull { getRange(creep, it) }) else null
             val target: Position
             val standoff: Int
             // A HEALER IN A WAVE WALKS WITH THE WAVE (v84). It carries no weapon, so the first row below sent it home —
@@ -4348,9 +4360,16 @@ object SpawnAndSwamp {
     private fun inContact(enemies: List<Creep>, ours: List<Creep>): Boolean =
         enemies.any { e -> ours.any { getRange(e, it) <= RANGED_RANGE + 1 } }
 
-    private fun catchable(unit: Creep, target: Creep): Boolean =
-        hasMelee(target) || getRange(unit, target) <= MELEE_KEEP_RANGE || !canMove(target) || swampPeriod(target) > swampPeriod(unit) ||
-            !retreating(unit, target)
+    private fun catchable(unit: Creep, target: Creep): Boolean {
+        // v94: "a melee" and "within two" held for any speed, and Ranamar's M10H2 and M10R2 (a swamp cell a tick against
+        // our three) kept two cells off our melee for whole matches — 0-1 % of their ticks adjacent — while his M15A3
+        // took our spawn. Being near or being melee catches him only if he is not faster than us on swamp
+        val notFaster = swampPeriod(target) >= swampPeriod(unit)
+        val near = getRange(unit, target) <= MELEE_KEEP_RANGE
+        return if (USE_HOME_STRIKER_FIRST)
+            (hasMelee(target) && notFaster) || (near && notFaster) || !canMove(target) || swampPeriod(target) > swampPeriod(unit) || !retreating(unit, target)
+        else hasMelee(target) || near || !canMove(target) || swampPeriod(target) > swampPeriod(unit) || !retreating(unit, target)
+    }
 
     /** Цель за прошлый тик увеличила дистанцию до нас: её прежняя клетка (enemyPrevCell) была ближе. */
     private fun retreating(unit: Creep, target: Creep): Boolean {
@@ -4798,6 +4817,26 @@ object SpawnAndSwamp {
      * builder reaches and empties before it rots and that no armed creep of his can reach before the work is done.
      */
     private const val USE_PILE_SPAWN = true
+    /**
+     * A RAMPART ON EVERY SPAWN OF OURS (v94). 200 energy for 10000 hits over the cell — the cheapest hit points in the
+     * game, and nothing repairs them on either side. marlyman123, ricardo and Ranamar all put one on their spawn by
+     * t≈206-556; we had none, and in all three v93 losses to Ranamar a single M15A3 took our 3000 in 33-34 swings
+     * (90 each): with a rampart that is 145 ticks instead of 34. The pile builder does it first — the home spawn, then
+     * each of ours that is bare and not under fire — with energy withdrawn from that spawn (a forward one holds the
+     * ~700 of its pile).
+     */
+    // OFF for now (25.09.2026): on the gate it alone loses `fortress` (won at 1371 without it) — the builder, held on
+    // the ramparts of each new spawn, stops turning piles into spawns; to be fixed before it goes on
+    private const val USE_SPAWN_RAMPART = false
+    /** At home our melee goes first for whoever hits the spawn, and "near" or "melee" is caught only if not faster (v94). */
+    private const val USE_HOME_STRIKER_FIRST = true
+
+    /** Our first spawn without a rampart of ours on its cell and without fire on it; null — all covered. */
+    private fun bareSpawn(ctx: Ctx): StructureSpawn? = if (!USE_SPAWN_RAMPART) null else ctx.mySpawns.firstOrNull { sp ->
+        ctx.ramparts.none { it.exists && it.my == true && it.x == sp.x && it.y == sp.y } &&
+            InfluenceMap.damageAt(sp.x, sp.y, ctx.combatEnemies) <= 0.0
+    }
+
     /** The pile builder's job outranks the haulers sent to its container (pileCandidate, v91). */
     private const val USE_PILE_RIGHT_OF_WAY = true
     /** A job is refused if any armed creep of his could reach the container before the work is done.
@@ -4940,6 +4979,33 @@ object SpawnAndSwamp {
                 pileJob = null
                 job = null
             }
+        }
+        // a bare spawn of ours comes before any pile job not yet started (the container still full, nothing dumped)
+        val bare = bareSpawn(ctx)
+        if (bare != null && job != null && pileOf(job) == null && ctx.mySites.none { it.x == job!!.s.x && it.y == job!!.s.y }) {
+            pileJob = null
+            job = null
+        }
+        if (bare != null && job == null) {
+            val incoming0 = InfluenceMap.damageAt(b.x, b.y, ctx.combatEnemies)
+            if (incoming0 > 0.0) {
+                (fleeStep(b, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(b, ctx.mySpawn, 1, ctx.dangerMatrix))?.let { if (canMove(b)) TrafficManager.request(b, it, HAULER_LOADED_PRIORITY) }
+                return
+            }
+            if (getRange(b, bare) > 1) {
+                pathStep(b, bare, 1, ctx.dangerMatrix)?.let { if (canMove(b)) TrafficManager.request(b, it, HAULER_LOADED_PRIORITY) }
+            } else {
+                val site = ctx.mySites.firstOrNull { it.x == bare.x && it.y == bare.y }
+                if (site == null) {
+                    val r = createConstructionSite(bare.x, bare.y, StructureRampart::class.js)
+                    if (DEBUG_LOG) println("spawn rampart: site at (${bare.x},${bare.y}) err=${r.error}")
+                }
+                val carrying = b.store[RESOURCE_ENERGY] ?: 0
+                if (site != null && carrying > 0) b.build(site)
+                else if (carrying <= 0 && (bare.store[RESOURCE_ENERGY] ?: 0) > 0) b.withdraw(bare, RESOURCE_ENERGY)
+            }
+            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("  pb${b.id} (${b.x},${b.y}) carry=${b.store[RESOURCE_ENERGY] ?: 0} rampart=(${bare.x},${bare.y})")
+            return
         }
         if (job == null) {
             job = pileCandidate(ctx, b, 0)

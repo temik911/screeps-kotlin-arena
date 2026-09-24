@@ -24,7 +24,11 @@ export function createConstructionSite(a, b, c){
   if(terrainAt(x,y)===C.TERRAIN_WALL) return {error:C.ERR_INVALID_TARGET};
   let total = C.CONSTRUCTION_COST[proto.name]; if(!total) return {error:C.ERR_INVALID_ARGS};
   if(proto.name==='StructureRoad' && terrainAt(x,y)===C.TERRAIN_SWAMP) total *= C.CONSTRUCTION_COST_ROAD_SWAMP_RATIO;
-  const busy = world.objects.some(o=>o.exists && o.x===x && o.y===y && (o instanceof ConstructionSite || o instanceof StructureSpawn || o instanceof StructureTower || o instanceof StructureExtension || o instanceof StructureWall || o instanceof Creep));
+  // a RAMPART goes over a structure or a creep (the engine; the field puts one on its spawn and its tower) — only
+  // another rampart, a site or a wall refuses it (25.09.2026: the stub refused every rampart on a spawn)
+  const rampart = proto.name==='StructureRampart';
+  const busy = world.objects.some(o=>o.exists && o.x===x && o.y===y && (o instanceof ConstructionSite || o instanceof StructureWall ||
+    (rampart ? o.constructor.name==='StructureRampart' : (o instanceof StructureSpawn || o instanceof StructureTower || o instanceof StructureExtension || o instanceof Creep))));
   if(busy) return {error:C.ERR_INVALID_TARGET};
   if(world.objects.filter(o=>o.exists && o instanceof ConstructionSite && o.my===true).length >= C.MAX_CONSTRUCTION_SITES) return {error:C.ERR_FULL};
   return {object:new ConstructionSite(x, y, true, total, proto)};
