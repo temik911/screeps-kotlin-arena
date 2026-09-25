@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 108
+    private const val BOT_VERSION = 109
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -888,6 +888,7 @@ object SpawnAndSwamp {
         // лечения не было вовсе, и пара лезла в шар с тремя лекарями (t=1060). Лекарь без урона — тоже
         // цель (фокус — лекари первыми) и тоже хиты в счёте Ланчестера
         val combatEnemies = enemyCreeps.filter { val p = InfluenceMap.profileOf(it); p.melee + p.ranged + p.heal > 0.0 }
+        enemyCreepsNow = enemyCreeps
         // ОБЕЗДВИЖЕННЫЕ (все MOVE выбиты): стоят навсегда, но стреляют. Для движения они — преграда:
         // просивший шаг обездвиженный «обещал» освободить клетку, TrafficManager верил, и шесть бойцов
         // трёх волн 300 тиков стояли за двумя такими в пробке (матч 02.09).
@@ -4281,8 +4282,34 @@ object SpawnAndSwamp {
     private fun meleeFactor(unit: Creep, opponents: List<Creep>, structure: Position?): Double {
         if (structure != null && getRange(unit, structure) <= 1) return 1.0
         if (opponents.any { getRange(unit, it) <= MELEE_KEEP_RANGE }) return 1.0
-        if (!USE_MELEE_SHARE) return meleeSwitch(swampPeriod(unit), opponents)
-        return meleeShare(swampPeriod(unit), opponents)
+        // HIS MELEE IS PACED AS HIS TRAIN, AND OUR GUN OF ITS PACE IS REACHED (v109): see trainSwampPeriod
+        val his = USE_TRAIN_PACE && !unit.my
+        val period = if (his) trainSwampPeriod(unit) else swampPeriod(unit)
+        if (!USE_MELEE_SHARE) return meleeSwitch(period, opponents)
+        return meleeShare(period, opponents, equalReaches = his)
+    }
+
+    /**
+     * HIS CREEP'S SWAMP PACE AS PART OF HIS TRAIN (v109). ●ω<♥♪ moves his melee pulled: a train shares one fatigue, so
+     * M7R1A6 alone steps a swamp cell every 5 ticks and with his M5H3 and an all-MOVE M12 every 3, our M8R4's pace
+     * (fatigue measured in the replay to the unit: 52 after a swamp step, 48 off a tick). Priced as a lone creep, his
+     * melee was a tenth of itself against our guns, the wave closed in on every pair it met, and his melee did 91 % of
+     * the damage that killed seven of our first-wave M8R4 in three losses. The train is his creeps chained to this one
+     * by adjacency, and its pace is their summed weight on their summed MOVE — the faster of that and its own.
+     */
+    private fun trainSwampPeriod(e: Creep): Int {
+        val own = swampPeriod(e)
+        val chain = ArrayList<Creep>()
+        val seen = HashSet<String>()
+        val queue = ArrayDeque<Creep>()
+        queue.add(e); seen.add(e.id)
+        while (queue.isNotEmpty()) {
+            val c = queue.removeFirst()
+            chain.add(c)
+            for (o in enemyCreepsNow) if (o.id !in seen && getRange(o, c) <= 1) { seen.add(o.id); queue.add(o) }
+        }
+        if (chain.size == 1) return own
+        return minOf(own, periodOn(chain.sumOf { bodyWeight(it) }, chain.sumOf { liveMoves(it) }, 10))
     }
 
     /** То же, что meleeFactor, для ЕЩЁ НЕ КУПЛЕННОГО тела: позиции у него нет, значит нет и клаузы
@@ -4310,7 +4337,7 @@ object SpawnAndSwamp {
         return if (ranged.any { swampPeriod(it) > minePeriod }) 1.0 else MELEE_KITE_DISCOUNT
     }
 
-    private fun meleeShare(minePeriod: Int, opponents: List<Creep>): Double {
+    private fun meleeShare(minePeriod: Int, opponents: List<Creep>, equalReaches: Boolean = false): Double {
         val armed = opponents.filter { hasMelee(it) || hasRanged(it) || hasHeal(it) }
         if (armed.none { hasRanged(it) }) return 1.0
         var reach = 0.0
@@ -4323,7 +4350,9 @@ object SpawnAndSwamp {
             all += h
             // a gun of our melee's own speed keeps its distance for ever — only a SLOWER one is reached (as meleeSwitch
             // always said; with ">=" the gate's tower+healball counted our guard full against his M3R3: 521 -> 1400)
-            val reached = if (USE_SHARE_BY_DAMAGE) swampPeriod(o) > minePeriod else swampPeriod(o) >= minePeriod
+            // …and his melee reaches our gun of its own pace: ours do not kite for ever — they march, wait for a laggard,
+            // stand at three, and a swamp step costs three ticks (v109)
+            val reached = if (USE_SHARE_BY_DAMAGE && !equalReaches) swampPeriod(o) > minePeriod else swampPeriod(o) >= minePeriod
             if (hasMelee(o) || reached) reach += h
         }
         if (all <= 0.0) return 1.0
@@ -5163,6 +5192,10 @@ object SpawnAndSwamp {
     private const val USE_ARM_AT_DOOR = true
     /** A siege prices his spawn with the rampart his builder finishes over it before the siege would end (rampartBy, v108). */
     private const val USE_PENDING_RAMPART = true
+    /** His melee is paced as his pulled train and reaches our guns of its pace (meleeFactor, trainSwampPeriod, v109). */
+    private const val USE_TRAIN_PACE = true
+    /** His creeps of this tick, for the pace of his trains (trainSwampPeriod). */
+    private var enemyCreepsNow: List<Creep> = emptyList()
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
