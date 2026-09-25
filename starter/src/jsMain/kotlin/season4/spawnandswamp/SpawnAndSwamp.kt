@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 113
+    private const val BOT_VERSION = 114
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3824,7 +3824,7 @@ object SpawnAndSwamp {
                 homeTarget != null && !marching -> { target = mySpawn; standoff = HOME_STANDOFF }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
                 threat != null && huntingThreat && !marching && mobile -> { target = threat; standoff = closeIn }
-                stompOf[creep.id] != null && !marching -> { target = stompOf[creep.id]!!; standoff = 0 }
+                stompOf[creep.id] != null && !marching -> { target = stompOf[creep.id]!!.first; standoff = stompOf[creep.id]!!.second }
                 raider != null && !marching && mobile && (raidTeam == null || creep.id in raidTeam) -> { target = raider; standoff = RANGED_RANGE }
                 marching -> { target = enemySpawn!!; standoff = if (melee) 1 else RANGED_RANGE }
                 wallTarget != null -> { target = wallTarget; standoff = if (melee) 1 else RANGED_RANGE }
@@ -4477,39 +4477,51 @@ object SpawnAndSwamp {
      * guarding: one), if the first of them gets there before the site is done; the rest stay where they were.
      * Returns the site each of them goes to.
      */
-    private fun stompJobs(ctx: Ctx, free: List<Creep>, combatEnemies: List<Creep>, centroid: Position): Map<String, Position> {
-        val out = HashMap<String, Position>()
+    private fun stompJobs(ctx: Ctx, free: List<Creep>, combatEnemies: List<Creep>, centroid: Position): Map<String, Pair<Position, Int>> {
+        val out = HashMap<String, Pair<Position, Int>>()
         // A STEP ERASES ONLY A SITE OF AN OBSTACLE (v103b). Measured live: his creep on our tower site erased it at
         // once, and our f29 stood on his road site (11,12) from t=574 to 1600 and it stayed, to be built at 1677. His
         // site's kind is not given to us, but a spawn (1000) and a tower (1250) have prices no other site has; and a
         // site that outlives one of ours standing on it is not erasable, whatever it is, and is left alone
-        val erasable = setOf(buildCost("StructureSpawn"), buildCost("StructureTower"))
+        // ...and a SPAWN site is not erased either (v114): our M8R4 stood on his (35,19) at 165/1000 at t=646 and the site
+        // lived to the end of the match. Only a tower site is stepped on; a site being built is taken by its BUILDER
+        val erasable = if (USE_BUILDER_HUNT) setOf(buildCost("StructureTower")) else setOf(buildCost("StructureSpawn"), buildCost("StructureTower"))
         for ((site, _) in enemySitesNow) if (ctx.myCreeps.any { it.x == site.x && it.y == site.y }) stompFailed.add(site.id)
         stompFailed.retainAll { id -> enemySitesNow.any { it.first.id == id } }
         if (free.isEmpty()) return out
         for ((site, doneIn) in enemySitesNow.sortedBy { getRange(it.first, centroid) }) {
-            if ((site.progressTotal ?: 0) !in erasable || site.id in stompFailed) continue
             if (coveringTowers(ctx, listOf(site), 0).isNotEmpty()) continue
+            // HIS BUILDER IS THE TARGET (v114): it stands at the site for the hundred ticks of the build, 600 hits and no
+            // weapon - one M8R4 kills it in 15; in five of nine of kerobi's builds a gun of ours was 11-82 ticks away,
+            // and the one builder we did kill (by a passing wave) stopped his building for 590 ticks
+            val builders = if (USE_BUILDER_HUNT) enemyCreepsNow.filter { c -> getRange(c, site) <= 3 && c.body.any { it.type == WORK && it.hits > 0 } } else emptyList()
+            val stompable = (site.progressTotal ?: 0) in erasable && site.id !in stompFailed
+            if (builders.isEmpty() && !stompable) continue
+            val aim: Position = builders.minByOrNull { it.hits } ?: site
+            val standoff = if (builders.isEmpty()) 0 else RANGED_RANGE
+            val work = builders.sumOf { it.hits }.toDouble()
             val guards = combatEnemies.filter { getRange(it, site) <= ENGAGE_RANGE + RANGED_RANGE }
-            val field = flowTo(ctx, site)
+            val field = flowTo(ctx, aim)
             val cands = free.filter { it.id !in out }.map { it to pathTicks(it, field, it.x * 100 + it.y) }
                 .filter { it.second < Int.MAX_VALUE / 4 && it.second < doneIn }.sortedBy { it.second }
             val team = ArrayList<Creep>()
             var holds = false
-            for ((c, _) in cands) {
+            var dps = 0.0
+            for ((c, eta) in cands) {
                 team.add(c)
-                holds = guards.isEmpty() || ourPowerOf(team, guards) >= enemyPowerOf(guards, team) * PUSH_RATIO
+                dps += InfluenceMap.profileOf(c).ranged
+                val inTime = builders.isEmpty() || (dps > 0.0 && eta + work / dps < doneIn)
+                holds = inTime && (guards.isEmpty() || ourPowerOf(team, guards) >= enemyPowerOf(guards, team) * PUSH_RATIO)
                 if (holds) break
             }
             if (!holds) continue
-            for (c in team) out[c.id] = site
+            for (c in team) out[c.id] = aim to standoff
             stompReach++
         }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0 && enemySitesNow.isNotEmpty()) {
             println("stomp t=${getTicks()}: " + enemySitesNow.joinToString(" ") { (s, d) ->
-                "(${s.x},${s.y})${s.progress}/${s.progressTotal}@${if (d >= Int.MAX_VALUE / 4) "-" else d.toString()}" +
-                    "=${out.filterValues { it === s }.keys.joinToString(",") { "f$it" }.ifEmpty { "-" }}"
-            } + " jobs=$stompReach")
+                "(${s.x},${s.y})${s.progress}/${s.progressTotal}@${if (d >= Int.MAX_VALUE / 4) "-" else d.toString()}"
+            } + " teams=" + out.entries.joinToString(",") { (id, j) -> "f$id>(${j.first.x},${j.first.y})" }.ifEmpty { "-" } + " jobs=$stompReach")
         }
         return out
     }
@@ -5316,6 +5328,8 @@ object SpawnAndSwamp {
     private var targetDue = false
     /** Under fire a runt that closes nothing is bought only when the spawn falls before the whole body is paid (v113). */
     private const val USE_RUNT_ONLY_IF_FALLING = true
+    /** A site of his being built is taken by killing its builder; only a tower site is stepped on (stompJobs, v114). */
+    private const val USE_BUILDER_HUNT = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
