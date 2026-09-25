@@ -104,9 +104,11 @@ export function endTick(){
     for(const p of c.body){ if(p.type===C.MOVE||p.type===C.CARRY) continue; n++; }
     n+=Math.min(used, c.body.filter(p=>p.type===C.CARRY).length);
     c.fatigue += n * (terrainAt(c.x,c.y)===2 ? 10 : 2);
-    // a creep stepping onto a construction site of the other side removes it with its progress (seen live
-    // 25.09.2026: his raider stepped on our tower site at 776/1250, and it was gone the same tick)
-    for(const o of world.objects){ if(o instanceof ConstructionSite && o.exists && o.my!==c.my && o.x===c.x && o.y===c.y) o.exists=false; } }
+    // a creep stepping onto a construction site of the other side removes it with its progress — a site of an
+    // OBSTACLE only (seen live 25.09.2026: his raider erased our tower site at 776/1250 in the tick it stepped on it;
+    // our creep stood on his road site for a thousand ticks and it stayed)
+    for(const o of world.objects){ if(o instanceof ConstructionSite && o.exists && o.my!==c.my && o.x===c.x && o.y===c.y &&
+      (o._proto===StructureSpawn || o._proto===StructureTower || o._proto===StructureExtension || o._proto===StructureWall)) o.exists=false; } }
   for(const o of world.objects){ if(o instanceof Creep){ o.fatigue=Math.max(0, o.fatigue - 2*o.parts(C.MOVE)); } }
   for(const o of world.objects){ if(o instanceof StructureTower && o.cooldown>0) o.cooldown--; }
   world.intents=[];

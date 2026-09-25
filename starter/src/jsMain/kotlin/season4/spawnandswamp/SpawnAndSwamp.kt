@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 103
+    private const val BOT_VERSION = 104
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -811,13 +811,20 @@ object SpawnAndSwamp {
         val held = enemySpawns.firstOrNull { it.id == siegeTargetId }
         val onOurHalf: (StructureSpawn) -> Boolean = { s -> enemyHome != null && getRange(s, mySpawn) < getRange(s, enemyHome) }
         val intruder = enemySpawns.filter { onOurHalf(it) }.minByOrNull { getRange(mySpawn, it) }
+        // the spawn this army takes soonest, by the last scoring (see targetCost); none it can take — null
+        val takeable = if (!USE_TARGET_BY_TAKE) null else
+            enemySpawns.filter { (targetCost[it.id] ?: Long.MAX_VALUE) < Long.MAX_VALUE / 4 }.minByOrNull { targetCost[it.id]!! }
+        val heldTakeable = held != null && (targetCost[held.id] ?: Long.MAX_VALUE) < Long.MAX_VALUE / 4
         val enemySpawn = when {
             // A SPAWN OF HIS ON OUR HALF COMES FIRST, even over a committed wave (v97): けろびー's (77,25), 24 cells from
             // ours, bred his army behind us for 500 ticks, 3000 hits and no rampart, while the wave went to his main
             // fifty cells off and died there
             USE_TARGET_COMMIT && intruder != null && (held == null || !onOurHalf(held)) -> intruder
-            // committed: a wave is out against the held target (the wave map outlives the tick; see runFighters)
-            USE_TARGET_COMMIT && held != null && wave.isNotEmpty() -> held
+            // committed: a wave is out against the held target (the wave map outlives the tick; see runFighters) —
+            // while it can take it, or while there is nothing else it can take (v104)
+            USE_TARGET_COMMIT && held != null && wave.isNotEmpty() && (!USE_TARGET_BY_TAKE || heldTakeable || takeable == null) -> held
+            // between waves, or with the held one out of reach: the spawn it takes soonest (v104)
+            takeable != null -> takeable
             !USE_TARGET_HOLD || held == null -> enemySpawns.minByOrNull { getRange(mySpawn, it) }
             intruder != null && !onOurHalf(held) -> intruder
             else -> held
@@ -3247,6 +3254,32 @@ object SpawnAndSwamp {
         // are taken nearest-next, each walked at the group's slowest swamp pace (pessimistic, by Chebyshev) and worked
         // down, rampart included, by the group's damage to structures.
         val tourGroup = (waveFront + staging).ifEmpty { siegeCrew }
+        // WHICH OF HIS SPAWNS THIS GROUP CAN TAKE, AND HOW SOON (v104; read by the target choice at the next tick's start).
+        // For each: the group's walk on the assault field to it, his creeps that get there within the walk and a
+        // quarter of the siege limit, his fed towers over it (and those done by then), his rampart on it — and the
+        // siege run on all of it. A siege it loses costs "never". In the three draws against marlyman123 the target
+        // was "nearest to our house", kept while a wave was out: his new spawns stood untouched 330-730 ticks each
+        // while the front waited at the one fort it could not take (C: 6437 of ours against 2551, and 0 of 6 taken)
+        if (USE_TARGET_BY_TAKE && (getTicks() - targetScoredAt >= LOG_EVERY || ctx.enemySpawns.any { it.id !in targetCost })) {
+            targetScoredAt = getTicks()
+            targetCost.clear()
+            for (s in ctx.enemySpawns) {
+                if (tourGroup.isEmpty()) { targetCost[s.id] = Long.MAX_VALUE; continue }
+                val field = assaultTo(ctx, s)
+                val walk = travelTicksOf(tourGroup, field, flowTo(ctx, s))
+                if (walk >= Int.MAX_VALUE / 4) { targetCost[s.id] = Long.MAX_VALUE; continue }
+                val within = (walk + SIEGE_LIMIT / 4).toLong()
+                val defs = massing.filter { getRange(it, s).toLong() * plainPeriod(it).coerceAtMost(10) <= within }
+                val towersS = coveringTowers(ctx, listOf(s)) + ctx.pendingTowers.filter {
+                    it.eta <= walk + SIEGE_LIMIT && InfluenceMap.towerShot(towerRangeFor(it.info, listOf(s))) > 0.0
+                }.map { it.info }
+                val sim = siegeOutcome(tourGroup, attrition, defs, towersS, s, shieldAt(s), PUSH_RATIO, field, approach = walk)
+                targetCost[s.id] = if (sim.win) walk.toLong() + sim.ticks else Long.MAX_VALUE
+            }
+            if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0) println("targets t=${getTicks()}: " + ctx.enemySpawns.joinToString(" ") { s ->
+                "(${s.x},${s.y})=${targetCost[s.id].let { if (it == null || it >= Long.MAX_VALUE / 4) "-" else it.toString() }}${if (s.id == enemySpawn?.id) "*" else ""}"
+            } + " group=${tourGroup.size}")
+        }
         val tourDps = tourGroup.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
         val tour: Long = if (!USE_TOUR_CLOCK || enemySpawn == null) 0L else {
             val period = tourGroup.maxOfOrNull { swampPeriod(it) } ?: 1
@@ -4309,8 +4342,16 @@ object SpawnAndSwamp {
      */
     private fun stompJobs(ctx: Ctx, free: List<Creep>, combatEnemies: List<Creep>, centroid: Position): Map<String, Position> {
         val out = HashMap<String, Position>()
+        // A STEP ERASES ONLY A SITE OF AN OBSTACLE (v103b). Measured live: his creep on our tower site erased it at
+        // once, and our f29 stood on his road site (11,12) from t=574 to 1600 and it stayed, to be built at 1677. His
+        // site's kind is not given to us, but a spawn (1000) and a tower (1250) have prices no other site has; and a
+        // site that outlives one of ours standing on it is not erasable, whatever it is, and is left alone
+        val erasable = setOf(buildCost("StructureSpawn"), buildCost("StructureTower"))
+        for ((site, _) in enemySitesNow) if (ctx.myCreeps.any { it.x == site.x && it.y == site.y }) stompFailed.add(site.id)
+        stompFailed.retainAll { id -> enemySitesNow.any { it.first.id == id } }
         if (free.isEmpty()) return out
         for ((site, doneIn) in enemySitesNow.sortedBy { getRange(it.first, centroid) }) {
+            if ((site.progressTotal ?: 0) !in erasable || site.id in stompFailed) continue
             if (coveringTowers(ctx, listOf(site), 0).isNotEmpty()) continue
             val guards = combatEnemies.filter { getRange(it, site) <= ENGAGE_RANGE + RANGED_RANGE }
             val field = flowTo(ctx, site)
@@ -5064,6 +5105,14 @@ object SpawnAndSwamp {
     private var enemySitesNow: List<Pair<ConstructionSite, Int>> = emptyList()
     /** Site-ticks a stomp team was sent (stompJobs), for the log. */
     private var stompReach = 0
+    /** His sites one of ours stood on without erasing them (stompJobs, v103b). */
+    private val stompFailed = HashSet<String>()
+    /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
+     *  (runFighters scores, tick chooses, v104). */
+    private const val USE_TARGET_BY_TAKE = true
+    /** His spawn id to the group's walk plus siege ticks for it, or Long.MAX_VALUE when the siege is lost (v104). */
+    private val targetCost = HashMap<String, Long>()
+    private var targetScoredAt = -1000
     /** Waves are staged and idle guns posted at our spawn nearest the target, not at home (runFighters, v98). */
     private const val USE_RALLY_FORWARD = true
     /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
