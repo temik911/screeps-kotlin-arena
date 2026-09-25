@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 111
+    private const val BOT_VERSION = 112
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -744,6 +744,17 @@ object SpawnAndSwamp {
      */
     private val enemyShield = HashMap<Int, Int>()
     private fun shieldAt(p: Position) = enemyShield[p.x * 100 + p.y] ?: 0
+
+    /** A DEFENDER BEHIND A RAMPART THAT COSTS MORE THAN THE SPAWN IT GUARDS IS NOT A TARGET (v112). At marlyman's fort
+     *  22 % of our damage to structures went into his spawn (the rest into his defenders' ramparts, one of them 10000
+     *  while the spawn lacked 2251), and a spawn at 100 hits stood in our range for 690 ticks: the step's `engage`, the
+     *  swing and the shot all took the nearest defender. One whose rampart and hits are no less than the spawn's own
+     *  hits and rampart is worth nothing to kill before it — the spawn falls first, whatever it guards. */
+    private fun costsMoreThanSpawn(e: Creep, spawn: StructureSpawn?): Boolean {
+        if (!USE_SPAWN_FIRST_AT_FORT || spawn == null) return false
+        val shield = shieldAt(e)
+        return shield > 0 && shield + e.hits >= (spawn.hits ?: SPAWN_HITS) + shieldAt(spawn)
+    }
 
     /** The wave front's siege is won by the direct plan (see siegeOutcome): in the storm, fire and swings go to the
      *  spawn, not to a defender behind a rampart and not to the tower. Set each tick with siegeGo. */
@@ -3733,7 +3744,7 @@ object SpawnAndSwamp {
             }
             if (localAggressive) aggressiveIds.add(creep.id) else aggressiveIds.remove(creep.id)
             // встречный боевой враг рядом — при локальном перевесе сворачиваем на него (см. ENGAGE_RANGE)
-            val engage = if (localAggressive) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE }.minByOrNull { getRange(creep, it) } else null
+            val engage = if (localAggressive) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && !(marching && costsMoreThanSpawn(it, enemySpawn)) }.minByOrNull { getRange(creep, it) } else null
             // при перевесе сближаемся до CLOSE_STANDOFF; без перевеса на врага не идём вовсе —
             // держим пост у спавна отрядом (по одному нас и били), кайт и бегство — в mustFlee
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
@@ -3951,6 +3962,8 @@ object SpawnAndSwamp {
         val target: screeps.api.GameObject? = when {
             // the direct storm (v83): swings go into the spawn while everything next to us stands behind a rampart
             (stormDirect || USE_SHIELD_LAST) && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && adjacent.all { shieldAt(it) > 0 } -> enemySpawn
+            // …and in any posture, past those that cost more than it (v112, see costsMoreThanSpawn)
+            USE_SPAWN_FIRST_AT_FORT && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && adjacent.all { costsMoreThanSpawn(it, enemySpawn) } -> enemySpawn
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
             // a defender behind his rampart costs its rampart first (10000) — the last choice, not the weakest (v95:
             // against marlyman123 our melee swung 188 and 302 times at his posts against 64 and 58 at the spawn)
@@ -4108,6 +4121,12 @@ object SpawnAndSwamp {
         // massValue выше единицы, и боец бил по площади — 1 урона за часть по стрелку на 3, вместо
         // 10 одиночным. Дуэль M5R5 против M3R3 в их коридоре хаулеров: 17 выстрелов получил, 11 нанёс (матч 6)
         val combatInRange = creepsInRange.filter { c -> val p = InfluenceMap.profileOf(c); p.melee + p.ranged + p.heal > 0.0 }
+        // the spawn in range goes before every defender that costs more than it, in any posture (v112): a spawn at 100 hits
+        // stood 690 ticks in range of our guns shooting a rampart next to it, because only a storm aimed at the spawn
+        if (USE_SPAWN_FIRST_AT_FORT && spawnInRange && combatInRange.all { costsMoreThanSpawn(it, enemySpawn) }) {
+            creep.rangedAttack(enemySpawn!!)
+            return
+        }
         // the direct storm (v83): a defender behind his rampart is not in the way, the spawn is the target
         if (stormSpawn && (stormDirect || USE_SHIELD_LAST) && spawnInRange && combatInRange.all { shieldAt(it) > 0 }) {
             creep.rangedAttack(enemySpawn!!)
@@ -5234,6 +5253,8 @@ object SpawnAndSwamp {
      *  projected income (recomputed by the cascade of every free spawn: 5.5 ms each, six spawns late in a match); and
      *  a spawn after the first that cannot pay for any body leaves the cascade at once (v111). */
     private const val USE_TICK_MEMO = true
+    /** His defender whose rampart and hits cost no less than the spawn's is no target for step, swing or shot (v112). */
+    private const val USE_SPAWN_FIRST_AT_FORT = true
     private val weightMemo = HashMap<String, Int>()
     private val movesMemo = HashMap<String, Int>()
     private var usableMemo: List<EnergySite>? = null
