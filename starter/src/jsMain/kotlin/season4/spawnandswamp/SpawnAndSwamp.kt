@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 105
+    private const val BOT_VERSION = 106
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3260,8 +3260,7 @@ object SpawnAndSwamp {
         // siege run on all of it. A siege it loses costs "never". In the three draws against marlyman123 the target
         // was "nearest to our house", kept while a wave was out: his new spawns stood untouched 330-730 ticks each
         // while the front waited at the one fort it could not take (C: 6437 of ours against 2551, and 0 of 6 taken)
-        if (USE_TARGET_BY_TAKE && (getTicks() - targetScoredAt >= LOG_EVERY || ctx.enemySpawns.any { it.id !in targetCost })) {
-            targetScoredAt = getTicks()
+        if (USE_TARGET_BY_TAKE && (getTicks() % LOG_EVERY == 0 || ctx.enemySpawns.any { it.id !in targetCost })) {
             targetCost.clear()
             for (s in ctx.enemySpawns) {
                 if (tourGroup.isEmpty()) { targetCost[s.id] = Long.MAX_VALUE; continue }
@@ -5131,7 +5130,6 @@ object SpawnAndSwamp {
     private const val USE_TARGET_BY_TAKE = true
     /** His spawn id to the group's walk plus siege ticks for it, or Long.MAX_VALUE when the siege is lost (v104). */
     private val targetCost = HashMap<String, Long>()
-    private var targetScoredAt = -1000
     /** Waves are staged and idle guns posted at our spawn nearest the target, not at home (runFighters, v98). */
     private const val USE_RALLY_FORWARD = true
     /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
