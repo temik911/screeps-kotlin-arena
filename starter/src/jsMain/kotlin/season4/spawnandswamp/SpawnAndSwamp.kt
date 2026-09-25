@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 120
+    private const val BOT_VERSION = 121
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3756,7 +3756,7 @@ object SpawnAndSwamp {
         val huntOf: Map<String, Creep> = if (!USE_BUILDER_CHASE) emptyMap() else builderHunt(ctx,
             fighters.filter { f -> f.id !in wave && strikers.any { it.id == f.id } && hasRanged(f) },
             fighters.filter { f -> f.id in wave && hasRanged(f) && canMove(f) },
-            homeGuard, homePack, enemySpawn, enemyCreeps, combatEnemies)
+            if (USE_HUNT_REACH) fighters.filter { it.id !in wave && inArms(it) } else homeGuard, homePack, enemySpawn, enemyCreeps, combatEnemies)
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
 
@@ -4607,16 +4607,30 @@ object SpawnAndSwamp {
             val guards = combatEnemies.filter { getRange(it, b) <= ENGAGE_RANGE + RANGED_RANGE }
             val field = flowTo(ctx, b)
             val cell = b.x * 100 + b.y
+            // CAN IT BE REACHED, NOT "IS IT BACKING OFF" (v121). `catchable` is the melee's contact question — a target
+            // that did not step away last tick counts as caught — and a builder 150-212 ticks off does not step away from
+            // what it cannot see: in four v117 non-wins against Ranamar#2/#3 every one of our twelve guns was sent after
+            // his M5C1W1 (a swamp cell a tick empty, two loaded, ours three), ten died in the swamp on the way, and the
+            // builder never took a shot. A gun reaches a builder not faster than it on swamp (kerobi's M2C2W2: five
+            // ticks empty, ten loaded), or one bound to a site of his for longer than the walk and the kill take
+            val bound = enemySitesNow.filter { (site, _) -> getRange(site, b) <= 3 }.maxOfOrNull { it.second } ?: 0
+            fun reaches(c: Creep, eta: Int): Boolean {
+                if (!USE_HUNT_REACH) return catchable(c, b)
+                if (swampPeriod(b) >= swampPeriod(c)) return true
+                val dps = InfluenceMap.profileOf(c).ranged - heal
+                return dps > 0.0 && eta + b.hits / dps < bound
+            }
             val cands = ArrayList<Pair<Creep, Int>>()
             for (c in free) {
-                if (c.id in out || !catchable(c, b)) continue
+                if (c.id in out) continue
                 val eta = pathTicks(c, field, c.x * 100 + c.y)
-                if (eta >= Int.MAX_VALUE / 4) continue
+                if (eta >= Int.MAX_VALUE / 4 || !reaches(c, eta)) continue
                 cands.add(c to eta)
             }
             for (c in marchers) {
-                if (c.id in out || !catchable(c, b) || targetField == null) continue
+                if (c.id in out || targetField == null) continue
                 val eta = pathTicks(c, field, c.x * 100 + c.y)
+                if (eta < Int.MAX_VALUE / 4 && !reaches(c, eta)) continue
                 val back = stepsFrom(targetField, b)
                 val direct = targetField[c.x * 100 + c.y]
                 if (eta >= Int.MAX_VALUE / 4 || back < 0 || direct < 0) continue
@@ -5521,6 +5535,9 @@ object SpawnAndSwamp {
     private const val USE_ARMED_WARD = true
     /** A gun assigned to his builder does not hold for its wave's laggards (runFighters, v120). */
     private const val USE_HUNT_NO_HOLD = true
+    /** A gun hunts his builder only if it reaches it — not faster than the gun on swamp, or bound to a site for longer
+     *  than the walk and the kill — and only while everyone who stays home holds without it (builderHunt, v121). */
+    private const val USE_HUNT_REACH = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
