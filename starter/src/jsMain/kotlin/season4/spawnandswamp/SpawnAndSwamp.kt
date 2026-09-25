@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 112
+    private const val BOT_VERSION = 113
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1034,6 +1034,14 @@ object SpawnAndSwamp {
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
         homeHits.addLast(getTicks() to (mySpawn.hits ?: SPAWN_HITS))
+        // who entered the alarm ring when, and what our house had then (v113, see houseFallsIn)
+        run {
+            val house = (mySpawn.hits ?: SPAWN_HITS) + ramparts.filter { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y }.sumOf { it.hits ?: 0 }
+            val inRing = combatEnemies.filter { enemyApproach[it.x * 100 + it.y] in 0..SPAWN_ALARM_TICKS }
+            ringSince.keys.retainAll { id -> inRing.any { it.id == id } }
+            for (e in inRing) if (e.id !in ringSince) ringSince[e.id] = getTicks() to house
+            houseNow = house
+        }
         while (homeHits.isNotEmpty() && homeHits.first().first < getTicks() - PRODUCTION_WINDOW) homeHits.removeFirst()
         measureDelivery(ctx)
         measureSupply(ctx)
@@ -1574,7 +1582,12 @@ object SpawnAndSwamp {
         return trip > 0.0 && taken > fleetCapacity * FLEET_ROUNDS
     }
 
-    private fun fleetPoints(ctx: Ctx, usable: List<EnergySite>): List<Pair<Int, Int>> = usable.map { it.energy to tripTicks(ctx, it) }
+    private fun fleetPoints(ctx: Ctx, usable: List<EnergySite>): List<Pair<Int, Int>> {
+        if (USE_TICK_MEMO && pointsMemoTick == getTicks() && usable === usableMemo) pointsMemo?.let { return it }
+        val v = usable.map { it.energy to tripTicks(ctx, it) }
+        if (usable === usableMemo) { pointsMemo = v; pointsMemoTick = getTicks() }
+        return v
+    }
 
     /** Прогноз притока текущего флота по точкам, которые он будет возить (см. incomeOf). */
     private fun projectedIncome(ctx: Ctx, usable: List<EnergySite>): Double {
@@ -1833,8 +1846,13 @@ object SpawnAndSwamp {
         // a spawn after the first that can pay for no body at all buys nothing whatever the cascade says (v111, CPU)
         if (USE_TICK_MEMO && !placeSites && budget < minOf(HAULER_BLOCKS_MIN * blockCost(), cost(RANGED_ATTACK) + cost(MOVE))) return reach("poor")
         val carried = ctx.haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
-        val ourPower = ourPowerOf(defenders, threats)
-        val enemyPower = enemyPowerOf(threats, defenders)
+        // the same for every free spawn of the tick (v113, CPU): computed by the first, read by the rest
+        if (!USE_TICK_MEMO || powerMemoTick != getTicks()) {
+            powerMemo = ourPowerOf(defenders, threats) to enemyPowerOf(threats, defenders)
+            powerMemoTick = getTicks()
+        }
+        val ourPower = powerMemo.first
+        val enemyPower = powerMemo.second
         // ДЕБЮТ: стартовую тысячу не тратим, пока не увидели, что рождает противник: его крип, заказанный
         // на первом тике, виден как spawning со второго. Если он не рождает ничего, ждём не дольше половины
         // окна оценки сближения — столько нужно, чтобы понять, идёт ли к нам уже стоящий в поле враг
@@ -2218,7 +2236,11 @@ object SpawnAndSwamp {
             if (deficit <= 0.0 || (enemyArrival > waitTicks && spawnLife > waitTicks)) return reach("wFull")
             // недомерок — только если САМ закрывает дефицит: тело, которое ничего не меняет, — корм
             // (матч 12: M2R1 и M5R1 по одному против трёх M5R1); под огнём спавна строим, что есть
-            if (!spawnUnderFire && !closesDeficit(body, defenders, threats)) return reach("wRunt")
+            // …and under fire too, while the spawn outlives the wait (v113): "under fire, build what we have" bought
+            // Ranamar#4's two kiting M5R1 a runt of 230-360 energy at a time, each lost the duel (M5R1: 600 hits and a
+            // swamp cell a tick), and the flow starved at 5 a tick — lost at t≈700 and 800. A runt that closes nothing
+            // is bought under fire only when the spawn falls before the whole body could be paid for
+            if ((!spawnUnderFire || (USE_RUNT_ONLY_IF_FALLING && spawnLife > waitTicks)) && !closesDeficit(body, defenders, threats)) return reach("wRunt")
         }
 
         val r = spawn.spawnCreep(body)
@@ -3258,7 +3280,12 @@ object SpawnAndSwamp {
         // дом (стенд stream17: наш спавн снесён на 1357-м, где раньше была победа на 888-м)
         val armoured = spawnRampart > 0 || siegeTowers.isNotEmpty()
         if (enemySpawn == null || siegeCrew.isEmpty()) { assaultWantsMelee = false; assaultWantsHealer = false }
+        // THE BODY QUESTION ON THE LOG'S GRID (v113, CPU): three siege runs of the whole army every tick were most of the
+        // 43 ms of f.posture late in a match (89 timeouts against marlyman in v112); the army's make-up changes by the
+        // body, not by the tick, and the answer is read by the spawn when it buys
+        else if (USE_TICK_MEMO && getTicks() % LOG_EVERY != 0 && bodyAskedAt >= 0) { }
         else {
+            bodyAskedAt = getTicks()
             // с тем же маршем: тело выбирается по тому, чем кончится ВЕСЬ поход, а не только работа
             // под спавном, — иначе лекарь снова оценивается там, где он не нужен
             val crewTravel = travelTicksOf(siegeCrew, assaultFlow, spawnFlow)
@@ -3301,7 +3328,11 @@ object SpawnAndSwamp {
         // siege run on all of it. A siege it loses costs "never". In the three draws against marlyman123 the target
         // was "nearest to our house", kept while a wave was out: his new spawns stood untouched 330-730 ticks each
         // while the front waited at the one fort it could not take (C: 6437 of ours against 2551, and 0 of 6 taken)
-        if (USE_TARGET_BY_TAKE && (getTicks() % LOG_EVERY == 0 || ctx.enemySpawns.any { it.id !in targetCost })) {
+        // …and put off to the next tick when this one has already spent its share (v113, CPU; the stub's clock is 0)
+        if (USE_TARGET_BY_TAKE && getTicks() % LOG_EVERY == 0) targetDue = true
+        if (USE_TARGET_BY_TAKE && (targetDue || ctx.enemySpawns.any { it.id !in targetCost }) &&
+            (!USE_TICK_MEMO || cpuMs() < cpuBudgetMs() * FWD_CPU_SHARE || ctx.enemySpawns.any { it.id !in targetCost })) {
+            targetDue = false
             targetCost.clear()
             val tourDpsNow = tourGroup.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
             for (s in ctx.enemySpawns) {
@@ -4504,7 +4535,16 @@ object SpawnAndSwamp {
         val never = Int.MAX_VALUE / 2
         val eta = threats.mapNotNull { e ->
             var a = arrivalById[e.id] ?: never
-            if (ctx.enemyApproach[e.x * 100 + e.y] in 0..SPAWN_ALARM_TICKS) a = minOf(a, SPAWN_ALARM_TICKS)
+            if (ctx.enemyApproach[e.x * 100 + e.y] in 0..SPAWN_ALARM_TICKS) {
+                // AN ARRIVAL PREDICTED AND NOT MADE IS FALSIFIED (v113): standing in the ring means "at us within its
+                // span", and one that has stood there longer than that while our house lost nothing is not coming at
+                // it now — against けろびー#16 his five stood ten cells off for 150 ticks as "arrives in 70", "fighter
+                // first" held the spawn the whole time, and no hauler was bought while his raider emptied the fleet
+                val since = ringSince[e.id]
+                val falsified = USE_ARRIVAL_CHECKED && since != null && getTicks() - since.first > SPAWN_ALARM_TICKS && houseNow >= since.second
+                if (falsified) return@mapNotNull null
+                a = minOf(a, SPAWN_ALARM_TICKS)
+            }
             if (a >= never) null else e to a
         }.sortedBy { it.second }
         val pack = ArrayList<Creep>()
@@ -5255,12 +5295,27 @@ object SpawnAndSwamp {
     private const val USE_TICK_MEMO = true
     /** His defender whose rampart and hits cost no less than the spawn's is no target for step, swing or shot (v112). */
     private const val USE_SPAWN_FIRST_AT_FORT = true
+    /** One of his that has stood in our alarm ring longer than its span while our house lost nothing is not counted as
+     *  arriving when the house's fall is priced (houseFallsIn, v113). */
+    private const val USE_ARRIVAL_CHECKED = true
+    /** His creep id to the tick it entered our alarm ring and our house's hits (spawn and its rampart) then. */
+    private val ringSince = HashMap<String, Pair<Int, Int>>()
+    /** Our house's hits (spawn and its rampart) this tick. */
+    private var houseNow = 0
     private val weightMemo = HashMap<String, Int>()
     private val movesMemo = HashMap<String, Int>()
     private var usableMemo: List<EnergySite>? = null
     private var usableMemoTick = -1
     private var incomeMemo = 0.0
     private var incomeMemoTick = -1
+    private var pointsMemo: List<Pair<Int, Int>>? = null
+    private var pointsMemoTick = -1
+    private var powerMemo = 0.0 to 0.0
+    private var powerMemoTick = -1
+    private var bodyAskedAt = -1
+    private var targetDue = false
+    /** Under fire a runt that closes nothing is bought only when the spawn falls before the whole body is paid (v113). */
+    private const val USE_RUNT_ONLY_IF_FALLING = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
