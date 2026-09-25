@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 107
+    private const val BOT_VERSION = 108
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3181,7 +3181,8 @@ object SpawnAndSwamp {
         val siegeTowers = if (enemySpawn != null) coveringTowers(ctx, listOf(enemySpawn)) +
             ctx.pendingTowers.filter { it.eta <= travel + siege && InfluenceMap.towerShot(towerRangeFor(it.info, listOf(enemySpawn))) > 0.0 }.map { it.info }
         else emptyList()
-        val spawnRampart = spawnRampartHits(ctx)
+        // …and the rampart his builder puts over it by the time our siege would be over (v108, see rampartBy)
+        val spawnRampart = if (enemySpawn != null && USE_PENDING_RAMPART) rampartBy(enemySpawn, travel, waveDps) else spawnRampartHits(ctx)
         // на выход — ГРУППА ПОСТА, которая уйдёт вместе (волны друг друга не ждут: подкрепление по двое
         // догоняло первую волну через сотню тиков и ложилось под башню по очереди — стенд); на
         // продолжение — ушедшие волны
@@ -3269,6 +3270,7 @@ object SpawnAndSwamp {
         // while the front waited at the one fort it could not take (C: 6437 of ours against 2551, and 0 of 6 taken)
         if (USE_TARGET_BY_TAKE && (getTicks() % LOG_EVERY == 0 || ctx.enemySpawns.any { it.id !in targetCost })) {
             targetCost.clear()
+            val tourDpsNow = tourGroup.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
             for (s in ctx.enemySpawns) {
                 if (tourGroup.isEmpty()) { targetCost[s.id] = Long.MAX_VALUE; continue }
                 val field = assaultTo(ctx, s)
@@ -3279,7 +3281,7 @@ object SpawnAndSwamp {
                 val towersS = coveringTowers(ctx, listOf(s)) + ctx.pendingTowers.filter {
                     it.eta <= walk + SIEGE_LIMIT && InfluenceMap.towerShot(towerRangeFor(it.info, listOf(s))) > 0.0
                 }.map { it.info }
-                val sim = siegeOutcome(tourGroup, attrition, defs, towersS, s, shieldAt(s), PUSH_RATIO, field, approach = walk)
+                val sim = siegeOutcome(tourGroup, attrition, defs, towersS, s, if (USE_PENDING_RAMPART) rampartBy(s, walk, tourDpsNow) else shieldAt(s), PUSH_RATIO, field, approach = walk)
                 targetCost[s.id] = if (sim.win) walk.toLong() + sim.ticks else Long.MAX_VALUE
             }
             if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0) println("targets t=${getTicks()}: " + ctx.enemySpawns.joinToString(" ") { s ->
@@ -4445,6 +4447,20 @@ object SpawnAndSwamp {
         return never
     }
 
+    /**
+     * HIS RAMPART OVER A SPAWN WHEN OUR SIEGE OF IT WOULD BE OVER (v108). The siege priced a spawn by the rampart on it
+     * now: Ranamar#2's builder put one over his bare spawn at t=498-537, and every siege planned against "3000 hits"
+     * before that met 13000. A rampart's site on the spawn's cell (no other site of that price can stand there) done
+     * before we arrive and knock the bare spawn down is priced as the rampart it will be.
+     */
+    private fun rampartBy(p: Position, arrival: Int, dps: Double): Int {
+        val now = shieldAt(p)
+        if (now > 0) return now
+        val site = enemySitesNow.firstOrNull { (s, _) -> s.x == p.x && s.y == p.y && (s.progressTotal ?: 0) == buildCost("StructureRampart") } ?: return 0
+        val bareFalls = if (dps > 0.0) (SPAWN_HITS / dps).toLong() else Long.MAX_VALUE / 4
+        return if (site.second.toLong() <= arrival.toLong() + bareFalls) RAMPART_HITS else 0
+    }
+
     /** Закроет ли это тело дефицит обороны вместе с нынешними защитниками (по Ланчестеру с лечением врага). */
     private fun closesDeficit(body: Array<BodyPartType>, defenders: List<Creep>, threats: List<Creep>): Boolean {
         val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats) +
@@ -5145,6 +5161,8 @@ object SpawnAndSwamp {
     private const val USE_HOLD_FIRE_EDGE = true
     /** His guns shooting our spawn that our defenders do not hold make the next body a fighter, whatever investing promises (v107). */
     private const val USE_ARM_AT_DOOR = true
+    /** A siege prices his spawn with the rampart his builder finishes over it before the siege would end (rampartBy, v108). */
+    private const val USE_PENDING_RAMPART = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
