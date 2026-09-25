@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 135
+    private const val BOT_VERSION = 136
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2211,6 +2211,26 @@ object SpawnAndSwamp {
         val liveFighters = defenders.sumOf { liveCost(it) }
         // ONE HAULER A TICK FROM ALL SPAWNS (v85): every free spawn runs this cascade on the same snapshot, and the
         // creep ordered by the first is not in it — two spawns bought `hauler #8` in one tick (24.09.2026)
+        // A HUNTER FOR HIS BUILDER IN THE FIELD (v136). A builder of his far from his home raises spawns out of the map's
+        // containers: against kerobi, with three or more of his spawns at t=800 we won 0 of 19, and in our wins his
+        // builders died by ~600 — he buys exactly two and never replaced a dead one (13 of 13). The first site of each is
+        // bare (no armed creep of his within 8 cells in 17 of 17), and our guns come late: the first at t≈218 and busy,
+        // its first shot at his builder at 390-480 or never in the losses. A dedicated M10A2 (660; a cell a tick on any
+        // ground, 60 a tick, 1200 hits) bought instead of the third hauler reaches his first site at ~287-319, before
+        // it is done in 9 of 9 games against his later versions, and his builder dies in 10 ticks. One at a time, never
+        // under a raid at our door, and only once the opening fleet (two haulers) runs — nothing flows without it
+        if (USE_FIELD_HUNTER && !armNow && ctx.haulers.size >= 2 && hunterOrderedAt != getTicks() &&
+            ctx.myCreeps.none { isHunter(it) } && fieldBuilders(ctx).isNotEmpty()) {
+            val price = HUNTER_BODY.sumOf { cost(it) }
+            if (energy >= price) {
+                val r = spawn.spawnCreep(HUNTER_BODY)
+                reach(if (r.error == null) "huBuy" else "err")
+                if (r.error == null) { hunterOrderedAt = getTicks(); spentFighters += price }
+                if (DEBUG_LOG) println("spawn: hunter cost=$price energy=$energy builders=" + fieldBuilders(ctx).joinToString(" ") { "(${it.x},${it.y})" } + " err=${r.error}")
+                return
+            }
+            if (!alarm && deficit <= 0.0) return reach("huSave")
+        }
         val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD && haulerOrderedAt != getTicks()
 
         if (haulerTurn) {
@@ -3940,9 +3960,9 @@ object SpawnAndSwamp {
             f.id !in wave && hasWeapon(f) && strikers.any { it.id == f.id } && !isMelee(f)
         }, combatEnemies, centroid) else emptyMap()
         val huntOf: Map<String, Creep> = if (!USE_BUILDER_CHASE) emptyMap() else builderHunt(ctx,
-            fighters.filter { f -> f.id !in wave && strikers.any { it.id == f.id } && hasRanged(f) },
+            fighters.filter { f -> f.id !in wave && (strikers.any { it.id == f.id } && hasRanged(f) || (USE_FIELD_HUNTER && isHunter(f))) },
             fighters.filter { f -> f.id in wave && hasRanged(f) && canMove(f) },
-            if (USE_HUNT_REACH) fighters.filter { it.id !in wave && inArms(it) } else homeGuard, homePack, enemySpawn, enemyCreeps, combatEnemies)
+            if (USE_HUNT_REACH) fighters.filter { it.id !in wave && inArms(it) && !(USE_FIELD_HUNTER && isHunter(it)) } else homeGuard, homePack, enemySpawn, enemyCreeps, combatEnemies)
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
 
@@ -4049,7 +4069,7 @@ object SpawnAndSwamp {
                 !hasWeapon(creep) -> { target = if (striker && hasHeal(creep)) rallySpawn else mySpawn; standoff = HOME_STANDOFF + 1 }
                 // his builder (v116, see builderHunt): the one assigned goes for it before home rows — the assignment already
                 // asked whether the house holds without it
-                huntOf[creep.id] != null -> { target = huntOf[creep.id]!!; standoff = RANGED_RANGE }
+                huntOf[creep.id] != null -> { target = huntOf[creep.id]!!; standoff = if (melee) 1 else RANGED_RANGE }
                 homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
                 // поводок — про ПОГОНЮ, а не про осаду: мили, не идущий в волне, остаётся дома, потому
@@ -4770,12 +4790,31 @@ object SpawnAndSwamp {
         return out
     }
 
+    /** A hunter's damage on his builder: its guns, and its swings for the melee hunter (v136). */
+    private fun huntDps(c: Creep): Double = InfluenceMap.profileOf(c).let { it.ranged + (if (USE_FIELD_HUNTER) it.melee else 0.0) }
+
     /**
      * HIS BUILDER BY ITS BODY, NOT BY ITS LIVE WORK (v134). The WORK of his M2C2W2 are its 2nd and 4th parts of six and
      * die at 200 hits: the hunt dropped it five shots before the kill and his healer gave the WORK back in 1-4 ticks —
      * against kerobi#20 (v133 loss) it was shot to 160 at t≈400, healed to 448 by 420 and finished its spawn at 424;
      * against #23 it stood at 160 from t=500 to 640 with no hunt line at all. In both v131 wins every wounded builder died.
      */
+    /** The hunter's body (v136): ten MOVE carry two ATTACK at a swamp cell a tick; the legs in front. */
+    private val HUNTER_BODY: Array<BodyPartType> = arrayOf(MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, ATTACK, ATTACK)
+    private var hunterOrderedAt = -1
+    /** Ours by body: melee with five MOVE to an ATTACK and nothing else — no guard, breacher or fighter looks like it. */
+    private fun isHunter(c: Creep): Boolean {
+        val a = c.body.count { it.type == ATTACK }
+        return a in 1..2 && c.body.count { it.type == MOVE } >= 5 * a &&
+            c.body.none { it.type == RANGED_ATTACK || it.type == WORK || it.type == CARRY || it.type == HEAL }
+    }
+    /** A builder of his out in the field: farther from his home than twice his fort's reach (his posts and tower stand
+     *  within five cells of his spawn; a builder feeding them or ramping the spawn is his house's, v136). */
+    private fun fieldBuilders(ctx: Ctx): List<Creep> {
+        val home = ctx.enemySpawns.firstOrNull() ?: return emptyList()
+        return ctx.enemyCreeps.filter { isHisBuilder(it) && getRange(it, home) > FIELD_BUILDER_RANGE }
+    }
+
     private fun isHisBuilder(c: Creep): Boolean =
         if (USE_BUILDER_BY_BODY) c.body.any { it.type == WORK } else c.body.any { it.type == WORK && it.hits > 0 }
 
@@ -4827,7 +4866,7 @@ object SpawnAndSwamp {
                 if (!USE_HUNT_REACH) return catchable(c, b)
                 if (USE_HUNT_BOUND) { if (plainPeriod(b) > plainPeriod(c) && swampPeriod(b) >= swampPeriod(c)) return true }
                 else if (swampPeriod(b) >= swampPeriod(c)) return true
-                val dps = InfluenceMap.profileOf(c).ranged - heal
+                val dps = huntDps(c) - heal
                 return dps > 0.0 && eta + b.hits / dps < bound
             }
             val cands = ArrayList<Pair<Creep, Int>>()
@@ -4844,7 +4883,7 @@ object SpawnAndSwamp {
                 val back = stepsFrom(targetField, b)
                 val direct = targetField[c.x * 100 + c.y]
                 if (eta >= Int.MAX_VALUE / 4 || back < 0 || direct < 0) continue
-                val dps = InfluenceMap.profileOf(c).ranged
+                val dps = huntDps(c)
                 val kill = if (dps - heal > 0.0) b.hits / (dps - heal) else Double.MAX_VALUE
                 val detour = eta + kill + back - direct
                 val worth = futureSpawns * (if (dps > 0.0) SPAWN_HITS / dps else Double.MAX_VALUE)
@@ -4866,7 +4905,7 @@ object SpawnAndSwamp {
             for ((c, _) in cands) {
                 if (c in home) { home.remove(c); if (!houseHolds()) { home.add(c); continue } }
                 team.add(c)
-                dps += InfluenceMap.profileOf(c).ranged
+                dps += huntDps(c)
                 ok = dps - heal > 0.0 && (guards.isEmpty() || ourPowerOf(team, guards) >= enemyPowerOf(guards, team) * PUSH_RATIO)
                 if (ok) break
             }
@@ -5785,6 +5824,10 @@ object SpawnAndSwamp {
     private const val USE_BUILDER_BY_BODY = true
     /** The march pays for every creep of his that reaches its route in time, fought as one group (runFighters, v135). */
     private const val USE_INTERCEPT = true
+    /** A dedicated fast melee hunter (M10A2) is bought for his builders out in the field (spawnIfNeeded, v136). */
+    private const val USE_FIELD_HUNTER = true
+    /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
+    private const val FIELD_BUILDER_RANGE = 10
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
