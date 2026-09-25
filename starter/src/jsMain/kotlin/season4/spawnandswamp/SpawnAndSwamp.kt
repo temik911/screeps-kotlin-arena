@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 98
+    private const val BOT_VERSION = 99
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -129,7 +129,12 @@ object SpawnAndSwamp {
      *  kills the damage and the healers left do nothing, so weighting by HITS undervalues exactly the melee that wins;
      *  and our own breacher (M6A6, five ticks a swamp cell) makes even M4H2 "faster". What decided Ranamar#2 was the
      *  march — his fast army meets the melee before the spawn — and that belongs to the siege's attrition, not here. */
-    private const val USE_MELEE_SHARE = false
+    private const val USE_MELEE_SHARE = true
+    /** meleeShare weighs his creeps by their damage (ranged + melee), not their hits (v99). Against Ranamar (25.09.2026,
+     *  lost at t≈410) his home guard M1A1 made our breacher M6A6 a full defender against his two kiting M5R1 — deficit
+     *  -147, the spawn "waited for the full body", bought two haulers instead, and the kiters husked them and shot the
+     *  spawn down with 800 energy of bodies. */
+    private const val USE_SHARE_BY_DAMAGE = true
     /** The siege target is kept until it falls; only a spawn on our half takes it from one on his (tick, v85).
      *  OFF — measured live 25.09.2026 and rejected: four unrated games against marlyman123#96 went 0-2-2 where every
      *  earlier build drew. Held on his fortress, the army went at 13000 of work it cannot do — fifteen waves in one
@@ -4199,9 +4204,15 @@ object SpawnAndSwamp {
         var reach = 0.0
         var all = 0.0
         for (o in armed) {
-            val h = o.hits.toDouble().coerceAtLeast(1.0)
+            // BY THE DAMAGE IT CAN STOP, NOT BY THE HITS (v99): what a melee takes out of his group is the damage of those
+            // it reaches; a healer's hits weighed as much as a gun's, so the healball's fast M4H2 outweighed the slow
+            // M3R3 our melee kills — and a healer does no damage to be stopped
+            val h = if (USE_SHARE_BY_DAMAGE) InfluenceMap.profileOf(o).let { it.ranged + it.melee } else o.hits.toDouble().coerceAtLeast(1.0)
             all += h
-            if (hasMelee(o) || swampPeriod(o) >= minePeriod) reach += h   // not faster than it: it gets there
+            // a gun of our melee's own speed keeps its distance for ever — only a SLOWER one is reached (as meleeSwitch
+            // always said; with ">=" the gate's tower+healball counted our guard full against his M3R3: 521 -> 1400)
+            val reached = if (USE_SHARE_BY_DAMAGE) swampPeriod(o) > minePeriod else swampPeriod(o) >= minePeriod
+            if (hasMelee(o) || reached) reach += h
         }
         if (all <= 0.0) return 1.0
         val share = reach / all
