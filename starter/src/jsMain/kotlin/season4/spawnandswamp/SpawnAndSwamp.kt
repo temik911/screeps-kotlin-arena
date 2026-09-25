@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 124
+    private const val BOT_VERSION = 125
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1992,7 +1992,24 @@ object SpawnAndSwamp {
         // spawn from t=171, the house "fell in 150+", "investing" won every tick, haulers were bought and husked, and the
         // first gun (M1R1 for 180) came at 390. The alarm alone is not the question: a harasser in the ring that shoots
         // nothing of ours cost the gate's harass 534 -> 608 held on "fighter first"
-        val armNow = USE_ARM_AT_DOOR && spawnUnderFire && deficit > 0.0
+        // THE RAID AT THE DOOR IS A STATE, NOT A TICK (v125). Under fire meant "shot this tick", and a kiter steps a cell
+        // off between volleys: against Ranamar#5/#6/#3 the spawn was under his 800 of kiters 93-235 ticks of t=150-450,
+        // and in exactly the ticks one stood 4-7 cells off it bought haulers (and a 700 tower keeper, and saved on the
+        // "camp" rule by a flow of 16-46 a tick while the haulers fled and 1-2 came in) — the first gun came at t=313-436
+        // or never, and four losses at t=408-1026 followed. The raid is on while a creep of his stands in the alarm ring
+        // and our house has lost hits since it came in (ringSince, v113); a harasser that shot nothing is not one
+        val raidAtDoor = if (!USE_RAID_STATE) emptyList() else threats.filter { e ->
+            val p = InfluenceMap.profileOf(e)
+            p.ranged + p.melee > 0.0 && ctx.enemyApproach[e.x * 100 + e.y] in 0..SPAWN_ALARM_TICKS &&
+                (ringSince[e.id]?.second ?: 0) > houseNow
+        }
+        val raidDps = raidAtDoor.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+        val armNow = USE_ARM_AT_DOOR && (spawnUnderFire || raidAtDoor.isNotEmpty()) && deficit > 0.0
+        // …and while it is on, a gun that matches the raid's damage is bought now rather than saved for (v125): the first
+        // gun at the door, even an M4R2 for 500, cut the house's loss from 9.7 a tick to 0.9 (Ranamar#6); a runt below
+        // the raid's damage — the 230-360 of v113 — still waits
+        fun raidBuys(b: Array<BodyPartType>) = raidAtDoor.isNotEmpty() && armNow &&
+            b.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER >= raidDps
         val fighterFirst = armNow || (alarm || deficit > 0.0) && threatIn < investReady &&
             (holdReady <= threatIn || holdReady < investReady || closesNow)
         val realised = realisedIncome()
@@ -2232,7 +2249,7 @@ object SpawnAndSwamp {
         // достроил 95 из 482 оставшихся. У готовой башни срока нет — её надо только кормить
         // смотритель покупается под РАБОТУ, которую успеваем сделать, или под готовую башню, которую
         // надо кормить; «есть хоть какая-то площадка» этого вопроса не задаёт
-        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty())) {
+        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty()) && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
             // ТЕЛО ПОД РАБОТУ, А НЕ ПОД ЛЮБУЮ. Работа выбирается тем же правилом, что и в runBuilders
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
             val builder = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
@@ -2256,7 +2273,7 @@ object SpawnAndSwamp {
         // на входящий урон, против времени накопления недостающего при нынешнем потоке. Без этого счёта
         // правило копило до конца: матч 19 (05.09.2026) — с 850-го по 1000-й спавн набрал с 584 до 904
         // энергии и не построил НИЧЕГО, пока последние бойцы гибли по одному, и был снесён с 904 в банке
-        if (alarm && ourPower < enemyPower && energy < SPAWN_ENERGY_CAPACITY &&
+        if (alarm && ourPower < enemyPower && energy < SPAWN_ENERGY_CAPACITY && !raidBuys(fighterBody(budget)) &&
             spawnLife > energyArrivalTicks(ctx, SPAWN_ENERGY_CAPACITY - energy, flow)) return reach("camp")
 
         // ожидаемая энергия — в спавне и В ПУТИ (хаулеры), не пул на земле: тот приедет за рейсы.
@@ -2290,7 +2307,7 @@ object SpawnAndSwamp {
         // гарнизоне тревога выпускала M1R1 по 200 (матч 9); недомерок при тревоге — только когда
         // гарнизон не держит и энергия не успевает
         val gap = bodyCap - budget
-        if (gap > 0 && bodyValue(full) > bodyValue(body)) {
+        if (gap > 0 && bodyValue(full) > bodyValue(body) && !raidBuys(body)) {
             val waitTicks = energyArrivalTicks(ctx, gap, flow)
             if (deficit <= 0.0 || (enemyArrival > waitTicks && spawnLife > waitTicks)) return reach("wFull")
             // недомерок — только если САМ закрывает дефицит: тело, которое ничего не меняет, — корм
@@ -5618,6 +5635,9 @@ object SpawnAndSwamp {
     private const val USE_HUNT_BOUND = true
     /** A defender of his spawn enters the siege at the tick its own walk brings it there (defenderEtas, v124). */
     private const val USE_DEFENDER_ARRIVAL = true
+    /** The raid at the door is a state — his creep in the alarm ring since our house lost hits — and while it is on no
+     *  keeper is bought and a gun matching its damage is not saved for (spawnIfNeeded, v125). */
+    private const val USE_RAID_STATE = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
