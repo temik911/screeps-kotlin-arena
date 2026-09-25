@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 125
+    private const val BOT_VERSION = 127
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -714,6 +714,8 @@ object SpawnAndSwamp {
     private var fleetMark = 0
     private var fleetMarkIncome = -1.0
     private var fleetMarkTick = -1
+    /** Every hauler purchase made once delivery was measured: (tick, delivery then) — the sliding guard (v127). */
+    private val fleetMarks = ArrayDeque<Pair<Int, Double>>()
 
     /**
      * САМОЕ БОЛЬШОЕ ЧИСЛО ЕГО СПАВНОВ ЗА МАТЧ. Это не счёт целей, а ЕГО ОТВЕТ НА ВОПРОС О ГОРИЗОНТЕ —
@@ -2021,7 +2023,16 @@ object SpawnAndSwamp {
         val fleetGrew = ctx.haulers.sumOf { capacityOf(it) } > fleetMark
         val lastHarmed = fleetMarkIncome >= 0.0 && realised >= 0.0 && fleetGrew &&
             getTicks() - fleetMarkTick >= PRODUCTION_WINDOW / 2 && realised < fleetMarkIncome
-        val fleetDelivers = !lastHarmed &&
+        // THE FLEET GREW AND DELIVERY FELL OVER HALF A WINDOW (v127). lastHarmed judges only the last purchase, and only
+        // "while the fleet grew" — a fleet that grows by purchases and shrinks by deaths never qualifies, and one bought
+        // every ~50 ticks is never judged at all: against kerobi#19 (v125 A/B) haulers #6-#13, 4000 of energy at four
+        // fighters, went while measured delivery went 15.6 at #7, then 17, 13, 10, 11, 13 — his army grew to 1500. The
+        // reference is the latest purchase at least half a window old: if we have bought since and delivery is below
+        // what it was then, the purchases since have not paid and the next one is not made. Nothing is delayed (v126,
+        // "wait until the last is measured", failed the gate's siege6): where delivery rises, this never fires
+        val slideRef = if (USE_FLEET_SLIDING) fleetMarks.lastOrNull { getTicks() - it.first >= PRODUCTION_WINDOW / 2 } else null
+        val slideHarmed = slideRef != null && realised >= 0.0 && fleetMarks.any { it.first > slideRef.first } && realised < slideRef.second
+        val fleetDelivers = !lastHarmed && !slideHarmed &&
             (realised < 0.0 || realised >= projectedIncome(ctx, usable) * PUSH_RELEASE_RATIO)
         // ПОТОК, А НЕ КУЧА. capacityBound спрашивает, лежит ли на земле на четыре круга всего флота, —
         // это вопрос про склад. Карта же роняет две точки по 2000 каждые пятьдесят тиков: восемьдесят в
@@ -2209,6 +2220,8 @@ object SpawnAndSwamp {
                 fleetMark = ctx.haulers.sumOf { capacityOf(it) }
                 fleetMarkIncome = realised
                 fleetMarkTick = getTicks()
+                if (realised >= 0.0) fleetMarks.addLast(getTicks() to realised)
+                while (fleetMarks.size > 16) fleetMarks.removeFirst()
             }
             if (DEBUG_LOG) println("spawn: hauler #${allHaulers + 1} blocks=$affordable income=${projectedIncome(ctx, usable).toInt()}/${targetIncome().toInt()} real=${if (realised < 0) "-" else realised.toInt().toString()} supply=${supplyRate().toInt()} live=$liveHaulers/$liveFighters mark=${fleetMark}/${(fleetMarkIncome * 10).toInt() / 10.0} err=${r.error}")
             return
@@ -5638,6 +5651,9 @@ object SpawnAndSwamp {
     /** The raid at the door is a state — his creep in the alarm ring since our house lost hits — and while it is on no
      *  keeper is bought and a gun matching its damage is not saved for (spawnIfNeeded, v125). */
     private const val USE_RAID_STATE = true
+    /** No hauler is bought when delivery has fallen below its level at the latest purchase half a window old, with
+     *  purchases made since (spawnIfNeeded, v127). */
+    private const val USE_FLEET_SLIDING = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
