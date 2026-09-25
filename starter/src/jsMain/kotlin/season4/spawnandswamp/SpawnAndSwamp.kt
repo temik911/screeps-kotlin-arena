@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 94
+    private const val BOT_VERSION = 95
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3654,10 +3654,28 @@ object SpawnAndSwamp {
             val gap = if (localEnemies.isEmpty() && !nearTower) COHESION_GAP else ENGAGE_COHESION_TICKS
             // бой у дома — строй не держит никто: бурильщик стоял в трёх клетках от пяти мили, бивших
             // спавн, а четыре M8R4 — в сорока, все с hold=true «для отставшего» (матч 9)
+            // A COLUMN IS NOT A LAG (v95). In a corridor one cell wide the wave is a column, the tail cannot close the
+            // gap because the cells ahead are held by those waiting for it, and the head waited for ever: 20 bodies at
+            // x=1, y=73-87 from t≈1720 to the clock against ricardo, ten at x=98 from 1675 to 1975 against marlyman#142
+            // with `sim=…/win/9t/direct`. A mate joined to me by a chain of mates, each within two cells of the next,
+            // is queued behind me; only one cut off from that chain is lagging.
+            // only on the march: a hunt at home keeps waiting for its laggards (applied to hunts too it sent the gate's
+            // siege6 garrison into the hunters piecemeal and left the tower site at 769)
+            val linked: Set<String> = if (!USE_COLUMN_COHESION || !marching) emptySet() else {
+                val seen = HashSet<String>()
+                val queue = ArrayDeque<Creep>()
+                queue.add(creep); seen.add(creep.id)
+                while (queue.isNotEmpty()) {
+                    val c = queue.removeFirst()
+                    for (m in mates) if (m.id !in seen && getRange(c, m) <= 2) { seen.add(m.id); queue.add(m) }
+                }
+                seen
+            }
             val hold = (marching || hunting) && !homeFight && !underFire && !inCoverage && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff && run {
                 var lagging = false
                 for (m in mates) {
                     if (getRange(creep, m) <= RANGED_RANGE) continue // рядом — не отстал
+                    if (m.id in linked) continue // в очереди за мной, а не отстал
                     val d = flow[m.x * 100 + m.y]
                     if (d < 0) continue
                     val lag = (d - myFlow) * plainPeriod(m) // поле в тиках полного хода × его период
@@ -3733,9 +3751,12 @@ object SpawnAndSwamp {
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
         val target: screeps.api.GameObject? = when {
             // the direct storm (v83): swings go into the spawn while everything next to us stands behind a rampart
-            stormDirect && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && adjacent.all { shieldAt(it) > 0 } -> enemySpawn
+            (stormDirect || USE_SHIELD_LAST) && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && adjacent.all { shieldAt(it) > 0 } -> enemySpawn
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
-            adjacent.isNotEmpty() -> adjacent.minByOrNull { it.hits }
+            // a defender behind his rampart costs its rampart first (10000) — the last choice, not the weakest (v95:
+            // against marlyman123 our melee swung 188 and 302 times at his posts against 64 and 58 at the spawn)
+            adjacent.isNotEmpty() -> (if (USE_SHIELD_LAST) adjacent.filter { shieldAt(it) <= 0 }.minByOrNull { it.hits } else null)
+                ?: adjacent.minByOrNull { it.hits + shieldAt(it) }
             enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 -> enemySpawn
             wallTarget != null && creep.getRangeTo(wallTarget) <= 1 -> wallTarget
             else -> null
@@ -3889,7 +3910,7 @@ object SpawnAndSwamp {
         // 10 одиночным. Дуэль M5R5 против M3R3 в их коридоре хаулеров: 17 выстрелов получил, 11 нанёс (матч 6)
         val combatInRange = creepsInRange.filter { c -> val p = InfluenceMap.profileOf(c); p.melee + p.ranged + p.heal > 0.0 }
         // the direct storm (v83): a defender behind his rampart is not in the way, the spawn is the target
-        if (stormSpawn && stormDirect && spawnInRange && combatInRange.all { shieldAt(it) > 0 }) {
+        if (stormSpawn && (stormDirect || USE_SHIELD_LAST) && spawnInRange && combatInRange.all { shieldAt(it) > 0 }) {
             creep.rangedAttack(enemySpawn!!)
             return
         }
@@ -4830,6 +4851,10 @@ object SpawnAndSwamp {
     private const val USE_SPAWN_RAMPART = false
     /** At home our melee goes first for whoever hits the spawn, and "near" or "melee" is caught only if not faster (v94). */
     private const val USE_HOME_STRIKER_FIRST = true
+    /** A mate chained to me through mates within two cells is queued, not lagging (cohesion hold, v95). */
+    private const val USE_COLUMN_COHESION = true
+    /** A defender behind his rampart is the last thing our guns and swings pick, after the spawn (strike, shoot, v95). */
+    private const val USE_SHIELD_LAST = true
 
     /** Our first spawn without a rampart of ours on its cell and without fire on it; null — all covered. */
     private fun bareSpawn(ctx: Ctx): StructureSpawn? = if (!USE_SPAWN_RAMPART) null else ctx.mySpawns.firstOrNull { sp ->
