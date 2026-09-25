@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 102
+    private const val BOT_VERSION = 103
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -909,6 +909,16 @@ object SpawnAndSwamp {
             val builders = enemyCreeps.sumOf { c -> if (getRange(c, site) <= 3) c.body.count { it.type == WORK && it.hits > 0 } else 0 }
             val rate = if (observed >= 0.0) observed else builders * BUILD_POWER.toDouble()
             if (rate <= 0.0) null else PendingTower(TowerInfo(site, true, 0), ceil(((site.progressTotal ?: 0) - progress) / rate).toInt())
+        }
+        // EVERY SITE OF HIS AND WHEN IT BECOMES A STRUCTURE (v103, see stompJobs): observed pace, or his WORK within
+        // three cells; neither — it is not being built now and waits for us
+        enemySitesNow = enemySites.map { site ->
+            val progress = site.progress ?: 0
+            val (t0, p0) = siteSeen.getOrPut(site.id) { getTicks() to progress }
+            val observed = if (getTicks() - t0 >= APPROACH_WINDOW / 2) (progress - p0).toDouble() / (getTicks() - t0) else -1.0
+            val builders = enemyCreeps.sumOf { c -> if (getRange(c, site) <= 3) c.body.count { it.type == WORK && it.hits > 0 } else 0 }
+            val rate = if (observed > 0.0) observed else builders * BUILD_POWER.toDouble()
+            site to (if (rate <= 0.0) Int.MAX_VALUE / 2 else ceil(((site.progressTotal ?: 0) - progress) / rate).toInt())
         }
         // темп меряется и у СВОЕЙ площадки (towerReadyTicks): прибор один на обе стороны
         siteSeen.keys.retainAll { id -> enemySites.any { it.id == id } || mySites.any { it.id == id } }
@@ -3573,6 +3583,9 @@ object SpawnAndSwamp {
         // в дальности трое наших, девять сидели на посту «без перевеса не идём» и смотрели.
         cpuMark("f.posture")
         val homeTarget = homeThreats.minWithOrNull(compareBy<Creep>({ arrivalOf(it) }, { getRange(it, centroid) }))
+        val stompOf = if (USE_STOMP && homeThreats.isEmpty()) stompJobs(ctx, fighters.filter { f ->
+            f.id !in wave && hasWeapon(f) && strikers.any { it.id == f.id } && !isMelee(f)
+        }, combatEnemies, centroid) else emptyMap()
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
 
@@ -3683,6 +3696,7 @@ object SpawnAndSwamp {
                 homeTarget != null && !marching -> { target = mySpawn; standoff = HOME_STANDOFF }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
                 threat != null && huntingThreat && !marching && mobile -> { target = threat; standoff = closeIn }
+                stompOf[creep.id] != null && !marching -> { target = stompOf[creep.id]!!; standoff = 0 }
                 raider != null && !marching && mobile -> { target = raider; standoff = RANGED_RANGE }
                 marching -> { target = enemySpawn!!; standoff = if (melee) 1 else RANGED_RANGE }
                 wallTarget != null -> { target = wallTarget; standoff = if (melee) 1 else RANGED_RANGE }
@@ -4283,6 +4297,44 @@ object SpawnAndSwamp {
         return lanchester(dps, heal, theirs.sumOf { weightedHits(it, ours, homeSpawnPos) }.toInt())
     }
 
+
+    /**
+     * HIS SITES ARE ERASED BY A STEP (v103). A creep of ours stepping onto a construction site of his removes it with
+     * everything built into it (seen live: his raider stepped on our tower site at 776/1250 and it was gone). His spawns
+     * are built this way from a pile, a hundred ticks each and mostly unguarded — けろびー#18 put up four on our half and
+     * middle, marlyman123 two to five a match, and the siege only ever saw a spawn once it stood. For every site not
+     * under his fed tower, the free guns nearest to it by their own walk are sent, as few as hold its guards (none
+     * guarding: one), if the first of them gets there before the site is done; the rest stay where they were.
+     * Returns the site each of them goes to.
+     */
+    private fun stompJobs(ctx: Ctx, free: List<Creep>, combatEnemies: List<Creep>, centroid: Position): Map<String, Position> {
+        val out = HashMap<String, Position>()
+        if (free.isEmpty()) return out
+        for ((site, doneIn) in enemySitesNow.sortedBy { getRange(it.first, centroid) }) {
+            if (coveringTowers(ctx, listOf(site), 0).isNotEmpty()) continue
+            val guards = combatEnemies.filter { getRange(it, site) <= ENGAGE_RANGE + RANGED_RANGE }
+            val field = flowTo(ctx, site)
+            val cands = free.filter { it.id !in out }.map { it to pathTicks(it, field, it.x * 100 + it.y) }
+                .filter { it.second < Int.MAX_VALUE / 4 && it.second < doneIn }.sortedBy { it.second }
+            val team = ArrayList<Creep>()
+            var holds = false
+            for ((c, _) in cands) {
+                team.add(c)
+                holds = guards.isEmpty() || ourPowerOf(team, guards) >= enemyPowerOf(guards, team) * PUSH_RATIO
+                if (holds) break
+            }
+            if (!holds) continue
+            for (c in team) out[c.id] = site
+            stompReach++
+        }
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0 && enemySitesNow.isNotEmpty()) {
+            println("stomp t=${getTicks()}: " + enemySitesNow.joinToString(" ") { (s, d) ->
+                "(${s.x},${s.y})${s.progress}/${s.progressTotal}@${if (d >= Int.MAX_VALUE / 4) "-" else d.toString()}" +
+                    "=${out.filterValues { it === s }.keys.joinToString(",") { "f$it" }.ifEmpty { "-" }}"
+            } + " jobs=$stompReach")
+        }
+        return out
+    }
 
     /** The defence deficit against his guns that no melee of ours can reach — faster or as fast on swamp as every one
      *  of them — counted against our guns (and towers) only (v101). No such guns: no deficit of this class. */
@@ -5006,6 +5058,12 @@ object SpawnAndSwamp {
     private const val USE_LAST_CALL_RACE = true
     /** While a wave is out, the recall asks whether everyone not in it holds the house, those staged included (v102). */
     private const val USE_STAGING_GUARDS = true
+    /** Free guns are sent to step on his construction sites, as many as hold their guards (stompJobs, v103). */
+    private const val USE_STOMP = true
+    /** His construction sites of this tick with the ticks until each becomes a structure (tick, stompJobs). */
+    private var enemySitesNow: List<Pair<ConstructionSite, Int>> = emptyList()
+    /** Site-ticks a stomp team was sent (stompJobs), for the log. */
+    private var stompReach = 0
     /** Waves are staged and idle guns posted at our spawn nearest the target, not at home (runFighters, v98). */
     private const val USE_RALLY_FORWARD = true
     /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
