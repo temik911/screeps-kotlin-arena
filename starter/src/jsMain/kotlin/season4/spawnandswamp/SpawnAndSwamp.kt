@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 99
+    private const val BOT_VERSION = 100
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3691,7 +3691,17 @@ object SpawnAndSwamp {
             // сплочение: авангард ждёт отставших СВОЕЙ группы (в тиках ИХ хода), пока сам не под огнём —
             // и на марше, и при сближении с врагом: «в бою не ждём» отправляло переднего в размен,
             // пока напарник полз по болоту в пяти клетках (02.09)
-            val myFlow = flow[creep.x * 100 + creep.y]
+            // ONE FIELD FOR THE WHOLE WAVE (v100). Each member measured "behind me" on the field of its OWN target, and
+            // a healer's target is its ward: on two fields "behind" is not antisymmetric, the waiting closed into a
+            // cycle and nobody was the rearmost — against けろびー#18 (25.09.2026) f30 waited for the healer on the
+            // assault field, the healer waited for f30 on its ward's, f34 for both, 187 ticks (t≈400-587) while his
+            // spawn sites on our half stood guarded by one builder. Measured on one field a mate is waited for only if it
+            // is strictly behind, the rearmost waits for nobody, and the wave converges whatever its make-up.
+            // The healer is the one member whose own target is never on the march field; a gun that engages a creep on
+            // the way keeps that creep's field (moved onto the march field too, the gate's tower+stream wave walked
+            // into the tower without its second wave: 574 -> 1007)
+            val cohesionFlow = if (USE_COMMON_COHESION && marching && ward != null && enemySpawn != null) assaultFlow else flow
+            val myFlow = cohesionFlow[creep.x * 100 + creep.y]
             val hunting = !marching && threat != null && target === threat
             val mates = when {
                 // волны друг друга не ждут (подкрепление по двое догоняло первую через сотню тиков — стенд)…
@@ -3735,7 +3745,7 @@ object SpawnAndSwamp {
                 for (m in mates) {
                     if (getRange(creep, m) <= RANGED_RANGE) continue // рядом — не отстал
                     if (m.id in linked) continue // в очереди за мной, а не отстал
-                    val d = flow[m.x * 100 + m.y]
+                    val d = cohesionFlow[m.x * 100 + m.y]
                     if (d < 0) continue
                     val lag = (d - myFlow) * plainPeriod(m) // поле в тиках полного хода × его период
                     if (lag in (gap + 1)..COHESION_GAP_MAX) { lagging = true; break }
@@ -4922,6 +4932,8 @@ object SpawnAndSwamp {
     private const val USE_THREAT_KILL_TIME = true
     /** A wave is recalled for home only if it gets back before the house falls (posture, v97). */
     private const val USE_RECALL_IF_SAVES = true
+    /** A marching healer measures its laggards on the assault field, as the guns do, not on its ward's (runFighters, v100). */
+    private const val USE_COMMON_COHESION = true
     /** Waves are staged and idle guns posted at our spawn nearest the target, not at home (runFighters, v98). */
     private const val USE_RALLY_FORWARD = true
     /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
