@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 130
+    private const val BOT_VERSION = 131
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4154,11 +4154,17 @@ object SpawnAndSwamp {
     private fun strike(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, wallTarget: StructureWall?) {
         if (!hasMelee(creep)) return
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
+        // THE SPAWN-FIRST RULES ASK ABOUT HIS ARMED NEIGHBOURS ONLY (v131), as the shot does (combatInRange): an unarmed
+        // hauler of his next to our melee has no fire to take off the siege (f = 0 in costsMoreThanSpawn's own terms) and
+        // yet failed `.all`, and the swing went to it or to the post in focus — against marlyman#96 (v128 draw) our melee
+        // standing at his spawn swung 14 times at his haulers (2070) and 3 at a post (450) while the spawn, rampart gone,
+        // stood at 1400 until they died, his only spawn
+        val armedNext = if (USE_STRIKE_ARMED_ONLY) adjacent.filter { c -> val p = InfluenceMap.profileOf(c); p.melee + p.ranged + p.heal > 0.0 } else adjacent
         val target: screeps.api.GameObject? = when {
             // the direct storm (v83): swings go into the spawn while everything next to us stands behind a rampart
-            (stormDirect || USE_SHIELD_LAST) && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && adjacent.all { shieldAt(it) > 0 } -> enemySpawn
+            (stormDirect || USE_SHIELD_LAST) && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && armedNext.all { shieldAt(it) > 0 } -> enemySpawn
             // …and in any posture, past those that cost more than it (v112, see costsMoreThanSpawn)
-            USE_SPAWN_FIRST_AT_FORT && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && adjacent.all { costsMoreThanSpawn(it, enemySpawn) } -> enemySpawn
+            USE_SPAWN_FIRST_AT_FORT && enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 && armedNext.all { costsMoreThanSpawn(it, enemySpawn) } -> enemySpawn
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
             // a defender behind his rampart costs its rampart first (10000) — the last choice, not the weakest (v95:
             // against marlyman123 our melee swung 188 and 302 times at his posts against 64 and 58 at the spawn)
@@ -5672,6 +5678,8 @@ object SpawnAndSwamp {
     private const val USE_PILE_BY_JOB = true
     /** Energy is held for a full fighter only if that fighter closes the deficit, or under alarm (spawnIfNeeded, v130). */
     private const val USE_HOLD_MUST_HOLD = true
+    /** The melee's spawn-first rules look at his armed neighbours only (strike, v131). */
+    private const val USE_STRIKE_ARMED_ONLY = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
