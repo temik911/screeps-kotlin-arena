@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 101
+    private const val BOT_VERSION = 102
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3265,8 +3265,8 @@ object SpawnAndSwamp {
             ctx.enemyApproach[it.x * 100 + it.y].let { d -> if (d < 0) Int.MAX_VALUE / 4 else d }
         } ?: Int.MAX_VALUE / 4
         val enemyDps = combatEnemies.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
-        val homeAtRisk = enemyDps > 0.0 &&
-            enemyReach + (mySpawn.hits ?: SPAWN_HITS) / enemyDps <= remaining.toDouble()
+        val houseFallsAt = if (enemyDps > 0.0) enemyReach + (mySpawn.hits ?: SPAWN_HITS) / enemyDps else Double.MAX_VALUE
+        val homeAtRisk = enemyDps > 0.0 && houseFallsAt <= remaining.toDouble()
         val notWeaker = ourOffense >= enemyPower
         // тревога отменяет наступление, только если ДОМАШНИЙ гарнизон с угрозой не справится:
         // разведчик врага у северного выхода отзывал всю армию с южного (02.09, трижды). Гарнизон —
@@ -3293,6 +3293,14 @@ object SpawnAndSwamp {
         val homeGuard = fighters.filter { it.id !in wave && staging.none { s -> s.id == it.id } && inArms(it) }
         val guardHolds = homeThreats.isEmpty() ||
             ourPowerOf(homeGuard, homePack) >= enemyPowerOf(homePack, homeGuard) * DEFEND_MARGIN
+        // WHILE A WAVE IS OUT, THOSE STAGED AT HOME ARE THE GARRISON (v102): they leave only with a new wave, and there is
+        // none this tick unless one departs. Counted as leaving, they made the garrison fail and called the wave back; a
+        // fighter back in the ring became "staging" again and the wave left again — against Ranamar#2 eleven waves in
+        // 130 ticks (t=294-426) under one raider, and no wave ever got past (86,89)
+        val stayHolds = homeThreats.isEmpty() || !USE_STAGING_GUARDS || waveMembers.isEmpty() || run {
+            val stay = fighters.filter { it.id !in wave && inArms(it) }
+            ourPowerOf(stay, homePack) >= enemyPowerOf(homePack, stay) * DEFEND_MARGIN
+        }
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
         // бой у дома — только если спавн уже под огнём, враг у ворот (достаёт пост или спавн) или
         // гарнизон ЦЕЛИКОМ сильнее всей угрозы. Иначе пост отрядом: враг в 25-40 тиках пути сильнее —
@@ -3417,9 +3425,14 @@ object SpawnAndSwamp {
         }
         val newPushing = when {
             enemySpawn == null -> false
-            (spawnUnderFire || alarm && !guardHolds) && !pushWinsRace(ctx, ourHalfCombat, siegeGo) && recallSaves -> false
+            (spawnUnderFire || alarm && !(if (USE_STAGING_GUARDS && waveMembers.isNotEmpty()) stayHolds else guardHolds)) &&
+                !pushWinsRace(ctx, ourHalfCombat, siegeGo) && recallSaves -> false
             // последний звонок — тоже только с выигрышной осадой: армия, положенная под башню в конце,
             // не приносит ничьей, а дома она её держит
+            // THE LAST CALL WEIGHS THE HOUSE, NOT THE ARMIES (v102): a house he cannot take in what is left cannot be
+            // lost by going, so we go; one he can take — we go if the siege wins and ends before it falls. "Not weaker"
+            // vetoed the last call of Ranamar#2's draw at t≈1400 (400 < 477) with our spawn never in danger all match
+            USE_LAST_CALL_RACE && lastCall -> !homeAtRisk || ((siegeGo.win || siegeStart.win) && goNeed < houseFallsAt)
             lastCall && notWeaker && (siegeGo.win || siegeStart.win || !homeAtRisk) -> true
             strongerNow -> true
             // ушедшую волну не отзываем из-за запаса «ещё одна стычка»: у ворот врага он ей не нужен
@@ -4989,6 +5002,10 @@ object SpawnAndSwamp {
     private const val USE_HOME_BOUND = true
     /** "Fighter first" takes the house's fall from the first pack of his our garrison does not hold (houseFallsIn, v101). */
     private const val USE_PACK_FALL = true
+    /** The last call goes whenever the house cannot fall in what is left, or the siege wins before it falls (v102). */
+    private const val USE_LAST_CALL_RACE = true
+    /** While a wave is out, the recall asks whether everyone not in it holds the house, those staged included (v102). */
+    private const val USE_STAGING_GUARDS = true
     /** Waves are staged and idle guns posted at our spawn nearest the target, not at home (runFighters, v98). */
     private const val USE_RALLY_FORWARD = true
     /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
