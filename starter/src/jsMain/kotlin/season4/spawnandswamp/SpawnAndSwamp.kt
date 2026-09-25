@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 137
+    private const val BOT_VERSION = 138
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2230,6 +2230,24 @@ object SpawnAndSwamp {
                 return
             }
             if (!alarm && deficit <= 0.0) return reach("huSave")
+        }
+        // THE PILE BUILDER BEFORE THE THIRD HAULER, WHEN THERE IS A JOB FOR IT NOW (v138). His spawns rise out of the
+        // map's containers — a fresh one holds 2000 for 100 ticks — and his economy outgrows ours by t≈400 (against kerobi
+        // our pile builder was bought before t=700 in 0 of 8 losses since v133: `needHauler` took the turn until ~500,
+        // `deficit`/`alarm` after). A spawn at a container is 2000 turned into a production point where the energy
+        // lies, with no haul. Once the opening fleet (two haulers) runs, a job reachable by a builder born now takes the
+        // turn from the next hauler; never under a raid at our door
+        if (USE_PILE_EARLY && USE_PILE_SPAWN && ctx.haulers.size >= 2 && !armNow && pileOrderedAt != getTicks() &&
+            ctx.myCreeps.none { isPileBuilder(it) } && pileCandidate(ctx, null, PILE_BODY.size * CREEP_SPAWN_TIME) != null) {
+            val price = PILE_BODY.sumOf { cost(it) }
+            if (energy >= price) {
+                val r = spawn.spawnCreep(PILE_BODY)
+                reach(if (r.error == null) "pbEarly" else "err")
+                r.`object`?.let { pileBuilderIds.add(it.id); pileOrderedAt = getTicks() }
+                if (DEBUG_LOG) println("spawn: pile builder (early) cost=$price energy=$energy err=${r.error}")
+                return
+            }
+            if (!alarm && deficit <= 0.0) return reach("pbSave")
         }
         val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD && haulerOrderedAt != getTicks()
 
@@ -5837,10 +5855,16 @@ object SpawnAndSwamp {
     private const val USE_BUILDER_BY_BODY = true
     /** The march pays for every creep of his that reaches its route in time, fought as one group (runFighters, v135). */
     private const val USE_INTERCEPT = true
-    /** A dedicated fast melee hunter (M10A2) is bought for his builders out in the field (spawnIfNeeded, v136). */
-    private const val USE_FIELD_HUNTER = true
+    /** A dedicated fast melee hunter (M10A2) is bought for his builders out in the field (spawnIfNeeded, v136).
+     *  OFF — measured live 26.09.2026: A/B against kerobi#29/#35 (4+4 each) v135 0-8 / v136 0-7-1, v135 1-7 / v137
+     *  (shadowing) 0-7-1. His first site stood 23 cells from his home, the hunter's walk was 160 ticks, his fire met it
+     *  there: the builder shot to 380 was healed back and the hunter died. Killing his builders is right by the
+     *  arithmetic (13 of 13 never replaced); a lone melee does not do it. */
+    private const val USE_FIELD_HUNTER = false
     /** The hunter follows the nearest unescorted builder of his in the field instead of waiting for a job (v137). */
     private const val USE_HUNTER_SHADOW = true
+    /** The pile builder takes the turn from the next hauler while a job reachable by a builder born now exists (v138). */
+    private const val USE_PILE_EARLY = true
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
