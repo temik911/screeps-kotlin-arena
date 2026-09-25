@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 138
+    private const val BOT_VERSION = 140
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5863,8 +5863,13 @@ object SpawnAndSwamp {
     private const val USE_FIELD_HUNTER = false
     /** The hunter follows the nearest unescorted builder of his in the field instead of waiting for a job (v137). */
     private const val USE_HUNTER_SHADOW = true
-    /** The pile builder takes the turn from the next hauler while a job reachable by a builder born now exists (v138). */
-    private const val USE_PILE_EARLY = true
+    /** The pile builder takes the turn from the next hauler while a job reachable by a builder born now exists (v138).
+     *  OFF — measured 26.09.2026: live it never fired (0 of 8 hands against kerobi#29/#35: from our spawn no fresh
+     *  container, 100 ticks of life, is ever in time); asked from the builder's waiting cell instead (v139) it fired in
+     *  nearly every stub scenario and took the gate apart — tower+healball 521 -> 1310, tower+stream 571 -> 1007,
+     *  freeze 574 -> 760, siege6 FAIL: 600 early is an army's first body. Racing his pile spawns needs the answer
+     *  "does this spawn pay before his army arrives", not "is there a container". */
+    private const val USE_PILE_EARLY = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
