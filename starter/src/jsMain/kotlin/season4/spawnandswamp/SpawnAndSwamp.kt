@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 121
+    private const val BOT_VERSION = 122
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -469,12 +469,41 @@ object SpawnAndSwamp {
     private var haulersLost = 0
     private var haulerCargoLost = 0
     private val haulerCargo = HashMap<String, Int>()
+    /** Hauler deaths and the fleet's size per tick over the production window: its mean life (haulerPaysBack, v122). */
+    private val haulerDeaths = ArrayDeque<Int>()
+    private val haulerCount = ArrayDeque<Pair<Int, Int>>()
+
+    /**
+     * A HAULER IS BOUGHT ONLY IF IT DELIVERS ITS PRICE BEFORE IT DIES (v122). The fleet's guard asked whether the last
+     * purchase made delivery fall — "if the fleet grew" — and a fleet being killed never grows: against kerobi#19 his
+     * M5A1 killed 15 of our 16 haulers, the measured delivery fell with every purchase (real=16, 10, 7, 5, 4, 2), and
+     * eight more were bought at 500 each to live 43-292 ticks. Over the production window a hauler of ours lives
+     * hauler-ticks / deaths and brings delivered / hauler-ticks a tick; one that brings less than it costs in that life
+     * (or in what is left of the match) is energy a fighter protecting the rest would have used. No deaths — no bound;
+     * no hauler alive — the first one is bought regardless, nothing flows without it.
+     */
+    private fun haulerPaysBack(ctx: Ctx, price: Int): Boolean {
+        if (!USE_HAULER_PAYBACK || haulerDeaths.isEmpty() || ctx.haulers.isEmpty()) return true
+        val haulerTicks = haulerCount.sumOf { it.second }
+        if (haulerTicks <= 0) return true
+        val rate = delivered.sumOf { it.second }.toDouble() / haulerTicks
+        val life = haulerTicks.toDouble() / haulerDeaths.size
+        val remaining = (arenaInfo.ticksLimit - getTicks()).toDouble()
+        val brings = rate * minOf(life, remaining)
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("hauler payback t=${getTicks()}: life=${life.toInt()} rate=${(rate * 100).toInt() / 100.0} brings=${brings.toInt()} price=$price deaths=${haulerDeaths.size}")
+        return brings >= price
+    }
 
     private fun measureHaulerLoss(ctx: Ctx) {
         val alive = ctx.myCreeps.mapTo(HashSet()) { it.id }
         val gone = knownHaulers.filter { it !in alive }
+        val now = getTicks()
+        haulerCount.addLast(now to ctx.haulers.size)
+        while (haulerCount.isNotEmpty() && haulerCount.first().first < now - PRODUCTION_WINDOW) haulerCount.removeFirst()
+        while (haulerDeaths.isNotEmpty() && haulerDeaths.first() < now - PRODUCTION_WINDOW) haulerDeaths.removeFirst()
         for (id in gone) {
             haulersLost++
+            haulerDeaths.addLast(now)
             haulerCargoLost += haulerCargo.remove(id) ?: 0
             knownHaulers.remove(id)
         }
@@ -1989,7 +2018,8 @@ object SpawnAndSwamp {
         val needHauler = allHaulers < MAX_HAULERS && fleetDelivers &&
             !(energy >= SPAWN_ENERGY_CAPACITY && carried > 0) &&
             (supplyBound || capacityBound(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) }, HAULER_BLOCKS_MIN * CARRY_CAPACITY)) &&
-            projectedIncome(ctx, usable) < targetIncome()
+            projectedIncome(ctx, usable) < targetIncome() &&
+            haulerPaysBack(ctx, HAULER_BLOCKS_MAX * blockCost())
         cpuMark("sp.fleet")
 
         if (placeSites) {
@@ -4614,9 +4644,15 @@ object SpawnAndSwamp {
             // builder never took a shot. A gun reaches a builder not faster than it on swamp (kerobi's M2C2W2: five
             // ticks empty, ten loaded), or one bound to a site of his for longer than the walk and the kill take
             val bound = enemySitesNow.filter { (site, _) -> getRange(site, b) <= 3 }.maxOfOrNull { it.second } ?: 0
+            // …and "not faster on swamp" is not reaching either (v122): an empty M2C2W2 of kerobi#18 walks a plain cell a
+            // tick like our M8R4, and in the v121 A/B our first gun chased one round the map for 140 ticks (t=260-400),
+            // got it to 400 hits for its healer to put back to 600, and the wave never staged (v117 left at t=291). A gun
+            // reaches a builder slower than it on plain and not faster on swamp, or one bound to a site of his for longer
+            // than the walk and the kill
             fun reaches(c: Creep, eta: Int): Boolean {
                 if (!USE_HUNT_REACH) return catchable(c, b)
-                if (swampPeriod(b) >= swampPeriod(c)) return true
+                if (USE_HUNT_BOUND) { if (plainPeriod(b) > plainPeriod(c) && swampPeriod(b) >= swampPeriod(c)) return true }
+                else if (swampPeriod(b) >= swampPeriod(c)) return true
                 val dps = InfluenceMap.profileOf(c).ranged - heal
                 return dps > 0.0 && eta + b.hits / dps < bound
             }
@@ -5538,6 +5574,10 @@ object SpawnAndSwamp {
     /** A gun hunts his builder only if it reaches it — not faster than the gun on swamp, or bound to a site for longer
      *  than the walk and the kill — and only while everyone who stays home holds without it (builderHunt, v121). */
     private const val USE_HUNT_REACH = true
+    /** A hauler is bought only if it delivers its price within the fleet's measured life (haulerPaysBack, v122). */
+    private const val USE_HAULER_PAYBACK = true
+    /** A builder is hunted only if it is slower than the gun on plain too, or bound to its site (builderHunt, v122). */
+    private const val USE_HUNT_BOUND = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
