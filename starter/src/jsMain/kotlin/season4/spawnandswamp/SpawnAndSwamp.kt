@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 136
+    private const val BOT_VERSION = 137
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4047,6 +4047,11 @@ object SpawnAndSwamp {
             // simulation saying `melee=win`. It follows the most damaged member by share of hits, or the vanguard
             // (nearest the enemy spawn on the assault field) while nobody is hurt; a husk — no weapon AND no heal —
             // still goes home.
+            val hunterPrey: Creep? = if (!USE_HUNTER_SHADOW || !USE_FIELD_HUNTER || !isHunter(creep)) null else
+                fieldBuilders(ctx).filter { b ->
+                    val guards = combatEnemies.filter { getRange(it, b) <= ENGAGE_RANGE + RANGED_RANGE }
+                    guards.isEmpty() || ourPowerOf(listOf(creep), guards) >= enemyPowerOf(guards, listOf(creep)) * PUSH_RATIO
+                }.minByOrNull { getRange(creep, it) }
             val healer = USE_HEALER_WARD && !hasWeapon(creep) && hasHeal(creep)
             val ward: Creep? = if (healer && marching) {
                 // …an ARMED one (v120): the vanguard of mates in arms was another healer — a healer walks a swamp cell a
@@ -4069,6 +4074,14 @@ object SpawnAndSwamp {
                 !hasWeapon(creep) -> { target = if (striker && hasHeal(creep)) rallySpawn else mySpawn; standoff = HOME_STANDOFF + 1 }
                 // his builder (v116, see builderHunt): the one assigned goes for it before home rows — the assignment already
                 // asked whether the house holds without it
+                // THE HUNTER SHADOWS HIS BUILDER (v137). Sent through builderHunt, the v136 hunter got a job only once a site
+                // stood, and from home it could not reach the first before it was done; between jobs the melee home rows
+                // sent it after his raider round our corner, and when a job came it walked into his army on the way
+                // (kerobi#29, v136 A/B: t=260-420 chasing the raider, killed at t≈470 at (20,52), the builder untouched). A
+                // dedicated hunter follows the nearest builder of his in the field whose escort it outguns: it walks a
+                // cell a tick anywhere, the builder a plain cell a tick empty and slower loaded or on swamp, so it closes
+                // whenever the builder stops to load, dump or build
+                USE_HUNTER_SHADOW && hunterPrey != null -> { target = hunterPrey; standoff = 1 }
                 huntOf[creep.id] != null -> { target = huntOf[creep.id]!!; standoff = if (melee) 1 else RANGED_RANGE }
                 homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
@@ -5826,6 +5839,8 @@ object SpawnAndSwamp {
     private const val USE_INTERCEPT = true
     /** A dedicated fast melee hunter (M10A2) is bought for his builders out in the field (spawnIfNeeded, v136). */
     private const val USE_FIELD_HUNTER = true
+    /** The hunter follows the nearest unescorted builder of his in the field instead of waiting for a job (v137). */
+    private const val USE_HUNTER_SHADOW = true
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
