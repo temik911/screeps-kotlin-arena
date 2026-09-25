@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 131
+    private const val BOT_VERSION = 133
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2317,7 +2317,14 @@ object SpawnAndSwamp {
         // когда симуляция говорит, что с ним осада кончится раньше (assaultWantsMelee)
         // ...а лекарь — по третьему ответу того же прогона (assaultWantsHealer). Мили-гарнизон дома
         // старше: против мили-шара у спавна лекарь без урона не держит ничего
-        val guard = guardNeeded || assaultWantsMelee
+        // …and no melee guard while the raid at our door is all kiters (v133): by kiteDeficit's own test no melee of ours
+        // reaches them — M5R1 walks a swamp cell a tick — and a melee body there also slipped past raidBuys, which asks
+        // for the raid's damage in RANGED (Ranamar#7, v131: the spawn waited 194 ticks for an M10A4 and fell at t=497)
+        val kiterRaid = USE_RAID_ON_OUR_HALF && raidAtDoor.isNotEmpty() && run {
+            val meleePeriods = defenders.filter { hasMelee(it) }.map { swampPeriod(it) }
+            raidAtDoor.all { e -> hasRanged(e) && !hasMelee(e) && meleePeriods.none { swampPeriod(e) > it } }
+        }
+        val guard = (guardNeeded && !kiterRaid) || assaultWantsMelee
         // ЛЕКАРЬ ПОКУПАЕТСЯ ТОЛЬКО ТОТ, О КОМ СПРАШИВАЛИ. assaultWantsHealer — ответ прогона про ПОЛНОЕ
         // тело (healerBody(SPAWN_ENERGY_CAPACITY)), а покупка брала healerBody(budget) и на половине
         // кассы выпускала M8H1: одна часть, двенадцать лечения, против сотен урона. Это тот же дефект,
@@ -3360,6 +3367,8 @@ object SpawnAndSwamp {
         var attrition = 0.0
         var maxPack = 0.0
         var maxPackCatch = 0.0
+        var raidMax = 0.0
+        var raidMaxCatch = 0.0
         val unmet = combatEnemies.filter { it.id in approachingIds }.toMutableList()
         while (unmet.isNotEmpty()) {
             val seed = unmet.first()
@@ -3368,6 +3377,12 @@ object SpawnAndSwamp {
             attrition += fightCost(pack, offensive)
             val packPower = enemyPowerOf(pack, strikers)
             if (packPower > maxPack) { maxPack = packPower; maxPackCatch = meleeShare(pack) }
+            // a RAID is a pack on our half or in the alarm ring (v133): his creeps born at his own spawn count as
+            // "walking at us", and against Ranamar#7 his fresh A1M1 and M5R1 there, 89 cells off, made a raid peak of 178
+            // with a melee share of 0.75 — the guard answering it was a melee M10A4 bought for two M5R1 kiters at our door
+            if (packPower > raidMax && (!USE_RAID_ON_OUR_HALF || pack.any { DistanceMap.inOurHalf(it.x, it.y) || ctx.enemyApproach[it.x * 100 + it.y] in 0..SPAWN_ALARM_TICKS })) {
+                raidMax = packPower; raidMaxCatch = meleeShare(pack)
+            }
         }
         val typical = typicalBirth()
         val unitCost = if (typical != null && waveDps > 0.0) typical.dps * typical.hits / waveDps else 0.0
@@ -3668,7 +3683,7 @@ object SpawnAndSwamp {
             ourPowerOf(homeGuard, arrivingHome) >= enemyPowerOf(arrivingHome, homeGuard) * DEFEND_MARGIN
         val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie
         // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
-        noteRaid(ctx, maxPack, maxPackCatch, typical)
+        if (USE_RAID_ON_OUR_HALF) noteRaid(ctx, raidMax, raidMaxCatch, typical) else noteRaid(ctx, maxPack, maxPackCatch, typical)
         // A RECALL MUST SAVE SOMETHING (v97). The whole push was called off whenever the home guard did not hold and the
         // race could not be priced (it never can with two spawns of his): against ricardo#24 one M6A3 on our half took
         // twelve bodies off a spawn ten ticks from falling (rampart down, 540 a tick coming off), and fifteen sat at home
@@ -4713,7 +4728,10 @@ object SpawnAndSwamp {
         val builders = enemyCreeps.filter { c -> c.body.any { it.type == WORK && it.hits > 0 } }
         if (builders.isEmpty() || (free.isEmpty() && marchers.isEmpty())) return out
         val remaining = arenaInfo.ticksLimit - getTicks()
-        val pace = if (spawnSiteStarts.size >= 2) (spawnSiteStarts.last() - spawnSiteStarts.first()).toDouble() / (spawnSiteStarts.size - 1) else remaining.toDouble()
+        // his pace between spawn sites FIRST SEEN ON DIFFERENT TICKS (v132): two sites seen on one tick made the pace 0 and
+        // "his future spawns" remaining/1 ≈ 1259 against marlyman#313 (t=550-1060), which justified any detour at all
+        val paceTicks = if (USE_HUNT_KEEPS_SIEGE) spawnSiteStarts.distinct() else spawnSiteStarts.toList()
+        val pace = if (paceTicks.size >= 2) (paceTicks.last() - paceTicks.first()).toDouble() / (paceTicks.size - 1) else remaining.toDouble()
         val futureSpawns = maxOf(1.0, remaining / maxOf(1.0, pace))
         val targetField = target?.let { flowTo(ctx, it) }
         val home = homeGuard.toMutableList()
@@ -4762,6 +4780,15 @@ object SpawnAndSwamp {
                 val kill = if (dps - heal > 0.0) b.hits / (dps - heal) else Double.MAX_VALUE
                 val detour = eta + kill + back - direct
                 val worth = futureSpawns * (if (dps > 0.0) SPAWN_HITS / dps else Double.MAX_VALUE)
+                // A GUN IN THE SIEGE OF ITS TARGET STAYS WHILE THE SIEGE ENDS SOONER THAN ITS DETOUR (v132). The worth never
+                // asked what leaving costs the spawn being shot: against marlyman#313 (v131 loss) his spawn stood bare at 660
+                // hits with no armed creep of his near, and f31, in range of it, was sent 43 cells after his builder; f27 alone
+                // took it to 340 and died to the tower, and the spawn stood at 340 to the end of the match
+                if (USE_HUNT_KEEPS_SIEGE && target != null && getRange(c, target) <= RANGED_RANGE && getRange(c, b) > RANGED_RANGE) {
+                    val work = (target.hits ?: SPAWN_HITS) + shieldAt(target)
+                    val fire = marchers.filter { getRange(it, target) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged }
+                    if (fire > 0.0 && work / fire < detour) continue
+                }
                 if (detour < worth) cands.add(c to eta)
             }
             cands.sortBy { it.second }
@@ -5680,6 +5707,12 @@ object SpawnAndSwamp {
     private const val USE_HOLD_MUST_HOLD = true
     /** The melee's spawn-first rules look at his armed neighbours only (strike, v131). */
     private const val USE_STRIKE_ARMED_ONLY = true
+    /** A wave gun in the siege of its target is not sent after his builder while the siege ends sooner than the detour,
+     *  and his building pace counts distinct ticks (builderHunt, v132). */
+    private const val USE_HUNT_KEEPS_SIEGE = true
+    /** The raid peak is read from packs on our half or in the alarm ring, and no melee guard is chosen while the raid at
+     *  the door is all kiters (noteRaid, spawnIfNeeded, v133). */
+    private const val USE_RAID_ON_OUR_HALF = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
