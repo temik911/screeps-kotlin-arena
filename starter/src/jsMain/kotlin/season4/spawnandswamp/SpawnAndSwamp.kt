@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 119
+    private const val BOT_VERSION = 120
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3843,7 +3843,11 @@ object SpawnAndSwamp {
             // still goes home.
             val healer = USE_HEALER_WARD && !hasWeapon(creep) && hasHeal(creep)
             val ward: Creep? = if (healer && marching) {
-                val mates = fighters.filter { it.id != creep.id && it.id in wave && inArms(it) }
+                // …an ARMED one (v120): the vanguard of mates in arms was another healer — a healer walks a swamp cell a
+                // tick, a gun one in three, so the healers led the column; against 76561198870429455#51 two of them took
+                // each other as wards and traded cells at its head for 500 ticks, sixteen guns queued behind them 26-30
+                // cells from a bare spawn their own siege run gave `win/6t/direct`, and the spawn took no damage all match
+                val mates = fighters.filter { it.id != creep.id && it.id in wave && inArms(it) && (!USE_ARMED_WARD || hasWeapon(it)) }
                 mates.filter { it.hits < it.hitsMax }.minByOrNull { it.hits.toDouble() / it.hitsMax }
                     ?: mates.minByOrNull { assaultFlow.getOrNull(it.x * 100 + it.y)?.takeIf { d -> d >= 0 } ?: Int.MAX_VALUE }
             } else null
@@ -3952,7 +3956,9 @@ object SpawnAndSwamp {
                 }
                 seen
             }
-            val hold = (marching || hunting) && !homeFight && !underFire && !inCoverage && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff && run {
+            // a gun sent after his builder does not wait for its wave (v120): f32 of a v117 loss to けろびー#18 was assigned
+            // 26 ticks from the builder, held 90 ticks for laggards, and came 3 ticks after the spawn he built was done
+            val hold = (marching || hunting) && !(USE_HUNT_NO_HOLD && huntOf[creep.id] != null) && !homeFight && !underFire && !inCoverage && !mateFighting && myFlow >= 0 && creep.getRangeTo(target) > standoff && run {
                 var lagging = false
                 for (m in mates) {
                     if (getRange(creep, m) <= RANGED_RANGE) continue // рядом — не отстал
@@ -5511,6 +5517,10 @@ object SpawnAndSwamp {
     /** A defender on his rampart is killed before the spawn only if the fire it takes off the siege is worth its rampart
      *  and hits against the spawn's work (costsMoreThanSpawn, v119). */
     private const val USE_FORT_WORTH = true
+    /** A marching healer's ward is an armed mate, never another healer (runFighters, v120). */
+    private const val USE_ARMED_WARD = true
+    /** A gun assigned to his builder does not hold for its wave's laggards (runFighters, v120). */
+    private const val USE_HUNT_NO_HOLD = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
