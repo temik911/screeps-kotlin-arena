@@ -352,6 +352,51 @@ object DistanceMap {
      * болото SWAMP_COST. Расстояние — в тиках пути, -1 = недостижимо. Дейкстра кольцевыми
      * корзинами (Dial): цены целые и малые, куча не нужна.
      */
+    /**
+     * A field from MANY sources, each starting at its own label (v135): the value of a cell is the least, over the
+     * sources, of the source's label plus the walk from it (swampCost a swamp cell, 1 a plain one). Seeds are injected
+     * as the queue reaches their label, so labels may lie far apart. -1 — unreached.
+     */
+    fun seededField(seeds: List<Pair<Int, Int>>, extraBlocked: List<Position>, swampCost: Int): IntArray {
+        ensureStaticBlocked()
+        val block = staticBlocked!!.copyOf()
+        for (p in extraBlocked) if (inBounds(p.x, p.y)) block[index(p.x, p.y)] = true
+        val dist = IntArray(FIELD * FIELD) { -1 }
+        val swamp = ensureSwamp()
+        val sorted = seeds.filter { (c, l) -> c in 0 until FIELD * FIELD && l >= 0 }.sortedBy { it.second }
+        if (sorted.isEmpty()) return dist
+        val span = swampCost + 1
+        val buckets = Array(span) { ArrayDeque<Int>() }
+        var next = 0
+        var current = sorted.first().second
+        var queued = 0
+        while (queued > 0 || next < sorted.size) {
+            while (next < sorted.size && sorted[next].second <= current) {
+                val (c, l) = sorted[next++]
+                if (dist[c] < 0 || l < dist[c]) { dist[c] = l; buckets[l % span].addLast(c); queued++ }
+            }
+            val bucket = buckets[current % span]
+            if (bucket.isEmpty()) { current++; continue }
+            val cell = bucket.removeFirst()
+            queued--
+            if (dist[cell] != current) continue
+            val cx = cell / FIELD
+            val cy = cell % FIELD
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = cx + dx
+                val ny = cy + dy
+                if (!inBounds(nx, ny)) continue
+                val ni = index(nx, ny)
+                if (block[ni]) continue
+                val step = if (swamp[ni]) swampCost else 1
+                val nd = current + step
+                if (dist[ni] < 0 || nd < dist[ni]) { dist[ni] = nd; buckets[nd % span].addLast(ni); queued++ }
+            }
+        }
+        return dist
+    }
+
     private fun bfs(startX: Int, startY: Int, blocked: BooleanArray, swampCost: Int = SWAMP_COST, fire: IntArray? = null): IntArray {
         val dist = IntArray(FIELD * FIELD) { -1 }
         if (!inBounds(startX, startY)) return dist

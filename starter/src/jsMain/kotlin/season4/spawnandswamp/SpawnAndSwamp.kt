@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 133
+    private const val BOT_VERSION = 135
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3417,6 +3417,65 @@ object SpawnAndSwamp {
         // ход считается ДО прогонов: он им теперь нужен — по нему разносится урон марша (см. approach)
         val startTravel = travelTicksOf(staging, assaultFlow, spawnFlow)
         val frontTravel = travelTicksOf(waveFront, assaultFlow, spawnFlow)
+        // THE MARCH PAYS FOR WHOEVER GETS ONTO ITS ROUTE IN TIME, AS ONE GROUP (v135). Attrition priced only the packs
+        // walking at us, each on its own, and his army standing elsewhere entered the siege at its arrival tick (v124) —
+        // his scattered groups that meet on our route were in neither: against kerobi #35/#23/#20 (v133 losses) waves of
+        // 2-4 M8R4 left with `sim=win` at t=292-363 and died to his 2-3 M5R5 and M5H3 closing on the route, 3000-4000
+        // each time. The route is our group's descent of the assault field, each cell with our arrival (the slowest
+        // member's pace); a creep of his that walks to some cell of it no later than we do is an interceptor, and all of
+        // them are fought as one group (fightCost: his healers first, his heal off our damage). It only ever adds: a
+        // march is priced at the larger of this and the packs walking at us
+        if (USE_INTERCEPT && enemySpawn != null && assaultFlow.isNotEmpty()) {
+            val group = staging.ifEmpty { waveFront }
+            val rear = group.filter { assaultFlow[it.x * 100 + it.y] >= 0 }.maxByOrNull { assaultFlow[it.x * 100 + it.y] }
+            if (rear != null) {
+                val route = ArrayList<Pair<Int, Int>>()
+                var cell = rear.x * 100 + rear.y
+                var t = 0
+                var steps = 0
+                val movers = group.filter { liveMoves(it) > 0 }
+                while (assaultFlow[cell] > 0 && steps < 400 && movers.isNotEmpty()) {
+                    val cx = cell / 100
+                    val cy = cell % 100
+                    var best = -1
+                    var bestFlow = assaultFlow[cell]
+                    for (dx in -1..1) for (dy in -1..1) {
+                        val nx = cx + dx
+                        val ny = cy + dy
+                        if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                        val f = assaultFlow[nx * 100 + ny]
+                        if (f in 0 until bestFlow) { bestFlow = f; best = nx * 100 + ny }
+                    }
+                    if (best < 0) break
+                    cell = best
+                    steps++
+                    t += movers.maxOf { periodAt(it, cell / 100, cell % 100) }
+                    route.add(cell to t)
+                }
+                if (route.isNotEmpty()) {
+                    val k = t
+                    val seeds = route.map { (c, at) -> c to k - at }
+                    // his walk to the route by his body: plain steps, plus the swamp ones at his swamp pace — read off
+                    // a field at swamp 1 and one at swamp 5 (the difference is four per swamp cell on the way)
+                    val heavy = DistanceMap.seededField(seeds, ctx.blockedForEnemy, DistanceMap.SWAMP_COST)
+                    val light = DistanceMap.seededField(seeds, ctx.blockedForEnemy, 1)
+                    val interceptors = combatEnemies.filter { e ->
+                        val h = heavy[e.x * 100 + e.y]
+                        val l = light[e.x * 100 + e.y]
+                        if (h < 0 || l < 0) false else {
+                            val swampCells = (h - l).coerceAtLeast(0) / (DistanceMap.SWAMP_COST - 1).toDouble()
+                            val his = l + swampCells * (swampPeriod(e).coerceAtMost(10) - 1)
+                            his <= k
+                        }
+                    }
+                    if (interceptors.isNotEmpty()) {
+                        val cost = fightCost(interceptors, offensive)
+                        if (cost + streamUnits * unitCost > attrition) attrition = cost + streamUnits * unitCost
+                        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("intercept t=${getTicks()}: route=${route.size}/${k}t on=${interceptors.size} cost=${cost.toInt()} attrition=${attrition.toInt()}")
+                    }
+                }
+            }
+        }
         cpuMark("f.march")
         val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = startTravel, etas = defEtas) else SIEGE_LOSE
         val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas) else SIEGE_LOSE
@@ -4679,7 +4738,7 @@ object SpawnAndSwamp {
             // HIS BUILDER IS THE TARGET (v114): it stands at the site for the hundred ticks of the build, 600 hits and no
             // weapon - one M8R4 kills it in 15; in five of nine of kerobi's builds a gun of ours was 11-82 ticks away,
             // and the one builder we did kill (by a passing wave) stopped his building for 590 ticks
-            val builders = if (USE_BUILDER_HUNT) enemyCreepsNow.filter { c -> getRange(c, site) <= 3 && c.body.any { it.type == WORK && it.hits > 0 } } else emptyList()
+            val builders = if (USE_BUILDER_HUNT) enemyCreepsNow.filter { c -> getRange(c, site) <= 3 && isHisBuilder(c) } else emptyList()
             val stompable = (site.progressTotal ?: 0) in erasable && site.id !in stompFailed
             if (builders.isEmpty() && !stompable) continue
             val aim: Position = builders.minByOrNull { it.hits } ?: site
@@ -4712,6 +4771,15 @@ object SpawnAndSwamp {
     }
 
     /**
+     * HIS BUILDER BY ITS BODY, NOT BY ITS LIVE WORK (v134). The WORK of his M2C2W2 are its 2nd and 4th parts of six and
+     * die at 200 hits: the hunt dropped it five shots before the kill and his healer gave the WORK back in 1-4 ticks —
+     * against kerobi#20 (v133 loss) it was shot to 160 at t≈400, healed to 448 by 420 and finished its spawn at 424;
+     * against #23 it stood at 160 from t=500 to 640 with no hunt line at all. In both v131 wins every wounded builder died.
+     */
+    private fun isHisBuilder(c: Creep): Boolean =
+        if (USE_BUILDER_BY_BODY) c.body.any { it.type == WORK } else c.body.any { it.type == WORK && it.hits > 0 }
+
+    /**
      * HIS BUILDER, WHEREVER IT IS (v116). v114 looked for a builder within three cells of a live site, took only guns
      * out of the waves and only while nothing threatened our house anywhere: in three losses to けろびー (#40, #18 twice)
      * that intersection was empty — 63 samples of a builder within 30 ticks of a gun of ours, 53 of them a wave member,
@@ -4725,7 +4793,7 @@ object SpawnAndSwamp {
     private fun builderHunt(ctx: Ctx, free: List<Creep>, marchers: List<Creep>, homeGuard: List<Creep>, homePack: List<Creep>,
                             target: StructureSpawn?, enemyCreeps: List<Creep>, combatEnemies: List<Creep>): Map<String, Creep> {
         val out = HashMap<String, Creep>()
-        val builders = enemyCreeps.filter { c -> c.body.any { it.type == WORK && it.hits > 0 } }
+        val builders = enemyCreeps.filter { c -> isHisBuilder(c) }
         if (builders.isEmpty() || (free.isEmpty() && marchers.isEmpty())) return out
         val remaining = arenaInfo.ticksLimit - getTicks()
         // his pace between spawn sites FIRST SEEN ON DIFFERENT TICKS (v132): two sites seen on one tick made the pace 0 and
@@ -5713,6 +5781,10 @@ object SpawnAndSwamp {
     /** The raid peak is read from packs on our half or in the alarm ring, and no melee guard is chosen while the raid at
      *  the door is all kiters (noteRaid, spawnIfNeeded, v133). */
     private const val USE_RAID_ON_OUR_HALF = true
+    /** His builder is known by the WORK in its body, live or not, for the hunt (isHisBuilder, v134). */
+    private const val USE_BUILDER_BY_BODY = true
+    /** The march pays for every creep of his that reaches its route in time, fought as one group (runFighters, v135). */
+    private const val USE_INTERCEPT = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
