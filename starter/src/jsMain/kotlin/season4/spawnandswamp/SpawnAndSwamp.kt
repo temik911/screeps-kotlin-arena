@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 110
+    private const val BOT_VERSION = 111
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -790,6 +790,8 @@ object SpawnAndSwamp {
     fun tick() {
         // a tick killed by the cpu limit never reached cpuSummary, and its marks polluted the next tick's split
         cpuPhases.clear()
+        weightMemo.clear()
+        movesMemo.clear()
         // Спавнов у нас может быть больше одного. Порядок getObjectsByPrototype — порядок создания,
         // поэтому первый и есть ДОМ: на нём держится вся геометрия, и она не переезжает от стройки
         val mySpawns = getObjectsByPrototype(StructureSpawn::class).filter { it.my == true && it.exists }
@@ -1461,8 +1463,13 @@ object SpawnAndSwamp {
     }
 
     /** Точки, куда хаулер поедет: безопасные, наши или контестные с запасом по пути. */
-    private fun usableSites(ctx: Ctx): List<EnergySite> =
-        ctx.sites.filter { it.safe && (it.ours || contestedOk(it, ctx.combatEnemies)) }
+    private fun usableSites(ctx: Ctx): List<EnergySite> {
+        if (USE_TICK_MEMO && usableMemoTick == getTicks()) usableMemo?.let { return it }
+        val u = ctx.sites.filter { it.safe && (it.ours || contestedOk(it, ctx.combatEnemies)) }
+        usableMemo = u
+        usableMemoTick = getTicks()
+        return u
+    }
 
     /**
      * КУДА СДАВАТЬ: ближайший наш спавн, у которого есть место. Смысл второго спавна в том и есть —
@@ -1559,8 +1566,12 @@ object SpawnAndSwamp {
     private fun fleetPoints(ctx: Ctx, usable: List<EnergySite>): List<Pair<Int, Int>> = usable.map { it.energy to tripTicks(ctx, it) }
 
     /** Прогноз притока текущего флота по точкам, которые он будет возить (см. incomeOf). */
-    private fun projectedIncome(ctx: Ctx, usable: List<EnergySite>): Double =
-        incomeOf(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) })
+    private fun projectedIncome(ctx: Ctx, usable: List<EnergySite>): Double {
+        if (USE_TICK_MEMO && incomeMemoTick == getTicks() && usable === usableMemo) return incomeMemo
+        val v = incomeOf(fleetPoints(ctx, usable), ctx.haulers.sumOf { capacityOf(it) })
+        if (usable === usableMemo) { incomeMemo = v; incomeMemoTick = getTicks() }
+        return v
+    }
 
     private fun runHaulers(ctx: Ctx) {
         val haulers = ctx.haulers
@@ -1808,6 +1819,8 @@ object SpawnAndSwamp {
         // СПАВНА: те покупки не спавн делает, а мы, и экстеншен для них не касса
         val extEnergy = if (!extReach) 0 else ctx.myExtensions.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
         val budget = energy + extEnergy
+        // a spawn after the first that can pay for no body at all buys nothing whatever the cascade says (v111, CPU)
+        if (USE_TICK_MEMO && !placeSites && budget < minOf(HAULER_BLOCKS_MIN * blockCost(), cost(RANGED_ATTACK) + cost(MOVE))) return reach("poor")
         val carried = ctx.haulers.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
         val ourPower = ourPowerOf(defenders, threats)
         val enemyPower = enemyPowerOf(threats, defenders)
@@ -2634,12 +2647,20 @@ object SpawnAndSwamp {
     /** Вес тела для усталости: части не-MOVE и не-CARRY ПО ТИПУ (мёртвые весят — movement.js:237)
      *  плюс гружёные CARRY (по 50 с хвоста). */
     private fun bodyWeight(creep: Creep): Int {
+        if (USE_TICK_MEMO) weightMemo[creep.id]?.let { return it }
         val parts = creep.body.count { it.type != MOVE && it.type != CARRY }
         val carried = creep.store[RESOURCE_ENERGY] ?: 0
-        return parts + (carried + CARRY_CAPACITY - 1) / CARRY_CAPACITY
+        val w = parts + (carried + CARRY_CAPACITY - 1) / CARRY_CAPACITY
+        if (USE_TICK_MEMO) weightMemo[creep.id] = w
+        return w
     }
 
-    private fun liveMoves(creep: Creep) = creep.body.count { it.type == MOVE && it.hits > 0 }
+    private fun liveMoves(creep: Creep): Int {
+        if (USE_TICK_MEMO) movesMemo[creep.id]?.let { return it }
+        val m = creep.body.count { it.type == MOVE && it.hits > 0 }
+        if (USE_TICK_MEMO) movesMemo[creep.id] = m
+        return m
+    }
 
     /** Период хода (тиков на клетку): после шага fatigue = вес × цена местности − 2 × живые MOVE, дальше
      *  −2×MOVE в тик, следующий ход при нуле (tick.js:105, movement.js:237). M5R5: равнина 1, болото 5;
@@ -5208,6 +5229,17 @@ object SpawnAndSwamp {
     private var enemyCreepsNow: List<Creep> = emptyList()
     /** A recall keeps the wave: its members walk home and leave it back in the rally ring (runFighters, v110). */
     private const val USE_WAVE_SURVIVES_FLIP = true
+    /** What does not change within a tick is computed once in it: a creep's body weight and live MOVE (read through the
+     *  isolate on every call — the top frame of 117 of 292 timeouts in a v107 draw), the usable sites and the fleet's
+     *  projected income (recomputed by the cascade of every free spawn: 5.5 ms each, six spawns late in a match); and
+     *  a spawn after the first that cannot pay for any body leaves the cascade at once (v111). */
+    private const val USE_TICK_MEMO = true
+    private val weightMemo = HashMap<String, Int>()
+    private val movesMemo = HashMap<String, Int>()
+    private var usableMemo: List<EnergySite>? = null
+    private var usableMemoTick = -1
+    private var incomeMemo = 0.0
+    private var incomeMemoTick = -1
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
