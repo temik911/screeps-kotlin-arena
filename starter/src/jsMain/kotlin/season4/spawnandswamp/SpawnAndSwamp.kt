@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 118
+    private const val BOT_VERSION = 119
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -755,8 +755,25 @@ object SpawnAndSwamp {
     private fun costsMoreThanSpawn(e: Creep, spawn: StructureSpawn?): Boolean {
         if (!USE_SPAWN_FIRST_AT_FORT || spawn == null) return false
         val shield = shieldAt(e)
-        return shield > 0 && shield + e.hits >= (spawn.hits ?: SPAWN_HITS) + shieldAt(spawn)
+        if (shield <= 0) return false
+        val work = (spawn.hits ?: SPAWN_HITS) + shieldAt(spawn)
+        // WORTH KILLING FIRST ONLY IF IT SAVES MORE FIRE THAN IT COSTS (v119). With the fort's whole fire F on us and his
+        // defender's share f, the spawn first keeps us under F for work/D ticks; the defender first — under F for
+        // (shield+hits)/D, then under F-f for work/D. The defender goes first only when shield+hits < work × f / F.
+        // v112's bar (shield+hits ≥ work) let every post of marlyman's fort through — 10000+800 against 13000 — and at
+        // t=1600 of a v117 draw 14 of 16 fighters had a post as their step's target and none the spawn: 20380 damage
+        // went into two posts while the spawn lacked 8647
+        val fire = if (USE_FORT_WORTH) fortFire[spawn.id] ?: 0.0 else 0.0
+        if (fire > 0.0) {
+            val p = InfluenceMap.profileOf(e)
+            return shield + e.hits >= work * minOf(1.0, (p.ranged + p.melee) / fire)
+        }
+        return shield + e.hits >= work
     }
+
+    /** The fort's fire on a siege of each spawn of his this tick: his fed towers reaching us at our standoff from it and
+     *  the damage of his armed creeps within two ranged ranges of it (costsMoreThanSpawn, v119). */
+    private val fortFire = HashMap<String, Double>()
 
     /** The wave front's siege is won by the direct plan (see siegeOutcome): in the storm, fire and swings go to the
      *  spawn, not to a defender behind a rampart and not to the tower. Set each tick with siegeGo. */
@@ -1034,6 +1051,14 @@ object SpawnAndSwamp {
             myExtensions.count { getRange(it, mySpawn) <= EXTENSION_REACH } * EXTENSION_ENERGY_CAPACITY
         val ctx = Ctx(mySpawn, mySpawns, enemySpawn, enemySpawns, myCreeps, active, haulers, fighters, builders, enemyCreeps, combatEnemies, blocked, blockedForEnemy, dangerMatrix, loadedToSpawn, stepsToSpawn, haulLoaded, haulSteps, enemyApproach, sites, enemyTowers, ramparts, enemyPending, pendingTowers, myTowers, myExtensions, mySites)
 
+        if (USE_FORT_WORTH) {
+            fortFire.clear()
+            for (s in enemySpawns) {
+                val towers = coveringTowers(ctx, listOf(s)).sumOf { towerDpsFor(it, listOf(s)) }
+                val guns = combatEnemies.filter { getRange(it, s) <= 2 * RANGED_RANGE }.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+                fortFire[s.id] = towers + guns
+            }
+        }
         rememberDrops(sites)
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
@@ -5483,6 +5508,9 @@ object SpawnAndSwamp {
     private const val USE_GUARD_BY_CATCH = true
     /** A body closes a deficit against kiters only by our guns (closesDeficit, v118). */
     private const val USE_KITE_CLOSE = true
+    /** A defender on his rampart is killed before the spawn only if the fire it takes off the siege is worth its rampart
+     *  and hits against the spawn's work (costsMoreThanSpawn, v119). */
+    private const val USE_FORT_WORTH = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
