@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 106
+    private const val BOT_VERSION = 107
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1885,7 +1885,14 @@ object SpawnAndSwamp {
         val killIn = if (!USE_THREAT_KILL_TIME || threatDps <= 0.0) 0 else (houseHits / threatDps).toInt()
         val threatIn = if (USE_PACK_FALL) houseFallsIn(ctx, defenders, threats, houseHits)
             else if (arriveIn >= Int.MAX_VALUE / 4) arriveIn else arriveIn + killIn
-        val fighterFirst = (alarm || deficit > 0.0) && threatIn < investReady &&
+        // UNDER FIRE AND NOT HELD, THERE IS NOTHING TO INVEST IN (v107). "Invest" means the fleet grows and brings the
+        // fighter sooner; with his guns already shooting our spawn and our defenders not holding them, the new haulers
+        // are what they shoot next: against Ranamar (v106, lost at t≈400) deficit=185 from t=100 and his M5R1 at the
+        // spawn from t=171, the house "fell in 150+", "investing" won every tick, haulers were bought and husked, and the
+        // first gun (M1R1 for 180) came at 390. The alarm alone is not the question: a harasser in the ring that shoots
+        // nothing of ours cost the gate's harass 534 -> 608 held on "fighter first"
+        val armNow = USE_ARM_AT_DOOR && spawnUnderFire && deficit > 0.0
+        val fighterFirst = armNow || (alarm || deficit > 0.0) && threatIn < investReady &&
             (holdReady <= threatIn || holdReady < investReady || closesNow)
         val realised = realisedIncome()
         // ПРОШЛАЯ ПОКУПКА НЕ ДОЛЖНА БЫЛА СДЕЛАТЬ ХУЖЕ (см. fleetMark). Спрашивается не «выросла ли
@@ -3465,6 +3472,25 @@ object SpawnAndSwamp {
             val back = waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) }
             back < falls
         }
+        // …но только пока авангард ВНЕ дальности башни: волна под башней уже платит выстрелами, и выход из-под
+        // огня стоит те же два выстрела, что и добивание — уцелевшие выходили на кромку посреди штурма и
+        // входили снова по одному (стенд tower+stream: спавн врага 300 тиков стоял на 668 хитах)
+        val vanguard = waveFront.minByOrNull { spawnFlow[it.x * 100 + it.y] }
+        val frontCovered = vanguard != null && coveringTowers(ctx, listOf(vanguard), 0).isNotEmpty()
+        // …и только пока подкрепление ЕЩЁ УСПЕВАЕТ дойти и добить вместе с фронтом: держать кромку ради
+        // группы, которая не придёт до конца матча, — это ничья по расписанию (матч 18: hold=true с
+        // 1800-го при двухстах тиках в запасе, подкрепление уходило по одному бойцу и не успело). Ход
+        // подкрепления — от поста, а если поста нет, от спавна: следующий боец родится там
+        // от дома до фронта — тоже по маршруту подхода, телом самого медленного из живых бойцов
+        // (новорождённый будет такой же); бойцов нет — по прежнему полю
+        val homeTravel = if (assaultFlow.isNotEmpty() && fighters.isNotEmpty())
+            flowNear(assaultFlow, mySpawn.x, mySpawn.y).let { cell ->
+                if (cell < 0) Int.MAX_VALUE / 4
+                else fighters.maxOf { pathTicks(it, assaultFlow, cell) }.let { if (it >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 4 else it }
+            }
+        else if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
+        else flowNear(spawnFlow, mySpawn.x, mySpawn.y).let { if (it < 0) Int.MAX_VALUE / 4 else spawnFlow[it] }
+        val reinforceTravel = if (staging.isNotEmpty()) startTravel else homeTravel
         val newPushing = when {
             enemySpawn == null -> false
             (spawnUnderFire || alarm && !(if (USE_STAGING_GUARDS && waveMembers.isNotEmpty()) stayHolds else guardHolds)) &&
@@ -3487,25 +3513,6 @@ object SpawnAndSwamp {
             pushing && waveMembers.isNotEmpty() -> true
             else -> false
         }
-        // …но только пока авангард ВНЕ дальности башни: волна под башней уже платит выстрелами, и выход из-под
-        // огня стоит те же два выстрела, что и добивание — уцелевшие выходили на кромку посреди штурма и
-        // входили снова по одному (стенд tower+stream: спавн врага 300 тиков стоял на 668 хитах)
-        val vanguard = waveFront.minByOrNull { spawnFlow[it.x * 100 + it.y] }
-        val frontCovered = vanguard != null && coveringTowers(ctx, listOf(vanguard), 0).isNotEmpty()
-        // …и только пока подкрепление ЕЩЁ УСПЕВАЕТ дойти и добить вместе с фронтом: держать кромку ради
-        // группы, которая не придёт до конца матча, — это ничья по расписанию (матч 18: hold=true с
-        // 1800-го при двухстах тиках в запасе, подкрепление уходило по одному бойцу и не успело). Ход
-        // подкрепления — от поста, а если поста нет, от спавна: следующий боец родится там
-        // от дома до фронта — тоже по маршруту подхода, телом самого медленного из живых бойцов
-        // (новорождённый будет такой же); бойцов нет — по прежнему полю
-        val homeTravel = if (assaultFlow.isNotEmpty() && fighters.isNotEmpty())
-            flowNear(assaultFlow, mySpawn.x, mySpawn.y).let { cell ->
-                if (cell < 0) Int.MAX_VALUE / 4
-                else fighters.maxOf { pathTicks(it, assaultFlow, cell) }.let { if (it >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 4 else it }
-            }
-        else if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
-        else flowNear(spawnFlow, mySpawn.x, mySpawn.y).let { if (it < 0) Int.MAX_VALUE / 4 else spawnFlow[it] }
-        val reinforceTravel = if (staging.isNotEmpty()) startTravel else homeTravel
         val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN
         siegeHold = newPushing && !siegeGo.win && waveMembers.isNotEmpty() && !frontCovered && holdInTime
         if (DEBUG_LOG && (newPushing != pushing || getTicks() % (LOG_EVERY * 10) == 0)) {
@@ -3847,8 +3854,14 @@ object SpawnAndSwamp {
                 // волна держит кромку башни: из-под огня кормленной башни — прочь; в поле — обычный шаг, но не
                 // в её дальность (враг у кромки бьётся по локальному счёту, см. localAggressive)
                 marching && siegeHold && coveringTowers(ctx, listOf(creep), 0).isNotEmpty() -> towerEdgeStep(creep, ctx)
+                // A HOLDING FRONT KEEPS THE EDGE OF HIS CREEPS' FIRE TOO, NOT ONLY OF HIS TOWERS (v107). With no tower on the
+                // way "hold" was a march: against ●ω<♥♪#2 (t=550) f74 and f100, locally weaker, stepped west into his pair
+                // at (56,8) with another seven cells behind them, and both died with nothing of his dead. A holding step
+                // may not take more of his fire than the cell it leaves — out of combat only: in it the fight's own score steps
+                // (the edge held in combat froze the gate's tower+stream front before his stream: 574 -> 1321)
                 marching && siegeHold -> bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, breaching, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt)
-                    ?.takeIf { s -> coveringTowers(ctx, listOf(InfluenceMap.cell(s.x, s.y)), 0).isEmpty() }
+                    ?.takeIf { s -> coveringTowers(ctx, listOf(InfluenceMap.cell(s.x, s.y)), 0).isEmpty() &&
+                        (!USE_HOLD_FIRE_EDGE || inCombat || InfluenceMap.damageAt(s.x, s.y, combatEnemies) <= InfluenceMap.damageAt(creep.x, creep.y, combatEnemies)) }
                 else -> bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, breaching, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt)
             }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
@@ -5125,6 +5138,13 @@ object SpawnAndSwamp {
     private val stompFailed = HashSet<String>()
     /** A soft target on our half is chased by a team that can catch and kill it, not by every free gun (runFighters, v105). */
     private const val USE_RAID_TEAM = true
+    /** A holding wave's step takes no more of his creeps' fire than the cell it leaves (runFighters, v107).
+     *  Built with it and rejected: calling the wave back whenever what of his reaches the front before our help is
+     *  stronger than it — the gate's ball 444 -> 1332: his ball stays home as the spawn's guard, and the front waiting
+     *  outside its reach for the next wave was right. */
+    private const val USE_HOLD_FIRE_EDGE = true
+    /** His guns shooting our spawn that our defenders do not hold make the next body a fighter, whatever investing promises (v107). */
+    private const val USE_ARM_AT_DOOR = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
