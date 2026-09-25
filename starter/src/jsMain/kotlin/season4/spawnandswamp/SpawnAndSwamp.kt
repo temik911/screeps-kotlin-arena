@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 114
+    private const val BOT_VERSION = 115
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -844,7 +844,7 @@ object SpawnAndSwamp {
         }
         siegeTargetId = enemySpawn?.id
         siteStepsCache.clear()
-        assaultCache.clear()
+        if (!USE_ASSAULT_CACHE) assaultCache.clear()
 
         if (!greeted) {
             greeted = true
@@ -997,7 +997,7 @@ object SpawnAndSwamp {
         // until the SET of blocked cells changes. With v92's pile spawns the bot held six and more spawns, and the two
         // fields per spawn per tick (nearestField) took 17 ms of the slow ticks — 222 overruns in one game
         val blockedSig = blocked.mapTo(HashSet()) { it.x * 100 + it.y }.sorted().toIntArray()
-        if (!blockedSig.contentEquals(cellStepsSig)) { cellStepsCache.clear(); flowCache.clear(); cellStepsSig = blockedSig }
+        if (!blockedSig.contentEquals(cellStepsSig)) { cellStepsCache.clear(); flowCache.clear(); assaultCache.clear(); cellStepsSig = blockedSig }
         fun flowF(t: Position) = flowCache.getOrPut(t.x * 100 + t.y) { DistanceMap.flowFieldTo(t, blocked) }
         fun stepF(t: Position) = cellStepsCache.getOrPut(t.x * 100 + t.y) { DistanceMap.stepFieldTo(t, blocked) }
         val loadedToSpawn = flowF(mySpawn)
@@ -3079,6 +3079,7 @@ object SpawnAndSwamp {
 
     private var towerFireTick = -1
     private var towerFire: IntArray? = null
+    private var towerFireSig = IntArray(0)
 
     private fun flowTo(ctx: Ctx, target: Position): IntArray =
         flowCache.getOrPut(target.x * 100 + target.y) { DistanceMap.flowFieldTo(target, ctx.blocked) }
@@ -3092,6 +3093,11 @@ object SpawnAndSwamp {
         towerFireTick = getTicks()
         towerFire = null
         val fed = ctx.enemyTowers.filter { it.fed }
+        // THE ASSAULT FIELDS LIVE WHILE HIS FED TOWERS AND THE OBSTACLES DO (v115, CPU): the weighted field over the whole
+        // map was rebuilt for every target every tick — f.march took 27 ms of the ticks that timed out 122 times in a
+        // v114 draw against ricardo. It is a function of the target, the obstacles and the fed towers only
+        val sig = fed.map { it.pos.x * 100 + it.pos.y }.sorted().toIntArray()
+        if (!sig.contentEquals(towerFireSig)) { assaultCache.clear(); towerFireSig = sig }
         if (fed.isEmpty()) return null
         val fire = IntArray(10000)
         towerFire = fire
@@ -5330,6 +5336,8 @@ object SpawnAndSwamp {
     private const val USE_RUNT_ONLY_IF_FALLING = true
     /** A site of his being built is taken by killing its builder; only a tower site is stepped on (stompJobs, v114). */
     private const val USE_BUILDER_HUNT = true
+    /** The assault fields are kept across ticks while the obstacles and his fed towers stay (assaultTo, v115). */
+    private const val USE_ASSAULT_CACHE = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
