@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 117
+    private const val BOT_VERSION = 118
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -440,6 +440,8 @@ object SpawnAndSwamp {
      *  домашний мили-гарнизон, когда противник сам мили (см. guardNeeded). */
     private var raidPeak = 0.0
     private var raidPeakTick = -1
+    /** The melee share of the raid peak's damage (meleeShare, v118). */
+    private var raidPeakCatch = 0.0
     private var guardNeeded = false
 
     /** Окно оценки сближения врага: по двум тикам темп не оценить, по двадцати — уже да. */
@@ -3222,13 +3224,15 @@ object SpawnAndSwamp {
         val horizon = minOf(travel, arenaInfo.ticksLimit) + siege
         var attrition = 0.0
         var maxPack = 0.0
+        var maxPackCatch = 0.0
         val unmet = combatEnemies.filter { it.id in approachingIds }.toMutableList()
         while (unmet.isNotEmpty()) {
             val seed = unmet.first()
             val pack = combatEnemies.filter { getRange(it, seed) <= ENGAGE_RANGE + RANGED_RANGE }
             unmet.removeAll { u -> pack.any { it.id == u.id } }
             attrition += fightCost(pack, offensive)
-            maxPack = maxOf(maxPack, enemyPowerOf(pack, strikers))
+            val packPower = enemyPowerOf(pack, strikers)
+            if (packPower > maxPack) { maxPack = packPower; maxPackCatch = meleeShare(pack) }
         }
         val typical = typicalBirth()
         val unitCost = if (typical != null && waveDps > 0.0) typical.dps * typical.hits / waveDps else 0.0
@@ -3527,13 +3531,7 @@ object SpawnAndSwamp {
             ourPowerOf(homeGuard, arrivingHome) >= enemyPowerOf(arrivingHome, homeGuard) * DEFEND_MARGIN
         val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie
         // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
-        if (raidPeakTick < 0 || getTicks() - raidPeakTick > PRODUCTION_WINDOW || maxPack >= raidPeak) { raidPeak = maxPack; raidPeakTick = getTicks() }
-        val meleeOpponent = typical != null && typical.dps > 0.0 && typical.melee > typical.dps / 2
-        // включая рождающихся: гарнизон рождается 51 тик, и без этого спавн ставил третьего, пока
-        // второй ещё не вышел (стенд)
-        val homeMelee = ctx.myCreeps.filter { it.id !in wave && isMelee(it) && !hasRanged(it) }
-        guardNeeded = meleeOpponent && raidPeak > 0.0 &&
-            ourPowerOf(homeMelee, combatEnemies) < raidPeak * DEFEND_MARGIN
+        noteRaid(ctx, maxPack, maxPackCatch, typical)
         // A RECALL MUST SAVE SOMETHING (v97). The whole push was called off whenever the home guard did not hold and the
         // race could not be priced (it never can with two spawns of his): against ricardo#24 one M6A3 on our half took
         // twelve bodies off a spawn ten ticks from falling (rampart down, 540 a tick coming off), and fifteen sat at home
@@ -4620,6 +4618,39 @@ object SpawnAndSwamp {
         return out
     }
 
+    /**
+     * THE SHARE OF A PACK'S DAMAGE THAT IS MELEE (v118): a melee guard of ours is for his melee at our spawn, which has to
+     * stand next to what it hits; his guns are our guns' job — a slower one is kited by them, a faster one is never
+     * caught by a melee (M5R1 walks a swamp cell a tick, our M12A5 one in three). The melee opponent used to be the
+     * average of his births: against Ranamar#4 his A1M1 breaking his own wall made two kiting M5R1 "a melee opponent",
+     * and a melee M9A4 (770) was bought for them and never swung once. Read from the pack that raids us instead.
+     */
+    private fun meleeShare(pack: List<Creep>): Double {
+        var all = 0.0
+        var melee = 0.0
+        for (e in pack) {
+            val p = InfluenceMap.profileOf(e)
+            all += p.ranged + p.melee
+            melee += p.melee
+        }
+        return if (all > 0.0) melee / all else 0.0
+    }
+
+    /** The raid peak over the production window and the home melee guard it asks for (see guardNeeded). */
+    private fun noteRaid(ctx: Ctx, maxPack: Double, maxPackCatch: Double, typical: Birth?) {
+        // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
+        if (raidPeakTick < 0 || getTicks() - raidPeakTick > PRODUCTION_WINDOW || maxPack >= raidPeak) {
+            raidPeak = maxPack; raidPeakCatch = maxPackCatch; raidPeakTick = getTicks()
+        }
+        val meleeOpponent = if (USE_GUARD_BY_CATCH) raidPeakCatch > 0.5
+            else typical != null && typical.dps > 0.0 && typical.melee > typical.dps / 2
+        // включая рождающихся: гарнизон рождается 51 тик, и без этого спавн ставил третьего, пока
+        // второй ещё не вышел (стенд)
+        val homeMelee = ctx.myCreeps.filter { it.id !in wave && isMelee(it) && !hasRanged(it) }
+        guardNeeded = meleeOpponent && raidPeak > 0.0 &&
+            ourPowerOf(homeMelee, ctx.combatEnemies) < raidPeak * DEFEND_MARGIN
+    }
+
     /** The defence deficit against his guns that no melee of ours can reach — faster or as fast on swamp as every one
      *  of them — counted against our guns (and towers) only (v101). No such guns: no deficit of this class. */
     private fun kiteDeficit(defenders: List<Creep>, threats: List<Creep>): Double {
@@ -4684,6 +4715,19 @@ object SpawnAndSwamp {
 
     /** Закроет ли это тело дефицит обороны вместе с нынешними защитниками (по Ланчестеру с лечением врага). */
     private fun closesDeficit(body: Array<BodyPartType>, defenders: List<Creep>, threats: List<Creep>): Boolean {
+        // AGAINST GUNS NO MELEE OF OURS CAN REACH, ONLY GUNS CLOSE ANYTHING (v118): the pooled count took our melee
+        // breacher's 297 against Ranamar#4's two kiting M5R1 and passed an M3R1 runt (63 by Lanchester against the 185
+        // wanted) at t=170; it died alone and the spawn lost 1300 hits before the next body
+        if (USE_KITE_CLOSE && kiteDeficit(defenders, threats) > 0.0) {
+            val meleePeriods = defenders.filter { hasMelee(it) }.map { swampPeriod(it) }
+            val kiters = threats.filter { e -> hasRanged(e) && !hasMelee(e) && meleePeriods.none { swampPeriod(e) > it } }
+            val guns = defenders.filter { hasRanged(it) || hasHeal(it) }
+            val kdps = guns.sumOf { effectiveDps(it, kiters, null) } + ourTowerDps(kiters) +
+                body.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER
+            val khits = guns.sumOf { weightedHits(it, kiters, null) } + (if (body.any { it == RANGED_ATTACK }) body.size * 100 else 0)
+            val kheal = kiters.sumOf { InfluenceMap.profileOf(it).heal }
+            if (lanchester(kdps, kheal, khits.toInt()) < enemyPowerOf(kiters, guns) * DEFEND_MARGIN) return false
+        }
         val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats) +
             body.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER + body.count { it == ATTACK } * ATTACK_POWER
         val hits = defenders.sumOf { weightedHits(it, threats, null) } + body.size * 100
@@ -5434,6 +5478,11 @@ object SpawnAndSwamp {
     private var huntReach = 0
     /** The last call only adds a reason to go, and a lost siege sets it no deadline (v117). */
     private const val USE_LAST_CALL_ADDS = true
+    /** The home melee guard answers a raid whose damage is mostly melee, read from the raid itself, not from the average
+     *  of his births (meleeShare, noteRaid, v118). */
+    private const val USE_GUARD_BY_CATCH = true
+    /** A body closes a deficit against kiters only by our guns (closesDeficit, v118). */
+    private const val USE_KITE_CLOSE = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
