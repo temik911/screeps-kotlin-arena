@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 95
+    private const val BOT_VERSION = 97
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -807,6 +807,10 @@ object SpawnAndSwamp {
         val onOurHalf: (StructureSpawn) -> Boolean = { s -> enemyHome != null && getRange(s, mySpawn) < getRange(s, enemyHome) }
         val intruder = enemySpawns.filter { onOurHalf(it) }.minByOrNull { getRange(mySpawn, it) }
         val enemySpawn = when {
+            // A SPAWN OF HIS ON OUR HALF COMES FIRST, even over a committed wave (v97): けろびー's (77,25), 24 cells from
+            // ours, bred his army behind us for 500 ticks, 3000 hits and no rampart, while the wave went to his main
+            // fifty cells off and died there
+            USE_TARGET_COMMIT && intruder != null && (held == null || !onOurHalf(held)) -> intruder
             // committed: a wave is out against the held target (the wave map outlives the tick; see runFighters)
             USE_TARGET_COMMIT && held != null && wave.isNotEmpty() -> held
             !USE_TARGET_HOLD || held == null -> enemySpawns.minByOrNull { getRange(mySpawn, it) }
@@ -993,6 +997,8 @@ object SpawnAndSwamp {
         rememberDrops(sites)
         logSites(sites)
         measureRegen(mySpawn, haulers.any { (it.store[RESOURCE_ENERGY] ?: 0) > 0 && it.getRangeTo(mySpawn) <= 1 })
+        homeHits.addLast(getTicks() to (mySpawn.hits ?: SPAWN_HITS))
+        while (homeHits.isNotEmpty() && homeHits.first().first < getTicks() - PRODUCTION_WINDOW) homeHits.removeFirst()
         measureDelivery(ctx)
         measureSupply(ctx)
         measureSiteWork(ctx)
@@ -1811,7 +1817,11 @@ object SpawnAndSwamp {
         // недостроенная становится башней, лишь когда на неё довезут остаток, и при мёртвой экономике
         // это «никогда». Спавн-точка-сдачи судится другим сроком и кормится не из спавна (см. SiteJob)
         cpuMark("sp.pre")
-        siteJobs = buildJobs(ctx, spawnLife, flow, energy)
+        // THE SPAWN'S LIFE BY ITS TREND TOO (v96): the clock of a site took the spawn's life from this tick's fire
+        // only, and against raids — six hunters every sixty ticks, the gate's siege6 — the spawn is "not under fire"
+        // between them, so its life read infinite and a tower site was fed to 769/1250 while the house went down. The
+        // hits the home spawn actually lost over the production window give the other answer; the shorter one is used
+        siteJobs = buildJobs(ctx, if (USE_SPAWN_TREND) minOf(spawnLife, homeLifeByTrend(ctx)) else spawnLife, flow, energy)
         cpuMark("sp.jobs")
         val minFighter = cost(RANGED_ATTACK) + cost(MOVE)
         // БОЕЦ ПЕРВЫМ — держать энергию под полное тело, не покупая ничего, — только когда так боец
@@ -1832,7 +1842,16 @@ object SpawnAndSwamp {
         // спавн на регенерации 1/тик без единого хаулера при открытом проломе в девяти клетках (стенд stream17)
         // под тревогой враг уже в SPAWN_ALARM_TICKS от спавна, даже если стоит: enemyArrival для стоящего
         // шара — «никогда», и угроза выходила несрочной (стенд tower+hover: четыре хаулера под тревогой)
-        val threatIn = if (alarm) minOf(enemyArrival, SPAWN_ALARM_TICKS) else enemyArrival
+        val arriveIn = if (alarm) minOf(enemyArrival, SPAWN_ALARM_TICKS) else enemyArrival
+        // THE THREAT IS WHEN THE HOUSE FALLS, NOT WHEN THEY ARRIVE (v97). Under alarm the arrival was capped at 40, and a
+        // loitering raider (けろびー's M5A1, dps 30) or births at his spawn on our half held "fighter first" for the whole
+        // game — 35 lines of "enemy arrives in 40" in one loss, the fleet stuck at 5-6 and 6-7 a tick; against Ranamar
+        // his first body (M5R1, 10 a tick, 300 ticks to our spawn) spent our opening thousand on a guard. What the
+        // threat takes is the spawn: its hits (and ours rampart over it) at the damage the threats bring.
+        val threatDps = threats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+        val houseHits = (spawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == spawn.x && it.y == spawn.y }.sumOf { it.hits ?: 0 }
+        val killIn = if (!USE_THREAT_KILL_TIME || threatDps <= 0.0) 0 else (houseHits / threatDps).toInt()
+        val threatIn = if (arriveIn >= Int.MAX_VALUE / 4) arriveIn else arriveIn + killIn
         val fighterFirst = (alarm || deficit > 0.0) && threatIn < investReady &&
             (holdReady <= threatIn || holdReady < investReady || closesNow)
         val realised = realisedIncome()
@@ -3350,9 +3369,24 @@ object SpawnAndSwamp {
         val homeMelee = ctx.myCreeps.filter { it.id !in wave && isMelee(it) && !hasRanged(it) }
         guardNeeded = meleeOpponent && raidPeak > 0.0 &&
             ourPowerOf(homeMelee, combatEnemies) < raidPeak * DEFEND_MARGIN
+        // A RECALL MUST SAVE SOMETHING (v97). The whole push was called off whenever the home guard did not hold and the
+        // race could not be priced (it never can with two spawns of his): against ricardo#24 one M6A3 on our half took
+        // twelve bodies off a spawn ten ticks from falling (rampart down, 540 a tick coming off), and fifteen sat at home
+        // for two hundred ticks. A recall is worth it only if the wave gets back before the house falls — the home
+        // threats' arrival plus our spawn's hits (and rampart) at their damage; a wave that cannot arrive in time saves
+        // nothing by leaving and loses the siege it was winning
+        val recallSaves = !USE_RECALL_IF_SAVES || waveMembers.isEmpty() || run {
+            val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+            if (threatDps <= 0.0) return@run false
+            val arrive = if (spawnUnderFire) 0 else homeThreats.minOf { (arrivalById[it.id] ?: Int.MAX_VALUE / 4).coerceAtMost(SPAWN_ALARM_TICKS) }
+            val house = (mySpawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y }.sumOf { it.hits ?: 0 }
+            val falls = arrive + house / threatDps
+            val back = waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) }
+            back < falls
+        }
         val newPushing = when {
             enemySpawn == null -> false
-            (spawnUnderFire || alarm && !guardHolds) && !pushWinsRace(ctx, ourHalfCombat, siegeGo) -> false
+            (spawnUnderFire || alarm && !guardHolds) && !pushWinsRace(ctx, ourHalfCombat, siegeGo) && recallSaves -> false
             // последний звонок — тоже только с выигрышной осадой: армия, положенная под башню в конце,
             // не приносит ничьей, а дома она её держит
             lastCall && notWeaker && (siegeGo.win || siegeStart.win || !homeAtRisk) -> true
@@ -4853,6 +4887,25 @@ object SpawnAndSwamp {
     private const val USE_HOME_STRIKER_FIRST = true
     /** A mate chained to me through mates within two cells is queued, not lagging (cohesion hold, v95). */
     private const val USE_COLUMN_COHESION = true
+    /** "Fighter first" weighs the threat by when the house falls — arrival plus the spawn's hits at their damage (v97). */
+    private const val USE_THREAT_KILL_TIME = true
+    /** A wave is recalled for home only if it gets back before the house falls (posture, v97). */
+    private const val USE_RECALL_IF_SAVES = true
+    /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
+    private const val USE_SPAWN_TREND = false   // measured on siege6 25.09.2026: the spawn loses hits only at the end, the site was fed while the GARRISON died — the clock needs the garrison, not the spawn
+    /** The home spawn's hits over the production window (tick to hits), for homeLifeByTrend. */
+    private val homeHits = ArrayDeque<Pair<Int, Int>>()
+
+    /** How long the home spawn lives at the rate it has actually been losing hits over the window; infinite while it
+     *  has lost none (a rampart over it takes the blows and its hits stay). */
+    private fun homeLifeByTrend(ctx: Ctx): Double {
+        val first = homeHits.firstOrNull() ?: return Double.MAX_VALUE
+        val now = ctx.mySpawn.hits ?: SPAWN_HITS
+        val lost = first.second - now
+        val span = getTicks() - first.first
+        if (lost <= 0 || span <= 0) return Double.MAX_VALUE
+        return now / (lost.toDouble() / span)
+    }
     /** A defender behind his rampart is the last thing our guns and swings pick, after the spawn (strike, shoot, v95). */
     private const val USE_SHIELD_LAST = true
 
