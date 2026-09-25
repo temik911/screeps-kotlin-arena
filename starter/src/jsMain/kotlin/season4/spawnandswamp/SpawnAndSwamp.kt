@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 104
+    private const val BOT_VERSION = 105
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3616,6 +3616,23 @@ object SpawnAndSwamp {
         // в дальности трое наших, девять сидели на посту «без перевеса не идём» и смотрели.
         cpuMark("f.posture")
         val homeTarget = homeThreats.minWithOrNull(compareBy<Creep>({ arrivalOf(it) }, { getRange(it, centroid) }))
+        // A SOFT TARGET IS A TEAM'S JOB, NOT THE ARMY'S (v105). Every free gun went after the one soft creep nearest the
+        // centroid: against marlyman123#96 all 22 chased one disarmed "M4 400/1200" at t=1760 while the staging post
+        // stood empty and no wave ever left. The team is the free guns that can catch it, nearest by their own walk,
+        // as many as kill it before it gets home at its own pace; none can catch it — nobody goes
+        val raidTeam: Set<String>? = if (!USE_RAID_TEAM || raider == null) null else {
+            val field = flowTo(ctx, raider)
+            val flight = enemySpawn?.let { pathTicks(raider, flowTo(ctx, it), raider.x * 100 + raider.y) } ?: Int.MAX_VALUE / 4
+            val team = HashSet<String>()
+            var dps = 0.0
+            for ((c, _) in freeStrikers.filter { hasRanged(it) && catchable(it, raider) }
+                .map { it to pathTicks(it, field, it.x * 100 + it.y) }.filter { it.second < Int.MAX_VALUE / 4 }.sortedBy { it.second }) {
+                team.add(c.id)
+                dps += InfluenceMap.profileOf(c).ranged
+                if (raider.hits / dps <= flight) break
+            }
+            team
+        }
         val stompOf = if (USE_STOMP && homeThreats.isEmpty()) stompJobs(ctx, fighters.filter { f ->
             f.id !in wave && hasWeapon(f) && strikers.any { it.id == f.id } && !isMelee(f)
         }, combatEnemies, centroid) else emptyMap()
@@ -3730,7 +3747,7 @@ object SpawnAndSwamp {
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
                 threat != null && huntingThreat && !marching && mobile -> { target = threat; standoff = closeIn }
                 stompOf[creep.id] != null && !marching -> { target = stompOf[creep.id]!!; standoff = 0 }
-                raider != null && !marching && mobile -> { target = raider; standoff = RANGED_RANGE }
+                raider != null && !marching && mobile && (raidTeam == null || creep.id in raidTeam) -> { target = raider; standoff = RANGED_RANGE }
                 marching -> { target = enemySpawn!!; standoff = if (melee) 1 else RANGED_RANGE }
                 wallTarget != null -> { target = wallTarget; standoff = if (melee) 1 else RANGED_RANGE }
                 else -> { target = rallySpawn; standoff = HOME_STANDOFF }
@@ -5107,6 +5124,8 @@ object SpawnAndSwamp {
     private var stompReach = 0
     /** His sites one of ours stood on without erasing them (stompJobs, v103b). */
     private val stompFailed = HashSet<String>()
+    /** A soft target on our half is chased by a team that can catch and kill it, not by every free gun (runFighters, v105). */
+    private const val USE_RAID_TEAM = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
