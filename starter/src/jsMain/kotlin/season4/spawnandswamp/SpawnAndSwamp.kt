@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 116
+    private const val BOT_VERSION = 117
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3375,9 +3375,12 @@ object SpawnAndSwamp {
             }
             t
         }
+        // A LOST SIEGE SETS NO DEADLINE (v117): its budget was travel plus the siege limit, a finite "need" for a siege that
+        // never ends, and with four to eight of his spawns under ramparts in the tour the last call opened from t≈990
+        fun deadline(travelTicks: Int, siege: SiegeResult) = if (!USE_LAST_CALL_ADDS || siege.win) budget(travelTicks, siege) else never
         val goNeed = minOf(
-            if (staging.isEmpty()) never else budget(startTravel, siegeStart),
-            if (waveFront.isEmpty()) never else budget(frontTravel, siegeGo)).let { if (it >= never || tour >= never) never else it + tour }
+            if (staging.isEmpty()) never else deadline(startTravel, siegeStart),
+            if (waveFront.isEmpty()) never else deadline(frontTravel, siegeGo)).let { if (it >= never || tour >= never) never else it + tour }
         val lastCall = goNeed < never && remaining <= goNeed + LATE_MARGIN
         siegeEndsIn = goNeed
         // Может ли враг ещё отнять у нас спавн за остаток: его ближайший боец доходит за enemyApproach и
@@ -3574,7 +3577,12 @@ object SpawnAndSwamp {
             // THE LAST CALL WEIGHS THE HOUSE, NOT THE ARMIES (v102): a house he cannot take in what is left cannot be
             // lost by going, so we go; one he can take — we go if the siege wins and ends before it falls. "Not weaker"
             // vetoed the last call of Ranamar#2's draw at t≈1400 (400 < 477) with our spawn never in danger all match
-            USE_LAST_CALL_RACE && lastCall -> !homeAtRisk || ((siegeGo.win || siegeStart.win) && goNeed < houseFallsAt)
+            // …and it only ever ADDS a reason to go (v117). Written as a verdict it returned "stay" whenever the house was at
+            // risk (his whole damage against our spawn alone — nearly always) and stood before strongerNow and the wave
+            // continuing: in four of seven v114 draws an army three to ten times his stayed home under it, and every wave
+            // that left was called back the next tick (71 of 80 against ricardo#24)
+            USE_LAST_CALL_RACE && USE_LAST_CALL_ADDS && lastCall && (!homeAtRisk || ((siegeGo.win || siegeStart.win) && goNeed < houseFallsAt)) -> true
+            USE_LAST_CALL_RACE && !USE_LAST_CALL_ADDS && lastCall -> !homeAtRisk || ((siegeGo.win || siegeStart.win) && goNeed < houseFallsAt)
             lastCall && notWeaker && (siegeGo.win || siegeStart.win || !homeAtRisk) -> true
             strongerNow -> true
             // ушедшую волну не отзываем из-за запаса «ещё одна стычка»: у ворот врага он ей не нужен
@@ -5424,6 +5432,8 @@ object SpawnAndSwamp {
     private val spawnSitesSeen = HashSet<String>()
     private val spawnSiteStarts = ArrayDeque<Int>()
     private var huntReach = 0
+    /** The last call only adds a reason to go, and a lost siege sets it no deadline (v117). */
+    private const val USE_LAST_CALL_ADDS = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
