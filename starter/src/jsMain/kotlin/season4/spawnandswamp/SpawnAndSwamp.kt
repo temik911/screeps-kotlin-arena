@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 100
+    private const val BOT_VERSION = 101
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1030,6 +1030,13 @@ object SpawnAndSwamp {
         // для решений спавна враг — «скоро»: с теми, кто ещё рождается у его спавна
         val threatsSoon = combatEnemies + enemyPending
         val enemyArrival = enemyArrivalTicks(ctx)
+        // THE SPAWN ANSWERS THE FIGHT THAT WILL BE AT OUR HOUSE (v101): those walking at us, those already in the alarm
+        // ring and those being born. His home guard is not in it — every Ranamar bot keeps an M1A1 at his spawn, eighty
+        // cells off, and it made our breacher a full defender against his two kiting M5R1 at our spawn (deficit -147 in
+        // all four matches, lost at t≈410); his army standing at home joins the moment it walks
+        val homeBound = if (!USE_HOME_BOUND) threatsSoon else threatsSoon.filter { e ->
+            (arrivalById[e.id] ?: Int.MAX_VALUE / 2) < Int.MAX_VALUE / 2 || enemyApproach[e.x * 100 + e.y] in 0..SPAWN_ALARM_TICKS
+        }
         val spawnUnderFire = InfluenceMap.fireAt(mySpawn.x, mySpawn.y, combatEnemies) > 0.0
         cpuMark("threat")
         measureHomeFight(ctx)
@@ -1043,9 +1050,9 @@ object SpawnAndSwamp {
         // без этого хода роняет сбор с 20.1 до 12.5 в тик и снимает победу вовсе. Площадки ставит
         // ПЕРВЫЙ ход тика — они общие, и три хода поставили бы три
         val freeSpawns = ctx.mySpawns.filter { it.spawning == null }.sortedByDescending { it.store[RESOURCE_ENERGY] ?: 0 }
-        if (freeSpawns.isEmpty()) spawnIfNeeded(ctx, defenders, threatsSoon, alarm, enemyArrival, spawnUnderFire, null, true)
+        if (freeSpawns.isEmpty()) spawnIfNeeded(ctx, defenders, homeBound, alarm, enemyArrival, spawnUnderFire, null, true)
         else freeSpawns.forEachIndexed { i, sp ->
-            spawnIfNeeded(ctx, defenders, threatsSoon, alarm, enemyArrival, spawnUnderFire, sp, i == 0)
+            spawnIfNeeded(ctx, defenders, homeBound, alarm, enemyArrival, spawnUnderFire, sp, i == 0)
         }
         cpuMark("spawn")
         runTowers(ctx)
@@ -1810,7 +1817,10 @@ object SpawnAndSwamp {
         val flow = income + regen
         val fullBody = fighterBody(SPAWN_ENERGY_CAPACITY)
         val fullCost = fullBody.sumOf { cost(it) }
-        val deficit = enemyPower * DEFEND_MARGIN - ourPower
+        // …and a gun faster than every melee of ours is answered by our guns alone (v101): the classes are not pooled,
+        // or a melee that never lands a swing covers the kiters shooting the spawn
+        val deficit = if (USE_HOME_BOUND) maxOf(enemyPower * DEFEND_MARGIN - ourPower, kiteDeficit(defenders, threats))
+            else enemyPower * DEFEND_MARGIN - ourPower
         val breach = breachPlan(ctx)
         // СКОЛЬКО ЖИВЁТ СПАВН при нынешнем входящем уроне: 3000 хитов, делённые на выстрелы в тик.
         // Это часы для обоих правил ожидания ниже. «Придёт враг» (enemyArrival) на них не отвечает: враг,
@@ -1856,7 +1866,8 @@ object SpawnAndSwamp {
         val threatDps = threats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
         val houseHits = (spawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == spawn.x && it.y == spawn.y }.sumOf { it.hits ?: 0 }
         val killIn = if (!USE_THREAT_KILL_TIME || threatDps <= 0.0) 0 else (houseHits / threatDps).toInt()
-        val threatIn = if (arriveIn >= Int.MAX_VALUE / 4) arriveIn else arriveIn + killIn
+        val threatIn = if (USE_PACK_FALL) houseFallsIn(ctx, defenders, threats, houseHits)
+            else if (arriveIn >= Int.MAX_VALUE / 4) arriveIn else arriveIn + killIn
         val fighterFirst = (alarm || deficit > 0.0) && threatIn < investReady &&
             (holdReady <= threatIn || holdReady < investReady || closesNow)
         val realised = realisedIncome()
@@ -4260,6 +4271,45 @@ object SpawnAndSwamp {
     }
 
 
+    /** The defence deficit against his guns that no melee of ours can reach — faster or as fast on swamp as every one
+     *  of them — counted against our guns (and towers) only (v101). No such guns: no deficit of this class. */
+    private fun kiteDeficit(defenders: List<Creep>, threats: List<Creep>): Double {
+        val meleePeriods = defenders.filter { hasMelee(it) }.map { swampPeriod(it) }
+        val kiters = threats.filter { e -> hasRanged(e) && !hasMelee(e) && meleePeriods.none { swampPeriod(e) > it } }
+        if (kiters.isEmpty()) return Double.NEGATIVE_INFINITY
+        val guns = defenders.filter { hasRanged(it) || hasHeal(it) }
+        return enemyPowerOf(kiters, guns) * DEFEND_MARGIN - ourPowerOf(guns, kiters)
+    }
+
+    /**
+     * WHEN THE HOUSE FALLS (v101): to the first pack of his that our armed creeps do not hold — a pack being everyone
+     * arrived by then, in the order they arrive (one standing in the alarm ring counts as arriving within it) — at that
+     * pack's own damage; never while every pack is held. v97 took the arrival of the nearest and the damage of all:
+     * against けろびー#19 a loitering M5A1 (held 464:134 by our garrison) and his army ninety cells off, standing, read
+     * "enemy arrives in 46-52" for 500 ticks, and "fighter first" bought no hauler while his raider killed all five.
+     */
+    private fun houseFallsIn(ctx: Ctx, defenders: List<Creep>, threats: List<Creep>, houseHits: Int): Int {
+        val never = Int.MAX_VALUE / 2
+        val eta = threats.mapNotNull { e ->
+            var a = arrivalById[e.id] ?: never
+            if (ctx.enemyApproach[e.x * 100 + e.y] in 0..SPAWN_ALARM_TICKS) a = minOf(a, SPAWN_ALARM_TICKS)
+            if (a >= never) null else e to a
+        }.sortedBy { it.second }
+        val pack = ArrayList<Creep>()
+        var i = 0
+        while (i < eta.size) {
+            val t = eta[i].second
+            while (i < eta.size && eta[i].second == t) { pack.add(eta[i].first); i++ }
+            val dps = pack.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+            if (dps <= 0.0) continue
+            val held = ourPowerOf(defenders, pack) >= enemyPowerOf(pack, defenders) * DEFEND_MARGIN &&
+                kiteDeficit(defenders, pack) <= 0.0
+            if (held) continue
+            return t + (houseHits / dps).toInt()
+        }
+        return never
+    }
+
     /** Закроет ли это тело дефицит обороны вместе с нынешними защитниками (по Ланчестеру с лечением врага). */
     private fun closesDeficit(body: Array<BodyPartType>, defenders: List<Creep>, threats: List<Creep>): Boolean {
         val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats) +
@@ -4934,6 +4984,11 @@ object SpawnAndSwamp {
     private const val USE_RECALL_IF_SAVES = true
     /** A marching healer measures its laggards on the assault field, as the guns do, not on its ward's (runFighters, v100). */
     private const val USE_COMMON_COHESION = true
+    /** The spawn's threats are those walking at our house, in its alarm ring or being born, not his home guard; the
+     *  deficit is the larger of all against all and his kiters against our guns (tick, spawnIfNeeded, v101). */
+    private const val USE_HOME_BOUND = true
+    /** "Fighter first" takes the house's fall from the first pack of his our garrison does not hold (houseFallsIn, v101). */
+    private const val USE_PACK_FALL = true
     /** Waves are staged and idle guns posted at our spawn nearest the target, not at home (runFighters, v98). */
     private const val USE_RALLY_FORWARD = true
     /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
