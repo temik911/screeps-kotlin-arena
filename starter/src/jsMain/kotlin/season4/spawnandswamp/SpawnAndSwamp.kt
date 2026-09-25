@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 128
+    private const val BOT_VERSION = 130
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2012,8 +2012,15 @@ object SpawnAndSwamp {
         // the raid's damage — the 230-360 of v113 — still waits
         fun raidBuys(b: Array<BodyPartType>) = raidAtDoor.isNotEmpty() && armNow &&
             b.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER >= raidDps
+        // HOLDING MUST HOLD SOMETHING (v130). "Hold" saves the spawn's energy for one full body because it comes sooner
+        // than investing would bring one — and the house is kept only if that body closes the deficit. Against ●ω<♥♪'s
+        // M6A6 born at t=1 (power 464, wanted 557) the full M11R3 gives 205 by Lanchester, no body for 1000 closes it,
+        // and the house falls at threatIn with it or without it: the spawn held from t=1, the first hauler came at 202,
+        // his breach wall opened at 493 instead of 98, 1530 spent by t=623 against 6050 by t=335 in the breach opening,
+        // and two losses at 623 and 713. Such openings went 1-1-8 in runs/. Under alarm the rule is as before
+        val holdHolds = !USE_HOLD_MUST_HOLD || alarm || closesDeficit(fullBody, defenders, threats)
         val fighterFirst = armNow || (alarm || deficit > 0.0) && threatIn < investReady &&
-            (holdReady <= threatIn || holdReady < investReady || closesNow)
+            ((holdReady <= threatIn || holdReady < investReady) && holdHolds || closesNow)
         val realised = realisedIncome()
         // ПРОШЛАЯ ПОКУПКА НЕ ДОЛЖНА БЫЛА СДЕЛАТЬ ХУЖЕ (см. fleetMark). Спрашивается не «выросла ли
         // сдача» — в долгой стройке она растёт медленнее окна замера, и требование роста стоило
@@ -5663,6 +5670,8 @@ object SpawnAndSwamp {
     private const val USE_FLEET_SLIDING = true
     /** The pile builder is bought while a job for it exists now, not only after a quiet window at home (v128). */
     private const val USE_PILE_BY_JOB = true
+    /** Energy is held for a full fighter only if that fighter closes the deficit, or under alarm (spawnIfNeeded, v130). */
+    private const val USE_HOLD_MUST_HOLD = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
