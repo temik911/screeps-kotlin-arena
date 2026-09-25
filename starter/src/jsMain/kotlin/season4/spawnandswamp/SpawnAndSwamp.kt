@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 115
+    private const val BOT_VERSION = 116
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -933,6 +933,8 @@ object SpawnAndSwamp {
         }
         // EVERY SITE OF HIS AND WHEN IT BECOMES A STRUCTURE (v103, see stompJobs): observed pace, or his WORK within
         // three cells; neither — it is not being built now and waits for us
+        // the ticks his spawn sites were first seen (v116): his pace of expansion, for the worth of his builder
+        for (site in enemySites) if ((site.progressTotal ?: 0) == buildCost("StructureSpawn") && spawnSitesSeen.add(site.id)) spawnSiteStarts.addLast(getTicks())
         enemySitesNow = enemySites.map { site ->
             val progress = site.progress ?: 0
             val (t0, p0) = siteSeen.getOrPut(site.id) { getTicks() to progress }
@@ -3720,6 +3722,10 @@ object SpawnAndSwamp {
         val stompOf = if (USE_STOMP && homeThreats.isEmpty()) stompJobs(ctx, fighters.filter { f ->
             f.id !in wave && hasWeapon(f) && strikers.any { it.id == f.id } && !isMelee(f)
         }, combatEnemies, centroid) else emptyMap()
+        val huntOf: Map<String, Creep> = if (!USE_BUILDER_CHASE) emptyMap() else builderHunt(ctx,
+            fighters.filter { f -> f.id !in wave && strikers.any { it.id == f.id } && hasRanged(f) },
+            fighters.filter { f -> f.id in wave && hasRanged(f) && canMove(f) },
+            homeGuard, homePack, enemySpawn, enemyCreeps, combatEnemies)
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
 
@@ -3820,6 +3826,9 @@ object SpawnAndSwamp {
             when {
                 ward != null -> { target = ward; standoff = 1 }
                 !hasWeapon(creep) -> { target = if (striker && hasHeal(creep)) rallySpawn else mySpawn; standoff = HOME_STANDOFF + 1 }
+                // his builder (v116, see builderHunt): the one assigned goes for it before home rows — the assignment already
+                // asked whether the house holds without it
+                huntOf[creep.id] != null -> { target = huntOf[creep.id]!!; standoff = RANGED_RANGE }
                 homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
                 // поводок — про ПОГОНЮ, а не про осаду: мили, не идущий в волне, остаётся дома, потому
@@ -4528,6 +4537,77 @@ object SpawnAndSwamp {
             println("stomp t=${getTicks()}: " + enemySitesNow.joinToString(" ") { (s, d) ->
                 "(${s.x},${s.y})${s.progress}/${s.progressTotal}@${if (d >= Int.MAX_VALUE / 4) "-" else d.toString()}"
             } + " teams=" + out.entries.joinToString(",") { (id, j) -> "f$id>(${j.first.x},${j.first.y})" }.ifEmpty { "-" } + " jobs=$stompReach")
+        }
+        return out
+    }
+
+    /**
+     * HIS BUILDER, WHEREVER IT IS (v116). v114 looked for a builder within three cells of a live site, took only guns
+     * out of the waves and only while nothing threatened our house anywhere: in three losses to けろびー (#40, #18 twice)
+     * that intersection was empty — 63 samples of a builder within 30 ticks of a gun of ours, 53 of them a wave member,
+     * 10 the one free gun called home by a raider; not one builder that built anything died, and one of them raised ten
+     * spawns. Every creep of his with a live WORK part is a target: a free gun goes for it if it can catch it (a loaded
+     * M2C2W2 steps a swamp cell every 10 ticks, our M8R4 every 3) and our house holds without it; a gun marching in a
+     * wave goes if the detour (to it, the kill, and back on the way to the target) costs less than the spawns it would
+     * otherwise raise — his measured pace between spawn sites over what is left of the match, each priced at the
+     * siege of a bare spawn by that gun. The kill is timed at our damage less his heal on the builder.
+     */
+    private fun builderHunt(ctx: Ctx, free: List<Creep>, marchers: List<Creep>, homeGuard: List<Creep>, homePack: List<Creep>,
+                            target: StructureSpawn?, enemyCreeps: List<Creep>, combatEnemies: List<Creep>): Map<String, Creep> {
+        val out = HashMap<String, Creep>()
+        val builders = enemyCreeps.filter { c -> c.body.any { it.type == WORK && it.hits > 0 } }
+        if (builders.isEmpty() || (free.isEmpty() && marchers.isEmpty())) return out
+        val remaining = arenaInfo.ticksLimit - getTicks()
+        val pace = if (spawnSiteStarts.size >= 2) (spawnSiteStarts.last() - spawnSiteStarts.first()).toDouble() / (spawnSiteStarts.size - 1) else remaining.toDouble()
+        val futureSpawns = maxOf(1.0, remaining / maxOf(1.0, pace))
+        val targetField = target?.let { flowTo(ctx, it) }
+        val home = homeGuard.toMutableList()
+        fun houseHolds(): Boolean = homePack.isEmpty() || ourPowerOf(home, homePack) >= enemyPowerOf(homePack, home) * DEFEND_MARGIN
+        for (b in builders.sortedBy { it.hits }) {
+            // not under his fed tower: a builder of his rampart at home is his house's, and the siege prices that
+            if (coveringTowers(ctx, listOf(b)).isNotEmpty()) continue
+            val heal = enemyCreeps.filter { getRange(it, b) <= HEAL_RANGE }.sumOf { InfluenceMap.profileOf(it).heal }
+            val guards = combatEnemies.filter { getRange(it, b) <= ENGAGE_RANGE + RANGED_RANGE }
+            val field = flowTo(ctx, b)
+            val cell = b.x * 100 + b.y
+            val cands = ArrayList<Pair<Creep, Int>>()
+            for (c in free) {
+                if (c.id in out || !catchable(c, b)) continue
+                val eta = pathTicks(c, field, c.x * 100 + c.y)
+                if (eta >= Int.MAX_VALUE / 4) continue
+                cands.add(c to eta)
+            }
+            for (c in marchers) {
+                if (c.id in out || !catchable(c, b) || targetField == null) continue
+                val eta = pathTicks(c, field, c.x * 100 + c.y)
+                val back = stepsFrom(targetField, b)
+                val direct = targetField[c.x * 100 + c.y]
+                if (eta >= Int.MAX_VALUE / 4 || back < 0 || direct < 0) continue
+                val dps = InfluenceMap.profileOf(c).ranged
+                val kill = if (dps - heal > 0.0) b.hits / (dps - heal) else Double.MAX_VALUE
+                val detour = eta + kill + back - direct
+                val worth = futureSpawns * (if (dps > 0.0) SPAWN_HITS / dps else Double.MAX_VALUE)
+                if (detour < worth) cands.add(c to eta)
+            }
+            cands.sortBy { it.second }
+            val team = ArrayList<Creep>()
+            var dps = 0.0
+            var ok = false
+            for ((c, _) in cands) {
+                if (c in home) { home.remove(c); if (!houseHolds()) { home.add(c); continue } }
+                team.add(c)
+                dps += InfluenceMap.profileOf(c).ranged
+                ok = dps - heal > 0.0 && (guards.isEmpty() || ourPowerOf(team, guards) >= enemyPowerOf(guards, team) * PUSH_RATIO)
+                if (ok) break
+            }
+            if (!ok) { for (c in team) if (c in homeGuard && c !in home) home.add(c); continue }
+            for (c in team) out[c.id] = b
+            huntReach++
+        }
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
+            println("hunt t=${getTicks()}: builders=" + builders.joinToString(" ") { "(${it.x},${it.y})h=${it.hits}" } +
+                " pace=${if (spawnSiteStarts.size >= 2) pace.toInt().toString() else "-"} teams=" +
+                out.entries.joinToString(",") { (id, b) -> "f$id>(${b.x},${b.y})" }.ifEmpty { "-" } + " jobs=$huntReach")
         }
         return out
     }
@@ -5338,6 +5418,12 @@ object SpawnAndSwamp {
     private const val USE_BUILDER_HUNT = true
     /** The assault fields are kept across ticks while the obstacles and his fed towers stay (assaultTo, v115). */
     private const val USE_ASSAULT_CACHE = true
+    /** Every creep of his with WORK is hunted by guns that can catch it: free ones if the house holds without them, wave
+     *  members if the detour is cheaper than the spawns it would raise (builderHunt, v116). */
+    private const val USE_BUILDER_CHASE = true
+    private val spawnSitesSeen = HashSet<String>()
+    private val spawnSiteStarts = ArrayDeque<Int>()
+    private var huntReach = 0
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
