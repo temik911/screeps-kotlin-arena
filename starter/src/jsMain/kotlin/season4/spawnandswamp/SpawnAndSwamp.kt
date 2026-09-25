@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 109
+    private const val BOT_VERSION = 110
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3535,7 +3535,13 @@ object SpawnAndSwamp {
 
         // ---- волны: в наступление уходят группой, пополнение копится на посту до следующей волны ----
         if (!pushing) {
-            wave.clear()
+            // A RECALL IS A WALK HOME, NOT THE END OF THE WAVE (v110). A one-tick DEFEND cleared the wave: against
+            // Ranamar#5 (t=395, 510) two M8R4 110 cells from his spawn lost their wave, took his kiting M5R1 136-151
+            // cells back as their target and walked there, 926 gun-ticks and not one shot. The recalled keep their wave
+            // and walk home (not marching while we defend); back in the rally ring they leave it and stage for the next
+            // one, and if the push comes back before that they march on
+            if (USE_WAVE_SURVIVES_FLIP) wave.keys.removeAll { id -> fighters.none { it.id == id } || fighters.any { it.id == id && atHome(it) } }
+            else wave.clear()
         } else {
             // в волну — только полноскоростные стрелки с поста: бурильщик (мили) кайтеров не догоняет и
             // гибнет в поле, а дома он и защита спавна, и пролом; обездвиженный никуда не идёт
@@ -3649,7 +3655,7 @@ object SpawnAndSwamp {
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
 
         for (creep in fighters) {
-            val marching = enemySpawn != null && creep.id in wave
+            val marching = enemySpawn != null && creep.id in wave && (pushing || !USE_WAVE_SURVIVES_FLIP)
             // за угрозой и рейдером ходят только полноскоростные: покалеченный никого не догонит и
             // никуда не успеет — его место дома (пост, стена пролома, враг у дома)
             val mobile = strikers.any { it.id == creep.id }
@@ -5192,10 +5198,16 @@ object SpawnAndSwamp {
     private const val USE_ARM_AT_DOOR = true
     /** A siege prices his spawn with the rampart his builder finishes over it before the siege would end (rampartBy, v108). */
     private const val USE_PENDING_RAMPART = true
-    /** His melee is paced as his pulled train and reaches our guns of its pace (meleeFactor, trainSwampPeriod, v109). */
-    private const val USE_TRAIN_PACE = true
+    /** His melee is paced as his pulled train and reaches our guns of its pace (meleeFactor, trainSwampPeriod, v109).
+     *  OFF — measured live 25.09.2026 and rejected: unrated A/B against ●ω<♥♪#2, 4+4, v107 1-2-1, v109 0-4-0 and every
+     *  loss sooner (700-1000). Priced right, his army outweighed ours from t≈300, the posture never left DEFEND, and he
+     *  massed and crushed the garrison at home by t=750 — the fights in the field that the fix avoids were the ones that
+     *  still traded. The pace is right; what to do with it (our own melee against his diving one, a healer) is open. */
+    private const val USE_TRAIN_PACE = false
     /** His creeps of this tick, for the pace of his trains (trainSwampPeriod). */
     private var enemyCreepsNow: List<Creep> = emptyList()
+    /** A recall keeps the wave: its members walk home and leave it back in the rally ring (runFighters, v110). */
+    private const val USE_WAVE_SURVIVES_FLIP = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
