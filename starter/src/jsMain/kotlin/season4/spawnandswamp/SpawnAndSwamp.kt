@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 97
+    private const val BOT_VERSION = 98
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3073,7 +3073,22 @@ object SpawnAndSwamp {
         // волна собирается ДОМА: полноскоростные стрелки не в волне и в зоне тревоги от спавна. Боец,
         // ушедший на охоту, в волну не зачисляется — в матче 6 волна из двух охотников на севере и
         // новорождённого на юге ушла тремя маршрутами и полегла по одному
-        fun atHome(c: Creep) = ctx.loadedToSpawn[c.x * 100 + c.y] in 0..SPAWN_ALARM_TICKS
+        // THE ARMY GATHERS AT OUR SPAWN NEAREST THE TARGET (v98). Since the pile spawns (v88-v92) 60-70 % of our
+        // bodies are born at forward spawns, and every one of them walked to the home post first, to be staged there
+        // and walk back out: 200-440 ticks from home to his base against marlyman123, the time the siege never had.
+        // The rally point is the spawn of ours nearest the target that is not under fire now; the waves are staged in
+        // the alarm ring of THAT spawn, idle guns stand at its post. The home stays the home: its threats still call
+        // the free fighters (homeTarget), the husks and the melee guard go there.
+        // "Nearest" is by the walk, on the field the waves march by, not by range: in the gate's fortress a pile spawn
+        // at (88,65) is six cells "nearer" his (5,50) than home (94,49) and a longer walk, and the rally there cost
+        // tower+fortspawn 942 -> 1177
+        val rallySpawn: StructureSpawn = if (!USE_RALLY_FORWARD || enemySpawn == null) mySpawn else {
+            val walk = flowTo(ctx, enemySpawn)
+            ctx.mySpawns.filter { sp -> InfluenceMap.damageAt(sp.x, sp.y, combatEnemies) <= 0.0 && stepsFrom(walk, sp) >= 0 }
+                .minByOrNull { stepsFrom(walk, it) } ?: mySpawn
+        }
+        val rallyField = if (rallySpawn.id == mySpawn.id) ctx.loadedToSpawn else flowTo(ctx, rallySpawn)
+        fun atHome(c: Creep) = rallyField[c.x * 100 + c.y] in 0..SPAWN_ALARM_TICKS
         val freeStrikers = strikers.filter { it.id !in wave }
         val staging = freeStrikers.filter { atHome(it) }
         // сила наступления: ушедшие волны (кто ещё вооружён — волна своих ждёт, см. hold) плюс те,
@@ -3621,15 +3636,20 @@ object SpawnAndSwamp {
             } else null
             // мили (бурильщик) на поводке: враг у дома, стена пролома, пост — и ничего дальше.
             // За целью «на нашей половине» он ушёл на другой край карты и стал турелью (02.09).
+            // a member of the next wave waits where the wave is staged (v98): a healer without a ward and a melee striker
+            // went home by the two rows below while the wave was staged at a forward spawn, were never "staging", and
+            // the wave never left (the gate's tower+fortspawn: 810-1050 `our=0/1009`, the siege 942 -> 1177); the home
+            // guard and a husk stay home
+            val striker = strikers.any { it.id == creep.id }
             when {
                 ward != null -> { target = ward; standoff = 1 }
-                !hasWeapon(creep) -> { target = mySpawn; standoff = HOME_STANDOFF + 1 }
+                !hasWeapon(creep) -> { target = if (striker && hasHeal(creep)) rallySpawn else mySpawn; standoff = HOME_STANDOFF + 1 }
                 homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
                 // поводок — про ПОГОНЮ, а не про осаду: мили, не идущий в волне, остаётся дома, потому
                 // что за кайтящей целью он уходил на другой край карты и становился турелью (02.09).
                 // Идущий в волне марширует со всеми — чужой спавн не кайтит, и мили взят ради него
-                melee && !marching -> { target = mySpawn; standoff = HOME_STANDOFF }
+                melee && !marching -> { target = if (striker) rallySpawn else mySpawn; standoff = HOME_STANDOFF }
                 // враг у дома сильнее гарнизона — пост отрядом, подкрепление копится у спавна
                 homeTarget != null && !marching -> { target = mySpawn; standoff = HOME_STANDOFF }
                 engage != null -> { target = engage; standoff = if (melee) 1 else closeIn }
@@ -3637,7 +3657,7 @@ object SpawnAndSwamp {
                 raider != null && !marching && mobile -> { target = raider; standoff = RANGED_RANGE }
                 marching -> { target = enemySpawn!!; standoff = if (melee) 1 else RANGED_RANGE }
                 wallTarget != null -> { target = wallTarget; standoff = if (melee) 1 else RANGED_RANGE }
-                else -> { target = mySpawn; standoff = HOME_STANDOFF }
+                else -> { target = rallySpawn; standoff = HOME_STANDOFF }
             }
             // к чужому спавну идём полем подхода (по урону), ко всему прочему — обычным
             val flow = if (enemySpawn != null && target.x == enemySpawn.x && target.y == enemySpawn.y) assaultFlow else flowTo(ctx, target)
@@ -4891,6 +4911,8 @@ object SpawnAndSwamp {
     private const val USE_THREAT_KILL_TIME = true
     /** A wave is recalled for home only if it gets back before the house falls (posture, v97). */
     private const val USE_RECALL_IF_SAVES = true
+    /** Waves are staged and idle guns posted at our spawn nearest the target, not at home (runFighters, v98). */
+    private const val USE_RALLY_FORWARD = true
     /** A site's deadline takes the home spawn's life from the hits it lost over the production window too (v96). */
     private const val USE_SPAWN_TREND = false   // measured on siege6 25.09.2026: the spawn loses hits only at the end, the site was fed while the GARRISON died — the clock needs the garrison, not the spawn
     /** The home spawn's hits over the production window (tick to hits), for homeLifeByTrend. */
