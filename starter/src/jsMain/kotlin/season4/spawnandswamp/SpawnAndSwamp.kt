@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 127
+    private const val BOT_VERSION = 128
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2241,7 +2241,14 @@ object SpawnAndSwamp {
             // …but never out of the opening: the house needs its rampart by his first strike (t≈600 for けろびー, ≈790 for
             // Ranamar), the fleet needs the first thousand now — bought in the opening it took the stub's tower+stream
             // 574 -> 1108; once delivery is measured the fleet stands
-            realised >= 0.0 && (wantRampart || homeShare() <= 0.0) &&
+            // …or while there is a job for it now (v128): a fresh container of ours, safe, with a spawn's worth in it and
+            // time to dump it before it rots, reached by a builder born now. The quiet window kept it out of every match
+            // against Ranamar and kerobi (his kiters and raider are never gone from our half): in the v122 and v125
+            // series it was bought in 2 of 16 games against Ranamar and 1 of 6 against kerobi, while against marlyman,
+            // ricardo and ●ω it raised 3-6 spawns a game — and the one win over Ranamar there had three. The job itself
+            // is judged where the builder works (site.safe; it runs under fire and drops the job)
+            realised >= 0.0 && (wantRampart || homeShare() <= 0.0 ||
+                (USE_PILE_BY_JOB && pileCandidate(ctx, null, PILE_BODY.size * CREEP_SPAWN_TIME) != null)) &&
             arenaInfo.ticksLimit - getTicks() > 2 * pileJobTicks) {
             val price = PILE_BODY.sumOf { cost(it) }
             if (energy >= price) {
@@ -5654,6 +5661,8 @@ object SpawnAndSwamp {
     /** No hauler is bought when delivery has fallen below its level at the latest purchase half a window old, with
      *  purchases made since (spawnIfNeeded, v127). */
     private const val USE_FLEET_SLIDING = true
+    /** The pile builder is bought while a job for it exists now, not only after a quiet window at home (v128). */
+    private const val USE_PILE_BY_JOB = true
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
      *  (runFighters scores, tick chooses, v104). */
     private const val USE_TARGET_BY_TAKE = true
