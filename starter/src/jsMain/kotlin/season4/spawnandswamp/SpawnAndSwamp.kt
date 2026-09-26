@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 142
+    private const val BOT_VERSION = 143
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2103,7 +2103,10 @@ object SpawnAndSwamp {
                 // значит запретить башню ровно там, где она и нужна, — враг у ворот (матч 26: worth=true
                 // трижды, площадка не поставлена ни разу). Остаются только часы: спавн должен дожить
                 if (worth && site == null) {
-                    val spot = towerSpot(ctx)
+                    // …in a fortified house on its spot, and only once our rampart stands there (v143): his step cannot
+                    // reach a site under our rampart
+                    val spot = if (USE_FORT_RAMPART_FIRST && fortHome) fortSpot(ctx)?.takeIf { sp -> ctx.ramparts.any { it.my == true && it.x == sp.x && it.y == sp.y } }
+                        else towerSpot(ctx)
                     if (spot != null) {
                         val r = createConstructionSite(spot.x, spot.y, StructureTower::class.js)
                         if (DEBUG_LOG) println("tower: site at (${spot.x},${spot.y})$trace flow=${(flow * 10).toInt() / 10.0} err=${r.error}")
@@ -2326,7 +2329,7 @@ object SpawnAndSwamp {
         // достроил 95 из 482 оставшихся. У готовой башни срока нет — её надо только кормить
         // смотритель покупается под РАБОТУ, которую успеваем сделать, или под готовую башню, которую
         // надо кормить; «есть хоть какая-то площадка» этого вопроса не задаёт
-        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty()) && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
+        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
             // ТЕЛО ПОД РАБОТУ, А НЕ ПОД ЛЮБУЮ. Работа выбирается тем же правилом, что и в runBuilders
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
             val builder = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
@@ -5890,6 +5893,8 @@ object SpawnAndSwamp {
     private const val USE_FORT_HOME = true
     /** His army's share of ours from which a house facing two spawns of his is fortified (measured, v141). */
     private const val FORT_HOME_SHARE = 0.5
+    /** The fortified house ramparts its tower spot first and puts the tower site under it (v143). */
+    private const val USE_FORT_RAMPART_FIRST = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
@@ -6135,6 +6140,24 @@ object SpawnAndSwamp {
         }
     }
 
+    /** The fortified house's tower spot, chosen once (towerSpot behind the spawn) and kept (v143). */
+    private var fortSpotCell = -1
+    private fun fortSpot(ctx: Ctx): Position? {
+        if (fortSpotCell < 0) towerSpot(ctx)?.let { fortSpotCell = it.x * 100 + it.y }
+        return if (fortSpotCell < 0) null else InfluenceMap.cell(fortSpotCell / 100, fortSpotCell % 100)
+    }
+
+    /** The rampart site over the fort's tower spot — placed if missing, null once our rampart stands there (v143). */
+    private fun fortSpotRampartSite(ctx: Ctx): ConstructionSite? {
+        val sp = fortSpot(ctx) ?: return null
+        if (ctx.ramparts.any { it.my == true && it.x == sp.x && it.y == sp.y }) return null
+        val site = ctx.mySites.firstOrNull { it.x == sp.x && it.y == sp.y && (it.progressTotal ?: 0) == buildCost("StructureRampart") }
+        if (site != null) return site
+        val r = createConstructionSite(sp.x, sp.y, StructureRampart::class.js)
+        if (DEBUG_LOG) println("fort rampart: tower spot (${sp.x},${sp.y}) err=${r.error}")
+        return null
+    }
+
     /** The keeper's post in a fortified house: a free cell next to both our home spawn and its tower (v141). */
     private fun fortPost(ctx: Ctx): Position? {
         val spawn = ctx.mySpawn
@@ -6181,8 +6204,11 @@ object SpawnAndSwamp {
         for (b in ctx.builders) {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
             val free = b.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
-            val goal: Position? = site ?: tower
-            val reach = if (site != null) BUILD_RANGE else 1
+            // THE TOWER'S SPOT IS RAMPARTED FIRST (v143): the tower site behind the spawn was still stepped off four times
+            // against kerobi (v142 loss, t=354-620) while his raider walked our base; under our rampart it cannot be
+            val spotRampart = if (USE_FORT_RAMPART_FIRST && fortHome && ctx.myTowers.isEmpty() && site == null) fortSpotRampartSite(ctx) else null
+            val goal: Position? = site ?: spotRampart ?: tower
+            val reach = if (site != null || spotRampart != null) BUILD_RANGE else 1
             val canAct = goal != null && getRange(b, goal) <= reach
             // ОТКУДА ЭТА ПЛОЩАДКА КОРМИТСЯ — сказано в самой работе. Домашнюю башню кормят из спавна;
             // площадку у энергии — из кучи рядом с ней, иначе смотритель возит тысячу по сорок клеток
@@ -6191,11 +6217,11 @@ object SpawnAndSwamp {
                 .minByOrNull { getRange(b, it.pos) } else null
             // …and in a fortified house the tower's shot is taken even when the spawn will not outlive a fighter (v141):
             // under the storm that was exactly when the tower stood empty (48-87 % of the ticks his army was in range)
-            val fortTower = USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty()
+            val fortTower = USE_FORT_HOME && fortHome && (ctx.myTowers.isNotEmpty() || spotRampart != null)
             val mayTake = !fromPile && (lastSpawnOutlivesFighter || fortTower) && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
             val mayScoop = pile != null && free > 0 && getRange(b, pile.pos) <= 1
             if (canAct && carrying > 0) {
-                if (site != null) b.build(site) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
+                if (site != null) b.build(site) else if (spotRampart != null) b.build(spotRampart) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
             }
             // кормить нечего — груз возвращается в спавн, а не лежит в смотрителе до конца матча
             // …unless it is for a rampart of the fortified house (v141)
