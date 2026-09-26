@@ -157,6 +157,8 @@ internal object Memory {
     val flipSeen = intArrayOf(0)
     /** Тиков подряд, что его стволы расколоты (`splitNow`, v664, см. USE_SPLIT_HELD). */
     val splitRun = intArrayOf(0)
+    /** Тик, когда размен до первого боя впервые начался (v667, см. USE_ENGAGE_HOLDS_TO_CONTACT); 0 — не начинался. */
+    val engageSeen = intArrayOf(0)
     /** Стояние гарнизонного крипа на марше (v658, см. USE_GARRISON_STILL_DETOUR): крип -> [тик, клетка, тиков на ней]. */
     val garrisonStill = HashMap<String, IntArray>()
     /** Тик, когда соперник показал почерк MetalicaX (v639, см. USE_METALICA_HOLD); 0 — не показал. */

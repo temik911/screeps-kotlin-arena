@@ -179,13 +179,16 @@ internal object Strategist {
         val idleEvade = USE_ENGAGE_OVER_IDLE_EVADE && pre == Posture.EVADE && !Signals.approachingNow
         // ...И НАЧАТЫЙ РАЗМЕН С КУЛАКОМ НЕ СНИМАЕТСЯ НАШИМ ЖЕ ЗАХВАТОМ ДО ПЕРВОГО БОЯ (v667, см. USE_ENGAGE_HOLDS_TO_CONTACT):
         // флаг, взятый разведчиком, разворачивает проекцию, и без этого армия встречала его кулак в HOLD
-        val engageHeld = USE_ENGAGE_HOLDS_TO_CONTACT && Signals.engagingGarrison && firstFightTick == 0 &&
-            Signals.enemyFistNow && !tourerMode()
+        // ...и только пока бой близко: его кулак в BRACE_RANGE, а размен до первого боя уже начинался (защёлка); без этого
+        // против того, кто стоит дома, армия весь матч держалась размена вместо гонки
+        val engageHeld = USE_ENGAGE_HOLDS_TO_CONTACT && Memory.engageSeen[0] > 0 && firstFightTick == 0 &&
+            Signals.enemyFistNow && i.fistNear && !tourerMode()
         val engageLost = USE_ENGAGE_WHEN_RACE_LOST && (i.raceLostNothingToTake || engageHeld) && (!pre.withdrawing || idleEvade) &&
             (!i.fewFoes || (USE_ENGAGE_VS_FEW && i.hisFlagsGuarded))
         engageAll.n++
         if (engageLost) engageOn.n++
         if (engageLost && !i.raceLostNothingToTake) engageHeldTicks.n++
+        if (USE_ENGAGE_HOLDS_TO_CONTACT && engageLost && firstFightTick == 0 && Memory.engageSeen[0] == 0) Memory.engageSeen[0] = getTicks()
         if (idleEvade) { engIdleAll.n++; if (engageLost) engIdleOn.n++ }
         // ...И ПОКА ИДЁТ ЭТОТ РАЗМЕН, АРМИЮ НЕ ДРОБИМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING): решение драться и
         // решение растащить армию по флагам — об одной величине, и до сих пор они принимались порознь
@@ -2926,6 +2929,8 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     val underTheirFire = combatArmy.any { InfluenceMap.damageAt(it.x, it.y, meas.forces.combatEnemies) > 0.0 }
     // его ствол уже достаёт нашу армию (v645, см. USE_FIST_FIGHT_IN_REACH): его вооружённый в дальности выстрела от нашего боевого
     val hisGunsReach = meas.forces.armedEnemies.any { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE } }
+    /** Его вооружённые в BRACE_RANGE от наших бойцов — бой близко (v667, см. USE_ENGAGE_HOLDS_TO_CONTACT). */
+    val fistNear = meas.forces.armedEnemies.any { e -> combatArmy.any { getRange(e, it) <= BRACE_RANGE } }
     private val retreatByDistance = Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
     // ...и по ЕГО шагу (v222, см. USE_RETREAT_BY_HIS_STEP): его центр сейчас против его центра в начале окна, оба — от
     // нашего центра в начале окна
