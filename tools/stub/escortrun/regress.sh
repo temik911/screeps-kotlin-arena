@@ -119,3 +119,7 @@ run  map-stuck.txt  - rev+keep+blk
 # stachu's interceptor (an M1A1 at t=50 kills the puller in the centre) fed by a 7-a-tick economy, here WITH a racing
 # train: lost by construction until the bot can defend its train before its energy allows a fighter
 open map-match4.txt - icpt
+# ricardo18informatica2020#8 (6ab841a9, 6ab841e5 — both v12 losses): no puller, an M4A3 on tick 20 straight at our
+# escort. The escort waits on the inner ring of its own ramparts, where a melee cannot stand next to it
+run  map-match4.txt - rush8
+run  map-match1.txt - rush8

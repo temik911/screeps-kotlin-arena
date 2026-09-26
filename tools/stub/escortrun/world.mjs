@@ -28,9 +28,10 @@ export const alive = () => world.objects.filter((o) => o.exists);
 
 const BLOCKING = new Set(['spawn', 'extension', 'tower', 'wall', 'source']);
 
-export function blockedAt(x, y) {
+export function blockedAt(x, y, owner) {
   if (terrainAt(x, y) === 1) return true;
-  return world.objects.some((o) => o.exists && o.x === x && o.y === y && BLOCKING.has(o.kind));
+  // a rampart lets through its owner only (movement.js checkObstacleAtXY: `rampart && !isPublic && user != object.user`)
+  return world.objects.some((o) => o.exists && o.x === x && o.y === y && (BLOCKING.has(o.kind) || (o.kind === 'rampart' && owner !== undefined && o.owner !== owner)));
 }
 
 export function creepAt(x, y) {
@@ -159,7 +160,11 @@ export function process(ResourceClass) {
       if (tg && tg.exists && tg.kind === 'creep' && range(c, tg) <= 1 && tg.owner === c.owner) addH(tg, live(c, 'heal') * 12 * effectMul(c, 'eff_heal_modifier'));
     }
   }
-  for (const [tg, d] of damage) applyDamage(tg, d);
+  // a hit on a creep standing on a rampart goes into the rampart (attack.js / rangedAttack.js: the target is swapped)
+  for (const [tg, d] of damage) {
+    const ramp = tg.kind === 'creep' ? world.objects.find((o) => o.exists && o.kind === 'rampart' && o.x === tg.x && o.y === tg.y) : null;
+    applyDamage(ramp || tg, d);
+  }
   for (const [tg, h] of heals) if (tg.exists && tg.kind === 'creep') applyHeal(tg, h);
   for (const o of world.objects) {
     if (!o.exists || o.hits === undefined) continue;
@@ -295,7 +300,7 @@ function movePhase(t) {
     const d = DIRS[m.move.dir];
     if (!d) continue;
     const tx = c.x + d[0], ty = c.y + d[1];
-    if (!inBounds(tx, ty) || blockedAt(tx, ty)) continue;
+    if (!inBounds(tx, ty) || blockedAt(tx, ty, c.owner)) continue;
     const key = idx(tx, ty);
     if (!cand.has(key)) cand.set(key, []);
     cand.get(key).push({ c, tx, ty, pulled });

@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v12"
+    private const val BOT_VERSION = "v13"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -150,6 +150,7 @@ object EscortRun {
         val occupant: HashMap<Int, Creep>,
         val enemyAt: HashSet<Int>,
         val blocked: List<Position>,
+        val myRamparts: List<Position>,
         val escortFlow: IntArray?,
         val enemyEscortFlow: IntArray?,
     )
@@ -164,6 +165,7 @@ object EscortRun {
         if (openingPlan == null) { planOpening(w); aimSpawn(w) }
         trackEnemyScouts(w)
         assignScouts(w)
+        decideHold(w)
         runSpawn(w)
         runTrain(w)
         runScouts(w)
@@ -235,7 +237,7 @@ object EscortRun {
             workers = others.filter { Bodies.isWorker(it) || Bodies.isHauler(it) },
             enemyArmed = enemies.filter { Bodies.isArmed(it) },
             enemyScouts = enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
-            occupant = occupant, enemyAt = enemyAt, blocked = blocked,
+            occupant = occupant, enemyAt = enemyAt, blocked = blocked, myRamparts = ramparts.filter { it.my == true },
             escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow,
         )
     }
@@ -450,6 +452,8 @@ object EscortRun {
 
         val ours = ourArrival(w)
         val theirs = theirArrival(w)
+
+        if (holding) { holdSpawn(w, e, ours, theirs); return }
 
         // 2. оборона поезда: боевые враги у эскорта сильнее наших бойцов рядом с ним
         if (escort != null) {
@@ -784,7 +788,7 @@ object EscortRun {
     private fun runTrain(w: World) {
         keeperStepAside = null
         val escort = w.escort ?: return
-        val flow = w.escortFlow ?: return
+        val flow = (if (holding) homeFlow(w) else null) ?: w.escortFlow ?: return
         val flag = w.myFlag ?: return
         pinned.add(idOf(escort))
         // проверка буксировки результатом: после шага с цепью усталость обязана быть меньше пешей
@@ -806,6 +810,17 @@ object EscortRun {
         }
         lastChain = chain.map { idOf(it) }
         for (p in chain) pinned.add(idOf(p))
+        // дома тягачи тоже встают на рампарты вокруг эскорта: тысяча хитов тягача — первая цель мили (stachu#9 снял
+        // нашего M10 за 33 тика), а на рампарте удар уходит в рампарт
+        if (holding && (homeFlow(w)?.get(key(escort)) ?: -1) == 0) {
+            for (p in chain + free) {
+                if (w.myRamparts.any { onCell(p, it) }) continue
+                val spot = w.myRamparts.filter { r -> dist(r, escort) <= 1 && !w.occupant.containsKey(key(r)) }.minByOrNull { dist(it, p) } ?: continue
+                pinned.remove(idOf(p))
+                val step = stepAround(w, p, spot, 0, 1, 1) ?: continue
+                TrafficManager.request(p, step, PULLER_PRIORITY)
+            }
+        }
 
         // связки
         val spawn = w.mySpawn
@@ -910,6 +925,103 @@ object EscortRun {
         }
     }
 
+    // ==================== оборона дома: эскорт на своих рампартах ====================
+
+    /** Эскорт держится дома: рядом враг, которого наша охрана не побеждает, и он успеет к эскорту раньше финиша. */
+    private var holding = false
+    private var holdSince = -1
+    /** Какие враги держат нас дома — для журнала и для бойцов. */
+    private var holdThreats: List<Creep> = emptyList()
+
+    /**
+     * ДОМ. Удар по эскорту на его СОБСТВЕННОМ рампарте приходится в рампарт (attack.js/rangedAttack.js: цель под
+     * рампартом подменяется рампартом, 10 000 хитов), и боец на рампарте тоже неуязвим. Поэтому раннего мили, которого
+     * охрана не бьёт в поле, эскорт встречает дома, а не в центре: ricardo#8 на 20-м тике заказал M4A3 (440 энергии,
+     * 90 урона в тик) и за 55 тиков у центра убил наш эскорт с полными хитами, пока наши тягачи стояли рядом (6ab841a9,
+     * 6ab841e5 — два поражения v12 из двух). Дома его ждёт боец с рампарта; стоит враг поодаль — ждём, копя охрану,
+     * которая его побьёт: их эскорт без тягача идёт вчетверо дольше, а их флаг держит наш блокировщик.
+     * Держимся, только если враг успевает к эскорту раньше финиша, а эскорт успевает домой раньше врага.
+     */
+    private fun decideHold(w: World) {
+        val escort = w.escort
+        val spawn = w.mySpawn
+        if (escort == null || spawn == null || w.myRamparts.isEmpty() || onCell(escort, w.myFlag)) { holding = false; return }
+        val armed = w.enemyArmed.filter { !isEscort(it) } + w.enemyPending.filter { Bodies.wasArmed(it) }
+        val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 6 }
+        val ours = ourArrival(w)
+        val threats = armed.filter { e ->
+            val eta = dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0)
+            eta < ours
+        }
+        if (threats.isEmpty() || wins(guards, threats.filter { !it.spawning }.ifEmpty { threats })) {
+            if (holding) println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}")
+            holding = false; holdThreats = emptyList(); return
+        }
+        val home = homeFlow(w) ?: run { holding = false; return }
+        val homeD = home[key(escort)]
+        if (homeD < 0) { holding = false; return }
+        val homeTicks = homeD * 2
+        val contact = threats.minOf { e -> dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0) }
+        // уже держимся — держимся, пока угроза есть (гистерезис); иначе — только если успеваем домой до встречи
+        val hold = holding || homeTicks < contact
+        if (hold && !holding) { holdSince = w.now; println("hold t=${w.now}: HOME — threats ${threats.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, escort) + (if (it.spawning) "(spawning)" else "") }} guards=${guards.size} homeTicks=$homeTicks contact=$contact ours=$ours") }
+        holding = hold
+        holdThreats = threats
+    }
+
+    /**
+     * Заказы, пока эскорт дома. Эскорт на рампарте неуязвим, флаги — нет, поэтому сперва флаги: блокировщик их флага
+     * (их эскорт без тягача всё равно идёт к нему), хранитель нашего; затем боец, который побеждает угрозу в поле (с
+     * ним держаться дома больше незачем), а если он дороже, чем копится за двести тиков, — дешёвый боец на рампарт:
+     * с рампарта он бьёт подошедшего без ответного урона.
+     */
+    private fun holdSpawn(w: World, e: Int, ours: Int, theirs: Int) {
+        if (theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
+        val myFlag = w.myFlag
+        val escort = w.escort ?: return
+        if (myFlag != null && scoutsOn(w, KEEP) == 0 && fightersOn(w, GUARD_FLAG) == 0 && w.enemies.none { onCell(it, myFlag) }) {
+            val body = Bodies.moves(1)
+            if (e >= Bodies.cost(body)) { if (order(w, body, "keeper", "holding at home; our flag is empty")) scoutQueue.addLast(KEEP); return }
+            saving(w, "keeper", Bodies.cost(body)); return
+        }
+        val live = holdThreats.filter { !it.spawning }.ifEmpty { holdThreats }
+        val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 8 }
+        val winner = cheapestWinner(live, guards, SPAWN_ENERGY_CAPACITY)
+        val cheap = meleeBody(maxOf(Bodies.cost(MOVE) + Bodies.cost(ATTACK), minOf(e, 2 * (Bodies.cost(MOVE) + Bodies.cost(ATTACK)))))!!
+        val body = if (winner != null && (Bodies.cost(winner) <= e + HOLD_SAVE || guards.isNotEmpty() || fighterQueue.contains(ESCORT_GUARD))) winner else cheap
+        if (e >= Bodies.cost(body)) { if (order(w, body, "defender", "holding at home vs ${live.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, escort) }}; guards=${guards.size}")) fighterQueue.addLast(ESCORT_GUARD); return }
+        saving(w, "home defender ${Bodies.summary(body)}", Bodies.cost(body))
+    }
+
+    /** Боец, побеждающий угрозу в поле, покупается дома, если копится не дольше стольких тиков; иначе — дешёвый на рампарт. */
+    private const val HOLD_SAVE = 200
+
+    /**
+     * Рампарты, к которым враг не может встать вплотную: все восемь соседей — наши рампарты или непроходимое (кольцо
+     * вокруг спавна). Мили врага эскорта на такой клетке не достаёт вовсе, а стрелок бьёт в рампарт. Угловой рампарт
+     * так не защищает: стенд rush8 — M4A3 сто одиннадцать тиков рубил рампарт (11,88) под эскортом и снёс его.
+     */
+    private fun safeRamparts(w: World): List<Position> {
+        val mine = w.myRamparts.mapTo(HashSet()) { key(it) }
+        val inner = w.myRamparts.filter { r ->
+            DIRECTIONS.all { (dx, dy) -> val x = r.x + dx; val y = r.y + dy; !DistanceMap.inBounds(x, y) || (x * 100 + y) in mine || DistanceMap.isWall(x, y) }
+        }
+        return inner.ifEmpty { w.myRamparts }
+    }
+
+    /** Поле к безопасным рампартам (цена болота эскорта). */
+    private fun homeFlow(w: World): IntArray? {
+        if (w.myRamparts.isEmpty()) return null
+        val k = "home"
+        val now = getTicks()
+        val hit = flowCache[k]
+        if (hit != null && (flowCacheTick[k] ?: -100) > now - 50) return hit
+        val f = DistanceMap.flowFieldToAny(safeRamparts(w), w.blocked, 5)
+        flowCache[k] = f
+        flowCacheTick[k] = now
+        return f
+    }
+
     // ==================== бойцы ====================
 
     /** Задания бойцов: id -> GUARD_FLAG (наш флаг), BREAK (их флаг), ESCORT_GUARD (при эскорте). Задание даётся при
@@ -947,6 +1059,21 @@ object EscortRun {
             var standOn: Position? = null
             var why: String
             val threat = if (escort != null) w.enemyArmed.filter { dist(it, escort) <= THREAT_RANGE && dist(it, f) <= 20 }.minByOrNull { dist(it, f) } else null
+            if (holding && role == ESCORT_GUARD && escort != null) {
+                // дома: бьём всё, что достаём, и стоим на рампарте у эскорта — с рампарта урон приходится не в нас
+                attackBest(f, w, w.enemies.filter { dist(it, f) <= (if (melee) 1 else RANGED_RANGE) }.minByOrNull { it.hits })
+                if (Bodies.liveMoves(f) == 0) continue
+                // рампарт, с которого достаём ближайшую угрозу (мили — вплотную, стрелок — на три), иначе у эскорта
+                val reach = if (melee) 1 else RANGED_RANGE
+                val foe = holdThreats.filter { !it.spawning }.minByOrNull { dist(it, escort) }
+                val free = w.myRamparts.filter { r -> w.occupant[key(r)].let { it == null || it === f } }
+                val spot = (if (foe != null) free.filter { dist(it, foe) <= reach }.minByOrNull { dist(it, f) } else null)
+                    ?: free.filter { dist(it, escort) <= 2 }.minByOrNull { dist(it, escort) * 100 + dist(it, f) }
+                if (spot != null && onCell(f, spot)) { pinned.add(id); continue }
+                val step = if (spot != null) stepAround(w, f, spot, 0, 5, 1) else stepAround(w, f, escort, 1, 5, 1)
+                if (step != null) TrafficManager.request(f, step, FIGHTER_PRIORITY)
+                continue
+            }
             when {
                 threat != null && (role == ESCORT_GUARD || dist(f, escort!!) <= 8) -> { target = threat; why = "defend" }
                 role == GUARD_FLAG && myFlag != null -> {
@@ -1000,7 +1127,16 @@ object EscortRun {
             if (step != null) return step
         }
         val f = flowTo("to:${goal.x},${goal.y}", goal, w.blocked, swampCost, ttl = ttl)
-        return DistanceMap.flowStep(f, c.x, c.y, range, w.occupant.keys, w.enemyAt)
+        val step = DistanceMap.flowStep(f, c.x, c.y, range, w.occupant.keys, w.enemyAt) ?: return null
+        // шаг в клетку нашего неподвижного (поезд дома, хранитель) — не шаг: его не толкнуть. Обход по полю, где наши
+        // неподвижные в пяти клетках — стены (стенд rush8: блокировщик простоял за эскортом у спавна 150 тиков)
+        val occ = w.occupant[key(step)]
+        if (occ != null && occ.my && idOf(occ) in pinned) {
+            val walls = w.active.filter { idOf(it) in pinned && it !== c && dist(it, c) <= 5 }
+            val g = flowTo("around:${idOf(c)}", goal, w.blocked + walls, swampCost, ttl = 1)
+            return DistanceMap.flowStep(g, c.x, c.y, range, w.occupant.keys, w.enemyAt)
+        }
+        return step
     }
 
     /** Удар: цель, если достаёт; иначе вооружённый враг рядом; иначе любой рядом (слабейший). */

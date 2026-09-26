@@ -13,6 +13,7 @@ import { Source } from './game/prototypes/source.mjs';
 import { StructureSpawn } from './game/prototypes/spawn.mjs';
 import { StructureContainer } from './game/prototypes/container.mjs';
 import { EscortCreep } from './arena/season_4/escort_run/basic/prototypes.mjs';
+import { StructureRampart } from './game/prototypes/rampart.mjs';
 import { CostMatrix, searchPath } from './game/path-finder.mjs';
 import { getDirection } from './game/utils.mjs';
 
@@ -61,6 +62,12 @@ function place(side, owner) {
   const esc = new EscortCreep(side.escort[0], side.escort[1], owner, ESCORT_BODY); world.objects.push(esc);
   const flag = new Flag(side.flag[0], side.flag[1]); flag.owner = owner; world.objects.push(flag);
   world.terrain[idx(side.spawn[0], side.spawn[1])] = 0; world.terrain[idx(side.source[0], side.source[1])] = 0; world.terrain[idx(side.escort[0], side.escort[1])] = 0; world.terrain[idx(side.flag[0], side.flag[1])] = 0;
+  // the live layout: 24 ramparts of the owner round its spawn (5x5, the spawn cell included in the live match — here the
+  // spawn cell is left out, it is impassable anyway); a creep on its own rampart takes its hits into the rampart
+  if (MAP) for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
+    if (!dx && !dy) continue;
+    world.objects.push(new StructureRampart(side.spawn[0] + dx, side.spawn[1] + dy, owner));
+  }
   return { sp, src, esc, flag };
 }
 function buildLiveMap(path) {
@@ -99,7 +106,7 @@ const HARDY_DEBUT_PERIOD = 3;
 // the stub's searchPath knows terrain only: structures (spawns, sources, walls) go into the cost matrix — the first
 // enemy melee stood at its spawn's side for 240 ticks wanting to step onto the spawn cell
 const STRUCT = new Set(['spawn', 'extension', 'tower', 'wall', 'source']);
-function structMatrix() { const cm = new CostMatrix(); for (const o of world.objects) if (o.exists && STRUCT.has(o.kind)) cm.set(o.x, o.y, 255); return cm; }
+function structMatrix() { const cm = new CostMatrix(); for (const o of world.objects) if (o.exists && (STRUCT.has(o.kind) || (o.kind === 'rampart' && o.owner === 0))) cm.set(o.x, o.y, 255); return cm; }
 function pathStepTo(c, target, stop) {
   if (range(c, target) <= stop) return null;
   const cm = structMatrix();
@@ -141,7 +148,7 @@ let enemyQueue = [];
 // 'icpt' — stachu's interceptor: one M1A1 at t=50 that walks to our train, kills the puller and then chips the escort.
 const roleOf = new Map();
 const done = {};
-const REV = () => has('rev') || has('keep') || has('blk') || has('blk1');
+const REV = () => has('rev') || has('keep') || has('blk') || has('blk1') || has('rush8');
 function orderRole(body, role) {
   const r = theirs.sp.spawnCreep(body);
   if (r.object) { roleOf.set(r.object.id, role); done[role] = (done[role] || 0) + 1; world.events.push(`t=${world.tick} enemy orders ${r.object.summary()} as ${role}`); return true; }
@@ -162,10 +169,11 @@ function metaEnemyTick(mine, oursC) {
     const e = sp.store.energy;
     const haveP = mine.some(isPuller);
     if (has('blk1') && !done.blk1) { if (e >= 50) orderRole([M], 'blk1'); }
-    else if (!haveP && e >= 500) orderRole(PULLER, 'puller');
+    else if (!haveP && !has('rush8') && e >= 500) orderRole(PULLER, 'puller');
     else if (haveP && has('keep') && !done.keep) { if (e >= 50) orderRole([M], 'keep'); }
     else if (haveP && has('blk') && !done.blk) { if (e >= 50) orderRole([M], 'blk'); }
     else if (has('icpt') && !done.icpt && world.tick >= 50 && e >= 130) orderRole([M, A], 'icpt');
+    else if (has('rush8') && !done.rush8 && world.tick >= 20 && e >= 440) orderRole([M, M, M, M, A, A, A], 'rush8');
   }
   if (!esc || !esc.exists) return;
   const flag = theirs.flag;
@@ -199,6 +207,12 @@ function metaEnemyTick(mine, oursC) {
       if (c.x === target.x && c.y === target.y) continue;
       if (range(c, target) <= 1) { if (!creepAt(target.x, target.y) && !(role === 'keep' && range(esc, target) <= 1)) c.move(getDirection(target.x - c.x, target.y - c.y)); continue; }
       stepToward(c, target, 1);
+    } else if (role === 'rush8') {
+      // ricardo18informatica2020#8 (6ab841a9, 6ab841e5): an M4A3 ordered at t=20 walks straight at our escort and
+      // hits nothing else; it does not attack ramparts — a creep on its own rampart is hit through the rampart
+      const ourEsc = ours.esc && ours.esc.exists ? ours.esc : null;
+      if (ourEsc && range(c, ourEsc) <= 1) c.attack(ourEsc);
+      if (ourEsc) stepToward(c, ourEsc, 1);
     } else if (role === 'icpt') {
       const ourPullers = oursC.filter((o) => isPuller(o) && o.body.length >= 3);
       const adjP = ourPullers.find((o) => range(c, o) <= 1);
