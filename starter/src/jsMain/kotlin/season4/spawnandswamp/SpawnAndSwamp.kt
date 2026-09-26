@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 145
+    private const val BOT_VERSION = 146
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1134,7 +1134,12 @@ object SpawnAndSwamp {
         // a volley is not healed off by his M5H3 (36 a tick), and the ramparts keep the spawn and the tower standing
         // while it fires. The flag is sticky and set once he has two spawns and an army at least half ours — across the
         // store since v122 at t=500 that is 100 of 114 games against kerobi and 1 of 226 against everyone else
-        if (USE_FORT_HOME && !fortHome && enemySpawns.size >= 2 && enemyPower >= ourDefense * FORT_HOME_SHARE) {
+        // …his spawn SITE counts (v146): it stands from t≈240-350 while the spawn is done ~100 ticks later, and the tower
+        // needs those ticks — his early storms came at 625-775. Across the rating logs since v122 the flag with his sites
+        // fires by t=400 in 73 of 75 games against kerobi (median 300, against 360 without) and never by t=500 against
+        // marlyman or ricardo (their medians 850 and 1220, as before)
+        val hisSpawnSites = if (USE_FORT_BY_SITE) enemySitesNow.count { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureSpawn") } else 0
+        if (USE_FORT_HOME && !fortHome && enemySpawns.size + hisSpawnSites >= 2 && enemyPower >= ourDefense * FORT_HOME_SHARE) {
             fortHome = true
             if (DEBUG_LOG) println("fort home t=${getTicks()}: his spawns=${enemySpawns.size} enemy=${enemyPower.toInt()} our=${ourDefense.toInt()}")
         }
@@ -5921,6 +5926,8 @@ object SpawnAndSwamp {
     /** In a fortified house the keeper is bought before haulers while its tower is not up, and re-bought under a raid
      *  once it is (spawnIfNeeded, v145). */
     private const val USE_FORT_KEEPER_FIRST = true
+    /** The fortified-house flag counts his spawn sites with his spawns (tick, v146). */
+    private const val USE_FORT_BY_SITE = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
