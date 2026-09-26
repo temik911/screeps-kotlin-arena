@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v14"
+    private const val BOT_VERSION = "v15"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -948,6 +948,14 @@ object EscortRun {
                 else { occ.move(dirTo(occ, escort)); escort.move(dirTo(escort, next)) }
                 moved = true
                 println("train t=${w.now}: ${idOf(occ)} ${Bodies.summaryOf(occ)} gives the escort its cell (${next.x},${next.y}) ${if (aside != null) "aside" else "by swap"}")
+            } else if (escort.fatigue == 0 && occ != null && occ.my && occ !in chain && Bodies.isPuller(occ, PULLER_MIN_MOVE)) {
+                // на следующей клетке наш тягач не из цепи (поезд развернулся домой, и хвост оказался впереди) — обмен:
+                // он в клетку эскорта, эскорт в его; цепь этот тик стоит. Без обмена оба просили клетку друг друга, и
+                // эскорт простоял в (23,76) сто десять тиков, пока перехватчик ел тягачей (стенд icpt, v15)
+                occ.move(dirTo(occ, escort))
+                pinned.add(idOf(occ))
+                escort.move(dirTo(escort, next))
+                moved = true
             } else if (escort.fatigue == 0 && (occ == null || occ.my)) {
                 if (occ != null && occ.my) yieldCells = setOf(key(next))
                 escort.move(dirTo(escort, next))
@@ -1052,7 +1060,10 @@ object EscortRun {
         val coming = { e: Creep -> closing[idOf(e)]?.let { h -> h.size >= 11 && h.first().second - h.last().second >= 5 } == true }
         // намерение дальнего ещё не видно (рождается или меньше десяти тиков истории) — он тоже держит
         val unknown = { e: Creep -> e.spawning || (closing[idOf(e)]?.size ?: 0) < 11 }
-        val decisive = threats.filter { dist(it, escort) <= HOLD_RADIUS || coming(it) || unknown(it) }
+        // держась, отпускаем только того, кто отошёл вдвое дальше: иначе перехватчик stachu, стоявший в центре в 45-60
+        // клетках, то держал, то отпускал эскорт каждые несколько тиков, и тот ходил туда-сюда у дома (6ab84583)
+        val radius = if (holding) 2 * HOLD_RADIUS else HOLD_RADIUS
+        val decisive = threats.filter { dist(it, escort) <= radius || coming(it) || unknown(it) }
         if (decisive.isEmpty() || wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive })) {
             if (holding) println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}")
             holding = false; holdThreats = emptyList(); return
@@ -1076,9 +1087,23 @@ object EscortRun {
      * с рампарта он бьёт подошедшего без ответного урона.
      */
     private fun holdSpawn(w: World, e: Int, ours: Int, theirs: Int) {
+        val escort = w.escort ?: return
+        // боец дома — прежде флагов, если бойца ещё нет: перехватчик stachu3478 приходил к нашим рампартам на ~175-м
+        // тике и ждал там; боец за 130, купленный третьим (после блокировщика и хранителя), появлялся на 231-м, эскорт
+        // выходил к 250-му и не успевал к их пешему финишу (~410; 6ab84583, 6ab845fd). Первым он встречает перехватчика
+        // у рампартов, эскорт уходит к ~185-му, а блокировщик за ним ещё успевает к их флагу задолго до их эскорта
+        if (w.fighters.none { Bodies.isArmed(it) } && !fighterQueue.contains(ESCORT_GUARD)) {
+            val cheap = meleeBody(Bodies.cost(MOVE) + Bodies.cost(ATTACK))!!
+            if (e >= Bodies.cost(cheap)) { if (order(w, cheap, "defender", "holding at home, no armed guard yet")) fighterQueue.addLast(ESCORT_GUARD); return }
+            // копим, только если блокировщик их флага ещё успеет после бойца; иначе сперва блокировщик
+            // блокировщику после бойца копить ещё пятьдесят с нуля — это и есть его задержка (стенд icpt: гонщик с
+            // перехватчиком финишировал на 246-м, пока мы копили на бойца, а блокировщик шёл следом)
+            val blockerLate = w.enemyFlag != null && scoutsOn(w, BLOCK) == 0 &&
+                (Bodies.cost(cheap) - e) + Bodies.spawnTicks(cheap) + Bodies.cost(MOVE) + scoutEta(w, w.enemyFlag) >= theirs - RACE_MARGIN
+            if (!blockerLate) { saving(w, "home defender ${Bodies.summary(cheap)}", Bodies.cost(cheap)); return }
+        }
         if (theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
         val myFlag = w.myFlag
-        val escort = w.escort ?: return
         if (myFlag != null && scoutsOn(w, KEEP) == 0 && fightersOn(w, GUARD_FLAG) == 0 && w.enemies.none { onCell(it, myFlag) }) {
             val body = Bodies.moves(1)
             if (e >= Bodies.cost(body)) { if (order(w, body, "keeper", "holding at home; our flag is empty")) scoutQueue.addLast(KEEP); return }

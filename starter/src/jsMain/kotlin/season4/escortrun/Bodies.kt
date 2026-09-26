@@ -125,8 +125,10 @@ internal object Bodies {
             for (u in them) if (u.alive()) u.healUp(u.heal())
             if (ours.alive()) ours.healUp(ours.heal())
             them.removeAll { !it.alive() }
-            if (them.isEmpty()) return t
+            // взаимная гибель — не победа: M1A1 против M1A1 «выигрывался», и держание дома снималось ради боя в поле,
+            // где наш боец умирал вместе с их перехватчиком (stachu3478#1, 6ab84583)
             if (!ours.alive()) return -1
+            if (them.isEmpty()) return t
         }
         return -1
     }
