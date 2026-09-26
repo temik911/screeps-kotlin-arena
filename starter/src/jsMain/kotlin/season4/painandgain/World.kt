@@ -1943,8 +1943,10 @@ internal object Garrisons {
                 // ШАР ДЕРЖИТ ЦЕНТР (v621, см. USE_BALL_HOLDS_CENTER): цель шара — оспариваемый флаг (открытая середина, откуда
                 // есть куда уйти), к нему при его группе и меньше BALL_FLAGS его флагов — к ближней группе стрелков
                 if (USE_BALL_HOLDS_CENTER) {
-                    val mate = medians.withIndex().filter { (i, m) -> i != si && m != null }
-                        .minByOrNull { (_, m) -> maxOf(abs(m!!.first - mx), abs(m.second - my)) }?.value
+                    // ...к той из них, до которой шар доходит раньше него (v694, см. USE_BALL_REFUGE_REACHABLE); нет таких — к ближней
+                    val mates = medians.withIndex().filter { (i, m) -> i != si && m != null }.map { (_, m) -> m!! }
+                    val reachable = if (USE_BALL_REFUGE_REACHABLE) mates.filter { (x, y) -> hisDist(x, y) > maxOf(abs(x - mx), abs(y - my)) } else emptyList()
+                    val mate = reachable.ifEmpty { mates }.minByOrNull { (x, y) -> maxOf(abs(x - mx), abs(y - my)) }
                     val contested = contestedFlag(ctx)
                     // УХОД ШАРА ПО СРОКУ ЕГО ОБСТРЕЛА (v624, см. USE_BALL_FIRE_REFUGE): к своим — когда его обстрел клетки шара
                     // ближе двойного пути до своих с запасом, путём внутри области, куда шар успевает раньше его
