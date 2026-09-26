@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v13"
+    private const val BOT_VERSION = "v14"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -150,6 +150,7 @@ object EscortRun {
         val occupant: HashMap<Int, Creep>,
         val enemyAt: HashSet<Int>,
         val blocked: List<Position>,
+        val blockedForEnemy: List<Position>,
         val myRamparts: List<Position>,
         val escortFlow: IntArray?,
         val enemyEscortFlow: IntArray?,
@@ -237,7 +238,7 @@ object EscortRun {
             workers = others.filter { Bodies.isWorker(it) || Bodies.isHauler(it) },
             enemyArmed = enemies.filter { Bodies.isArmed(it) },
             enemyScouts = enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
-            occupant = occupant, enemyAt = enemyAt, blocked = blocked, myRamparts = ramparts.filter { it.my == true },
+            occupant = occupant, enemyAt = enemyAt, blocked = blocked, blockedForEnemy = blockedForEnemy, myRamparts = ramparts.filter { it.my == true },
             escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow,
         )
     }
@@ -512,9 +513,21 @@ object EscortRun {
             }
         }
 
-        // 4'. их флаг и при НЕпроигранной гонке: блокировщик, пришедший раньше их эскорта, выигрывает матч при любой
-        //     гонке, если они не держат флаг хранителем (ricardo#4/#5 хранителя не ставят — их M1 идёт на НАШ флаг)
-        if (!raceLost && theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
+        // 4'. клетки подхода. Их M1, ждущий у нашего флага, пока наш хранитель на клетке, встаёт ровно на клетку
+        //     подхода нашего эскорта (он идёт от центра тем же путём), и эскорт обходит его — на карте 6ab843ac обход
+        //     пришёлся на болото (десять тиков вместо двух), гонку, выигранную на пути, проиграли на последней клетке
+        //     (76561198870429455#31 и #34 — 101-й тик, M1 к нашему флагу). Второй M1 идёт туда, где обход дороже: на
+        //     клетку подхода НАШЕГО эскорта (второй хранитель) или ИХ (блокировщик); свободный их флаг — всегда блок.
+        //     Цена обхода — по полю маршрута с перекрытой клеткой подхода, из местности каждой карты.
+        if (!raceLost) {
+            val ourPen = detourPenalty(w.escort, w.escortFlow, w.myFlag, w.blocked, "ours")
+            val theirPen = detourPenalty(w.enemyEscort, w.enemyEscortFlow, w.enemyFlag, w.blockedForEnemy, "theirs")
+            val theirFree = w.enemyFlag != null && w.occupant[key(w.enemyFlag)] == null && enemyScoutEta(w, w.enemyFlag, "THEIRS") > scoutEta(w, w.enemyFlag)
+            val approachFirst = !theirFree && ourPen > 0 && ourPen >= theirPen
+            if (approachFirst && approachOrder(w, e, ours, ourPen, theirPen)) return
+            if (theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
+            if (ourPen > 0 && approachOrder(w, e, ours, ourPen, theirPen)) return
+        }
 
         // 7. доход: пока боевого врага нет рядом, деньги работают в добытчике
         if (w.workers.isEmpty() && w.homeSource != null && arenaInfo.ticksLimit - w.now > 400) {
@@ -560,7 +573,59 @@ object EscortRun {
         return false
     }
 
+    /** Второй хранитель на клетку подхода нашего эскорта: если его ещё нет, хранитель флага есть, и он успевает раньше эскорта. */
+    private fun approachOrder(w: World, e: Int, ours: Int, ourPen: Int, theirPen: Int): Boolean {
+        if (scoutsOn(w, APPROACH) > 0 || scoutsOn(w, KEEP) == 0) return false
+        val a = approachCell(w.escort, w.escortFlow) ?: return false
+        val eta = scoutEta(w, a)
+        if (eta >= ours) return false
+        val body = Bodies.moves(1)
+        if (e >= Bodies.cost(body)) { if (order(w, body, "approach-keeper", "our approach (${a.x},${a.y}) detour costs us $ourPen vs them $theirPen; eta=$eta ours=$ours")) scoutQueue.addLast(APPROACH); return true }
+        saving(w, "approach keeper", Bodies.cost(body)); return true
+    }
+
+    /** Клетки маршрута эскорта по полю, от следующей до флага включительно. */
+    private fun routeOf(escort: Creep, flow: IntArray): List<Int> {
+        val out = ArrayList<Int>()
+        var cell = key(escort)
+        var guard = 0
+        while (flow[cell] > 0 && guard++ < 400) {
+            val cx = cell / 100; val cy = cell % 100
+            var best = -1
+            var bestD = flow[cell]
+            for ((dx, dy) in DIRECTIONS) {
+                val nx = cx + dx; val ny = cy + dy
+                if (!DistanceMap.inBounds(nx, ny)) continue
+                val d = flow[nx * 100 + ny]
+                if (d in 0 until bestD) { bestD = d; best = nx * 100 + ny }
+            }
+            if (best < 0) break
+            out.add(best)
+            cell = best
+        }
+        return out
+    }
+
+    /**
+     * Во сколько тиков эскорту обойдётся чужой крип на его клетке подхода: поле к флагу с этой клеткой непроходимой,
+     * разница в клетке ПЕРЕД ней (единица поля — два тика поезда на равнине, болото — пять единиц).
+     */
+    private fun detourPenalty(escort: Creep?, flow: IntArray?, flag: Position?, blocked: List<Position>, tag: String): Int {
+        if (escort == null || flow == null || flag == null) return 0
+        val route = routeOf(escort, flow)
+        if (route.size < 3) return 0
+        val a = route[route.size - 2]
+        val p = route[route.size - 3]
+        val g = flowTo("detour:$tag:$a", flag, blocked + InfluenceMap.cell(a / 100, a % 100), 5, ttl = 100)
+        val d0 = flow[p]; val d1 = g[p]
+        if (d0 < 0) return 0
+        if (d1 < 0) return 99
+        return (d1 - d0) * 2
+    }
+
     private const val KEEP = "keep"
+    /** Второй хранитель — на клетке ПОДХОДА нашего эскорта к флагу (см. runScouts). */
+    private const val APPROACH = "approach"
     private const val BLOCK = "block"
     private const val BREAK = "break"
     private const val GUARD_FLAG = "flag"
@@ -718,6 +783,16 @@ object EscortRun {
         for (s in w.scouts) {
             if (s.spawning || Bodies.liveMoves(s) == 0) continue
             val mission = scoutMission[idOf(s)] ?: continue
+            if (mission == APPROACH) {
+                // второй хранитель: на клетке подхода нашего эскорта; эскорт, подойдя, сдвинет его (runTrain)
+                val a = approachCell(w.escort, w.escortFlow) ?: w.myFlag ?: continue
+                if (onCell(s, a)) { if (keeperStepAside != idOf(s)) pinned.add(idOf(s)); continue }
+                val occ = w.occupant[key(a)]
+                if (occ != null && occ !== s) { if (dist(s, a) <= 1) pinned.add(idOf(s)) else stepAround(w, s, a, 1, 1, 5)?.let { TrafficManager.request(s, it, SCOUT_PRIORITY) }; continue }
+                val step = stepAround(w, s, a, 0, 1, 5) ?: continue
+                TrafficManager.request(s, step, SCOUT_PRIORITY)
+                continue
+            }
             val flag = (if (mission == KEEP) w.myFlag else w.enemyFlag) ?: continue
             if (onCell(s, flag)) {
                 if (mission == KEEP && keeperStepAside == idOf(s)) continue // уже сдвинут поездом
@@ -863,6 +938,16 @@ object EscortRun {
                     moved = true
                     println("train t=${w.now}: FINISH swap with ${idOf(occ)} ${Bodies.summaryOf(occ)}, escort -> flag rc=$rc")
                 }
+            } else if (escort.fatigue == 0 && occ != null && occ.my && occ !in chain && !isEscort(occ) &&
+                (scoutMission.containsKey(idOf(occ)) || fighterRole[idOf(occ)] == GUARD_FLAG)) {
+                // на следующей клетке наш неподвижный (второй хранитель на клетке подхода): он уходит вбок в тот же
+                // тик, эскорт входит; некуда — обмен (он в клетку эскорта, цепь этот тик стоит)
+                val aside = asideCell(w, occ, setOf(key(escort), key(next), key(flag)) + chain.map { key(it) })
+                keeperStepAside = idOf(occ)
+                if (aside != null) { occ.move(dirTo(occ, aside)); escort.move(dirTo(escort, next)); moveChain(chain, escort) }
+                else { occ.move(dirTo(occ, escort)); escort.move(dirTo(escort, next)) }
+                moved = true
+                println("train t=${w.now}: ${idOf(occ)} ${Bodies.summaryOf(occ)} gives the escort its cell (${next.x},${next.y}) ${if (aside != null) "aside" else "by swap"}")
             } else if (escort.fatigue == 0 && (occ == null || occ.my)) {
                 if (occ != null && occ.my) yieldCells = setOf(key(next))
                 escort.move(dirTo(escort, next))
@@ -953,7 +1038,22 @@ object EscortRun {
             val eta = dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0)
             eta < ours
         }
-        if (threats.isEmpty() || wins(guards, threats.filter { !it.spawning }.ifEmpty { threats })) {
+        // держимся против того, кто БЛИЗКО (живые в HOLD_RADIUS) или ещё рождается; дальние — не повод сидеть дома:
+        // экономика stachu3478 рождает бойца за бойцом, и «наша охрана бьёт всех» не наступало никогда — эскорт
+        // простоял дома до их финиша на 408-м, хотя их эскорт шёл пешком (6ab843f2)
+        // …или кто ИДЁТ к эскорту: его дистанция сократилась за десять тиков на пять и больше (рашер ricardo#8 рождается
+        // в восьмидесяти клетках и идёт прямо на нас — без этого признака держание снималось в тик его рождения)
+        for (e in threats) if (!e.spawning) {
+            val h = closing.getOrPut(idOf(e)) { ArrayDeque() }
+            h.addLast(w.now to dist(e, escort))
+            while (h.size > 11) h.removeFirst()
+        }
+        closing.keys.retainAll { id -> threats.any { idOf(it) == id } }
+        val coming = { e: Creep -> closing[idOf(e)]?.let { h -> h.size >= 11 && h.first().second - h.last().second >= 5 } == true }
+        // намерение дальнего ещё не видно (рождается или меньше десяти тиков истории) — он тоже держит
+        val unknown = { e: Creep -> e.spawning || (closing[idOf(e)]?.size ?: 0) < 11 }
+        val decisive = threats.filter { dist(it, escort) <= HOLD_RADIUS || coming(it) || unknown(it) }
+        if (decisive.isEmpty() || wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive })) {
             if (holding) println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}")
             holding = false; holdThreats = emptyList(); return
         }
@@ -986,15 +1086,20 @@ object EscortRun {
         }
         val live = holdThreats.filter { !it.spawning }.ifEmpty { holdThreats }
         val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 8 }
-        val winner = cheapestWinner(live, guards, SPAWN_ENERGY_CAPACITY)
-        val cheap = meleeBody(maxOf(Bodies.cost(MOVE) + Bodies.cost(ATTACK), minOf(e, 2 * (Bodies.cost(MOVE) + Bodies.cost(ATTACK)))))!!
-        val body = if (winner != null && (Bodies.cost(winner) <= e + HOLD_SAVE || guards.isNotEmpty() || fighterQueue.contains(ESCORT_GUARD))) winner else cheap
+        // дома без бойца — сперва ДЕШЁВЫЙ боец на рампарт, сразу как хватит: цель «боец, побеждающий в поле» росла с
+        // каждым новым врагом (M1A1 → M2A2 → M3A3), и v13 копил на неё двести тиков, не купив никого, пока M1A1
+        // stachu3478#1 стоял у наших рампартов, а его эскорт шёл к флагу (6ab843f2)
+        val cheap = meleeBody(Bodies.cost(MOVE) + Bodies.cost(ATTACK))!!
+        val body = if (guards.isEmpty() && !fighterQueue.contains(ESCORT_GUARD)) cheap
+            else cheapestWinner(live, guards, SPAWN_ENERGY_CAPACITY) ?: meleeBody(minOf(e, SPAWN_ENERGY_CAPACITY)) ?: cheap
         if (e >= Bodies.cost(body)) { if (order(w, body, "defender", "holding at home vs ${live.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, escort) }}; guards=${guards.size}")) fighterQueue.addLast(ESCORT_GUARD); return }
         saving(w, "home defender ${Bodies.summary(body)}", Bodies.cost(body))
     }
 
-    /** Боец, побеждающий угрозу в поле, покупается дома, если копится не дольше стольких тиков; иначе — дешёвый на рампарт. */
-    private const val HOLD_SAVE = 200
+    private val closing = HashMap<String, ArrayDeque<Pair<Int, Int>>>()
+
+    /** Угроза держит эскорт дома, только пока она в стольких клетках от него (или ещё рождается, до выхода из дома). */
+    private const val HOLD_RADIUS = 40
 
     /**
      * Рампарты, к которым враг не может встать вплотную: все восемь соседей — наши рампарты или непроходимое (кольцо
