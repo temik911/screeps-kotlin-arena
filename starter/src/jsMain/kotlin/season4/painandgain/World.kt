@@ -490,6 +490,28 @@ internal fun passableNear(p: Position): Position {
     return p
 }
 
+/** Сухое место ожидания рядом с [p] (v682, см. USE_POST_OFF_SWAMP): ближайшая к [p] клетка в POST_DRY_REACH, не стена, у
+ *  которой в квадрате со стороной 2·POST_DRY_HALF+1 нет болота; ближе — по Чебышёву, при равных — по евклиду. Нет такой —
+ *  [p]. Считается по terrain каждый раз: 13×13 кандидатов × 49 клеток — доли миллисекунды. */
+internal fun dryNear(p: Position): Position {
+    fun dry(x: Int, y: Int): Boolean {
+        if (DistanceMap.isTerrainWall(x, y)) return false
+        for (dx in sym(POST_DRY_HALF)) for (dy in sym(POST_DRY_HALF)) if (DistanceMap.isSwamp(x + dx, y + dy)) return false
+        return true
+    }
+    if (dry(p.x, p.y)) return p
+    var best: Position? = null
+    var bestCheb = Int.MAX_VALUE; var bestEu = Int.MAX_VALUE
+    for (dx in sym(POST_DRY_REACH)) for (dy in sym(POST_DRY_REACH)) {
+        val x = p.x + dx; val y = p.y + dy
+        if (x !in 0..99 || y !in 0..99) continue
+        val cheb = maxOf(abs(dx), abs(dy)); val eu = dx * dx + dy * dy
+        if (cheb > bestCheb || (cheb == bestCheb && eu >= bestEu) || !dry(x, y)) continue
+        best = InfluenceMap.cell(x, y); bestCheb = cheb; bestEu = eu
+    }
+    return best ?: p
+}
+
 /** Через сколько тиков боевые враги дойдут до нашего дома — по темпу сближения за APPROACH_WINDOW;
  *  новый враг — по ходу его тела вдоль поля. Заполняет approachingIds/arrivalById (для приоритета угроз). */
 internal fun enemyArrivalTicks(ctx: Ctx) {
@@ -2208,6 +2230,11 @@ internal val fistReachTicks = Gauges.counter("fistreach")
  *  только удержанием: проигранной гонки по проекции уже нет. */
 internal val engageHeldTicks = Gauges.counter("engheld")
 
+/** Прибор болота под армией (v682, `bog=до первого боя/после`): крипо-тиков нашей армии на клетке болота. Оператор 26.09.2026
+ *  видел строй, вставший у болота; по реплеям это одна игра из 95 против MetalicaX#13 — прибор говорит, так ли и живьём. */
+internal val bogPre = Gauges.counter("bog")
+internal val bogFight = Gauges.counter("bog", 1)
+
 /** Прибор прикрытия (v647, см. USE_MELEE_COVER): `cover=` — наших мили-тиков, упустивших шаг к его мили, который рубит нашего
  *  стрелка или лекаря (см. `missedCovers`). */
 internal val coverMissed = Gauges.counter("cover")
@@ -2330,6 +2357,7 @@ internal class MeasuresExchange(private val ctx: Ctx, private val forces: Measur
     // этих тиков размена нет вовсе, — это 35 % матча против 4 % в выигранных (v219: 24 % против 5 %)
     val exchangeLive = ourLostWindow >= STALL_DAMAGE || hisLostWindow >= STALL_DAMAGE
     init { if (exchangeLive && firstFightTick == 0) firstFightTick = getTicks() }
+    init { ctx.army.count { DistanceMap.isSwamp(it.x, it.y) }.let { if (firstFightTick == 0) bogPre.n += it else bogFight.n += it } }
     // ПРИБОР ПЕРВОГО РАЗМЕНА (v680, `clashg=`): стволы обеих сторон, достающие противника, в первый тик досягаемости и в тик
     // первого размена — снимок, который до v680 брался только из реплея
     init {

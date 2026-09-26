@@ -1236,7 +1236,9 @@ internal fun postPoint(ctx: Ctx): Position {
     // центральный флаг наш — пост на нём (v102, USE_POST_ON_CENTRE)
     val centre = ctx.flags.firstOrNull { it.ours && it.type == EFF_DAMAGE_TAKEN_MODIFIER }?.pos
     val c = centre ?: centroidOf(ctx.ourFlags.map { it.pos }) ?: midway ?: ctx.home
-    return passableNear(c)
+    // ...И НЕ У БОЛОТА (v682, см. USE_POST_OFF_SWAMP): расчётная точка сдвигается на ближайшую, вокруг которой строю сухо;
+    // пост на нашем центральном флаге остаётся на флаге
+    return if (USE_POST_OFF_SWAMP && centre == null) dryNear(passableNear(c)) else passableNear(c)
 }
 
 /** Бегство направлением (v46): когда ни одна точка выхода не даёт запаса (см. evadePoint), цель — клетка в EVADE_RANGE от
