@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 152
+    private const val BOT_VERSION = 153
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2295,6 +2295,30 @@ object SpawnAndSwamp {
             if (r.error == null) spentBuild += keeperCost
             if (DEBUG_LOG) println("spawn: builder (fort, before haulers) work=${keeper.count { it == WORK }} cost=$keeperCost energy=$energy err=${r.error}")
             return
+        }
+        // A PILE BUILDER BEHIND A STANDING FORT (v153). A loss is ALL our spawns down, and against kerobi the house fell to
+        // 12 of his armed with 144 heal a tick at the door (v152 A/B, t=1100-1200) while our income was 3-7 a tick and ten
+        // haulers had died — no tower or rampart we can pay for holds that. A spawn raised from a pile in the field is a
+        // second life he has to find and take (against marlyman#334 our house fell at 1575 and the pile spawns kept the
+        // game a draw) and a production point where the energy lies. Against him it was never bought: `deficit` stays
+        // positive while the fort holds the house with 0-1 guns, and the alarm never clears (9 of 9 draws). The nine
+        // draws' containers would have given one builder waiting in the field 4.3 spawns and +7k by t=2000 (model of
+        // the v146 draws). Bought once the fort's tower and ramparts stand and its keeper lives, never under a raid at
+        // the door; saved for ahead of haulers and fighters, whose bodies died at the door (6 of the 7 bought after the
+        // tower in those draws). The builder waits at `pileWaitCell` and runs its jobs as against everyone else
+        if (USE_FORT_PILE && USE_PILE_SPAWN && USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() && !fortIncomplete(ctx, withTwin = false) &&
+            ctx.builders.isNotEmpty() && !armNow && pileOrderedAt != getTicks() && ctx.myCreeps.none { isPileBuilder(it) } &&
+            arenaInfo.ticksLimit - getTicks() > 2 * (PILE_BODY.size * CREEP_SPAWN_TIME +
+                ceil(buildCost("StructureSpawn").toDouble() / (BUILD_POWER * PILE_BODY.count { it == WORK })).toInt())) {
+            val price = PILE_BODY.sumOf { cost(it) }
+            if (energy >= price) {
+                val r = spawn.spawnCreep(PILE_BODY)
+                reach(if (r.error == null) "fpBuy" else "err")
+                r.`object`?.let { pileBuilderIds.add(it.id); pileOrderedAt = getTicks() }
+                if (DEBUG_LOG) println("spawn: pile builder (fort) cost=$price energy=$energy err=${r.error}")
+                return
+            }
+            if (!spawnUnderFire) return reach("fpSave")
         }
         // THE PILE BUILDER BEFORE THE THIRD HAULER, WHEN THERE IS A JOB FOR IT NOW (v138). His spawns rise out of the
         // map's containers — a fresh one holds 2000 for 100 ticks — and his economy outgrows ours by t≈400 (against kerobi
@@ -6082,6 +6106,9 @@ object SpawnAndSwamp {
     /** The wave's front is the COHESION_GAP window along the flow holding the most members, not the one behind the most
      *  advanced (posture, v152). */
     private const val USE_FRONT_BY_MASS = true
+    /** Behind a standing fort (tower and ramparts up, keeper alive, no raid at the door) a pile builder is saved for and
+     *  bought ahead of haulers and fighters (spawnIfNeeded, v153). */
+    private const val USE_FORT_PILE = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
@@ -6334,9 +6361,9 @@ object SpawnAndSwamp {
 
     /** The fortified house is flagged and not yet complete: no tower of ours, or one of the ramparts over the spawn, the
      *  tower and the keeper's post missing (v149). Reads only; the sites are placed by runBuilders. */
-    private fun fortIncomplete(ctx: Ctx): Boolean {
+    private fun fortIncomplete(ctx: Ctx, withTwin: Boolean = true): Boolean {
         if (!USE_FORT_HOME || !fortHome) return false
-        if (ctx.myTowers.isEmpty() || (fortTwin && ctx.myTowers.size < 2)) return true
+        if (ctx.myTowers.isEmpty() || (withTwin && fortTwin && ctx.myTowers.size < 2)) return true
         val cells = listOfNotNull<Position>(ctx.mySpawn, fortPost(ctx)) + ctx.myTowers
         return cells.any { c -> ctx.ramparts.none { it.my == true && it.x == c.x && it.y == c.y && (it.hits ?: 0) > 0 } }
     }
