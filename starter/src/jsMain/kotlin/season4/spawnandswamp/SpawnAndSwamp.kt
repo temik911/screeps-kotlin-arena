@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 171
+    private const val BOT_VERSION = 172
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -896,7 +896,7 @@ object SpawnAndSwamp {
             // A SPAWN OF HIS ON OUR HALF COMES FIRST, even over a committed wave (v97): けろびー's (77,25), 24 cells from
             // ours, bred his army behind us for 500 ticks, 3000 hits and no rampart, while the wave went to his main
             // fifty cells off and died there
-            USE_TARGET_COMMIT && intruder != null && (held == null || !onOurHalf(held)) -> intruder
+            USE_TARGET_COMMIT && intruder != null && (held == null || !onOurHalf(held)) && !(USE_RAID_CHIP && held != null && heldFallsFirst(held, intruder)) -> intruder
             // committed: a wave is out against the held target (the wave map outlives the tick; see runFighters) —
             // while it can take it, or while there is nothing else it can take (v104)
             USE_TARGET_COMMIT && held != null && wave.isNotEmpty() && (!USE_TARGET_BY_TAKE || heldTakeable || takeable == null) -> held
@@ -6373,6 +6373,14 @@ object SpawnAndSwamp {
      *  that can walk; a waiting pair comes home to a storm it can reach before the house falls (v171). */
     private const val USE_RAID_THRIFT = true
     private const val RAID_REBUY_WINDOW = 300
+    /** The raid chips a ramparted spawn of his in visits once his builders are dead; the prey is taken near it; a wave
+     *  keeps a target that falls before it reaches his new spawn on our half (v172). */
+    private const val USE_RAID_CHIP = true
+    /** Ticks of the pair's strikes a visit must fit: 1800 on the rampart, a tenth of it (v172). */
+    private const val RAID_CHIP_MIN = 10
+    /** A visit ends when his nearest gun is this many ticks from its range of the target: the pair, a cell a tick on any
+     *  ground, is out of his reach before he is in range (v172). */
+    private const val RAID_CHIP_LEAVE = 4
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6428,6 +6436,19 @@ object SpawnAndSwamp {
             if (v in 0 until best) best = v + 1
         }
         return best
+    }
+
+    /** The held target falls to the guns of ours within three cells of it before they could reach the intruder (v172):
+     *  against marlyman#443 a wave of eight had his main at 1350 hits (two ticks of its ~825 a tick) when his new spawn
+     *  on our half took the target at 1494; the wave left, his rampart stood again at 10000 by 1625, and it was a draw. */
+    private fun heldFallsFirst(held: StructureSpawn, intruder: StructureSpawn): Boolean {
+        val at = getObjectsByPrototype(Creep::class).filter { it.my && it.exists && !it.spawning && getRange(it, held) <= RANGED_RANGE }
+        val ramparts = getObjectsByPrototype(StructureRampart::class).filter { it.exists }
+        val dps = at.sumOf { c -> c.body.count { it.type == RANGED_ATTACK && it.hits > 0 } * RANGED_ATTACK_POWER +
+            (if (getRange(c, held) <= 1) c.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER else 0) }.toDouble()
+        if (dps <= 0.0) return false
+        val left = (held.hits ?: SPAWN_HITS) + ramparts.filter { it.my == false && it.x == held.x && it.y == held.y }.sumOf { it.hits ?: 0 }
+        return left / dps < at.minOf { getRange(it, intruder) }
     }
 
     private fun raidWanted(ctx: Ctx): Boolean {
@@ -6557,7 +6578,15 @@ object SpawnAndSwamp {
         // 144 for one — and the lone survivors of v158 struck his main 12-34 times and died (828, 917, 1164); with his army
         // 82-93 cells off, the pair's 72 ticks fit. A target is struck when the raiders present kill it before his nearest
         // mobile armed creep can walk back into range; a strike begun is finished
-        val strikeFits = target == null || target.id !in spawnIds || !USE_RAID_LAST || raiders.any { getRange(it, pos(target)) <= 1 } || run {
+        // …AND IN VISITS, SINCE HIS RAMPART IS NEVER REPAIRED (v172). With his builders dead the pair waited hundreds of
+        // ticks for one visit to take all 13000 (72 ticks of strikes) — it never came, while his guns stood 20+ cells
+        // off for 700-760 ticks of 850-985 in three v171 draws, in windows of 95-330 ticks; both v171 wins over him were
+        // the damage summed over visits (10000 -> 6760 -> 0 -> the spawn at 1419). A visit is entered when the walk and
+        // RAID_CHIP_MIN ticks of strikes fit before his guns are back, and left when they come within RAID_CHIP_LEAVE
+        // ticks of it — no longer finished once begun (at 1206 a pair that began with his guns 5-16 cells off was held
+        // there and died); `finishing` still holds it on a spawn that falls before it does
+        val chipping = USE_RAID_CHIP && target != null && target.id in spawnIds && ctx.enemyCreeps.none { isHisBuilder(it) }
+        val strikeFits = target == null || target.id !in spawnIds || !USE_RAID_LAST || (!chipping && raiders.any { getRange(it, pos(target)) <= 1 }) || run {
             val shield = rampartOn(ctx, pos(target))
             if (shield <= 0) return@run true
             val dps = raiders.sumOf { r -> r.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
@@ -6569,6 +6598,10 @@ object SpawnAndSwamp {
             val field = flowTo(ctx, pos(target))
             val back = guns.minOfOrNull { (pathTicks(it, field, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) - RANGED_RANGE * plainPeriod(it).toInt()) } ?: Int.MAX_VALUE
             val walk = raiders.maxOf { getRange(it, pos(target)) - 1 }
+            if (chipping) {
+                val there = raiders.any { getRange(it, pos(target)) <= 1 }
+                return@run if (there) back > RAID_CHIP_LEAVE || finishing else walk + RAID_CHIP_MIN < back
+            }
             walk + kill < back
         }
         // …AND WHILE IT WAITS IT TAKES HIS UNARMED (v166). Against kerobi#49 the raid froze his count at one spawn — his
@@ -6579,7 +6612,10 @@ object SpawnAndSwamp {
         val prey: Creep? = if (!USE_RAID_PREY || strikeFits || raidHome || gathering) null else {
             val hisGuns = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } }
             ctx.enemyCreeps.filter { c -> InfluenceMap.profileOf(c).let { p -> p.ranged + p.melee + p.heal <= 0.0 } &&
-                hisGuns.none { getRange(it, c) < RAID_LURK_RANGE } }.minByOrNull { getRange(lead, it) }
+                hisGuns.none { getRange(it, c) < RAID_LURK_RANGE } &&
+                // …within reach of the target while chipping (v172): the prey took the pair 40-80 cells off, and it was by
+                // the free main only 45-124 raider-ticks of the windows
+                (!chipping || target == null || getRange(c, pos(target)) <= 2 * RAID_LURK_RANGE) }.minByOrNull { getRange(lead, it) }
         }
         // A WAITING PAIR COMES HOME TO A STORM IT CAN TURN (v171): against kerobi#50 both builders were dead at 447 and the
         // pair waited 79-88 cells off while his M3R3, M5H3 and two M5R5 took our rampart (130 a tick) and spawn at 661;
