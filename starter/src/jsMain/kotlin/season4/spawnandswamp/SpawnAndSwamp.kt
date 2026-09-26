@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 147
+    private const val BOT_VERSION = 148
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5937,8 +5937,11 @@ object SpawnAndSwamp {
     private const val USE_FORT_KEEPER_FIRST = true
     /** The fortified-house flag counts his spawn sites with his spawns (tick, v146). */
     private const val USE_FORT_BY_SITE = true
-    /** A standing fort counts as holding the house in the posture's and the hunt's "does the house hold" (v147). */
-    private const val USE_FORT_HOLDS = true
+    /** A standing fort counts as holding the house in the posture's and the hunt's "does the house hold" (v147).
+     *  OFF — measured live 26.09.2026: A/B against kerobi#35/#30 (5+5 each) v146 1-4-5 / v147 0-5-5. The army let out
+     *  wins nothing against his spawn spam (8-35 spawns at 2000, 75-85k spent against our 7-19k: no siege is won in time
+     *  even without his army) and is lost in the field; the house held either way. */
+    private const val USE_FORT_HOLDS = false
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
