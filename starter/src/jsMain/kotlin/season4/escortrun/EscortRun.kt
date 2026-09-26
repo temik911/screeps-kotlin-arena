@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v17"
+    private const val BOT_VERSION = "v18"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -428,23 +428,6 @@ object EscortRun {
         return false
     }
 
-    /** До какого тика дебют ждёт первого бойца экономиста (его перехватчик заказывается на 50-м). */
-    private const val ECON_WAIT_UNTIL = 56
-
-    /** Тела первых заказов врага (видны со второго тика как рождающиеся). */
-    private val firstEnemyOrders = ArrayList<String>()
-    private val seenEnemyIds = HashSet<String>()
-
-    /** Их дебют — экономика: среди первых двух заказов есть WORK, а тягача (одни MOVE от трёх) нет. */
-    private fun enemyEcon(w: World): Boolean {
-        for (c in w.enemyPending + w.enemies) {
-            if (isEscort(c) || firstEnemyOrders.size >= 2) continue
-            if (seenEnemyIds.add(idOf(c))) firstEnemyOrders.add(Bodies.summaryOf(c))
-        }
-        if (firstEnemyOrders.isEmpty()) return false
-        return firstEnemyOrders.any { it.contains("W") } && firstEnemyOrders.none { it.matches(Regex("M([3-9]|[1-9][0-9])")) }
-    }
-
     private fun saving(w: World, what: String, cost: Int) {
         if (DEBUG_LOG && w.now % LOG_EVERY == 0) println("spawn t=${w.now}: saving for $what e=${energyOf(w)}/$cost")
     }
@@ -458,31 +441,11 @@ object EscortRun {
         val e = energyOf(w)
         val escort = w.escort
 
-        // 1. дебют: тягачи по прогону. Соперник-экономист (первый его заказ — добытчик, тягача нет) не гонится: его
-        //    эскорт идёт пешком и приходит к ~410-430-му, но на 50-м тике он шлёт M1A1 в центр, к нашему поезду, и
-        //    безоружный поезд либо гибнет, либо сидит дома, пока его экономика (~7-12 энергии в тик против нашей 1)
-        //    растит армию: v13-v15 проиграли stachu3478 одиннадцать матчей из одиннадцати. Против экономиста остаток
-        //    дебюта идёт в бойца при поезде: период 3 вместо 2 (приход ~340) всё равно раньше их пешего эскорта, а
-        //    перехватчик встречает бойца, а не тягачей
-        //    Но экономист экономисту рознь: けろびー#5/#7/#8/#13 перехватчика не шлёт, его R5M5 рождается на 177-м и
-        //    догоняет медленный поезд у нашего флага — против него период 2 и есть победа (v16 проиграла ему шесть из
-        //    семи, v15 выигрывала все). Поэтому решение ждёт, пока экономист не покажет бойца: его перехватчик заказан
-        //    на 50-м (виден на 51-м); бойца к ECON_WAIT_UNTIL нет — второй тягач, как всегда
+        // 1. дебют: тягачи по прогону. (v16-v17 меняли против «экономиста» второго тягача на охрану поезда: stachu3478
+        //    это било в трёх из пяти, но けろびー — тоже экономист по первому заказу, без раннего бойца, — его M5A1 со
+        //    120-го и R5M5 со 177-го догоняли медленный поезд: 1 из 7 при v16 и 0 из 2 при v17, где M6 ждал до 56-го.
+        //    Убрано: против stachu держит дом, см. decideHold.)
         val plan = openingPlan
-        if (plan != null && openingIdx in 1 until plan.size && escort != null && enemyEcon(w)) {
-            val armedSoon = (w.enemyPending + w.enemies).any { !isEscort(it) && Bodies.wasArmed(it) }
-            if (!armedSoon && w.now < ECON_WAIT_UNTIL) { saving(w, "the economist's first fighter (guard) or the second puller", plan.drop(openingIdx).sum() * Bodies.cost(MOVE)); return }
-        }
-        if (plan != null && openingIdx in 1 until plan.size && escort != null && enemyEcon(w) &&
-            (w.enemyPending + w.enemies).any { !isEscort(it) && Bodies.wasArmed(it) }) {
-            val body = meleeBody(minOf(e, plan.drop(openingIdx).sum() * Bodies.cost(MOVE)))
-            if (body != null && Bodies.cost(body) >= 2 * (Bodies.cost(MOVE) + Bodies.cost(ATTACK))) {
-                if (order(w, body, "train-guard", "their opening is economy (${firstEnemyOrders.joinToString(" ")}): the rest of the opening goes into a guard")) {
-                    fighterQueue.addLast(ESCORT_GUARD); openingIdx = plan.size
-                }
-                return
-            }
-        }
         if (plan != null && openingIdx < plan.size && escort != null) {
             val body = Bodies.moves(plan[openingIdx])
             if (e >= Bodies.cost(body)) {
@@ -1103,9 +1066,14 @@ object EscortRun {
         // держась, отпускаем только того, кто отошёл вдвое дальше: иначе перехватчик stachu, стоявший в центре в 45-60
         // клетках, то держал, то отпускал эскорт каждые несколько тиков, и тот ходил туда-сюда у дома (6ab84583)
         val radius = if (holding) 2 * HOLD_RADIUS else HOLD_RADIUS
-        val decisive = threats.filter { dist(it, escort) <= radius || coming(it) || unknown(it) }
+        // Однажды отпустив эскорт, дом больше не держим из-за дальних и «неясных»: только живой враг в HOLD_NEAR
+        // клетках. Иначе против экономиста каждый его новый боец (у stachu3478 — M3A3 на ~170-м, при его эскорте)
+        // снова загонял наш эскорт домой, пока его пеший эскорт шёл к флагу (v15-v17: 0 из 9 после убийства его
+        // перехватчика у наших рампартов)
+        val decisive = if (released) threats.filter { !it.spawning && dist(it, escort) <= HOLD_NEAR }
+            else threats.filter { dist(it, escort) <= radius || coming(it) || unknown(it) }
         if (decisive.isEmpty() || wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive })) {
-            if (holding) println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}")
+            if (holding) { released = true; println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}") }
             holding = false; holdThreats = emptyList(); return
         }
         val home = homeFlow(w) ?: run { holding = false; return }
@@ -1162,6 +1130,10 @@ object EscortRun {
     }
 
     private val closing = HashMap<String, ArrayDeque<Pair<Int, Int>>>()
+    /** Эскорт уже однажды выходил из дома после держания. */
+    private var released = false
+    /** После первого выхода дом держит только живой враг в стольких клетках. */
+    private const val HOLD_NEAR = 15
 
     /** Угроза держит эскорт дома, только пока она в стольких клетках от него (или ещё рождается, до выхода из дома). */
     private const val HOLD_RADIUS = 40
