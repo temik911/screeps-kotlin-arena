@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 148
+    private const val BOT_VERSION = 149
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2024,6 +2024,15 @@ object SpawnAndSwamp {
         }
         val raidDps = raidAtDoor.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
         val armNow = USE_ARM_AT_DOOR && (spawnUnderFire || raidAtDoor.isNotEmpty()) && deficit > 0.0
+        // THE FORT IS PAID BEFORE ANYTHING ELSE BUT A GUN AT THE DOOR (v149). The v145 keeper-first rule held only while
+        // no keeper lived: once it was born, the hauler and fighter turns spent the full spawn under a tower half-built.
+        // In the four early losses to kerobi#23/#30 (storm at 587-709, house down at 704-882) an M8R4 was bought right
+        // after the keeper (t=314-351, deficit -169..-35, no alarm) and the tower stood at 475 unfed, at 703, or never
+        // (892/1250, 1111/1250); at ~7 a tick that thousand is 140 ticks of the tower. Built from the keeper's own pace
+        // (four WORK, 1250 in 63 ticks from its post at ~318) it stands by ~381, before every storm of the four. In the
+        // three draws against the same #30 the tower stood at 413-520 and the storm came at 895-1308
+        val fortReserve = USE_FORT_RESERVE && !armNow && fortIncomplete(ctx) &&
+            (ctx.myTowers.isNotEmpty() || siteJobs.any { it.kind == "StructureTower" && it.inTime })
         // …and while it is on, a gun that matches the raid's damage is bought now rather than saved for (v125): the first
         // gun at the door, even an M4R2 for 500, cut the house's loss from 9.7 a tick to 0.9 (Ranamar#6); a runt below
         // the raid's damage — the 230-360 of v113 — still waits
@@ -2286,7 +2295,8 @@ object SpawnAndSwamp {
             }
             if (!alarm && deficit <= 0.0) return reach("pbSave")
         }
-        val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD && haulerOrderedAt != getTicks()
+        val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD && haulerOrderedAt != getTicks() &&
+            !(fortReserve && ctx.haulers.isNotEmpty())
 
         if (haulerTurn) {
             val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
@@ -2319,7 +2329,7 @@ object SpawnAndSwamp {
         // ticks), it stood under fire by the house, and the 600 it cost was the tower site's 750 left dead
         // a bare home spawn is a reason on its own (v94, see USE_SPAWN_RAMPART): no quiet window needed, only no threat
         val wantRampart = bareSpawn(ctx)?.let { it.id == ctx.mySpawn.id } == true
-        if (USE_PILE_SPAWN && ctx.myCreeps.none { isPileBuilder(it) } && !fighterFirst && !alarm && deficit <= 0.0 &&
+        if (USE_PILE_SPAWN && ctx.myCreeps.none { isPileBuilder(it) } && !fighterFirst && !alarm && deficit <= 0.0 && !fortReserve &&
             // …but never out of the opening: the house needs its rampart by his first strike (t≈600 for けろびー, ≈790 for
             // Ranamar), the fleet needs the first thousand now — bought in the opening it took the stub's tower+stream
             // 574 -> 1108; once delivery is measured the fleet stands
@@ -2373,6 +2383,11 @@ object SpawnAndSwamp {
             return
         }
 
+        // the fort's energy is not a fighter's (v149, see fortReserve)
+        if (fortReserve) {
+            if (DEBUG_LOG && getTicks() % 10 == 0) println("spawn: fort reserve energy=$energy towers=${ctx.myTowers.size} deficit=${deficit.toInt()}")
+            return reach("fReserve")
+        }
         // ЛАГЕРЬ у спавна: враг рядом и сильнее — боец по 300 умирает один (матч 02.09: восемь
         // подряд). Копим на полное тело — но только пока СПАВН ДОЖИВАЕТ до него: 3000 хитов, делённые
         // на входящий урон, против времени накопления недостающего при нынешнем потоке. Без этого счёта
@@ -3824,7 +3839,11 @@ object SpawnAndSwamp {
         }
         val guardHoldsSortie = arrivingHome.isEmpty() || fortHolds ||
             ourPowerOf(homeGuard, arrivingHome) >= enemyPowerOf(arrivingHome, homeGuard) * DEFEND_MARGIN
-        val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie
+        // …and no gun leaves a fortified house before it is complete (v149): in the early losses to kerobi#23/#30 the
+        // garrison left for a push (t=292, a tick after the flag) and for his builders 40-78 cells away at 300-450, and the
+        // two M8R4 of one push died at 444 and 531 while his storm came at 587-709
+        val fortGarrison = USE_FORT_GARRISON && fortIncomplete(ctx)
+        val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie && !fortGarrison
         // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
         if (USE_RAID_ON_OUR_HALF) noteRaid(ctx, raidMax, raidMaxCatch, typical) else noteRaid(ctx, maxPack, maxPackCatch, typical)
         // A RECALL MUST SAVE SOMETHING (v97). The whole push was called off whenever the home guard did not hold and the
@@ -4020,11 +4039,11 @@ object SpawnAndSwamp {
             }
             team
         }
-        val stompOf = if (USE_STOMP && homeThreats.isEmpty()) stompJobs(ctx, fighters.filter { f ->
+        val stompOf = if (USE_STOMP && homeThreats.isEmpty() && !fortGarrison) stompJobs(ctx, fighters.filter { f ->
             f.id !in wave && hasWeapon(f) && strikers.any { it.id == f.id } && !isMelee(f)
         }, combatEnemies, centroid) else emptyMap()
         val huntOf: Map<String, Creep> = if (!USE_BUILDER_CHASE) emptyMap() else builderHunt(ctx,
-            fighters.filter { f -> f.id !in wave && (strikers.any { it.id == f.id } && hasRanged(f) || (USE_FIELD_HUNTER && isHunter(f))) },
+            if (fortGarrison) emptyList() else fighters.filter { f -> f.id !in wave && (strikers.any { it.id == f.id } && hasRanged(f) || (USE_FIELD_HUNTER && isHunter(f))) },
             fighters.filter { f -> f.id in wave && hasRanged(f) && canMove(f) },
             if (USE_HUNT_REACH) fighters.filter { it.id !in wave && inArms(it) && !(USE_FIELD_HUNTER && isHunter(it)) } else homeGuard, homePack, enemySpawn, enemyCreeps, combatEnemies)
         val occupantAt = HashMap<Int, Creep>()
@@ -5942,6 +5961,11 @@ object SpawnAndSwamp {
      *  wins nothing against his spawn spam (8-35 spawns at 2000, 75-85k spent against our 7-19k: no siege is won in time
      *  even without his army) and is lost in the field; the house held either way. */
     private const val USE_FORT_HOLDS = false
+    /** While the fortified house is not complete (its tower, then ramparts over spawn, tower and post) the spawn buys no
+     *  fighter, hauler or pile builder unless the raid is at our door — the energy goes into the fort (v149). */
+    private const val USE_FORT_RESERVE = true
+    /** While the fortified house is not complete no gun leaves it: no push, no builder hunt, no stomp (v149). */
+    private const val USE_FORT_GARRISON = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
@@ -6191,6 +6215,15 @@ object SpawnAndSwamp {
      *  the tower (v147). */
     private fun fortStands(ctx: Ctx): Boolean = USE_FORT_HOLDS && USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() &&
         ctx.builders.isNotEmpty() && ctx.ramparts.any { it.my == true && it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y && (it.hits ?: 0) > 0 }
+
+    /** The fortified house is flagged and not yet complete: no tower of ours, or one of the ramparts over the spawn, the
+     *  tower and the keeper's post missing (v149). Reads only; the sites are placed by runBuilders. */
+    private fun fortIncomplete(ctx: Ctx): Boolean {
+        if (!USE_FORT_HOME || !fortHome) return false
+        val tower = ctx.myTowers.minByOrNull { getRange(ctx.mySpawn, it) } ?: return true
+        val cells = listOfNotNull<Position>(ctx.mySpawn, tower, fortPost(ctx))
+        return cells.any { c -> ctx.ramparts.none { it.my == true && it.x == c.x && it.y == c.y && (it.hits ?: 0) > 0 } }
+    }
 
     /** The fortified house's tower spot, chosen once (towerSpot behind the spawn) and kept (v143). */
     private var fortSpotCell = -1
