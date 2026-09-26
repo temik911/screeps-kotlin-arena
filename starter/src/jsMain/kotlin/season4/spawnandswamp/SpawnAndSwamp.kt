@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 156
+    private const val BOT_VERSION = 157
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6185,6 +6185,11 @@ object SpawnAndSwamp {
     private var raidOrderedAt = -1
     private var raidSignal = false
     private var raidHome = false
+    /** The raid goes out again from home at this share of its hits (v157). */
+    private const val RAID_RESUME_SHARE = 0.9
+    /** The raid strikes his builders and spawns (not sites), holds its target, and goes out again when healed (v157). */
+    private const val USE_RAID_TOUR = true
+    private var raidTargetId: String? = null
     private var hisMainId: String? = null
 
     /** A raider by body: melee with at least four MOVE a strike and nothing else (v155). */
@@ -6231,27 +6236,44 @@ object SpawnAndSwamp {
         val max = raiders.sumOf { it.hitsMax }
         if (!raidHome && hits < RAID_RETREAT_SHARE * max) {
             raidHome = true
+            raidTargetId = null
             if (DEBUG_LOG) println("raid home t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
+        }
+        // …and out again once our tower has healed it (v157): in the v156 A/B the pair went home for good at 721-919 with
+        // his count at 1-4, and in two games his ramparted main was his only spawn from 600 to 1200 with nobody to take it
+        if (USE_RAID_TOUR && raidHome && hits >= RAID_RESUME_SHARE * max) {
+            raidHome = false
+            if (DEBUG_LOG) println("raid out t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
         }
         val gathering = raidOrdered < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL ||
             ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL + 60)
         val guns = ctx.combatEnemies.filter { InfluenceMap.profileOf(it).ranged > 0.0 }
         val targets = ArrayList<GameObject>()
         ctx.enemySpawns.forEach { targets.add(it) }
-        enemySitesNow.filter { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureSpawn") }.forEach { targets.add(it.first) }
+        // HIS BUILDERS, NOT HIS SITES (v157): a strike on a spawn site did nothing — the v156 pair stood next to (22,69)
+        // for 150 ticks — and the builder standing at it went unstruck because the site was "in reach"; the builder is
+        // 800 hits, five ticks for the pair, and his spawns are built by it
+        if (USE_RAID_TOUR) ctx.enemyCreeps.filter { isHisBuilder(it) }.forEach { targets.add(it) }
+        else enemySitesNow.filter { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureSpawn") }.forEach { targets.add(it.first) }
         val lead = raiders.maxByOrNull { it.hits }!!
         val main = ctx.enemySpawns.firstOrNull { it.id == hisMainId }
         fun pos(o: GameObject): Position = o
         // not under his tower (v156): a target within its reach is passed by, and with none left the pair goes home
         val open = targets.filter { t -> ctx.enemyTowers.none { getRange(it.pos, pos(t)) <= InfluenceMap.towerFalloffRange.toInt() } }
-        // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17)
+        // the target is held until it is gone (v157): the v156 pair turned between (77,18) and (42,31) three times in 150
+        // ticks as his guns came and went near one of them
+        val held = if (USE_RAID_TOUR) open.firstOrNull { it.id == raidTargetId } else null
+        // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17) — and
+        // taken when it is all that is left, since the win is his last spawn
         val target: GameObject? = when {
             raidHome || gathering -> null
+            held != null -> held
             main != null && main in open && rampartOn(ctx, main) == 0 -> main
             else -> open.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
                 .minWithOrNull(compareBy<GameObject> { rampartOn(ctx, pos(it)) > 0 }.thenBy { getRange(lead, pos(it)) })
                 ?: open.minByOrNull { getRange(lead, pos(it)) }
         }
+        if (USE_RAID_TOUR) raidTargetId = target?.id
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
         for (r in raiders) {
             val goal: Position = if (target != null) pos(target) else ctx.mySpawn
