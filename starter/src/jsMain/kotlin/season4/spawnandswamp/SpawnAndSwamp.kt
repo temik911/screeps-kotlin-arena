@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 169
+    private const val BOT_VERSION = 170
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1783,7 +1783,19 @@ object SpawnAndSwamp {
 
             // под огнём — бросаем всё и уходим к спавну (хаулер не боец; груз важнее, чем точка)
             val incoming = InfluenceMap.damageAt(h.x, h.y, ctx.combatEnemies)
-            if (incoming > 0.0) {
+            // …AND BEFORE IT IS IN REACH (v170). His raiders (kerobi's lone M5A1, marlyman's packs of 2-4) killed 54 and
+            // 108 of our haulers in the recorded games (45 replays): 38 cells from our spawn, out of the tower's reach,
+            // 13-21 ticks from the first strike to the death — and the hauler began to run only once it was struck. From
+            // "his armed creep within five cells" to the first strike is a median of 6 (kerobi) and 15 (marlyman) ticks;
+            // an empty hauler walks any ground a cell a tick like his M5A1, and one that leaves early is not caught
+            // …from his MELEE (v170b): a shooter is already fled from at its range of three (`incoming`), and fleeing his
+            // two M5R1 of the stub's `harass` at five cells stopped the fleet — the enemy spawn fell at 1566 instead of 531
+            // …and out in the field only (v170c): his kills were 36-38 cells from our spawn; by the house the hauler's way
+            // home is the flight anyway, and the stub's `harass` pair lives by our house
+            val threatened = USE_HAULER_EARLY_FLEE && incoming <= 0.0 && getRange(h, mySpawn) > HAULER_FLEE_FIELD && ctx.combatEnemies.any { e ->
+                getRange(e, h) <= HAULER_FLEE_RANGE && e.body.any { it.type == MOVE && it.hits > 0 } &&
+                    InfluenceMap.profileOf(e).melee > 0.0 }
+            if (incoming > 0.0 || threatened) {
                 haulerSite.remove(h.id)?.let { sid -> claimed[sid] = ((claimed[sid] ?: 0) - free).coerceAtLeast(0) }
                 val home = dropOff(ctx, h)
                 val step = fleeStep(h, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(h, home, 1, matrixFor(h))
@@ -6348,6 +6360,13 @@ object SpawnAndSwamp {
      *  OFF — measured live 27.09.2026: A/B against marlyman#443 (5+5) and #434 (3+3) v167 5-0-3 / v168 3-0-5; the wave
      *  kept out of the house's reach wins no more of his ramparted mains than the one called home. v169 plays v167's game. */
     private const val USE_HOUSE_OUTLASTS = false
+    /** A hauler runs home as soon as a mobile armed creep of his is within HAULER_FLEE_RANGE, not once struck (v170). */
+    private const val USE_HAULER_EARLY_FLEE = true
+    /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
+     *  the first strike (v170). */
+    private const val HAULER_FLEE_RANGE = 5
+    /** Beyond this many cells from our spawn a hauler is in the field for the early flight (v170c). */
+    private const val HAULER_FLEE_FIELD = 10
     /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
      *  33 swings (v164b). */
     private const val HOME_RAMPART_ATTACK = 3
