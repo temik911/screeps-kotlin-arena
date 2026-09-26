@@ -53,7 +53,8 @@ function buildMap() {
 // right edge, the flags in the far corners, spawns starting at 500 energy
 const OURS = MAP ? { spawn: [9, 90], escort: [7, 92], source: [2, 97], flag: [95, 95] } : { spawn: [6, 93], escort: [7, 92], source: [9, 95], flag: [93, 93] };
 const ENEMY = MAP ? { spawn: [9, 9], escort: [7, 7], source: [2, 2], flag: [95, 4] } : { spawn: [6, 6], escort: [7, 7], source: [9, 4], flag: [93, 6] };
-const SPAWN_START = MAP ? 500 : 1000;
+// 500 on every map: measured by the first live match (04.09.2026); the synthetic map's 1000 was the guess before it
+const SPAWN_START = 500;
 function place(side, owner) {
   const sp = new StructureSpawn(side.spawn[0], side.spawn[1], owner, SPAWN_START); world.objects.push(sp);
   const src = new Source(side.source[0], side.source[1], 1000, 1000); world.objects.push(src);
@@ -79,7 +80,9 @@ if (MAP) {
   world.objects.push(new Source(95, 45, 1000, 1000)); world.objects.push(new Source(95, 54, 1000, 1000));
   world.objects.push(new StructureContainer(92, 49, 2500, 2500)); world.objects.push(new StructureContainer(92, 50, 2500, 2500));
 }
-world.spawnRegen = [1, has('harvest') ? 11 : 1]; // 'harvest': the enemy economy as if it had a W5 harvester from tick 1
+world.spawnRegen = [1, has('harvest') ? 11 : has('icpt') ? 7 : 1]; // 'harvest': the enemy economy as if it had a W5 harvester from tick 1
+// 'icpt' (stachu3478#9/#10, 27.09.2026): two W3M1C1 harvesters and two M1C1 haulers put ~7 a tick into his spawn from
+// the first tens of ticks (measured on his spawn's energy: +7/tick at t=80..120), so the stub gives him 7 from tick 1
 // 'racer' (match 2, 04.09.2026): the opponent runs a train too and is AHEAD — its puller is already alive at tick 0, so
 // it does not lose the thirty ticks of spawning we lose. That match was lost by two ticks, and the stub needs a rival
 // that actually wins the race to exercise the "race lost" branch at all
@@ -112,7 +115,8 @@ function stepAway(c, from) {
   const s = r.path[0];
   if (s) c.move(getDirection(s.x - c.x, s.y - c.y));
 }
-const isPuller = (c) => !c.escort && c.body.every((p) => p.type === M);
+// a puller is at least three MOVE: an M1 is a scout (keeper or blocker) and must not be taken into the train
+const isPuller = (c) => !c.escort && c.body.length >= 3 && c.body.every((p) => p.type === M);
 function fireAt(c, targets) {
   const inRange = targets.filter((o) => range(c, o) <= 3);
   if (live(c, R) > 0 && inRange.length) {
@@ -126,12 +130,93 @@ function fireAt(c, targets) {
   }
 }
 let enemyQueue = [];
+// ---------- the meta of 27.09.2026 (replays of 76561198870429455#4..#29, stachu3478#9/#10) ----------
+// 'rev'  — the REVERSE train: the escort is the head and pulls a 10-MOVE puller behind it; while the spawn is still
+//          spawning that puller and the escort stands next to the spawn, the escort pulls the SPAWNING creep (its fatigue
+//          series 60, 20, 0, 40, 0, 40 in #24/#28/#29 — five ticks of race). The puller is ordered on tick 1.
+// 'keep' — an M1 keeper on HIS flag (ordered at the first 50 energy after the puller): it steps aside in the tick his
+//          escort steps on, so a blocker of ours next to the flag never gets the cell.
+// 'blk'  — an M1 blocker for OUR flag at the first 50 after the puller (and the keeper, if any); 'blk1' — on tick 1,
+//          before the puller (#7: the puller then waits till t=51).
+// 'icpt' — stachu's interceptor: one M1A1 at t=50 that walks to our train, kills the puller and then chips the escort.
+const roleOf = new Map();
+const done = {};
+const REV = () => has('rev') || has('keep') || has('blk') || has('blk1');
+function orderRole(body, role) {
+  const r = theirs.sp.spawnCreep(body);
+  if (r.object) { roleOf.set(r.object.id, role); done[role] = (done[role] || 0) + 1; world.events.push(`t=${world.tick} enemy orders ${r.object.summary()} as ${role}`); return true; }
+  return false;
+}
+function freeAround(c, forbid) {
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+    if (!dx && !dy) continue;
+    const x = c.x + dx, y = c.y + dy;
+    if (!inBounds(x, y) || terrainAt(x, y) === 1 || creepAt(x, y) || forbid.some((f) => f.x === x && f.y === y)) continue;
+    return { x, y };
+  }
+  return null;
+}
+function metaEnemyTick(mine, oursC) {
+  const sp = theirs.sp, esc = theirs.esc;
+  if (!sp.spawning) {
+    const e = sp.store.energy;
+    const haveP = mine.some(isPuller);
+    if (has('blk1') && !done.blk1) { if (e >= 50) orderRole([M], 'blk1'); }
+    else if (!haveP && e >= 500) orderRole(PULLER, 'puller');
+    else if (haveP && has('keep') && !done.keep) { if (e >= 50) orderRole([M], 'keep'); }
+    else if (haveP && has('blk') && !done.blk) { if (e >= 50) orderRole([M], 'blk'); }
+    else if (has('icpt') && !done.icpt && world.tick >= 50 && e >= 130) orderRole([M, A], 'icpt');
+  }
+  if (!esc || !esc.exists) return;
+  const flag = theirs.flag;
+  const pullers = mine.filter((c) => isPuller(c) && !c.spawning);
+  const p0 = pullers.find((c) => range(c, esc) <= 1);
+  if (p0) esc.pull(p0);
+  else if (sp.spawning && range(esc, sp) <= 1) { const babe = creeps().find((c) => c.owner === 1 && c.spawning); if (babe) esc.pull(babe); }
+  const keeper = mine.find((c) => roleOf.get(c.id) === 'keep' && !c.spawning);
+  if (esc.fatigue === 0 && !(esc.x === flag.x && esc.y === flag.y)) {
+    const cm = structMatrix();
+    for (const o of creeps()) if (!o.spawning && o !== esc && !(o === keeper && o.x === flag.x && o.y === flag.y) && o !== p0) cm.set(o.x, o.y, 255);
+    const next = searchPath(esc, { pos: flag, range: 0 }, { costMatrix: cm }).path[0];
+    if (next) {
+      const occ = creepAt(next.x, next.y);
+      if (occ && occ === keeper) {
+        const aside = freeAround(keeper, [esc, ...(p0 ? [p0] : [])]);
+        if (aside) keeper.move(getDirection(aside.x - keeper.x, aside.y - keeper.y));
+      }
+      if (!occ || occ === keeper || occ === p0) {
+        esc.move(getDirection(next.x - esc.x, next.y - esc.y));
+        if (p0) p0.move(getDirection(esc.x - p0.x, esc.y - p0.y));
+      }
+    }
+  }
+  for (const p of pullers) if (p !== p0 && range(p, esc) > 1) stepToward(p, esc, 1);
+  for (const c of mine) {
+    if (c.spawning || c === esc) continue;
+    const role = roleOf.get(c.id);
+    if (role === 'keep' || role === 'blk' || role === 'blk1') {
+      const target = role === 'keep' ? flag : ours.flag;
+      if (c.x === target.x && c.y === target.y) continue;
+      if (range(c, target) <= 1) { if (!creepAt(target.x, target.y) && !(role === 'keep' && range(esc, target) <= 1)) c.move(getDirection(target.x - c.x, target.y - c.y)); continue; }
+      stepToward(c, target, 1);
+    } else if (role === 'icpt') {
+      const ourPullers = oursC.filter((o) => isPuller(o) && o.body.length >= 3);
+      const adjP = ourPullers.find((o) => range(c, o) <= 1);
+      const ourEsc = ours.esc && ours.esc.exists ? ours.esc : null;
+      if (adjP) c.attack(adjP); else if (ourEsc && range(c, ourEsc) <= 1) c.attack(ourEsc); else fireAt(c, oursC);
+      const tgt = ourPullers.sort((a, b) => range(c, a) - range(c, b))[0] || ourEsc;
+      if (tgt) stepToward(c, tgt, 1);
+    }
+  }
+}
 const FIGHTER = [M, M, M, M, M, R, R, R, R, R];
 const MELEE = [M, M, M, M, M, M, M, A, A, A, A, A, A, A];
 const PULLER = Array(10).fill(M);
 function enemyTick() {
   const mine = creeps().filter((c) => c.owner === 1);
   const oursC = creeps().filter((c) => c.owner === 0);
+  if (REV()) { metaEnemyTick(mine, oursC); return; }
+  if (has('icpt') && !has('race')) { metaEnemyTick(mine, oursC); return; }
   const esc = theirs.esc;
   const ourEsc = ours.esc;
   // orders: 'rush'/'hunt' — ranged fighters whenever affordable; 'melee' — melee; 'guard' — fighters that escort;

@@ -28,8 +28,17 @@ export class Creep extends GameObject {
     return s || 'dead';
   }
   // the API refuses the intent of a tired or motorless creep (ERR_TIRED -11 / ERR_NO_BODYPART -12) — the engine's
-  // pull bypass exists only for World's move(creepObject), which the Arena typings do not offer
-  move(dir) { if (this.fatigue > 0) return -11; if (!this.body.some((p) => p.type === 'move' && p.hits > 0)) return -12; if (!(dir >= 1 && dir <= 8)) return -10; intent(this, 'move', { dir }); return 0; }
+  // move(creepObject) is World's pull form (game/creeps.js:135-142): the API sets the intent toward that creep and
+  // returns OK WITHOUT the fatigue and MOVE checks; the processor then moves the creep only if it is pulled this tick
+  // (world.mjs movePhase). Measured live 27.09.2026: escort.move(puller) with fatigue 60 answers 0 in the Arena too
+  move(dir) {
+    if (dir && typeof dir === 'object') {
+      const dx = Math.sign(dir.x - this.x), dy = Math.sign(dir.y - this.y);
+      const d = { '0,-1': 1, '1,-1': 2, '1,0': 3, '1,1': 4, '0,1': 5, '-1,1': 6, '-1,0': 7, '-1,-1': 8 }[`${dx},${dy}`];
+      if (!d) return -10;
+      intent(this, 'move', { dir: d }); return 0;
+    }
+    if (this.fatigue > 0) return -11; if (!this.body.some((p) => p.type === 'move' && p.hits > 0)) return -12; if (!(dir >= 1 && dir <= 8)) return -10; intent(this, 'move', { dir }); return 0; }
   moveTo(target, opts) { if (this.fatigue > 0) return -11; if (!this.body.some((p) => p.type === 'move' && p.hits > 0)) return -12; const r = searchPath(this, target, opts); const s = r.path[0]; if (!s) return -2; return this.move(getDirection(s.x - this.x, s.y - this.y)); }
   attack(target) { intent(this, 'melee', { target }); return 0; }
   rangedAttack(target) { intent(this, 'ranged', { type: 'attack', target }); return 0; }

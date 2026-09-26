@@ -107,3 +107,15 @@ open - - melee+harvest
 open - - hunt+harvest
 open - - race PULL_MODEL=off
 open - - rush+harvest PULL_MODEL=off
+# the meta of 27.09.2026, measured on the replays of the first v10 series (docs/escort-run.md, "Мета поля"): the reverse
+# train with the spawn pull (76561198870429455#24/#28/#29), his keeper on his own flag, his blocker on ours — after the
+# puller ('blk') or on tick 1 before it ('blk1', #7). On two live maps; each loss here was a live loss of v10
+run  map-match4.txt - rev+keep
+run  map-match4.txt - rev+keep+blk
+run  map-match4.txt - blk1+keep
+run  map-match1.txt - rev+keep+blk
+run  map-match1.txt - blk1+keep
+run  map-stuck.txt  - rev+keep+blk
+# stachu's interceptor (an M1A1 at t=50 kills the puller in the centre) fed by a 7-a-tick economy, here WITH a racing
+# train: lost by construction until the bot can defend its train before its energy allows a fighter
+open map-match4.txt - icpt
