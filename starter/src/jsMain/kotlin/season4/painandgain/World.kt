@@ -1387,8 +1387,11 @@ internal object Garrisons {
                 return
             }
             if (USE_MERGE_TAKES_SPARES && takeSpares(bySquad, small, home)) return
-            if (small.value.size >= 2 && small.value.any { it.key == home }) continue
             val to = others.minByOrNull { farKey(postOf(it.value), home) } ?: continue
+            // ...а пара, у которой клетку забрали, не уходит в пост дешевле своего — она его и возвращает (v670, см.
+            // USE_FLIP_PAIR_STAYS_ON_DEAR)
+            val dearer = USE_FLIP_PAIR_STAYS_ON_DEAR && scoreOf(postOf(to.value)) < scoreOf(home)
+            if (small.value.size >= 2 && (small.value.any { it.key == home } || dearer)) continue
             moveTo(small.value, to.key, postOf(to.value).takeIf { it >= 0 } ?: continue)
             raidWhy.bump("tmerge")
             return
