@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 151
+    private const val BOT_VERSION = 152
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3530,9 +3530,24 @@ object SpawnAndSwamp {
         // ФРОНТ волны — те, кто держится вместе: в зазоре сплочения марша от авангарда по полю к спавну
         // врага. Осада на продолжение считается по фронту, а не по всем ушедшим: подкрепление в полутора
         // сотнях клеток позади в осаде не участвует, и «выигрыш» с ним отправил бы авангард под башню одного
+        // …THE FRONT IS WHERE THE WAVE'S MASS IS (v152): the window of COHESION_GAP along the flow holding the most members
+        // (the most advanced of equal ones), not the one behind whoever walked farthest. A hunter or a stomper ahead of
+        // the wave made the front itself: against marlyman#360 the front at t=1750 was 4 of 17 around a hunter at 506/1200
+        // hits, the siege by it lost, `hold` kept the whole army while the run of all of it won in 9-13 ticks, and the
+        // last call at 1920 left his spawn at 3000 on 1999; against #334 the front was 1 of 5 at t=700 and 1 of 11 at 1200
         val waveFront = if (waveMembers.isNotEmpty() && spawnFlow.isNotEmpty()) {
-            val van = waveMembers.mapNotNull { m -> spawnFlow[m.x * 100 + m.y].takeIf { it >= 0 } }.minOrNull() ?: 0
-            waveMembers.filter { m -> spawnFlow[m.x * 100 + m.y].let { it >= 0 && it - van <= COHESION_GAP } }
+            val flows = waveMembers.mapNotNull { m -> spawnFlow[m.x * 100 + m.y].takeIf { it >= 0 } }.sorted()
+            val van = if (!USE_FRONT_BY_MASS || flows.isEmpty()) flows.firstOrNull() ?: 0 else {
+                var best = flows[0]
+                var bestCount = 0
+                var j = 0
+                for (i in flows.indices) {
+                    while (j < flows.size && flows[j] - flows[i] <= COHESION_GAP) j++
+                    if (j - i > bestCount) { bestCount = j - i; best = flows[i] }
+                }
+                best
+            }
+            waveMembers.filter { m -> spawnFlow[m.x * 100 + m.y].let { it >= 0 && it - van in 0..COHESION_GAP } }
         } else waveMembers
         // ход считается ДО прогонов: он им теперь нужен — по нему разносится урон марша (см. approach)
         val startTravel = travelTicksOf(staging, assaultFlow, spawnFlow)
@@ -6064,6 +6079,9 @@ object SpawnAndSwamp {
     /** The keeper of a standing fort feeds a hungry tower before any build, ramparts before the second tower, the second
      *  tower only from surplus; the post is kept while the keeper stands on it (fortKeeperTurn, fortPost, v151). */
     private const val USE_FORT_FEED_FIRST = true
+    /** The wave's front is the COHESION_GAP window along the flow holding the most members, not the one behind the most
+     *  advanced (posture, v152). */
+    private const val USE_FRONT_BY_MASS = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
