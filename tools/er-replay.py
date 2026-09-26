@@ -89,7 +89,11 @@ def main():
                 energy[s[0]].append((k, s[2]))
 
     # ---------- 1. structures ----------
-    initial = {o['id'] for o in doc['objects'] if first_seen.get(o['id'], 0) <= 1 and not str(o['id']).startswith('a')}
+    # the map's own objects are numbered before the first creep born in the match (the escorts carry low ids too);
+    # a structure that first reports hits late (a rampart hit at t=165) is NOT new — only its first update is
+    born = [int(n[0]) for t in doc['ticks'] if t['k'] >= 1 for n in t.get('n', []) if str(n[0]).isdigit()]
+    first_new = min(born) if born else 10 ** 9
+    initial = {o['id'] for o in doc['objects'] if str(o['id']).isdigit() and int(o['id']) < first_new}
     print("\n== STRUCTURES built or dropped during the match ==")
     new = [o for o in doc['objects'] if o['id'] not in initial and o['kind'] not in ('flag', 'source', 'energy')]
     if not new:
