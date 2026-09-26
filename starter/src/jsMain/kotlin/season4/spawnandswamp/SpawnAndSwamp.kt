@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 155
+    private const val BOT_VERSION = 156
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6172,8 +6172,11 @@ object SpawnAndSwamp {
     /** MOVE in front (losing one costs only swamp speed), ATTACK last: M15A3, 990. */
     private val RAID_BODY: Array<BodyPartType> = Array(15) { MOVE } + Array(3) { ATTACK }
     private const val RAID_SIZE = 2
-    /** His builder must be seen by this tick for the raid's signal (his later versions: born 146-172). */
-    private const val RAID_SIGNAL_TICK = 200
+    /** His builder must be seen in the field by this tick for the raid's signal (his later versions: born 146-172, 20
+     *  cells out by 193-211; marlyman's leave home at 303-377, v156). */
+    private const val RAID_SIGNAL_TICK = 250
+    /** A builder of his at least this far from every spawn of his is in the field (v156). */
+    private const val RAID_FIELD_RANGE = 15
     /** The raid is bought until this tick; later the fort's energy comes first. */
     private const val RAID_BUY_UNTIL = 360
     /** The raid goes home below this share of its hits. */
@@ -6191,16 +6194,18 @@ object SpawnAndSwamp {
             c.body.none { it.type == RANGED_ATTACK || it.type == HEAL || it.type == CARRY || it.type == WORK || it.type == TOUGH }
     }
 
-    /** His spawns and spawn sites are bare: no rampart on or over them, no tower and no tower site of his (v155). */
+    /** No tower and no tower site of his (v156; v155 also asked for no rampart on his spawns, and kerobi#43 carries one
+     *  on his main from t≈200 — the raid was never bought against him). His tower is what the pair cannot stand under:
+     *  80-100 a tick for the 73 ticks of a ramparted spawn is more than its 3600 hits. */
     private fun hisBare(ctx: Ctx): Boolean {
         if (ctx.enemyTowers.isNotEmpty()) return false
         if (enemySitesNow.any { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureTower") }) return false
-        for (sp in ctx.enemySpawns) {
-            if (ctx.ramparts.any { it.my == false && it.x == sp.x && it.y == sp.y }) return false
-            if (enemySitesNow.any { (site, _) -> site.x == sp.x && site.y == sp.y }) return false
-        }
         return true
     }
+
+    /** A target's rampart hits: his rampart on its cell (v156). */
+    private fun rampartOn(ctx: Ctx, p: Position): Int =
+        ctx.ramparts.filter { it.my == false && it.x == p.x && it.y == p.y }.sumOf { it.hits ?: 0 }
 
     private fun raidWanted(ctx: Ctx): Boolean =
         raidSignal && raidOrdered < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL && raidOrderedAt != getTicks() && hisBare(ctx)
@@ -6215,7 +6220,8 @@ object SpawnAndSwamp {
         if (hisMainId == null && getTicks() <= 5) hisMainId = ctx.enemySpawns.firstOrNull()?.id
         if (!raidSignal && getTicks() <= RAID_SIGNAL_TICK && ctx.enemyCreeps.any { c ->
                 c.body.any { it.type == WORK } && c.body.any { it.type == CARRY } &&
-                    c.body.none { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL } }) {
+                    c.body.none { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL } &&
+                    ctx.enemySpawns.all { sp -> getRange(sp, c) >= RAID_FIELD_RANGE } }) {
             raidSignal = true
             if (DEBUG_LOG) println("raid signal t=${getTicks()}: bare=${hisBare(ctx)}")
         }
@@ -6236,11 +6242,15 @@ object SpawnAndSwamp {
         val lead = raiders.maxByOrNull { it.hits }!!
         val main = ctx.enemySpawns.firstOrNull { it.id == hisMainId }
         fun pos(o: GameObject): Position = o
+        // not under his tower (v156): a target within its reach is passed by, and with none left the pair goes home
+        val open = targets.filter { t -> ctx.enemyTowers.none { getRange(it.pos, pos(t)) <= InfluenceMap.towerFalloffRange.toInt() } }
+        // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17)
         val target: GameObject? = when {
             raidHome || gathering -> null
-            main != null -> main
-            else -> targets.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
-                .minByOrNull { getRange(lead, pos(it)) } ?: targets.minByOrNull { getRange(lead, pos(it)) }
+            main != null && main in open && rampartOn(ctx, main) == 0 -> main
+            else -> open.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
+                .minWithOrNull(compareBy<GameObject> { rampartOn(ctx, pos(it)) > 0 }.thenBy { getRange(lead, pos(it)) })
+                ?: open.minByOrNull { getRange(lead, pos(it)) }
         }
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
         for (r in raiders) {
