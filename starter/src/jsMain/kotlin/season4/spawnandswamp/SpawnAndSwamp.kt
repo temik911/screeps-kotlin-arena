@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 168
+    private const val BOT_VERSION = 169
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6344,8 +6344,10 @@ object SpawnAndSwamp {
      *  joins a one-WORK keeper with one sized for the tower (v167). */
     private const val USE_RAID_FINISH = true
     /** A wave is not called home, and may leave, when the house outlasts the siege (and the walk back unless the target is
-     *  his last spawn); a creep of his at the target is its defender, not an interceptor of the march (v168). */
-    private const val USE_HOUSE_OUTLASTS = true
+     *  his last spawn); a creep of his at the target is its defender, not an interceptor of the march (v168).
+     *  OFF — measured live 27.09.2026: A/B against marlyman#443 (5+5) and #434 (3+3) v167 5-0-3 / v168 3-0-5; the wave
+     *  kept out of the house's reach wins no more of his ramparted mains than the one called home. v169 plays v167's game. */
+    private const val USE_HOUSE_OUTLASTS = false
     /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
      *  33 swings (v164b). */
     private const val HOME_RAMPART_ATTACK = 3
