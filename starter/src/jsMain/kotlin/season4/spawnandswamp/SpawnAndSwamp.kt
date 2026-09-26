@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 153
+    private const val BOT_VERSION = 154
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -943,7 +943,11 @@ object SpawnAndSwamp {
 
         // СТРОИТЕЛЬ — крип с WORK: он не возит в спавн и не воюет. Тип по телу, а не по живым частям:
         // с выбитыми WORK он всё ещё не хаулер (маршрут у него свой), и кормить башню он может дальше
-        val builders = active.filter { c -> c.body.any { it.type == WORK } && !isPileBuilder(c) }
+        val builders = active.filter { c -> c.body.any { it.type == WORK } && !isPileBuilder(c) &&
+            // …and only while it can still carry (v154): a keeper with its CARRY shot off stood at the post with carry=0
+            // for 135 ticks against kerobi#36 (t=598-733), counted as the keeper, and none was bought in its place while
+            // the spawn held 278 — 27 shots — and the house fell at 882
+            (!USE_KEEPER_CARRY_LAST || c.body.any { it.type == CARRY && it.hits > 0 }) }
         val haulers = active.filter { c -> c.body.any { it.type == CARRY } && c.body.none { it.type == WORK } }
         val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } }
         // армия врага — И лекари: M4H2 без оружия считался «мягкой» целью, как хаулер, и бойцы шли за ним
@@ -2319,6 +2323,22 @@ object SpawnAndSwamp {
                 return
             }
             if (!spawnUnderFire) return reach("fpSave")
+        }
+        // A STANDING FORT RE-BUYS ITS KEEPER FIRST (v154). Its tower holds one shot and the spawn's regeneration alone is a
+        // shot every ten ticks (~90 a tick at range <=4, more than an M5H3 heals); with the keeper dead the tower is
+        // silent. The re-buy stood after `poor` (<200) and after the hauler's turn: against kerobi#36 the spawn saved
+        // from 733 to 800 before it even asked. With the fort's ramparts all up the keeper only feeds, and a feeder of
+        // [WORK, MOVE, CARRY, CARRY] for 250 does that (the WORK keeps it a keeper, not a hauler)
+        if (USE_KEEPER_CARRY_LAST && USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() && ctx.builders.isEmpty() &&
+            keeperOrderedAt != getTicks()) {
+            val body = if (fortIncomplete(ctx, withTwin = false)) keeperBody(ctx, null, 0, flow) else FEEDER_BODY
+            val price = body.sumOf { cost(it) }
+            if (energy < price) return reach("kfSave")
+            val r = spawn.spawnCreep(body)
+            reach(if (r.error == null) "kfBuy" else "err")
+            if (r.error == null) { spentBuild += price; keeperOrderedAt = getTicks() }
+            if (DEBUG_LOG) println("spawn: keeper (fort re-buy) parts=${body.size} cost=$price energy=$energy err=${r.error}")
+            return
         }
         // THE PILE BUILDER BEFORE THE THIRD HAULER, WHEN THERE IS A JOB FOR IT NOW (v138). His spawns rise out of the
         // map's containers — a fresh one holds 2000 for 100 ticks — and his economy outgrows ours by t≈400 (against kerobi
@@ -5636,6 +5656,15 @@ object SpawnAndSwamp {
     private fun builderBody(k: Int, walk: Boolean = false): Array<BodyPartType> {
         val move = if (walk) 2 + k else 2
         val body = ArrayList<BodyPartType>(2 + move + k)
+        // …the order the comment above means (v154): damage takes the FRONT, so a standing keeper carries its WORK in
+        // front and its CARRY last. [MOVE×2, CARRY×2, WORK×k] lost both CARRY first: against kerobi#36 its 515 damage at
+        // t≈598 left W3 with no CARRY, and the tower was silent to the fall. A walking keeper keeps its legs first
+        if (USE_KEEPER_CARRY_LAST && !walk) {
+            repeat(k) { body.add(WORK) }
+            repeat(move) { body.add(MOVE) }
+            repeat(2) { body.add(CARRY) }
+            return body.toTypedArray()
+        }
         repeat(move) { body.add(MOVE) }
         repeat(2) { body.add(CARRY) }
         repeat(k) { body.add(WORK) }
@@ -6109,6 +6138,11 @@ object SpawnAndSwamp {
     /** Behind a standing fort (tower and ramparts up, keeper alive, no raid at the door) a pile builder is saved for and
      *  bought ahead of haulers and fighters (spawnIfNeeded, v153). */
     private const val USE_FORT_PILE = true
+    /** A standing keeper's body carries its CARRY last; a keeper is a WORK creep with a live CARRY; a standing fort
+     *  re-buys its keeper before haulers and before `poor`, a feeder when the ramparts are all up (v154). */
+    private const val USE_KEEPER_CARRY_LAST = true
+    private val FEEDER_BODY: Array<BodyPartType> = arrayOf(WORK, MOVE, CARRY, CARRY)
+    private var keeperOrderedAt = -1
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
