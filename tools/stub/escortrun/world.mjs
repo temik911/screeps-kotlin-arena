@@ -280,6 +280,12 @@ function movePhase(t) {
       if (!d || tg.x + d[0] !== p.x || tg.y + d[1] !== p.y) pulledBy.delete(tid);
     }
   }
+  // candidates per target cell, then ONE winner per cell by the engine's ranks (movement.js check(), 27.09.2026):
+  // rate1 — how many creeps want the mover's own cell (100 if one of them comes FROM the target cell: a swap),
+  // rate2 — the mover is pulled, rate3 — it pulls, rate4 — MOVE per weight. Until this the stub gave the cell to
+  // whoever issued its intent first, so a finish lost live to a blocker next to the flag (6ab83ebc) could not be seen
+  const cand = new Map();
+  const wantsCell = new Map();
   for (const [id, m] of world.intents) {
     if (!m.move) continue;
     const c = byId(id);
@@ -291,9 +297,26 @@ function movePhase(t) {
     const tx = c.x + d[0], ty = c.y + d[1];
     if (!inBounds(tx, ty) || blockedAt(tx, ty)) continue;
     const key = idx(tx, ty);
-    if (targetTaken.has(key)) continue;
-    targetTaken.set(key, c);
-    movers.set(c.id, { c, tx, ty, pulled });
+    if (!cand.has(key)) cand.set(key, []);
+    cand.get(key).push({ c, tx, ty, pulled });
+    wantsCell.set(key, (wantsCell.get(key) || 0) + 1);
+  }
+  const pulling = new Set([...pulledBy.values()].map((p) => p.id));
+  for (const [key, list] of cand) {
+    let best = list[0];
+    if (list.length > 1) {
+      const rank = (m) => {
+        const own = idx(m.c.x, m.c.y);
+        let r1 = wantsCell.get(own) || 0;
+        if ((cand.get(own) || []).some((o) => o.c.x === m.tx && o.c.y === m.ty)) r1 = 100;
+        const w = weight(m.c) || 1;
+        return [r1, m.pulled ? 1 : 0, pulling.has(m.c.id) ? 1 : 0, live(m.c, 'move') / w];
+      };
+      const cmp = (a, b) => { const ra = rank(a), rb = rank(b); for (let i = 0; i < 4; i++) if (ra[i] !== rb[i]) return rb[i] - ra[i]; return 0; };
+      best = [...list].sort(cmp)[0];
+    }
+    targetTaken.set(key, best.c);
+    movers.set(best.c.id, best);
   }
   // a pulled creep moves only if its puller moves out of the cell it steps into
   const occ = new Map();

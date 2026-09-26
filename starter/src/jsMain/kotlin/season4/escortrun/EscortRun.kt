@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v11"
+    private const val BOT_VERSION = "v12"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -161,7 +161,7 @@ object EscortRun {
         if (w.now in 3..6) logMap((w.now - 3) * 25)
         pinned.clear()
         yieldCells = emptySet()
-        if (openingPlan == null) planOpening(w)
+        if (openingPlan == null) { planOpening(w); aimSpawn(w) }
         trackEnemyScouts(w)
         assignScouts(w)
         runSpawn(w)
@@ -391,6 +391,25 @@ object EscortRun {
             all.sortedBy { it.arrival }.take(6).joinToString(" | "))
     }
 
+    /**
+     * Куда спавн выпускает рождённого: по умолчанию движок берёт первую свободную клетку из directions = [TOP, …], и
+     * наш верхний спавн (9,9) выпускал каждого крипа в (9,8) — от маршрута, а их нижний (9,90) — в (9,89), к центру.
+     * Два шага лишних на каждом крипе: хранитель, рождённый в один тик с их блокировщиком, приходил к флагу на тик
+     * позже и отдавал клетку (6ab83f48, ricardo#4). Направления сортируются по полю к нашему флагу (все пути идут
+     * через центр) — первый выход ближе к маршруту.
+     */
+    private fun aimSpawn(w: World) {
+        val spawn = w.mySpawn ?: return
+        val flag = w.myFlag ?: return
+        val f = flowTo("scout:${flag.x},${flag.y}", flag, w.blocked, 1)
+        val dirs = DIRECTIONS.filter { (dx, dy) -> DistanceMap.inBounds(spawn.x + dx, spawn.y + dy) && f[(spawn.x + dx) * 100 + spawn.y + dy] >= 0 }
+            .sortedBy { (dx, dy) -> f[(spawn.x + dx) * 100 + spawn.y + dy] }
+        if (dirs.isEmpty()) return
+        val arr = dirs.map { (dx, dy) -> screeps.api.getDirection(dx, dy) }.toTypedArray()
+        val rc = spawn.asDynamic().setDirections(arr)
+        println("spawn directions: ${dirs.joinToString(" ") { (dx, dy) -> "(${spawn.x + dx},${spawn.y + dy})=${f[(spawn.x + dx) * 100 + spawn.y + dy]}" }} rc=$rc")
+    }
+
     // ==================== спавн ====================
 
     private fun energyOf(w: World) = w.mySpawn?.store?.get(RESOURCE_ENERGY) ?: 0
@@ -447,7 +466,10 @@ object EscortRun {
             }
         }
 
-        val raceLost = theirs <= ours + RACE_MARGIN
+        // гонка проиграна, только если их приход РАНЬШЕ нашего с запасом: ничьи по оценке на 51-м тике (наш 194-197,
+        // их 196-210 во всей серии v11) на деле выигрывал наш поезд, а блокировщик, купленный первым «на всякий
+        // случай», отдавал наш флаг их блокировщику (ricardo#5 трижды)
+        val raceLost = theirs + RACE_MARGIN < ours
         val myFlag = w.myFlag
         val enemyFlag = w.enemyFlag
 
@@ -469,7 +491,9 @@ object EscortRun {
             if (needGuard) {
                 val targetHits = maxOf(100, squatters.maxOfOrNull { it.hits } ?: 100)
                 val pick = fastHunter(w, myFlag, targetHits, e, squatters)
-                if (pick != null) {
+                // страж «на опережение» (флаг ещё пуст, но их разведчик успеет раньше нашего хранителя) нужен, только
+                // если сам успевает к приходу эскорта; иначе эти деньги сперва идут в блокировщик их флага (ниже)
+                if (pick != null && (squatters.isNotEmpty() || pick.second <= ours + GUARD_SLACK)) {
                     val (body, arrive) = pick
                     if (e >= Bodies.cost(body)) {
                         if (order(w, body, "flag-guard", "our flag: squatters=${squatters.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, myFlag) }} rivalEta=$rival keeperEta=$keeperEta arrive=$arrive ours=$ours theirs=$theirs")) fighterQueue.addLast(GUARD_FLAG)
@@ -483,6 +507,10 @@ object EscortRun {
                 saving(w, "keeper", Bodies.cost(body)); return
             }
         }
+
+        // 4'. их флаг и при НЕпроигранной гонке: блокировщик, пришедший раньше их эскорта, выигрывает матч при любой
+        //     гонке, если они не держат флаг хранителем (ricardo#4/#5 хранителя не ставят — их M1 идёт на НАШ флаг)
+        if (!raceLost && theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
 
         // 7. доход: пока боевого врага нет рядом, деньги работают в добытчике
         if (w.workers.isEmpty() && w.homeSource != null && arenaInfo.ticksLimit - w.now > 400) {
@@ -503,18 +531,20 @@ object EscortRun {
      * нужнее дома. Хранитель на клетке пропускает свой эскорт обменом (rate1), поэтому блокировщик рядом с чужим
      * хранителем бесполезен. true — заказ сделан или копим на него.
      */
-    private fun theirFlagOrder(w: World, e: Int, ours: Int, theirs: Int): Boolean {
+    private fun theirFlagOrder(w: World, e: Int, ours: Int, theirs: Int, blockerOnly: Boolean = false): Boolean {
         val enemyFlag = w.enemyFlag ?: return false
         if (w.enemyEscort != null && theirs > 0 && w.active.none { onCell(it, enemyFlag) }) {
             val held = w.enemies.firstOrNull { onCell(it, enemyFlag) }
             val rival = enemyScoutEta(w, enemyFlag, "THEIRS")
             val blockerEta = scoutEta(w, enemyFlag)
-            if (held == null && rival > blockerEta && scoutsOn(w, BLOCK) == 0 && fightersOn(w, BREAK) == 0 && blockerEta < theirs) {
+            // блокировщик полезен и при их хранителе на флаге: он встаёт на клетку подхода их эскорта (runScouts) и
+            // стоит им обхода — двух тиков гонки; а свободный флаг он просто занимает
+            if (scoutsOn(w, BLOCK) == 0 && fightersOn(w, BREAK) == 0 && blockerEta < theirs) {
                 val body = Bodies.moves(1)
-                if (e >= Bodies.cost(body)) { if (order(w, body, "blocker", "their flag free: blockerEta=$blockerEta rivalEta=$rival ours=$ours theirs=$theirs")) scoutQueue.addLast(BLOCK); return true }
+                if (e >= Bodies.cost(body)) { if (order(w, body, "blocker", "their flag ${held?.let { "held by " + Bodies.summaryOf(it) } ?: "free"}: blockerEta=$blockerEta rivalEta=$rival ours=$ours theirs=$theirs")) scoutQueue.addLast(BLOCK); return true }
                 saving(w, "blocker", Bodies.cost(body)); return true
             }
-            if ((held != null || rival <= blockerEta) && fightersOn(w, BREAK) == 0) {
+            if (!blockerOnly && (held != null || rival <= blockerEta) && fightersOn(w, BREAK) == 0) {
                 val pick = fastHunter(w, enemyFlag, maxOf(100, held?.hits ?: 100), e, listOfNotNull(held))
                 if (pick != null && pick.second < theirs) {
                     val (body, arrive) = pick
@@ -531,11 +561,13 @@ object EscortRun {
     private const val BREAK = "break"
     private const val GUARD_FLAG = "flag"
     private const val ESCORT_GUARD = "escort"
-    /** Гонка считается проигранной, если их приход не позже нашего плюс этот запас (ничья — тоже проигрыш: спор за
-     *  клетку в один тик не решается ничем). */
-    private const val RACE_MARGIN = 6
+    /** Гонка считается проигранной, если их приход раньше нашего больше чем на столько тиков (ошибка оценки — пара
+     *  тиков; ничья по оценке — не проигрыш). */
+    private const val RACE_MARGIN = 2
     /** Хранитель не нужен, если эскорт придёт раньше, чем он дойдёт (путь M1 до флага от спавна ~100 клеток). */
     private const val KEEPER_MIN_LEAD = 20
+    /** Страж флага на опережение покупается, только если приходит не позже эскорта плюс столько тиков. */
+    private const val GUARD_SLACK = 20
 
     /** Враг идёт к нашему эскорту: его дистанция сокращается и он в тридцати клетках. */
     private fun approaching(w: World, e: Creep, escort: Creep): Boolean {
@@ -690,15 +722,53 @@ object EscortRun {
             }
             val flagOcc = w.occupant[key(flag)]
             val d = dist(s, flag)
+            // Флаг держит их крип. Блокировщик встаёт на клетку ПОДХОДА их эскорта (последнюю клетку его маршрута перед
+            // флагом): их хранитель пропустит эскорт обменом, но до флага эскорту придётся обходить нас — лишний шаг,
+            // два тика гонки. Так же их M1, ждущий у нашего флага, стоял ровно на нашей клетке подхода (стенд
+            // stuck:rev+keep+blk: обход (94,93)→(95,94), проигрыш на 246-м тике при равном ходе). Хранитель, наоборот,
+            // ждёт НЕ на нашей клетке подхода, чтобы не запереть собственный эскорт.
+            if (flagOcc != null && !flagOcc.my) {
+                val ownApproach = if (mission == BLOCK) approachCell(w.enemyEscort, w.enemyEscortFlow) else approachCell(w.escort, w.escortFlow)
+                val spot: Position? = if (mission == BLOCK) ownApproach?.takeIf { w.occupant[key(it)].let { o -> o == null || o === s } }
+                    else null
+                if (spot != null) {
+                    if (onCell(s, spot)) { pinned.add(idOf(s)); continue }
+                    val step = stepAround(w, s, spot, 0, 1, 1)
+                    if (step != null) { TrafficManager.request(s, step, SCOUT_PRIORITY); continue }
+                }
+                if (d <= 1 && (mission == BLOCK || ownApproach == null || !onCell(s, ownApproach))) { pinned.add(idOf(s)); continue }
+            }
             if (d <= 1) {
                 if (flagOcc == null) { s.move(dirTo(s, flag)); pinned.add(idOf(s)); continue }
-                // клетка занята: ждём вплотную (не на клетке, куда придёт наш эскорт)
                 pinned.add(idOf(s))
                 continue
             }
             val step = stepAround(w, s, flag, 1, 1, 50) ?: continue
             TrafficManager.request(s, step, SCOUT_PRIORITY)
         }
+    }
+
+    /** Клетка подхода эскорта к его флагу: последняя клетка его маршрута по полю перед флагом (null — маршрута нет). */
+    private fun approachCell(escort: Creep?, flow: IntArray?): Position? {
+        if (escort == null || flow == null) return null
+        var cell = key(escort)
+        if (flow[cell] <= 0) return null
+        var guard = 0
+        while (guard++ < 400) {
+            val cx = cell / 100; val cy = cell % 100
+            var best = -1
+            var bestD = flow[cell]
+            for ((dx, dy) in DIRECTIONS) {
+                val nx = cx + dx; val ny = cy + dy
+                if (!DistanceMap.inBounds(nx, ny)) continue
+                val d = flow[nx * 100 + ny]
+                if (d in 0 until bestD) { bestD = d; best = nx * 100 + ny }
+            }
+            if (best < 0) return null
+            if (bestD == 0) return InfluenceMap.cell(cx, cy)
+            cell = best
+        }
+        return null
     }
 
     // ==================== поезд ====================
@@ -764,19 +834,19 @@ object EscortRun {
             // на клетке флага наш — хранитель M1 или страж флага: оба уходят вбок, эскорт встаёт
             val keeperThere = occ != null && occ.my && !isEscort(occ) && occ !in chain
             if (onCell(next, flag) && keeperThere) {
-                // финиш: хранитель уходит вбок, эскорт встаёт на флаг; усталый эскорт хранитель втягивает сам
-                val aside = asideCell(w, occ!!, setOf(key(escort)) + chain.map { key(it) })
-                if (aside != null) {
-                    occ.move(dirTo(occ, aside))
+                // Финиш — ОБМЕНОМ и только отдохнувшим эскортом: хранитель шагает в клетку эскорта, эскорт — на флаг.
+                // У шага эскорта тогда высший ранг спора за клетку (movement.js: к нему идёт крип С ЭТОЙ САМОЙ клетки,
+                // rate1 = 100), и их блокировщик, ждущий вплотную, клетку не возьмёт. v11 уводил хранителя ВБОК и
+                // втягивал усталого эскорта формой move(крип) — живьём эскорт не сдвинулся, а их M1 встал на флаг в
+                // тот же тик (6ab83ebc, #31, t=247; 6ab83eea, ricardo#5): два поражения на последней клетке. Усталый
+                // эскорт ждёт тик — хранитель при этом стоит и клетку держит.
+                if (escort.fatigue == 0) {
+                    occ!!.move(dirTo(occ, escort))
                     keeperStepAside = idOf(occ)
                     pinned.add(idOf(occ))
-                    // усталый эскорт шагает только буксируемым и только формой move(объектКрипа) — она минует
-                    // ERR_TIRED в API (замер v10: escort.move(puller) при усталости 60 ответил 0), а процессор
-                    // пускает шаг, потому что связка есть; move(направление) усталому отвечает ERR_TIRED
-                    val rc = if (escort.fatigue > 0) { occ.pull(escort); escort.asDynamic().move(occ) } else escort.move(dirTo(escort, next))
-                    moveChain(chain, escort)
+                    val rc = escort.move(dirTo(escort, next))
                     moved = true
-                    println("train t=${w.now}: FINISH keeper ${idOf(occ)} aside to (${aside.x},${aside.y}), escort f=${escort.fatigue} -> flag rc=$rc")
+                    println("train t=${w.now}: FINISH swap with ${idOf(occ)} ${Bodies.summaryOf(occ)}, escort -> flag rc=$rc")
                 }
             } else if (escort.fatigue == 0 && (occ == null || occ.my)) {
                 if (occ != null && occ.my) yieldCells = setOf(key(next))
