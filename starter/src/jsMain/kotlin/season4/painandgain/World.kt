@@ -2543,7 +2543,8 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     // в контакте стоять — законно (строй рубится на месте), и полное взаимное лечение даёт нулевой чистый урон
     // стратег этого тика ещё не решал о наступлении: `pushing` здесь — значение ПРОШЛОГО тика (см. объявление внизу файла)
     private val pushingPrev = pushing
-    private val marchStalled = MARCH_STALLED.c("pushing", pushingPrev) && MARCH_STALLED.c("hasCell", marchCell >= 0) && MARCH_STALLED.c("fullWindow", Memory.marchHist.size == MARCH_STALL_TICKS) &&
+    // ...или в постуре уничтожения без толчка (v692, см. USE_MARCH_STALL_IN_ANNIHILATE): её держит и контакт без размена
+    private val marchStalled = MARCH_STALLED.c("pushing", pushingPrev || (USE_MARCH_STALL_IN_ANNIHILATE && Memory.prevPosture == Posture.ANNIHILATE)) && MARCH_STALLED.c("hasCell", marchCell >= 0) && MARCH_STALLED.c("fullWindow", Memory.marchHist.size == MARCH_STALL_TICKS) &&
         MARCH_STALLED.c("sameCellAllWindow", Memory.marchHist.all { if (USE_MARCH_STALL_WITHIN_ONE) keyRange(it, marchCell) <= 1 else it == marchCell }) &&
         MARCH_STALLED.c("noFight", !fightOn)
     // сухой толчок (v86): толчок PASSIVE_TICKS без нашего выстрела и без удара по нам — не толчок

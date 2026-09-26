@@ -2688,6 +2688,17 @@ internal const val USE_MARCH_STALL_WITHIN_ONE = true
  *  «той же мерой, что у простоя» — теперь это правда. Окно и порог те же (LEDGER_WINDOW = STALL_TICKS, STALL_DAMAGE). */
 internal const val USE_STALL_BY_CREEP_LOSSES = true
 
+/** ПРОСТОЙ МАРША И В ПОСТУРЕ УНИЧТОЖЕНИЯ БЕЗ ТОЛЧКА (v692, звено `pushing` в `marchStalled`). Тот же разбор v690 против
+ *  MBFishhh#1: постуру ANNIHILATE держат два источника — толчок `pushByPower` (`exchangePaying` истинно при 0 ≥ 0, то есть и без
+ *  выстрелов) и `contactFight` через `hotContact` (его вооружённый в 4 клетках от нашей массы, а выстрелов нет). В 6ab82e36
+ *  (t≈910–1 500) армия 12/12 с полными хитами стоит между двумя его группами, FIGHT 599 из 600 тиков, `contactFight` 582,
+ *  выстрелов 0 из 60 срезов, у всех двенадцати `step=stay` — и ни один детектор простоя не сработал: `marchStalled` отказывал
+ *  на звене `pushing` (толчка нет), `keepsDistance` — центр его боевых в 2 клетках, пикет — в досягаемости все семь его
+ *  вооружённых. «Горячий контакт без размена — не контакт» — это USE_FIGHT_BY_LEDGER, отвергнутый в v221. Что должно быть
+ *  верно: армия, которая в постуре уничтожения не сдвигается (центр в клетке MARCH_STALL_TICKS тиков) и не дерётся (`noFight`
+ *  остаётся), стоит, чем бы постура ни держалась. Риск — стоящий лагерь стенда (`camp`) после первого боя. */
+internal const val USE_MARCH_STALL_IN_ANNIHILATE = true
+
 /** Групп его бойцов (одиночки в счёт) не меньше этого — срез дробления (см. USE_FRAG_ANY_GROUPS). */
 internal const val FRAG_ANY_GROUPS = 4
 
