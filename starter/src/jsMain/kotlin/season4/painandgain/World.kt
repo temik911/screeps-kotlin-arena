@@ -1333,7 +1333,8 @@ internal object Garrisons {
 
     /** Отряд, где живых меньше TRIPLE_SIZE, вливается в отряд с ближайшим флагом (по одному за тик): одиночек и пар он бьёт.
      *  ...а если есть пост дешевле его собственного, бросается ТОТ: бойцы самого дешёвого поста идут на пост повреждённого
-     *  отряда (v649, см. USE_MERGE_DROPS_CHEAPEST). */
+     *  отряда (v649, см. USE_MERGE_DROPS_CHEAPEST). ...а если дешевле нет, а у какого-то отряда бойцы сверх тройки — он
+     *  отдаёт недостающих, и пост не бросается (v662, см. USE_MERGE_TAKES_SPARES). */
     private fun tripleMerge(ctx: Ctx) {
         val bySquad = readyFighters(ctx).filter { it.id in Memory.garrisonSquad }.groupBy { Memory.garrisonSquad[it.id]!! }
         if (bySquad.size < 2) return
@@ -1352,6 +1353,7 @@ internal object Garrisons {
                 return
             }
         }
+        if (USE_MERGE_TAKES_SPARES && takeSpares(bySquad, small, home)) return
         val to = others.minByOrNull { e ->
             val fk = Memory.garrisonHome[e.value[0].id] ?: home
             maxOf(abs(fk / 100 - home / 100), abs(fk % 100 - home % 100))
@@ -1385,6 +1387,7 @@ internal object Garrisons {
                 raidWhy.bump(if (give.size == donor.value.size) "tdrop" else "tspare")
                 return
             }
+            if (USE_MERGE_TAKES_SPARES && takeSpares(bySquad, small, home)) return
             if (small.value.size >= 2 && small.value.any { it.key == home }) continue
             val to = bySquad.entries.filter { it.key != small.key }.minByOrNull { far(postOf(it.value), home) } ?: continue
             val fk = postOf(to.value).takeIf { it >= 0 } ?: continue
@@ -1392,6 +1395,22 @@ internal object Garrisons {
             raidWhy.bump("tmerge")
             return
         }
+    }
+
+    /** Отряд с бойцами сверх TRIPLE_SIZE (ближайший к посту отряда меньше тройки) отдаёт ему недостающих — ближних к его
+     *  посту и никогда держателя клетки своего флага (v662, см. USE_MERGE_TAKES_SPARES); true — отдал. */
+    private fun takeSpares(bySquad: Map<Int, List<Creep>>, small: Map.Entry<Int, List<Creep>>, home: Int): Boolean {
+        fun postOf(sq: List<Creep>) = Memory.garrisonHome[sq[0].id] ?: -1
+        fun far(a: Int, b: Int) = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
+        val donor = bySquad.entries.filter { it.key != small.key && it.value.size > TRIPLE_SIZE && postOf(it.value) >= 0 }
+            .minByOrNull { far(postOf(it.value), home) } ?: return false
+        val post = postOf(donor.value)
+        val need = minOf(TRIPLE_SIZE - small.value.size, donor.value.size - TRIPLE_SIZE)
+        val give = donor.value.filter { it.key != post }.sortedBy { far(it.key, home) }.take(need.coerceAtLeast(0))
+        if (give.isEmpty()) return false
+        for (c in give) { Memory.garrisonSquad[c.id] = small.key; Memory.garrisonHome[c.id] = home; Memory.garrisonFlag[c.id] = home }
+        raidWhy.bump("tspare")
+        return true
     }
 
     /** Тиков, что гарнизонный крип стоит на одной клетке (v658): считается раз в тик при вызове шага. */
