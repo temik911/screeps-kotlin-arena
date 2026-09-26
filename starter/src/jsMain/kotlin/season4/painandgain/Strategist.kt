@@ -1738,11 +1738,14 @@ internal class RaceRoutes(private val ctx: Ctx, private val meas: ArmyMeasures, 
     // нечего по построению. Размер горстки теперь считается так, чтобы стражей превзойти, — значит и список должен
     // включать охраняемые флаги
     private val garrison = USE_WANTED_VS_GARRISON && garrisonFoe(ctx)
-    val wanted = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it, meas.view, CapAsker.ARMY) &&
-        !(roster.safe && !garrison && it.occupant != null) &&
-        !(roster.safe && !garrison && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
-            flags.any { o -> !o.ours && getRange(o.pos, ctx.home) <= getRange(o.pos, ctx.enemyHome) }) }
-
+    private val takeable = flags.filter { !it.ours && it.occupant?.my != true && captureAllowed(ctx, it, meas.view, CapAsker.ARMY) &&
+        !(roster.safe && !garrison && it.occupant != null) }
+    // ...И «СВОЯ ПОЛОВИНА» — ЭТО ФЛАГИ, КОТОРЫЕ БРАТЬ МОЖНО (v666, см. USE_HALF_TAKEABLE): не наш флаг на нашей половине,
+    // под его телом или закрытый воротами, дальний флаг больше не запирает — иначе список пуст, и чужой пустой H стоит
+    // его весь матч
+    private fun locksFar(o: FlagInfo) = if (USE_HALF_TAKEABLE) takeable.any { it === o } else !o.ours
+    val wanted = takeable.filter { !(roster.safe && !garrison && getRange(it.pos, ctx.home) > getRange(it.pos, ctx.enemyHome) &&
+            flags.any { o -> locksFar(o) && getRange(o.pos, ctx.home) <= getRange(o.pos, ctx.enemyHome) }) }
         .sortedBy { f -> free.minOf { getRange(it, f.pos) } }
     // ...И ОТРЯД НА ПУТИ К ФЛАГУ СОХРАНЯЕТ ЗАДАНИЕ (v299): задание раздавалось заново каждый тик, а флаг, к которому уже
     // идёт бегун, командир не дублирует, — своя же пара с прошлого тика закрывала ему этот флаг, и её распускали через
