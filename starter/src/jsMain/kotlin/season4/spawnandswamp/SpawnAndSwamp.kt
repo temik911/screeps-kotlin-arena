@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 149
+    private const val BOT_VERSION = 150
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1143,6 +1143,18 @@ object SpawnAndSwamp {
             fortHome = true
             if (DEBUG_LOG) println("fort home t=${getTicks()}: his spawns=${enemySpawns.size} enemy=${enemyPower.toInt()} our=${ourDefense.toInt()}")
         }
+        // A SECOND TOWER ONCE HIS STORM HAS TOUCHED THE RAMPART (v150). In the seven late losses to kerobi (v146, house down
+        // at 1244-1975) the fort stood in all seven and still fell: 4-6 of his M5R5 and 1-5 M5H3 at the door, 150-220 a
+        // tick on the ramparts, and one tower killing ~0.6 of a creep a shot — its 850-950 once in ten ticks is healed off
+        // by three M5H3 (108 a tick); in two of the seven it was fed on nearly every cooldown and the house fell anyway.
+        // Two towers firing at one target in one tick put 1700-1900 on it, more than an M5R5 (1000) or an M5H3 (800)
+        // plus a tick of his heal: a corpse every ten ticks instead of every 17-20. Ramparts are never repaired, so the
+        // first hits off the spawn's rampart say the storms have begun and will wear it down
+        if (USE_FORT_TWIN && fortHome && !fortTwin && ctx.myTowers.size == 1 && !fortIncomplete(ctx) &&
+            ctx.ramparts.any { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y && (it.hits ?: 0) < RAMPART_HITS }) {
+            fortTwin = true
+            if (DEBUG_LOG) println("fort twin t=${getTicks()}: spawn rampart=${ctx.ramparts.firstOrNull { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y }?.hits}")
+        }
         // для решений спавна враг — «скоро»: с теми, кто ещё рождается у его спавна
         val threatsSoon = combatEnemies + enemyPending
         val enemyArrival = enemyArrivalTicks(ctx)
@@ -2127,6 +2139,13 @@ object SpawnAndSwamp {
                     }
                 }
             }
+            if (USE_FORT_TWIN && fortTwin && ctx.myTowers.size == 1 && ctx.mySites.none { (it.progressTotal ?: 0) == buildCost("StructureTower") }) {
+                val spot = fortPost(ctx)?.let { twinSpot(ctx, it) }
+                if (spot != null) {
+                    val r = createConstructionSite(spot.x, spot.y, StructureTower::class.js)
+                    if (DEBUG_LOG) println("tower: twin site at (${spot.x},${spot.y}) err=${r.error}")
+                }
+            }
             cpuMark("sp.tower")
             // ТОЧКА СДАЧИ — ПОКУПКА ИЗ ИЗЛИШКА, А НЕ СТАВКА НА ДЛИНУ МАТЧА. Горизонта матча бот не знает и
             // знать не может (четвёртая попытка требовала его от симуляции осады и получила «никогда»), но
@@ -2434,7 +2453,15 @@ object SpawnAndSwamp {
         // гарнизоне тревога выпускала M1R1 по 200 (матч 9); недомерок при тревоге — только когда
         // гарнизон не держит и энергия не успевает
         val gap = bodyCap - budget
-        if (gap > 0 && bodyValue(full) > bodyValue(body) && !raidBuys(body)) {
+        // …and when his heal zeroes the value of every body (v150): bodyValue subtracts his heal per gun of ours, and with
+        // 0-1 guns at home (the fortified house) his 52-324 a tick made the full M8R4 and an M1R1 both worth 0 — the wait
+        // was skipped and every 200 became an M1R1: fifteen of them (3400) in one late loss, 9000 across seven. A body
+        // is then judged by the damage it deals, which is what adds up when guns focus one of his
+        fun dealt(b: Array<BodyPartType>) = b.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER + b.count { it == ATTACK } * ATTACK_POWER +
+            b.count { it == HEAL } * HEAL_POWER
+        val fullBetter = bodyValue(full) > bodyValue(body) ||
+            (USE_RUNT_BY_DAMAGE && bodyValue(full) == bodyValue(body) && dealt(full) > dealt(body))
+        if (gap > 0 && fullBetter && !raidBuys(body)) {
             val waitTicks = energyArrivalTicks(ctx, gap, flow)
             if (deficit <= 0.0 || (enemyArrival > waitTicks && spawnLife > waitTicks)) return reach("wFull")
             // недомерок — только если САМ закрывает дефицит: тело, которое ничего не меняет, — корм
@@ -5738,6 +5765,7 @@ object SpawnAndSwamp {
      *  иначе в самого опасного из достижимых. Некого бить — лечит самого израненного своего: 600 за
      *  выстрел, полсотни частей HEAL. Пустая башня молчит — кормит её смотритель. */
     private fun runTowers(ctx: Ctx) {
+        if (USE_TOWER_VOLLEY) return runTowerVolley(ctx)
         for (t in ctx.myTowers) {
             if (t.cooldown > 0) continue
             if ((t.store[RESOURCE_ENERGY] ?: 0) < TOWER_ENERGY_COST) continue
@@ -5754,6 +5782,63 @@ object SpawnAndSwamp {
             val hurt = ctx.active.filter { it.hits < it.hitsMax && InfluenceMap.towerShot(getRange(t, it)) > 0.0 }
                 .minByOrNull { it.hits * 100 / maxOf(it.hitsMax, 1) }
             if (hurt != null) t.heal(hurt)
+        }
+    }
+
+    /**
+     * OUR TOWERS FIRE AS ONE (v150). The kill test is by the volley of the ready towers against the creep's hits plus his
+     * heal on it this tick; the fewest towers that kill it fire (nearest-damage first) and the rest choose again, and a
+     * creep no volley kills takes them all. With no armed creep of his in reach they shoot his builder — fourteen of his
+     * builders spent 1013 ticks inside our tower's reach in nine draws and took 0 shots, each worth ~2.7 spawns of his —
+     * then heal ours, then shoot any other creep of his (his M1C1 haulers: 200 hits, one shot).
+     */
+    private fun runTowerVolley(ctx: Ctx) {
+        val ready = ctx.myTowers.filter { it.cooldown <= 0 && (it.store[RESOURCE_ENERGY] ?: 0) >= TOWER_ENERGY_COST }.toMutableList()
+        if (ready.isEmpty()) return
+        fun shot(t: StructureTower, e: Creep) = InfluenceMap.towerShot(getRange(t, e))
+        fun healOn(e: Creep): Double = ctx.enemyCreeps.sumOf { h ->
+            val parts = h.body.count { it.type == HEAL && it.hits > 0 }
+            val r = getRange(h, e)
+            if (r <= 1) parts * HEAL_POWER.toDouble() else if (r <= RANGED_RANGE) parts * RANGED_HEAL_POWER.toDouble() else 0.0
+        }
+        fun volley(e: Creep) = ready.sumOf { shot(it, e) }
+        fun kills(e: Creep) = volley(e) >= e.hits + healOn(e)
+        val done = HashSet<String>()
+        fun fire(target: Creep, why: String) {
+            val need = target.hits + healOn(target)
+            var dealt = 0.0
+            for (t in ready.filter { shot(it, target) > 0.0 }.sortedByDescending { shot(it, target) }) {
+                if (dealt >= need) break
+                t.attack(target)
+                ready.remove(t)
+                dealt += shot(t, target)
+                if (DEBUG_LOG) println("  tower (${t.x},${t.y}) -> (${target.x},${target.y}) $why r=${getRange(t, target)} dmg=${shot(t, target).toInt()} hits=${target.hits} volley=${dealt.toInt()}/${need.toInt()}")
+            }
+            done.add(target.id)
+        }
+        while (ready.isNotEmpty()) {
+            val armed = ctx.combatEnemies.filter { e -> e.id !in done && ready.any { shot(it, e) > 0.0 } }
+            val target = armed.minWithOrNull(
+                compareByDescending<Creep> { kills(it) }
+                    .thenByDescending { effectiveDps(it, ctx.fighters, homeSpawnPos) }
+                    .thenBy { e -> ready.minOf { getRange(it, e) } }) ?: break
+            fire(target, "armed")
+        }
+        if (ready.isEmpty() || !USE_TOWER_SOFT) {
+            for (t in ready) ctx.active.filter { it.hits < it.hitsMax && shot(t, it) > 0.0 }.minByOrNull { it.hits * 100 / maxOf(it.hitsMax, 1) }?.let { t.heal(it) }
+            return
+        }
+        val soft = ctx.enemyCreeps.filter { e -> e.id !in done && ctx.combatEnemies.none { it.id == e.id } && ready.any { shot(it, e) > 0.0 } }
+        val builder = soft.filter { isHisBuilder(it) }.minWithOrNull(compareByDescending<Creep> { kills(it) }.thenBy { it.hits })
+        if (builder != null) { fire(builder, "builder"); if (ready.isEmpty()) return }
+        for (t in ready.toList()) {
+            val hurt = ctx.active.filter { it.hits < it.hitsMax && shot(t, it) > 0.0 }.minByOrNull { it.hits * 100 / maxOf(it.hitsMax, 1) }
+            if (hurt != null) { t.heal(hurt); ready.remove(t) }
+        }
+        while (ready.isNotEmpty()) {
+            val other = soft.filter { it.id !in done && ready.any { t -> shot(t, it) > 0.0 } }
+                .minWithOrNull(compareByDescending<Creep> { kills(it) }.thenBy { it.hits }) ?: break
+            fire(other, "soft")
         }
     }
 
@@ -5966,6 +6051,16 @@ object SpawnAndSwamp {
     private const val USE_FORT_RESERVE = true
     /** While the fortified house is not complete no gun leaves it: no push, no builder hunt, no stomp (v149). */
     private const val USE_FORT_GARRISON = true
+    /** A fortified house whose spawn rampart has been hit gets a second tower next to the keeper's post (v150). */
+    private const val USE_FORT_TWIN = true
+    private var fortTwin = false
+    /** Our towers fire in one volley: the kill test and the target are by the sum of the ready towers (runTowers, v150). */
+    private const val USE_TOWER_VOLLEY = true
+    /** A tower with no armed creep of his in reach shoots his builder, then any unarmed creep of his (runTowers, v150). */
+    private const val USE_TOWER_SOFT = true
+    /** The spawn waits for the full body when a smaller one deals less damage, also when his heal zeroes both values
+     *  (spawnIfNeeded, v150). */
+    private const val USE_RUNT_BY_DAMAGE = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
@@ -6220,9 +6315,36 @@ object SpawnAndSwamp {
      *  tower and the keeper's post missing (v149). Reads only; the sites are placed by runBuilders. */
     private fun fortIncomplete(ctx: Ctx): Boolean {
         if (!USE_FORT_HOME || !fortHome) return false
-        val tower = ctx.myTowers.minByOrNull { getRange(ctx.mySpawn, it) } ?: return true
-        val cells = listOfNotNull<Position>(ctx.mySpawn, tower, fortPost(ctx))
+        if (ctx.myTowers.isEmpty() || (fortTwin && ctx.myTowers.size < 2)) return true
+        val cells = listOfNotNull<Position>(ctx.mySpawn, fortPost(ctx)) + ctx.myTowers
         return cells.any { c -> ctx.ramparts.none { it.my == true && it.x == c.x && it.y == c.y && (it.hits ?: 0) > 0 } }
+    }
+
+    /** The second tower of a fortified house (v150): a free cell next to the keeper's post, so the keeper feeds both
+     *  towers from it without a step, farthest from his spawn, and leaving the spawn two free cells to bear creeps. */
+    private fun twinSpot(ctx: Ctx, post: Position): Position? {
+        val spawn = ctx.mySpawn
+        val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
+        for (t in ctx.myTowers) busy.add(t.x * 100 + t.y)
+        fun open(x: Int, y: Int) = x in 1..98 && y in 1..98 && (x * 100 + y) !in busy &&
+            getTerrainAt(InfluenceMap.cell(x, y)) != TERRAIN_WALL
+        var best: Position? = null
+        for (dx in -1..1) for (dy in -1..1) {
+            val x = post.x + dx
+            val y = post.y + dy
+            if ((dx == 0 && dy == 0) || (x == spawn.x && y == spawn.y) || !open(x, y)) continue
+            var exits = 0
+            for (ex in -1..1) for (ey in -1..1) {
+                val nx = spawn.x + ex
+                val ny = spawn.y + ey
+                if ((ex == 0 && ey == 0) || (nx == x && ny == y) || (nx == post.x && ny == post.y)) continue
+                if (open(nx, ny)) exits++
+            }
+            if (exits < 2) continue
+            val pos = InfluenceMap.cell(x, y)
+            if (best == null || getRange(pos, ctx.enemySpawn ?: spawn) > getRange(best, ctx.enemySpawn ?: spawn)) best = pos
+        }
+        return best
     }
 
     /** The fortified house's tower spot, chosen once (towerSpot behind the spawn) and kept (v143). */
@@ -6262,13 +6384,20 @@ object SpawnAndSwamp {
 
     /** The next rampart of a fortified house: over the spawn, the tower, then the post — its site, placed if missing,
      *  and null once all three stand (v141). */
+    private var fortSiteOrderedAt = -1
     private fun fortRampartSite(ctx: Ctx, post: Position): ConstructionSite? {
         val tower = ctx.myTowers.minByOrNull { getRange(ctx.mySpawn, it) } ?: return null
-        for (c in listOf<Position>(ctx.mySpawn, tower, post)) {
+        val cells = if (USE_FORT_TWIN) listOf<Position>(ctx.mySpawn, tower) + ctx.myTowers.filter { it.id != tower.id } + listOf<Position>(post)
+            else listOf<Position>(ctx.mySpawn, tower, post)
+        for (c in cells) {
             val has = ctx.ramparts.any { it.my == true && it.x == c.x && it.y == c.y }
             if (has) continue
             val site = ctx.mySites.firstOrNull { it.x == c.x && it.y == c.y && (it.progressTotal ?: 0) == buildCost("StructureRampart") }
             if (site != null) return site
+            // once a tick (v150): it is asked twice a tick, and both orders were taken — a second site 0/200 under every
+            // rampart of the fort in all seven late losses
+            if (fortSiteOrderedAt == getTicks()) return null
+            fortSiteOrderedAt = getTicks()
             val r = createConstructionSite(c.x, c.y, StructureRampart::class.js)
             if (DEBUG_LOG) println("fort rampart: site at (${c.x},${c.y}) err=${r.error}")
             return null
@@ -6307,6 +6436,11 @@ object SpawnAndSwamp {
             val mayScoop = pile != null && free > 0 && getRange(b, pile.pos) <= 1
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else if (spotRampart != null) b.build(spotRampart) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
+            }
+            // …and in a fortified house a tower within reach is fed while a site is built (v150): the second tower's site
+            // takes the keeper's goal, and the first tower must not go quiet for the 60 ticks of the build
+            if (USE_FORT_TWIN && fortTower && carrying > 0 && (site != null || spotRampart != null) && tower != null && getRange(b, tower) <= 1) {
+                b.transfer(tower, RESOURCE_ENERGY)
             }
             // кормить нечего — груз возвращается в спавн, а не лежит в смотрителе до конца матча
             // …unless it is for a rampart of the fortified house (v141)
