@@ -1245,7 +1245,15 @@ internal object Garrisons {
     /** ПОЛ ЕГО ФЛАГОВ (v620, см. USE_FLAG_FLOOR): флаг брать можно, если после этого не наших останется не меньше BALL_FLAGS —
      *  шар бьётся с ним, пока он под своими дебаффами. */
     fun floorAllows(ctx: Ctx, f: FlagInfo): Boolean = !USE_FLAG_FLOOR || (USE_TOURER_SWITCH && Memory.campBreak[0] == 0) ||
-        farmer(ctx) || farmerSign(ctx) || f.ours || ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS
+        farmer(ctx) || farmerSign(ctx) || f.ours || ctx.flags.count { !it.ours } - 1 >= BALL_FLAGS || floorByValue(ctx, f)
+
+    /** ПОЛ ПО ЦЕНЕ (v684, см. USE_FLOOR_BY_VALUE): флаг [f] проходит пол, если наших флагов НЕ ДЕШЕВЛЕ его после захвата будет не
+     *  больше «всех минус BALL_FLAGS» — дешёвые, взятые раньше разведчиками, места дорогому не занимают. */
+    private fun floorByValue(ctx: Ctx, f: FlagInfo): Boolean {
+        if (!USE_FLOOR_BY_VALUE || ctx.flags.count { it.ours && it.score >= f.score } + 1 > ctx.flags.size - BALL_FLAGS) return false
+        floorValueGauge.n++
+        return true
+    }
 
     /** ПОЧЕРК ОБЪЕЗДЧИКА (v633, см. USE_TOURER_SWITCH): защёлка до конца матча; правило признака — `tourerRule`. */
     fun tourer(ctx: Ctx): Boolean {
@@ -2236,6 +2244,9 @@ internal val engageHeldTicks = Gauges.counter("engheld")
 
 /** Прибор болота под армией (v682, `bog=до первого боя/после`): крипо-тиков нашей армии на клетке болота. Оператор 26.09.2026
  *  видел строй, вставший у болота; по реплеям это одна игра из 95 против MetalicaX#13 — прибор говорит, так ли и живьём. */
+/** Прибор пола по цене (v684, `floorval=`): проверок пола, где флаг пропущен только ценой — по счёту штук он был бы закрыт. */
+internal val floorValueGauge = Gauges.counter("floorval")
+
 internal val bogPre = Gauges.counter("bog")
 internal val bogFight = Gauges.counter("bog", 1)
 
