@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 163
+    private const val BOT_VERSION = 164
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2172,6 +2172,22 @@ object SpawnAndSwamp {
                     }
                 }
             }
+            // A RAMPART OVER THE HOME SPAWN ONCE THE OPENING FLEET RUNS (v164). 200 energy for 10000 hits, never repaired on
+            // either side. Death000's M10A6 (180 a tick) took our bare 3000 in ~17 ticks at t≈400 while three M8R4 shot it
+            // (−15), marlyman#441's three melee took it at 999 while the army was out; a single M15A3 of Ranamar took it in
+            // 33 swings (v93). Over the rampart those are 72, 40 and 145 ticks. Only the home spawn: v94's rampart on EVERY
+            // spawn by the pile builder held the builder off its piles and lost the gate's `fortress`. The site is a job
+            // like any other: the keeper's branch buys the body for it and runBuilders builds it.
+            // …and only once a heavy melee of his is seen (v164b): placed for every opening it cost the stub's army 500 of
+            // its first thousand and lost `ball` 444->813, `tower+stream` 571->1009. A structure falls to ATTACK (30 a part
+            // against RANGED's 10); Death000's M10A6 was seen at t=250 and at our door at ~400, marlyman's M3A3/M4A4 and
+            // Ranamar's M15A3 walk the same hundred-odd ticks — the keeper (15 ticks to spawn) and the build (40) fit in it
+            if (USE_HOME_RAMPART && ctx.haulers.size >= 2 && ctx.combatEnemies.any { e -> e.body.count { it.type == ATTACK && it.hits > 0 } >= HOME_RAMPART_ATTACK } &&
+                ctx.mySites.none { it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y } &&
+                ctx.ramparts.none { it.my == true && it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y }) {
+                val r = createConstructionSite(ctx.mySpawn.x, ctx.mySpawn.y, StructureRampart::class.js)
+                if (DEBUG_LOG) println("home rampart: site t=${getTicks()} err=${r.error}")
+            }
             if (USE_FORT_TWIN && fortTwin && ctx.myTowers.size == 1 && ctx.mySites.none { (it.progressTotal ?: 0) == buildCost("StructureTower") }) {
                 val spot = fortPost(ctx)?.let { twinSpot(ctx, it) }
                 if (spot != null) {
@@ -2627,6 +2643,7 @@ object SpawnAndSwamp {
      *  (200 обоим), поэтому опознание по цене однозначно ровно пока мы не ставим рампартов; ставим —
      *  и площадку придётся различать чем-то ещё. */
     private val BUILDABLE = if (EXT_PROBE) arrayOf("StructureTower", "StructureSpawn", "StructureExtension")
+        else if (USE_HOME_RAMPART) arrayOf("StructureTower", "StructureSpawn", "StructureRampart")
         else arrayOf("StructureTower", "StructureSpawn")
 
     private fun buildKindOf(site: ConstructionSite): String? {
@@ -5759,6 +5776,9 @@ object SpawnAndSwamp {
 
     /** Тело смотрителя под конкретную работу: с ногами или без (см. keeperWalks). */
     private fun keeperBody(ctx: Ctx, at: Position?, left: Int, flow: Double): Array<BodyPartType> {
+        // a rampart's 200 is forty ticks of one WORK (v164): the tower's body (k from the tower's 1250) for it cost 500-700
+        // in every game; a fortified house still sizes its keeper for the tower
+        if (USE_HOME_RAMPART && !fortHome && left in 1..buildCost("StructureRampart")) return builderBody(1)
         val walk = keeperWalks(ctx, at, left, flow)
         return builderBody(builderWork(flow, walk), walk)
     }
@@ -6264,6 +6284,11 @@ object SpawnAndSwamp {
     /** The raid is topped up to its size rather than re-bought only when none lives; a re-buy is decided before the pile
      *  builder's saving, which does not hold while we have no hauler; the second tower waits for half a spawn (v163). */
     private const val USE_RAID_TOPUP = true
+    /** A rampart site over the home spawn once two haulers run; the keeper's branch builds it (v164). */
+    private const val USE_HOME_RAMPART = true
+    /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
+     *  33 swings (v164b). */
+    private const val HOME_RAMPART_ATTACK = 3
     /** His M5R5 walks a plain cell a tick and shoots at 3: twelve cells are nine ticks of his walk before his first shot,
      *  and the pair, a cell a tick on any ground, keeps the distance on swamp where he is five times slower (v162). */
     private const val RAID_LURK_RANGE = 12
