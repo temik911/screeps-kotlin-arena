@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 159
+    private const val BOT_VERSION = 160
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1158,7 +1158,16 @@ object SpawnAndSwamp {
         // sites he had left at 450/1000 and 80/1000 hundreds of ticks before, and the fort took 2500 and 400 ticks of guns
         val hisSpawnSites = if (USE_FORT_BY_SITE) enemySitesNow.count { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureSpawn") &&
             (!USE_FORT_HONEST || enemyCreeps.any { c -> isHisBuilder(c) && getRange(c, site) <= BUILD_RANGE }) } else 0
-        if (USE_FORT_HOME && !fortHome && enemySpawns.size + hisSpawnSites >= 2 && enemyPower >= ourDefense * FORT_HOME_SHARE) {
+        // A LATE FORT ANSWERS A BLOW, NOT A FORECAST (v160). The flag is a forecast of his storm, and the storm it was made
+        // for comes early: against kerobi the flag rises by t=400 in 73 of 75 games and his first storms came at 587-775.
+        // Against marlyman it rose at 798-1006 on his second and third spawns and bought nothing — his tower-covered main
+        // stays home, our house took no damage in 8 of 9 games, the fort's tower fired 0-5 times — while its reserve and
+        // the pile builder's saving held the energy for 150-250 ticks (v159 A/B against marlyman#443: both draws had the
+        // flag, three of the four wins did not). Past the storm window it rises only once our house has been hit
+        val houseHit = (mySpawn.hits ?: SPAWN_HITS) < SPAWN_HITS ||
+            ramparts.any { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y && (it.hits ?: 0) < RAMPART_HITS }
+        val forecastInTime = !USE_FORT_LATE_BY_HIT || getTicks() <= FORT_FORECAST_UNTIL || houseHit
+        if (USE_FORT_HOME && !fortHome && forecastInTime && enemySpawns.size + hisSpawnSites >= 2 && enemyPower >= ourDefense * FORT_HOME_SHARE) {
             fortHome = true
             if (DEBUG_LOG) println("fort home t=${getTicks()}: his spawns=${enemySpawns.size} enemy=${enemyPower.toInt()} our=${ourDefense.toInt()}")
         }
@@ -6220,6 +6229,11 @@ object SpawnAndSwamp {
      *  hold only while a missing tower is in time; his spawn site counts for the flag only with his builder at it; the
      *  keeper is bought at the home spawn only. */
     private const val USE_FORT_HONEST = true
+    /** Past FORT_FORECAST_UNTIL the fort's flag rises only once our house has lost hits (v160). */
+    private const val USE_FORT_LATE_BY_HIT = true
+    /** The earliest of kerobi's storms measured against the fort (587, v144-v150 analyses), rounded: a forecast flag after
+     *  it predicts a storm that has had its time to come. */
+    private const val FORT_FORECAST_UNTIL = 600
     private const val RAID_REBUY_UNTIL = 1500
     private const val RAID_REBUY_SPAWNS = 2
     private var raidRebuyAt = -1
