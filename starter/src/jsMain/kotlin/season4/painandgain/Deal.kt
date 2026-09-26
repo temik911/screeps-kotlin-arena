@@ -1160,7 +1160,7 @@ internal class Deal(
         Pass("straggler") { passStraggler() },
         Pass("fields") { passFields() },
         Pass("melee") { if (!rangedFirst) passMelee() },
-        Pass("ranged") { passRanged(); if (rangedFirst) passMelee() },
+        Pass("ranged") { passRanged(); if (rangedFirst) { rec.rangedFirstN.n++; passMelee() } },
         Pass("advancing") { passAdvancing() },
         Pass("healer") { passHealer() },
         Pass("keeper") { passKeeper() },

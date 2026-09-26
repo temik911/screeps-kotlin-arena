@@ -2321,6 +2321,16 @@ internal class MeasuresExchange(private val ctx: Ctx, private val forces: Measur
     // этих тиков размена нет вовсе, — это 35 % матча против 4 % в выигранных (v219: 24 % против 5 %)
     val exchangeLive = ourLostWindow >= STALL_DAMAGE || hisLostWindow >= STALL_DAMAGE
     init { if (exchangeLive && firstFightTick == 0) firstFightTick = getTicks() }
+    // ПРИБОР ПЕРВОГО РАЗМЕНА (v680, `clashg=`): стволы обеих сторон, достающие противника, в первый тик досягаемости и в тик
+    // первого размена — снимок, который до v680 брался только из реплея
+    init {
+        if (firstReachGuns.isEmpty() || (firstFightGuns.isEmpty() && firstFightTick > 0)) {
+            val ours = gunsReaching(ctx.myCreeps, forces.combatEnemies)
+            val his = gunsReaching(forces.combatEnemies, ctx.myCreeps)
+            if (firstReachGuns.isEmpty() && ours + his > 0) firstReachGuns = "$now:$ours:$his"
+            if (firstFightGuns.isEmpty() && firstFightTick > 0) firstFightGuns = "$now:$ours:$his"
+        }
+    }
     // наступление окупается (см. PUSH_EXCHANGE); без окна — да (нечего мерить)
     val exchangePaying = Memory.ourHitsHist.size < STALL_TICKS ||
         (Memory.enemyHitsHist.first() - enemyHitsNow) >= (Memory.ourHitsHist.first() - ourHitsNow) * PUSH_EXCHANGE
@@ -2937,6 +2947,18 @@ internal var fightImminentTicks = 0                    // тиков подря�
 internal var noFireTicks = 0                           // тиков подряд враг с боем рядом и не снял с нас ни хита (см. USE_INTERCEPT)
 
 internal var firstFightTick = 0                        // тик первого размена (exchangeLive); 0 — первый бой впереди (v281)
+
+internal var firstReachGuns = ""                       // «тик:наших:его» стволов, достающих противника, в первый тик досягаемости (v680, clashg=)
+internal var firstFightGuns = ""                       // ...и то же в тик первого размена firstFightTick (v680, clashg=)
+
+/** Живых стволов стороны [from], достающих сторону [to] в этом тике (v680, прибор `clashg=`): RANGED — у крипа в
+ *  RANGED_RANGE от любого из [to], ATTACK — у крипа вплотную. Исследование v675–v679: у кого в тик первого размена стволов
+ *  не меньше, тот выигрывает 83 % против 50 %. */
+internal fun gunsReaching(from: List<Creep>, to: List<Creep>): Int = from.sumOf { c ->
+    val ranged = if (to.any { getRange(c, it) <= RANGED_RANGE }) c.body.count { it.type == RANGED_ATTACK && it.hits > 0 } else 0
+    val melee = if (to.any { getRange(c, it) <= 1 }) c.body.count { it.type == ATTACK && it.hits > 0 } else 0
+    ranged + melee
+}
 
 internal var fightMassedSeen = false                   // он хоть раз дрался с нами СОМКНУТЫМ (v434, см. USE_GATE_VS_FIGHTER)
 
