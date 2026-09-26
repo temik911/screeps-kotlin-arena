@@ -305,6 +305,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                 if (mv != null) {
                     if (mv.step != null) TrafficManager.request(s, mv.step, Arbiter.RUNNER_PRIORITY)
                     dbg(s, (if ((USE_SCOUT_MARGIN_EVADE && tourerMode())) "EVADE:" else "REFUGE:") + mv.why, f, mv.step)
+                    noteScoutFlee(s, f)
                     continue
                 }
             }
@@ -333,6 +334,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
                     ?: fleeStep(s, foes, ctx.dangerMatrix, fleeTo) ?: greedyFlee(ctx, s, foes, force = danger)
                 if (step != null) TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY)
                 dbg(s, "FLEE", f, step)
+                noteScoutFlee(s, f)
                 continue
             }
             if (f == null) {
@@ -377,7 +379,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             val matrix = crowdMatrixOf(ctx, if (allowed) f.pos.key else -1)
             // ...и безоружный идёт В ОБХОД ЗОНЫ СВОЕГО БЕГСТВА (v672, см. USE_SCOUT_PATH_AROUND_FLEE): путь сквозь неё — шаг,
             // который правило бегства тут же развернёт
-            if (USE_SCOUT_PATH_AROUND_FLEE && !hasWeapon(s)) avoidFleeZone(matrix, ctx, s, f)
+            if (USE_SCOUT_PATH_AROUND_FLEE && !hasWeapon(s) && swinging(s, f)) avoidFleeZone(matrix, ctx, s, f)
             val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, matrix) else null
             if (step != null) { TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY); planCapture(ctx, step) }
             // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
@@ -389,6 +391,16 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
 }
 
 internal const val SCOUT_FLEE_RANGE = 12
+
+/** Безоружный бегун бежит на пути к флагу f: тики бегства копятся, пока цель та же (v674, см. USE_SCOUT_PATH_AROUND_FLEE). */
+internal fun noteScoutFlee(s: Creep, f: FlagInfo?) {
+    if (f == null || bornCombatant(s)) return
+    val prev = Memory.scoutFlees[s.id]
+    Memory.scoutFlees[s.id] = if (prev?.first == f.id) Pair(f.id, prev.second + 1) else Pair(f.id, 1)
+}
+
+/** Бегун качается между флагом f и бегством: SCOUT_OSC_TICKS тиков бегства на пути к нему (v674). */
+internal fun swinging(s: Creep, f: FlagInfo) = Memory.scoutFlees[s.id]?.let { it.first == f.id && it.second >= SCOUT_OSC_TICKS } == true
 
 /** Зона бегства безоружного бегуна (v672, см. USE_SCOUT_PATH_AROUND_FLEE): клетки в радиусе, с которого он бежит от
  *  угрожающего врага, дорожают на FLEE_ZONE_COST — путь их обходит, а стеной они не становятся (флаг внутри зоны достижим). */
