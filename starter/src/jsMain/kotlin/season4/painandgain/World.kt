@@ -1254,7 +1254,7 @@ internal object Garrisons {
         if (!USE_FARMER_TRIPLES || Memory.fragSeen[0] > 0 || tourerMode() || (chemoMode() && !USE_TRIPLES_OVER_CHEMO)) return
         val now = getTicks()
         if (now > FRAG_TO) return
-        if (USE_FLIPPER_TRIPLES && flipperRule(ctx, now)) { Memory.fragSeen[0] = now; raidWhy.bump("flip"); return }
+        if (USE_FLIPPER_TRIPLES && flipperRule(ctx, now)) { Memory.fragSeen[0] = now; Memory.flipSeen[0] = now; raidWhy.bump("flip"); return }
         if (Memory.fragScoutH[0] == 0 && now <= FRAG_SCOUT_BY) {
             val hs = hFlagsOf(ctx)
             if (enemyScoutsOf(ctx).any { sc -> hs.any { it.pos.key == sc.key } }) Memory.fragScoutH[0] = now
@@ -1337,6 +1337,7 @@ internal object Garrisons {
     private fun tripleMerge(ctx: Ctx) {
         val bySquad = readyFighters(ctx).filter { it.id in Memory.garrisonSquad }.groupBy { Memory.garrisonSquad[it.id]!! }
         if (bySquad.size < 2) return
+        if (USE_FLIP_KEEPS_H && flipMode()) { flipMerge(ctx, bySquad); return }
         val small = bySquad.entries.firstOrNull { it.value.size < TRIPLE_SIZE } ?: return
         val home = Memory.garrisonHome[small.value[0].id] ?: return
         val others = bySquad.entries.filter { it.key != small.key }
@@ -1358,6 +1359,39 @@ internal object Garrisons {
         val fk = Memory.garrisonHome[to.value[0].id] ?: return
         for (c in small.value) { Memory.garrisonSquad[c.id] = to.key; Memory.garrisonHome[c.id] = fk; Memory.garrisonFlag[c.id] = fk }
         raidWhy.bump("tmerge")
+    }
+
+    /** Слияние против переворачивающего одиночек (v661, см. USE_FLIP_KEEPS_H): H не бросается. Отряду меньше тройки
+     *  донор — пост дешевле его собственного (дешевле, затем ближе); пост самой низкой цены отдаёт всех, дорогой — только
+     *  лишних сверх TRIPLE_SIZE, и никогда держателя клетки своего флага. Нет донора — пара и больше, стоящая на своём
+     *  флаге, остаётся на нём (его пару он переворачивает в 4 % подходов, пустой флаг — всегда); прочие вливаются в
+     *  ближайший отряд, как прежде. */
+    private fun flipMerge(ctx: Ctx, bySquad: Map<Int, List<Creep>>) {
+        fun postOf(sq: List<Creep>) = Memory.garrisonHome[sq[0].id] ?: -1
+        fun scoreOf(fk: Int) = ctx.flags.firstOrNull { it.pos.key == fk }?.score ?: 0
+        fun far(a: Int, b: Int) = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
+        val cheapest = ctx.flags.minOfOrNull { it.score } ?: return
+        for (small in bySquad.entries.filter { it.value.size < TRIPLE_SIZE }) {
+            val home = postOf(small.value).takeIf { it >= 0 } ?: continue
+            val donors = bySquad.entries.filter { it.key != small.key && postOf(it.value) >= 0 && scoreOf(postOf(it.value)) < scoreOf(home) }
+                .sortedWith(compareBy({ scoreOf(postOf(it.value)) }, { far(postOf(it.value), home) }))
+            for (donor in donors) {
+                val post = postOf(donor.value)
+                val give = if (scoreOf(post) <= cheapest) donor.value
+                    else donor.value.filter { it.key != post }.sortedBy { far(it.key, home) }
+                        .take((donor.value.size - TRIPLE_SIZE).coerceAtLeast(0))
+                if (give.isEmpty()) continue
+                for (c in give) { Memory.garrisonSquad[c.id] = small.key; Memory.garrisonHome[c.id] = home; Memory.garrisonFlag[c.id] = home }
+                raidWhy.bump(if (give.size == donor.value.size) "tdrop" else "tspare")
+                return
+            }
+            if (small.value.size >= 2 && small.value.any { it.key == home }) continue
+            val to = bySquad.entries.filter { it.key != small.key }.minByOrNull { far(postOf(it.value), home) } ?: continue
+            val fk = postOf(to.value).takeIf { it >= 0 } ?: continue
+            for (c in small.value) { Memory.garrisonSquad[c.id] = to.key; Memory.garrisonHome[c.id] = fk; Memory.garrisonFlag[c.id] = fk }
+            raidWhy.bump("tmerge")
+            return
+        }
     }
 
     /** Тиков, что гарнизонный крип стоит на одной клетке (v658): считается раз в тик при вызове шага. */

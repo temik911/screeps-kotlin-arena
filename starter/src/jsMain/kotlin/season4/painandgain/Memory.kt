@@ -153,6 +153,8 @@ internal object Memory {
     val flipH = HashSet<String>()
     val flagPrevMine = HashMap<String, Boolean?>()
     val flipCount = intArrayOf(0)
+    /** Тик, когда защёлка троек встала по почерку «переворачивающего одиночек», а не дробящего фермера (v661); 0 — нет. */
+    val flipSeen = intArrayOf(0)
     /** Стояние гарнизонного крипа на марше (v658, см. USE_GARRISON_STILL_DETOUR): крип -> [тик, клетка, тиков на ней]. */
     val garrisonStill = HashMap<String, IntArray>()
     /** Тик, когда соперник показал почерк MetalicaX (v639, см. USE_METALICA_HOLD); 0 — не показал. */
@@ -257,6 +259,9 @@ internal fun metalicaMode() = Memory.metalSeen[0] > 0
 
 /** РЕЖИМ ПРОТИВ ДРОБЯЩЕГО ФЕРМЕРА (v644, см. USE_FARMER_TRIPLES): его почерк встал. */
 internal fun fragMode() = Memory.fragSeen[0] > 0
+
+/** ...и тройки встали по почерку переворачивающего одиночек (v661, см. USE_FLIP_KEEPS_H). */
+internal fun flipMode() = Memory.flipSeen[0] > 0
 
 /** РЕЖИМ ПРОТИВ ХРАНИТЕЛЯ ОТРЫВА (v646, см. USE_LEAD_KEEPER_PAIRS): его почерк встал. */
 internal fun leadKeeperMode() = Memory.leadKeeper[0] > 0
