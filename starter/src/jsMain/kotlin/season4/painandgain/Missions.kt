@@ -374,7 +374,11 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             // ПАРА ИДЁТ ВМЕСТЕ (v158): на флаг под стаей отправляются двое (см. USE_RUNNER_PAIRS), потому что один не
             // справится, — но шли они каждый своим путём и приходили порознь, то есть по одному против той же стаи.
             // Идущий впереди ждёт отставшего: тот же кулак, только на двоих
-            val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, crowdMatrixOf(ctx, if (allowed) f.pos.key else -1)) else null
+            val matrix = crowdMatrixOf(ctx, if (allowed) f.pos.key else -1)
+            // ...и безоружный идёт В ОБХОД ЗОНЫ СВОЕГО БЕГСТВА (v672, см. USE_SCOUT_PATH_AROUND_FLEE): путь сквозь неё — шаг,
+            // который правило бегства тут же развернёт
+            if (USE_SCOUT_PATH_AROUND_FLEE && !hasWeapon(s)) avoidFleeZone(matrix, ctx, s)
+            val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, matrix) else null
             if (step != null) { TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY); planCapture(ctx, step) }
             // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
             poisedAll.n++
@@ -385,6 +389,19 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
 }
 
 internal const val SCOUT_FLEE_RANGE = 12
+
+/** Зона бегства безоружного бегуна (v672, см. USE_SCOUT_PATH_AROUND_FLEE): клетки в радиусе, с которого он бежит от
+ *  угрожающего врага, дорожают на FLEE_ZONE_COST — путь их обходит, а стеной они не становятся (флаг внутри зоны достижим). */
+internal fun avoidFleeZone(matrix: CostMatrix, ctx: Ctx, s: Creep) {
+    val r = if (USE_CHEMO_SENTRIES && chemoMode() && !bornCombatant(s)) CHEMO_SCOUT_FLEE else SCOUT_FLEE_TRIGGER
+    for (e in ctx.combatEnemies) {
+        if (!threatening(e, ctx.enemyCreeps)) continue
+        for (x in maxOf(0, e.x - r)..minOf(99, e.x + r)) for (y in maxOf(0, e.y - r)..minOf(99, e.y + r)) {
+            val c = matrix.get(x, y)
+            if (c < 255) matrix.set(x, y, minOf(254, c + FLEE_ZONE_COST))
+        }
+    }
+}
 
 // ==================== приборы стадии: счётчик живёт у того, кто считает (v447, план архитектуры, 4.7 и этап 6) ====================
 // Объявления перенесены из Instruments.kt дословно; Instruments их читает и печатает, текст строк прежний.
