@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 161
+    private const val BOT_VERSION = 162
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6253,6 +6253,11 @@ object SpawnAndSwamp {
     /** The raid is re-bought for his last spawns, strikes a ramparted one only when the kill beats his guns back, its
      *  second raider comes before the keeper, and a re-buy's window follows the flow (v161). */
     private const val USE_RAID_LAST = true
+    /** A pair waiting for his guns to leave its target keeps RAID_LURK_RANGE from his mobile armed creeps (v162). */
+    private const val USE_RAID_LURK = true
+    /** His M5R5 walks a plain cell a tick and shoots at 3: twelve cells are nine ticks of his walk before his first shot,
+     *  and the pair, a cell a tick on any ground, keeps the distance on swamp where he is five times slower (v162). */
+    private const val RAID_LURK_RANGE = 12
     private var hisMainId: String? = null
 
     /** A raider by body: melee with at least four MOVE a strike and nothing else (v155). */
@@ -6410,7 +6415,17 @@ object SpawnAndSwamp {
             if (struck) r.attack(go!!)
             else ctx.enemyCreeps.filter { getRange(it, r) <= 1 }.minWithOrNull(
                 compareByDescending<Creep> { isHisBuilder(it) }.thenBy { it.hits })?.let { r.attack(it) }
-            if (getRange(r, goal) > range && canMove(r)) {
+            // …A WAITING PAIR KEEPS AWAY FROM HIS GUNS (v162): in the v161 draws it waited in place in the field for his army
+            // to leave his ramparted main (t=490-770), was found there and went home at 460/1800 and 1254/3600; it now
+            // walks off to RAID_LURK_RANGE from his nearest mobile armed creep and waits there
+            val hunters = if (USE_RAID_LURK && go == null && !strikeFits) ctx.combatEnemies.filter { e ->
+                e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
+                    getRange(e, r) < RAID_LURK_RANGE } else emptyList()
+            if (hunters.isNotEmpty() && canMove(r)) {
+                val away = searchPath(r, hunters.map { SearchGoal(pos = InfluenceMap.cell(it.x, it.y), range = RAID_LURK_RANGE) }.toTypedArray(),
+                    SearchPathOptions(flee = true, costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)).path.firstOrNull()
+                if (away != null) TrafficManager.request(r, away, HAULER_LOADED_PRIORITY)
+            } else if (getRange(r, goal) > range && canMove(r)) {
                 val step = searchPath(r, SearchGoal(pos = goal, range = range), opts).path.firstOrNull()
                 if (step != null) TrafficManager.request(r, step, HAULER_LOADED_PRIORITY)
             }
