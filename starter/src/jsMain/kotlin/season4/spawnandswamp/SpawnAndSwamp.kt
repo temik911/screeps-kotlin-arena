@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 158
+    private const val BOT_VERSION = 159
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -519,10 +519,21 @@ object SpawnAndSwamp {
     /** Площадка -> (тиков, что смотритель провёл В ДОСЯГАЕМОСТИ от неё; её прогресс на первом таком
      *  тике). Знаменатель наблюдаемой скорости стройки: см. siteReadyTicks. */
     private val siteWork = HashMap<String, Pair<Int, Int>>()
+    private val siteProgressLast = HashMap<String, Int>()
 
     private fun measureSiteWork(ctx: Ctx) {
         for (s in ctx.mySites) {
             if (ctx.builders.none { getRange(it, s) <= BUILD_RANGE }) continue
+            // …an idle tick counts only for a keeper with nothing to build with (v159): one standing next to a site with
+            // 100/100 and not building (the site had dropped out of its job) made the site's estimate grow without end —
+            // 2140 -> 36473 against marlyman#443 while it stood there 500 ticks — and the dropped work never came back
+            val was0 = siteWork[s.id]
+            if (USE_FORT_HONEST && was0 != null && (s.progress ?: 0) <= (siteProgressLast[s.id] ?: -1) &&
+                ctx.builders.filter { getRange(it, s) <= BUILD_RANGE }.all { (it.store[RESOURCE_ENERGY] ?: 0) > 0 }) {
+                siteProgressLast[s.id] = s.progress ?: 0
+                continue
+            }
+            siteProgressLast[s.id] = s.progress ?: 0
             val was = siteWork[s.id]
             siteWork[s.id] = if (was == null) 1 to (s.progress ?: 0) else (was.first + 1) to was.second
         }
@@ -1143,7 +1154,10 @@ object SpawnAndSwamp {
         // needs those ticks — his early storms came at 625-775. Across the rating logs since v122 the flag with his sites
         // fires by t=400 in 73 of 75 games against kerobi (median 300, against 360 without) and never by t=500 against
         // marlyman or ricardo (their medians 850 and 1220, as before)
-        val hisSpawnSites = if (USE_FORT_BY_SITE) enemySitesNow.count { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureSpawn") } else 0
+        // …and only a site his builder stands at (v159): against marlyman#403 the flag rose with one spawn of his and two
+        // sites he had left at 450/1000 and 80/1000 hundreds of ticks before, and the fort took 2500 and 400 ticks of guns
+        val hisSpawnSites = if (USE_FORT_BY_SITE) enemySitesNow.count { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureSpawn") &&
+            (!USE_FORT_HONEST || enemyCreeps.any { c -> isHisBuilder(c) && getRange(c, site) <= BUILD_RANGE }) } else 0
         if (USE_FORT_HOME && !fortHome && enemySpawns.size + hisSpawnSites >= 2 && enemyPower >= ourDefense * FORT_HOME_SHARE) {
             fortHome = true
             if (DEBUG_LOG) println("fort home t=${getTicks()}: his spawns=${enemySpawns.size} enemy=${enemyPower.toInt()} our=${ourDefense.toInt()}")
@@ -2054,8 +2068,7 @@ object SpawnAndSwamp {
         // (hauler queue, the pile builder's saving, `poor`) and held 1000 in the fort's reserve from 1000 to 1400
         val lastStand = USE_RAID_BUILDERS_FIRST && raidSignal && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
             ctx.enemyCreeps.none { isHisBuilder(it) } && getTicks() > RAID_BUY_UNTIL
-        val fortReserve = USE_FORT_RESERVE && !armNow && !lastStand && fortIncomplete(ctx) &&
-            (ctx.myTowers.isNotEmpty() || siteJobs.any { it.kind == "StructureTower" && it.inTime })
+        val fortReserve = USE_FORT_RESERVE && !armNow && !lastStand && fortPending(ctx)
         // …and while it is on, a gun that matches the raid's damage is bought now rather than saved for (v125): the first
         // gun at the door, even an M4R2 for 500, cut the house's loss from 9.7 a tick to 0.9 (Ranamar#6); a runt below
         // the raid's damage — the 230-360 of v113 — still waits
@@ -2295,7 +2308,8 @@ object SpawnAndSwamp {
         // games with the flag: bought ~235 ticks after it in losses and draws alike, the tower up at 690-800 — and what
         // told them apart was only whether his storm came before it (625-775 in the losses, 787-900 in the draws). With
         // the keeper first, by the energy that came in, the tower stands before the storm in 6 of the 11 early losses
-        if (USE_FORT_KEEPER_FIRST && USE_FORT_HOME && fortHome && ctx.myTowers.isEmpty() && ctx.builders.isEmpty() &&
+        val homeSpawnTurn = !USE_FORT_HONEST || spawn.id == ctx.mySpawn.id
+        if (USE_FORT_KEEPER_FIRST && USE_FORT_HOME && fortHome && homeSpawnTurn && ctx.myTowers.isEmpty() && ctx.builders.isEmpty() &&
             siteJobs.any { it.site != null && it.inTime } && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
             val keeper = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
@@ -2336,7 +2350,7 @@ object SpawnAndSwamp {
         // silent. The re-buy stood after `poor` (<200) and after the hauler's turn: against kerobi#36 the spawn saved
         // from 733 to 800 before it even asked. With the fort's ramparts all up the keeper only feeds, and a feeder of
         // [WORK, MOVE, CARRY, CARRY] for 250 does that (the WORK keeps it a keeper, not a hauler)
-        if (USE_KEEPER_CARRY_LAST && USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() && ctx.builders.isEmpty() &&
+        if (USE_KEEPER_CARRY_LAST && USE_FORT_HOME && fortHome && homeSpawnTurn && ctx.myTowers.isNotEmpty() && ctx.builders.isEmpty() &&
             keeperOrderedAt != getTicks()) {
             val body = if (fortIncomplete(ctx, withTwin = false)) keeperBody(ctx, null, 0, flow) else FEEDER_BODY
             val price = body.sumOf { cost(it) }
@@ -2444,7 +2458,9 @@ object SpawnAndSwamp {
         // надо кормить; «есть хоть какая-то площадка» этого вопроса не задаёт
         // …and a fortified house whose tower stands re-buys its keeper under a raid too (v145): against kerobi#35 the keeper
         // died at t=767 and was never replaced while the spawn saved 416 -> 718 for a fighter, and the tower went quiet
-        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) &&
+        // …at the home spawn only (v159): against marlyman#443 a keeper born at the pile spawn (65,27) at 885 reached the
+        // tower's site at 1134, and the fort's reserve held the energy all that while
+        if (ctx.builders.isEmpty() && homeSpawnTurn && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) &&
             !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty() && !(USE_FORT_KEEPER_FIRST && fortHome && ctx.myTowers.isNotEmpty()))) {
             // ТЕЛО ПОД РАБОТУ, А НЕ ПОД ЛЮБУЮ. Работа выбирается тем же правилом, что и в runBuilders
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
@@ -3948,7 +3964,7 @@ object SpawnAndSwamp {
         // …and no gun leaves a fortified house before it is complete (v149): in the early losses to kerobi#23/#30 the
         // garrison left for a push (t=292, a tick after the flag) and for his builders 40-78 cells away at 300-450, and the
         // two M8R4 of one push died at 444 and 531 while his storm came at 587-709
-        val fortGarrison = USE_FORT_GARRISON && fortIncomplete(ctx)
+        val fortGarrison = USE_FORT_GARRISON && (if (USE_FORT_HONEST) fortPending(ctx) else fortIncomplete(ctx))
         val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie && !fortGarrison
         // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
         if (USE_RAID_ON_OUR_HALF) noteRaid(ctx, raidMax, raidMaxCatch, typical) else noteRaid(ctx, maxPack, maxPackCatch, typical)
@@ -6200,6 +6216,10 @@ object SpawnAndSwamp {
     /** The raid hunts his builders while any lives, is re-bought for his new builder while he has at most two spawns,
      *  and his last stand frees the spawn for guns; an immobile creep of his is no interceptor (v158). */
     private const val USE_RAID_BUILDERS_FIRST = true
+    /** The fort counts its work honestly (v159): an idle keeper with energy adds no work tick; the reserve and the garrison
+     *  hold only while a missing tower is in time; his spawn site counts for the flag only with his builder at it; the
+     *  keeper is bought at the home spawn only. */
+    private const val USE_FORT_HONEST = true
     private const val RAID_REBUY_UNTIL = 1500
     private const val RAID_REBUY_SPAWNS = 2
     private var raidRebuyAt = -1
@@ -6616,6 +6636,18 @@ object SpawnAndSwamp {
             if (best == null || getRange(pos, ctx.enemySpawn ?: spawn) > getRange(best, ctx.enemySpawn ?: spawn)) best = pos
         }
         return best
+    }
+
+    /** The fort's work is pending (v159): it is incomplete, and a missing tower's job is still in time. The reserve had
+     *  that release and the garrison did not: against marlyman#443 the tower's job dropped out at ~900 and the garrison
+     *  forbade every new wave to t=2000. */
+    private fun fortPending(ctx: Ctx): Boolean {
+        if (!fortIncomplete(ctx)) return false
+        if (!USE_FORT_HONEST) return ctx.myTowers.isNotEmpty() || siteJobs.any { it.kind == "StructureTower" && it.inTime }
+        val towerInTime = siteJobs.any { it.kind == "StructureTower" && it.inTime }
+        if (ctx.myTowers.isEmpty()) return towerInTime
+        if (fortTwin && ctx.myTowers.size < 2 && !fortIncomplete(ctx, withTwin = false)) return towerInTime
+        return true
     }
 
     /** The fortified house's tower spot, chosen once (towerSpot behind the spawn) and kept (v143). */
