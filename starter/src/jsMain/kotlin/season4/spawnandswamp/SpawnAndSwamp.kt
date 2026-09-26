@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 140
+    private const val BOT_VERSION = 141
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1126,6 +1126,18 @@ object SpawnAndSwamp {
         val defenders = fighters.filter { inArms(it) }
         val ourDefense = ourPowerOf(defenders, combatEnemies)
         val enemyPower = enemyPowerOf(combatEnemies, fighters)
+        // A HOUSE THAT WILL BE STORMED IS FORTIFIED (v141). An economy of two spawns or more outproduces our one: against
+        // kerobi we spent 4980-8380 on the army before our house fell and he 8970-17970, his group came to our door at
+        // t=634-996, shot our defenders first (31-129 shots against 5-29 at the spawn) and took the house 17-107 ticks
+        // after it came — 0 of 9 held (v140 series). A fed tower with ramparts over the spawn, the tower and its keeper's
+        // post holds 8-9 of the 9 by a fight model that reproduces all ten home fights of those games: the tower's 900
+        // a volley is not healed off by his M5H3 (36 a tick), and the ramparts keep the spawn and the tower standing
+        // while it fires. The flag is sticky and set once he has two spawns and an army at least half ours — across the
+        // store since v122 at t=500 that is 100 of 114 games against kerobi and 1 of 226 against everyone else
+        if (USE_FORT_HOME && !fortHome && enemySpawns.size >= 2 && enemyPower >= ourDefense * FORT_HOME_SHARE) {
+            fortHome = true
+            if (DEBUG_LOG) println("fort home t=${getTicks()}: his spawns=${enemySpawns.size} enemy=${enemyPower.toInt()} our=${ourDefense.toInt()}")
+        }
         // для решений спавна враг — «скоро»: с теми, кто ещё рождается у его спавна
         val threatsSoon = combatEnemies + enemyPending
         val enemyArrival = enemyArrivalTicks(ctx)
@@ -2082,7 +2094,7 @@ object SpawnAndSwamp {
                 // (06.09.2026) держали площадку 220-863 из 1250 до конца матча. Горизонт — уже существующие
                 // сроки: жизнь спавна под нынешним огнём и остаток матча
                 val inTime = job?.inTime ?: false
-                val worth = inTime && towerWorth(defenders, threats, flow, left, trace)
+                val worth = inTime && ((USE_FORT_HOME && fortHome) || towerWorth(defenders, threats, flow, left, trace))
                 if (DEBUG_LOG && getTicks() % (LOG_EVERY * 5) == 0 && (trace.isNotEmpty() || site != null)) {
                     println("tower: worth=$worth inTime=$inTime job=${job ?: "-"} jobs=${siteJobs.size}$trace")
                 }
@@ -5870,6 +5882,12 @@ object SpawnAndSwamp {
      *  freeze 574 -> 760, siege6 FAIL: 600 early is an army's first body. Racing his pile spawns needs the answer
      *  "does this spawn pay before his army arrives", not "is there a container". */
     private const val USE_PILE_EARLY = false
+    /** A house to be stormed — his two spawns and an army at least half ours — gets a fed tower and ramparts over the
+     *  spawn, the tower and the keeper's post, the keeper standing at its post (v141). */
+    private const val USE_FORT_HOME = true
+    /** His army's share of ours from which a house facing two spawns of his is fortified (measured, v141). */
+    private const val FORT_HOME_SHARE = 0.5
+    private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
     /** The target is the spawn of his this army takes soonest by a siege run, held only while it can be taken
@@ -6114,6 +6132,39 @@ object SpawnAndSwamp {
         }
     }
 
+    /** The keeper's post in a fortified house: a free cell next to both our home spawn and its tower (v141). */
+    private fun fortPost(ctx: Ctx): Position? {
+        val spawn = ctx.mySpawn
+        val tower = ctx.myTowers.minByOrNull { getRange(spawn, it) } ?: return null
+        val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
+        var best: Position? = null
+        for (dx in -1..1) for (dy in -1..1) {
+            val x = spawn.x + dx
+            val y = spawn.y + dy
+            if ((dx == 0 && dy == 0) || x < 1 || y < 1 || x > 98 || y > 98) continue
+            val pos = InfluenceMap.cell(x, y)
+            if (getRange(pos, tower) > 1 || getTerrainAt(pos) == TERRAIN_WALL || x * 100 + y in busy) continue
+            if (best == null || getRange(pos, ctx.enemySpawn ?: spawn) > getRange(best, ctx.enemySpawn ?: spawn)) best = pos
+        }
+        return best
+    }
+
+    /** The next rampart of a fortified house: over the spawn, the tower, then the post — its site, placed if missing,
+     *  and null once all three stand (v141). */
+    private fun fortRampartSite(ctx: Ctx, post: Position): ConstructionSite? {
+        val tower = ctx.myTowers.minByOrNull { getRange(ctx.mySpawn, it) } ?: return null
+        for (c in listOf<Position>(ctx.mySpawn, tower, post)) {
+            val has = ctx.ramparts.any { it.my == true && it.x == c.x && it.y == c.y }
+            if (has) continue
+            val site = ctx.mySites.firstOrNull { it.x == c.x && it.y == c.y && (it.progressTotal ?: 0) == buildCost("StructureRampart") }
+            if (site != null) return site
+            val r = createConstructionSite(c.x, c.y, StructureRampart::class.js)
+            if (DEBUG_LOG) println("fort rampart: site at (${c.x},${c.y}) err=${r.error}")
+            return null
+        }
+        return null
+    }
+
     private fun runBuilders(ctx: Ctx) {
         if (ctx.builders.isEmpty()) return
         val spawn = ctx.mySpawn
@@ -6135,17 +6186,29 @@ object SpawnAndSwamp {
             val fromPile = job != null && !job.fromSpawn
             val pile = if (fromPile) ctx.sites.filter { it.container != null && it.safe && it.energy > 0 }
                 .minByOrNull { getRange(b, it.pos) } else null
-            val mayTake = !fromPile && lastSpawnOutlivesFighter && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
+            // …and in a fortified house the tower's shot is taken even when the spawn will not outlive a fighter (v141):
+            // under the storm that was exactly when the tower stood empty (48-87 % of the ticks his army was in range)
+            val fortTower = USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty()
+            val mayTake = !fromPile && (lastSpawnOutlivesFighter || fortTower) && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
             val mayScoop = pile != null && free > 0 && getRange(b, pile.pos) <= 1
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
             }
             // кормить нечего — груз возвращается в спавн, а не лежит в смотрителе до конца матча
-            if (goal == null && carrying > 0 && getRange(b, spawn) <= 1) b.transfer(spawn, RESOURCE_ENERGY)
+            // …unless it is for a rampart of the fortified house (v141)
+            val fortPending = USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() && fortPost(ctx)?.let { fortRampartSite(ctx, it) } != null
+            if (goal == null && carrying > 0 && getRange(b, spawn) <= 1 && !fortPending) b.transfer(spawn, RESOURCE_ENERGY)
             if (mayTake && free > 0) b.withdraw(spawn, RESOURCE_ENERGY)
             if (mayScoop) pile!!.container?.let { b.withdraw(it, RESOURCE_ENERGY) }
             val incoming = InfluenceMap.damageAt(b.x, b.y, ctx.combatEnemies)
+            // THE KEEPER OF A FORTIFIED HOUSE STANDS AT ITS POST (v141): a cell next to both the spawn and the tower, under
+            // a rampart of its own, from where it takes from the one and feeds the other without a step; it builds the
+            // ramparts over the spawn, the tower and the post while the tower is fed. It does not run: running lost the
+            // spawn's side and left the tower empty through every storm (1-9 shots at range 5 or less a game)
+            val post = if (fortTower) fortPost(ctx) else null
+            if (post != null && carrying > 0 && canAct.not()) fortRampartSite(ctx, post)?.let { rs -> if (getRange(b, rs) <= BUILD_RANGE) b.build(rs) }
             val step = when {
+                post != null -> if (b.x != post.x || b.y != post.y) pathStep(b, post, 0, ctx.dangerMatrix) else null
                 incoming > 0.0 -> fleeStep(b, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(b, spawn, 1, ctx.dangerMatrix)
                 goal == null -> if (getRange(b, spawn) > PARK_RANGE) pathStep(b, spawn, PARK_RANGE, ctx.dangerMatrix) else null
                 // пустой идёт за энергией ТУДА, ГДЕ ОНА ДЛЯ ЭТОЙ ПЛОЩАДКИ: к спавну или к куче
