@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 166
+    private const val BOT_VERSION = 167
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2352,15 +2352,24 @@ object SpawnAndSwamp {
             if (DEBUG_LOG) println("spawn: raider #$raidOrdered (pair) cost=$price energy=$energy err=${r.error}")
             return
         }
-        if (USE_FORT_KEEPER_FIRST && USE_FORT_HOME && fortHome && homeSpawnTurn && ctx.myTowers.isEmpty() && ctx.builders.isEmpty() &&
+        // …and the one-WORK keeper bought for the home rampart (v164) is not the tower's keeper (v167): against kerobi#49 it
+        // was bought at 326, the flag rose at 352, the tower was built at 5 a tick and stepped off at 1205/1250 on 629 —
+        // the house fell at 743. While the fort has no tower, a keeper with less WORK than the tower's body is joined by one
+        val keeperShort = USE_RAID_FINISH && ctx.builders.size == 1 && keeperOrderedAt != getTicks() && run {
+            val job = siteJobs.filter { it.kind == "StructureTower" && it.inTime }.minByOrNull { it.left }
+            job != null && ctx.builders[0].body.count { it.type == WORK && it.hits > 0 } < keeperBody(ctx, job.site?.let { InfluenceMap.cell(it.x, it.y) }, job.left, flow).count { it == WORK }
+        }
+        if (USE_FORT_KEEPER_FIRST && USE_FORT_HOME && fortHome && homeSpawnTurn && ctx.myTowers.isEmpty() && (ctx.builders.isEmpty() || keeperShort) &&
             siteJobs.any { it.site != null && it.inTime } && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
-            val keeper = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
+            val towerJob = if (USE_RAID_FINISH) siteJobs.filter { it.kind == "StructureTower" && it.inTime }.minByOrNull { it.left } else null
+            val keeper = if (towerJob != null) keeperBody(ctx, towerJob.site?.let { InfluenceMap.cell(it.x, it.y) }, towerJob.left, flow)
+                else keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
             val keeperCost = keeper.sumOf { cost(it) }
             if (energy < keeperCost) return reach("kFirst")
             val r = spawn.spawnCreep(keeper)
             reach(if (r.error == null) "kBuy" else "err")
-            if (r.error == null) spentBuild += keeperCost
+            if (r.error == null) { spentBuild += keeperCost; keeperOrderedAt = getTicks() }
             if (DEBUG_LOG) println("spawn: builder (fort, before haulers) work=${keeper.count { it == WORK }} cost=$keeperCost energy=$energy err=${r.error}")
             return
         }
@@ -6308,6 +6317,10 @@ object SpawnAndSwamp {
     private const val USE_SIEGE_MELEE = true
     /** A waiting raid strikes his unarmed creeps that none of his mobile guns is near (v166). */
     private const val USE_RAID_PREY = true
+    /** The last-stand walk ends next to his spawn; the pair finishes a spawn that falls before it does; the strike counts
+     *  the pair's walk and his guns' real walk back, and a waiting pair hovers near its target; a fort without a tower
+     *  joins a one-WORK keeper with one sized for the tower (v167). */
+    private const val USE_RAID_FINISH = true
     /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
      *  33 swings (v164b). */
     private const val HOME_RAMPART_ATTACK = 3
@@ -6343,6 +6356,20 @@ object SpawnAndSwamp {
         return if (USE_RAID_TOPUP) n else if (n > 0) RAID_SIZE else 0
     }
 
+    /** Steps from our home spawn to a cell next to p: the least of the field over its eight neighbours, plus one (v167). */
+    private fun stepsNextTo(ctx: Ctx, p: Position): Int {
+        var best = Int.MAX_VALUE / 4
+        for (dx in -1..1) for (dy in -1..1) {
+            if (dx == 0 && dy == 0) continue
+            val x = p.x + dx
+            val y = p.y + dy
+            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+            val v = ctx.stepsToSpawn[x * 100 + y]
+            if (v in 0 until best) best = v + 1
+        }
+        return best
+    }
+
     private fun raidWanted(ctx: Ctx): Boolean {
         if (!raidSignal || raidOrderedAt == getTicks() || !hisBare(ctx)) return false
         // A NEW PAIR FOR HIS NEW BUILDER (v158): with both of his builders dead his count froze, and his next builder came
@@ -6363,7 +6390,9 @@ object SpawnAndSwamp {
         // what is left of the match covers the pair's birth, its walk and the kill
         if (USE_RAID_LAST && raidOrdered >= RAID_SIZE && raidAlive(ctx) < RAID_SIZE && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
             ctx.enemyCreeps.none { isHisBuilder(it) }) {
-            val walk = ctx.enemySpawns.maxOf { sp -> ctx.stepsToSpawn[sp.x * 100 + sp.y].let { if (it < 0) Int.MAX_VALUE / 4 else it } }
+            // the walk ends NEXT to his spawn (v167): its own cell is blocked, the field there is -1, and v161-v166 read the
+            // walk as "never" in every game — no `raid last` line in any log, the rule had never run
+            val walk = ctx.enemySpawns.maxOf { sp -> if (USE_RAID_FINISH) stepsNextTo(ctx, sp) else ctx.stepsToSpawn[sp.x * 100 + sp.y].let { if (it < 0) Int.MAX_VALUE / 4 else it } }
             val kill = ctx.enemySpawns.sumOf { sp -> (sp.hits ?: SPAWN_HITS) + rampartOn(ctx, sp) } / (RAID_SIZE * ATTACK_POWER * RAID_BODY.count { it == ATTACK }).toDouble()
             val need = RAID_SIZE * RAID_BODY.size * CREEP_SPAWN_TIME + walk + kill
             if (walk < Int.MAX_VALUE / 4 && arenaInfo.ticksLimit - getTicks() > need) {
@@ -6404,7 +6433,14 @@ object SpawnAndSwamp {
         if (raiders.isEmpty()) return
         val hits = raiders.sumOf { it.hits }
         val max = raiders.sumOf { it.hitsMax }
-        if (!raidHome && hits < RAID_RETREAT_SHARE * max) {
+        // …unless it is finishing a spawn that falls before it does (v167): against kerobi#50 the pair left a bare spawn at
+        // 2340/3000 — four ticks of it — with ~11 ticks to live, died on the way home, and his count went to 4
+        val finishing = USE_RAID_FINISH && raiders.any { r -> ctx.enemySpawns.any { sp -> getRange(r, sp) <= 1 && run {
+            val dps = raiders.filter { getRange(it, sp) <= 1 }.sumOf { a -> a.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
+            val incoming = raiders.sumOf { InfluenceMap.damageAt(it.x, it.y, ctx.combatEnemies) }
+            dps > 0.0 && ((sp.hits ?: SPAWN_HITS) + rampartOn(ctx, sp)) / dps < (if (incoming <= 0.0) Double.MAX_VALUE else hits / incoming)
+        } } }
+        if (!raidHome && hits < RAID_RETREAT_SHARE * max && !finishing) {
             raidHome = true
             raidTargetId = null
             if (DEBUG_LOG) println("raid home t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
@@ -6464,9 +6500,14 @@ object SpawnAndSwamp {
             if (shield <= 0) return@run true
             val dps = raiders.sumOf { r -> r.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
             val kill = ((ctx.enemySpawns.firstOrNull { it.id == target.id }?.hits ?: SPAWN_HITS) + shield) / dps.coerceAtLeast(1.0)
-            val back = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } }
-                .minOfOrNull { getRange(it, pos(target)) - RANGED_RANGE } ?: Int.MAX_VALUE
-            kill < back
+            // …the pair's own walk counts, and his guns' walk back is theirs, over the swamp at their pace (v167): at 1610 the
+            // check said "fits" with the pair 82 cells off, and his army walked home with it
+            val guns = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } }
+            if (!USE_RAID_FINISH) return@run kill < (guns.minOfOrNull { getRange(it, pos(target)) - RANGED_RANGE } ?: Int.MAX_VALUE)
+            val field = flowTo(ctx, pos(target))
+            val back = guns.minOfOrNull { (pathTicks(it, field, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) - RANGED_RANGE * plainPeriod(it).toInt()) } ?: Int.MAX_VALUE
+            val walk = raiders.maxOf { getRange(it, pos(target)) - 1 }
+            walk + kill < back
         }
         // …AND WHILE IT WAITS IT TAKES HIS UNARMED (v166). Against kerobi#49 the raid froze his count at one spawn — his
         // ramparted main — from 600-900 to the end in 4 of 4 games, and waited the rest of the match because his army
@@ -6483,8 +6524,10 @@ object SpawnAndSwamp {
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
         for (r in raiders) {
             // waiting for his guns to go, the pair holds where it stands rather than walking home and back
-            val goal: Position = if (go != null) pos(go) else if (!strikeFits) r else ctx.mySpawn
-            val range = if (go != null) 1 else if (!strikeFits) 0 else 2
+            // …and, since v167, near its target at the lurk range: waiting at our house it was 82 cells from the strike
+            val hover = USE_RAID_FINISH && target != null && !strikeFits
+            val goal: Position = if (go != null) pos(go) else if (hover) pos(target!!) else if (!strikeFits) r else ctx.mySpawn
+            val range = if (go != null) 1 else if (hover) RAID_LURK_RANGE else if (!strikeFits) 0 else 2
             val waiting = !strikeFits && go == null
             val struck = go != null && getRange(r, goal) <= 1
             if (struck) r.attack(go!!)
