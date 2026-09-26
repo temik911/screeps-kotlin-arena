@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v18"
+    private const val BOT_VERSION = "v19"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -1070,8 +1070,20 @@ object EscortRun {
         // клетках. Иначе против экономиста каждый его новый боец (у stachu3478 — M3A3 на ~170-м, при его эскорте)
         // снова загонял наш эскорт домой, пока его пеший эскорт шёл к флагу (v15-v17: 0 из 9 после убийства его
         // перехватчика у наших рампартов)
-        val decisive = if (released) threats.filter { !it.spawning && dist(it, escort) <= HOLD_NEAR }
+        val decisive0 = if (released) threats.filter { !it.spawning && dist(it, escort) <= HOLD_NEAR }
             else threats.filter { dist(it, escort) <= radius || coming(it) || unknown(it) }
+        // Стрелки без мили дом не держат, если весь их огонь за наш путь до флага эскорт выдерживает: с рампарта их
+        // не достать (кайтят), а дом — это ожидание, в котором растёт их армия. stachu3478#1: его M1A1 умер у наших
+        // рампартов на 176-м, но M2R2 (20 урона в тик) стоял в центре, и эскорт просидел дома до их финиша на 405-м
+        // (6ab84f50); 20 × 224 тика пути — 4480 из 5000
+        val fire = decisive0.filter { !it.spawning }.sumOf { Bodies.rangedDps(it) }
+        val ranged = decisive0.isNotEmpty() && decisive0.none { Bodies.has(it, ATTACK) }
+        // И дом не держит, когда ожидание уже проигрывает само: их эскорт придёт раньше, чем наш успеет от дома, если
+        // выйти позже чем сейчас (стенд econ+icpt: перехватчик не подошёл к рампартам, и эскорт просидел дома до их
+        // финиша на 473-м, хотя выход на 200-м приходил к 422-му)
+        val theirs = theirArrival(w)
+        val lastCall = holding && theirs < Int.MAX_VALUE / 8 && theirs <= ours + HOLD_LAST_CALL
+        val decisive = if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
         if (decisive.isEmpty() || wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive })) {
             if (holding) { released = true; println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}") }
             holding = false; holdThreats = emptyList(); return
@@ -1132,6 +1144,8 @@ object EscortRun {
     private val closing = HashMap<String, ArrayDeque<Pair<Int, Int>>>()
     /** Эскорт уже однажды выходил из дома после держания. */
     private var released = false
+    /** Держание снимается, когда их приход ближе нашего пути от дома плюс столько тиков: ждать дальше — проиграть. */
+    private const val HOLD_LAST_CALL = 60
     /** После первого выхода дом держит только живой враг в стольких клетках. */
     private const val HOLD_NEAR = 15
 
