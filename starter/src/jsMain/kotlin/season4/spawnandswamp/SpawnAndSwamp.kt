@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 167
+    private const val BOT_VERSION = 168
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3739,7 +3739,10 @@ object SpawnAndSwamp {
                     val light = DistanceMap.seededField(seeds, ctx.blockedForEnemy, 1)
                     // …a creep of his with no MOVE intercepts nothing (v158): his stationary A3 at home was an interceptor of
                     // our march, and his two unarmed healers' heal took our wave's damage down to "lose"
-                    val interceptors = combatEnemies.filter { e -> !USE_RAID_BUILDERS_FIRST || e.body.any { it.type == MOVE && it.hits > 0 } }.filter { e ->
+                    // …and a creep of his standing at the target is its defender, priced by the siege, not an interceptor of
+                    // the march too (v168): his M5A5 by marlyman's spawn was counted twice, attrition 6530 against 2250
+                    val interceptors = combatEnemies.filter { e -> (!USE_RAID_BUILDERS_FIRST || e.body.any { it.type == MOVE && it.hits > 0 }) &&
+                        !(USE_HOUSE_OUTLASTS && getRange(e, enemySpawn) <= RANGED_RANGE + 1) }.filter { e ->
                         val h = heavy[e.x * 100 + e.y]
                         val l = light[e.x * 100 + e.y]
                         if (h < 0 || l < 0) false else {
@@ -4031,7 +4034,24 @@ object SpawnAndSwamp {
         // garrison left for a push (t=292, a tick after the flag) and for his builders 40-78 cells away at 300-450, and the
         // two M8R4 of one push died at 444 and 531 while his storm came at 587-709
         val fortGarrison = USE_FORT_GARRISON && (if (USE_FORT_HONEST) fortPending(ctx) else fortIncomplete(ctx))
-        val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie && !fortGarrison
+        // THE HOUSE THAT OUTLASTS THE SIEGE HOLDS (v168). "Does the garrison beat the threats" read a lone M5A1 of marlyman's
+        // (whom no gun of ours catches) as a house that does not hold — against #441 our wave of 14-16 was called home
+        // three times in 1693-1745, 17-24 cells from his last spawn (bare, 3000, 3-10 ticks of the siege), and his next
+        // ones stood under ramparts by 1675. With the rampart over our spawn the house is 13000: what the threats at the
+        // door take off it in the time the siege needs — and the walk back, when the target is not his last spawn — is
+        // the question; his storms (8-12 guns, 500-1000 a tick) still fall inside it and still call the wave home
+        fun houseOutlasts(travel: Int, siegeTicks: Int, back: Int): Boolean {
+            if (!USE_HOUSE_OUTLASTS || homeThreats.isEmpty() || siegeTicks >= Int.MAX_VALUE / 4) return false
+            val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+            if (threatDps <= 0.0) return true
+            val arrive = if (spawnUnderFire) 0 else homeThreats.minOf { (arrivalById[it.id] ?: Int.MAX_VALUE / 4).coerceAtMost(SPAWN_ALARM_TICKS) }
+            val house = (mySpawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y }.sumOf { it.hits ?: 0 }
+            val need = travel.toLong() + siegeTicks + (if (ctx.enemySpawns.size <= 1) 0 else back)
+            return arrive + house / threatDps > need.toDouble()
+        }
+        val startOutlasts = houseOutlasts(startTravel, siegeStart.ticks, startTravel)
+        val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && (guardHolds || startOutlasts) &&
+            (guardHoldsSortie || startOutlasts) && !fortGarrison
         // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
         if (USE_RAID_ON_OUR_HALF) noteRaid(ctx, raidMax, raidMaxCatch, typical) else noteRaid(ctx, maxPack, maxPackCatch, typical)
         // A RECALL MUST SAVE SOMETHING (v97). The whole push was called off whenever the home guard did not hold and the
@@ -4068,10 +4088,12 @@ object SpawnAndSwamp {
         else if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
         else flowNear(spawnFlow, mySpawn.x, mySpawn.y).let { if (it < 0) Int.MAX_VALUE / 4 else spawnFlow[it] }
         val reinforceTravel = if (staging.isNotEmpty()) startTravel else homeTravel
+        val goOutlasts = siegeGo.win && waveMembers.isNotEmpty() &&
+            houseOutlasts(frontTravel, siegeGo.ticks, waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) })
         val newPushing = when {
             enemySpawn == null -> false
             (spawnUnderFire || alarm && !(if (USE_STAGING_GUARDS && waveMembers.isNotEmpty()) stayHolds else guardHolds)) &&
-                !pushWinsRace(ctx, ourHalfCombat, siegeGo) && recallSaves -> false
+                !pushWinsRace(ctx, ourHalfCombat, siegeGo) && recallSaves && !goOutlasts -> false
             // последний звонок — тоже только с выигрышной осадой: армия, положенная под башню в конце,
             // не приносит ничьей, а дома она её держит
             // THE LAST CALL WEIGHS THE HOUSE, NOT THE ARMIES (v102): a house he cannot take in what is left cannot be
@@ -6321,6 +6343,9 @@ object SpawnAndSwamp {
      *  the pair's walk and his guns' real walk back, and a waiting pair hovers near its target; a fort without a tower
      *  joins a one-WORK keeper with one sized for the tower (v167). */
     private const val USE_RAID_FINISH = true
+    /** A wave is not called home, and may leave, when the house outlasts the siege (and the walk back unless the target is
+     *  his last spawn); a creep of his at the target is its defender, not an interceptor of the march (v168). */
+    private const val USE_HOUSE_OUTLASTS = true
     /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
      *  33 swings (v164b). */
     private const val HOME_RAMPART_ATTACK = 3
