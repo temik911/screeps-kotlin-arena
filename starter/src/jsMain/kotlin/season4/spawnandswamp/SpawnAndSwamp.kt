@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 150
+    private const val BOT_VERSION = 151
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6061,6 +6061,9 @@ object SpawnAndSwamp {
     /** The spawn waits for the full body when a smaller one deals less damage, also when his heal zeroes both values
      *  (spawnIfNeeded, v150). */
     private const val USE_RUNT_BY_DAMAGE = true
+    /** The keeper of a standing fort feeds a hungry tower before any build, ramparts before the second tower, the second
+     *  tower only from surplus; the post is kept while the keeper stands on it (fortKeeperTurn, fortPost, v151). */
+    private const val USE_FORT_FEED_FIRST = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
@@ -6370,6 +6373,10 @@ object SpawnAndSwamp {
         val spawn = ctx.mySpawn
         val tower = ctx.myTowers.minByOrNull { getRange(spawn, it) } ?: return null
         val busy = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
+        // …and the keeper standing on the post does not make it busy (v151): the M2C2W4 loses its MOVE first, an immobile
+        // creep is in `blocked`, and the post vanished — against kerobi#39 the fort read as complete at t=692 with the
+        // post's rampart at 181/200, and the reserve and the garrison let go for 65 ticks
+        if (USE_FORT_FEED_FIRST) for (b in ctx.builders) busy.remove(b.x * 100 + b.y)
         var best: Position? = null
         for (dx in -1..1) for (dy in -1..1) {
             val x = spawn.x + dx
@@ -6405,6 +6412,42 @@ object SpawnAndSwamp {
         return null
     }
 
+    /**
+     * THE KEEPER OF A STANDING FORT FEEDS FIRST (v151). Its goal was `site ?: rampart ?: tower`, so a site took its energy
+     * before the tower did: against kerobi#30 the second tower's site took 290 (≈29 shots) while the first stood empty
+     * for 211 ticks with his army in reach (3 shots in 1150-1363), and against #39 it took 678 while the post's rampart
+     * lacked 19 — the keeper died on the bare post and the tower was quiet to the end. The spawn's regeneration alone is
+     * one shot in ten ticks. Order: a tower in reach that is not full; then the ramparts over spawn, towers and post; then
+     * the second tower's site, only out of surplus (every tower full, nothing armed of his within a tower's reach of the
+     * spawn). From the post, without a step. Returns false when there is no post to stand on (the old rules run).
+     */
+    private fun fortKeeperTurn(ctx: Ctx, b: Creep, carrying: Int, free: Int): Boolean {
+        val spawn = ctx.mySpawn
+        val post = fortPost(ctx) ?: return false
+        val hungry = ctx.myTowers.filter { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 && getRange(b, it) <= 1 }
+            .minByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
+        val rampart = fortRampartSite(ctx, post)
+        val calm = ctx.combatEnemies.none { getRange(it, spawn) <= TOWER_FALLOFF_RANGE }
+        val surplus = calm && ctx.myTowers.all { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) == 0 }
+        val twin = if (surplus) ctx.mySites.firstOrNull { (it.progressTotal ?: 0) == buildCost("StructureTower") && getRange(b, it) <= BUILD_RANGE } else null
+        var act = "-"
+        if (carrying > 0) {
+            when {
+                hungry != null -> { b.transfer(hungry, RESOURCE_ENERGY); act = "feed" }
+                rampart != null && getRange(b, rampart) <= BUILD_RANGE -> { b.build(rampart); act = "rampart" }
+                twin != null -> { b.build(twin); act = "twin" }
+            }
+        }
+        if (free > 0 && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1) b.withdraw(spawn, RESOURCE_ENERGY)
+        val step = if (b.x != post.x || b.y != post.y) pathStep(b, post, 0, ctx.dangerMatrix) else null
+        if (step != null && canMove(b)) TrafficManager.request(b, step, HAULER_LOADED_PRIORITY)
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
+            println("  b${b.id} (${b.x},${b.y}) fort carry=$carrying post=(${post.x},${post.y}) act=$act hungry=${hungry != null} " +
+                "rampart=${rampart?.let { "(${it.x},${it.y})${it.progress}/${it.progressTotal}" } ?: "-"} surplus=$surplus")
+        }
+        return true
+    }
+
     private fun runBuilders(ctx: Ctx) {
         if (ctx.builders.isEmpty()) return
         val spawn = ctx.mySpawn
@@ -6418,6 +6461,7 @@ object SpawnAndSwamp {
         for (b in ctx.builders) {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
             val free = b.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
+            if (USE_FORT_FEED_FIRST && USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() && fortKeeperTurn(ctx, b, carrying, free)) continue
             // THE TOWER'S SPOT IS RAMPARTED FIRST (v143): the tower site behind the spawn was still stepped off four times
             // against kerobi (v142 loss, t=354-620) while his raider walked our base; under our rampart it cannot be
             val spotRampart = if (USE_FORT_RAMPART_FIRST && fortHome && ctx.myTowers.isEmpty() && site == null) fortSpotRampartSite(ctx) else null
