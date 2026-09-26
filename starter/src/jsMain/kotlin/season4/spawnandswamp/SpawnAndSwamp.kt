@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 146
+    private const val BOT_VERSION = 147
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3710,13 +3710,19 @@ object SpawnAndSwamp {
         // стояли на клетку дальше (стенд hover: 635 против 464 при 758 у всего шара)
         val homePack = combatEnemies.filter { e -> homeThreats.any { getRange(e, it) <= ENGAGE_RANGE + RANGED_RANGE } }
         val homeGuard = fighters.filter { it.id !in wave && staging.none { s -> s.id == it.id } && inArms(it) }
-        val guardHolds = homeThreats.isEmpty() ||
+        // A FORT THAT STANDS HOLDS THE HOUSE BY ITSELF (v147). Tower, the rampart over the spawn and a keeper to feed it:
+        // against kerobi in nine replays of draws our spawn never fell below 2970 hits, the rampart over it never below
+        // 4256, with 0-1 fighters at home for 800-900 ticks and 5-11 of his storms thrown back — yet every "does the house
+        // hold" test here counted fighters only, and in one draw against #22 the only thing that kept a winning siege
+        // (148 ticks, 6 fighters staged, his spawns bare) at home at t=1400 was guardHoldsSortie with a garrison of 0
+        val fortHolds = fortStands(ctx)
+        val guardHolds = homeThreats.isEmpty() || fortHolds ||
             ourPowerOf(homeGuard, homePack) >= enemyPowerOf(homePack, homeGuard) * DEFEND_MARGIN
         // WHILE A WAVE IS OUT, THOSE STAGED AT HOME ARE THE GARRISON (v102): they leave only with a new wave, and there is
         // none this tick unless one departs. Counted as leaving, they made the garrison fail and called the wave back; a
         // fighter back in the ring became "staging" again and the wave left again — against Ranamar#2 eleven waves in
         // 130 ticks (t=294-426) under one raider, and no wave ever got past (86,89)
-        val stayHolds = homeThreats.isEmpty() || !USE_STAGING_GUARDS || waveMembers.isEmpty() || run {
+        val stayHolds = homeThreats.isEmpty() || !USE_STAGING_GUARDS || waveMembers.isEmpty() || fortHolds || run {
             val stay = fighters.filter { it.id !in wave && inArms(it) }
             ourPowerOf(stay, homePack) >= enemyPowerOf(homePack, stay) * DEFEND_MARGIN
         }
@@ -3816,7 +3822,7 @@ object SpawnAndSwamp {
         val arrivingHome = combatEnemies.filter {
             it.id in approachingIds && (arrivalById[it.id] ?: Int.MAX_VALUE / 2) <= sortieTicks
         }
-        val guardHoldsSortie = arrivingHome.isEmpty() ||
+        val guardHoldsSortie = arrivingHome.isEmpty() || fortHolds ||
             ourPowerOf(homeGuard, arrivingHome) >= enemyPowerOf(arrivingHome, homeGuard) * DEFEND_MARGIN
         val strongerNow = staging.size >= PUSH_MIN_FIGHTERS && siegeStart.win && guardHolds && guardHoldsSortie
         // пик набега за окно: под него строится мили-гарнизон, если противник сам мили (см. guardNeeded)
@@ -4913,7 +4919,10 @@ object SpawnAndSwamp {
         val futureSpawns = maxOf(1.0, remaining / maxOf(1.0, pace))
         val targetField = target?.let { flowTo(ctx, it) }
         val home = homeGuard.toMutableList()
-        fun houseHolds(): Boolean = homePack.isEmpty() || ourPowerOf(home, homePack) >= enemyPowerOf(homePack, home) * DEFEND_MARGIN
+        // …and his builders are hunted by guns the house does not need once the fort stands (v147): 127 of his 161 spawn
+        // sites in those draws stood bare, 39-55 cells from our spawn, and 0 of 47 of his builders died in four of five
+        val fortOn = fortStands(ctx)
+        fun houseHolds(): Boolean = homePack.isEmpty() || fortOn || ourPowerOf(home, homePack) >= enemyPowerOf(homePack, home) * DEFEND_MARGIN
         for (b in builders.sortedBy { it.hits }) {
             // not under his fed tower: a builder of his rampart at home is his house's, and the siege prices that
             if (coveringTowers(ctx, listOf(b)).isNotEmpty()) continue
@@ -5928,6 +5937,8 @@ object SpawnAndSwamp {
     private const val USE_FORT_KEEPER_FIRST = true
     /** The fortified-house flag counts his spawn sites with his spawns (tick, v146). */
     private const val USE_FORT_BY_SITE = true
+    /** A standing fort counts as holding the house in the posture's and the hunt's "does the house hold" (v147). */
+    private const val USE_FORT_HOLDS = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
@@ -6172,6 +6183,11 @@ object SpawnAndSwamp {
                 "pile=${j?.let { pileOf(it)?.amount } ?: "-"} fire=${incoming.toInt()} step=${step?.let { "(${it.x},${it.y})" } ?: "stay"}")
         }
     }
+
+    /** The fort stands: the flag is up, our tower is built, our rampart covers the home spawn and a keeper lives to feed
+     *  the tower (v147). */
+    private fun fortStands(ctx: Ctx): Boolean = USE_FORT_HOLDS && USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() &&
+        ctx.builders.isNotEmpty() && ctx.ramparts.any { it.my == true && it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y && (it.hits ?: 0) > 0 }
 
     /** The fortified house's tower spot, chosen once (towerSpot behind the spawn) and kept (v143). */
     private var fortSpotCell = -1
