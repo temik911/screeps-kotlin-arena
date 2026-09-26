@@ -34,6 +34,9 @@ internal fun medianOf(core: List<Creep>): Pair<Int, Int> {
 /** Знак числа: −1, 0, 1. */
 internal fun sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0
 
+/** Расстояние по Чебышёву между клетками по их ключам x * 100 + y (v690; прежде — частный `Garrisons.farKey`, v661). */
+internal fun keyRange(a: Int, b: Int) = maxOf(kotlin.math.abs(a / 100 - b / 100), kotlin.math.abs(a % 100 - b % 100))
+
 /** Центр точек; округление — в своей системе координат (см. mirrorTL). До v446 — расширение `PainAndGain`, хотя объекта не читало. */
 internal fun centroidOf(points: List<Position>): Position? {
     if (points.isEmpty()) return null

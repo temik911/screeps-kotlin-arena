@@ -1296,7 +1296,9 @@ internal object Garrisons {
         val sizes = groupsOf(combatEnemiesBorn(ctx), FRAG_LINK).map { it.size }
         val split = sizes.count { it >= 2 } >= FRAG_GROUPS && (sizes.maxOrNull() ?: 0) <= FRAG_MAX
         // ...или его бойцы разошлись на FRAG_ANY_GROUPS групп, одиночки в счёт: глыба и одиночки по флагам (v665)
-        if (split || (USE_FRAG_ANY_GROUPS && sizes.size >= FRAG_ANY_GROUPS)) Memory.fragSplits[0]++
+        // ...но не при кулаке: крупнейшая группа больше двух троек бьёт тройки (v689, см. USE_FRAG_NO_FIST)
+        val noFist = !USE_FRAG_NO_FIST || (sizes.maxOrNull() ?: 0) <= 2 * TRIPLE_SIZE
+        if (split || (USE_FRAG_ANY_GROUPS && sizes.size >= FRAG_ANY_GROUPS && noFist)) Memory.fragSplits[0]++
         if (Memory.fragScoutH[0] > 0 && Memory.fragSplits[0] >= FRAG_SAMPLES) { Memory.fragSeen[0] = now; raidWhy.bump("frag") }
     }
 
@@ -1461,7 +1463,7 @@ internal object Garrisons {
     private fun postOf(sq: List<Creep>) = Memory.garrisonHome[sq[0].id] ?: -1
 
     /** Расстояние между клетками по их ключам x * 100 + y (v661). */
-    private fun farKey(a: Int, b: Int) = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
+    private fun farKey(a: Int, b: Int) = keyRange(a, b)
 
     /** Не больше n лишних отряда для поста home: ближние к нему и никогда держатель клетки своего флага (v661). */
     private fun sparesOf(donor: List<Creep>, home: Int, n: Int): List<Creep> {
@@ -2540,7 +2542,8 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     // стратег этого тика ещё не решал о наступлении: `pushing` здесь — значение ПРОШЛОГО тика (см. объявление внизу файла)
     private val pushingPrev = pushing
     private val marchStalled = MARCH_STALLED.c("pushing", pushingPrev) && MARCH_STALLED.c("hasCell", marchCell >= 0) && MARCH_STALLED.c("fullWindow", Memory.marchHist.size == MARCH_STALL_TICKS) &&
-        MARCH_STALLED.c("sameCellAllWindow", Memory.marchHist.all { it == marchCell }) && MARCH_STALLED.c("noFight", !fightOn)
+        MARCH_STALLED.c("sameCellAllWindow", Memory.marchHist.all { if (USE_MARCH_STALL_WITHIN_ONE) keyRange(it, marchCell) <= 1 else it == marchCell }) &&
+        MARCH_STALLED.c("noFight", !fightOn)
     // сухой толчок (v86): толчок PASSIVE_TICKS без нашего выстрела и без удара по нам — не толчок
     // в любой постуре, кроме отхода и уклонения: в ПОСТУ с висящим рядом врагом «держим линию» без простоя длилось до
     // конца матча (стенд m19 spread, t=600–1600)
