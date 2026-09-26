@@ -377,7 +377,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             val matrix = crowdMatrixOf(ctx, if (allowed) f.pos.key else -1)
             // ...и безоружный идёт В ОБХОД ЗОНЫ СВОЕГО БЕГСТВА (v672, см. USE_SCOUT_PATH_AROUND_FLEE): путь сквозь неё — шаг,
             // который правило бегства тут же развернёт
-            if (USE_SCOUT_PATH_AROUND_FLEE && !hasWeapon(s)) avoidFleeZone(matrix, ctx, s)
+            if (USE_SCOUT_PATH_AROUND_FLEE && !hasWeapon(s)) avoidFleeZone(matrix, ctx, s, f)
             val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, matrix) else null
             if (step != null) { TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY); planCapture(ctx, step) }
             // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
@@ -392,10 +392,13 @@ internal const val SCOUT_FLEE_RANGE = 12
 
 /** Зона бегства безоружного бегуна (v672, см. USE_SCOUT_PATH_AROUND_FLEE): клетки в радиусе, с которого он бежит от
  *  угрожающего врага, дорожают на FLEE_ZONE_COST — путь их обходит, а стеной они не становятся (флаг внутри зоны достижим). */
-internal fun avoidFleeZone(matrix: CostMatrix, ctx: Ctx, s: Creep) {
+internal fun avoidFleeZone(matrix: CostMatrix, ctx: Ctx, s: Creep, f: FlagInfo) {
     val r = if (USE_CHEMO_SENTRIES && chemoMode() && !bornCombatant(s)) CHEMO_SCOUT_FLEE else SCOUT_FLEE_TRIGGER
-    for (e in ctx.combatEnemies) {
-        if (!threatening(e, ctx.enemyCreeps)) continue
+    val threats = huntersOf(ctx)
+    // ...и только к флагу ВНЕ зон: флаг в зоне бегство снимет и на месте, а дорогой путь к нему лишь длиннее (v673,
+    // гейт v672: match34:camp проигран, 23 868 : 24 048 — у лагеря его стволы сидят у самих флагов)
+    if (threats.any { getRange(it, f.pos) <= r }) return
+    for (e in threats) {
         for (x in maxOf(0, e.x - r)..minOf(99, e.x + r)) for (y in maxOf(0, e.y - r)..minOf(99, e.y + r)) {
             val c = matrix.get(x, y)
             if (c < 255) matrix.set(x, y, minOf(254, c + FLEE_ZONE_COST))
