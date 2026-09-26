@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 143
+    private const val BOT_VERSION = 144
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5893,8 +5893,11 @@ object SpawnAndSwamp {
     private const val USE_FORT_HOME = true
     /** His army's share of ours from which a house facing two spawns of his is fortified (measured, v141). */
     private const val FORT_HOME_SHARE = 0.5
-    /** The fortified house ramparts its tower spot first and puts the tower site under it (v143). */
-    private const val USE_FORT_RAMPART_FIRST = true
+    /** The fortified house ramparts its tower spot first and puts the tower site under it (v143).
+     *  OFF — measured live 26.09.2026: the engine takes a tower site on our rampart (err=null, up to 98 shots), but the
+     *  A/B against kerobi#35/#22 (4+4 each) went v142 0-4-4 / v143 1-6-1 — by rating (draws +1..+6 against him, losses
+     *  -6..-7) v142 is ahead; the earlier keeper and the rampart's 200 buy no house that v142 did not keep. */
+    private const val USE_FORT_RAMPART_FIRST = false
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
