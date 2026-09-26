@@ -177,10 +177,15 @@ internal object Strategist {
         // ответ на армию, которая идёт на нас; от запаркованной оно только доводит часы до недостижимого отрыва.
         // Отступление (RETREAT) не тронуто: это уход из боя, который проигрывается
         val idleEvade = USE_ENGAGE_OVER_IDLE_EVADE && pre == Posture.EVADE && !Signals.approachingNow
-        val engageLost = USE_ENGAGE_WHEN_RACE_LOST && i.raceLostNothingToTake && (!pre.withdrawing || idleEvade) &&
+        // ...И НАЧАТЫЙ РАЗМЕН С КУЛАКОМ НЕ СНИМАЕТСЯ НАШИМ ЖЕ ЗАХВАТОМ ДО ПЕРВОГО БОЯ (v667, см. USE_ENGAGE_HOLDS_TO_CONTACT):
+        // флаг, взятый разведчиком, разворачивает проекцию, и без этого армия встречала его кулак в HOLD
+        val engageHeld = USE_ENGAGE_HOLDS_TO_CONTACT && Signals.engagingGarrison && firstFightTick == 0 &&
+            Signals.enemyFistNow && !tourerMode()
+        val engageLost = USE_ENGAGE_WHEN_RACE_LOST && (i.raceLostNothingToTake || engageHeld) && (!pre.withdrawing || idleEvade) &&
             (!i.fewFoes || (USE_ENGAGE_VS_FEW && i.hisFlagsGuarded))
         engageAll.n++
         if (engageLost) engageOn.n++
+        if (engageLost && !i.raceLostNothingToTake) engageHeldTicks.n++
         if (idleEvade) { engIdleAll.n++; if (engageLost) engIdleOn.n++ }
         // ...И ПОКА ИДЁТ ЭТОТ РАЗМЕН, АРМИЮ НЕ ДРОБИМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING): решение драться и
         // решение растащить армию по флагам — об одной величине, и до сих пор они принимались порознь

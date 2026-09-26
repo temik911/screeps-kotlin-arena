@@ -2186,6 +2186,10 @@ internal val picketArmy = Gauges.counter("pkarmy")
  *  против кулака снят, потому что его стволы уже достают нашу армию. */
 internal val fistReachTicks = Gauges.counter("fistreach")
 
+/** Прибор удержанного размена (v667, см. USE_ENGAGE_HOLDS_TO_CONTACT): `engheld=` — тиков, где размен до первого боя держится
+ *  только удержанием: проигранной гонки по проекции уже нет. */
+internal val engageHeldTicks = Gauges.counter("engheld")
+
 /** Прибор прикрытия (v647, см. USE_MELEE_COVER): `cover=` — наших мили-тиков, упустивших шаг к его мили, который рубит нашего
  *  стрелка или лекаря (см. `missedCovers`). */
 internal val coverMissed = Gauges.counter("cover")
