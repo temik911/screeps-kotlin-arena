@@ -1407,7 +1407,11 @@ internal object Garrisons {
                 .sortedWith(compareBy({ scoreOf(postOf(it.value)) }, { farKey(postOf(it.value), home) }))
             for (donor in donors) {
                 val whole = scoreOf(postOf(donor.value)) <= cheapest && overQuota(bySquad)
-                val give = if (whole) donor.value else sparesOf(donor.value, home, donor.value.size - TRIPLE_SIZE)
+                // ...а дорогой донор отдаёт посту дороже себя и до пары, но не больше, чем тому недостаёт до тройки (v683, см.
+                // USE_FLIP_DONOR_DOWN_TO_PAIR): его пару на нашей клетке он не берёт, а штурмует D5
+                val spare = if (USE_FLIP_DONOR_DOWN_TO_PAIR) minOf(TRIPLE_SIZE - small.value.size, donor.value.size - FLIP_DONOR_KEEP)
+                    else donor.value.size - TRIPLE_SIZE
+                val give = if (whole) donor.value else sparesOf(donor.value, home, spare)
                 if (give.isEmpty()) continue
                 moveTo(give, small.key, home)
                 raidWhy.bump(if (whole) "tdrop" else "tspare")
