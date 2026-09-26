@@ -480,6 +480,17 @@ internal fun captureGates(): List<Gate<CaptureCase>> = captureGateRows ?: listOf
         if (ctx.flags.count { it.ours } + 1 >= ctx.flags.size) return@Gate Verdict.Veto("seventh")
         Verdict.Next
     },
+    Gate("camp") {
+        // ЛАГЕРЬ, КОТОРЫЙ ЖДЁТ НАШЕГО ЗАХВАТА (v695, см. USE_CAMP_WAITS_FOR_OUR_FLAG): его армия сомкнута и стоит, боя не было,
+        // флагов нет ни у кого — первый флаг берётся, только когда до конца матча не больше тиков, чем его ближайшему
+        // вооружённому идти до флага: наш захват — его сигнал к атаке, а бой мы примем на своих дебаффах
+        if (USE_CAMP_WAITS_FOR_OUR_FLAG && firstFightTick == 0 && Signals.enemyMassedSignal && ctx.passiveEnemy &&
+            ctx.flags.none { it.ours || it.theirs }) {
+            val reach = ctx.threats.minOfOrNull { getRange(it, f.pos) }
+            if (reach != null && arenaInfo.ticksLimit - getTicks() > reach) return@Gate Verdict.Veto("camp")
+        }
+        Verdict.Next
+    },
     Gate("lastCall") {
         // последний зов и при РАВНОМ счёте: ничья 0:0 после уклонения (см. EVADE_EQUAL_RATIO) отдана не будет
         ticksLeft = arenaInfo.ticksLimit - getTicks()
