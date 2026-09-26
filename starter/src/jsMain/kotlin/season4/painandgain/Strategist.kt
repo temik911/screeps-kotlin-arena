@@ -181,8 +181,11 @@ internal object Strategist {
         // флаг, взятый разведчиком, разворачивает проекцию, и без этого армия встречала его кулак в HOLD
         // ...и только пока бой надвигается: его сомкнутая армия идёт на нас (`approachingNow`), а размен до первого боя уже
         // начинался (защёлка); без этого против того, кто стоит дома или лагерем, армия весь матч держалась размена
+        // ...а «бой надвигается» — это окно первого столкновения, а не скорость его сближения (v675): его кулак в момент
+        // нашего захвата сближается со скоростью 0,00–0,21 при пороге APPROACH_RUSH 0,5, и удержание не включалось ни разу
+        val clashing = if (USE_HOLD_IN_CLASH_WINDOW) getTicks() <= FIRST_CLASH_TICKS else Signals.approachingNow
         val engageHeld = USE_ENGAGE_HOLDS_TO_CONTACT && Memory.engageSeen[0] > 0 && firstFightTick == 0 &&
-            Signals.enemyFistNow && Signals.approachingNow && !tourerMode()
+            Signals.enemyFistNow && clashing && !tourerMode()
         val engageLost = USE_ENGAGE_WHEN_RACE_LOST && (i.raceLostNothingToTake || engageHeld) && (!pre.withdrawing || idleEvade) &&
             (!i.fewFoes || (USE_ENGAGE_VS_FEW && i.hisFlagsGuarded))
         engageAll.n++
