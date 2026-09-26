@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v16"
+    private const val BOT_VERSION = "v17"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -428,6 +428,9 @@ object EscortRun {
         return false
     }
 
+    /** До какого тика дебют ждёт первого бойца экономиста (его перехватчик заказывается на 50-м). */
+    private const val ECON_WAIT_UNTIL = 56
+
     /** Тела первых заказов врага (видны со второго тика как рождающиеся). */
     private val firstEnemyOrders = ArrayList<String>()
     private val seenEnemyIds = HashSet<String>()
@@ -461,8 +464,17 @@ object EscortRun {
         //    растит армию: v13-v15 проиграли stachu3478 одиннадцать матчей из одиннадцати. Против экономиста остаток
         //    дебюта идёт в бойца при поезде: период 3 вместо 2 (приход ~340) всё равно раньше их пешего эскорта, а
         //    перехватчик встречает бойца, а не тягачей
+        //    Но экономист экономисту рознь: けろびー#5/#7/#8/#13 перехватчика не шлёт, его R5M5 рождается на 177-м и
+        //    догоняет медленный поезд у нашего флага — против него период 2 и есть победа (v16 проиграла ему шесть из
+        //    семи, v15 выигрывала все). Поэтому решение ждёт, пока экономист не покажет бойца: его перехватчик заказан
+        //    на 50-м (виден на 51-м); бойца к ECON_WAIT_UNTIL нет — второй тягач, как всегда
         val plan = openingPlan
         if (plan != null && openingIdx in 1 until plan.size && escort != null && enemyEcon(w)) {
+            val armedSoon = (w.enemyPending + w.enemies).any { !isEscort(it) && Bodies.wasArmed(it) }
+            if (!armedSoon && w.now < ECON_WAIT_UNTIL) { saving(w, "the economist's first fighter (guard) or the second puller", plan.drop(openingIdx).sum() * Bodies.cost(MOVE)); return }
+        }
+        if (plan != null && openingIdx in 1 until plan.size && escort != null && enemyEcon(w) &&
+            (w.enemyPending + w.enemies).any { !isEscort(it) && Bodies.wasArmed(it) }) {
             val body = meleeBody(minOf(e, plan.drop(openingIdx).sum() * Bodies.cost(MOVE)))
             if (body != null && Bodies.cost(body) >= 2 * (Bodies.cost(MOVE) + Bodies.cost(ATTACK))) {
                 if (order(w, body, "train-guard", "their opening is economy (${firstEnemyOrders.joinToString(" ")}): the rest of the opening goes into a guard")) {
