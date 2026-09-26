@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 165
+    private const val BOT_VERSION = 166
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6306,6 +6306,8 @@ object SpawnAndSwamp {
     /** Against an armoured target the melee guard is a striker; a wave whose siege wins turns only on what stands at the
      *  target or next to it (v165). */
     private const val USE_SIEGE_MELEE = true
+    /** A waiting raid strikes his unarmed creeps that none of his mobile guns is near (v166). */
+    private const val USE_RAID_PREY = true
     /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
      *  33 swings (v164b). */
     private const val HOME_RAMPART_ATTACK = 3
@@ -6466,13 +6468,24 @@ object SpawnAndSwamp {
                 .minOfOrNull { getRange(it, pos(target)) - RANGED_RANGE } ?: Int.MAX_VALUE
             kill < back
         }
-        val go = if (strikeFits) target else null
+        // …AND WHILE IT WAITS IT TAKES HIS UNARMED (v166). Against kerobi#49 the raid froze his count at one spawn — his
+        // ramparted main — from 600-900 to the end in 4 of 4 games, and waited the rest of the match because his army
+        // (9-13 armed) stayed at the main; his one spawn is fed by eleven M1C1 of 200 hits walking to the containers — two
+        // strikes of the pair each, and his army is paid by nothing else. A creep of his with no weapon and no heal, with
+        // none of his mobile guns within RAID_LURK_RANGE of it, is struck while the spawn cannot be
+        val prey: Creep? = if (!USE_RAID_PREY || strikeFits || raidHome || gathering) null else {
+            val hisGuns = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } }
+            ctx.enemyCreeps.filter { c -> InfluenceMap.profileOf(c).let { p -> p.ranged + p.melee + p.heal <= 0.0 } &&
+                hisGuns.none { getRange(it, c) < RAID_LURK_RANGE } }.minByOrNull { getRange(lead, it) }
+        }
+        val go = if (strikeFits) target else prey
         if (USE_RAID_TOUR) raidTargetId = go?.id ?: if (strikeFits) null else raidTargetId
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
         for (r in raiders) {
             // waiting for his guns to go, the pair holds where it stands rather than walking home and back
             val goal: Position = if (go != null) pos(go) else if (!strikeFits) r else ctx.mySpawn
             val range = if (go != null) 1 else if (!strikeFits) 0 else 2
+            val waiting = !strikeFits && go == null
             val struck = go != null && getRange(r, goal) <= 1
             if (struck) r.attack(go!!)
             else ctx.enemyCreeps.filter { getRange(it, r) <= 1 }.minWithOrNull(
@@ -6480,7 +6493,7 @@ object SpawnAndSwamp {
             // …A WAITING PAIR KEEPS AWAY FROM HIS GUNS (v162): in the v161 draws it waited in place in the field for his army
             // to leave his ramparted main (t=490-770), was found there and went home at 460/1800 and 1254/3600; it now
             // walks off to RAID_LURK_RANGE from his nearest mobile armed creep and waits there
-            val hunters = if (USE_RAID_LURK && go == null && !strikeFits) ctx.combatEnemies.filter { e ->
+            val hunters = if (USE_RAID_LURK && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
                 e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
                     getRange(e, r) < RAID_LURK_RANGE } else emptyList()
             if (hunters.isNotEmpty() && canMove(r)) {
