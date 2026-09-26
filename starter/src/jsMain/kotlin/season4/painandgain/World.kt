@@ -2702,6 +2702,9 @@ internal fun readSignals(ctx: Ctx) {
     val hisW = ctx.combatEnemies.filter { hasWeapon(it) }
     val largestW = hisW.maxOfOrNull { e -> hisW.count { getRange(e, it) <= ENGAGE_RANGE } } ?: 0
     val splitNow = hisW.size >= 3 && largestW * 3 <= hisW.size * 2
+    // ...и режим пар открывает раскол, ДЕРЖАЩИЙСЯ SPLIT_HOLD тиков, а не мгновенный (v664, см. USE_SPLIT_HELD)
+    Memory.splitRun[0] = if (splitNow) Memory.splitRun[0] + 1 else 0
+    val splitOpens = if (USE_SPLIT_HELD) Memory.splitRun[0] >= SPLIT_HOLD else splitNow
     // ОХОТЯЩИЙСЯ КУЛАК (v553, см. USE_NO_DETACH_VS_HUNTING_FIST): большинство его стволов в ОДНОЙ группе — величина,
     // обратная `splitNow`, и считается тем же способом. Против такого выпускать отряжённых нечем: он их и ест
     Signals.enemyFistNow = hisW.size >= 3 && largestW * 2 > hisW.size
@@ -2780,7 +2783,7 @@ internal fun readSignals(ctx: Ctx) {
     // ...И ЕГО ПОЧЕРК «ХРАНИТЕЛЬ ОТРЫВА» ОТКРЫВАЕТ РЕЖИМ ПАР (v646, см. USE_LEAD_KEEPER_PAIRS): раскол его армии в тихий
     // момент у бота, который держит армию одним блоком, — случайность, а флаги ему приносят только разведчики
     Signals.groupSafe = getTicks() >= GROUP_WINDOW && Signals.groupDmgWindow <= GROUP_SAFE_DMG && !sitsOnFlags &&
-        (Signals.groupSafe || splitNow || (USE_LEAD_KEEPER_PAIRS && leadKeeperMode()))
+        (Signals.groupSafe || splitOpens || (USE_LEAD_KEEPER_PAIRS && leadKeeperMode()))
     // ...И РЕЖИМ ПАР НЕ ВКЛЮЧАЕТСЯ, ПОКА МЫ САМИ ВЕДЁМ РАЗМЕН С ГАРНИЗОНОМ (v543, см. USE_NO_PAIRS_WHILE_ENGAGING).
     // В проигранной руке v542 армия ужалась до ДВУХ тел при включённом режиме пар: бот решал драться и одновременно
     // растаскивал армию по флагам, которых без разоружения стража не взять. Разоружено там 1 крип против 4-8 в победах
