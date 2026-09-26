@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 144
+    private const val BOT_VERSION = 145
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2246,6 +2246,23 @@ object SpawnAndSwamp {
             }
             if (!alarm && deficit <= 0.0) return reach("huSave")
         }
+        // IN A FORTIFIED HOUSE THE KEEPER COMES BEFORE THE HAULER (v145). The tower site stands from the flag's tick, and
+        // the keeper that builds it queued behind 1-4 haulers (500-1800 of energy, 68-162 ticks of the spawn) in 14 of 18
+        // games with the flag: bought ~235 ticks after it in losses and draws alike, the tower up at 690-800 — and what
+        // told them apart was only whether his storm came before it (625-775 in the losses, 787-900 in the draws). With
+        // the keeper first, by the energy that came in, the tower stands before the storm in 6 of the 11 early losses
+        if (USE_FORT_KEEPER_FIRST && USE_FORT_HOME && fortHome && ctx.myTowers.isEmpty() && ctx.builders.isEmpty() &&
+            siteJobs.any { it.site != null && it.inTime } && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
+            val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
+            val keeper = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
+            val keeperCost = keeper.sumOf { cost(it) }
+            if (energy < keeperCost) return reach("kFirst")
+            val r = spawn.spawnCreep(keeper)
+            reach(if (r.error == null) "kBuy" else "err")
+            if (r.error == null) spentBuild += keeperCost
+            if (DEBUG_LOG) println("spawn: builder (fort, before haulers) work=${keeper.count { it == WORK }} cost=$keeperCost energy=$energy err=${r.error}")
+            return
+        }
         // THE PILE BUILDER BEFORE THE THIRD HAULER, WHEN THERE IS A JOB FOR IT NOW (v138). His spawns rise out of the
         // map's containers — a fresh one holds 2000 for 100 ticks — and his economy outgrows ours by t≈400 (against kerobi
         // our pile builder was bought before t=700 in 0 of 8 losses since v133: `needHauler` took the turn until ~500,
@@ -2329,7 +2346,10 @@ object SpawnAndSwamp {
         // достроил 95 из 482 оставшихся. У готовой башни срока нет — её надо только кормить
         // смотритель покупается под РАБОТУ, которую успеваем сделать, или под готовую башню, которую
         // надо кормить; «есть хоть какая-то площадка» этого вопроса не задаёт
-        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
+        // …and a fortified house whose tower stands re-buys its keeper under a raid too (v145): against kerobi#35 the keeper
+        // died at t=767 and was never replaced while the spawn saved 416 -> 718 for a fighter, and the tower went quiet
+        if (ctx.builders.isEmpty() && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) &&
+            !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty() && !(USE_FORT_KEEPER_FIRST && fortHome && ctx.myTowers.isNotEmpty()))) {
             // ТЕЛО ПОД РАБОТУ, А НЕ ПОД ЛЮБУЮ. Работа выбирается тем же правилом, что и в runBuilders
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
             val builder = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
@@ -5898,6 +5918,9 @@ object SpawnAndSwamp {
      *  A/B against kerobi#35/#22 (4+4 each) went v142 0-4-4 / v143 1-6-1 — by rating (draws +1..+6 against him, losses
      *  -6..-7) v142 is ahead; the earlier keeper and the rampart's 200 buy no house that v142 did not keep. */
     private const val USE_FORT_RAMPART_FIRST = false
+    /** In a fortified house the keeper is bought before haulers while its tower is not up, and re-bought under a raid
+     *  once it is (spawnIfNeeded, v145). */
+    private const val USE_FORT_KEEPER_FIRST = true
     private var fortHome = false
     /** Twice his fort's reach (posts and tower within five cells of his spawn): a builder farther is in the field. */
     private const val FIELD_BUILDER_RANGE = 10
