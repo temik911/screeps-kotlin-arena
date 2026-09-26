@@ -302,8 +302,8 @@ internal fun accountScore(flags: List<FlagInfo>) {
 // ==================== армия ====================
 
 /** Поле к цели; не наши флаги — стены (кроме самой цели: flowFieldTo всегда открывает целевую клетку). */
-internal fun flowTo(ctx: Ctx, target: Position, avoid: Boolean = false, near: Boolean = false): IntArray {
-    val key = target.key + (if (avoid) 10000 else 0) + (if (near) 20000 else 0)
+internal fun flowTo(ctx: Ctx, target: Position, avoid: Boolean = false, near: Boolean = false, aroundOurFlags: Boolean = false): IntArray {
+    val key = target.key + (if (avoid) 10000 else 0) + (if (near) 20000 else 0) + (if (aroundOurFlags) 40000 else 0)
     val now = getTicks()
     val hit = Memory.flowCache[key]
     val at = Memory.flowCacheTick[key]
@@ -321,7 +321,10 @@ internal fun flowTo(ctx: Ctx, target: Position, avoid: Boolean = false, near: Bo
         (now > 1 && cpuMs() > CPU_GUARD_MS)
     bfsThisTick++
     bfsCost += if (bounded) 0.25 else 1.0
-    val f = DistanceMap.flowFieldTo(target, ctx.flagBlocked + (if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked),
+    // клетки НАШИХ флагов, кроме самой цели, — стены (v681, см. USE_MARCH_AROUND_OUR_FLAGS); множество наших флагов — дополнение
+    // `flagBlocked`, и его смена сбрасывает кэш через `blockSig`
+    val ourFlagCells = if (aroundOurFlags) ctx.flags.filter { it.ours && it.pos.key != target.key }.map { it.pos } else emptyList()
+    val f = DistanceMap.flowFieldTo(target, ctx.flagBlocked + ourFlagCells + (if (avoid) ctx.blocked + avoidCells(ctx) else ctx.blocked),
         maxDist = if (bounded) NEAR_FLOW else Int.MAX_VALUE)
     Memory.flowCache[key] = f
     Memory.flowCacheTick[key] = if (bounded && !near) -1000 else now
@@ -2146,15 +2149,21 @@ internal object Garrisons {
         }
         if (maxOf(abs(creep.x - fx), abs(creep.y - fy)) > 2) {
             // к посту — в обход его стоящих групп (v629, см. USE_POST_AVOID)
-            val flow = flowTo(ctx, InfluenceMap.cell(fx, fy), avoid = USE_POST_AVOID && fk in Memory.raidPost)
+            // ...МИМО КЛЕТОК НАШИХ ФЛАГОВ (v681, см. USE_MARCH_AROUND_OUR_FLAGS): на клетке стоит держатель, с которым не меняются;
+            // если без них пути отсюда нет — обычное поле
+            val postCell = InfluenceMap.cell(fx, fy)
+            val avoidPost = USE_POST_AVOID && fk in Memory.raidPost
+            val flow = if (!USE_MARCH_AROUND_OUR_FLAGS) flowTo(ctx, postCell, avoid = avoidPost)
+                else flowTo(ctx, postCell, avoid = avoidPost, aroundOurFlags = true).takeIf { it[here] >= 0 } ?: flowTo(ctx, postCell, avoid = avoidPost)
             // ОТРЯД ИДЁТ КУЧНО (v602; живой блок v601: отряды растягивались, и ушедшего вперёд мили он добивал одного —
             // t=46–63, «наших в 6» ноль): кто впереди отстающего товарища больше чем на 2 клетки по полю — ждёт
             // ...внутри СВОЕГО отряда и в радиусе кулака (v605, стенд: при натиске всей армией на один флаг передние ждали
             // задних, а задние не могли их обойти — пробка на 1 600 тиков)
             val mine = flow[key(creep.x, creep.y)]
             val squad = Memory.garrisonSquad[creep.id]
+            // ...раздетого товарища не ждут (v681, см. USE_COHERE_SKIPS_STRIPPED): ни оружия, ни лечения, и ходит он раз в 2–6 тиков
             val last = ctx.myCreeps.filter { (if (squad != null) Memory.garrisonSquad[it.id] == squad else Memory.garrisonFlag[it.id] == fk) &&
-                    it.key !in cells }
+                    it.key !in cells && (!USE_COHERE_SKIPS_STRIPPED || combatant(it)) }
                 .maxOfOrNull { flow[key(it.x, it.y)] } ?: mine
             if (mine >= 0 && last - mine > FIST_RADIUS) { garrisonWhy.bump("cohere"); return Pair(null, true) }
             // ОБХОД СВОИХ (v607, стенд: восьмёрка шла к H сквозь D5, где стоят закреплённые бойцы первого гарнизона, — поле ведёт
