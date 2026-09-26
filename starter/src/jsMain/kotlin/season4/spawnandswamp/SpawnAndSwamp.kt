@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 170
+    private const val BOT_VERSION = 171
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2196,7 +2196,10 @@ object SpawnAndSwamp {
             // its first thousand and lost `ball` 444->813, `tower+stream` 571->1009. A structure falls to ATTACK (30 a part
             // against RANGED's 10); Death000's M10A6 was seen at t=250 and at our door at ~400, marlyman's M3A3/M4A4 and
             // Ranamar's M15A3 walk the same hundred-odd ticks — the keeper (15 ticks to spawn) and the build (40) fit in it
-            if (USE_HOME_RAMPART && ctx.haulers.size >= 2 && ctx.combatEnemies.any { e -> e.body.count { it.type == ATTACK && it.hits > 0 } >= HOME_RAMPART_ATTACK } &&
+            // (v171: one that can walk — kerobi's stationary A3 at his home ordered it at t=123, and the one-WORK keeper's
+            // 300 was missing when his fort flag rose late)
+            if (USE_HOME_RAMPART && ctx.haulers.size >= 2 && ctx.combatEnemies.any { e -> e.body.count { it.type == ATTACK && it.hits > 0 } >= HOME_RAMPART_ATTACK &&
+                    (!USE_RAID_THRIFT || e.body.any { it.type == MOVE && it.hits > 0 }) } &&
                 ctx.mySites.none { it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y } &&
                 ctx.ramparts.none { it.my == true && it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y }) {
                 val r = createConstructionSite(ctx.mySpawn.x, ctx.mySpawn.y, StructureRampart::class.js)
@@ -2357,12 +2360,16 @@ object SpawnAndSwamp {
         if (USE_RAID_LAST && USE_RAID && !armNow && (if (USE_RAID_TOPUP) raidWanted(ctx) && (raidOrdered in 1 until RAID_SIZE || raidRebuyAt >= 0)
                 else raidOrdered in 1 until RAID_SIZE && raidWanted(ctx))) {
             val price = RAID_BODY.sumOf { cost(it) }
-            if (energy < price) return reach("rSave2")
+            // …saved for only while a fleet brings the energy (v171): against kerobi#49 `rSave2` held the spawn 944 ticks
+            // (460-1500) at an income of 0 while the haulers went 4 -> 0 unreplaced, and the house fell at 1592
+            if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2)) return reach("rSave2")
+            if (energy < price) { reach("rSkip2") } else {
             val r = spawn.spawnCreep(RAID_BODY)
             reach(if (r.error == null) "rBuy" else "err")
             if (r.error == null) { raidOrdered++; raidOrderedAt = getTicks(); spentFighters += price }
             if (DEBUG_LOG) println("spawn: raider #$raidOrdered (pair) cost=$price energy=$energy err=${r.error}")
             return
+            }
         }
         // …and the one-WORK keeper bought for the home rampart (v164) is not the tower's keeper (v167): against kerobi#49 it
         // was bought at 326, the flag rose at 352, the tower was built at 5 a tick and stepped off at 1205/1250 on 629 —
@@ -6362,6 +6369,10 @@ object SpawnAndSwamp {
     private const val USE_HOUSE_OUTLASTS = false
     /** A hauler runs home as soon as a mobile armed creep of his is within HAULER_FLEE_RANGE, not once struck (v170). */
     private const val USE_HAULER_EARLY_FLEE = true
+    /** The pair's saving holds only with a fleet, a re-buy's window is bounded; the home rampart answers a heavy melee
+     *  that can walk; a waiting pair comes home to a storm it can reach before the house falls (v171). */
+    private const val USE_RAID_THRIFT = true
+    private const val RAID_REBUY_WINDOW = 300
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6401,6 +6412,9 @@ object SpawnAndSwamp {
         val n = ctx.myCreeps.count { isRaider(it) }
         return if (USE_RAID_TOPUP) n else if (n > 0) RAID_SIZE else 0
     }
+
+    /** A raider's steps to our home spawn by the steps field (v171). */
+    private fun stepsNextToSelf(ctx: Ctx, c: Creep): Int = ctx.stepsToSpawn[c.x * 100 + c.y].let { if (it < 0) Int.MAX_VALUE / 4 else it }
 
     /** Steps from our home spawn to a cell next to p: the least of the field over its eight neighbours, plus one (v167). */
     private fun stepsNextTo(ctx: Ctx, p: Position): Int {
@@ -6457,7 +6471,9 @@ object SpawnAndSwamp {
         if (raidRebuyAt < 0) return RAID_BUY_UNTIL
         if (!USE_RAID_LAST) return raidRebuyAt + RAID_BUY_UNTIL - 200
         val steady = realisedIncome().let { if (it < 0.0) 1.0 else it + regenRate() }.coerceAtLeast(1.0)
-        return raidRebuyAt + (RAID_SIZE * RAID_BODY.sumOf { cost(it) } / steady).toInt() + 60
+        val window = (RAID_SIZE * RAID_BODY.sumOf { cost(it) } / steady).toInt() + 60
+        // …bounded (v171): at an income near 0 the window ran past the end of the match
+        return raidRebuyAt + if (USE_RAID_THRIFT) window.coerceAtMost(RAID_REBUY_WINDOW) else window
     }
 
     /**
@@ -6565,13 +6581,27 @@ object SpawnAndSwamp {
             ctx.enemyCreeps.filter { c -> InfluenceMap.profileOf(c).let { p -> p.ranged + p.melee + p.heal <= 0.0 } &&
                 hisGuns.none { getRange(it, c) < RAID_LURK_RANGE } }.minByOrNull { getRange(lead, it) }
         }
-        val go = if (strikeFits) target else prey
+        // A WAITING PAIR COMES HOME TO A STORM IT CAN TURN (v171): against kerobi#50 both builders were dead at 447 and the
+        // pair waited 79-88 cells off while his M3R3, M5H3 and two M5R5 took our rampart (130 a tick) and spawn at 661;
+        // at a cell a tick on any ground it would have been home by ~610 with 180 a tick on his creeps
+        if (USE_RAID_THRIFT && !strikeFits && !raidHome && ctx.enemyCreeps.any { e -> InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
+                getRange(e, ctx.mySpawn) <= RANGED_RANGE }) {
+            val threatDps = ctx.combatEnemies.filter { getRange(it, ctx.mySpawn) <= RANGED_RANGE + 2 }.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+            val house = (ctx.mySpawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y }.sumOf { it.hits ?: 0 }
+            val walk = raiders.maxOf { stepsNextToSelf(ctx, it) }
+            if (threatDps > 0.0 && walk < house / threatDps) {
+                raidHome = true
+                raidTargetId = null
+                if (DEBUG_LOG) println("raid home t=${getTicks()}: storm at our door, walk=$walk falls=${(house / threatDps).toInt()}")
+            }
+        }
+        val go = if (strikeFits && !raidHome) target else if (raidHome) null else prey
         if (USE_RAID_TOUR) raidTargetId = go?.id ?: if (strikeFits) null else raidTargetId
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
         for (r in raiders) {
             // waiting for his guns to go, the pair holds where it stands rather than walking home and back
             // …and, since v167, near its target at the lurk range: waiting at our house it was 82 cells from the strike
-            val hover = USE_RAID_FINISH && target != null && !strikeFits
+            val hover = USE_RAID_FINISH && target != null && !strikeFits && !raidHome
             val goal: Position = if (go != null) pos(go) else if (hover) pos(target!!) else if (!strikeFits) r else ctx.mySpawn
             val range = if (go != null) 1 else if (hover) RAID_LURK_RANGE else if (!strikeFits) 0 else 2
             val waiting = !strikeFits && go == null
