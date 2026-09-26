@@ -661,7 +661,7 @@ internal class Deal(
      * печатаемым числом — `gate=...`. Ниже единицы порог не опускается: клетка, где крип умирает за ход,
      * не предлагается никогда.
      */
-    fun placeScored(c: Creep, role: Int, i: Intent): Boolean {
+    fun placeScored(c: Creep, role: Int, i: Intent, bound: (Position) -> Boolean = { true }): Boolean {
         val (att, dan, ttlMin) = weightsOf(i)
         // ПРЕСЛЕДОВАТЕЛЬ СМОТРИТ НА СВОЙ ОСТОВ (v211) — тем же полем притяжения, что и фокус: у мили пик
         // вплотную, у стрелка на дальности три. Отдельной формулы у погони нет и не нужно
@@ -688,7 +688,7 @@ internal class Deal(
         }
         for (lvl in ttlMin downTo 1) {
             val ok = place(c, { p ->
-                (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
+                bound(p) && (!kite || hisMelee.isEmpty() || hisMelee.minOf { getRange(p, it) } >= MELEE_HOLD_RANGE) &&
                     (if (role == 0) ttlMeleeAt(c, p.key, p) else ttlAt(c, p.key, p)) >= lvl
             }, rank)
             if (ok) {
@@ -807,6 +807,16 @@ internal class Deal(
         }
     }
 
+    /** СТРЕЛКИ ПЕРВЫМ РЯДОМ ДО ПЕРВОГО БОЯ С КУЛАКОМ (v676, см. USE_RANGED_FRONT_BEFORE_CLASH): стрелки расставляются раньше
+     *  мили, а мили — не ближе к его вооружённым, чем ближайшая выданная клетка стрелка. */
+    private val rangedFirst get() = USE_RANGED_FRONT_BEFORE_CLASH && firstFightTick == 0 && Signals.enemyFistNow &&
+        !tourerMode() && !healersOnly && armedEnemies.isNotEmpty()
+    private val meleeBound: (Position) -> Boolean get() {
+        if (!rangedFirst) return { true }
+        val front = rangeds.mapNotNull { out[it.id] }.minOfOrNull { q -> armedEnemies.minOf { getRange(q, it) } } ?: return { true }
+        return { p -> armedEnemies.minOf { getRange(p, it) } >= front }
+    }
+
     fun passMelee() {
         // мили: по замыслу — вплотную к его вооружённому (напор), в самую безопасную клетку с целью (удержание) или
         // как можно дальше от его мили (уступка); среди равных всегда меньше входящего на следующий тик
@@ -818,7 +828,7 @@ internal class Deal(
             // указывала на клетку, которую крипу уже не отдали, и лекарь шёл встречать пустоту
             if (USE_RETREAT_CELL_STICKS && c.id in out) { repassKept.n++; continue }
             repassAll.n++
-            val ok = placeScored(c, 0, intentOf(c))
+            val ok = placeScored(c, 0, intentOf(c), meleeBound)
             // ДОБОР МИЛИ ПОМЕНЯЛ СМЫСЛ ВМЕСТЕ С ВОРОТАМИ (v208). Прежде `ok = false` значило «нет клетки вплотную
             // к его вооружённому, куда дотягивается лекарь», и шаг к врагу был верным ответом. С воротами
             // выживания `ok = false` значит «нет клетки, где я переживу ход», и тот же шаг посылает крипа
@@ -1149,8 +1159,8 @@ internal class Deal(
         Pass("retreat") { passRetreat() },
         Pass("straggler") { passStraggler() },
         Pass("fields") { passFields() },
-        Pass("melee") { passMelee() },
-        Pass("ranged") { passRanged() },
+        Pass("melee") { if (!rangedFirst) passMelee() },
+        Pass("ranged") { passRanged(); if (rangedFirst) passMelee() },
         Pass("advancing") { passAdvancing() },
         Pass("healer") { passHealer() },
         Pass("keeper") { passKeeper() },
