@@ -87,7 +87,7 @@ if (MAP) {
   world.objects.push(new Source(95, 45, 1000, 1000)); world.objects.push(new Source(95, 54, 1000, 1000));
   world.objects.push(new StructureContainer(92, 49, 2500, 2500)); world.objects.push(new StructureContainer(92, 50, 2500, 2500));
 }
-world.spawnRegen = [1, has('harvest') ? 11 : has('icpt') ? 7 : 1]; // 'harvest': the enemy economy as if it had a W5 harvester from tick 1
+world.spawnRegen = [1, has('harvest') ? 11 : (has('icpt') || has('econ')) ? 7 : 1]; // 'harvest': the enemy economy as if it had a W5 harvester from tick 1
 // 'icpt' (stachu3478#9/#10, 27.09.2026): two W3M1C1 harvesters and two M1C1 haulers put ~7 a tick into his spawn from
 // the first tens of ticks (measured on his spawn's energy: +7/tick at t=80..120), so the stub gives him 7 from tick 1
 // 'racer' (match 2, 04.09.2026): the opponent runs a train too and is AHEAD — its puller is already alive at tick 0, so
@@ -148,7 +148,7 @@ let enemyQueue = [];
 // 'icpt' — stachu's interceptor: one M1A1 at t=50 that walks to our train, kills the puller and then chips the escort.
 const roleOf = new Map();
 const done = {};
-const REV = () => has('rev') || has('keep') || has('blk') || has('blk1') || has('rush8');
+const REV = () => has('rev') || has('keep') || has('blk') || has('blk1') || has('rush8') || has('econ');
 function orderRole(body, role) {
   const r = theirs.sp.spawnCreep(body);
   if (r.object) { roleOf.set(r.object.id, role); done[role] = (done[role] || 0) + 1; world.events.push(`t=${world.tick} enemy orders ${r.object.summary()} as ${role}`); return true; }
@@ -169,7 +169,11 @@ function metaEnemyTick(mine, oursC) {
     const e = sp.store.energy;
     const haveP = mine.some(isPuller);
     if (has('blk1') && !done.blk1) { if (e >= 50) orderRole([M], 'blk1'); }
-    else if (!haveP && !has('rush8') && e >= 500) orderRole(PULLER, 'puller');
+    // 'econ' — stachu3478's opening: a W3M1C1 harvester on tick 1 (its income is the 7-a-tick regen above) and no
+    // puller at all: his escort walks at period 4 the whole match
+    else if (has('econ') && !done.econ) { if (e >= 400) orderRole([W, W, W, M, C], 'econ'); }
+    else if (has('econ') && done.icpt && !done.guard3 && world.tick >= 171 && e >= 390) orderRole([M, M, M, A, A, A], 'guard3');
+    else if (!haveP && !has('rush8') && !has('econ') && e >= 500) orderRole(PULLER, 'puller');
     else if (haveP && has('keep') && !done.keep) { if (e >= 50) orderRole([M], 'keep'); }
     else if (haveP && has('blk') && !done.blk) { if (e >= 50) orderRole([M], 'blk'); }
     else if (has('icpt') && !done.icpt && world.tick >= 50 && e >= 130) orderRole([M, A], 'icpt');
@@ -207,6 +211,12 @@ function metaEnemyTick(mine, oursC) {
       if (c.x === target.x && c.y === target.y) continue;
       if (range(c, target) <= 1) { if (!creepAt(target.x, target.y) && !(role === 'keep' && range(esc, target) <= 1)) c.move(getDirection(target.x - c.x, target.y - c.y)); continue; }
       stepToward(c, target, 1);
+    } else if (role === 'econ') {
+      // stays at home: the stub pays its income as spawn regen
+    } else if (role === 'guard3') {
+      // stachu's M3A3 walks with his escort and hits whatever of ours comes within one
+      fireAt(c, oursC);
+      if (range(c, esc) > 2) stepToward(c, esc, 1);
     } else if (role === 'rush8') {
       // ricardo18informatica2020#8 (6ab841a9, 6ab841e5): an M4A3 ordered at t=20 walks straight at our escort and
       // hits nothing else; it does not attack ramparts — a creep on its own rampart is hit through the rampart

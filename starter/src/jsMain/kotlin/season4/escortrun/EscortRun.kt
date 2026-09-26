@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v15"
+    private const val BOT_VERSION = "v16"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -428,6 +428,20 @@ object EscortRun {
         return false
     }
 
+    /** Тела первых заказов врага (видны со второго тика как рождающиеся). */
+    private val firstEnemyOrders = ArrayList<String>()
+    private val seenEnemyIds = HashSet<String>()
+
+    /** Их дебют — экономика: среди первых двух заказов есть WORK, а тягача (одни MOVE от трёх) нет. */
+    private fun enemyEcon(w: World): Boolean {
+        for (c in w.enemyPending + w.enemies) {
+            if (isEscort(c) || firstEnemyOrders.size >= 2) continue
+            if (seenEnemyIds.add(idOf(c))) firstEnemyOrders.add(Bodies.summaryOf(c))
+        }
+        if (firstEnemyOrders.isEmpty()) return false
+        return firstEnemyOrders.any { it.contains("W") } && firstEnemyOrders.none { it.matches(Regex("M([3-9]|[1-9][0-9])")) }
+    }
+
     private fun saving(w: World, what: String, cost: Int) {
         if (DEBUG_LOG && w.now % LOG_EVERY == 0) println("spawn t=${w.now}: saving for $what e=${energyOf(w)}/$cost")
     }
@@ -441,8 +455,22 @@ object EscortRun {
         val e = energyOf(w)
         val escort = w.escort
 
-        // 1. дебют: тягачи по прогону
+        // 1. дебют: тягачи по прогону. Соперник-экономист (первый его заказ — добытчик, тягача нет) не гонится: его
+        //    эскорт идёт пешком и приходит к ~410-430-му, но на 50-м тике он шлёт M1A1 в центр, к нашему поезду, и
+        //    безоружный поезд либо гибнет, либо сидит дома, пока его экономика (~7-12 энергии в тик против нашей 1)
+        //    растит армию: v13-v15 проиграли stachu3478 одиннадцать матчей из одиннадцати. Против экономиста остаток
+        //    дебюта идёт в бойца при поезде: период 3 вместо 2 (приход ~340) всё равно раньше их пешего эскорта, а
+        //    перехватчик встречает бойца, а не тягачей
         val plan = openingPlan
+        if (plan != null && openingIdx in 1 until plan.size && escort != null && enemyEcon(w)) {
+            val body = meleeBody(minOf(e, plan.drop(openingIdx).sum() * Bodies.cost(MOVE)))
+            if (body != null && Bodies.cost(body) >= 2 * (Bodies.cost(MOVE) + Bodies.cost(ATTACK))) {
+                if (order(w, body, "train-guard", "their opening is economy (${firstEnemyOrders.joinToString(" ")}): the rest of the opening goes into a guard")) {
+                    fighterQueue.addLast(ESCORT_GUARD); openingIdx = plan.size
+                }
+                return
+            }
+        }
         if (plan != null && openingIdx < plan.size && escort != null) {
             val body = Bodies.moves(plan[openingIdx])
             if (e >= Bodies.cost(body)) {

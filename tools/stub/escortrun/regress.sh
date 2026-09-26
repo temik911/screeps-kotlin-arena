@@ -123,3 +123,8 @@ open map-match4.txt - icpt
 # escort. The escort waits on the inner ring of its own ramparts, where a melee cannot stand next to it
 run  map-match4.txt - rush8
 run  map-match1.txt - rush8
+# stachu3478#1/#3/#5 (eleven losses of v13-v15): a harvester opening with a 7-a-tick economy, an M1A1 interceptor on tick
+# 50, an M3A3 by his escort from 171, and his escort walks without a puller. The train goes with a guard instead of the
+# second puller
+run  map-match4.txt - econ+icpt
+run  map-match1.txt - econ+icpt
