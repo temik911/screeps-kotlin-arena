@@ -810,7 +810,7 @@ internal class Deal(
     /** СТРЕЛКИ ПЕРВЫМ РЯДОМ ДО ПЕРВОГО БОЯ С КУЛАКОМ (v676, см. USE_RANGED_FRONT_BEFORE_CLASH): стрелки расставляются раньше
      *  мили, а мили — не ближе к его вооружённым, чем ближайшая выданная клетка стрелка. */
     private val rangedFirst get() = USE_RANGED_FRONT_BEFORE_CLASH && firstFightTick == 0 && Signals.enemyFistNow &&
-        Signals.hisCentreMovedNow && !tourerMode() && !healersOnly && armedEnemies.isNotEmpty()
+        Signals.hisCentreMovedNow && Signals.hisFistInOurHalf && !tourerMode() && !healersOnly && armedEnemies.isNotEmpty()
     private val meleeBound: (Position) -> Boolean get() {
         if (!rangedFirst) return { true }
         val front = rangeds.mapNotNull { out[it.id] }.minOfOrNull { q -> armedEnemies.minOf { getRange(q, it) } } ?: return { true }

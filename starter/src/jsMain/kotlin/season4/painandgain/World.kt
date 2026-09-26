@@ -2664,6 +2664,8 @@ internal fun readSignals(ctx: Ctx) {
     })
     Signals.approachingNow = !ctx.passiveEnemy && Prev.approachRate >= APPROACH_RUSH && enemyMassed && hisCentreMoved
     Signals.hisCentreMovedNow = hisCentreMoved   // v677: «идёт ОН» без порога скорости (см. USE_RANGED_FRONT_BEFORE_CLASH)
+    // v679: центр его вооружённых на НАШЕЙ половине — он пришёл к нам (см. USE_RANGED_FRONT_BEFORE_CLASH)
+    Signals.hisFistInOurHalf = centroidOf(armedNow)?.let { c -> getRange(c, ctx.home) < getRange(c, ctx.enemyHome) } == true
     Signals.fightImminentNow = Signals.unflaggedRushNow || Signals.approachingNow
     // ...и ЗАПОМИНАЕМ РАССТОЯНИЕ НА НАЧАЛО ПОДХОДА (v215, см. USE_RUSH_VETO_EXPIRES). Первая редакция срока
     // сравнивала с ТЕКУЩИМ расстоянием между центрами — а оно по мере подхода сокращается, то есть срок
@@ -3030,6 +3032,7 @@ internal object Signals {
     internal var fightImminentNow = false                  // сомкнутая армия врага идёт на нас, с флагом или без (см. captureAllowed)
     internal var approachingNow = false                    // та же, но по его подходу, без безфлагового броска (v284, см. captureBlock)
     internal var hisCentreMovedNow = false                 // v677: центр его вооружённых сдвинулся за APPROACH_WINDOW на четверть окна
+    internal var hisFistInOurHalf = false                  // v679: центр его вооружённых ближе к нашему дому, чем к своему
     internal var enemyNotFightingNow = false               // фермер: noFireTicks ≥ STALL_TICKS (см. USE_INTERCEPT)
     internal var enemyMassedSignal = false
     internal var groupSafe = false                         // v298: он не бьёт наших, стоящих группой (см. GROUP_SAFE_DMG)
