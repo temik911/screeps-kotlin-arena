@@ -12,6 +12,7 @@ import screeps.api.ConstructionSite
 import screeps.api.CostMatrix
 import screeps.api.CREEP_SPAWN_TIME
 import screeps.api.Creep
+import screeps.api.GameObject
 import screeps.api.HEAL
 import screeps.api.HEAL_POWER
 import screeps.api.MAX_CREEP_SIZE
@@ -114,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 154
+    private const val BOT_VERSION = 155
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -949,7 +950,7 @@ object SpawnAndSwamp {
             // the spawn held 278 — 27 shots — and the house fell at 882
             (!USE_KEEPER_CARRY_LAST || c.body.any { it.type == CARRY && it.hits > 0 }) }
         val haulers = active.filter { c -> c.body.any { it.type == CARRY } && c.body.none { it.type == WORK } }
-        val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } }
+        val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } && !(USE_RAID && isRaider(c)) }
         // армия врага — И лекари: M4H2 без оружия считался «мягкой» целью, как хаулер, и бойцы шли за ним
         // как за рейдером — прямо в его конвой из четырёх M3R3 (матч 13, t=1150); в локальном перевесе его
         // лечения не было вовсе, и пара лезла в шар с тремя лекарями (t=1060). Лекарь без урона — тоже
@@ -1192,6 +1193,7 @@ object SpawnAndSwamp {
         cpuMark("haulers")
         runBuilders(ctx)
         if (USE_PILE_SPAWN) runPileBuilder(ctx)
+        if (USE_RAID) runRaiders(ctx)
         cpuMark("builders")
         val ourOffense = runFighters(ctx, enemyPower, alarm)
         cpuMark("fighters")
@@ -2260,7 +2262,7 @@ object SpawnAndSwamp {
         // бойцов, чужой спавн отбит с 2200 обратно до 3000). Считаем то, что ЕСТЬ: цену уцелевших
         // частей живого флота против цены уцелевших частей живых вооружённых
         val liveHaulers = ctx.haulers.sumOf { liveCost(it) }
-        val liveFighters = defenders.sumOf { liveCost(it) }
+        val liveFighters = defenders.sumOf { liveCost(it) } + (if (USE_RAID) ctx.active.filter { isRaider(it) }.sumOf { liveCost(it) } else 0)
         // ONE HAULER A TICK FROM ALL SPAWNS (v85): every free spawn runs this cascade on the same snapshot, and the
         // creep ordered by the first is not in it — two spawns bought `hauler #8` in one tick (24.09.2026)
         // A HUNTER FOR HIS BUILDER IN THE FIELD (v136). A builder of his far from his home raises spawns out of the map's
@@ -2418,6 +2420,17 @@ object SpawnAndSwamp {
         if (needHauler && !fighterFirst && energy < cost(RANGED_ATTACK) + cost(MOVE)) return reach("hQueue")
 
         if (budget < minFighter) return reach("poor")
+
+        // THE RAID TAKES THE FIRST TWO FIGHTER SLOTS (v155, see USE_RAID): two M15A3 instead of the M8R4 pair of ~218/254
+        if (USE_RAID && !armNow && raidWanted(ctx)) {
+            val price = RAID_BODY.sumOf { cost(it) }
+            if (energy < price) return reach("rSave")
+            val r = spawn.spawnCreep(RAID_BODY)
+            reach(if (r.error == null) "rBuy" else "err")
+            if (r.error == null) { raidOrdered++; raidOrderedAt = getTicks(); spentFighters += price }
+            if (DEBUG_LOG) println("spawn: raider #$raidOrdered cost=$price energy=$energy err=${r.error}")
+            return
+        }
 
         // СМОТРИТЕЛЬ — ЧАСТЬ ЦЕНЫ БАШНИ, И ЧАСЫ У НЕГО ТЕ ЖЕ. Под площадку, которая не достроится
         // в срок, он не покупается: в проигранном матче 22:22 он стоил 700 при притоке 2 в тик и
@@ -6141,6 +6154,112 @@ object SpawnAndSwamp {
     /** A standing keeper's body carries its CARRY last; a keeper is a WORK creep with a live CARRY; a standing fort
      *  re-buys its keeper before haulers and before `poor`, a feeder when the ramparts are all up (v154). */
     private const val USE_KEEPER_CARRY_LAST = true
+    /**
+     * AN EARLY MELEE RAID ON HIS SPAWN SPAM (v155). Against kerobi's pile economy ~85 % of our games end in draws: by
+     * t=2000 he has 8-35 bare spawns, and no siege of ours takes them all. But at t≈475 he has one to three, his main
+     * spawn is guarded only by a stationary A3 seven cells off, and the pair of M8R4 we buy at ~218/254 died in the
+     * field in 6 of 6 recorded draws (v153) without touching one of his spawns. The same 2000 buys two M15A3 (990: a
+     * cell a tick on ANY ground — 3 weights ×10 on swamp against 15 MOVE ×2 — 90 a tick on a structure, 1800 hits): the
+     * path from our house to his main spawn is 150 ticks (his M5R5 walks it in 181-240), a bare spawn falls to the pair
+     * in 17 ticks, and his spawns stand 5-11 cells apart (median). Modelled on the six v153 draws from the replays, the
+     * pair leaving at ~308 straight for his main spawn takes his spawn count to zero by t=534-667 in 6 of 6 games with
+     * his army on its recorded tracks, and in 5 of 6 if all of his army hunts the pair from its first kill; a late raid
+     * (from ~960) does it in 2 of 6. The signal is his: a builder (WORK and CARRY, no weapon) seen by t=200, all his
+     * spawns bare and no tower or tower site of his — marlyman and ricardo put a rampart and a tower on theirs, where
+     * the pair would stand 73 ticks under a tower (analysis 26.09.2026, scratchpad an/raid/sim2-4.py).
+     */
+    private const val USE_RAID = true
+    /** MOVE in front (losing one costs only swamp speed), ATTACK last: M15A3, 990. */
+    private val RAID_BODY: Array<BodyPartType> = Array(15) { MOVE } + Array(3) { ATTACK }
+    private const val RAID_SIZE = 2
+    /** His builder must be seen by this tick for the raid's signal (his later versions: born 146-172). */
+    private const val RAID_SIGNAL_TICK = 200
+    /** The raid is bought until this tick; later the fort's energy comes first. */
+    private const val RAID_BUY_UNTIL = 360
+    /** The raid goes home below this share of its hits. */
+    private const val RAID_RETREAT_SHARE = 0.35
+    private var raidOrdered = 0
+    private var raidOrderedAt = -1
+    private var raidSignal = false
+    private var raidHome = false
+    private var hisMainId: String? = null
+
+    /** A raider by body: melee with at least four MOVE a strike and nothing else (v155). */
+    private fun isRaider(c: Creep): Boolean {
+        val a = c.body.count { it.type == ATTACK }
+        return a > 0 && c.body.count { it.type == MOVE } >= 4 * a &&
+            c.body.none { it.type == RANGED_ATTACK || it.type == HEAL || it.type == CARRY || it.type == WORK || it.type == TOUGH }
+    }
+
+    /** His spawns and spawn sites are bare: no rampart on or over them, no tower and no tower site of his (v155). */
+    private fun hisBare(ctx: Ctx): Boolean {
+        if (ctx.enemyTowers.isNotEmpty()) return false
+        if (enemySitesNow.any { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureTower") }) return false
+        for (sp in ctx.enemySpawns) {
+            if (ctx.ramparts.any { it.my == false && it.x == sp.x && it.y == sp.y }) return false
+            if (enemySitesNow.any { (site, _) -> site.x == sp.x && site.y == sp.y }) return false
+        }
+        return true
+    }
+
+    private fun raidWanted(ctx: Ctx): Boolean =
+        raidSignal && raidOrdered < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL && raidOrderedAt != getTicks() && hisBare(ctx)
+
+    /**
+     * The raid (v155): the pair waits at home until both are out, then walks to his main spawn and strikes it, then the
+     * nearest spawn or spawn site of his (a strike on a site takes it), passing by a target that already has two of his
+     * guns within three cells of it; a creep of his next to a raider with no target in reach takes the strike. Below
+     * RAID_RETREAT_SHARE of its hits the pair goes home and strikes whatever comes next to it there.
+     */
+    private fun runRaiders(ctx: Ctx) {
+        if (hisMainId == null && getTicks() <= 5) hisMainId = ctx.enemySpawns.firstOrNull()?.id
+        if (!raidSignal && getTicks() <= RAID_SIGNAL_TICK && ctx.enemyCreeps.any { c ->
+                c.body.any { it.type == WORK } && c.body.any { it.type == CARRY } &&
+                    c.body.none { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL } }) {
+            raidSignal = true
+            if (DEBUG_LOG) println("raid signal t=${getTicks()}: bare=${hisBare(ctx)}")
+        }
+        val raiders = ctx.active.filter { isRaider(it) }
+        if (raiders.isEmpty()) return
+        val hits = raiders.sumOf { it.hits }
+        val max = raiders.sumOf { it.hitsMax }
+        if (!raidHome && hits < RAID_RETREAT_SHARE * max) {
+            raidHome = true
+            if (DEBUG_LOG) println("raid home t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
+        }
+        val gathering = raidOrdered < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL ||
+            ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL + 60)
+        val guns = ctx.combatEnemies.filter { InfluenceMap.profileOf(it).ranged > 0.0 }
+        val targets = ArrayList<GameObject>()
+        ctx.enemySpawns.forEach { targets.add(it) }
+        enemySitesNow.filter { (site, _) -> (site.progressTotal ?: 0) == buildCost("StructureSpawn") }.forEach { targets.add(it.first) }
+        val lead = raiders.maxByOrNull { it.hits }!!
+        val main = ctx.enemySpawns.firstOrNull { it.id == hisMainId }
+        fun pos(o: GameObject): Position = o
+        val target: GameObject? = when {
+            raidHome || gathering -> null
+            main != null -> main
+            else -> targets.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
+                .minByOrNull { getRange(lead, pos(it)) } ?: targets.minByOrNull { getRange(lead, pos(it)) }
+        }
+        val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
+        for (r in raiders) {
+            val goal: Position = if (target != null) pos(target) else ctx.mySpawn
+            val range = if (target != null) 1 else 2
+            val struck = target != null && getRange(r, goal) <= 1
+            if (struck) r.attack(target!!)
+            else ctx.enemyCreeps.filter { getRange(it, r) <= 1 }.minWithOrNull(
+                compareByDescending<Creep> { isHisBuilder(it) }.thenBy { it.hits })?.let { r.attack(it) }
+            if (getRange(r, goal) > range && canMove(r)) {
+                val step = searchPath(r, SearchGoal(pos = goal, range = range), opts).path.firstOrNull()
+                if (step != null) TrafficManager.request(r, step, HAULER_LOADED_PRIORITY)
+            }
+        }
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
+            println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering " +
+                "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
+        }
+    }
     private val FEEDER_BODY: Array<BodyPartType> = arrayOf(WORK, MOVE, CARRY, CARRY)
     private var keeperOrderedAt = -1
     private var fortHome = false
