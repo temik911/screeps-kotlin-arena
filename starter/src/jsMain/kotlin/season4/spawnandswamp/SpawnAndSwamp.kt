@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 157
+    private const val BOT_VERSION = 158
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2049,7 +2049,12 @@ object SpawnAndSwamp {
         // (892/1250, 1111/1250); at ~7 a tick that thousand is 140 ticks of the tower. Built from the keeper's own pace
         // (four WORK, 1250 in 63 ticks from its post at ~318) it stands by ~381, before every storm of the four. In the
         // three draws against the same #30 the tower stood at 413-520 and the storm came at 895-1308
-        val fortReserve = USE_FORT_RESERVE && !armNow && fortIncomplete(ctx) &&
+        // HIS LAST STAND (v158): his builders dead and one or two spawns left — the win is those spawns, and the spawn is
+        // for guns now. Against kerobi#43 his count stood at 1 from 518 to 1243 while we bought no fighter from 301 to 898
+        // (hauler queue, the pile builder's saving, `poor`) and held 1000 in the fort's reserve from 1000 to 1400
+        val lastStand = USE_RAID_BUILDERS_FIRST && raidSignal && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
+            ctx.enemyCreeps.none { isHisBuilder(it) } && getTicks() > RAID_BUY_UNTIL
+        val fortReserve = USE_FORT_RESERVE && !armNow && !lastStand && fortIncomplete(ctx) &&
             (ctx.myTowers.isNotEmpty() || siteJobs.any { it.kind == "StructureTower" && it.inTime })
         // …and while it is on, a gun that matches the raid's damage is bought now rather than saved for (v125): the first
         // gun at the door, even an M4R2 for 500, cut the house's loss from 9.7 a tick to 0.9 (Ranamar#6); a runt below
@@ -2312,7 +2317,7 @@ object SpawnAndSwamp {
         // the v146 draws). Bought once the fort's tower and ramparts stand and its keeper lives, never under a raid at
         // the door; saved for ahead of haulers and fighters, whose bodies died at the door (6 of the 7 bought after the
         // tower in those draws). The builder waits at `pileWaitCell` and runs its jobs as against everyone else
-        if (USE_FORT_PILE && USE_PILE_SPAWN && USE_FORT_HOME && fortHome && ctx.myTowers.isNotEmpty() && !fortIncomplete(ctx, withTwin = false) &&
+        if (USE_FORT_PILE && USE_PILE_SPAWN && USE_FORT_HOME && fortHome && !lastStand && ctx.myTowers.isNotEmpty() && !fortIncomplete(ctx, withTwin = false) &&
             ctx.builders.isNotEmpty() && !armNow && pileOrderedAt != getTicks() && ctx.myCreeps.none { isPileBuilder(it) } &&
             arenaInfo.ticksLimit - getTicks() > 2 * (PILE_BODY.size * CREEP_SPAWN_TIME +
                 ceil(buildCost("StructureSpawn").toDouble() / (BUILD_POWER * PILE_BODY.count { it == WORK })).toInt())) {
@@ -2324,7 +2329,7 @@ object SpawnAndSwamp {
                 if (DEBUG_LOG) println("spawn: pile builder (fort) cost=$price energy=$energy err=${r.error}")
                 return
             }
-            if (!spawnUnderFire) return reach("fpSave")
+            if (!spawnUnderFire && !lastStand) return reach("fpSave")
         }
         // A STANDING FORT RE-BUYS ITS KEEPER FIRST (v154). Its tower holds one shot and the spawn's regeneration alone is a
         // shot every ten ticks (~90 a tick at range <=4, more than an M5H3 heals); with the keeper dead the tower is
@@ -3651,7 +3656,9 @@ object SpawnAndSwamp {
                     // a field at swamp 1 and one at swamp 5 (the difference is four per swamp cell on the way)
                     val heavy = DistanceMap.seededField(seeds, ctx.blockedForEnemy, DistanceMap.SWAMP_COST)
                     val light = DistanceMap.seededField(seeds, ctx.blockedForEnemy, 1)
-                    val interceptors = combatEnemies.filter { e ->
+                    // …a creep of his with no MOVE intercepts nothing (v158): his stationary A3 at home was an interceptor of
+                    // our march, and his two unarmed healers' heal took our wave's damage down to "lose"
+                    val interceptors = combatEnemies.filter { e -> !USE_RAID_BUILDERS_FIRST || e.body.any { it.type == MOVE && it.hits > 0 } }.filter { e ->
                         val h = heavy[e.x * 100 + e.y]
                         val l = light[e.x * 100 + e.y]
                         if (h < 0 || l < 0) false else {
@@ -6190,6 +6197,12 @@ object SpawnAndSwamp {
     /** The raid strikes his builders and spawns (not sites), holds its target, and goes out again when healed (v157). */
     private const val USE_RAID_TOUR = true
     private var raidTargetId: String? = null
+    /** The raid hunts his builders while any lives, is re-bought for his new builder while he has at most two spawns,
+     *  and his last stand frees the spawn for guns; an immobile creep of his is no interceptor (v158). */
+    private const val USE_RAID_BUILDERS_FIRST = true
+    private const val RAID_REBUY_UNTIL = 1500
+    private const val RAID_REBUY_SPAWNS = 2
+    private var raidRebuyAt = -1
     private var hisMainId: String? = null
 
     /** A raider by body: melee with at least four MOVE a strike and nothing else (v155). */
@@ -6212,8 +6225,21 @@ object SpawnAndSwamp {
     private fun rampartOn(ctx: Ctx, p: Position): Int =
         ctx.ramparts.filter { it.my == false && it.x == p.x && it.y == p.y }.sumOf { it.hits ?: 0 }
 
-    private fun raidWanted(ctx: Ctx): Boolean =
-        raidSignal && raidOrdered < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL && raidOrderedAt != getTicks() && hisBare(ctx)
+    private fun raidWanted(ctx: Ctx): Boolean {
+        if (!raidSignal || raidOrderedAt == getTicks() || !hisBare(ctx)) return false
+        // A NEW PAIR FOR HIS NEW BUILDER (v158): with both of his builders dead his count froze, and his next builder came
+        // 292-371 ticks later (754, 924) — 319 ticks before its first spawn stood in one game; the pair is re-bought for it
+        // while he has at most two spawns and none of the old pair lives
+        if (USE_RAID_BUILDERS_FIRST && raidOrdered >= RAID_SIZE && ctx.myCreeps.none { isRaider(it) } && getTicks() <= RAID_REBUY_UNTIL &&
+            ctx.enemySpawns.size <= RAID_REBUY_SPAWNS && ctx.enemyCreeps.any { isHisBuilder(it) && ctx.enemySpawns.all { sp -> getRange(sp, it) >= RAID_FIELD_RANGE } }) {
+            raidOrdered = 0
+            raidRebuyAt = getTicks()
+            raidHome = false
+            if (DEBUG_LOG) println("raid again t=${getTicks()}: his spawns=${ctx.enemySpawns.size}")
+        }
+        val until = if (raidRebuyAt >= 0) raidRebuyAt + RAID_BUY_UNTIL - 200 else RAID_BUY_UNTIL
+        return raidOrdered < RAID_SIZE && getTicks() <= until
+    }
 
     /**
      * The raid (v155): the pair waits at home until both are out, then walks to his main spawn and strikes it, then the
@@ -6245,8 +6271,9 @@ object SpawnAndSwamp {
             raidHome = false
             if (DEBUG_LOG) println("raid out t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
         }
-        val gathering = raidOrdered < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL ||
-            ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= RAID_BUY_UNTIL + 60)
+        val buyUntil = if (raidRebuyAt >= 0) raidRebuyAt + RAID_BUY_UNTIL - 200 else RAID_BUY_UNTIL
+        val gathering = raidOrdered < RAID_SIZE && getTicks() <= buyUntil ||
+            ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= buyUntil + 60)
         val guns = ctx.combatEnemies.filter { InfluenceMap.profileOf(it).ranged > 0.0 }
         val targets = ArrayList<GameObject>()
         ctx.enemySpawns.forEach { targets.add(it) }
@@ -6262,16 +6289,27 @@ object SpawnAndSwamp {
         val open = targets.filter { t -> ctx.enemyTowers.none { getRange(it.pos, pos(t)) <= InfluenceMap.towerFalloffRange.toInt() } }
         // the target is held until it is gone (v157): the v156 pair turned between (77,18) and (42,31) three times in 150
         // ticks as his guns came and went near one of them
-        val held = if (USE_RAID_TOUR) open.firstOrNull { it.id == raidTargetId } else null
+        val spawnIds = ctx.enemySpawns.mapTo(HashSet()) { it.id }
+        val held = if (USE_RAID_TOUR) open.firstOrNull { it.id == raidTargetId && (!USE_RAID_BUILDERS_FIRST || it.id in spawnIds) } else null
+        // HIS BUILDERS FIRST, WHILE ANY LIVES (v158). What the raid is worth is his two builders: where it killed both, he
+        // bought the next one 292-371 ticks later and his count froze at 1 (518-1243, and 593 to the end — the one win);
+        // where one lived, he rebuilt within 16-133 ticks and the count grew. Under his fire of 80-130 a tick a builder
+        // (800, five ticks for the pair) costs the pair 400-650 of its hits, a bare spawn (17 ticks) 1400-2200 — and v157
+        // held a spawn while both builders stood 7-10 cells off (e42c: the pair died on the spawn). Re-picked every tick,
+        // a standing builder before a walking one
+        val builderTarget = if (!USE_RAID_BUILDERS_FIRST || raidHome || gathering) null else
+            ctx.enemyCreeps.filter { c -> isHisBuilder(c) && open.any { it.id == c.id } }.minWithOrNull(compareBy<Creep> { c ->
+                val prev = enemyPrevCell[c.id]; if (prev != null && prev == c.x * 100 + c.y) 0 else 1 }.thenBy { getRange(lead, it) })
         // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17) — and
         // taken when it is all that is left, since the win is his last spawn
         val target: GameObject? = when {
             raidHome || gathering -> null
+            builderTarget != null -> builderTarget
             held != null -> held
             main != null && main in open && rampartOn(ctx, main) == 0 -> main
-            else -> open.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
+            else -> open.filter { t -> t.id in spawnIds || !USE_RAID_BUILDERS_FIRST }.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
                 .minWithOrNull(compareBy<GameObject> { rampartOn(ctx, pos(it)) > 0 }.thenBy { getRange(lead, pos(it)) })
-                ?: open.minByOrNull { getRange(lead, pos(it)) }
+                ?: open.filter { t -> t.id in spawnIds || !USE_RAID_BUILDERS_FIRST }.minByOrNull { getRange(lead, pos(it)) }
         }
         if (USE_RAID_TOUR) raidTargetId = target?.id
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
