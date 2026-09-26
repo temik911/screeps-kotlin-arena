@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 162
+    private const val BOT_VERSION = 163
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2322,7 +2322,10 @@ object SpawnAndSwamp {
         // Against kerobi#42 the flag rose at 219, the keeper took the thousand at 220, the first raider was born at 256 and
         // the second never — the window closed while the fort and the saving took what came; the lone one left at 420
         // and met five of his spawns. In the five games where the pair came out whole, the first was born before the flag
-        if (USE_RAID_LAST && USE_RAID && raidOrdered in 1 until RAID_SIZE && !armNow && raidWanted(ctx)) {
+        // …and a re-buy (v163) too: `raidWanted` resets the pair, and it stood after the pile builder's `fpSave`, which
+        // returned first for 516 ticks against kerobi#49 — no `raid again` in all twenty games of the v160 series
+        if (USE_RAID_LAST && USE_RAID && !armNow && (if (USE_RAID_TOPUP) raidWanted(ctx) && (raidOrdered in 1 until RAID_SIZE || raidRebuyAt >= 0)
+                else raidOrdered in 1 until RAID_SIZE && raidWanted(ctx))) {
             val price = RAID_BODY.sumOf { cost(it) }
             if (energy < price) return reach("rSave2")
             val r = spawn.spawnCreep(RAID_BODY)
@@ -2353,7 +2356,10 @@ object SpawnAndSwamp {
         // the v146 draws). Bought once the fort's tower and ramparts stand and its keeper lives, never under a raid at
         // the door; saved for ahead of haulers and fighters, whose bodies died at the door (6 of the 7 bought after the
         // tower in those draws). The builder waits at `pileWaitCell` and runs its jobs as against everyone else
-        if (USE_FORT_PILE && USE_PILE_SPAWN && USE_FORT_HOME && fortHome && !lastStand && ctx.myTowers.isNotEmpty() && !fortIncomplete(ctx, withTwin = false) &&
+        // …and not while we have no hauler (v163): against kerobi#49 his M5A1 killed all six by 695 and the saving held
+        // the spawn's regeneration for 516 ticks while a hauler (200) would have brought 6-8 a tick back
+        if (USE_FORT_PILE && USE_PILE_SPAWN && USE_FORT_HOME && fortHome && !lastStand && (!USE_RAID_TOPUP || ctx.haulers.isNotEmpty()) &&
+            ctx.myTowers.isNotEmpty() && !fortIncomplete(ctx, withTwin = false) &&
             ctx.builders.isNotEmpty() && !armNow && pileOrderedAt != getTicks() && ctx.myCreeps.none { isPileBuilder(it) } &&
             arenaInfo.ticksLimit - getTicks() > 2 * (PILE_BODY.size * CREEP_SPAWN_TIME +
                 ceil(buildCost("StructureSpawn").toDouble() / (BUILD_POWER * PILE_BODY.count { it == WORK })).toInt())) {
@@ -6255,6 +6261,9 @@ object SpawnAndSwamp {
     private const val USE_RAID_LAST = true
     /** A pair waiting for his guns to leave its target keeps RAID_LURK_RANGE from his mobile armed creeps (v162). */
     private const val USE_RAID_LURK = true
+    /** The raid is topped up to its size rather than re-bought only when none lives; a re-buy is decided before the pile
+     *  builder's saving, which does not hold while we have no hauler; the second tower waits for half a spawn (v163). */
+    private const val USE_RAID_TOPUP = true
     /** His M5R5 walks a plain cell a tick and shoots at 3: twelve cells are nine ticks of his walk before his first shot,
      *  and the pair, a cell a tick on any ground, keeps the distance on swamp where he is five times slower (v162). */
     private const val RAID_LURK_RANGE = 12
@@ -6280,14 +6289,22 @@ object SpawnAndSwamp {
     private fun rampartOn(ctx: Ctx, p: Position): Int =
         ctx.ramparts.filter { it.my == false && it.x == p.x && it.y == p.y }.sumOf { it.hits ?: 0 }
 
+    /** Raiders alive, the spawning ones included; without USE_RAID_TOPUP a survivor counts as the whole pair, as in
+     *  v158-v162, whose re-buy waited for none to live (v163). */
+    private fun raidAlive(ctx: Ctx): Int {
+        val n = ctx.myCreeps.count { isRaider(it) }
+        return if (USE_RAID_TOPUP) n else if (n > 0) RAID_SIZE else 0
+    }
+
     private fun raidWanted(ctx: Ctx): Boolean {
         if (!raidSignal || raidOrderedAt == getTicks() || !hisBare(ctx)) return false
         // A NEW PAIR FOR HIS NEW BUILDER (v158): with both of his builders dead his count froze, and his next builder came
         // 292-371 ticks later (754, 924) — 319 ticks before its first spawn stood in one game; the pair is re-bought for it
         // while he has at most two spawns and none of the old pair lives
-        if (USE_RAID_BUILDERS_FIRST && raidOrdered >= RAID_SIZE && ctx.myCreeps.none { isRaider(it) } && getTicks() <= RAID_REBUY_UNTIL &&
+        // …and a survivor does not block it (v163): the re-buy tops the pair up to RAID_SIZE (see raidAlive)
+        if (USE_RAID_BUILDERS_FIRST && raidOrdered >= RAID_SIZE && raidAlive(ctx) < RAID_SIZE && getTicks() <= RAID_REBUY_UNTIL &&
             ctx.enemySpawns.size <= RAID_REBUY_SPAWNS && ctx.enemyCreeps.any { isHisBuilder(it) && ctx.enemySpawns.all { sp -> getRange(sp, it) >= RAID_FIELD_RANGE } }) {
-            raidOrdered = 0
+            raidOrdered = if (USE_RAID_TOPUP) raidAlive(ctx) else 0
             raidRebuyAt = getTicks()
             raidHome = false
             if (DEBUG_LOG) println("raid again t=${getTicks()}: his spawns=${ctx.enemySpawns.size}")
@@ -6297,13 +6314,13 @@ object SpawnAndSwamp {
         // end, his mobile army (9-14 armed) stood 20-24 cells from OUR spawn, 82-93 from his, only his stationary A3 by the
         // main, and nobody struck it: the pair was re-bought only for a new builder, and there was none. It is bought while
         // what is left of the match covers the pair's birth, its walk and the kill
-        if (USE_RAID_LAST && raidOrdered >= RAID_SIZE && ctx.myCreeps.none { isRaider(it) } && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
+        if (USE_RAID_LAST && raidOrdered >= RAID_SIZE && raidAlive(ctx) < RAID_SIZE && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
             ctx.enemyCreeps.none { isHisBuilder(it) }) {
             val walk = ctx.enemySpawns.maxOf { sp -> ctx.stepsToSpawn[sp.x * 100 + sp.y].let { if (it < 0) Int.MAX_VALUE / 4 else it } }
             val kill = ctx.enemySpawns.sumOf { sp -> (sp.hits ?: SPAWN_HITS) + rampartOn(ctx, sp) } / (RAID_SIZE * ATTACK_POWER * RAID_BODY.count { it == ATTACK }).toDouble()
             val need = RAID_SIZE * RAID_BODY.size * CREEP_SPAWN_TIME + walk + kill
             if (walk < Int.MAX_VALUE / 4 && arenaInfo.ticksLimit - getTicks() > need) {
-                raidOrdered = 0
+                raidOrdered = if (USE_RAID_TOPUP) raidAlive(ctx) else 0
                 raidRebuyAt = getTicks()
                 raidHome = false
                 if (DEBUG_LOG) println("raid last t=${getTicks()}: his spawns=${ctx.enemySpawns.size} need=${need.toInt()}")
@@ -6813,7 +6830,10 @@ object SpawnAndSwamp {
             .minByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
         val rampart = fortRampartSite(ctx, post)
         val calm = ctx.combatEnemies.none { getRange(it, spawn) <= TOWER_FALLOFF_RANGE }
-        val surplus = calm && ctx.myTowers.all { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) == 0 }
+        // …and the spawn's surplus, not the towers' ten (v163): a tower holds one shot, so "every tower full" was nearly
+        // always true — the twin's site was laid at 1598 at an income of 1 and took 433 just before his storm
+        val surplus = calm && ctx.myTowers.all { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) == 0 } &&
+            (!USE_RAID_TOPUP || (spawn.store[RESOURCE_ENERGY] ?: 0) >= SPAWN_ENERGY_CAPACITY / 2)
         val twin = if (surplus) ctx.mySites.firstOrNull { (it.progressTotal ?: 0) == buildCost("StructureTower") && getRange(b, it) <= BUILD_RANGE } else null
         var act = "-"
         if (carrying > 0) {
