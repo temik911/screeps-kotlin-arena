@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 164
+    private const val BOT_VERSION = 165
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -821,6 +821,8 @@ object SpawnAndSwamp {
     /** The wave front's siege is won by the direct plan (see siegeOutcome): in the storm, fire and swings go to the
      *  spawn, not to a defender behind a rampart and not to the tower. Set each tick with siegeGo. */
     private var stormDirect = false
+    /** The departed wave's siege wins (posture, read by runFighters' engage, v165). */
+    private var siegeGoWin = false
 
     /** Строящаяся башня врага: площадка и через сколько тиков достроится — по наблюдаемому темпу, а
      *  пока темпа нет, по WORK строителей рядом. Для симуляции осады башня, которая встанет до конца
@@ -3544,7 +3546,16 @@ object SpawnAndSwamp {
         // наш спавн снесён на 1357-м)
         // ...и лекарь идёт со всеми всегда: стрелять он не умеет, дома в одиночку не делает ничего,
         // а его дело — держать живой ту группу, которая работает
-        val strikers = fighters.filter { fullSpeed(it) && (hasRanged(it) || hasHeal(it) || (assaultWantsMelee && !guardNeeded && hasMelee(it))) }
+        // …and the melee guard goes against an ARMOURED target whatever the body question said (v165). The question is
+        // asked about the strikers plus one more body, and three to seven M8R4 lose with or without it, so its answer
+        // stayed "ranged" and the melee never became strikers: against marlyman#441/#443 two to four M12A5 (52-82 % of
+        // our damage on structures) stood home 60-89 % of the time in the draws (1-23 % in the wins), outside staging,
+        // siegeStart, join, the tour and the deadline; at 1921 in one draw the answer flipped, staging went 5 -> 11 and
+        // the siege read win/25t — too late. A rampart or his tower over the target is exactly the work ATTACK does five
+        // times cheaper; the breacher (MOVE:ATTACK 1:1) stays at its walls
+        val armouredNow = USE_SIEGE_MELEE && ctx.enemySpawn?.let { sp -> spawnRampartHits(ctx) > 0 || coveringTowers(ctx, listOf(sp)).isNotEmpty() } == true
+        val strikers = fighters.filter { fullSpeed(it) && (hasRanged(it) || hasHeal(it) || (!guardNeeded && hasMelee(it) &&
+            (assaultWantsMelee || (armouredNow && it.body.count { p -> p.type == MOVE } > it.body.count { p -> p.type == ATTACK })))) }
         // ПОДХОД — по ближайшему к цели стрелку (центр масс бывает на стене, где поле = -1): по нему
         // считается горизонт производства врага, то есть когда осада НАЧНЁТСЯ. Срок, до которого волна
         // обязана выйти, считается ниже и по всей группе — это разные величины, и прежде их путали
@@ -3741,6 +3752,7 @@ object SpawnAndSwamp {
         val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas) else SIEGE_LOSE
         // the front fires the way its winning plan does (v83): past his shielded defenders and his towers, at the spawn
         stormDirect = siegeGo.win && siegeGo.direct
+        siegeGoWin = siegeGo.win
         // осада фронтом ВМЕСТЕ с группой поста: когда волна держит кромку, подкрепление уходит к ней, если
         // сумма выигрывает (с запасом на выход, как siegeStart)
         val siegeJoin = if (enemySpawn != null && waveFront.isNotEmpty() && staging.isNotEmpty()) siegeOutcome(waveFront + staging, attrition + unitCost, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, etas = defEtas, arrive = maxOf(frontTravel, startTravel).coerceAtMost(arenaInfo.ticksLimit)) else SIEGE_LOSE
@@ -4274,7 +4286,12 @@ object SpawnAndSwamp {
             }
             if (localAggressive) aggressiveIds.add(creep.id) else aggressiveIds.remove(creep.id)
             // встречный боевой враг рядом — при локальном перевесе сворачиваем на него (см. ENGAGE_RANGE)
-            val engage = if (localAggressive) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && !(marching && costsMoreThanSpawn(it, enemySpawn)) }.minByOrNull { getRange(creep, it) } else null
+            // …and a marching wave whose siege wins turns only on what stands at its target or next to it (v165): against
+            // marlyman#441 at 1521 his defenders were dead, the rampart at 8270, and four of the wave (380 on structures)
+            // walked 13-18 cells north after his retreating M5R3 — 30 ticks from his last spawn
+            val siegeSpawn = enemySpawn
+            val engage = if (localAggressive) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && !(marching && costsMoreThanSpawn(it, enemySpawn)) &&
+                !(USE_SIEGE_MELEE && marching && siegeGoWin && siegeSpawn != null && getRange(it, siegeSpawn) > RANGED_RANGE && getRange(it, creep) > 2) }.minByOrNull { getRange(creep, it) } else null
             // при перевесе сближаемся до CLOSE_STANDOFF; без перевеса на врага не идём вовсе —
             // держим пост у спавна отрядом (по одному нас и били), кайт и бегство — в mustFlee
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
@@ -6286,6 +6303,9 @@ object SpawnAndSwamp {
     private const val USE_RAID_TOPUP = true
     /** A rampart site over the home spawn once two haulers run; the keeper's branch builds it (v164). */
     private const val USE_HOME_RAMPART = true
+    /** Against an armoured target the melee guard is a striker; a wave whose siege wins turns only on what stands at the
+     *  target or next to it (v165). */
+    private const val USE_SIEGE_MELEE = true
     /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
      *  33 swings (v164b). */
     private const val HOME_RAMPART_ATTACK = 3
