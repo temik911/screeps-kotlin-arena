@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 160
+    private const val BOT_VERSION = 161
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2318,6 +2318,19 @@ object SpawnAndSwamp {
         // told them apart was only whether his storm came before it (625-775 in the losses, 787-900 in the draws). With
         // the keeper first, by the energy that came in, the tower stands before the storm in 6 of the 11 early losses
         val homeSpawnTurn = !USE_FORT_HONEST || spawn.id == ctx.mySpawn.id
+        // THE PAIR IS ONE PURCHASE (v161): its second raider goes before the fort's keeper and the pile builder's saving.
+        // Against kerobi#42 the flag rose at 219, the keeper took the thousand at 220, the first raider was born at 256 and
+        // the second never — the window closed while the fort and the saving took what came; the lone one left at 420
+        // and met five of his spawns. In the five games where the pair came out whole, the first was born before the flag
+        if (USE_RAID_LAST && USE_RAID && raidOrdered in 1 until RAID_SIZE && !armNow && raidWanted(ctx)) {
+            val price = RAID_BODY.sumOf { cost(it) }
+            if (energy < price) return reach("rSave2")
+            val r = spawn.spawnCreep(RAID_BODY)
+            reach(if (r.error == null) "rBuy" else "err")
+            if (r.error == null) { raidOrdered++; raidOrderedAt = getTicks(); spentFighters += price }
+            if (DEBUG_LOG) println("spawn: raider #$raidOrdered (pair) cost=$price energy=$energy err=${r.error}")
+            return
+        }
         if (USE_FORT_KEEPER_FIRST && USE_FORT_HOME && fortHome && homeSpawnTurn && ctx.myTowers.isEmpty() && ctx.builders.isEmpty() &&
             siteJobs.any { it.site != null && it.inTime } && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
@@ -6237,6 +6250,9 @@ object SpawnAndSwamp {
     private const val RAID_REBUY_UNTIL = 1500
     private const val RAID_REBUY_SPAWNS = 2
     private var raidRebuyAt = -1
+    /** The raid is re-bought for his last spawns, strikes a ramparted one only when the kill beats his guns back, its
+     *  second raider comes before the keeper, and a re-buy's window follows the flow (v161). */
+    private const val USE_RAID_LAST = true
     private var hisMainId: String? = null
 
     /** A raider by body: melee with at least four MOVE a strike and nothing else (v155). */
@@ -6271,8 +6287,33 @@ object SpawnAndSwamp {
             raidHome = false
             if (DEBUG_LOG) println("raid again t=${getTicks()}: his spawns=${ctx.enemySpawns.size}")
         }
-        val until = if (raidRebuyAt >= 0) raidRebuyAt + RAID_BUY_UNTIL - 200 else RAID_BUY_UNTIL
-        return raidOrdered < RAID_SIZE && getTicks() <= until
+        // THE LAST-STAND PAIR (v161): with his builders dead and one or two spawns left, a pair is bought for those spawns
+        // themselves. In three of the four v158 draws his count stood at 1 — his ramparted main — from 485-1023 to the
+        // end, his mobile army (9-14 armed) stood 20-24 cells from OUR spawn, 82-93 from his, only his stationary A3 by the
+        // main, and nobody struck it: the pair was re-bought only for a new builder, and there was none. It is bought while
+        // what is left of the match covers the pair's birth, its walk and the kill
+        if (USE_RAID_LAST && raidOrdered >= RAID_SIZE && ctx.myCreeps.none { isRaider(it) } && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
+            ctx.enemyCreeps.none { isHisBuilder(it) }) {
+            val walk = ctx.enemySpawns.maxOf { sp -> ctx.stepsToSpawn[sp.x * 100 + sp.y].let { if (it < 0) Int.MAX_VALUE / 4 else it } }
+            val kill = ctx.enemySpawns.sumOf { sp -> (sp.hits ?: SPAWN_HITS) + rampartOn(ctx, sp) } / (RAID_SIZE * ATTACK_POWER * RAID_BODY.count { it == ATTACK }).toDouble()
+            val need = RAID_SIZE * RAID_BODY.size * CREEP_SPAWN_TIME + walk + kill
+            if (walk < Int.MAX_VALUE / 4 && arenaInfo.ticksLimit - getTicks() > need) {
+                raidOrdered = 0
+                raidRebuyAt = getTicks()
+                raidHome = false
+                if (DEBUG_LOG) println("raid last t=${getTicks()}: his spawns=${ctx.enemySpawns.size} need=${need.toInt()}")
+            }
+        }
+        return raidOrdered < RAID_SIZE && getTicks() <= raidBuyUntil()
+    }
+
+    /** Until when the raid is bought (v161): the opening window, or after a re-buy the ticks the flow needs to pay for the
+     *  pair plus the old window's slack — v158's fixed 160 bought one of two at an income of 7 (the pair is ~283 ticks). */
+    private fun raidBuyUntil(): Int {
+        if (raidRebuyAt < 0) return RAID_BUY_UNTIL
+        if (!USE_RAID_LAST) return raidRebuyAt + RAID_BUY_UNTIL - 200
+        val steady = realisedIncome().let { if (it < 0.0) 1.0 else it + regenRate() }.coerceAtLeast(1.0)
+        return raidRebuyAt + (RAID_SIZE * RAID_BODY.sumOf { cost(it) } / steady).toInt() + 60
     }
 
     /**
@@ -6305,7 +6346,7 @@ object SpawnAndSwamp {
             raidHome = false
             if (DEBUG_LOG) println("raid out t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
         }
-        val buyUntil = if (raidRebuyAt >= 0) raidRebuyAt + RAID_BUY_UNTIL - 200 else RAID_BUY_UNTIL
+        val buyUntil = raidBuyUntil()
         val gathering = raidOrdered < RAID_SIZE && getTicks() <= buyUntil ||
             ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= buyUntil + 60)
         val guns = ctx.combatEnemies.filter { InfluenceMap.profileOf(it).ranged > 0.0 }
@@ -6345,13 +6386,28 @@ object SpawnAndSwamp {
                 .minWithOrNull(compareBy<GameObject> { rampartOn(ctx, pos(it)) > 0 }.thenBy { getRange(lead, pos(it)) })
                 ?: open.filter { t -> t.id in spawnIds || !USE_RAID_BUILDERS_FIRST }.minByOrNull { getRange(lead, pos(it)) }
         }
-        if (USE_RAID_TOUR) raidTargetId = target?.id
+        // A LONG KILL ONLY WHERE IT ENDS BEFORE HIS GUNS ARE BACK (v161): a ramparted spawn is 13000 — 72 ticks for the pair,
+        // 144 for one — and the lone survivors of v158 struck his main 12-34 times and died (828, 917, 1164); with his army
+        // 82-93 cells off, the pair's 72 ticks fit. A target is struck when the raiders present kill it before his nearest
+        // mobile armed creep can walk back into range; a strike begun is finished
+        val strikeFits = target == null || target.id !in spawnIds || !USE_RAID_LAST || raiders.any { getRange(it, pos(target)) <= 1 } || run {
+            val shield = rampartOn(ctx, pos(target))
+            if (shield <= 0) return@run true
+            val dps = raiders.sumOf { r -> r.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
+            val kill = ((ctx.enemySpawns.firstOrNull { it.id == target.id }?.hits ?: SPAWN_HITS) + shield) / dps.coerceAtLeast(1.0)
+            val back = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } }
+                .minOfOrNull { getRange(it, pos(target)) - RANGED_RANGE } ?: Int.MAX_VALUE
+            kill < back
+        }
+        val go = if (strikeFits) target else null
+        if (USE_RAID_TOUR) raidTargetId = go?.id ?: if (strikeFits) null else raidTargetId
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
         for (r in raiders) {
-            val goal: Position = if (target != null) pos(target) else ctx.mySpawn
-            val range = if (target != null) 1 else 2
-            val struck = target != null && getRange(r, goal) <= 1
-            if (struck) r.attack(target!!)
+            // waiting for his guns to go, the pair holds where it stands rather than walking home and back
+            val goal: Position = if (go != null) pos(go) else if (!strikeFits) r else ctx.mySpawn
+            val range = if (go != null) 1 else if (!strikeFits) 0 else 2
+            val struck = go != null && getRange(r, goal) <= 1
+            if (struck) r.attack(go!!)
             else ctx.enemyCreeps.filter { getRange(it, r) <= 1 }.minWithOrNull(
                 compareByDescending<Creep> { isHisBuilder(it) }.thenBy { it.hits })?.let { r.attack(it) }
             if (getRange(r, goal) > range && canMove(r)) {
@@ -6361,7 +6417,7 @@ object SpawnAndSwamp {
         }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering " +
-                "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
+                "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"}${if (strikeFits) "" else " wait"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
         }
     }
     private val FEEDER_BODY: Array<BodyPartType> = arrayOf(WORK, MOVE, CARRY, CARRY)
