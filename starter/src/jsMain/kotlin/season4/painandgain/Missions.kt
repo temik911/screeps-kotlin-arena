@@ -380,6 +380,7 @@ internal class RunnerMoves(private val ctx: Ctx, private val runners: List<Creep
             // ...и безоружный идёт В ОБХОД ЗОНЫ СВОЕГО БЕГСТВА (v672, см. USE_SCOUT_PATH_AROUND_FLEE): путь сквозь неё — шаг,
             // который правило бегства тут же развернёт
             if (USE_SCOUT_PATH_AROUND_FLEE && !hasWeapon(s) && swinging(s, f)) avoidFleeZone(matrix, ctx, s, f)
+            if (!bornCombatant(s)) Memory.scoutAim[s.id] = f.id
             val step = if (s.getRangeTo(f.pos) > range) pathStep(s, f.pos, range, matrix) else null
             if (step != null) { TrafficManager.request(s, step, Arbiter.RUNNER_PRIORITY); planCapture(ctx, step) }
             // прибор наблюдения 4: бегун дошёл до флага, и ему запрещено на него встать. Пара «стоя/всего с целью»
@@ -394,9 +395,11 @@ internal const val SCOUT_FLEE_RANGE = 12
 
 /** Безоружный бегун бежит на пути к флагу f: тики бегства копятся, пока цель та же (v674, см. USE_SCOUT_PATH_AROUND_FLEE). */
 internal fun noteScoutFlee(s: Creep, f: FlagInfo?) {
-    if (f == null || bornCombatant(s)) return
+    if (bornCombatant(s)) return
+    // ...бегство без назначенного флага — на счёт того, к которому он шёл последним (v686, см. USE_SCOUT_FLEE_KEEPS_AIM)
+    val fid = f?.id ?: (if (USE_SCOUT_FLEE_KEEPS_AIM) Memory.scoutAim[s.id] else null) ?: return
     val prev = Memory.scoutFlees[s.id]
-    Memory.scoutFlees[s.id] = if (prev?.first == f.id) Pair(f.id, prev.second + 1) else Pair(f.id, 1)
+    Memory.scoutFlees[s.id] = if (prev?.first == fid) Pair(fid, prev.second + 1) else Pair(fid, 1)
 }
 
 /** Бегун качается между флагом f и бегством: SCOUT_OSC_TICKS тиков бегства на пути к нему (v674). */

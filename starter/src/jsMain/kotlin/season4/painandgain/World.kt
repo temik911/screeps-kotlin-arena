@@ -1352,11 +1352,18 @@ internal object Garrisons {
             .sortedBy { f -> armed.count { getRange(it, f.pos) <= FRAG_GUARD_RANGE } }
         val flags = (listOfNotNull(contested) + hs + rest).take(n)
         val squads = ArrayList<ArrayList<Creep>>()
+        // ПРИ `flip` НА ОСПАРИВАЕМОМ — ТРОЕ ВООРУЖЁННЫХ, ЛЕКАРИ ПО ОДНОМУ НА ПОСТ (v688, см. USE_FLIP_D5_ARMED)
+        val gunsFirst = USE_FLIP_D5_ARMED && flipMode()
+        fun notHealers() = fighters.filter { !healerOnly(it) }
         for (f in flags) {
-            val seed = fighters.filter { !healerOnly(it) }.minByOrNull { getRange(it, f.pos) }
+            val seed = notHealers().minByOrNull { getRange(it, f.pos) }
                 ?: fighters.minByOrNull { getRange(it, f.pos) } ?: break
             val sq = arrayListOf(seed); fighters.remove(seed)
-            repeat(TRIPLE_SIZE - 1) { fighters.minByOrNull { getRange(it, f.pos) }?.let { sq.add(it); fighters.remove(it) } }
+            repeat(TRIPLE_SIZE - 1) {
+                val pick = if (!gunsFirst) fighters else if (f === contested) fighters.filter { hasWeapon(it) }.ifEmpty { fighters }
+                    else if (sq.any { healerOnly(it) }) notHealers().ifEmpty { fighters } else fighters
+                pick.minByOrNull { getRange(it, f.pos) }?.let { sq.add(it); fighters.remove(it) }
+            }
             squads.add(sq)
         }
         for (c in fighters) squads.indices.minByOrNull { getRange(c, flags[it].pos) }?.let { squads[it].add(c) }
@@ -1408,13 +1415,18 @@ internal object Garrisons {
     private fun flipMerge(ctx: Ctx, bySquad: Map<Int, List<Creep>>) {
         fun scoreOf(fk: Int) = ctx.flags.firstOrNull { it.pos.key == fk }?.score ?: 0
         val cheapest = ctx.flags.minOfOrNull { it.score } ?: return
-        for (small in bySquad.entries.filter { it.value.size < TRIPLE_SIZE }) {
+        val dearest = ctx.flags.maxOfOrNull { it.score } ?: return
+        // ...и отряд самого дорогого поста мал, пока в нём меньше TRIPLE_SIZE ВООРУЖЁННЫХ; дешёвый пост отдаёт ему всех, и
+        // сверх нормы тоже (v688, см. USE_FLIP_D5_ARMED): на D5 с тремя стволами он не нападает
+        fun gunsShort(sq: List<Creep>) = USE_FLIP_D5_ARMED && scoreOf(postOf(sq)) == dearest && sq.count { hasWeapon(it) } < TRIPLE_SIZE
+        for (small in bySquad.entries.filter { it.value.size < TRIPLE_SIZE || gunsShort(it.value) }) {
             val home = postOf(small.value).takeIf { it >= 0 } ?: continue
             val others = othersOf(bySquad, small)
             val donors = others.filter { postOf(it.value) >= 0 && scoreOf(postOf(it.value)) < scoreOf(home) }
                 .sortedWith(compareBy({ scoreOf(postOf(it.value)) }, { farKey(postOf(it.value), home) }))
             for (donor in donors) {
-                val whole = scoreOf(postOf(donor.value)) <= cheapest && overQuota(bySquad)
+                val whole = scoreOf(postOf(donor.value)) <= cheapest && (overQuota(bySquad) || gunsShort(small.value)) &&
+                    (!USE_FLIP_D5_ARMED || donor.value.any { hasWeapon(it) })
                 // ...а дорогой донор отдаёт посту дороже себя и до пары, но не больше, чем тому недостаёт до тройки (v683, см.
                 // USE_FLIP_DONOR_DOWN_TO_PAIR): его пару на нашей клетке он не берёт, а штурмует D5
                 val spare = if (USE_FLIP_DONOR_DOWN_TO_PAIR) minOf(TRIPLE_SIZE - small.value.size, donor.value.size - FLIP_DONOR_KEEP)
@@ -2000,7 +2012,10 @@ internal object Garrisons {
                 // под полом (v620) — самые дорогие флаги первыми: нам остаётся не больше трёх
                 // ...и оспариваемый флаг — шару (v621)
                 val center = if (USE_BALL_HOLDS_CENTER) contestedFlag(ctx)?.pos?.key ?: -1 else -1
-                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && it.pos.key != center &&
+                // ...а отряд на своём НАШЕМ флаге уходит только к более дорогому (v687, см. USE_RANGERS_HOLD_DEAR): пол по цене
+                // (v684) не закрывает не наш H никогда, и без этого отряд бросал свой H ради второго — маятник весь матч
+                val held = if (USE_RANGERS_HOLD_DEAR) ctx.flags.firstOrNull { it.pos.key == current && it.ours }?.score ?: 0 else 0
+                val next = ctx.flags.filter { !it.ours && it.pos.key !in claimed && it.pos.key != center && it.score > held &&
                         !group(it.pos.x, it.pos.y, FIST_RADIUS) && floorAllows(ctx, it) }
                     .map { it to travel(it.pos.key) }.filter { it.second < Int.MAX_VALUE }
                     .minWithOrNull(if (USE_FLAG_FLOOR) compareBy({ -it.first.score }, { it.second }) else compareBy({ it.second }, { -it.first.score }))?.first

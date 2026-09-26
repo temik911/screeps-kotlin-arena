@@ -161,6 +161,8 @@ internal object Memory {
     val engageSeen = intArrayOf(0)
     /** Бегства безоружного бегуна на пути к одному флагу (v674, см. USE_SCOUT_PATH_AROUND_FLEE): бегун -> (флаг, тиков). */
     val scoutFlees = HashMap<String, Pair<String, Int>>()
+    /** Последний флаг, к которому безоружный бегун шёл (v686, см. USE_SCOUT_FLEE_KEEPS_AIM): бегун -> флаг. */
+    val scoutAim = HashMap<String, String>()
     /** Стояние гарнизонного крипа на марше (v658, см. USE_GARRISON_STILL_DETOUR): крип -> [тик, клетка, тиков на ней]. */
     val garrisonStill = HashMap<String, IntArray>()
     /** Тик, когда соперник показал почерк MetalicaX (v639, см. USE_METALICA_HOLD); 0 — не показал. */
