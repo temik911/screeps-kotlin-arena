@@ -114,7 +114,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 141
+    private const val BOT_VERSION = 142
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5455,7 +5455,10 @@ object SpawnAndSwamp {
             val pos = InfluenceMap.cell(x, y)
             if (getTerrainAt(pos) == TERRAIN_WALL) continue
             if (x * 100 + y in busy) continue
-            val score = getRange(pos, enemy)
+            // …and in a fortified house BEHIND the spawn (v142): a step of his erases a tower site, and the ring cell nearest
+            // him is where his army walks — against kerobi#39 (v141 A/B) the site at (7,48) was stepped off and placed
+            // again, and the tower was not up when the house fell at t=800. The far side is as close to the spawn
+            val score = if (USE_FORT_HOME && fortHome) -getRange(pos, enemy) else getRange(pos, enemy)
             if (score < bestScore) { bestScore = score; best = pos }
         }
         return best
