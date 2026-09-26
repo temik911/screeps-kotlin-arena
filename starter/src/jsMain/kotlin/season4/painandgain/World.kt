@@ -1341,7 +1341,7 @@ internal object Garrisons {
         if (USE_FLIP_KEEPS_H && flipMode()) { flipMerge(ctx, bySquad); return }
         val small = bySquad.entries.firstOrNull { it.value.size < TRIPLE_SIZE } ?: return
         val home = Memory.garrisonHome[small.value[0].id] ?: return
-        val others = bySquad.entries.filter { it.key != small.key }
+        val others = othersOf(bySquad, small)
         if (USE_MERGE_DROPS_CHEAPEST) {
             fun postOf(e: Map.Entry<Int, List<Creep>>) = Memory.garrisonHome[e.value[0].id] ?: home
             fun scoreOf(fk: Int) = ctx.flags.firstOrNull { it.pos.key == fk }?.score ?: 0
@@ -1369,46 +1369,59 @@ internal object Garrisons {
      *  флаге, остаётся на нём (его пару он переворачивает в 4 % подходов, пустой флаг — всегда); прочие вливаются в
      *  ближайший отряд, как прежде. */
     private fun flipMerge(ctx: Ctx, bySquad: Map<Int, List<Creep>>) {
-        fun postOf(sq: List<Creep>) = Memory.garrisonHome[sq[0].id] ?: -1
         fun scoreOf(fk: Int) = ctx.flags.firstOrNull { it.pos.key == fk }?.score ?: 0
-        fun far(a: Int, b: Int) = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
         val cheapest = ctx.flags.minOfOrNull { it.score } ?: return
         for (small in bySquad.entries.filter { it.value.size < TRIPLE_SIZE }) {
             val home = postOf(small.value).takeIf { it >= 0 } ?: continue
-            val donors = bySquad.entries.filter { it.key != small.key && postOf(it.value) >= 0 && scoreOf(postOf(it.value)) < scoreOf(home) }
-                .sortedWith(compareBy({ scoreOf(postOf(it.value)) }, { far(postOf(it.value), home) }))
+            val others = othersOf(bySquad, small)
+            val donors = others.filter { postOf(it.value) >= 0 && scoreOf(postOf(it.value)) < scoreOf(home) }
+                .sortedWith(compareBy({ scoreOf(postOf(it.value)) }, { farKey(postOf(it.value), home) }))
             for (donor in donors) {
-                val post = postOf(donor.value)
-                val give = if (scoreOf(post) <= cheapest) donor.value
-                    else donor.value.filter { it.key != post }.sortedBy { far(it.key, home) }
-                        .take((donor.value.size - TRIPLE_SIZE).coerceAtLeast(0))
+                val whole = scoreOf(postOf(donor.value)) <= cheapest
+                val give = if (whole) donor.value else sparesOf(donor.value, home, donor.value.size - TRIPLE_SIZE)
                 if (give.isEmpty()) continue
-                for (c in give) { Memory.garrisonSquad[c.id] = small.key; Memory.garrisonHome[c.id] = home; Memory.garrisonFlag[c.id] = home }
-                raidWhy.bump(if (give.size == donor.value.size) "tdrop" else "tspare")
+                moveTo(give, small.key, home)
+                raidWhy.bump(if (whole) "tdrop" else "tspare")
                 return
             }
             if (USE_MERGE_TAKES_SPARES && takeSpares(bySquad, small, home)) return
             if (small.value.size >= 2 && small.value.any { it.key == home }) continue
-            val to = bySquad.entries.filter { it.key != small.key }.minByOrNull { far(postOf(it.value), home) } ?: continue
-            val fk = postOf(to.value).takeIf { it >= 0 } ?: continue
-            for (c in small.value) { Memory.garrisonSquad[c.id] = to.key; Memory.garrisonHome[c.id] = fk; Memory.garrisonFlag[c.id] = fk }
+            val to = others.minByOrNull { farKey(postOf(it.value), home) } ?: continue
+            moveTo(small.value, to.key, postOf(to.value).takeIf { it >= 0 } ?: continue)
             raidWhy.bump("tmerge")
             return
         }
     }
 
+    /** Прочие отряды гарнизона, кроме данного (v661). */
+    private fun othersOf(bySquad: Map<Int, List<Creep>>, small: Map.Entry<Int, List<Creep>>) =
+        bySquad.entries.filter { it.key != small.key }
+
+    /** Пост отряда гарнизона — ключ клетки его флага; −1 — не записан (v661). */
+    private fun postOf(sq: List<Creep>) = Memory.garrisonHome[sq[0].id] ?: -1
+
+    /** Расстояние между клетками по их ключам x * 100 + y (v661). */
+    private fun farKey(a: Int, b: Int) = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
+
+    /** Не больше n лишних отряда для поста home: ближние к нему и никогда держатель клетки своего флага (v661). */
+    private fun sparesOf(donor: List<Creep>, home: Int, n: Int): List<Creep> {
+        val post = postOf(donor)
+        return donor.filter { it.key != post }.sortedBy { farKey(it.key, home) }.take(n.coerceAtLeast(0))
+    }
+
+    /** Бойцы переходят в отряд squad на пост home (v661). */
+    private fun moveTo(cs: List<Creep>, squad: Int, home: Int) {
+        for (c in cs) { Memory.garrisonSquad[c.id] = squad; Memory.garrisonHome[c.id] = home; Memory.garrisonFlag[c.id] = home }
+    }
+
     /** Отряд с бойцами сверх TRIPLE_SIZE (ближайший к посту отряда меньше тройки) отдаёт ему недостающих — ближних к его
      *  посту и никогда держателя клетки своего флага (v662, см. USE_MERGE_TAKES_SPARES); true — отдал. */
     private fun takeSpares(bySquad: Map<Int, List<Creep>>, small: Map.Entry<Int, List<Creep>>, home: Int): Boolean {
-        fun postOf(sq: List<Creep>) = Memory.garrisonHome[sq[0].id] ?: -1
-        fun far(a: Int, b: Int) = maxOf(abs(a / 100 - b / 100), abs(a % 100 - b % 100))
-        val donor = bySquad.entries.filter { it.key != small.key && it.value.size > TRIPLE_SIZE && postOf(it.value) >= 0 }
-            .minByOrNull { far(postOf(it.value), home) } ?: return false
-        val post = postOf(donor.value)
-        val need = minOf(TRIPLE_SIZE - small.value.size, donor.value.size - TRIPLE_SIZE)
-        val give = donor.value.filter { it.key != post }.sortedBy { far(it.key, home) }.take(need.coerceAtLeast(0))
+        val donor = othersOf(bySquad, small).filter { it.value.size > TRIPLE_SIZE && postOf(it.value) >= 0 }
+            .minByOrNull { farKey(postOf(it.value), home) } ?: return false
+        val give = sparesOf(donor.value, home, minOf(TRIPLE_SIZE - small.value.size, donor.value.size - TRIPLE_SIZE))
         if (give.isEmpty()) return false
-        for (c in give) { Memory.garrisonSquad[c.id] = small.key; Memory.garrisonHome[c.id] = home; Memory.garrisonFlag[c.id] = home }
+        moveTo(give, small.key, home)
         raidWhy.bump("tspare")
         return true
     }
@@ -1477,7 +1490,7 @@ internal object Garrisons {
      *  Opus, 24.09.2026). На первом тике — двое его крипов из одной части MOVE, их стартовые клетки и смещение второго от
      *  первого; дальше тик последнего сдвига каждого. Признак — до TOURER_CHECK_TICKS: оба не сдвигались TOURER_STILL тиков,
      *  между ними не больше TOURER_PAIR, каждый отошёл от старта не меньше TOURER_AWAY и шёл по диагонали (|dx − dy| ≤ 2), а
-     *  смещение пары то же, что на старте (±1 по каждой оси). Разведчик погиб до признака — признака не будет. */
+     *  смещение пары то же, что на старте (±TOURER_OFFSET_SLACK по каждой оси). Разведчик погиб до признака — признака не будет. */
     private fun tourerRule(ctx: Ctx): Boolean {
         val now = getTicks()
         val ids = Memory.tourerScouts
@@ -1502,7 +1515,7 @@ internal object Garrisons {
             if (maxOf(abs(dx), abs(dy)) < TOURER_AWAY || abs(dx - dy) > 2) return false
         }
         val ox = x(Memory.tourerStart[1]) - x(Memory.tourerStart[0]); val oy = y(Memory.tourerStart[1]) - y(Memory.tourerStart[0])
-        return abs((b.x - a.x) - ox) <= 1 && abs((b.y - a.y) - oy) <= 1
+        return abs((b.x - a.x) - ox) <= TOURER_OFFSET_SLACK && abs((b.y - a.y) - oy) <= TOURER_OFFSET_SLACK
     }
 
     /** ПОЧЕРК ФЕРМЕРА (v630, см. USE_FARMER_SWAP): тот же признак, что у кулака (v626), без кулака; держится до конца матча. */
