@@ -1261,7 +1261,9 @@ internal object Garrisons {
         }
         if (now < FRAG_FROM || now % FRAG_STEP != 0) return
         val sizes = groupsOf(combatEnemiesBorn(ctx), FRAG_LINK).map { it.size }
-        if (sizes.count { it >= 2 } >= FRAG_GROUPS && (sizes.maxOrNull() ?: 0) <= FRAG_MAX) Memory.fragSplits[0]++
+        val split = sizes.count { it >= 2 } >= FRAG_GROUPS && (sizes.maxOrNull() ?: 0) <= FRAG_MAX
+        // ...или его бойцы разошлись на FRAG_ANY_GROUPS групп, одиночки в счёт: глыба и одиночки по флагам (v665)
+        if (split || (USE_FRAG_ANY_GROUPS && sizes.size >= FRAG_ANY_GROUPS)) Memory.fragSplits[0]++
         if (Memory.fragScoutH[0] > 0 && Memory.fragSplits[0] >= FRAG_SAMPLES) { Memory.fragSeen[0] = now; raidWhy.bump("frag") }
     }
 
