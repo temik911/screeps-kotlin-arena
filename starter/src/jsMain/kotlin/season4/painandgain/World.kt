@@ -1344,7 +1344,9 @@ internal object Garrisons {
         val small = bySquad.entries.firstOrNull { it.value.size < TRIPLE_SIZE } ?: return
         val home = Memory.garrisonHome[small.value[0].id] ?: return
         val others = othersOf(bySquad, small)
-        if (USE_MERGE_DROPS_CHEAPEST) {
+        // ...и пост бросается, только пока постов больше ⌊живые / TRIPLE_SIZE⌋ — иначе недостающих даёт переполненный
+        // отряд (v671, см. USE_DROP_ONLY_OVER_QUOTA)
+        if (USE_MERGE_DROPS_CHEAPEST && overQuota(bySquad)) {
             fun postOf(e: Map.Entry<Int, List<Creep>>) = Memory.garrisonHome[e.value[0].id] ?: home
             fun scoreOf(fk: Int) = ctx.flags.firstOrNull { it.pos.key == fk }?.score ?: 0
             val cheap = others.minWithOrNull(compareBy<Map.Entry<Int, List<Creep>>>(
@@ -1379,7 +1381,7 @@ internal object Garrisons {
             val donors = others.filter { postOf(it.value) >= 0 && scoreOf(postOf(it.value)) < scoreOf(home) }
                 .sortedWith(compareBy({ scoreOf(postOf(it.value)) }, { farKey(postOf(it.value), home) }))
             for (donor in donors) {
-                val whole = scoreOf(postOf(donor.value)) <= cheapest
+                val whole = scoreOf(postOf(donor.value)) <= cheapest && overQuota(bySquad)
                 val give = if (whole) donor.value else sparesOf(donor.value, home, donor.value.size - TRIPLE_SIZE)
                 if (give.isEmpty()) continue
                 moveTo(give, small.key, home)
@@ -1397,6 +1399,10 @@ internal object Garrisons {
             return
         }
     }
+
+    /** Постов больше, чем ⌊живые бойцы / TRIPLE_SIZE⌋ — лишний пост можно бросить (v671, см. USE_DROP_ONLY_OVER_QUOTA). */
+    private fun overQuota(bySquad: Map<Int, List<Creep>>) =
+        !USE_DROP_ONLY_OVER_QUOTA || bySquad.size > bySquad.values.sumOf { it.size } / TRIPLE_SIZE
 
     /** Прочие отряды гарнизона, кроме данного (v661). */
     private fun othersOf(bySquad: Map<Int, List<Creep>>, small: Map.Entry<Int, List<Creep>>) =
