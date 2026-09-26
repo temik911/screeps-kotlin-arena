@@ -2433,7 +2433,9 @@ internal class MeasuresChase(private val ctx: Ctx, private val forces: MeasuresF
     init { kiteChaseSeen = kiteChaseNow }
     init { if (Memory.prevPosture == Posture.ANNIHILATE) { kchaseAnn.n++; if (kiteChaseNow) kchaseTicks.n++ } }
     // с обеих сторон: бьют только нас — бой, не простой (матч 20, t=117)
-    private val netDamage = Memory.enemyHitsHist.size == STALL_TICKS &&
+    // ...по потерям КРИПОВ, а не по сумме армии (v691, см. USE_STALL_BY_CREEP_LOSSES): отряжённые за флагами выпадают из
+    // `ctx.army`, и сумма падала на их хиты — «размен» гасил тот самый простой, который их и отрядил
+    private val netDamage = if (USE_STALL_BY_CREEP_LOSSES) exchange.exchangeLive else Memory.enemyHitsHist.size == STALL_TICKS &&
         (Memory.enemyHitsHist.first() - exchange.enemyHitsNow >= STALL_DAMAGE || Memory.ourHitsHist.first() - exchange.ourHitsNow >= STALL_DAMAGE)
     init { if (netDamage) stallUntil = 0 }
     // пикет в досягаемости броска все STALL_TICKS подряд (см. STALL_PICKET): армия, только что вошедшая в
