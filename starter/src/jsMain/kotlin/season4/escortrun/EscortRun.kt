@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v19"
+    private const val BOT_VERSION = "v19r"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -95,6 +95,7 @@ object EscortRun {
 
     // ---------- состояние между тиками ----------
     private var greeted = false
+    private var personaRead = false
     /** id крипов, живых на ПЕРВОМ тике: за один тик родить никого нельзя, значит это эскорты обеих сторон. */
     private val escortIds = HashSet<String>()
     /** Задания разведчиков: id -> KEEP (наш флаг) / BLOCK (их флаг). Роль — по телу, задание — по нужде в момент рождения. */
@@ -128,7 +129,7 @@ object EscortRun {
 
     // ==================== мир ====================
 
-    private class World(
+    internal class World(
         val now: Int,
         val mySpawn: StructureSpawn?,
         val enemySpawn: StructureSpawn?,
@@ -157,6 +158,13 @@ object EscortRun {
     )
 
     fun tick() {
+        if (!personaRead) {
+            personaRead = true
+            // личность посылки (docs/escort-run-redteam.md): tools/er-league.py оборачивает main.mjs и называет приёмы
+            // красной команды в globalThis.ER_PERSONA; без обёртки — основной бот
+            val named = js("globalThis.ER_PERSONA")
+            RedTeam.configure(if (jsTypeOf(named) == "string") named.unsafeCast<String>() else "main")
+        }
         val w = sense()
         if (!greeted) { greeted = true; probe(w) }
         if (mapMarks == null) captureMapMarks(w)
@@ -172,6 +180,7 @@ object EscortRun {
         runScouts(w)
         runFighters(w)
         runWorkers(w)
+        RedTeam.act(w)
         enforceYield(w)
         TrafficManager.resolve(w.active.filter { idOf(it) !in pinned && Bodies.liveMoves(it) > 0 && !isEscort(it) }, w.active + w.enemies)
         if (DEBUG_LOG) {
@@ -226,14 +235,16 @@ object EscortRun {
         for (c in enemies) occupant[key(c)] = c
         val enemyAt = enemies.mapTo(HashSet()) { key(it) }
 
-        val others = active.filter { !isEscort(it) }
+        RedTeam.claim(mine)
+        // крипы красной команды ведёт RedTeam: основная логика не считает их своими тягачами, разведчиками и бойцами
+        val others = active.filter { !isEscort(it) && !RedTeam.owns(it) }
         val escortFlow = if (escort != null && myFlag != null) flowTo("escort", myFlag, blocked, 5) else null
         val enemyEscortFlow = if (enemyEscort != null && enemyFlag != null) flowTo("enemyEscort", enemyFlag, blockedForEnemy, 5) else null
         return World(
             now, mySpawn, enemySpawn, escort, enemyEscort, myFlag, enemyFlag, homeSource, mine, active, enemies,
             enemyAll.filter { it.spawning },
             pullers = others.filter { Bodies.isPuller(it, PULLER_MIN_MOVE) },
-            scouts = mine.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
+            scouts = mine.filter { !isEscort(it) && !RedTeam.owns(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
             fighters = others.filter { Bodies.wasArmed(it) },
             workers = others.filter { Bodies.isWorker(it) || Bodies.isHauler(it) },
             enemyArmed = enemies.filter { Bodies.isArmed(it) },
@@ -417,7 +428,7 @@ object EscortRun {
 
     private fun energyOf(w: World) = w.mySpawn?.store?.get(RESOURCE_ENERGY) ?: 0
 
-    private fun order(w: World, body: Array<BodyPartType>, role: String, why: String): Boolean {
+    internal fun order(w: World, body: Array<BodyPartType>, role: String, why: String): Boolean {
         val spawn = w.mySpawn ?: return false
         val r = spawn.spawnCreep(body)
         if (r.`object` != null) {
@@ -440,6 +451,7 @@ object EscortRun {
         if (spawn.spawning != null) return
         val e = energyOf(w)
         val escort = w.escort
+        if (RedTeam.spawn(w, e)) return
 
         // 1. дебют: тягачи по прогону. (v16-v17 меняли против «экономиста» второго тягача на охрану поезда: stachu3478
         //    это било в трёх из пяти, но けろびー — тоже экономист по первому заказу, без раннего бойца, — его M5A1 со
@@ -1329,7 +1341,7 @@ object EscortRun {
         }
     }
 
-    private fun stepTo(w: World, c: Creep, target: Position, range: Int) {
+    internal fun stepTo(w: World, c: Creep, target: Position, range: Int) {
         val swampCost = maxOf(1, Bodies.period(Bodies.weight(c) + ((c.store[RESOURCE_ENERGY] ?: 0) + 49) / 50, Bodies.liveMoves(c), true))
         val f = flowTo("to:${target.x},${target.y}:$swampCost", target, w.blocked, swampCost)
         val step = DistanceMap.flowStep(f, c.x, c.y, range, w.occupant.keys, w.enemyAt) ?: return
@@ -1394,6 +1406,7 @@ object EscortRun {
         println("hello season4 escort-run $BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} ticksLimit=${arenaInfo.ticksLimit} " +
             "cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
         println("tuning: train=reverse spawnPull=true openingMoves=$OPENING_MOVES pullerMin=$PULLER_MIN_MOVE chain=$MAX_CHAIN raceMargin=$RACE_MARGIN keeperLead=$KEEPER_MIN_LEAD threat=$THREAT_RANGE")
+        println("persona: ${RedTeam.describe()}")
         println("world: spawn=${w.mySpawn?.let { "(${it.x},${it.y}) e=${it.store[RESOURCE_ENERGY]}" }} enemySpawn=${w.enemySpawn?.let { "(${it.x},${it.y})" }} " +
             "escort=${w.escort?.let { "(${it.x},${it.y}) ${Bodies.summaryOf(it)}" }} enemyEscort=${w.enemyEscort?.let { "(${it.x},${it.y})" }} " +
             "myFlag=${w.myFlag?.let { "(${it.x},${it.y})" }} enemyFlag=${w.enemyFlag?.let { "(${it.x},${it.y})" }} source=${w.homeSource?.let { "(${it.x},${it.y}) ${it.energy}/${it.energyCapacity}" }}")
