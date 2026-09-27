@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 8
+const val BOT_VERSION = 9
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -582,9 +582,11 @@ object PainAndGainAdvanced {
 
     private fun fire(army: List<Unit>) {
         for (shot in Fire.assign(army, theirs, ourFx, theirFx)) {
-            if (shot.mass) shot.shooter.c.rangedMassAttack()
-            else if (shot.shooter.melee > 0 && Grid.range(shot.shooter.x, shot.shooter.y, shot.target!!.x, shot.target.y) <= 1) shot.shooter.c.attack(shot.target.c)
-            else shot.shooter.c.rangedAttack(shot.target!!.c)
+            if (shot.mass) { shot.shooter.c.rangedMassAttack(); continue }
+            val tgt = shot.target!!
+            val r = Grid.range(shot.shooter.x, shot.shooter.y, tgt.x, tgt.y)
+            if (shot.shooter.melee > 0 && r <= 1) shot.shooter.c.attack(tgt.c)
+            if (shot.shooter.ranged > 0 && r <= 3) shot.shooter.c.rangedAttack(tgt.c)
         }
         // a melee creep with RANGED parts too is not in this army; a heavy melee swings, and a ranged one within one
         // of its target still shoots — the engine runs attack and rangedAttack in separate pipelines

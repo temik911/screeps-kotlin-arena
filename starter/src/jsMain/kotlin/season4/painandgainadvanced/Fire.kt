@@ -71,70 +71,83 @@ object Fire {
 
     class Shot(val shooter: Unit, val target: Unit?, val mass: Boolean)
 
+    /** The enemy the group has been focusing: kept while it lives and something of ours reaches it, since damage on a
+     *  healed target is only worth what it gains over the healing, tick after tick. */
+    var focusId: String? = null
+
     /**
-     * Assign every armed creep of `ours` a target among `theirs`. `ourFx` scales our damage, `theirFx` their damage
-     * taken and their healing. Returns melee swings and ranged shots; a ranged creep with several targets close takes
-     * the mass attack when its total (10 / 4 / 1 per part at 1 / 2 / 3) beats the single shot's value.
+     * Group focus. For every enemy in reach: what all our guns that reach it put on it this tick, less what his healers
+     * can put back ("net"), against the hits standing between it and a stripped weapon ("room" — armour, then the
+     * weapon itself). Ticks to strip = room / net; the value is its output (melee 30, ranged 10, heal 12 a part, with
+     * its owner's effects). The group fires at the best value per tick of stripping, everyone who reaches it, and the
+     * rest go to the next such target.
+     *
+     * Why (27.09.2026, stachu3478#5 against v7): his two heavy healers put back ~220k hits in a thousand ticks against
+     * our ~76k of ranged fire, while the per-shot greedy of v4-v7 saw one volley on a fresh heavy remove nothing (its
+     * armour) and scattered our fire over his light creeps and even his pullers (225 hits on them). Damage spread
+     * under heavy healing removes nothing; concentrated past his heal it strips a weapon every few ticks.
      */
     fun assign(ours: List<Unit>, theirs: List<Unit>, ourFx: Effects, theirFx: Effects): List<Shot> {
-        val assigned = HashMap<String, Double>()
-        // the healing his mates can put on a target this tick: every healer of his in reach heals SOMEONE, and the
-        // one we focus is the one he heals — counted in full, as a bound
         val healOn = HashMap<String, Double>()
         for (e in theirs) {
             var h = 0.0
             for (m in theirs) {
-                if (m.heal == 0) continue
+                if (m.heal == 0 || m === e) continue
                 val r = Grid.range(m.x, m.y, e.x, e.y)
                 if (r <= 1) h += m.heal * 12 * theirFx.heal else if (r <= 3) h += m.heal * 4 * theirFx.heal
             }
-            healOn[e.id] = h
+            // his healers split between the creeps we hit; one target gets at most what its nearest two can give
+            healOn[e.id] = minOf(h, 2 * 96.0 * theirFx.heal) + e.heal * 12 * theirFx.heal
         }
+        val shooters = ours.filter { it.melee > 0 || it.ranged > 0 }.toMutableList()
         val shots = ArrayList<Shot>()
-        val shooters = ours.filter { it.melee > 0 || it.ranged > 0 }
-            .sortedBy { u -> theirs.count { Grid.range(it.x, it.y, u.x, u.y) <= (if (u.melee > 0) 1 else 3) } }
-        for (u in shooters) {
-            val reach = if (u.melee > 0) 1 else 3
-            val options = theirs.filter { Grid.range(it.x, it.y, u.x, u.y) <= reach }
-            if (options.isEmpty()) continue
-            var best: Unit? = null; var bestV = -1.0
-            for (e in options) {
-                val dmg = damageOf(u, e, ourFx) * theirFx.damageTaken
-                val before = assigned[e.id] ?: 0.0
-                val heal = healOn[e.id] ?: 0.0
-                // damage that his heal undoes this tick removes nothing: what counts is the part of the running total
-                // above his heal
-                val v0 = outputRemoved(e, maxOf(0.0, before - heal), theirFx)
-                val v1 = outputRemoved(e, maxOf(0.0, before + dmg - heal), theirFx)
-                val focus = if (before > 0) 1.05 else 1.0
-                val v = (v1 - v0) * focus + (if (e.hits <= before + dmg - heal) 5.0 else 0.0) + 0.001 * (1000.0 / e.hits)
-                if (v > bestV) { bestV = v; best = e }
+        val left = theirs.toMutableList()
+        while (shooters.isNotEmpty() && left.isNotEmpty()) {
+            var best: Unit? = null; var bestScore = 0.0
+            for (e in left) {
+                val net = shooters.sumOf { u -> reachDamage(u, e, ourFx) } * theirFx.damageTaken - (healOn[e.id] ?: 0.0)
+                if (net <= 0) continue
+                val room = maxOf(1, weaponRoom(e))
+                val value = e.melee * 30 * theirFx.attack + e.ranged * 10 * theirFx.ranged + e.heal * 12 * theirFx.heal
+                // a creep with no weapon left is worth only its kill (a runner still holds flags), a little
+                val worth = if (value > 0) value else 2.0
+                val ticks = room / net
+                var score = worth / maxOf(1.0, ticks)
+                if (e.id == focusId) score *= 1.5
+                if (e.hits <= net) score *= 1.3
+                if (score > bestScore) { bestScore = score; best = e }
             }
-            val tgt = best!!
-            if (u.melee == 0 && u.ranged > 0) {
-                val massValue = options.sumOf { e ->
-                    val r = Grid.range(e.x, e.y, u.x, u.y)
-                    val per = when (r) { 0, 1 -> 10; 2 -> 4; else -> 1 }
-                    val dmg = u.ranged * per * ourFx.ranged * theirFx.damageTaken
-                    val before = assigned[e.id] ?: 0.0
-                    val heal = healOn[e.id] ?: 0.0
-                    outputRemoved(e, maxOf(0.0, before + dmg - heal), theirFx) - outputRemoved(e, maxOf(0.0, before - heal), theirFx) + dmg * 0.0005
-                }
-                val single = bestV + damageOf(u, tgt, ourFx) * 0.0005
-                if (options.size > 1 && massValue > single) {
-                    for (e in options) {
-                        val r = Grid.range(e.x, e.y, u.x, u.y)
-                        val per = when (r) { 0, 1 -> 10; 2 -> 4; else -> 1 }
-                        assigned[e.id] = (assigned[e.id] ?: 0.0) + u.ranged * per * ourFx.ranged * theirFx.damageTaken
-                    }
-                    shots.add(Shot(u, null, true))
-                    continue
-                }
-            }
-            assigned[tgt.id] = (assigned[tgt.id] ?: 0.0) + damageOf(u, tgt, ourFx) * theirFx.damageTaken
-            shots.add(Shot(u, tgt, false))
+            if (best == null) break
+            val tgt = best
+            if (shots.isEmpty()) focusId = tgt.id
+            val onIt = shooters.filter { reachDamage(it, tgt, ourFx) > 0 }
+            for (u in onIt) shots.add(Shot(u, tgt, false))
+            shooters.removeAll(onIt)
+            left.remove(tgt)
         }
-        return shots
+        // a ranged creep with no target of the focus in reach, or with several enemies close, takes the mass attack
+        // when its 10 / 4 / 1 per part over everything in three beats its single shot
+        val out = ArrayList<Shot>()
+        for (s in shots) {
+            val u = s.shooter
+            if (u.melee == 0 && u.ranged > 0) {
+                val near = theirs.filter { Grid.range(it.x, it.y, u.x, u.y) <= 3 }
+                val mass = near.sumOf { e -> when (Grid.range(e.x, e.y, u.x, u.y)) { 0, 1 -> 10; 2 -> 4; else -> 1 }.toDouble() }
+                if (near.size >= 3 && mass > 10 * 1.5) { out.add(Shot(u, null, true)); continue }
+            }
+            out.add(s)
+        }
+        // shooters left with nothing assigned (their targets all out-healed) still fire at whatever is in reach
+        for (u in shooters) {
+            val tgt = theirs.filter { reachDamage(u, it, ourFx) > 0 }.minByOrNull { it.hits } ?: continue
+            out.add(Shot(u, tgt, false))
+        }
+        return out
+    }
+
+    private fun reachDamage(u: Unit, e: Unit, fx: Effects): Double {
+        val r = Grid.range(u.x, u.y, e.x, e.y)
+        return (if (r <= 1) u.melee * 30 * fx.attack else 0.0) + (if (r <= 3) u.ranged * 10 * fx.ranged else 0.0)
     }
 
     private fun damageOf(u: Unit, e: Unit, fx: Effects): Double =
