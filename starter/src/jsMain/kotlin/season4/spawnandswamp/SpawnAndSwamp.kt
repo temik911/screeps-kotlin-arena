@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 179
+    private const val BOT_VERSION = 180
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6417,6 +6417,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_CLOSE_LURK = true
     /** His gun's range of three and three steps of the pair's head start (v179). */
     private const val RAID_LURK_FLEE = 6
+    /** A pile builder under fire finishes a spawn that fits the ticks it keeps its WORK (runPileBuilder, v180). */
+    private const val USE_PILE_FINISH = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6957,7 +6959,23 @@ object SpawnAndSwamp {
             pileJob = job
         }
         val incoming = InfluenceMap.damageAt(b.x, b.y, ctx.combatEnemies)
+        // A SPAWN NEARLY UP IS FINISHED UNDER FIRE (v180). Against marlyman#441/#443 the pile builder ran from one M5A1 off a
+        // site at 750-970/1000 in 12 games (8 draws) and died 13-35 ticks later all the same — on the swamp his M5A1 walks a
+        // cell a tick, the loaded builder one in three — having lived longer after the flight than the build needed; the
+        // next spawn from that pile came 125-930 ticks later or never, and a pile spawn by t=1000 was 72 % wins against
+        // 35 % without one. The builder stays and builds while what is left fits the ticks it keeps a CARRY (the body is
+        // hit front to back and its WORK stands behind the last CARRY, so the WORK outlives it; without a CARRY it holds
+        // no energy to build with)
+        val finishing = USE_PILE_FINISH && incoming > 0.0 && work > 0 && job != null && b.x == job.p.x && b.y == job.p.y && run {
+            val j: PileJob = job
+            val site = ctx.mySites.firstOrNull { it.x == j.s.x && it.y == j.s.y } ?: return@run false
+            val behind = b.body.size - 1 - b.body.indexOfLast { it.type == CARRY }
+            val keeps = ceil((b.hits - 100.0 * behind) / incoming).toInt()
+            val left = (site.progressTotal ?: 0) - (site.progress ?: 0)
+            keeps > 0 && left <= BUILD_POWER * work * keeps
+        }
         val step: Position? = when {
+            finishing -> null
             incoming > 0.0 -> fleeStep(b, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(b, ctx.mySpawn, 1, ctx.dangerMatrix)
             job == null -> pileWaitCell(ctx).let { w -> if (getRange(b, w) > PARK_RANGE) pathStep(b, w, PARK_RANGE, ctx.dangerMatrix) else null }
             b.x != job.p.x || b.y != job.p.y -> pathStep(b, job.p, 0, ctx.dangerMatrix)
