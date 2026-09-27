@@ -479,10 +479,20 @@ object PainAndGainAdvanced {
     private fun hold(army: List<Unit>, gx: Int, gy: Int) {
         if (army.isEmpty()) return
         val f = Grid.to(gx, gy)
+        // the hits-loss flags drain every creep a hit or two a tick, and at hold the healers stand: a creep that has
+        // lost MEND_AT with no healer beside it walks to the nearest one (the stand lost a heavy ranged at t=1875 of a
+        // quiet match, four cells from the centre and out of every healer's reach)
+        val healers = army.filter { it.heal > 0 }
+        val mending = army.filter { u -> u.deficit >= MEND_AT && u.heal == 0 && healers.none { Grid.range(it.x, it.y, u.x, u.y) <= 1 } }
+        for (u in mending) {
+            val h = healers.minByOrNull { Grid.range(it.x, it.y, u.x, u.y) } ?: continue
+            stepToward(u, Grid.to(h.x, h.y), 15, stopAt = 1)
+        }
         val keeper = army.firstOrNull { it.x == gx && it.y == gy }
             ?: army.filter { it.role == Role.HEALER }.minByOrNull { f[it.cell] }
             ?: army.minByOrNull { f[it.cell] }
         for (u in army) {
+            if (u in mending) continue
             if (u === keeper) {
                 if (u.x == gx && u.y == gy) hold(u) else stepToward(u, f, 1000)
                 continue
@@ -619,6 +629,7 @@ object PainAndGainAdvanced {
     const val FIGHT_RATIO = 1.15
     const val RETREAT_RATIO = 0.8
     const val ENGAGED_R = 4
+    const val MEND_AT = 250
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
