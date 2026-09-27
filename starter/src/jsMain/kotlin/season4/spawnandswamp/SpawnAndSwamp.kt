@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 205
+    private const val BOT_VERSION = 206
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6656,8 +6656,12 @@ object SpawnAndSwamp {
     private const val USE_RAID_REOPEN = true
     /** A recall off a winning siege waits while the house outlasts the siege left and the walk back (v203). */
     private const val USE_RECALL_OUTLASTS = true
-    /** The raid's race counts the fire of its straight walk, and a strike it takes is walked straight (v205). */
-    private const val USE_RAID_PATH_FIRE = true
+    /** The raid's race counts the fire of its straight walk, and a strike it takes is walked straight (v205).
+     *  OFF (v206): A/B v204 / v205 against けろびー#48 (6+6) 6-0-0 / 4-0-2, the v205 wins slower (900-1900 against
+     *  800-1400) with the pair as whole (3600 at 450 in all twelve). Priced on the straight walk, the race turned down
+     *  strikes the detour would have made cheaply — the fire it now counts is the fire the detour avoids. The right
+     *  question compares the two plans: the straight walk with its fire against the detour with its ticks */
+    private const val USE_RAID_PATH_FIRE = false
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
