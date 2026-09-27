@@ -28,15 +28,17 @@ import screeps.api.structures.StructureRampart
  *  - `plug` — строитель W1C4M4 (500) берёт 200 энергии из контейнера у правого края и ставит НАШ рампарт на клетку
  *    чужого флага: рампарт пропускает только владельца и строится под крипом, поэтому их хранитель на флаге стройке
  *    не мешает, а их эскорт на флаг больше не войдёт;
+ *  - `blk` — тот же захватчик чужого флага, но ПОСЛЕ дебюта, первым заказом (так играл ShuP1#3: его M1 на 51-м сел на
+ *    наш флаг раньше хранителя v23, 6ab8fcb0);
  *  - `choke` — M1 ПОСЛЕ дебюта встаёт на клетку впереди их поезда, где обход дороже всего (болото вокруг узкого
  *    прохода), и туда, куда успевает раньше поезда; когда поезд обошёл — перебегает на следующую (M1 ходит клетку в
  *    тик, поезд — в два). Замер по 120 маршрутам: один такой крип стоит поезду медианно 18 тиков, два — 36.
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("squat", "plug", "choke")
+    private val ORDER = listOf("squat", "plug", "choke", "blk")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
-    private val LATE = setOf("choke")
+    private val LATE = setOf("choke", "blk")
     private const val RAMPART_COST = 200
     private const val BUILD_RANGE = 3
 
@@ -67,7 +69,7 @@ internal object RedTeam {
     }
 
     private fun bodyOf(trick: String): Array<BodyPartType> = when (trick) {
-        "squat", "choke" -> arrayOf(MOVE)
+        "squat", "choke", "blk" -> arrayOf(MOVE)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
@@ -95,7 +97,7 @@ internal object RedTeam {
         for ((id, trick) in owned) {
             val c = alive[id] ?: continue
             when (trick) {
-                "squat" -> squat(w, c)
+                "squat", "blk" -> squat(w, c)
                 "plug" -> plug(w, c)
                 "choke" -> choke(w, c)
             }

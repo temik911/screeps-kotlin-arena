@@ -37,7 +37,13 @@ def node():
 def side_bundle(ref, label, scratch, keep):
     """A private copy of the build package for one side; returns (entry url, description, worktree to clean or None)."""
     if ref:
-        wt, starter, sha = play.ab_worktree(ref, label)
+        try:
+            wt, starter, sha = play.ab_worktree(ref, label)
+        except SystemExit as e:
+            # the first build of a fresh worktree fails now and then in :starter:jsNodeTest (CLAUDE.md: transient,
+            # a second build clears it) — measured on v22's worktree, 27.09.2026
+            print(f"offline: {ref}: {str(e).splitlines()[0][:120]} — building again", flush=True)
+            wt, starter, sha = play.ab_worktree(ref, label)
         desc = f"{ref} ({sha[:10]})"
     else:
         wt, starter = None, os.path.join(HERE, "..", "build", "js", "packages", PKG)
