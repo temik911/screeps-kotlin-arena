@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v21"
+    private const val BOT_VERSION = "v22"
 
     private const val LOG_EVERY = 50
 
@@ -316,6 +316,9 @@ object SpawnAndSwampAdvanced {
      * внешней клетки), и башня; всё строится энергией самих контейнеров, строитель потом их заправщик.
      * Рельеф случаен: если карман не запечатан рельефом, ломать нечего — стадия пролома пропускается.
      */
+    /** До кармана путь меряется до его окрестности: стены стоят в 4–5 клетках от центра блока контейнеров. */
+    private const val VAULT_REACH = 6
+
     private class Vault(
         val containers: List<Pos>, val interior: Set<Pos>, val wall: Pos?, val outside: Pos?,
         val spawnCell: Pos, val towerCell: Pos?,
@@ -330,8 +333,8 @@ object SpawnAndSwampAdvanced {
         return out
     }
 
-    private fun planVault(from: Position, all: Array<GameObject>) {
-        val ourStart = posOf(from)
+    private fun planVault(from: Position, start: Position, all: Array<GameObject>) {
+        val ourStart = posOf(start)
         val enemy = enemyStart ?: return
         val containers = all.filter { it is StructureContainer }.map { posOf(it) }
         if (containers.isEmpty()) return
@@ -342,9 +345,15 @@ object SpawnAndSwampAdvanced {
             if (home != null) home.add(c) else clusters.add(mutableListOf(c))
         }
         fun center(cl: List<Pos>) = Pos(cl.sumOf { it.x } / cl.size, cl.sumOf { it.y } / cl.size)
-        val cluster = clusters.minByOrNull { cheb(center(it), ourStart) - cheb(center(it), enemy) } ?: return
+        // свой карман — по ПУТИ от стартов (до его окрестности: внутрь пути нет): v20 мерил прямой от спавна у (67,1),
+        // и ближним оказался чужой карман за центральной стеной — пробой там так и не начался
+        fun reach(from: Pos, c: Pos): Int {
+            val r = searchPath(cell(from), SearchGoal(pos = cell(c), range = VAULT_REACH), SearchPathOptions(plainCost = 1, swampCost = 5))
+            return if (r.incomplete) Int.MAX_VALUE / 4 else r.cost
+        }
+        val cluster = clusters.maxByOrNull { reach(enemy, center(it)) - reach(ourStart, center(it)) } ?: return
         val c0 = center(cluster)
-        if (cheb(c0, ourStart) >= cheb(c0, enemy)) { println("vault: no cluster on our side"); return }
+        if (reach(ourStart, c0) >= reach(enemy, c0)) { println("vault: no cluster on our side"); return }
         val walls = all.filter { it is StructureWall && cheb(posOf(it), c0) <= 8 }.map { posOf(it) }.toSet()
         fun open(p: Pos) = p.x in 0..99 && p.y in 0..99 && getTerrainAt(cell(p)) != TERRAIN_WALL && p !in walls
         // внутренность кармана: заливка от контейнеров; дошла до края окна — карман рельефом не запечатан
@@ -540,7 +549,7 @@ object SpawnAndSwampAdvanced {
             if (w != null) {
                 openingPlan(w, sources, all)
                 val home = bases.firstOrNull()?.let { cell(it.spawnCell) } ?: w
-                planVault(home, all)
+                planVault(home, w, all)
             }
         }
         resolveRoles(t, mine)
@@ -769,8 +778,10 @@ object SpawnAndSwampAdvanced {
         val blocked = blockedCells(all)
         val ranked = sources.filter { idOf(it) !in taken }.map { s -> Triple(s, pathTicks(from, s), enemyFrom.minOf { pathTicks(it, s) }) }
         println("expansion: candidates " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})us=${it.second}/them=${it.third}" })
+        // лучший из БЕЗОПАСНЫХ: v20 брал только первый по запасу, а у него стояла армия けろびー — и не расширялся вовсе,
+        // когда два других наших источника были свободны
         for ((s, _, _) in ranked.filter { it.second < it.third }.sortedWith(compareByDescending<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
-            planBase(s, from, blocked)?.let { return it }
+            planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) }?.let { return it }
         }
         return null
     }
