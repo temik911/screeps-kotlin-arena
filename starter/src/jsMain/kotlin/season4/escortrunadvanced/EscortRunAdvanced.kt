@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 30
+const val BOT_VERSION = 31
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -888,12 +888,18 @@ object EscortRunAdvanced {
         val spawn = w.mySpawn ?: return
         val homes = escortHome.values.toSet()
         for (m in w.masons.filter { !it.spawning }) {
-            val post = innerCells(w).filter { k -> k !in homes && (w.occupant[k] == null || idOf(w.occupant[k]!!) == idOf(m)) }
+            // its post: a cell beside the spawn as the block stood at tick one — innerCells() counts living ramparts, and
+            // after eleven fell in 153 ticks (6ab95e92) there was no inner cell left and the mason had no post
+            val post = (blockCells ?: emptyList()).filter { k -> cheb(k, key(spawn)) == 1 && k !in homes &&
+                (w.occupant[k] == null || idOf(w.occupant[k]!!) == idOf(m)) }
                 .minByOrNull { getRange(cellOf(it), m) }
             if (post != null && key(m) != post) {
                 val f = flowTo("mason", cellOf(post), Bodies.swampCost(m))
                 DistanceMap.flowStep(f, m.x, m.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(m, it, HAULER_PRIORITY + 20) }
-            } else if (post != null) pinned.add(idOf(m))
+            }
+            // not pinned: a cell beside the spawn can be the haulers' only way out of the block, and a pinned mason on
+            // (8,89) held both haulers inside for 250 ticks at zero income (v31 draft, stand, kerobii bottom); shoved
+            // aside it walks back to its post
             val carried = m.store[RESOURCE_ENERGY] ?: 0
             val gaps = blockGaps(w)
             val site = getObjectsByPrototype(ConstructionSite::class).firstOrNull { it.exists && it.my == true && key(it) in gaps && getRange(it, m) <= 3 }
@@ -2075,7 +2081,12 @@ object EscortRunAdvanced {
         if (open.weWin && open.margin() >= DEFEND_OPEN_MARGIN) return emptySet()
         val spawnKey = w.mySpawn?.let { key(it) }
         val towerCells = works?.filter { it.first == "tower" }?.map { it.second }?.toSet() ?: emptySet()
-        val cells = basesRamparts(w, base).filter { k -> k != spawnKey && k !in towerCells &&
+        // a gap beside our escort is held too, while a mason stands by to raise the rampart under its holder: his melee
+        // walked into such a gap one tick after it fell and held it 95-98 % of the time (v23, six losses to stachu3478).
+        // Without a mason the holder only dies in the open — the stand's kerobii persona killed one in seven ticks and the
+        // mason came 96 ticks later (v31 draft, kerobii bottom)
+        val gaps = if (w.masons.any { !it.spawning }) blockGaps(w).filter { k -> w.escorts.any { e -> cheb(k, key(e)) <= 1 } } else emptyList()
+        val cells = (basesRamparts(w, base) + gaps).distinct().filter { k -> k != spawnKey && k !in towerCells &&
             (w.occupant[k]?.let { o -> o.my && idOf(o) !in escortIds } ?: true) }
         val taken = HashSet<Int>()
         val placed = HashSet<String>()
@@ -2186,7 +2197,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
