@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 198
+    private const val BOT_VERSION = 199
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3593,7 +3593,31 @@ object SpawnAndSwamp {
     }
 
     /** Армия. Возвращает мощь наступления (ушедшие волны плюс готовые уйти с поста) — для журнала. */
+    /** His LAST spawn, when the guns of ours already in reach of it take what is left of it (spawn and rampart) before
+     *  his fire takes them (v199); null otherwise. Set each tick at the start of runFighters. */
+    private var lastShotSpawn: StructureSpawn? = null
+
+    private fun lastShotOf(ctx: Ctx): StructureSpawn? {
+        if (!USE_LAST_SHOT || ctx.enemySpawns.size != 1) return null
+        val sp = ctx.enemySpawns.first()
+        val left = (sp.hits ?: SPAWN_HITS) + rampartOn(ctx, sp)
+        val guns = ctx.active.filter { c -> (hasRanged(c) && getRange(c, sp) <= RANGED_RANGE) || (hasMelee(c) && getRange(c, sp) <= 1) }
+        if (guns.isEmpty()) return null
+        val dps = guns.sumOf { c -> (if (getRange(c, sp) <= RANGED_RANGE) c.body.count { it.type == RANGED_ATTACK && it.hits > 0 } * RANGED_ATTACK_POWER else 0) +
+            (if (getRange(c, sp) <= 1) c.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER else 0) }.toDouble()
+        if (dps <= 0.0) return null
+        // the guns hold while the weakest of them lives under his fire where it stands
+        val holds = guns.minOf { c -> InfluenceMap.damageAt(c.x, c.y, ctx.combatEnemies).let { d -> if (d <= 0.0) Double.MAX_VALUE else c.hits / d } }
+        return if (left <= dps * holds) sp else null
+    }
+
     private fun runFighters(ctx: Ctx, enemyPower: Double, alarm: Boolean): Double {
+        // THE LAST SHOT (v199). His last spawn is the match, and the win outranks every other target and every step:
+        // against けろびー#49 (v198) his last spawn (24,15) stood at 60 hits for 255 ticks after our M3R3 f45 brought it
+        // there — f45 shot his creeps in range (the spawn is shot only in a storm or with no armed creep near it) and
+        // stepped away at 1743, before his first hit on it at 1752; two of its shots were the win. While the guns in
+        // reach of his last spawn take what is left of it before his fire takes them, they shoot it and hold their cells
+        lastShotSpawn = lastShotOf(ctx)
         val fighters = ctx.fighters
         measureIncoming(fighters, ctx.combatEnemies)
         if (fighters.isEmpty()) { wave.clear(); return 0.0 }
@@ -4620,6 +4644,8 @@ object SpawnAndSwamp {
                 else ctx.enemyTowers.filter { it.fed }
             val step: Position? = when {
                 !canMove(creep) -> null // обездвижен — только стреляет
+                // (v199) in reach of his last spawn that the guns there finish: hold the cell and shoot
+                lastShotSpawn?.let { sp -> (hasRanged(creep) && getRange(creep, sp) <= RANGED_RANGE) || (hasMelee(creep) && getRange(creep, sp) <= 1) } == true -> null
                 mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix) ?: pathStep(creep, mySpawn, 1, ctx.dangerMatrix)
                 hold -> null
                 // волна держит кромку башни: из-под огня кормленной башни — прочь; в поле — обычный шаг, но не
@@ -4695,6 +4721,7 @@ object SpawnAndSwamp {
 
     private fun strike(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, wallTarget: StructureWall?) {
         if (!hasMelee(creep)) return
+        lastShotSpawn?.let { sp -> if (creep.getRangeTo(sp) <= 1) { creep.attack(sp); return } }
         val adjacent = enemyCreeps.filter { creep.getRangeTo(it) <= 1 }
         // THE SPAWN-FIRST RULES ASK ABOUT HIS ARMED NEIGHBOURS ONLY (v131), as the shot does (combatInRange): an unarmed
         // hauler of his next to our melee has no fire to take off the siege (f = 0 in costsMoreThanSpawn's own terms) and
@@ -4855,6 +4882,7 @@ object SpawnAndSwamp {
 
     private fun shoot(creep: Creep, enemyCreeps: List<Creep>, enemySpawn: StructureSpawn?, focusTarget: Creep?, stormSpawn: Boolean, wallTarget: StructureWall? = null, allies: List<Creep> = emptyList(), towerTarget: StructureTower? = null) {
         if (!hasRanged(creep)) return
+        lastShotSpawn?.let { sp -> if (creep.getRangeTo(sp) <= RANGED_RANGE) { creep.rangedAttack(sp); return } }
         val creepsInRange = enemyCreeps.filter { creep.getRangeTo(it) <= RANGED_RANGE }
         val spawnInRange = enemySpawn != null && creep.getRangeTo(enemySpawn) <= RANGED_RANGE
         val towerInRange = towerTarget != null && creep.getRangeTo(towerTarget) <= RANGED_RANGE
@@ -6573,6 +6601,9 @@ object SpawnAndSwamp {
     private const val USE_RAID_FIT_TARGET = true
     /** While chipping his ramparted spawn the waiting raid waits at its door, not at the lurk range (v198). */
     private const val USE_RAID_DOOR_WAIT = true
+    /** His last spawn, when our guns in reach take what is left of it before his fire takes them, is shot first and
+     *  the guns hold their cells (v199). */
+    private const val USE_LAST_SHOT = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
