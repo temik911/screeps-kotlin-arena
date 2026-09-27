@@ -521,9 +521,24 @@ object PainAndGainAdvanced {
     }
 
     private fun place(army: List<Unit>, engaged: Boolean) {
-        val ctx = Formation.ctx(army, theirs) { n -> n in towerCells || n in held || occupiedByEnemy(n) }
-        val patients = army.filter { it.deficit > 0 }
-        val claimed = HashSet<String>()
+        // a cell of ours whose creep is not stepping away this tick is not taken: taking it is a swap that moves the pair
+        // nowhere and breaks the line
+        val ctx = Formation.ctx(army, theirs) { n ->
+            n in towerCells || n in held || occupiedByEnemy(n) || ourAt[n]?.let { !Traffic.wants(it.c) } == true
+        }
+        // what each of ours needs this tick: its deficit and what his weapons in reach can put on it. Healers share a
+        // need by their power — under focused fire the one being focused needs several of them, and v7's first cut
+        // gave each patient one healer and lost the stand's rush, 10 for 10, which v6 won with 7 to 9 alive
+        val need = HashMap<String, Double>()
+        for (a in army) {
+            var d = 0.0
+            for (e in theirs) {
+                val r = Grid.range(e.x, e.y, a.x, a.y)
+                if (r <= 2 && e.melee > 0) d += e.melee * 30 * theirFx.attack
+                if (r <= 4 && e.ranged > 0) d += e.ranged * 10 * theirFx.ranged
+            }
+            need[a.id] = a.deficit + d * ourFx.damageTaken
+        }
         // front first: the one nearest him decides first, so the ones behind see where the line will be
         for (u in army.sortedBy { ctx.foe(it.cell) }) {
             val role = if (u.melee > 0) Role.MELEE else if (u.ranged > 0) Role.RANGED else if (u.heal > 0) Role.HEALER else continue
@@ -533,9 +548,10 @@ object PainAndGainAdvanced {
                 if (heavies.isNotEmpty()) stepToward(u, Grid.fresh(heavies.toIntArray()), 40, stopAt = 1)
                 continue
             }
-            val patient = if (role == Role.HEALER) patients.filter { it.id !in claimed && it !== u }
-                .maxByOrNull { it.deficit.toDouble() - 30.0 * Grid.range(it.x, it.y, u.x, u.y) } else null
-            if (patient != null) claimed.add(patient.id)
+            val power = u.heal * 12 * ourFx.heal
+            val patient = if (role == Role.HEALER) army.filter { it !== u && (need[it.id] ?: 0.0) > 0 }
+                .maxByOrNull { minOf(need[it.id] ?: 0.0, power) - 8.0 * Grid.range(it.x, it.y, u.x, u.y) } else null
+            if (patient != null) need[patient.id] = (need[patient.id] ?: 0.0) - power
             val want = Formation.step(u, role, ctx, patient, engaged)
             if (want != u.cell) Traffic.want(u.c, want, if (role == Role.MELEE) 60 else 30)
         }
