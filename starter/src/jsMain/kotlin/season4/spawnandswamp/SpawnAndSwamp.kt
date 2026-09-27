@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 181
+    private const val BOT_VERSION = 182
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4496,7 +4496,11 @@ object SpawnAndSwamp {
             val mates = when {
                 // волны друг друга не ждут (подкрепление по двое догоняло первую через сотню тиков — стенд)…
                 // кроме фронта, держащего кромку: тогда все ушедшие — одна группа, и фронт ждёт подкрепление
-                marching -> fighters.filter { it.id != creep.id && (if (siegeHold) it.id in wave else wave[it.id] == wave[creep.id]) && canMove(it) }
+                // …and a mate sent after his builder is not waited for either (v182): it is off the march on purpose, and
+                // against marlyman#453 f71/f86 held about 130 ticks at (33-35,70) for f83 of their wave, which was hunting
+                // his builder, while his main — the last spawn he had — stood untouched
+                marching -> fighters.filter { it.id != creep.id && (if (siegeHold) it.id in wave else wave[it.id] == wave[creep.id]) && canMove(it) &&
+                    !(USE_HUNTER_NOT_WAITED && huntOf[it.id] != null) }
                 hunting -> freeStrikers.filter { it.id != creep.id }
                 else -> emptyList()
             }
@@ -6442,6 +6446,8 @@ object SpawnAndSwamp {
     private const val USE_PILE_FINISH = true
     /** The approach field prices a tick in the army's hits over the ticks left, not at one hit (towerFireField, v181). */
     private const val USE_TICK_PRICE = true
+    /** A mate sent after his builder is not waited for by its marching wave (runFighters' cohesion, v182). */
+    private const val USE_HUNTER_NOT_WAITED = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
