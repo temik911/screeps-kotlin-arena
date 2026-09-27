@@ -16,6 +16,7 @@ import screeps.api.HEAL
 import screeps.api.HEAL_POWER
 import screeps.api.MAX_CONSTRUCTION_SITES
 import screeps.api.MOVE
+import screeps.api.MAX_CREEP_SIZE
 import screeps.api.OBSTACLE_OBJECT_TYPES
 import screeps.api.Position
 import screeps.api.RAMPART_HITS
@@ -98,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v28"
+    private const val BOT_VERSION = "v29"
 
     private const val LOG_EVERY = 50
 
@@ -119,6 +120,9 @@ object SpawnAndSwampAdvanced {
 
     /** У его спавна «стоит» то, что в стольких клетках от него: защитники, которые успеют к удару по этому спавну. */
     private const val STRIKE_GUARD_RANGE = 15
+
+    /** Спавны в стольких клетках друг от друга делят запас на одно тело (замер basic: 3 — да, 25 — нет). */
+    private const val POOL_RANGE = 3
 
     /** Прогон дольше этого не смотрим: бой, который не решается за столько тиков, для решения — ничья. */
     private const val SIM_LIMIT = 300
@@ -157,6 +161,10 @@ object SpawnAndSwampAdvanced {
     private class Base(val sourceId: String, val spawnCell: Pos, val slots: List<Pos>) {
         var spawnId: String? = null
         var towerCell: Pos? = null
+        /** Второй спавн у того же источника: доход он не поднимает (источник даёт свои 10 в тик), но запас спавнов в
+         *  досягаемости `spawnCreep` общий — тело до 2000 вместо 1000 (идея оператора 27.09.2026). */
+        var twinCell: Pos? = null
+        var twinId: String? = null
     }
 
     private val bases = ArrayList<Base>()
@@ -697,7 +705,13 @@ object SpawnAndSwampAdvanced {
         val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
         for (b in bases) {
             val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
+            planTwin(t, b, sp, mine, all)
             planTower(t, b, sp, mine, all)
+            val tc = b.twinCell
+            if (tc != null && b.twinId == null) {
+                val tw = mySpawns.firstOrNull { it.x == tc.x && it.y == tc.y }
+                if (tw != null) { b.twinId = idOf(tw); println("twin spawn up t=$t at (${tw.x},${tw.y})") }
+            }
         }
         runTowers(myTowers, theirs, mine)
 
@@ -707,6 +721,9 @@ object SpawnAndSwampAdvanced {
         for (b in bases) {
             val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
             if (sp.spawning == null) runSpawn(t, b, sp, mine, threats)
+            // второй спавн рожает, пока первый занят: запас у них общий, очередь — две
+            val tw = b.twinId?.let { byId[it] } as? StructureSpawn ?: continue
+            if (tw.spawning == null && sp.spawning != null) spawnFighter(t, tw, energyOf(tw), why = if (threats.isEmpty()) "twin" else "threat")
         }
         for (v in vaults) {
             val sp = v.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
@@ -851,8 +868,12 @@ object SpawnAndSwampAdvanced {
                 if (w.build(site).asDynamic().unsafeCast<Int>() == 0) return
             } else if (src.energy > 0) { w.harvest(src); return }
         }
-        val spawnFree = spawn.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
-        val canDeliver = e > 0 && spawnFree > 0 && getRange(w, spawn) <= 1
+        // сдаём в тот из спавнов базы рядом, где есть место (второй спавн делит с первым запас на одно тело)
+        val sink = getObjectsByPrototype(StructureSpawn::class)
+            .filter { it.my == true && getRange(w, it) <= 1 && (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }
+            .minByOrNull { energyOf(it) } ?: spawn
+        val spawnFree = sink.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
+        val canDeliver = e > 0 && spawnFree > 0 && getRange(w, sink) <= 1
         // копка исполняется раньше сдачи: место под неё — от запаса начала тика
         if (src.energy > 0 && getRange(w, src) <= 1 && cap - e >= h) {
             w.harvest(src)
@@ -860,7 +881,7 @@ object SpawnAndSwampAdvanced {
             val site = mySites.filter { getRange(w, it) <= 3 }.minByOrNull { getRange(w, it) }
             if (site != null) w.build(site)
         }
-        if (canDeliver) w.transfer(spawn, RESOURCE_ENERGY)
+        if (canDeliver) w.transfer(sink, RESOURCE_ENERGY)
     }
 
     // ---------- второй спавн ----------
@@ -933,7 +954,7 @@ object SpawnAndSwampAdvanced {
 
     private fun fighterBody(energy: Int): Array<BodyPartType> {
         val pair = (BODYPART_COST[MOVE] ?: 50) + (BODYPART_COST[RANGED_ATTACK] ?: 150)
-        val k = minOf(5, energy / pair)
+        val k = minOf(MAX_CREEP_SIZE / 2, energy / pair)
         val out = ArrayList<BodyPartType>()
         repeat(k) { out.add(MOVE); out.add(RANGED_ATTACK) }
         return out.toTypedArray()
@@ -991,7 +1012,7 @@ object SpawnAndSwampAdvanced {
         var bestScore = Int.MIN_VALUE
         for (dx in -3..3) for (dy in -3..3) {
             val c = Pos(b.spawnCell.x + dx, b.spawnCell.y + dy)
-            if (c == b.spawnCell || c in b.slots || !walkable(c, blocked)) continue
+            if (c == b.spawnCell || c in b.slots || c == b.twinCell || !walkable(c, blocked)) continue
             val feeders = b.slots.count { cheb(it, c) <= 1 }
             if (feeders == 0 || exits(c) == 0) continue
             val score = feeders * 1000 + (if (isSwamp(c)) 0 else 100) - cheb(c, b.spawnCell)
@@ -1030,7 +1051,7 @@ object SpawnAndSwampAdvanced {
     private fun guardCells(b: Base, all: Array<GameObject>): List<Pos> {
         val blocked = blockedCells(all)
         val enemy = enemyStart
-        return neighbours(b.spawnCell).filter { it !in b.slots && it != b.towerCell && walkable(it, blocked) }
+        return neighbours(b.spawnCell).filter { it !in b.slots && it != b.towerCell && it != b.twinCell && walkable(it, blocked) }
             .sortedBy { if (enemy == null) 0 else cheb(it, enemy) }
     }
 
@@ -1044,12 +1065,45 @@ object SpawnAndSwampAdvanced {
         return cost != null && o.asDynamic().progressTotal == cost
     }
 
+    /** Второй спавн у главной базы: когда экономика уже взяла следующий источник (или брать нечего) и дом держит угрозы;
+     *  клетка — у клеток добытчиков (они строят и сдают в него без шага), не отнимая у спавна последний выход. */
+    private fun planTwin(t: Int, b: Base, spawn: StructureSpawn, mine: List<Creep>, all: Array<GameObject>) {
+        if (b !== bases.first() || b.twinCell != null) return
+        if (mine.none { isCombat(it) } || !homeHolds) return
+        val economyTaken = bases.size >= 2 || (expansionPlanAt >= 0 && expansionPlan == null && expansion == null)
+        if (!economyTaken) return
+        val blocked = blockedCells(all)
+        fun exits(extra: Pos): Int {
+            var n = 0
+            for (x in b.spawnCell.x - 1..b.spawnCell.x + 1) for (y in b.spawnCell.y - 1..b.spawnCell.y + 1) {
+                val p = Pos(x, y)
+                if (p != b.spawnCell && p != extra && p !in b.slots && p != b.towerCell && walkable(p, blocked)) n++
+            }
+            return n
+        }
+        var best: Pos? = null
+        var bestScore = Int.MIN_VALUE
+        for (dx in -2..2) for (dy in -2..2) {
+            val c = Pos(b.spawnCell.x + dx, b.spawnCell.y + dy)
+            if (c == b.spawnCell || c in b.slots || c == b.towerCell || !walkable(c, blocked)) continue
+            val feeders = b.slots.count { cheb(it, c) <= 1 }
+            if (feeders == 0 || exits(c) <= 1) continue
+            val score = feeders * 1000 + (if (isSwamp(c)) 0 else 100) - cheb(c, b.spawnCell)
+            if (score > bestScore) { bestScore = score; best = c }
+        }
+        val c = best ?: return
+        val r = createConstructionSite(c.x, c.y, StructureSpawn::class.js)
+        println("twin site t=$t at (${c.x},${c.y}) base=(${b.spawnCell.x},${b.spawnCell.y}) err=${r.error}")
+        if (r.error == null) b.twinCell = c
+    }
+
     /** Башня бьёт боевого врага в досягаемости (ближнего — у него выстрел сильнее), при равенстве — самого битого;
      *  без врагов лечит самого битого нашего. */
     private fun runTowers(towers: List<StructureTower>, theirs: List<Creep>, mine: List<Creep>) {
         for (tw in towers) {
             if (energyOf(tw) < TOWER_ENERGY_COST || tw.cooldown > 0) continue
-            val foe = theirs.filter { getRange(tw, it) <= TOWER_RANGE }
+            // рождающийся крип стоит на клетке спавна и неуязвим, пока не выйдет (оператор 27.09.2026)
+            val foe = theirs.filter { !it.spawning && getRange(tw, it) <= TOWER_RANGE }
                 .sortedWith(compareBy<Creep> { if (isCombat(it)) 0 else 1 }.thenBy { getRange(tw, it) }.thenBy { it.hits })
                 .firstOrNull()
             if (foe != null) { tw.attack(foe); continue }
@@ -1163,7 +1217,7 @@ object SpawnAndSwampAdvanced {
     /** Лекарь той же цены, что стрелок: MOVE на каждую часть и HEAL на остальное. */
     private fun healerBody(energy: Int): Array<BodyPartType> {
         val pair = (BODYPART_COST[MOVE] ?: 50) + (BODYPART_COST[HEAL] ?: 250)
-        val k = energy / pair
+        val k = minOf(MAX_CREEP_SIZE / 2, energy / pair)
         val out = ArrayList<BodyPartType>()
         repeat(k) { out.add(MOVE) }
         repeat(k) { out.add(HEAL) }
@@ -1176,9 +1230,9 @@ object SpawnAndSwampAdvanced {
      *  за то же время, плюс его башни. Против армии без лечения лекарь ничего не решает — прогон выберет стрелка. */
     private var armyCache: Pair<List<SimUnit>, List<SimUnit>>? = null
 
-    private fun chooseFighter(): Array<BodyPartType> {
-        val ranger = fighterBody(SPAWN_ENERGY_CAPACITY)
-        val healer = healerBody(SPAWN_ENERGY_CAPACITY)
+    private fun chooseFighter(cap: Int): Array<BodyPartType> {
+        val ranger = fighterBody(cap)
+        val healer = healerBody(cap)
         val (ours, theirs) = armyCache ?: return ranger
         if (theirs.isEmpty()) return ranger
         val r = simulate(ours + SimUnit(ranger.map { it.asDynamic().unsafeCast<String>() }, ranger.size * 100), theirs)
@@ -1187,11 +1241,21 @@ object SpawnAndSwampAdvanced {
         return if (score(h) > score(r)) healer else ranger
     }
 
+    /** Спавны, чей запас берёт `spawnCreep` этого спавна: наши в `POOL_RANGE` (basic замерил: в 3 клетках
+     *  считается, в 25 — нет; 20 из документации не проверено). */
+    private fun poolOf(spawn: StructureSpawn): List<StructureSpawn> =
+        getObjectsByPrototype(StructureSpawn::class).filter { it.my == true && getRange(it, spawn) <= POOL_RANGE }
+
     private fun spawnFighter(t: Int, spawn: StructureSpawn, energy: Int, why: String) {
-        val full = chooseFighter()
-        if (energy < costOf(full)) return
+        val pool = poolOf(spawn)
+        val poolEnergy = pool.sumOf { energyOf(it) }
+        val poolCap = pool.sumOf { it.store.getCapacity(RESOURCE_ENERGY) ?: SPAWN_ENERGY_CAPACITY }
+        // под угрозой — тело одного спавна: защитник нужен сейчас, а не через 180 тиков накопления на двойное
+        val cap = if (why == "threat") minOf(poolCap, SPAWN_ENERGY_CAPACITY) else poolCap
+        val full = chooseFighter(cap)
+        if (poolEnergy < costOf(full)) return
         val r = spawn.spawnCreep(full)
-        println("spawn t=$t ${bodyText(full)} cost=${costOf(full)} energy=$energy why=$why err=${r.error}")
+        println("spawn t=$t ${bodyText(full)} cost=${costOf(full)} energy=$energy pool=$poolEnergy/${pool.size} why=$why err=${r.error}")
     }
 
     // ---------- сила ----------
@@ -1645,7 +1709,8 @@ object SpawnAndSwampAdvanced {
     /** Все наши спавны: базы и сейф. Один список для угроз, сбора и защиты — v9 считал его в двух местах, и во втором
      *  не было спавна сейфа: угроза у сейфа держала защиту, а бойцы стояли у первой базы до конца матча. */
     private fun homeSpawnObjects(byId: Map<String, GameObject>): List<GameObject> =
-        bases.mapNotNull { b -> b.spawnId?.let { byId[it] } } + vaults.mapNotNull { v -> v.spawnId?.let { byId[it] } }
+        bases.mapNotNull { b -> b.spawnId?.let { byId[it] } } + bases.mapNotNull { b -> b.twinId?.let { byId[it] } } +
+            vaults.mapNotNull { v -> v.spawnId?.let { byId[it] } }
 
     /** Клетки, на которых боец не стоит: у спавна (выходы для рождения), клетки добытчиков, башни и наших площадок. */
     private fun reservedCells(all: Array<GameObject>): Set<Pos> {
@@ -1654,6 +1719,7 @@ object SpawnAndSwampAdvanced {
             for (x in b.spawnCell.x - 1..b.spawnCell.x + 1) for (y in b.spawnCell.y - 1..b.spawnCell.y + 1) out.add(Pos(x, y))
             out.addAll(b.slots)
             b.towerCell?.let { out.add(it) }
+            b.twinCell?.let { tc -> for (x in tc.x - 1..tc.x + 1) for (y in tc.y - 1..tc.y + 1) out.add(Pos(x, y)) }
         }
         for (v in vaults) {
             if (v.stage == "run" || v.wall != null) {
@@ -1691,7 +1757,7 @@ object SpawnAndSwampAdvanced {
     /** Цель волны: боевой враг в пределах местной дальности, иначе ближайшая постройка (башня раньше спавна),
      *  иначе ближайший крип. */
     private fun pickGoal(f: Creep, enemyCombat: List<Creep>, enemyObjects: List<GameObject>, theirs: List<Creep>): GameObject? {
-        enemyCombat.filter { getRange(f, it) <= LOCAL_RANGE }.minByOrNull { getRange(f, it) }?.let { return it }
+        enemyCombat.filter { !it.spawning && getRange(f, it) <= LOCAL_RANGE }.minByOrNull { getRange(f, it) }?.let { return it }
         val structures = enemyObjects.filter { it is Structure }
         structures.filter { it is StructureTower }.minByOrNull { getRange(f, it) }?.let { tw ->
             val sp = structures.filter { it is StructureSpawn }.minByOrNull { getRange(f, it) }
@@ -1703,7 +1769,9 @@ object SpawnAndSwampAdvanced {
 
     /** Стрельба: по крипам в досягаемости (сперва боевые, самые битые), иначе по постройкам; массовая — когда она
      *  бьёт сильнее одиночной. Возвращает, стрелял ли. */
-    private fun shoot(f: Creep, theirs: List<Creep>, enemyObjects: List<GameObject>): Boolean {
+    private fun shoot(f: Creep, theirsAll: List<Creep>, enemyObjects: List<GameObject>): Boolean {
+        // рождающийся крип неуязвим, пока не выйдет со спавна: выстрел в него пропадает (оператор 27.09.2026)
+        val theirs = theirsAll.filter { !it.spawning }
         // мили (пробойщик после пролома): вплотную — крип, иначе постройка
         if (liveParts(f, ATTACK) > 0) {
             val adj = theirs.filter { getRange(f, it) <= 1 }.minByOrNull { it.hits }
