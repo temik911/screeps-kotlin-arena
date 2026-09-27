@@ -3615,8 +3615,12 @@ object SpawnAndSwamp {
         val dps = guns.sumOf { c -> (if (getRange(c, sp) <= RANGED_RANGE) c.body.count { it.type == RANGED_ATTACK && it.hits > 0 } * RANGED_ATTACK_POWER else 0) +
             (if (getRange(c, sp) <= 1) c.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER else 0) }.toDouble()
         if (dps <= 0.0) return null
-        // the guns hold while the weakest of them lives under his fire where it stands
-        val holds = guns.minOf { c -> InfluenceMap.damageAt(c.x, c.y, ctx.combatEnemies).let { d -> if (d <= 0.0) Double.MAX_VALUE else c.hits / d } }
+        // the guns hold while the weakest of them lives under his fire where it stands — his tower's shot counted whole,
+        // not as its average per tick: one shot at range 3 takes an M8R4's legs and a gun, and priced at the average the
+        // gate's tower+healball held two guns at his spawn under the tower until both died, the spawn standing (518 -> 1460)
+        val holds = guns.minOf { c ->
+            val d = InfluenceMap.damageAt(c.x, c.y, ctx.combatEnemies) - InfluenceMap.towerSustainedAt(c.x, c.y) + InfluenceMap.towerBurstAt(c.x, c.y)
+            if (d <= 0.0) Double.MAX_VALUE else c.hits / d }
         return if (left <= dps * holds) sp else null
     }
 
