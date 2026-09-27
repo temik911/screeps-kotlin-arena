@@ -361,9 +361,9 @@ object EscortRunAdvanced {
             myRamparts = myRamparts, enemyRamparts = enemyRamparts, occupant = occupant,
             enemyAt = enemies.mapTo(HashSet()) { key(it) }, blocked = blocked,
             fighters = others.filter { Bodies.wasArmed(it) },
-            harvesters = mine.filter { idOf(it) !in escortIds && Bodies.isWorker(it) && !isPioneer(it) && !isMason(it) && idOf(it) !in denierIds },
-            masons = mine.filter { idOf(it) !in escortIds && isMason(it) && idOf(it) !in denierIds },
-            deniers = mine.filter { idOf(it) in denierIds },
+            harvesters = mine.filter { idOf(it) !in escortIds && Bodies.isWorker(it) && !isPioneer(it) && !isMason(it) && !isDenier(it) },
+            masons = mine.filter { idOf(it) !in escortIds && isMason(it) },
+            deniers = mine.filter { idOf(it) !in escortIds && isDenier(it) },
             pioneers = mine.filter { idOf(it) !in escortIds && isPioneer(it) },
             outpostSpawn = outpostSpawn,
             haulers = mine.filter { idOf(it) !in escortIds && Bodies.isHauler(it) },
@@ -379,6 +379,12 @@ object EscortRunAdvanced {
 
     /** An outpost worker: WORK enough to saturate a source alone (home harvesters are split in two). */
     private fun isPioneer(c: Creep) = c.body.count { it.type == WORK } >= WORK_TARGET
+
+    /** The denier's body is its mark (four WORK, four CARRY): v35's first build kept its id from spawnCreep()'s answer,
+     *  which is not the id the creep has once born — the denier worked the home source as a harvester and was
+     *  "replaced" 400 ticks later (test game 6ab9782f). */
+    private fun isDenier(c: Creep) = c.body.count { it.type == WORK } == DENIER.count { it == WORK } &&
+        c.body.count { it.type == CARRY } == DENIER.count { it == CARRY } && c.body.none { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
 
     /** The mason's body is its mark: no harvester of ours carries four WORK and two CARRY. */
     private fun isMason(c: Creep) = c.body.count { it.type == WORK } == MASON.count { it == WORK } &&
@@ -473,7 +479,7 @@ object EscortRunAdvanced {
             pullerFor?.let { pullerOrders.addLast(it) }
             if (order.any { it == ATTACK || it == RANGED_ATTACK || it == HEAL }) armyMade++
             if (order.count { it == WORK } >= WORK_TARGET) pioneersSent++
-            if (order === DENIER) r.`object`?.let { denierIds.add(idOf(it)); deniersSent++ }
+            if (order === DENIER) deniersSent++
             println("spawn t=${w.now}: ${Bodies.summary(order)} e=${energy(w)} army=$armyMade")
         }
     }
@@ -957,7 +963,7 @@ object EscortRunAdvanced {
      *  the flag, so it builds there without a step). */
     private class Deny(val flag: Int, val source: Int, val slot: Int)
     private var deny: Deny? = null
-    private val denierIds = HashSet<String>()
+    private var denierSeen = false
     private var deniersSent = 0
     private var denierLostAt = -1
 
@@ -987,8 +993,9 @@ object EscortRunAdvanced {
      *  PIONEER_RETRY has passed. */
     private fun denyWanted(w: World): Boolean {
         val d = deny ?: return false
-        for (id in denierIds.toList()) if (w.mine.none { idOf(it) == id }) { denierIds.remove(id); denierLostAt = w.now }
-        if (w.deniers.isNotEmpty() || w.fighters.isEmpty()) return false
+        if (w.deniers.isNotEmpty()) { denierSeen = true; return false }
+        if (denierSeen) { denierSeen = false; denierLostAt = w.now }
+        if (w.fighters.isEmpty()) return false
         if (denierLostAt >= 0 && w.now - denierLostAt < PIONEER_RETRY) return false
         if (hisDeliveryIn(w) == Int.MAX_VALUE) return false
         return w.enemyEscorts.none { key(it) == d.flag }
