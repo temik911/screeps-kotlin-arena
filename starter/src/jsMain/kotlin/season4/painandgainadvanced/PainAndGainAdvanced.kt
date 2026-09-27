@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 21
+const val BOT_VERSION = 22
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -403,6 +403,7 @@ object PainAndGainAdvanced {
 
     private val hunterOf = HashMap<String, String>()   // our hunter id -> enemy id
     private var surviving = false
+    private var preyId = ""
     /** His army is broken (we swept) or ours is gone: from then on no fight pays for our fatigue flag. */
     private var settled = false
     private var lastDeathT = 0
@@ -580,8 +581,24 @@ object PainAndGainAdvanced {
                 if (restGroup.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= restGroup.size) capture(restGroup, objective)
             }
             Mode.SWEEP -> if (restGroup.isNotEmpty()) {
-                march(restGroup, objective.x, objective.y); capture(restGroup, objective)
-                for (f in flags) if (f.my == true && restGroup.any { it.x == f.x && it.y == f.y }) maybeGarrison(restGroup, f)
+                // an armed survivor of his that no pair of ours hunts and that walks no faster than our group is the
+                // group's to kill before any flag: against kerobii#5 our lights, the only hunters, were dead by t=700,
+                // and his one heavy melee killed six of our garrisons one by one from t=1104 to t=1506 while the group
+                // walked from flag to flag; with the garrisons gone our own hits-loss flags finished the rest (0 of 16
+                // at t=1963, annihilated while he had two). No garrison is set while that hunt is on
+                val pace = restGroup.filter { it.moves > 0 }.maxOfOrNull { it.ticksPerStep(ourFx.fatigue) } ?: 1
+                // (not under his fed tower with a group too small to take one — the sweep's own rule for flags)
+                val hisFed = towers.filter { it.my == false && (it.store[RESOURCE_ENERGY] ?: 0) > 0 }
+                val loose = foes.filter { e -> e.armed && hunterOf.values.none { it == e.id } && e.ticksPerStep(theirFx.fatigue) >= pace &&
+                    (restGroup.size >= TOWER_ASSAULT_MIN || hisFed.none { Grid.range(it.x, it.y, e.x, e.y) <= HUNT_TOWER_R }) }
+                val prey = loose.minByOrNull { Grid.to(it.x, it.y)[Grid.idx(cx, cy)] }
+                if (prey != null) {
+                    if (preyId != prey.id) { preyId = prey.id; println("hunt t=$t: the group after ${prey.id.substringAfterLast("player").drop(2)} at (${prey.x},${prey.y})") }
+                    march(restGroup, prey.x, prey.y)
+                } else {
+                    march(restGroup, objective.x, objective.y); capture(restGroup, objective)
+                    for (f in flags) if (f.my == true && restGroup.any { it.x == f.x && it.y == f.y }) maybeGarrison(restGroup, f)
+                }
             }
             Mode.HOLD -> if (fortress != null && objective === fortress) {
                 val a = fortressAnchor(fortress, foes)
@@ -937,6 +954,7 @@ object PainAndGainAdvanced {
     const val GROUP_LINK = 4
     const val SWEEP_RATIO = 4.0
     const val HUNT_PAIR = 2
+    const val HUNT_TOWER_R = 5
     const val TOWER_MIN_DAMAGE = 200.0
     const val TOWER_FOCUS_BONUS = 3.0
 }
