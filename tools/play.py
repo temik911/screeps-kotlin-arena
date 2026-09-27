@@ -84,7 +84,7 @@ def arenas(c):
       const s = await (await GET('{API}/season/current')).json();
       const id = s.season?._id || s._id;
       const a = await (await GET('{API}/season/' + id + '/arenas')).json();
-      return JSON.stringify((a.arenas || a.list || []).map(x => ({{id: x._id, name: x.name, unlocked: !!x.unlocked}})));
+      return JSON.stringify((a.arenas || a.list || []).map(x => ({{id: x._id, name: x.name, unlocked: !!x.unlocked, advanced: !!x.advanced}})));
     }})()""")
 
 
@@ -92,9 +92,20 @@ def slug(name):
     return name.lower().replace(" ", "-")
 
 
+def arena_slug(arena):
+    """An arena's name on the command line. The advanced level of a mode is a separate arena with the SAME name (27.09.2026:
+    "Spawn and Swamp" twice, told apart only by `advanced` in the API), so it takes the suffix its client folder has."""
+    return slug(arena["name"]) + ("-advanced" if arena.get("advanced") else "")
+
+
 def folder_for(name):
-    """The client's script folder for an arena: ~/ScreepsArena/<season>-<mode>, matched by name."""
-    want = name.lower().replace(" ", "_")
+    """The client's script folder for an arena: ~/ScreepsArena/<season>-<mode>, matched by name (or by arena_slug: a
+    trailing "advanced" is the folder's `-advanced` suffix)."""
+    n = name.lower().replace("-", " ").strip()
+    advanced = n.endswith(" advanced")
+    if advanced:
+        n = n[:-len(" advanced")]
+    want = n.replace(" ", "_") + ("-advanced" if advanced else "")
     hits = [d for d in sorted(os.listdir(CLIENT_ROOT))
             if d.endswith(want) and os.path.isdir(os.path.join(CLIENT_ROOT, d))]
     if not hits:
@@ -103,9 +114,12 @@ def folder_for(name):
 
 
 def pick(c, wanted):
-    found = [a for a in arenas(c) if slug(a["name"]).startswith(wanted.lower()) and a["unlocked"]]
+    unlocked = [a for a in arenas(c) if a["unlocked"]]
+    # an exact name first: "spawn-and-swamp" is a prefix of "spawn-and-swamp-advanced"
+    found = [a for a in unlocked if arena_slug(a) == wanted.lower()] or \
+        [a for a in unlocked if arena_slug(a).startswith(wanted.lower())]
     if len(found) != 1:
-        names = ", ".join(sorted({slug(a["name"]) for a in arenas(c) if a["unlocked"]}))
+        names = ", ".join(sorted({arena_slug(a) for a in unlocked}))
         raise SystemExit(f"{'no' if not found else len(found)} unlocked arenas match {wanted!r}; have: {names}")
     return found[0]
 
@@ -545,7 +559,7 @@ def main():
         # by `export function loop() {}`, every hand lost at t=100 with an empty console.
         folder = None
         try:
-            folder = folder_for(a.arena.replace("-", " "))
+            folder = folder_for(a.arena)
         except SystemExit:
             folder = None
         payloads = {}
@@ -557,8 +571,7 @@ def main():
         elif not a.dry:
             raise SystemExit(f"no client folder for {a.arena!r} under {CLIENT_ROOT}")
         if a.dry:
-            arena_slug = a.arena if "-" in a.arena else a.arena
-            diffs = ab_dry(arena_slug, sides)
+            diffs = ab_dry(a.arena, sides)
             if payloads and sides["A"][2] == sides["B"][2]:
                 same = payload_digest(payloads["A"], sides["A"][0]) == payload_digest(payloads["B"], sides["B"][0])
                 print(f"ab --dry: the two refs are one commit — payloads {'identical' if same else 'DIFFER'}")
@@ -569,8 +582,8 @@ def main():
             raise SystemExit(1 if diffs else 0)
         c = CDP()
         arena = pick(c, a.arena)
-        if folder != folder_for(arena["name"]):
-            raise SystemExit(f"ab: the payload folder {folder} is not the arena's own {folder_for(arena['name'])}")
+        if folder != folder_for(arena_slug(arena)):
+            raise SystemExit(f"ab: the payload folder {folder} is not the arena's own {folder_for(arena_slug(arena))}")
         s = slot(c, arena["id"])
         if s["game"] and s["status"] != "finished":
             raise SystemExit(f"{arena['name']}: a match is already running ({s['game']})")
@@ -615,7 +628,7 @@ def main():
         print(f"ab: sides by game id -> {relabel} (1 = A = {a.ab[0]}, 2 = B = {a.ab[1]})")
         import subprocess
         series = os.path.join(os.path.dirname(os.path.abspath(__file__)), "series.py")
-        arena_arg = ["--arena", slug(arena["name"]), "--relabel", relabel]
+        arena_arg = ["--arena", arena_slug(arena), "--relabel", relabel]
         for cmd in (["compare", "1", "2"], ["shares", "--control", "1", "--final", "2", "--every"], ["reach", "--version", "1"], ["reach", "--version", "2"]):
             print(f"\n==== series.py {' '.join(cmd)}", flush=True)
             subprocess.run([sys.executable, series, *cmd, *arena_arg])
@@ -630,11 +643,11 @@ def main():
                 continue
             s = slot(c, arena["id"])
             try:
-                folder = folder_for(arena["name"])
+                folder = folder_for(arena_slug(arena))
             except SystemExit as e:
                 folder = f"({e})"
             busy = f"{s['status']} {s['game']}" if s["game"] else "idle"
-            print(f"{slug(arena['name']):<18} {arena['id']}  {busy:<26} {folder}")
+            print(f"{arena_slug(arena):<26} {arena['id']}  {busy:<26} {folder}")
         return
 
     arena = pick(c, a.arena)
@@ -682,7 +695,7 @@ def main():
         gained = {k: after.get(k, 0) - before.get(k, 0) for k in set(before) | set(after) if after.get(k, 0) != before.get(k, 0)}
         print(f"fame: inventory gained {gained if gained else 'nothing'}")
         return
-    folder = folder_for(arena["name"])
+    folder = folder_for(arena_slug(arena))
     s = slot(c, arena["id"])
     if s["game"] and s["status"] != "finished":
         raise SystemExit(f"{arena['name']}: a match is already running ({s['game']})")
@@ -733,7 +746,8 @@ def main():
         if path:
             # our bots name themselves on the first line; another name means the wrong payload was played
             greeting = open(path, encoding='utf-8').readline().strip()
-            if greeting.startswith("hello") and slug(arena["name"]) not in greeting:
+            if greeting.startswith("hello") and (arena_slug(arena) not in greeting or
+                                                 (not arena.get("advanced") and arena_slug(arena) + "-advanced" in greeting)):
                 line += f"\n  !! WRONG BOT PLAYED: {greeting[:80]}"
         print(line, flush=True)
         if a.fame:
