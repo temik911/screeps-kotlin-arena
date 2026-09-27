@@ -204,7 +204,8 @@ internal object Strategist {
         // гибнут первыми, мощь по числу частей становится нашей, натиск по мощи включается — и армия уходит из боя в гонку,
         // где приказ получают трое, а его сомкнутые стрелки с лекарями, отступив на четыре клетки, расстреливают остальных
         // поодиночке. Шаг назад того, кто по нам стреляет, — кайт, а не отход
-        val holdUnderFire = USE_FIGHT_UNDER_HIS_FIRE && i.underTheirFire
+        // ...только против одних его стволов (сужено гейтом, v699): против лагеря с мили правило ломало match34:camp
+        val holdUnderFire = USE_FIGHT_UNDER_HIS_FIRE && i.underTheirFire && (!USE_FIRE_HOLD_GUNS_ONLY || i.hisGunsOnly)
         val fightNow = ((!pushing || holdUnderFire) && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
             !(i.enemyMassed && USE_NO_FIST_FIGHT && !fistInReach)) || engageLost
         if (holdUnderFire && (pushing || i.hisRetreat)) fireHoldTicks.n++
@@ -2951,6 +2952,9 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     val underTheirFire = combatArmy.any { InfluenceMap.damageAt(it.x, it.y, meas.forces.combatEnemies) > 0.0 }
     // его ствол уже достаёт нашу армию (v645, см. USE_FIST_FIGHT_IN_REACH): его вооружённый в дальности выстрела от нашего боевого
     val hisGunsReach = meas.forces.armedEnemies.any { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE } }
+    /** у нашей армии только его стволы: его вооружённые рядом (в RANGED_RANGE + 1) есть, и ни у кого нет живого ATTACK (v696) */
+    val hisGunsOnly = meas.forces.armedEnemies.filter { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
+        .let { near -> near.isNotEmpty() && near.none { InfluenceMap.profileOf(it).melee > 0.0 } }
     private val retreatByDistance = Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
     // ...и по ЕГО шагу (v222, см. USE_RETREAT_BY_HIS_STEP): его центр сейчас против его центра в начале окна, оба — от
     // нашего центра в начале окна
