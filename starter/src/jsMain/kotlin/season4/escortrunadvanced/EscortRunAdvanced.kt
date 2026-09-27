@@ -38,7 +38,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 2
+const val BOT_VERSION = 3
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -154,6 +154,7 @@ object EscortRunAdvanced {
 
     fun tick() {
         val w = sense()
+        stillCells = w.escorts.map { cell(it.x, it.y) }
         if (w.now == 1) probe(w)
         if (w.now in 2..5) printMap((w.now - 2) * 25)
         runSpawn(w)
@@ -208,7 +209,15 @@ object EscortRunAdvanced {
         )
     }
 
-    private fun flowTo(name: String, target: Position, swampCost: Int, extra: List<Position> = emptyList()): IntArray {
+    /** Cells our own creeps must walk round: the escorts standing at home. They never yield (they are not movers), so a
+     *  field through them sends a creep into an escort's back for good. */
+    private var stillCells: List<Position> = emptyList()
+
+    /** A flow field for our movers: round the structures and round our standing escorts. */
+    private fun flowTo(name: String, target: Position, swampCost: Int): IntArray =
+        flowTo(name + ":" + stillCells.joinToString(",") { key(it).toString() }, target, swampCost, stillCells)
+
+    private fun flowTo(name: String, target: Position, swampCost: Int, extra: List<Position>): IntArray {
         val k = "$name:${key(target)}:$swampCost"
         val now = getTicks()
         val cached = flowCache[k]
@@ -233,9 +242,13 @@ object EscortRunAdvanced {
         val spawn = w.mySpawn ?: return
         if (spawn.spawning != null) return
         val works = w.harvesters.sumOf { Bodies.live(it, WORK) }
+        // his escort already out of his ramparts and nobody of ours to strike it: the first fighter goes before the second
+        // half of the economy — Hardy#1 walks all three to the flags from tick 0 and is on them by 568 (6ab9255d)
+        val raceOn = w.enemyEscorts.any { !onRampart(w, it, false) } && w.fighters.isEmpty()
         val order: Array<BodyPartType> = when {
             w.harvesters.isEmpty() -> HARVESTER_FIRST
             w.haulers.isEmpty() -> HAULER
+            raceOn -> MELEE
             works < WORK_TARGET -> HARVESTER_NEXT
             w.haulers.size < HAULERS -> HAULER
             else -> nextFighter(w)
@@ -280,10 +293,11 @@ object EscortRunAdvanced {
 
     private fun runEscorts(w: World) {
         if (escortHome.isEmpty() && w.escorts.isNotEmpty()) {
-            // the escorts' cells are the ones farthest from the home source, whichever escort takes which: v2's first
-            // match gave each escort its nearest inner cell, those were the source side of the spawn, and a hauler stood
-            // behind them for 3 000 ticks while the harvest piled up on the ground
-            val cells = innerCells(w).take(w.escorts.size).toMutableList()
+            // each escort takes the inner cell nearest to it — one step from the start. Sending them to the cells
+            // farthest from the source walked three slow escorts across the whole block, and the first harvester stood
+            // between them for 550 ticks (Hardy#1, 6ab9255d); the haulers find a free side of the spawn by themselves
+            // (dock), and every flow of ours walks round the escorts (stillCells)
+            val cells = innerCells(w).toMutableList()
             for (e in w.escorts.sortedByDescending { Bodies.period(it, false) }) {
                 val best = cells.minByOrNull { getRange(e, cellOf(it)) } ?: break
                 escortHome[idOf(e)] = best
@@ -294,7 +308,7 @@ object EscortRunAdvanced {
         for (e in w.escorts) {
             val home = escortHome[idOf(e)] ?: continue
             if (key(e) == home || e.fatigue > 0) continue
-            val f = flowTo("escort", cellOf(home), Bodies.swampCost(e))
+            val f = flowTo("escort", cellOf(home), Bodies.swampCost(e), emptyList())
             val step = DistanceMap.flowStep(f, e.x, e.y, 0, w.occupant.keys, w.enemyAt) ?: continue
             if (w.occupant.containsKey(key(step))) continue
             e.move(getDirection(step.x - e.x, step.y - e.y))
@@ -391,12 +405,14 @@ object EscortRunAdvanced {
             mode = "defend"; modeTarget = null
         } else {
             // strike: an escort of his outside his ramparts, where the fight against everything guarding it is ours
+            // of several, the one nearest to our fighters: any kill wins, so the soonest one
             var picked: Pair<Creep, Bodies.Outcome>? = null
+            val from: Position? = if (fighters.isEmpty()) null else cell(fighters.sumOf { it.x } / fighters.size, fighters.sumOf { it.y } / fighters.size)
             for (e in w.enemyEscorts.filter { !onRampart(w, it, false) }) {
+                if (from == null) break
                 val sim = Bodies.fight(ours, units(guardsOf(w, e)))
                 val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
-                val from = w.mySpawn ?: fighters.firstOrNull() ?: continue
-                if (fighters.isNotEmpty() && sim.weWin && sim.margin() >= need && (picked == null || getRange(e, from) < getRange(picked.first, from)))
+                if (sim.weWin && sim.margin() >= need && (picked == null || getRange(e, from) < getRange(picked.first, from)))
                     picked = e to sim
             }
             val all = Bodies.fight(ours, units(w.enemyArmed))
@@ -524,7 +540,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS")
         for (f in w.myFlags + w.enemyFlags) println("flag: ${at(f)} ${own(f.my)}")
