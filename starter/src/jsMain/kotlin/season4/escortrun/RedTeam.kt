@@ -101,7 +101,7 @@ internal object RedTeam {
         val onFlag = c.x == flag.x && c.y == flag.y
         if (onFlag) { log(w, c, "squat", "on flag"); return }
         val occupied = w.occupant[flag.x * 100 + flag.y]
-        if (occupied == null) { EscortRun.stepTo(w, c, flag, 0); log(w, c, "squat", "to flag"); return }
+        if (occupied == null) { EscortRun.stepRed(w, c, flag, 0); log(w, c, "squat", "to flag"); return }
         // флаг занят — клетка кармана, ближайшая к их эскорту (через неё он придёт)
         val esc = w.enemyEscort
         val cells = ArrayList<Pair<Int, Int>>()
@@ -116,7 +116,7 @@ internal object RedTeam {
         val best = cells.minByOrNull { (x, y) -> if (esc != null) maxOf(kotlin.math.abs(esc.x - x), kotlin.math.abs(esc.y - y)) else 0 }
         if (best == null) { log(w, c, "squat", "pocket full"); return }
         if (c.x == best.first && c.y == best.second) { log(w, c, "squat", "on pocket (${best.first},${best.second})"); return }
-        EscortRun.stepTo(w, c, pos(best.first, best.second), 0)
+        EscortRun.stepRed(w, c, pos(best.first, best.second), 0)
         log(w, c, "squat", "to pocket (${best.first},${best.second})")
     }
 
@@ -140,12 +140,12 @@ internal object RedTeam {
                 val r = c.withdraw(box, RESOURCE_ENERGY)
                 log(w, c, "plug", "withdraw r=$r")
             } else {
-                EscortRun.stepTo(w, c, box, 1)
+                EscortRun.stepRed(w, c, box, 1)
                 log(w, c, "plug", "to container (${box.x},${box.y})")
             }
             return
         }
-        if (getRange(c, flag) > BUILD_RANGE) { EscortRun.stepTo(w, c, flag, BUILD_RANGE - 1); log(w, c, "plug", "to flag e=$carried"); return }
+        if (getRange(c, flag) > BUILD_RANGE) { EscortRun.stepRed(w, c, flag, BUILD_RANGE - 1); log(w, c, "plug", "to flag e=$carried"); return }
         if (site == null) {
             val r = createConstructionSite(flag.x, flag.y, StructureRampart::class.js)
             println("red t=${w.now} plug: site on (${flag.x},${flag.y}) err=${r.error} ok=${r.`object` != null}")
