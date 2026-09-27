@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 31
+const val BOT_VERSION = 32
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -461,13 +461,12 @@ object EscortRunAdvanced {
 
     /** Two melee to one ranged: the melee is three times the damage per energy against anything that stands still (an
      *  escort, a rampart), the ranged is what reaches a kiter. */
-    private fun nextFighter(w: World): Array<BodyPartType> {
+    private fun nextFighter(w: World, g: Garrison = homeG, base: Position? = w.mySpawn): Array<BodyPartType> {
         // a siege at home is fought from our ramparts, where a melee hits only what stands beside one and a ranged all
         // within three: the body that does more to his creeps there per energy. stachu3478#2's trios stood two and three
         // cells off our block — his M5R5 gnawing at range three, his M8A6 held back — and v26's melee on the ramparts
         // reached none of them while two ranged did 100 a tick against his healers' 144 (6ab96311)
-        val base = w.mySpawn
-        val threats = if (base != null) threatsTo(w, homeG, base) else emptyList()
+        val threats = if (base != null) threatsTo(w, g, base) else emptyList()
         if (threats.isNotEmpty()) {
             fun reach(r: Int) = threats.count { e -> w.myRamparts.any { k -> cheb(k, key(e)) <= r } }
             val melee = Bodies.unitOf(MELEE).dps().toDouble() / Bodies.cost(MELEE) * reach(1)
@@ -998,12 +997,20 @@ object EscortRunAdvanced {
             }
             val e = p.store[RESOURCE_ENERGY] ?: 0
             val spawn = w.outpostSpawn
-            if (spawn != null) {
+            // the garrison's ramparts: a cell round the outpost's spawn for each of its fighters. Without them its
+            // defenders had nothing to hold — basesRamparts() leaves out the spawn's and the slots' — and went one by one
+            // at stachu3478#1's M4R5M1 and M4H3M1: twenty fighters, ~13 700 energy, 49 ticks each, no kill (6ab96bbe)
+            val guard = if (spawn != null) outpostGuardCells(w).let { cells ->
+                val need = minOf(cells.size, w.fighters.count { originOf[idOf(it)] == "outpost" })
+                if (cells.count { rampartAt(it) } < need) cells.firstOrNull { !rampartAt(it) } else null
+            } else null
+            if (spawn != null && guard == null) {
                 if (getRange(p, src) <= 1) p.harvest(src)
                 if (e > 0 && getRange(p, spawn) <= 1) p.transfer(spawn, RESOURCE_ENERGY)
                 continue
             }
             val next: Pair<Int, String> = when {
+                guard != null -> guard to "rampart"
                 key(p) in op.slots && !rampartAt(key(p)) -> key(p) to "rampart"
                 !rampartAt(op.spawnCell) -> op.spawnCell to "rampart"
                 else -> op.spawnCell to "spawn"
@@ -1022,11 +1029,21 @@ object EscortRunAdvanced {
         }
     }
 
+    /** The cells round the outpost's spawn its garrison holds: beside the spawn, not a slot, the source, a wall or a flag;
+     *  the side facing his flags first. */
+    private fun outpostGuardCells(w: World): List<Int> {
+        val op = outpost ?: return emptyList()
+        return DIRECTIONS.map { (dx, dy) -> (op.spawnCell / 100 + dx) * 100 + (op.spawnCell % 100 + dy) }
+            .filter { k -> DistanceMap.inBounds(k / 100, k % 100) && !DistanceMap.isTerrainWall(k / 100, k % 100) && k !in op.slots &&
+                k != op.source && w.myFlags.none { key(it) == k } }
+            .sortedBy { k -> w.enemyFlags.minOfOrNull { getRange(it, cellOf(k)) } ?: 0 }
+    }
+
     /** The outpost's spawn: a harvester for its slot when none stands there, then fighters of the outpost's garrison. */
     private fun runOutpostSpawn(w: World) {
         val spawn = w.outpostSpawn ?: return
         if (spawn.spawning != null) return
-        val order = if (w.pioneers.none { !it.spawning && getRange(it, spawn) <= 3 }) PIONEER_WORKER else nextFighter(w)
+        val order = if (w.pioneers.none { !it.spawning && getRange(it, spawn) <= 3 }) PIONEER_WORKER else nextFighter(w, outpostG, spawn)
         if ((spawn.store[RESOURCE_ENERGY] ?: 0) < Bodies.cost(order)) return
         val r = spawn.spawnCreep(order)
         if (r.error == null) println("outpost spawn t=${w.now}: ${Bodies.summary(order)}")
@@ -2007,11 +2024,15 @@ object EscortRunAdvanced {
         // reserves (not in the running operation) break the wall while nothing threatens home
         val reserves = fighters.filter { !(inOp && idOf(it) in g.members) }
         val breaching = if (breach && g.mode != "defend" && (breachLeft(w) || corridorLeft(w))) runBreach(w, reserves) else emptySet()
-        val walled = if (g.mode == "defend") holdRamparts(w, fighters, threats, base) else emptySet()
+        // null: the fight in the open is ours (or there is none) and the defenders go at the threat; a set: they hold
+        // our ramparts, and one with no rampart left waits at the rally rather than walk into the field alone
+        val hold = if (g.mode == "defend") holdRamparts(w, fighters, threats, base) else null
+        val walled = hold ?: emptySet()
         for (f in fighters) {
             if (idOf(f) in breaching || idOf(f) in walled) continue
             if (g.mode == "convoy") { guardConvoy(w, f); continue }
             val focus: Position? = when {
+                g.mode == "defend" && hold != null -> null
                 g.mode == "defend" -> threats.minByOrNull { getRange(it, f) }
                 inOp && idOf(f) in g.members -> target
                 else -> null
@@ -2058,8 +2079,8 @@ object EscortRunAdvanced {
         return w.myRamparts.filter { k -> getRange(cellOf(k), base) <= HOME_RADIUS && (op == null || (k != op.spawnCell && k !in op.slots)) }
     }
 
-    private fun holdRamparts(w: World, fighters: List<Creep>, threats: List<Creep>, base: Position?): Set<String> {
-        if (threats.isEmpty() || fighters.isEmpty() || base == null) return emptySet()
+    private fun holdRamparts(w: World, fighters: List<Creep>, threats: List<Creep>, base: Position?): Set<String>? {
+        if (threats.isEmpty() || fighters.isEmpty() || base == null) return null
         // his whole group, not the part inside our radius: every fighter of his within SALLY_LINK of one already counted
         // — stachu3478's M4R5M1 stood at twelve with its M4H3M1 one cell outside, v13 walked out against "one ranged" and
         // lost twelve M5A5 one by one (6ab94091, 6ab941cf)
@@ -2078,7 +2099,7 @@ object EscortRunAdvanced {
             if (Bodies.isMelee(f) && Bodies.period(f, false) >= hisSlowest) Bodies.Unit(Array(u.parts.size) { i -> if (u.parts[i] == ATTACK) TOUGH else u.parts[i] }, u.hits) else u
         }
         val open = Bodies.fight(ours, units(his))
-        if (open.weWin && open.margin() >= DEFEND_OPEN_MARGIN) return emptySet()
+        if (open.weWin && open.margin() >= DEFEND_OPEN_MARGIN) return null
         val spawnKey = w.mySpawn?.let { key(it) }
         val towerCells = works?.filter { it.first == "tower" }?.map { it.second }?.toSet() ?: emptySet()
         // a gap beside our escort is held too, while a mason stands by to raise the rampart under its holder: his melee
@@ -2197,7 +2218,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
