@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 22
+const val BOT_VERSION = 23
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -216,6 +216,7 @@ object EscortRunAdvanced {
 
     private var lastSiegeWhy = ""
     private var lastOpWhy = ""
+    private var lastStrikeWhy = ""
     private val homeG = Garrison("home")
     private val outpostG = Garrison("outpost")
     /** Which base a fighter belongs to: the spawn it was born at. */
@@ -1255,9 +1256,14 @@ object EscortRunAdvanced {
 
     /** The corridor is broken while it stands and the convoy has not started (a breach gains nothing once they walk). */
     private fun corridorLeft(w: World): Boolean = !convoyOn && corridorPath?.any { w.walls.containsKey(it) } == true && centreHeld(w) &&
-        corridorConvoyWins(w)
+        w.enemyEscorts.all { onRampart(w, it, false) } && corridorConvoyWins(w)
 
     /**
+     * (corridorLeft) An escort of his off his ramparts is the army's target, and the army stays within its reach instead:
+     * v22 against けろびー#13 broke our corridor y=9 with all three fighters at 850-1200 while his M10T40 and M5T40 stood
+     * outside his ramparts by his base — the strike, once the fourth fighter came, was a hundred cells away (6ab95ba9,
+     * 6ab95b4a).
+     *
      * The convoy through the corridor wins its fight: half the home guard against every fighter of his on the move, every
      * one standing within CONVOY_GUARD_RADIUS of the corridor or of our flags, and what he makes over the trip. v19's
      * army broke our corridor at 1003-1337 in three matches of four against けろびー for a convoy that never set out, at
@@ -1675,7 +1681,7 @@ object EscortRunAdvanced {
         // operation goes on while our kill comes before the soonest kill of ours his whole army could make (hisKillEta);
         // with nothing of his by our base there is nothing to race
         val hisKill = if (threats.isNotEmpty()) hisKillEta(w) else Int.MAX_VALUE
-        fun beats(eta: Int) = threats.isEmpty() || eta * (1 + RACE_MARGIN) < hisKill
+        fun beats(eta: Int, running: Boolean = false) = threats.isEmpty() || (if (running) eta < hisKill else eta * (1 + RACE_MARGIN) < hisKill)
         // strike: an escort of his outside his ramparts that the group kills before it dies
         // of several, the one nearest to our group: any kill wins, so the soonest one
         var picked: Pair<Creep, OpEval>? = null
@@ -1690,7 +1696,9 @@ object EscortRunAdvanced {
             }
             val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
             val ev = opEval(w, group, from, e, need)
-            if (ev.ok && beats(ev.eta) && (picked == null || getRange(e, from) < getRange(picked.first, from))) picked = e to ev
+            if (from != null) lastStrikeWhy = "${Bodies.summaryOf(e)}${at(e)} $ev kill=${ev.eta}${if (threats.isEmpty()) "" else " hisKill=$hisKill"}"
+            // v22 flipped STRIKE/DEFEND four times in 50 ticks on kill 112 against hisKill 124-125 (6ab95ba9)
+            if (ev.ok && beats(ev.eta, prev == "strike" && prevTarget == idOf(e)) && (picked == null || getRange(e, from) < getRange(picked.first, from))) picked = e to ev
         }
         val siegeNeed = if (prev == "siege") KEEP_MARGIN else SIEGE_MARGIN
         val siegeTarget = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits } ?: w.enemyEscorts.minByOrNull { it.hits }
@@ -1700,7 +1708,7 @@ object EscortRunAdvanced {
         if (picked != null) {
             mode = "strike"; modeTarget = idOf(picked.first); plan = picked.second.plan
             if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} plan=$plan ${picked.second} kill=${picked.second.eta} hisKill=${if (threats.isEmpty()) "-" else hisKill.toString()} group=${group.size}/${fighters.size}")
-        } else if (siegeEv != null && siegeTarget != null && siegeEv.ok && threats.isNotEmpty() && beats(siegeEv.eta)) {
+        } else if (siegeEv != null && siegeTarget != null && siegeEv.ok && threats.isNotEmpty() && beats(siegeEv.eta, prev == "siege")) {
             mode = "siege"
             modeTarget = idOf(siegeTarget); plan = siegeEv.plan
             if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} plan=$plan $siegeEv kill=${siegeEv.eta} hisKill=$hisKill group=${group.size}/${fighters.size}")
@@ -1953,7 +1961,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
@@ -1993,7 +2001,9 @@ object EscortRunAdvanced {
             "work=${w.harvesters.sumOf { Bodies.live(it, WORK) }} " +
             "haulers=${w.haulers.size} fighters=${w.fighters.size}(${w.fighters.joinToString(",") { Bodies.summaryOf(it) + at(it) + (if (originOf[idOf(it)] == "outpost") "o" else "") }}) " +
             "ours=${w.escorts.joinToString(" ") { "${at(it)}h${it.hits}" }} his=${w.enemyEscorts.joinToString(" ") { "${at(it)}h${it.hits}${if (onRampart(w, it, false)) "r" else ""}" }} " +
-            "enemies=${w.enemies.filter { idOf(it) !in escortIds }.joinToString(",") { Bodies.summaryOf(it) + at(it) }} cpu=${getCpuTime() / 1_000_000}")
+            "enemies=${w.enemies.filter { idOf(it) !in escortIds }.joinToString(",") { Bodies.summaryOf(it) + at(it) }} cpu=${getCpuTime() / 1_000_000}" +
+            (if (lastStrikeWhy.isNotEmpty()) " strike?=$lastStrikeWhy" else ""))
+        lastStrikeWhy = ""
     }
 
     @Suppress("unused")
