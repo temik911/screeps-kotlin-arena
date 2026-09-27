@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 193
+    private const val BOT_VERSION = 194
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6527,6 +6527,12 @@ object SpawnAndSwamp {
     private const val USE_BODY_BY_ITS_CREW = true
     /** A standing gun of his within a raider's flight range is prey too, not only one by the target (v193). */
     private const val USE_RAID_GUN_NEAR = true
+    /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
+    private const val USE_PILE_CONTAINER_RACE = true
+    /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
+    private const val USE_PILE_DEAD_JOB = true
+    /** The idle pile builder waits in the middle of all the container drops, not only our half's (v194). */
+    private const val USE_PILE_WAIT_MIDDLE = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -7078,7 +7084,9 @@ object SpawnAndSwamp {
         for (site in ctx.sites) {
             val c = site.container ?: continue
             val life = site.ticksToDecay ?: continue          // permanent containers are the fleet's
-            if (!site.ours) { no("his"); continue }
+            // (v194: with USE_PILE_CONTAINER_RACE the haulers' race to the MAIN spawns is not the builder's question —
+            // see below, after the walk)
+            if (!site.ours && !USE_PILE_CONTAINER_RACE) { no("his"); continue }
             if (!site.safe) { no("unsafe"); continue }
             // WHAT THE FLEET WILL TAKE IS NOT THE BUILDER'S (v90): the haulers already sent carry away their free
             // capacity; the rest must still pay for the spawn and the pile's decay over the build. v89 skipped any
@@ -7095,6 +7103,19 @@ object SpawnAndSwamp {
             if (walk >= Int.MAX_VALUE / 4) { no("noway"); continue }
             val dump = ceil((site.energy - fleetTakes) / dumpRate).toInt()
             if (life < walk + dump + 3) { no("late"); continue }  // it rots before it is on the ground
+            // THE RACE IS AT THE CONTAINER, NOT TO THE MAIN SPAWNS (v194). `ours` asks whose loaded hauler gets home
+            // first; a spawn built AT the container carries nothing home. Against marlyman#403 (v191) our home was walled
+            // off at x=13-19, and fresh containers 26-31 cells from us — (31,38), (36,27), (32,33), (32,63) — were "his",
+            // the builder had no job 700-1100, and no pile spawn stood all match (3-5 in the two wins over him). What can
+            // take the energy first is his carriers: each that walks to it (his plain pace, the optimistic one for him)
+            // before our builder has dumped it takes its capacity; the rest must still pay for the spawn. Measured on the
+            // replays of nine v191 games: of 25 real losses of such a container to him it catches 23
+            if (USE_PILE_CONTAINER_RACE && !site.ours) {
+                val hisTake = ctx.enemyCreeps.filter { e -> e.body.any { it.type == CARRY && it.hits > 0 } &&
+                    getRange(e, c).toLong() * plainPeriod(e).coerceAtMost(10) <= walk + dump }
+                    .sumOf { e -> e.body.count { it.type == CARRY && it.hits > 0 } * CARRY_CAPACITY }
+                if (site.energy - fleetTakes - hisTake < price + 2 * buildTicks) { no("his"); continue }
+            }
             val work0 = walk + dump + buildTicks
             // nobody of his armed reaches it before the job is done (at his plain pace — the optimistic one for him)
             if (USE_PILE_THREAT_ETA && ctx.combatEnemies.any { getRange(it, c).toLong() * plainPeriod(it).coerceAtMost(10) <= work0 }) { no("threat"); continue }
@@ -7110,7 +7131,12 @@ object SpawnAndSwamp {
      *  side of the map, the one nearest the middle of them all — so the next fresh one is as few ticks away as the
      *  map lets it be. Home while nothing has dropped on our side yet. */
     private fun pileWaitCell(ctx: Ctx): Position {
-        val ours = dropHistory.keys.filter { k -> DistanceMap.inOurHalf(k / 100, k % 100) && ctx.loadedToSpawn[k] >= 0 }
+        // …AMONG ALL THE DROPS, NOT OUR HALF'S (v194). A fresh container lives ~100 ticks and a spawn needs its dump, so
+        // the builder must reach it within ~75; waiting by our half's drops — behind the wall at x=13-19 against
+        // marlyman#403 — it was "late" for every container 700-1100 (walks of 99-153), while from the middle of all the
+        // drops every one of them was within 75 ticks (67 passing checks instead of 0 on the replay). His fire at the
+        // wait cell is answered as everywhere: the builder flees what reaches it
+        val ours = dropHistory.keys.filter { k -> (USE_PILE_WAIT_MIDDLE || DistanceMap.inOurHalf(k / 100, k % 100)) && ctx.loadedToSpawn[k] >= 0 }
         if (ours.isEmpty()) return ctx.mySpawn
         val mx = ours.sumOf { it / 100 } / ours.size
         val my = ours.sumOf { it % 100 } / ours.size
@@ -7141,7 +7167,12 @@ object SpawnAndSwamp {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
             val finished = spawnThere != null && (pile == null || spawnFull) && (carrying <= 0 || spawnFull)
             // the container rotted or was taken before a site stood: nothing to build from
-            val lost = site == null && spawnThere == null && pile == null && (cont == null || (cont.store[RESOURCE_ENERGY] ?: 0) <= 0)
+            // …or after it stood (v194): against marlyman#403 he took the container (23,13), our site (21,11) stood at
+            // 475/1000, and the builder held that dead job from ~1170 to its death at ~1580 while three fresh containers
+            // passed every test 7-18 ticks from it. With nothing in the container, on the ground or in its store there is
+            // nothing to build it with
+            val lost = (site == null || (USE_PILE_DEAD_JOB && carrying <= 0)) && spawnThere == null && pile == null &&
+                (cont == null || (cont.store[RESOURCE_ENERGY] ?: 0) <= 0)
             if (finished || lost) {
                 spawnReach[if (finished) "pbDone" else "pbLost"] = (spawnReach[if (finished) "pbDone" else "pbLost"] ?: 0) + 1
                 pileJob = null
