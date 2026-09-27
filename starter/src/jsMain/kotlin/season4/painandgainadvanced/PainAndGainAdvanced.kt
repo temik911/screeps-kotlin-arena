@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 7
+const val BOT_VERSION = 8
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -166,7 +166,7 @@ object PainAndGainAdvanced {
     private fun probe() {
         println("hello season4 pain-and-gain-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} TICKS_LIMIT=$TICKS_LIMIT MAX_SCORE_PER_TICK=$MAX_SCORE_PER_TICK")
-        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE")
+        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R local=$LOCAL_R initiative=$INITIATIVE_RATIO fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE")
         println("flagtypes: ${JSON.stringify(FLAG_TYPES)}")
         println("consts: TOWER_RANGE=$TOWER_RANGE TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_POWER_HEAL=$TOWER_POWER_HEAL " +
             "TOWER_OPTIMAL_RANGE=$TOWER_OPTIMAL_RANGE TOWER_FALLOFF_RANGE=$TOWER_FALLOFF_RANGE TOWER_FALLOFF=$TOWER_FALLOFF " +
@@ -334,10 +334,16 @@ object PainAndGainAdvanced {
         // retreat only turns backs to his guns: v4 against Hardy#1 went from 9 against 9 at t=92 to 1 against 8 at
         // t=200 walking home (the basic arena's `no-escape-equal-speed`)
         val engaged = foes.any { e -> e.armed && group.any { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGED_R } }
+        // the head of his approach: what of his is within LOCAL_R of our group. Walking in a column he brings its head
+        // first, and the head alone loses — v6's one win over stachu3478#5 in four was the one where it closed first
+        // (t=219, killing his heavy melee by t=250); in the three losses it stood and he arrived formed
+        val head = foes.filter { e -> group.any { Grid.range(it.x, it.y, e.x, e.y) <= LOCAL_R } }
+        val local = Duel(group, head.ifEmpty { foes }, ourFx, theirFx, towerDpsAt(ourFedTowers(), cx, cy), towerDpsAt(theirTowers(), cx, cy))
         val want = when {
             near.isEmpty() -> null
             engaged -> Mode.FIGHT
             swept && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
+            head.size < zone.size && local.ratio >= INITIATIVE_RATIO -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
             mode == Mode.FIGHT && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             duel.ratio < RETREAT_RATIO -> Mode.RETREAT
@@ -656,6 +662,8 @@ object PainAndGainAdvanced {
     const val FIGHT_RATIO = 1.15
     const val RETREAT_RATIO = 0.8
     const val ENGAGED_R = 4
+    const val LOCAL_R = 10
+    const val INITIATIVE_RATIO = 1.3
     const val MEND_AT = 250
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
