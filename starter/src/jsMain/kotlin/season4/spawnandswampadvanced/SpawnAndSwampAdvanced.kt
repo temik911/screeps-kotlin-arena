@@ -95,17 +95,21 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v11"
+    private const val BOT_VERSION = "v12"
 
     private const val LOG_EVERY = 50
 
     // ---------- армия ----------
     private const val RANGED_RANGE = 3
-    /** Волна выходит, когда её сила больше силы соперника в столько раз: запас на ошибку оценки (тот же, что у
-     *  базового бота, где он замерен живыми матчами). */
+    /** Под угрозой спавн рожает бойца, пока сила дома меньше силы угрозы в столько раз (Ланчестер — только для
+     *  заказа, решения боя считает прогон). */
     private const val PUSH_RATIO = 1.3
-    /** Волна на месте проигрывает, если её сила меньше местной силы соперника в столько раз, — отход. */
-    private const val RETREAT_RATIO = 0.8
+    /** Волна выходит, если по прогону боя побеждает и сохраняет не меньше этой доли своих хитов: запас на то, чего
+     *  прогон не видит — подход под огнём, строй, мили у спавна. Ланчестер с лечением «как уроном» пускал волну 1,3×
+     *  против пар стрелок+лекарь 76561198870429455 и stachu3478 — обе волны v11 легли и отошли. */
+    private const val PUSH_KEEP = 0.3
+    /** Прогон дольше этого не смотрим: бой, который не решается за столько тиков, для решения — ничья. */
+    private const val SIM_LIMIT = 300
     /** Угроза дому: боевой враг в стольких клетках от нашего спавна или от нашего рабочего (дальность стрелка плюс
      *  несколько шагов подхода). */
     private const val HOME_THREAT_RANGE = 10
@@ -153,7 +157,7 @@ object SpawnAndSwampAdvanced {
     private var defending = false
     private var attackedOnce = false
     /** Рождения его боевых крипов: тик, урон+лечение, хиты — из них его производство к нашему подходу. */
-    private val enemyBirths = ArrayList<Triple<Int, Int, Int>>()
+    private val enemyBirths = ArrayList<Pair<Int, List<String>>>()
     private val enemyCombatSeen = HashSet<String>()
     private var enemySpawnSeenAt = -1
     /** Роли крипов вне экономики баз и армии: пробойщик, строитель сейфа. Заказанный крип узнаётся по телу. */
@@ -542,7 +546,7 @@ object SpawnAndSwampAdvanced {
         }
 
         val enemyCombat = theirs.filter { isCombat(it) }
-        for (e in enemyCombat) if (enemyCombatSeen.add(idOf(e))) enemyBirths.add(Triple(t, dpsOf(e) + healOf(e), e.hitsMax))
+        for (e in enemyCombat) if (enemyCombatSeen.add(idOf(e))) enemyBirths.add(t to typesOf(e))
         if (enemySpawnSeenAt < 0 && all.any { it is StructureSpawn && it.asDynamic().my == false }) enemySpawnSeenAt = t
         for (b in bases) {
             val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
@@ -960,8 +964,35 @@ object SpawnAndSwampAdvanced {
         return true
     }
 
+    /** Лекарь той же цены, что стрелок: MOVE на каждую часть и HEAL на остальное. */
+    private fun healerBody(energy: Int): Array<BodyPartType> {
+        val pair = (BODYPART_COST[MOVE] ?: 50) + (BODYPART_COST[HEAL] ?: 250)
+        val k = energy / pair
+        val out = ArrayList<BodyPartType>()
+        repeat(k) { out.add(MOVE) }
+        repeat(k) { out.add(HEAL) }
+        val spare = (energy - k * pair) / (BODYPART_COST[MOVE] ?: 50)
+        repeat(minOf(spare, k)) { out.add(0, MOVE) }
+        return out.toTypedArray()
+    }
+
+    /** Кого рожать: стрелка или лекаря — прогоном всей нашей армии с кандидатом против его армии и того, что он родит
+     *  за то же время, плюс его башни. Против армии без лечения лекарь ничего не решает — прогон выберет стрелка. */
+    private var armyCache: Pair<List<SimUnit>, List<SimUnit>>? = null
+
+    private fun chooseFighter(): Array<BodyPartType> {
+        val ranger = fighterBody(SPAWN_ENERGY_CAPACITY)
+        val healer = healerBody(SPAWN_ENERGY_CAPACITY)
+        val (ours, theirs) = armyCache ?: return ranger
+        if (theirs.isEmpty()) return ranger
+        val r = simulate(ours + SimUnit(ranger.map { it.asDynamic().unsafeCast<String>() }, ranger.size * 100), theirs)
+        val h = simulate(ours + SimUnit(healer.map { it.asDynamic().unsafeCast<String>() }, healer.size * 100), theirs)
+        val score = { x: SimResult -> (if (x.win) 1_000_000 else 0) + x.left - x.theirLeft }
+        return if (score(h) > score(r)) healer else ranger
+    }
+
     private fun spawnFighter(t: Int, spawn: StructureSpawn, energy: Int, why: String) {
-        val full = fighterBody(SPAWN_ENERGY_CAPACITY)
+        val full = chooseFighter()
         if (energy < costOf(full)) return
         val r = spawn.spawnCreep(full)
         println("spawn t=$t ${bodyText(full)} cost=${costOf(full)} energy=$energy why=$why err=${r.error}")
@@ -1003,18 +1034,88 @@ object SpawnAndSwampAdvanced {
 
     /** Его армия к нашему приходу: нынешние боевые крипы плюс рождённые за окно (не больше 300 тиков с его первого
      *  спавна), разнесённые на путь; Ланчестер по сумме. */
-    private fun arrivalPower(t: Int, enemyCombat: List<Creep>, arrival: Int): Double {
-        var out = enemyCombat.sumOf { dpsOf(it) + healOf(it) }.toDouble()
-        var hits = enemyCombat.sumOf { it.hits }.toDouble()
-        if (enemySpawnSeenAt >= 0 && arrival > 0) {
-            val window = minOf(300, t - enemySpawnSeenAt)
-            if (window > 0) {
-                val recent = enemyBirths.filter { it.first > t - window }
-                out += recent.sumOf { it.second }.toDouble() * arrival / window
-                hits += recent.sumOf { it.third }.toDouble() * arrival / window
+    /** Кого он родит за `ticks`: рождения за окно (не больше 300 тиков с его первого спавна), разнесённые на срок,
+     *  телами из того же окна по кругу. */
+    private fun projectedBirths(t: Int, ticks: Int): List<SimUnit> {
+        if (enemySpawnSeenAt < 0 || ticks <= 0) return emptyList()
+        val window = minOf(300, t - enemySpawnSeenAt)
+        if (window <= 0) return emptyList()
+        val recent = enemyBirths.filter { it.first > t - window }
+        if (recent.isEmpty()) return emptyList()
+        val k = kotlin.math.round(recent.size.toDouble() * ticks / window).toInt()
+        return List(k) { i -> val types = recent[i % recent.size].second; SimUnit(types, types.size * 100) }
+    }
+
+    // ---------- прогон боя ----------
+
+    /** Боец в прогоне: типы частей спереди назад и хиты общим числом — движок держит части «сзади наперёд» (часть i
+     *  жива, пока хиты больше 100 × (n−1−i)), поэтому урон снимает передние части первыми, а лечение возвращает их
+     *  последними. Башня — боец без частей со своим уроном и 3000 хитов, её бьют последней. */
+    private class SimUnit(val types: List<String>, var hits: Int, val fixedDps: Int = 0, val maxHits: Int = types.size * 100) {
+        val tower get() = types.isEmpty()
+        fun live(type: String): Int {
+            var c = 0
+            val n = types.size
+            for (i in 0 until n) if (types[i] == type && hits > 100 * (n - 1 - i)) c++
+            return c
+        }
+        fun dps(): Int = fixedDps + live("ranged_attack") * RANGED_ATTACK_POWER + live("attack") * ATTACK_POWER
+        fun heal(): Int = live("heal") * HEAL_POWER
+        fun copy() = SimUnit(types, hits, fixedDps, maxHits)
+    }
+
+    private class SimResult(val win: Boolean, val keep: Double, val left: Int, val theirLeft: Int, val ticks: Int)
+
+    private fun typesOf(c: Creep): List<String> = c.body.map { it.type.asDynamic().unsafeCast<String>() }
+
+    private fun simOf(c: Creep) = SimUnit(typesOf(c), c.hits)
+
+    /** Башня как боец прогона: выстрел на дальности нашего стрелка у неё (4 клетки) раз в перезарядку. */
+    private fun simTower(hits: Int) = SimUnit(emptyList(), hits, (towerShot(RANGED_RANGE + 1) / TOWER_COOLDOWN).toInt(), TOWER_HITS)
+
+    /** Бой по тикам: обе стороны бьют одновременно всем уроном в одну цель (лекарей первыми, потом самого битого,
+     *  башни последними; перебор урона уходит в следующую), лечение возвращает хиты самым битым. Лечение считается
+     *  вплотную (12 за часть) для обеих сторон: строй лекарей у раненого — их и наша задача. */
+    private fun simulate(ours: List<SimUnit>, theirs: List<SimUnit>, limit: Int = SIM_LIMIT): SimResult {
+        val a = ours.map { it.copy() }.toMutableList()
+        val b = theirs.map { it.copy() }.toMutableList()
+        val aStart = a.sumOf { it.hits }.coerceAtLeast(1)
+        var t = 0
+        fun strike(side: MutableList<SimUnit>, dmg: Int) {
+            var left = dmg
+            val order = side.sortedWith(compareBy<SimUnit> { if (it.tower) 2 else if (it.heal() > 0) 0 else 1 }.thenBy { it.hits })
+            for (u in order) {
+                if (left <= 0) break
+                val take = minOf(left, u.hits)
+                u.hits -= take
+                left -= take
             }
         }
-        return kotlin.math.sqrt(out * hits)
+        fun mend(side: MutableList<SimUnit>, heal: Int) {
+            var left = heal
+            for (u in side.filter { !it.tower && it.hits > 0 && it.hits < it.maxHits }.sortedByDescending { it.maxHits - it.hits }) {
+                if (left <= 0) break
+                val add = minOf(left, u.maxHits - u.hits)
+                u.hits += add
+                left -= add
+            }
+        }
+        while (t < limit && a.isNotEmpty() && b.isNotEmpty()) {
+            t++
+            val da = a.sumOf { it.dps() }
+            val db = b.sumOf { it.dps() }
+            val ha = a.sumOf { it.heal() }
+            val hb = b.sumOf { it.heal() }
+            strike(b, da)
+            strike(a, db)
+            a.removeAll { it.hits <= 0 }
+            b.removeAll { it.hits <= 0 }
+            mend(a, ha)
+            mend(b, hb)
+            if (da == 0 && db == 0) break
+        }
+        val left = a.sumOf { it.hits }
+        return SimResult(b.isEmpty() && a.isNotEmpty(), left.toDouble() / aStart, left, b.sumOf { it.hits }, t)
     }
 
     private fun towerPowerOf(count: Int, hits: Double): Double {
@@ -1060,42 +1161,51 @@ object SpawnAndSwampAdvanced {
         val enemyObjects = all.filter { it.asDynamic().my == false && it !is Creep && it !is ConstructionSite }
         val homeGroup = fighters.filter { idOf(it) !in wave }
         val pending = pendingTowers(t, all, homeGroup)
-        val enemyPowerNow = power(enemyCombat) + towerPower(enemyTowers) + towerPowerOf(pending, TOWER_HITS.toDouble() * pending)
+        val enemyPower = power(enemyCombat) + towerPower(enemyTowers)
         // к нашему приходу у него будет больше: его производство за окно, помноженное на путь до его спавна. v10 ушёл
         // одним бойцом на 360-м против «силы 0», а к подходу у けろびー стояли M5R5 и башня
         val enemySpawnObjs = all.filter { it is StructureSpawn && it.asDynamic().my == false }
         val arrival = if (enemySpawnObjs.isEmpty()) 0 else enemySpawnObjs.minOf { pathTicks(home, it) }
-        val enemyPower = arrivalPower(t, enemyCombat, arrival) + towerPower(enemyTowers) + towerPowerOf(pending, TOWER_HITS.toDouble() * pending)
+        val fedTowers = enemyTowers.filter { energyOf(it) > 0 }
+        val enemyAtArrival = enemyCombat.map { simOf(it) } + projectedBirths(t, arrival) +
+            fedTowers.map { simTower(it.hits ?: TOWER_HITS) } + List(pending) { simTower(TOWER_HITS) }
+        armyCache = fighters.map { simOf(it) } to enemyAtArrival
         val lastCall = t > arenaInfo.ticksLimit - 600
-        // дом под угрозой, которую он сам (с башнями) не держит, — волна возвращается: v10 ушёл волной, а поток его M3R3
-        // перебил добытчиков, которых спавн рожал заново каждые 13 тиков
+        val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
+        // дом под угрозой, которую он сам (с башнями) по прогону не держит, — волна возвращается: v10 ушёл волной, а
+        // поток его M3R3 перебил добытчиков, которых спавн рожал заново каждые 13 тиков
         if (wave.isNotEmpty() && threats.isNotEmpty() && !lastCall) {
-            val myTowersNow = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
-            val homePower = power(homeGroup) + towerPower(myTowersNow)
-            if (homePower < power(threats)) {
-                println("recall t=$t wave=${wave.size} home=${homePower.toInt()} vs threats=${power(threats).toInt()}")
+            val home0 = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && threats.any { getRange(it, tw) <= TOWER_RANGE } }.map { simTower(it.hits ?: TOWER_HITS) }
+            val r = simulate(home0, threats.map { simOf(it) })
+            if (!r.win) {
+                println("recall t=$t wave=${wave.size} home=${homeGroup.size} vs threats=${threats.size} sim=${r.left}/${r.theirLeft}")
                 wave.clear()
             }
         }
 
-        // выход волны: сила дома больше всей армии и башен соперника (и тех его площадок башен, что достроятся к
-        // нашему подходу — v5 ушёл одним бойцом против одного M4R3, пока башня была площадкой, и лёг под ней).
-        // Уже ушедшая волна не держит дом: дом, который сам сильнее соперника, выходит следом
-        if (threats.isEmpty() && homeGroup.isNotEmpty() &&
-            (power(homeGroup) >= enemyPower * PUSH_RATIO || lastCall) && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
-            for (f in homeGroup) wave.add(idOf(f))
-            println("push t=$t wave=${wave.size} power=${power(homeGroup).toInt()} vs enemy=${enemyPower.toInt()} (now ${enemyPowerNow.toInt()} army ${power(enemyCombat).toInt()} arrival=$arrival towers ${towerPower(enemyTowers).toInt()} pending=$pending)${if (lastCall) " lastCall" else ""}")
+        // выход волны: прогон всего дома против его армии к нашему приходу (с тем, что он родит по дороге) и его
+        // кормленых башен — и тех площадок башен, что достроятся к подходу (v5 лёг под достроившейся). Уже ушедшая волна
+        // не держит дом: дом, который сам по прогону побеждает, выходит следом
+        if (threats.isEmpty() && homeGroup.isNotEmpty() && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
+            val r = simulate(homeGroup.map { simOf(it) }, enemyAtArrival)
+            if ((r.win && r.keep >= PUSH_KEEP) || lastCall) {
+                for (f in homeGroup) wave.add(idOf(f))
+                println("push t=$t wave=${wave.size} home=${homeGroup.size} vs ${enemyAtArrival.size} (army ${enemyCombat.size} towers ${fedTowers.size}+$pending arrival=$arrival) " +
+                    "sim keep=${(r.keep * 100).toInt()}% ticks=${r.ticks}${if (lastCall) " lastCall" else ""}")
+            }
         }
         val waveCreeps = fighters.filter { idOf(it) in wave }
-        if (waveCreeps.isNotEmpty()) {
-            // отход: на месте волна слабее местной силы соперника
+        if (waveCreeps.isNotEmpty() && !lastCall) {
+            // отход: на месте волна по прогону проигрывает тем, кто рядом, и башням, что её достают
             val center = waveCreeps.minByOrNull { c -> waveCreeps.sumOf { getRange(it, c) } }!!
             val local = enemyCombat.filter { getRange(it, center) <= LOCAL_RANGE }
-            val localTowers = enemyTowers.filter { getRange(it, center) <= TOWER_FALLOFF_RANGE / 2 }
-            val localPower = power(local) + towerPower(localTowers)
-            if (!lastCall && localPower > 0 && power(waveCreeps) < localPower * RETREAT_RATIO) {
-                println("retreat t=$t wave=${waveCreeps.size} power=${power(waveCreeps).toInt()} vs local=${localPower.toInt()}")
-                wave.clear()
+            val localTowers = fedTowers.filter { getRange(it, center) <= TOWER_FALLOFF_RANGE / 2 }
+            if (local.isNotEmpty() || localTowers.isNotEmpty()) {
+                val r = simulate(waveCreeps.map { simOf(it) }, local.map { simOf(it) } + localTowers.map { simTower(it.hits ?: TOWER_HITS) })
+                if (!r.win) {
+                    println("retreat t=$t wave=${waveCreeps.size} vs local=${local.size}+${localTowers.size}tw sim=${r.left}/${r.theirLeft} ticks=${r.ticks}")
+                    wave.clear()
+                }
             }
         }
         val posture = when {
@@ -1123,28 +1233,28 @@ object SpawnAndSwampAdvanced {
                 val keep = if (goal is Creep) RANGED_RANGE else RANGED_RANGE - 1
                 for (f in waveNow) {
                     shoot(f, theirs, enemyObjects)
+                    if (healAct(f, mine, waveNow)) continue
                     if (fleeMelee(f, enemyCombat)) continue
                     val d = toGoal[f] ?: 0
                     val fighting = theirs.any { isCombat(it) && getRange(f, it) <= RANGED_RANGE + 1 }
                     if (hold && d - frontD <= COHESION && !fighting) continue
                     if (d > keep) f.moveTo(goal)
                 }
-            } else for (f in waveNow) shoot(f, theirs, enemyObjects)
+            } else for (f in waveNow) { shoot(f, theirs, enemyObjects); healAct(f, mine, waveNow) }
         }
         // дом: угрозу бьём всей кучей, если на месте сильнее (с башнями) или она уже бьёт спавн или рабочего;
         // иначе держимся у спавна — туда ей придётся подойти на выстрел. За пределы домашней зоны не гонимся
-        val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
-        val workers = mine.filter { liveParts(it, WORK) > 0 }
         val target = threats.minByOrNull { e -> homeSpawns.minOfOrNull { getRange(e, it) } ?: 0 }
         val anchor: Position = target?.let { tg -> homeSpawns.minByOrNull { getRange(tg, it) } } ?: home
         var engage = false
         if (target != null) {
+            // бьём угрозу, только если прогон дома (с нашими кормлеными башнями, что её достают) против неё побеждает.
+            // v11 бил и проигранную, если она «била спавн» — а спавн сейфа за стеной недосягаем, и бойцы из обоих
+            // спавнов по одному шли в толпу из 36 у входа в сейф. Предела погони нет: угроза по определению в домашней
+            // зоне (v9: зазор между пределом погони и снятием защиты держал защиту вечно)
             val local = threats.filter { getRange(it, target) <= LOCAL_RANGE }
-            val ours = power(homeGroup) + towerPower(myTowers.filter { getRange(it, target) <= TOWER_RANGE })
-            val striking = getRange(target, anchor) <= RANGED_RANGE + 1 || workers.any { getRange(target, it) <= RANGED_RANGE + 1 }
-            // предела погони нет: угроза по определению в домашней зоне и выпадает из неё сама. v9 бил только в 13
-            // клетках от спавна, а защита держится до 15 — угроза в этом зазоре держала защиту (и запрет волны) вечно
-            engage = ours >= power(local) || striking
+            val ours = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && getRange(tw, target) <= TOWER_RANGE }.map { simTower(it.hits ?: TOWER_HITS) }
+            engage = simulate(ours, local.map { simOf(it) }).win
         }
         val blocked = blockedCells(all)
         val reserved = reservedCells(all)
@@ -1154,9 +1264,25 @@ object SpawnAndSwampAdvanced {
         for (f in homeGroup) {
             if (idOf(f) in wave) continue
             shoot(f, theirs, enemyObjects)
+            if (healAct(f, mine, homeGroup)) continue
             if (fleeMelee(f, enemyCombat)) continue
             if (engage && target != null) {
                 if (getRange(f, target) > RANGED_RANGE) f.moveTo(target)
+            } else if (target != null) {
+                // проигранная угроза: держимся у СВОЕГО ближайшего спавна, в укрытии — внутри сейфа, если он ближе всех,
+                // иначе в точке сбора этой базы — и копимся, пока прогон не скажет «бьём»
+                val mySpawn = homeSpawns.minByOrNull { getRange(f, it) } ?: anchor
+                val inVault = vault?.let { v -> v.spawnId != null && mySpawn.x == v.spawnCell.x && mySpawn.y == v.spawnCell.y } == true
+                if (inVault) {
+                    val v = vault!!
+                    if (Pos(f.x, f.y) !in v.interior || Pos(f.x, f.y) in reserved) {
+                        val spot = v.interior.filter { it !in reserved && it !in v.containers }.minByOrNull { cheb(it, Pos(f.x, f.y)) }
+                        if (spot != null) f.moveTo(cell(spot))
+                    }
+                } else {
+                    val rally = rallyFor(mySpawn, reserved, blocked)
+                    if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) f.moveTo(cell(rally))
+                }
             } else {
                 // сбор — не у самого спавна, а в точке сбора: клетки у спавна, добытчиков, башни и площадок заняты
                 // делом (выход для рождения, копка, стройка), и боец на них ломает базу
@@ -1245,6 +1371,20 @@ object SpawnAndSwampAdvanced {
         return false
     }
 
+    /** Лекарь: лечит самого битого своего вплотную (12 за часть) или издали (4), идёт к раненому своей группы, а без
+     *  раненых держится за ближайшим стрелком группы. Возвращает, распорядился ли он ходом (чистый лекарь — всегда). */
+    private fun healAct(f: Creep, mine: List<Creep>, group: List<Creep>): Boolean {
+        if (liveParts(f, HEAL) == 0) return false
+        val hurt = mine.filter { !it.spawning && it.hits < it.hitsMax && getRange(f, it) <= RANGED_RANGE }
+            .sortedWith(compareBy<Creep> { if (getRange(f, it) <= 1) 0 else 1 }.thenByDescending { it.hitsMax - it.hits }).firstOrNull()
+        if (hurt != null) { if (getRange(f, hurt) <= 1) f.heal(hurt) else f.rangedHeal(hurt) }
+        if (dpsOf(f) > 0) return false
+        val wounded = group.filter { it !== f && it.hits < it.hitsMax }.maxByOrNull { it.hitsMax - it.hits }
+        val lead = wounded ?: group.filter { it !== f && dpsOf(it) > 0 }.minByOrNull { getRange(f, it) }
+        if (lead != null && getRange(f, lead) > 1) f.moveTo(lead)
+        return true
+    }
+
     /** Стрелок не стоит рядом с мили: шаг прочь, если враг с ATTACK в двух клетках. */
     private fun fleeMelee(f: Creep, enemyCombat: List<Creep>): Boolean {
         if (liveParts(f, RANGED_ATTACK) == 0) return false
@@ -1260,7 +1400,7 @@ object SpawnAndSwampAdvanced {
 
     private fun dumpWorld(all: Array<GameObject>) {
         println("hello season4 spawn-and-swamp-advanced $BOT_VERSION")
-        println("tuning: push=$PUSH_RATIO retreat=$RETREAT_RATIO homeThreat=$HOME_THREAT_RANGE workerThreat=$WORKER_THREAT_RANGE " +
+        println("tuning: keep=$PUSH_KEEP simLimit=$SIM_LIMIT threatRatio=$PUSH_RATIO homeThreat=$HOME_THREAT_RANGE workerThreat=$WORKER_THREAT_RANGE " +
             "cohesion=$COHESION local=$LOCAL_RANGE fighter=${bodyText(fighterBody(SPAWN_ENERGY_CAPACITY))} builder=${bodyText(builderBody())}")
         println("arena: name=${arenaInfo.name} level=${arenaInfo.level} season=${arenaInfo.season} ticksLimit=${arenaInfo.ticksLimit} " +
             "cpu=${arenaInfo.cpuTimeLimit} cpuFirst=${arenaInfo.cpuTimeLimitFirstTick}")
