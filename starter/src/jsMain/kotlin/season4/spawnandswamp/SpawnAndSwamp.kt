@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 184
+    private const val BOT_VERSION = 185
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3760,65 +3760,79 @@ object SpawnAndSwamp {
         // member's pace); a creep of his that walks to some cell of it no later than we do is an interceptor, and all of
         // them are fought as one group (fightCost: his healers first, his heal off our damage). It only ever adds: a
         // march is priced at the larger of this and the packs walking at us
-        if (USE_INTERCEPT && enemySpawn != null && assaultFlow.isNotEmpty()) {
-            val group = staging.ifEmpty { waveFront }
-            val rear = group.filter { assaultFlow[it.x * 100 + it.y] >= 0 }.maxByOrNull { assaultFlow[it.x * 100 + it.y] }
-            if (rear != null) {
-                val route = ArrayList<Pair<Int, Int>>()
-                var cell = rear.x * 100 + rear.y
-                var t = 0
-                var steps = 0
-                val movers = group.filter { liveMoves(it) > 0 }
-                while (assaultFlow[cell] > 0 && steps < 400 && movers.isNotEmpty()) {
-                    val cx = cell / 100
-                    val cy = cell % 100
-                    var best = -1
-                    var bestFlow = assaultFlow[cell]
-                    for (dx in -1..1) for (dy in -1..1) {
-                        val nx = cx + dx
-                        val ny = cy + dy
-                        if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
-                        val f = assaultFlow[nx * 100 + ny]
-                        if (f in 0 until bestFlow) { bestFlow = f; best = nx * 100 + ny }
-                    }
-                    if (best < 0) break
-                    cell = best
-                    steps++
-                    t += movers.maxOf { periodAt(it, cell / 100, cell % 100) }
-                    route.add(cell to t)
+        // the interceptors of one group's route and their fight's price, or null with none (see below)
+        fun interceptCost(group: List<Creep>, skipDefenders: Boolean): Double? {
+            if (enemySpawn == null) return null
+            val rear = group.filter { assaultFlow[it.x * 100 + it.y] >= 0 }.maxByOrNull { assaultFlow[it.x * 100 + it.y] } ?: return null
+            val route = ArrayList<Pair<Int, Int>>()
+            var cell = rear.x * 100 + rear.y
+            var t = 0
+            var steps = 0
+            val movers = group.filter { liveMoves(it) > 0 }
+            while (assaultFlow[cell] > 0 && steps < 400 && movers.isNotEmpty()) {
+                val cx = cell / 100
+                val cy = cell % 100
+                var best = -1
+                var bestFlow = assaultFlow[cell]
+                for (dx in -1..1) for (dy in -1..1) {
+                    val nx = cx + dx
+                    val ny = cy + dy
+                    if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                    val f = assaultFlow[nx * 100 + ny]
+                    if (f in 0 until bestFlow) { bestFlow = f; best = nx * 100 + ny }
                 }
-                if (route.isNotEmpty()) {
-                    val k = t
-                    val seeds = route.map { (c, at) -> c to k - at }
-                    // his walk to the route by his body: plain steps, plus the swamp ones at his swamp pace — read off
-                    // a field at swamp 1 and one at swamp 5 (the difference is four per swamp cell on the way)
-                    val heavy = DistanceMap.seededField(seeds, ctx.blockedForEnemy, DistanceMap.SWAMP_COST)
-                    val light = DistanceMap.seededField(seeds, ctx.blockedForEnemy, 1)
-                    // …a creep of his with no MOVE intercepts nothing (v158): his stationary A3 at home was an interceptor of
-                    // our march, and his two unarmed healers' heal took our wave's damage down to "lose"
-                    // …and a creep of his standing at the target is its defender, priced by the siege, not an interceptor of
-                    // the march too (v168): his M5A5 by marlyman's spawn was counted twice, attrition 6530 against 2250
-                    val interceptors = combatEnemies.filter { e -> (!USE_RAID_BUILDERS_FIRST || e.body.any { it.type == MOVE && it.hits > 0 }) &&
-                        !(USE_HOUSE_OUTLASTS && getRange(e, enemySpawn) <= RANGED_RANGE + 1) }.filter { e ->
-                        val h = heavy[e.x * 100 + e.y]
-                        val l = light[e.x * 100 + e.y]
-                        if (h < 0 || l < 0) false else {
-                            val swampCells = (h - l).coerceAtLeast(0) / (DistanceMap.SWAMP_COST - 1).toDouble()
-                            val his = l + swampCells * (swampPeriod(e).coerceAtMost(10) - 1)
-                            his <= k
-                        }
-                    }
-                    if (interceptors.isNotEmpty()) {
-                        val cost = fightCost(interceptors, offensive, withMelee = true)
-                        if (cost + streamUnits * unitCost > attrition) attrition = cost + streamUnits * unitCost
-                        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("intercept t=${getTicks()}: route=${route.size}/${k}t on=${interceptors.size} cost=${cost.toInt()} attrition=${attrition.toInt()}")
-                    }
+                if (best < 0) break
+                cell = best
+                steps++
+                t += movers.maxOf { periodAt(it, cell / 100, cell % 100) }
+                route.add(cell to t)
+            }
+            if (route.isEmpty()) return null
+            val k = t
+            val seeds = route.map { (c, at) -> c to k - at }
+            // his walk to the route by his body: plain steps, plus the swamp ones at his swamp pace — read off
+            // a field at swamp 1 and one at swamp 5 (the difference is four per swamp cell on the way)
+            val heavy = DistanceMap.seededField(seeds, ctx.blockedForEnemy, DistanceMap.SWAMP_COST)
+            val light = DistanceMap.seededField(seeds, ctx.blockedForEnemy, 1)
+            // …a creep of his with no MOVE intercepts nothing (v158): his stationary A3 at home was an interceptor of
+            // our march, and his two unarmed healers' heal took our wave's damage down to "lose"
+            // …and a creep of his standing at the target is its defender, priced by the siege, not an interceptor of
+            // the march too (v168): his M5A5 by marlyman's spawn was counted twice, attrition 6530 against 2250
+            val interceptors = combatEnemies.filter { e -> (!USE_RAID_BUILDERS_FIRST || e.body.any { it.type == MOVE && it.hits > 0 }) &&
+                !((USE_HOUSE_OUTLASTS || skipDefenders) && getRange(e, enemySpawn) <= RANGED_RANGE + 1) }.filter { e ->
+                val h = heavy[e.x * 100 + e.y]
+                val l = light[e.x * 100 + e.y]
+                if (h < 0 || l < 0) false else {
+                    val swampCells = (h - l).coerceAtLeast(0) / (DistanceMap.SWAMP_COST - 1).toDouble()
+                    val his = l + swampCells * (swampPeriod(e).coerceAtMost(10) - 1)
+                    his <= k
                 }
             }
+            if (interceptors.isEmpty()) return null
+            val cost = fightCost(interceptors, offensive, withMelee = true)
+            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("intercept t=${getTicks()}: ${if (skipDefenders) "front " else ""}route=${route.size}/${k}t on=${interceptors.size} cost=${cost.toInt()}")
+            return cost
         }
+        if (USE_INTERCEPT && enemySpawn != null && assaultFlow.isNotEmpty()) {
+            val cost = interceptCost(staging.ifEmpty { waveFront }, false)
+            if (cost != null && cost + streamUnits * unitCost > attrition) attrition = cost + streamUnits * unitCost
+        }
+        // THE FRONT PAYS FOR ITS OWN ROUTE (v185). The march's price was one number for everyone: the interceptors of the
+        // post's route (from our house, when a post stood) and the packs walking at our house, and siegeGo — the front's
+        // verdict — read it too. Against marlyman#453 (v182, t=1294) the front of 9400 hits stood 41-44 ticks from his
+        // last spawn, his ramparted main, which was `win/47t` a hundred ticks before; the post's lone gun's route of 109
+        // cells took his M5A5 at the target and five M5A1 on our half — 95 cells from the front's route — cost 4863,
+        // siegeGo turned `lose`, the front was recalled for 370 ticks and came back at 1980 to a rampart 10 ticks short;
+        // the pack never struck our spawn. The front's verdict is priced by the interceptors of its own route plus his
+        // production over the horizon as before. His creeps at the target stay in that price although the siege counts
+        // them too: left to the siege alone (the first cut of v185) the gate's tower+healball front of four M8R4 was
+        // `win/24t` against his healball and tower, walked in without its reinforcement and died — 518 -> 1316; the
+        // siege run is optimistic against his heal, and the double count is what held that front for its second wave
+        val frontAttrition = if (!USE_FRONT_OWN_ROUTE || waveFront.isEmpty() || !USE_INTERCEPT || enemySpawn == null || assaultFlow.isEmpty()) attrition
+            else streamUnits * unitCost + (interceptCost(waveFront, false) ?: 0.0)
         cpuMark("f.march")
         val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = startTravel, etas = defEtas) else SIEGE_LOSE
-        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas) else SIEGE_LOSE
+        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, frontAttrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas) else SIEGE_LOSE
         // the front fires the way its winning plan does (v83): past his shielded defenders and his towers, at the spawn
         stormDirect = siegeGo.win && siegeGo.direct
         siegeGoWin = siegeGo.win
@@ -4736,7 +4750,11 @@ object SpawnAndSwamp {
         if (enemyTravel == Int.MAX_VALUE || enemyDps <= 0.0) return true
         // наше время осады — по симуляции (башня и защитники), не hits/dps
         val ourTicks = maxOf(0, travel - RANGED_RANGE) + siege.ticks.toDouble()
-        val enemyTicks = enemyTravel + (ctx.mySpawn.hits ?: SPAWN_HITS) / enemyDps
+        // …and the house he must take is our spawn AND its rampart (v185), as recallSaves counts it: without the rampart
+        // his race was 38-44 ticks against our 72 at marlyman#453's last spawn, with it 105-111
+        val house = (ctx.mySpawn.hits ?: SPAWN_HITS) + (if (!USE_FRONT_OWN_ROUTE) 0 else
+            ctx.ramparts.filter { it.my == true && it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y }.sumOf { it.hits ?: 0 })
+        val enemyTicks = enemyTravel + house / enemyDps
         return ourTicks + 10.0 < enemyTicks
     }
 
@@ -6452,6 +6470,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_RACE = true
     /** The pair is re-bought for his builder in the field with any number of his spawns, while the clock covers it (v184). */
     private const val USE_RAID_AGAIN_ANY = true
+    /** The front's siege verdict is priced by its own route's interceptors, and the spawn race counts our rampart (v185). */
+    private const val USE_FRONT_OWN_ROUTE = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
