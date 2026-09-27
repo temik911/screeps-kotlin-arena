@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v20"
+    private const val BOT_VERSION = "v21"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -155,6 +155,8 @@ object EscortRun {
         val myRamparts: List<Position>,
         val escortFlow: IntArray?,
         val enemyEscortFlow: IntArray?,
+        /** Поле нашего эскорта БЕЗ чужих крипов: по нему видно, кто из них стоит на нашем пути (routeBlockers). */
+        val escortFlowRaw: IntArray?,
     )
 
     fun tick() {
@@ -238,7 +240,15 @@ object EscortRun {
         RedTeam.claim(mine)
         // крипы красной команды ведёт RedTeam: основная логика не считает их своими тягачами, разведчиками и бойцами
         val others = active.filter { !isEscort(it) && !RedTeam.owns(it) }
-        val escortFlow = if (escort != null && myFlag != null) flowTo("escort", myFlag, blocked, 5) else null
+        val escortFlowRaw = if (escort != null && myFlag != null) flowTo("escort", myFlag, blocked, 5) else null
+        // их разведчик, вставший на наш путь впереди (CHOKE соперника), — стена поля эскорта: поезд обходит его всем
+        // маршрутом заранее, а не упирается и объезжает по месту (docs/escort-run-redteam.md)
+        val stops = if (escort != null && escortFlowRaw != null) {
+            val ahead = Chokes.route(escortFlowRaw, escort).drop(1).toHashSet()
+            enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) && key(it) in ahead && (myFlag == null || getRange(it, myFlag) > FLAG_GUARD_RANGE) }
+        } else emptyList()
+        val escortFlow = if (stops.isEmpty() || myFlag == null) escortFlowRaw
+            else flowTo("escort:" + stops.map { key(it) }.sorted().joinToString(","), myFlag, blocked + stops, 5)
         val enemyEscortFlow = if (enemyEscort != null && enemyFlag != null) flowTo("enemyEscort", enemyFlag, blockedForEnemy, 5) else null
         return World(
             now, mySpawn, enemySpawn, escort, enemyEscort, myFlag, enemyFlag, homeSource, mine, active, enemies,
@@ -250,7 +260,7 @@ object EscortRun {
             enemyArmed = enemies.filter { Bodies.isArmed(it) },
             enemyScouts = enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
             occupant = occupant, enemyAt = enemyAt, blocked = blocked, blockedForEnemy = blockedForEnemy, myRamparts = ramparts.filter { it.my == true },
-            escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow,
+            escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow, escortFlowRaw = escortFlowRaw,
         )
     }
 
@@ -630,7 +640,7 @@ object EscortRun {
     /** Чужие крипы на НАШЕМ маршруте впереди эскорта (кроме тех, что у нашего флага — это дело стража флага), по порядку пути. */
     private fun routeBlockers(w: World): List<Pair<Creep, Int>> {
         val esc = w.escort ?: return emptyList()
-        val flow = w.escortFlow ?: return emptyList()
+        val flow = w.escortFlowRaw ?: return emptyList()
         val route = Chokes.route(flow, esc)
         val idx = HashMap<Int, Int>()
         route.forEachIndexed { i, k -> idx[k] = i }
@@ -642,7 +652,7 @@ object EscortRun {
     private fun clearOrder(w: World, e: Int): Boolean {
         if (fightersOn(w, CLEAR) > 0) return false
         val esc = w.escort ?: return false
-        val flow = w.escortFlow ?: return false
+        val flow = w.escortFlowRaw ?: return false
         val (b, i) = routeBlockers(w).firstOrNull() ?: return false
         val route = Chokes.route(flow, esc)
         val pen = Chokes.penalty(route, i, if (i == 0) key(esc) else route[i - 1])
