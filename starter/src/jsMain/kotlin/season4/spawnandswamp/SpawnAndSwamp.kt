@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 187
+    private const val BOT_VERSION = 188
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -759,6 +759,8 @@ object SpawnAndSwamp {
 
     /** Поле подхода под огнём — свой кэш на тик (см. assaultTo). */
     private val assaultCache = HashMap<Int, IntArray>()
+    /** Marching fighters whose target is a creep of his engaged on the way, as of their last decision (v188). */
+    private val engagedIds = HashSet<String>()
 
     // ---------- модель ----------
 
@@ -4468,6 +4470,7 @@ object SpawnAndSwamp {
                 wallTarget != null -> { target = wallTarget; standoff = if (melee) 1 else RANGED_RANGE }
                 else -> { target = rallySpawn; standoff = HOME_STANDOFF }
             }
+            if (marching && engage != null && target === engage) engagedIds.add(creep.id) else engagedIds.remove(creep.id)
             // к чужому спавну идём полем подхода (по урону), ко всему прочему — обычным
             val flow = if (enemySpawn != null && target.x == enemySpawn.x && target.y == enemySpawn.y) assaultFlow else flowTo(ctx, target)
             val breaching = marching && target === enemySpawn
@@ -4513,8 +4516,13 @@ object SpawnAndSwamp {
                 // …and a mate sent after his builder is not waited for either (v182): it is off the march on purpose, and
                 // against marlyman#453 f71/f86 held about 130 ticks at (33-35,70) for f83 of their wave, which was hunting
                 // his builder, while his main — the last spawn he had — stood untouched
+                // …nor one that went after a creep of his on the way (v188): it measures "behind" on that creep's field and
+                // the wave on the march field, so each waited for the other — against marlyman#403 the head of wave 1
+                // (f12, f37) held for f30, 77 ticks behind on the march field while it chased his M2R1, and f30 held for
+                // them, 65 behind on its own; about 320 ticks, while his extra spawn (2,2) stood from 450 to 1192. A mate
+                // fighting within reach is covered by mateFighting; one chasing farther is not waited for
                 marching -> fighters.filter { it.id != creep.id && (if (siegeHold) it.id in wave else wave[it.id] == wave[creep.id]) && canMove(it) &&
-                    !(USE_HUNTER_NOT_WAITED && huntOf[it.id] != null) }
+                    !(USE_HUNTER_NOT_WAITED && huntOf[it.id] != null) && !(USE_ENGAGED_NOT_WAITED && it.id in engagedIds) }
                 hunting -> freeStrikers.filter { it.id != creep.id }
                 else -> emptyList()
             }
@@ -6479,6 +6487,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_GUN_PREY = true
     /** The column chain of the march's cohesion runs through fighters of any wave (v187). */
     private const val USE_COLUMN_ANY_WAVE = true
+    /** A marching wave does not wait for a mate that went after a creep of his on the way (runFighters' cohesion, v188). */
+    private const val USE_ENGAGED_NOT_WAITED = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
