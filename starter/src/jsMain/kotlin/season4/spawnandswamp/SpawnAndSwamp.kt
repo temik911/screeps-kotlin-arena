@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 185
+    private const val BOT_VERSION = 186
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6472,6 +6472,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_AGAIN_ANY = true
     /** The front's siege verdict is priced by its own route's interceptors, and the spawn race counts our rampart (v185). */
     private const val USE_FRONT_OWN_ROUTE = true
+    /** A waiting raid strikes a standing gun of his by its target when the pair outlasts it (runRaiders, v186). */
+    private const val USE_RAID_GUN_PREY = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6561,15 +6563,19 @@ object SpawnAndSwamp {
      * damage takes the target's `left` hits before his guns — each from the tick it walks within its reach of the target,
      * over the ground at its own pace — take the weakest raider's hits; the pair is worth its next builders.
      */
-    private fun raidOutlasts(ctx: Ctx, raiders: List<Creep>, target: Position, left: Int, field: IntArray): Boolean {
+    private fun raidOutlasts(ctx: Ctx, raiders: List<Creep>, target: Position, left: Int, field: IntArray, healed: Boolean = false): Boolean {
         val strikes = raiders.map { r -> (getRange(r, target) - 1).coerceAtLeast(0) to r.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER }
             .filter { it.second > 0 }
         if (strikes.isEmpty()) return false
         val weakest = raiders.minOf { it.hits }
         val first = strikes.minOf { it.first }
         val fire = ArrayList<Pair<Int, Double>>()
+        // a creep is healed by his healers from the tick they walk next to it (v186); a structure is not
+        val heal = ArrayList<Pair<Int, Double>>()
         for (e in ctx.combatEnemies) {
             val p = InfluenceMap.profileOf(e)
+            if (healed && p.heal > 0.0 && e.body.any { it.type == MOVE && it.hits > 0 })
+                heal.add((pathTicks(e, field, e.x * 100 + e.y).coerceAtMost(Int.MAX_VALUE / 4) - plainPeriod(e)).coerceAtLeast(0) to p.heal)
             val dmg = p.ranged + p.melee
             if (dmg <= 0.0) continue
             val reach = if (p.ranged > 0.0) RANGED_RANGE else 1
@@ -6579,10 +6585,11 @@ object SpawnAndSwamp {
         }
         // the race ends by the tick the slowest raider alone would have taken it
         val horizon = strikes.maxOf { it.first } + left / strikes.minOf { it.second } + 1
-        var dealt = 0
+        var dealt = 0.0
         var taken = 0.0
         for (t in 1..horizon) {
             for ((a, d) in strikes) if (t > a) dealt += d
+            for ((a, h) in heal) if (t > a) dealt -= h
             if (dealt >= left) return true
             if (t > first) for ((a, d) in fire) if (t > a) taken += d
             if (taken >= weakest) return false
@@ -6796,6 +6803,19 @@ object SpawnAndSwamp {
                 // the free main only 45-124 raider-ticks of the windows
                 (!chipping || target == null || getRange(c, pos(target)) <= 2 * RAID_LURK_RANGE) }.minByOrNull { getRange(lead, it) }
         }
+        // …AND A STANDING GUN OF HIS BY THE TARGET IS STRUCK, NOT FLED, WHEN THE PAIR OUTLASTS IT (v186). Once v183 kept the
+        // first pair alive against けろびー#48, his last spawn — his ramparted main — was held by ONE M5R5 (1000 hits, 50 a
+        // tick) standing four cells from its southern entrance for 319 of 321 ticks while his other guns were a median 69
+        // cells off: the waiting raider rocked at five to six cells from it for 300 ticks (it fled any gun within
+        // RAID_LURK_FLEE), went round to the north and was held there the same way — a draw with 1150 ticks of no strike
+        // on the main. One raider kills that gun in 12 ticks for at most 750 of its hits, the pair in 6. A mobile armed
+        // creep of his within RAID_LURK_RANGE of the target that stood still last tick is struck when the race of
+        // raidOutlasts (his heal included) says the pair outlasts it; a walking one would kite the melee pair on plain
+        val armedPrey: Creep? = if (!USE_RAID_GUN_PREY || strikeFits || raidHome || gathering || target == null) null else
+            ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
+                enemyPrevCell[e.id] == e.x * 100 + e.y && getRange(e, pos(target)) <= RAID_LURK_RANGE }
+                .sortedBy { getRange(lead, it) }
+                .firstOrNull { e -> raidOutlasts(ctx, raiders, e, e.hits, raceField(ctx, e), healed = true) }
         // A WAITING PAIR COMES HOME TO A STORM IT CAN TURN (v171): against kerobi#50 both builders were dead at 447 and the
         // pair waited 79-88 cells off while his M3R3, M5H3 and two M5R5 took our rampart (130 a tick) and spawn at 661;
         // at a cell a tick on any ground it would have been home by ~610 with 180 a tick on his creeps
@@ -6810,7 +6830,7 @@ object SpawnAndSwamp {
                 if (DEBUG_LOG) println("raid home t=${getTicks()}: storm at our door, walk=$walk falls=${(house / threatDps).toInt()}")
             }
         }
-        val go = if (strikeFits && !raidHome) target else if (raidHome) null else prey
+        val go = if (strikeFits && !raidHome) target else if (raidHome) null else armedPrey ?: prey
         if (USE_RAID_TOUR) raidTargetId = go?.id ?: if (strikeFits) null else raidTargetId
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
         // …WAITING BY THE TARGET, AWAY ONLY FROM A GUN THAT REACHES IT (v179): fleeing every gun within twelve cells kept the
@@ -6839,7 +6859,7 @@ object SpawnAndSwamp {
             // …A WAITING PAIR KEEPS AWAY FROM HIS GUNS (v162): in the v161 draws it waited in place in the field for his army
             // to leave his ramparted main (t=490-770), was found there and went home at 460/1800 and 1254/3600; it now
             // walks off to RAID_LURK_RANGE from his nearest mobile armed creep and waits there
-            val hunters = if (USE_RAID_LURK && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
+            val hunters = if (USE_RAID_LURK && armedPrey == null && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
                 e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
                     getRange(e, r) < lurkFlee } else emptyList()
             if (hunters.isNotEmpty() && canMove(r)) {
