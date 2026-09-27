@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v40"
+    private const val BOT_VERSION = "v41"
 
     private const val LOG_EVERY = 50
 
@@ -395,6 +395,18 @@ object SpawnAndSwampAdvanced {
      *  копает и сдаёт без шага), и хотя бы одним свободным выходом для рождения; равнина лучше болота. */
     private fun planBase(src: Source, from: Position, blocked: Set<Pos>): Base? {
         val s = posOf(src)
+        // наша площадка спавна у этого источника, оставшаяся от погибшего строителя, — и есть клетка базы: v39 ставил
+        // рядом новую (старая — препятствие для плана), и к 1740-му у источника (1,32) стояли три наших спавна
+        val own = getObjectsByPrototype(ConstructionSite::class).firstOrNull { it.my == true && isSpawnSite(it) && cheb(posOf(it), s) == 2 }
+        if (own != null) {
+            val c = posOf(own)
+            val slots = ArrayList<Pos>()
+            for (ax in c.x - 1..c.x + 1) for (ay in c.y - 1..c.y + 1) {
+                val a = Pos(ax, ay)
+                if (a != c && walkable(a, blocked) && cheb(a, s) == 1) slots.add(a)
+            }
+            if (slots.isNotEmpty()) return Base(idOf(src), c, slots)
+        }
         var best: Base? = null
         var bestScore = Int.MIN_VALUE
         for (dx in -2..2) for (dy in -2..2) {
@@ -1015,8 +1027,11 @@ object SpawnAndSwampAdvanced {
         val here = Pos(w.x, w.y)
         val structures = getObjects()
         fun rampartAt(p: Pos) = structures.any { it is StructureRampart && it.asDynamic().my == true && it.x == p.x && it.y == p.y }
+        val spawnSiteThere = mySites.any { it.x == base.spawnCell.x && it.y == base.spawnCell.y && isSpawnSite(it) }
         val next: Pair<Pos, String>? = when {
             here in base.slots && !rampartAt(here) -> here to "rampart"
+            // площадка спавна уже заложена (прежним строителем) — рампарт на её клетку не встанет, строим спавн
+            spawnSiteThere -> base.spawnCell to "spawn"
             !rampartAt(base.spawnCell) -> base.spawnCell to "rampart"
             else -> base.spawnCell to "spawn"
         }
