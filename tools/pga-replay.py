@@ -9,6 +9,7 @@ so this arena has its own — a copy of the idea, not of the code (CLAUDE.md: co
     tools/pga-replay.py flags <id>              # every flag's changes of owner, with the creep that stood on it
     tools/pga-replay.py deaths <id>             # every death: tick, whose, body, where
     tools/pga-replay.py pic <id> <t> [x0 y0 x1 y1]   # the map at tick t: m/M ours light/heavy, e/E his, p/P pullers
+    tools/pga-replay.py fight <id> [t0 t1]      # actions per role and side in a window: a/r/R/h/H done, A attacked, E healed
 
 Ours is the side whose username is ours (temik911); in self-play the first side. The replay's per-tick record: `n`
 births, `u` [id, x, y, hits, fatigue, …] updates, `x` deaths, `a` [id, action, x, y] actions, `s` [id, hits, energy]
@@ -160,6 +161,33 @@ def cmd_pic(d, t, box):
         print(f"{y:02d} " + "".join(grid[(x, y)] for x in range(x0, x1 + 1)))
 
 
+def cmd_fight(d, t0, t1):
+    """What each role of each side DID in the window, counted from the replay's action log: `a` attack, `r` ranged
+    attack, `R` mass attack, `h` heal beside, `H` heal from range; and what was done TO it: `A` attacked, `E` healed.
+    It is how v7-v11 were read: our melee swinging 18 times in a thousand ticks, our healers healing from range two
+    times in three while his healed beside, our fire landing on his pullers."""
+    from collections import Counter, defaultdict
+    us = our_side(d)
+    tot = defaultdict(Counter)
+    alive = None
+    for k, creeps, owners, energy, tk in replay(d):
+        if k < t0 or k > t1:
+            continue
+        for a in tk.get("a", []):
+            c = creeps.get(a[0])
+            if not c:
+                continue
+            side = "us " if c["side"] == us else "him"
+            role = a[0].split("_", 2)[2].rsplit("_", 1)[0]
+            tot[side][(role, a[1])] += 1
+        alive = [sum(1 for c in creeps.values() if c["side"] == s and c.get("hits", 0) > 0) for s in (us, 1 - us)]
+    print(f"window t={t0}..{t1}  alive at its end {alive[0]}:{alive[1]}" if alive else "empty window")
+    for side in ("us ", "him"):
+        roles = sorted({r for r, _ in tot[side]})
+        for r in roles:
+            print(f"  {side} {r:<13} " + " ".join(f"{c}={tot[side][(r, c)]}" for c in "arRhHAE" if tot[side][(r, c)]))
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -171,6 +199,10 @@ def main():
         cmd_flags(d)
     elif cmd == "deaths":
         cmd_deaths(d)
+    elif cmd == "fight":
+        t0 = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+        t1 = int(sys.argv[4]) if len(sys.argv) > 4 else 10 ** 6
+        cmd_fight(d, t0, t1)
     elif cmd == "pic":
         t = int(sys.argv[3])
         box = tuple(map(int, sys.argv[4:8])) if len(sys.argv) >= 8 else (0, 0, 99, 99)
