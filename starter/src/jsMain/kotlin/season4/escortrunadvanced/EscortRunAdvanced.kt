@@ -49,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 11
+const val BOT_VERSION = 12
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -142,6 +142,8 @@ object EscortRunAdvanced {
     private const val YIELD_PRIORITY = 95
     /** A fighter of his that has not changed cell for this many ticks holds a position and is not coming. */
     private const val STILL_TICKS = 30
+    /** His production rate is measured over this many ticks. */
+    private const val PRODUCTION_WINDOW = 300
 
     private const val FIGHTER_PRIORITY = 30
     private const val HAULER_PRIORITY = 20
@@ -555,7 +557,7 @@ object EscortRunAdvanced {
         val fighters = w.fighters.size
         val attacked = attackedAt >= 0
         return when {
-            kind == "tower" -> fighters >= 4 || attacked
+            kind == "tower" -> fighters >= 4 || (attacked && fighters >= 1)
             index < 2 -> fighters >= 1 || attacked
             else -> fighters >= 3 || attacked
         }
@@ -825,9 +827,40 @@ object EscortRunAdvanced {
         return es.indices.associate { i -> idOf(es[i]) to flags[pick[i]] }
     }
 
-    /** The convoy is wanted once home has a guard and nothing threatens it. */
-    private fun convoyWanted(w: World): Boolean =
-        homeG.mode != "defend" && w.fighters.count { originOf[idOf(it)] != "outpost" } >= CONVOY_MIN_GUARD
+    /** The convoy's fight: the home guard against everything near the routes, every fighter of his on the move, and
+     *  what his spawn makes while the trains walk (the longest route at the convoy's pace, swamp and all). */
+    private var convoySimAt = -1
+    private var convoySimVal: Bodies.Outcome? = null
+
+    private fun convoySim(w: World, plan: Map<String, Int>): Bodies.Outcome {
+        if (convoySimAt == w.now) convoySimVal?.let { return it }
+        val guard = w.fighters.filter { originOf[idOf(it)] != "outpost" && !it.spawning }
+        val longest = w.escorts.maxOfOrNull { e -> plan[idOf(e)]?.let { pathCells(w, e, cellOf(it)).size } ?: 0 } ?: 0
+        // three trains are three targets and the guard is where one of them is: half of it must win alone. v11's second
+        // build started with one guard against two M2A1 and the hunters took the train it was not beside (stand, hunt)
+        val half = guard.sortedByDescending { Bodies.meleeDps(it) + Bodies.rangedDps(it) }.take((guard.size + 1) / 2)
+        val sim = Bodies.fight(units(half), units(convoyThreats(w, plan)) + reinforcements(w, longest * (CONVOY_PERIOD + 1)))
+        convoySimAt = w.now; convoySimVal = sim
+        return sim
+    }
+
+    /** A group of his holding its cells near the convoy's routes: then the corridor round the centre is worth its walls. */
+    private fun centreHeld(w: World): Boolean {
+        val plan = convoyFlags ?: return false
+        val cells = HashSet<Int>()
+        for (e in w.escorts) { val f = plan[idOf(e)] ?: continue; cells.addAll(pathCells(w, e, cellOf(f))) }
+        return w.enemyArmed.any { en -> !mobile(w, en) && cells.any { k -> cheb(k, key(en)) <= PATH_RADIUS } }
+    }
+
+    /** The convoy is wanted — its pullers are made — once home is not defending and the guard already wins the convoy's
+     *  fight: v11's first build made 2150 energy of pullers first and let them stand while the guard it had no energy
+     *  left for never grew to his army (けろびー#15, stachu3478 — "ready, waiting" from 650 to the loss). */
+    private fun convoyWanted(w: World): Boolean {
+        if (homeG.mode == "defend" || w.fighters.count { originOf[idOf(it)] != "outpost" } < CONVOY_MIN_GUARD) return false
+        val plan = convoyFlags ?: return false
+        val sim = convoySim(w, plan)
+        return sim.weWin && sim.margin() >= STRIKE_MARGIN
+    }
 
     /** The next puller the home spawn should make, or null: M{need} for the escort shortest of its MOVE. The order is
      *  queued by the caller only when the spawn takes it (the puller is tied to its escort when first seen). */
@@ -844,12 +877,40 @@ object EscortRunAdvanced {
     /** Where and when each of his creeps last changed cell. */
     private val enemyMoved = HashMap<String, Pair<Int, Int>>()
 
+    /** His production: the energy of every fighter of his seen born, cumulative by tick, and the last body he made. */
+    private val enemyBorn = HashSet<String>()
+    private var enemyProduced = 0
+    private val producedAt = ArrayDeque<Pair<Int, Int>>()
+    private var lastEnemyBody: Array<BodyPartType>? = null
+
     private fun trackEnemies(w: World) {
         for (e in w.enemies) {
             val was = enemyMoved[idOf(e)]
             if (was == null || was.first != key(e)) enemyMoved[idOf(e)] = key(e) to w.now
         }
         if (w.now % 100 == 0) enemyMoved.keys.retainAll(w.enemies.mapTo(HashSet()) { idOf(it) })
+        for (e in w.enemyArmed) {
+            if (!enemyBorn.add(idOf(e))) continue
+            val body = Array(e.body.size) { e.body[it].type }
+            enemyProduced += Bodies.cost(body)
+            lastEnemyBody = body
+        }
+        if (w.now % 25 == 0) { producedAt.addLast(w.now to enemyProduced); while (producedAt.size > 40) producedAt.removeFirst() }
+    }
+
+    /**
+     * What his spawn adds to a fight that lasts `ticks`: his fighters' energy per tick over the last PRODUCTION_WINDOW ticks,
+     * times the duration, as copies of the last body he made. A convoy walks for two hundred ticks and more: v11's first
+     * start (guard of one against three M2A1 of 76561198870429455) met the hunters he made on the way and lost an escort
+     * at 800 (6ab93ca9).
+     */
+    private fun reinforcements(w: World, ticks: Int): List<Bodies.Unit> {
+        val body = lastEnemyBody ?: return emptyList()
+        val past = producedAt.firstOrNull { it.first >= w.now - PRODUCTION_WINDOW } ?: return emptyList()
+        val span = maxOf(1, w.now - past.first)
+        val energy = (enemyProduced - past.second).toLong() * ticks / span
+        val n = (energy / maxOf(1, Bodies.cost(body))).toInt()
+        return List(minOf(n, 30)) { Bodies.unitOf(body) }
     }
 
     private fun mobile(w: World, e: Creep) = (enemyMoved[idOf(e)]?.second ?: 0) >= w.now - STILL_TICKS
@@ -880,7 +941,7 @@ object EscortRunAdvanced {
         val ready = w.escorts.all { e -> Trains.chainOf(e, pullersFor(w, e), lastChains[idOf(e)] ?: emptyList()) { idOf(it) }.sumOf { it.body.size } >= pullNeed(e) }
         if (!convoyOn && ready) {
             val guard = w.fighters.filter { originOf[idOf(it)] != "outpost" && !it.spawning }
-            val sim = Bodies.fight(units(guard), units(convoyThreats(w, plan)))
+            val sim = convoySim(w, plan)
             if (sim.weWin && sim.margin() >= STRIKE_MARGIN) {
                 convoyOn = true; convoyAt = w.now
                 println("convoy t=${w.now}: START guard=${guard.size} sim=$sim")
@@ -1051,7 +1112,7 @@ object EscortRunAdvanced {
     private var corridorPath: List<Int>? = null
 
     /** The corridor is broken while it stands and the convoy has not started (a breach gains nothing once they walk). */
-    private fun corridorLeft(w: World): Boolean = !convoyOn && corridorPath?.any { w.walls.containsKey(it) } == true
+    private fun corridorLeft(w: World): Boolean = !convoyOn && corridorPath?.any { w.walls.containsKey(it) } == true && centreHeld(w)
 
     /**
      * A breach is worth its walls only while there is something behind it to strike: an escort of his standing out of
@@ -1516,7 +1577,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD corridor=auto homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
