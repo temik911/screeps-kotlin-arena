@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 197
+    private const val BOT_VERSION = 198
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6568,6 +6568,11 @@ object SpawnAndSwamp {
      *  latecomer and going together IS the hold; against marlyman#441 (v195) the hold's 110 ticks were a wait for f84
      *  at the far edge of his tower, not for the swamp-bound melee — the cohesion's question, not the verdict's */
     private const val USE_WAVE_LATECOMERS = false
+    /** The raid takes the spawn of his where a strike fits now (margin of his guns' walk back over our walk and work),
+     *  before the held or the bare one (runRaiders, v198). */
+    private const val USE_RAID_FIT_TARGET = true
+    /** While chipping his ramparted spawn the waiting raid waits at its door, not at the lurk range (v198). */
+    private const val USE_RAID_DOOR_WAIT = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
@@ -6857,11 +6862,31 @@ object SpawnAndSwamp {
             ctx.enemyCreeps.filter { c -> isHisBuilder(c) && open.any { it.id == c.id } }.minWithOrNull(compareBy<Creep> { c ->
                 if (USE_RAID_RACE && !outlasts(c)) 1 else 0 }.thenBy { c ->
                 val prev = enemyPrevCell[c.id]; if (prev != null && prev == c.x * 100 + c.y) 0 else 1 }.thenBy { getRange(lead, it) })
+        // THE SPAWN WHERE A STRIKE FITS NOW (v198). The order — his bare main, then bare before ramparted, the held one
+        // kept — waited where it did not fit: against けろびー#49 (v195) the pair stood 900 ticks (470-1391) by the bare
+        // (44,28) under his army while his ramparted main was free — his guns 73-141 ticks from it, the pair 72. All his
+        // spawns must fall, the order does not matter; what counts is the margin — his nearest mobile gun's walk back
+        // into range of it, less our walk and the work (the whole kill of a bare one, RAID_CHIP_MIN strikes of a visit)
+        val raidGuns = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } }
+        val raidDps = raiders.sumOf { r -> r.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
+        fun strikeMargin(t: GameObject): Int {
+            val p = pos(t)
+            val field = flowTo(ctx, p)
+            val back = raidGuns.minOfOrNull { (pathTicks(it, field, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) - RANGED_RANGE * plainPeriod(it)) } ?: (Int.MAX_VALUE / 4)
+            val walk = raiders.minOf { getRange(it, p) - 1 }.coerceAtLeast(0)
+            val need = if (rampartOn(ctx, p) > 0) RAID_CHIP_MIN
+                else ceil((ctx.enemySpawns.firstOrNull { it.id == t.id }?.hits ?: SPAWN_HITS) / raidDps.coerceAtLeast(1.0)).toInt()
+            return back - walk - need
+        }
+        val fitSpawn: GameObject? = if (!USE_RAID_FIT_TARGET || raidHome || gathering || raidDps <= 0.0) null else
+            open.filter { it.id in spawnIds }.map { it to strikeMargin(it) }.filter { it.second > 0 }
+                .minWithOrNull(compareBy<Pair<GameObject, Int>> { rampartOn(ctx, pos(it.first)) > 0 }.thenBy { getRange(lead, pos(it.first)) })?.first
         // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17) — and
         // taken when it is all that is left, since the win is his last spawn
         val target: GameObject? = when {
             raidHome || gathering -> null
             builderTarget != null -> builderTarget
+            fitSpawn != null && (held == null || (held.id != fitSpawn.id && strikeMargin(held) <= 0)) -> fitSpawn
             held != null -> held
             main != null && main in open && rampartOn(ctx, main) == 0 -> main
             else -> open.filter { t -> t.id in spawnIds || !USE_RAID_BUILDERS_FIRST }.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
@@ -6967,7 +6992,13 @@ object SpawnAndSwamp {
             // …and, since v167, near its target at the lurk range: waiting at our house it was 82 cells from the strike
             val hover = USE_RAID_FINISH && target != null && !strikeFits && !raidHome
             val goal: Position = if (go != null) pos(go) else if (hover) pos(target!!) else if (!strikeFits) r else ctx.mySpawn
-            val range = if (go != null) 1 else if (hover) RAID_LURK_RANGE else if (!strikeFits) 0 else 2
+            // …AT THE DOOR WHILE IT CHIPS (v198): from the lurk range (12 cells) the walk alone was 21+ ticks against his
+            // gun's walk back of 15-19, so the visit's entry (walk + RAID_CHIP_MIN < back) almost never opened — in five
+            // v195 draws with けろびー the raiders struck his main in 3 % of their ticks against 12 % in the wins, and
+            // 28 of the 30 real visits of ten games lost the raider no hits. At the door the walk is none, and the flight
+            // from a gun within RAID_LURK_FLEE still stands
+            val waitRange = if (USE_RAID_DOOR_WAIT && chipping) 1 else RAID_LURK_RANGE
+            val range = if (go != null) 1 else if (hover) waitRange else if (!strikeFits) 0 else 2
             val waiting = !strikeFits && go == null
             val struck = go != null && getRange(r, goal) <= 1
             if (struck) {
