@@ -32,15 +32,18 @@ import screeps.api.structures.StructureRampart
  *    наш флаг раньше хранителя v23, 6ab8fcb0);
  *  - `chase` — M1 после дебюта всегда стоит на их пути в CHASE_AHEAD клетках впереди поезда, не выбирая узких мест:
  *    держит клетку, пока поезд её не прошёл, и перебегает (стендовый `chk` так обыгрывал v24 три раза из четырёх);
+ *  - `rush` — то же, но ДО дебюта и вместо него (экономика без гонки, как けろびー#29, у которого эскорт весь матч дома);
+ *  - `army` — после остальных приёмов, раз за разом: стрелок M5R5 охотится на их эскорт, по дороге бьёт тягачей
+ *    (вместе с ECON2 стенда — экономика, которой бот не играет: так выглядел бы けろびー#29 с блокировщиками);
  *  - `choke` — M1 ПОСЛЕ дебюта встаёт на клетку впереди их поезда, где обход дороже всего (болото вокруг узкого
  *    прохода), и туда, куда успевает раньше поезда; когда поезд обошёл — перебегает на следующую (M1 ходит клетку в
  *    тик, поезд — в два). Замер по 120 маршрутам: один такой крип стоит поезду медианно 18 тиков, два — 36.
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("squat", "plug", "choke", "blk", "chase")
+    private val ORDER = listOf("rush", "squat", "plug", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
-    private val LATE = setOf("choke", "blk", "chase")
+    private val LATE = setOf("choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
     private const val BUILD_RANGE = 3
 
@@ -72,6 +75,8 @@ internal object RedTeam {
 
     private fun bodyOf(trick: String): Array<BodyPartType> = when (trick) {
         "squat", "choke", "blk", "chase" -> arrayOf(MOVE)
+        // армия: стрелок M5R5 (1000) — достаёт эскорт с трёх клеток, 50 урона в тик; повторяется, пока идёт матч
+        "army", "rush" -> Array(5) { MOVE } + Array(5) { screeps.api.RANGED_ATTACK }
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
@@ -86,7 +91,7 @@ internal object RedTeam {
             val body = bodyOf(t)
             if (energy < Bodies.cost(body)) return true
             if (EscortRun.order(w, body, "red:$t", "persona ${describe()}")) {
-                ordered.add(t)
+                if (t != "army" && t != "rush") ordered.add(t)
                 pendingBody = Bodies.summary(body)
                 pendingTrick = t
             }
@@ -105,6 +110,7 @@ internal object RedTeam {
                 "plug" -> plug(w, c)
                 "choke" -> choke(w, c)
                 "chase" -> chase(w, c)
+                "army", "rush" -> army(w, c)
             }
         }
     }
@@ -169,6 +175,15 @@ internal object RedTeam {
     }
 
     // ---------- choke ----------
+
+    private fun army(w: EscortRun.World, c: Creep) {
+        val esc = w.enemyEscort ?: return
+        val near = w.enemies.filter { getRange(c, it) <= 3 }
+        val shot = if (getRange(c, esc) <= 3) esc else near.minByOrNull { it.hits }
+        if (shot != null) c.rangedAttack(shot)
+        if (getRange(c, esc) > 2) EscortRun.stepRed(w, c, esc, 2)
+        log(w, c, "army", "hunting escort h=${esc.hits}")
+    }
 
     private const val CHASE_AHEAD = 10
     private var chaseTarget = -1

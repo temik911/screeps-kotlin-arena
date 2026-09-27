@@ -106,6 +106,13 @@ if (LIVE) {
   world.objects.push(new StructureContainer(92, 49, 2500, 2500)); world.objects.push(new StructureContainer(92, 50, 2500, 2500));
 }
 world.spawnRegen = [1, has('harvest') ? 11 : (has('icpt') || has('econ')) ? 7 : 1]; // 'harvest': the enemy economy as if it had a W5 harvester from tick 1
+// bot against bot: ECON2=<energy a tick> gives the enemy BOT the income of an economy it does not play (stachu3478 and
+// けろびー#29 run ~7 a tick from harvesters by tick 80-120) — the league measures what that energy buys, not the harvest
+// ECON2_FROM=<tick> — the income starts there (1 a tick before: the harvesters are walking and filling), ECON2_COST —
+// what the economy cost at tick 1 (taken from the enemy spawn's 500)
+const ECON2_FROM = parseInt(process.env.ECON2_FROM || '1', 10);
+if (process.env.ECON2 && ECON2_FROM <= 1) world.spawnRegen[1] = parseFloat(process.env.ECON2);
+if (process.env.ECON2_COST) theirs.sp.store.energy = Math.max(0, theirs.sp.store.energy - parseInt(process.env.ECON2_COST, 10));
 // 'icpt' (stachu3478#9/#10, 27.09.2026): two W3M1C1 harvesters and two M1C1 haulers put ~7 a tick into his spawn from
 // the first tens of ticks (measured on his spawn's energy: +7/tick at t=80..120), so the stub gives him 7 from tick 1
 // 'racer' (match 2, 04.09.2026): the opponent runs a train too and is AHEAD — its puller is already alive at tick 0, so
@@ -393,6 +400,7 @@ for (let t = 1; t <= ticks; t++) {
     sink = lines;
     world.perspective = 0;
   } else enemyTick();
+  if (process.env.ECON2 && t + 1 === ECON2_FROM) world.spawnRegen[1] = parseFloat(process.env.ECON2);
   step(Resource);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
   if (TRACE && t >= TRACE[0] && t <= TRACE[1]) {

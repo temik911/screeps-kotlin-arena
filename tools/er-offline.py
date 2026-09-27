@@ -76,11 +76,16 @@ def maps(n):
 
 
 def hand(args):
-    game, swap, a, b, pa, pb = args
+    game, swap, a, b, pa, pb, econ = args
     env = dict(os.environ, GAME=game, BOT=a, BOT2=b, PERSONA=pa, PERSONA2=pb,
                LOGTAG=f"off-{os.path.basename(os.path.dirname(game))[:8]}-{'top' if swap else 'bottom'}-")
     if swap:
         env["START"] = "match2"
+    if econ:
+        parts = str(econ).split(":")
+        env["ECON2"] = parts[0]
+        if len(parts) > 1: env["ECON2_FROM"] = parts[1]
+        if len(parts) > 2: env["ECON2_COST"] = parts[2]
     env.setdefault("NODE_OPTIONS", "--max-semi-space-size=2 --max-old-space-size=256")
     r = subprocess.run([node(), "--import", "./register.mjs", "run.mjs", "2000", "offline"], cwd=STUB, env=env,
                        capture_output=True, text=True, timeout=600)
@@ -99,6 +104,7 @@ def main():
     ap.add_argument("--b", help="git ref of side B (default: this worktree's build)")
     ap.add_argument("--persona-a", default="main")
     ap.add_argument("--persona-b", default="main")
+    ap.add_argument("--econ-b", help="side B's economy the stub stands in for: RATE[:FROM[:COST]] — energy a tick from tick FROM, COST taken at tick 1 (e.g. 7:60:400)")
     ap.add_argument("-n", type=int, default=20, help="maps (each played on both sides)")
     ap.add_argument("-j", type=int, default=6, help="parallel stub runs")
     ap.add_argument("--keep", action="store_true", help="keep temporary worktrees")
@@ -112,8 +118,8 @@ def main():
         ub, db, wb = side_bundle(a.b, "B", scratch, a.keep)
         cleanup += [w for w in (wa, wb) if w]
         ms = maps(a.n)
-        print(f"offline: A = {da} persona={a.persona_a} | B = {db} persona={a.persona_b} | {len(ms)} maps x 2 sides", flush=True)
-        jobs = [(g, s, ua, ub, a.persona_a, a.persona_b) for g in ms for s in (False, True)]
+        print(f"offline: A = {da} persona={a.persona_a} | B = {db} persona={a.persona_b}{f' econ={a.econ_b}' if a.econ_b else ''} | {len(ms)} maps x 2 sides", flush=True)
+        jobs = [(g, s, ua, ub, a.persona_a, a.persona_b, a.econ_b) for g in ms for s in (False, True)]
         with ThreadPoolExecutor(max_workers=a.j) as ex:
             results = list(ex.map(hand, jobs))
     finally:
