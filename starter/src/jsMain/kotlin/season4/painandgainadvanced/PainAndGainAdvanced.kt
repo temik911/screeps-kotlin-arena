@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 24
+const val BOT_VERSION = 25
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -138,6 +138,7 @@ object PainAndGainAdvanced {
         // a fighter that starts farming is no longer played from a fortress
         if (fighter && fortressLoses()) { fighter = false; fortressId = null; println("style t=$t: out of the fortress — it loses on the score, rate ${ourFx.rate}:${theirFx.rate} score $ourScore:$theirScore") }
         army()
+        noteFight(mode == Mode.FIGHT || mode == Mode.RETREAT || mode == Mode.STAND)
         pullers()
         towersAct()
         Traffic.resolve(mine.map { it.c })
@@ -432,7 +433,8 @@ object PainAndGainAdvanced {
      *  fire beat the other's healing — while his three flags outscored our two; the fight held the army because his
      *  guns were within four. While his flags score at least ours, such a fight is left for his flags. */
     private var breakOffUntil = 0
-    /** Which of the last STALE_T ticks the army spent in FIGHT (a ring by t % STALE_T) and how many. */
+    /** Which of the last STALE_T ticks the army spent standing still — FIGHT, RETREAT or STAND (a ring by t % STALE_T)
+     *  — and how many. */
     private val fightRing = BooleanArray(STALE_T)
     private var fightTicks = 0
     private fun noteFight(fighting: Boolean) {
@@ -552,10 +554,16 @@ object PainAndGainAdvanced {
         // ticks as his runners passed within ENGAGE_RANGE of it, the count restarted each time, and from t=500 to t=4000
         // it "fought" what it could not catch (our heavy melee swung 0 times in t=1000-1500) while his runners held six
         // flags to our four — lost on the score
-        val stale = t - lastDeathT > STALE_T && fightTicks * 2 >= STALE_T
-        if (stale && theirFx.rate >= ourFx.rate && t >= breakOffUntil) {
+        // ... and not only a fight: an army that neither kills nor is killed while the score, at the rates that stand, ends
+        // the match lost is standing still whatever its mode says — against kerobii#5 (v24) ours, 9 to his 11, held
+        // RETREAT from t=937 to the end, no death on either side, 18 a tick to his 20: lost on the score. The window
+        // counts FIGHT, RETREAT and STAND; the loss is the score at the end, lead included, not his rate against ours
+        val left = TICKS_LIMIT - t
+        val lostAtEnd = (ourScore - theirScore) + (ourFx.rate - theirFx.rate) * left <= 0
+        val stale = t - lastDeathT > STALE_T && fightTicks * 2 >= STALE_T && lostAtEnd
+        if (stale && t >= breakOffUntil) {
             breakOffUntil = t + STALE_T
-            println("stale t=$t: no death in ${t - lastDeathT} ticks, rate ${ourFx.rate}:${theirFx.rate} — off to his flags")
+            println("stale t=$t: no death in ${t - lastDeathT} ticks, rate ${ourFx.rate}:${theirFx.rate} score $ourScore:$theirScore — off to his flags")
         }
         val breakingOff = t < breakOffUntil
         val engaged = !breakingOff && foes.any { e -> e.armed && group.any { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGED_R } }
@@ -619,7 +627,6 @@ object PainAndGainAdvanced {
         if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} whole=${whole.ratio.asDynamic().toFixed(2)} near=${near.size} group=${group.size}/${army.size} obj=${objective.x},${objective.y}") }
 
         if (mode == Mode.SWEEP) settled = true
-        noteFight(mode == Mode.FIGHT)
         fire(all)
         // hunters: in a sweep, light armed creeps go in pairs after the enemy's survivors — a lone runner sits on a flag
         // or walks between them, and an `h4m4` heals itself 48 a tick, more than one `r4m4` does to it
