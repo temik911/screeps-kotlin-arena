@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 192
+    private const val BOT_VERSION = 193
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6525,6 +6525,8 @@ object SpawnAndSwamp {
     private const val USE_HOLD_TARGET_TOWERS = true
     /** The siege body question leaves out of its crew the melee whose going hangs on its own answer (runFighters, v192). */
     private const val USE_BODY_BY_ITS_CREW = true
+    /** A standing gun of his within a raider's flight range is prey too, not only one by the target (v193). */
+    private const val USE_RAID_GUN_NEAR = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6882,7 +6884,12 @@ object SpawnAndSwamp {
         // raidOutlasts (his heal included) says the pair outlasts it; a walking one would kite the melee pair on plain
         val armedPrey: Creep? = if (!USE_RAID_GUN_PREY || strikeFits || raidHome || gathering || target == null) null else
             ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
-                enemyPrevCell[e.id] == e.x * 100 + e.y && getRange(e, pos(target)) <= RAID_LURK_RANGE }
+                enemyPrevCell[e.id] == e.x * 100 + e.y && (getRange(e, pos(target)) <= RAID_LURK_RANGE ||
+                    // …or where it holds a raider off (v193): against けろびー#48 his M5R5 stood still at (6,29), 21 cells
+                    // from his free main, 1592-1839, and the waiting raider rocked six cells from it, fleeing it, while the
+                    // pair's race against it said 12 ticks for 600 of 1800 hits; his main took 18 strikes in 1287 free
+                    // ticks and the match was a draw. A standing gun within the flight range of a raider is prey too
+                    (USE_RAID_GUN_NEAR && raiders.any { r -> getRange(r, e) <= (if (USE_RAID_CLOSE_LURK) RAID_LURK_FLEE else RAID_LURK_RANGE) })) }
                 .sortedBy { getRange(lead, it) }
                 .firstOrNull { e -> raidOutlasts(ctx, raiders, e, e.hits, raceField(ctx, e), healed = true) }
         // A WAITING PAIR COMES HOME TO A STORM IT CAN TURN (v171): against kerobi#50 both builders were dead at 447 and the
