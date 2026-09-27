@@ -367,6 +367,11 @@ internal class Deal(
     // добиваемость — killTicks/killableNow, которыми уже пользуется фокус. Замеры из прежнего комментария
     // перенесены в docs/pain-and-gain.md.
     val hisMelee = armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
+    // СТРЕЛОК НЕ ВЫХОДИТ ИЗ ДАЛЬНОСТИ ЕГО СТВОЛОВ, ПОКА У НЕГО НЕТ МИЛИ (v697, см. USE_RANGED_HOLDS_REACH_VS_GUNS): против
+    // одних стрелков с лекарями перестрелку решает, чьи стволы в дальности, а шаг назад при равной скорости дистанции не даёт
+    private val holdsReach = USE_RANGED_HOLDS_REACH_VS_GUNS && armedEnemies.isNotEmpty() && hisMelee.isEmpty()
+    private fun reachesArmed(p: Position) = armedEnemies.any { getRange(p, it) <= RANGED_RANGE }
+    private fun keepsReach(c: Creep) = holdsReach && hasRanged(c) && reachesArmed(c)
     // СОГЛАСОВАННОСТЬ СТРОЯ (v200, оператор: «все ходы должны быть согласованными... не должно быть такого, что
     // наш крип пошёл в наступление без прикрытия; командир не должен отправлять крипов в строй врага, если он там
     // может сильно пострадать и без возможности быть вылеченным»). Клетка крипа считается ОТНОСИТЕЛЬНО уже
@@ -762,7 +767,10 @@ internal class Deal(
             // уже есть и проверен фактом (`huntsWounded`: две модели его выбора сверяются с правдой следующего тика)
             val medics = if (TacticianState.huntsWounded) (if (rotate) army.filter { it.id != c.id && healerOnly(it) } else emptyList())
                 else army.filter { it.id != c.id && hasHeal(it) && (rotate || !hasWeapon(it)) }
-            place(c, { true }, rescue = true, rank = { p -> danOf(c, p.key) * 100 -
+            // ...но стрелок, которого не добьют в этот тик, уходит к лекарю в пределах дальности его стволов (v697)
+            val holdReach = !hurtBadly && keepsReach(c)
+            if (holdReach) rec.reachHoldRetreat.n++
+            place(c, { p -> !holdReach || reachesArmed(p) }, rescue = true, rank = { p -> danOf(c, p.key) * 100 -
                 (armedEnemies.minOfOrNull { getRange(p, it) } ?: 0).toDouble() +
                 (medics.minOfOrNull { getRange(p, it) } ?: 0).toDouble() })
             if (rotate) out[c.id]?.let { rotatingMeet[c.id] = it }
@@ -842,7 +850,9 @@ internal class Deal(
         for (c in (if (healersOnly) emptyList() else rangeds).sortedBy { c -> cells.values.count { p -> getRange(c, p) <= 2 && armedEnemies.any { getRange(p, it) <= RANGED_RANGE } } }) {
             if (USE_RETREAT_CELL_STICKS && c.id in out) { repassKept.n++; continue }   // см. passMelee (v522)
             repassAll.n++
-            val ok = placeScored(c, 1, intentOf(c))
+            val holdReach = keepsReach(c)
+            if (holdReach) rec.reachHoldPlace.n++
+            val ok = placeScored(c, 1, intentOf(c), bound = { p -> !holdReach || reachesArmed(p) })
             // ...и КОГДА ВЫБОРА НЕТ, СТРЕЛОК ВЫХОДИТ ИЗ-ПОД МИЛИ, А НЕ ОСТАЁТСЯ СТРЕЛЯТЬ (v183, оператор: «рэнжи не
             // должны быть рядом с его мили»). Все замыслы требуют разом двух вещей — быть вне досягаемости его мили и
             // при этом доставать цель, — а такой клетки рядом с его строем часто нет вовсе, и общий фолбэк «любая
