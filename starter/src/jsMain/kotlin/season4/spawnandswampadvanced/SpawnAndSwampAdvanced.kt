@@ -95,7 +95,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v10"
+    private const val BOT_VERSION = "v11"
 
     private const val LOG_EVERY = 50
 
@@ -152,6 +152,10 @@ object SpawnAndSwampAdvanced {
     private var spawnUpAt = -1
     private var defending = false
     private var attackedOnce = false
+    /** Рождения его боевых крипов: тик, урон+лечение, хиты — из них его производство к нашему подходу. */
+    private val enemyBirths = ArrayList<Triple<Int, Int, Int>>()
+    private val enemyCombatSeen = HashSet<String>()
+    private var enemySpawnSeenAt = -1
     /** Роли крипов вне экономики баз и армии: пробойщик, строитель сейфа. Заказанный крип узнаётся по телу. */
     private val roleOf = HashMap<String, String>()
     private val pendingRoles = ArrayList<Pair<String, String>>()
@@ -538,6 +542,12 @@ object SpawnAndSwampAdvanced {
         }
 
         val enemyCombat = theirs.filter { isCombat(it) }
+        for (e in enemyCombat) if (enemyCombatSeen.add(idOf(e))) enemyBirths.add(Triple(t, dpsOf(e) + healOf(e), e.hitsMax))
+        if (enemySpawnSeenAt < 0 && all.any { it is StructureSpawn && it.asDynamic().my == false }) enemySpawnSeenAt = t
+        for (b in bases) {
+            val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
+            planRamparts(t, b, mine, all)
+        }
         val enemyTowers = all.filter { it is StructureTower && it.asDynamic().my == false }.unsafeCast<List<StructureTower>>()
 
         val homeSpawns = homeSpawnObjects(byId)
@@ -687,11 +697,12 @@ object SpawnAndSwampAdvanced {
             return
         }
         // площадка в досягаемости и дому ничто не грозит: строим циклом дебюта (копка и стройка — одно действие)
-        val site = mySites.filter { getRange(w, it) <= 3 }.minByOrNull { getRange(w, it) }
+        val site = mySites.filter { getRange(w, it) <= 3 }.sortedWith(compareBy<ConstructionSite> { if (isRampartSite(it)) 0 else 1 }.thenBy { getRange(w, it) }).firstOrNull()
         // на клетке площадки стоит крип — стройка препятствия не идёт; v6 так простоял 400 тиков: боец встал на
         // площадку башни, рабочий с полным запасом каждый тик «строил» впустую и не копал, спавн жил на +1 в тик
-        val siteFree = site != null && getObjectsByPrototype(Creep::class).none { it.x == site.x && it.y == site.y }
-        if (site != null && siteFree && !defending) {
+        val siteFree = site != null && (isRampartSite(site) || getObjectsByPrototype(Creep::class).none { it.x == site.x && it.y == site.y })
+        // рампарт строится и под огнём: 200 за 10000 хитов дешевле любого бойца; остальное — только в тишине
+        if (site != null && siteFree && (!defending || isRampartSite(site))) {
             if (e >= batchFor(w) || (src.energy == 0 && e > 0)) {
                 if (w.build(site).asDynamic().unsafeCast<Int>() == 0) return
             } else if (src.energy > 0) { w.harvest(src); return }
@@ -738,13 +749,27 @@ object SpawnAndSwampAdvanced {
         val src = byId[base.sourceId] as? Source ?: return
         val slot = base.slots.minByOrNull { getRange(w, cell(it)) } ?: return
         if (getRange(w, src) > 1) { w.moveTo(cell(slot)); return }
-        if (!expansionPlaced) {
-            val r = createConstructionSite(base.spawnCell.x, base.spawnCell.y, StructureSpawn::class.js)
-            println("expansion: site (${base.spawnCell.x},${base.spawnCell.y}) src=(${src.x},${src.y}) t=${getTicks()} err=${r.error}")
-            expansionPlaced = r.error == null
-            if (!expansionPlaced) { expansion = null; return }
+        // по предложению оператора: сперва рампарт ПОД СОБОЙ, потом рампарт на клетку спавна, потом спавн под ним —
+        // строитель и будущий спавн с первого часа под 10000 хитов (v4–v10 строили голый спавн, stachu3478 снёс его
+        // вместе со строителем)
+        val here = Pos(w.x, w.y)
+        val structures = getObjects()
+        fun rampartAt(p: Pos) = structures.any { it is StructureRampart && it.asDynamic().my == true && it.x == p.x && it.y == p.y }
+        val next: Pair<Pos, String>? = when {
+            here in base.slots && !rampartAt(here) -> here to "rampart"
+            !rampartAt(base.spawnCell) -> base.spawnCell to "rampart"
+            else -> base.spawnCell to "spawn"
         }
-        val site = mySites.firstOrNull { it.x == base.spawnCell.x && it.y == base.spawnCell.y }
+        val (cellNext, kind) = next ?: return
+        var site = mySites.firstOrNull { it.x == cellNext.x && it.y == cellNext.y && (if (kind == "rampart") isRampartSite(it) else isSpawnSite(it)) }
+        if (site == null) {
+            val r = if (kind == "rampart") createConstructionSite(cellNext.x, cellNext.y, StructureRampart::class.js)
+                else createConstructionSite(cellNext.x, cellNext.y, StructureSpawn::class.js)
+            println("expansion: $kind site (${cellNext.x},${cellNext.y}) src=(${src.x},${src.y}) t=${getTicks()} err=${r.error}")
+            if (r.error != null) { if (kind == "spawn") expansion = null; return }
+            expansionPlaced = true
+            site = r.`object`
+        }
         val e = w.store[RESOURCE_ENERGY] ?: 0
         if (site == null) { if (src.energy > 0) w.harvest(src); return }
         if (e >= batchFor(w) || (src.energy == 0 && e > 0)) w.build(site) else w.harvest(src)
@@ -831,6 +856,28 @@ object SpawnAndSwampAdvanced {
         if (r.error == null) b.towerCell = c
     }
 
+    /** Рампарты базы — над спавном и над каждой занятой клеткой добытчика (200 за 10000 хитов, свои под ним
+     *  работают, урон идёт в рампарт): ставятся, когда у дома есть боец или его уже атаковали, по одному. Рейдеры
+     *  けろびー (M3R3, 30 в тик) убивали незащищённых добытчиков за 13–33 тика; сквозь рампарт им нужно 330. */
+    private fun planRamparts(t: Int, b: Base, mine: List<Creep>, all: Array<GameObject>) {
+        if (mine.none { isCombat(it) } && !attackedOnce) return
+        val occupied = b.slots.filter { s -> mine.any { it.x == s.x && it.y == s.y && idOf(it) in slotOf } }
+        val want = listOf(b.spawnCell) + occupied
+        val have = all.filter { (it is StructureRampart || it is ConstructionSite && isRampartSite(it)) && it.asDynamic().my == true }
+            .map { posOf(it) }.toSet()
+        if (all.any { it is ConstructionSite && it.asDynamic().my == true && isRampartSite(it) && cheb(posOf(it), b.spawnCell) <= 2 }) return
+        val next = want.firstOrNull { it !in have } ?: return
+        val r = createConstructionSite(next.x, next.y, StructureRampart::class.js)
+        println("rampart site t=$t at (${next.x},${next.y}) base=(${b.spawnCell.x},${b.spawnCell.y}) err=${r.error}")
+    }
+
+    private fun isRampartSite(o: GameObject): Boolean {
+        val st = o.asDynamic().structure
+        if (st != null && st != undefined && protoName(st) == "StructureRampart") return true
+        val cost = CONSTRUCTION_COST.asDynamic()["StructureRampart"].unsafeCast<Int?>()
+        return cost != null && o.asDynamic().progressTotal == cost
+    }
+
     /** Башня бьёт боевого врага в досягаемости (ближнего — у него выстрел сильнее), при равенстве — самого битого;
      *  без врагов лечит самого битого нашего. */
     private fun runTowers(towers: List<StructureTower>, theirs: List<Creep>, mine: List<Creep>) {
@@ -850,7 +897,7 @@ object SpawnAndSwampAdvanced {
         val needWork = (SOURCE_ENERGY_REGEN + HARVEST_POWER - 1) / HARVEST_POWER
         val haveWork = homeWork(b, mine)
         val freeSlots = b.slots.count { it !in slotOf.values.toSet() }
-        val fighters = mine.filter { isCombat(it) }
+        val fighters = mine.filter { isCombat(it) && idOf(it) !in wave }
         val threat = threats
         val body: Array<BodyPartType>
         val why: String
@@ -890,6 +937,10 @@ object SpawnAndSwampAdvanced {
         val v = vault ?: return false
         if (v.stage == "run") return false
         val all = getObjects()
+        // его башня у сейфа (けろびー поставил передовую базу с башней в девяти клетках от нашего пролома, и пробойщик
+        // со строителем легли под ней): пока она стоит, сейф — не стройка, а цель для армии
+        val near = listOfNotNull(v.wall, v.spawnCell)
+        if (all.any { it is StructureTower && it.asDynamic().my == false && near.any { p -> cheb(posOf(it), p) <= 12 } }) return false
         if (v.stage == "breach" && !hasRole("breacher")) return order(t, spawn, energy, breacherBody(), "breacher")
         if (hasRole("vaultBuilder")) return false
         val wallLeft = wallObject(v, all)?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
@@ -950,6 +1001,22 @@ object SpawnAndSwampAdvanced {
         return towerPowerOf(fed.size, fed.sumOf { it.hits ?: 0 }.toDouble())
     }
 
+    /** Его армия к нашему приходу: нынешние боевые крипы плюс рождённые за окно (не больше 300 тиков с его первого
+     *  спавна), разнесённые на путь; Ланчестер по сумме. */
+    private fun arrivalPower(t: Int, enemyCombat: List<Creep>, arrival: Int): Double {
+        var out = enemyCombat.sumOf { dpsOf(it) + healOf(it) }.toDouble()
+        var hits = enemyCombat.sumOf { it.hits }.toDouble()
+        if (enemySpawnSeenAt >= 0 && arrival > 0) {
+            val window = minOf(300, t - enemySpawnSeenAt)
+            if (window > 0) {
+                val recent = enemyBirths.filter { it.first > t - window }
+                out += recent.sumOf { it.second }.toDouble() * arrival / window
+                hits += recent.sumOf { it.third }.toDouble() * arrival / window
+            }
+        }
+        return kotlin.math.sqrt(out * hits)
+    }
+
     private fun towerPowerOf(count: Int, hits: Double): Double {
         if (count <= 0) return 0.0
         val dps = count * towerShot(RANGED_RANGE + 1) / TOWER_COOLDOWN
@@ -993,8 +1060,23 @@ object SpawnAndSwampAdvanced {
         val enemyObjects = all.filter { it.asDynamic().my == false && it !is Creep && it !is ConstructionSite }
         val homeGroup = fighters.filter { idOf(it) !in wave }
         val pending = pendingTowers(t, all, homeGroup)
-        val enemyPower = power(enemyCombat) + towerPower(enemyTowers) + towerPowerOf(pending, TOWER_HITS.toDouble() * pending)
+        val enemyPowerNow = power(enemyCombat) + towerPower(enemyTowers) + towerPowerOf(pending, TOWER_HITS.toDouble() * pending)
+        // к нашему приходу у него будет больше: его производство за окно, помноженное на путь до его спавна. v10 ушёл
+        // одним бойцом на 360-м против «силы 0», а к подходу у けろびー стояли M5R5 и башня
+        val enemySpawnObjs = all.filter { it is StructureSpawn && it.asDynamic().my == false }
+        val arrival = if (enemySpawnObjs.isEmpty()) 0 else enemySpawnObjs.minOf { pathTicks(home, it) }
+        val enemyPower = arrivalPower(t, enemyCombat, arrival) + towerPower(enemyTowers) + towerPowerOf(pending, TOWER_HITS.toDouble() * pending)
         val lastCall = t > arenaInfo.ticksLimit - 600
+        // дом под угрозой, которую он сам (с башнями) не держит, — волна возвращается: v10 ушёл волной, а поток его M3R3
+        // перебил добытчиков, которых спавн рожал заново каждые 13 тиков
+        if (wave.isNotEmpty() && threats.isNotEmpty() && !lastCall) {
+            val myTowersNow = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
+            val homePower = power(homeGroup) + towerPower(myTowersNow)
+            if (homePower < power(threats)) {
+                println("recall t=$t wave=${wave.size} home=${homePower.toInt()} vs threats=${power(threats).toInt()}")
+                wave.clear()
+            }
+        }
 
         // выход волны: сила дома больше всей армии и башен соперника (и тех его площадок башен, что достроятся к
         // нашему подходу — v5 ушёл одним бойцом против одного M4R3, пока башня была площадкой, и лёг под ней).
@@ -1002,7 +1084,7 @@ object SpawnAndSwampAdvanced {
         if (threats.isEmpty() && homeGroup.isNotEmpty() &&
             (power(homeGroup) >= enemyPower * PUSH_RATIO || lastCall) && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
             for (f in homeGroup) wave.add(idOf(f))
-            println("push t=$t wave=${wave.size} power=${power(homeGroup).toInt()} vs enemy=${enemyPower.toInt()} (army ${power(enemyCombat).toInt()} towers ${towerPower(enemyTowers).toInt()} pending=$pending)${if (lastCall) " lastCall" else ""}")
+            println("push t=$t wave=${wave.size} power=${power(homeGroup).toInt()} vs enemy=${enemyPower.toInt()} (now ${enemyPowerNow.toInt()} army ${power(enemyCombat).toInt()} arrival=$arrival towers ${towerPower(enemyTowers).toInt()} pending=$pending)${if (lastCall) " lastCall" else ""}")
         }
         val waveCreeps = fighters.filter { idOf(it) in wave }
         if (waveCreeps.isNotEmpty()) {
