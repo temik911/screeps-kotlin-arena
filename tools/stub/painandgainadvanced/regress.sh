@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Stub regression for the Pain and Gain ADVANCED bot against THIS worktree's build (run.mjs imports ../../../build/js/...).
 # Usage: zsh tools/stub/painandgainadvanced/regress.sh [tag]      JOBS=<n> to run lines in parallel (default 1)
-#        tag `gate` (and `land`, used by tools/land.sh) runs the `run` lines only; any other tag runs the `grind` lines too;
+#        tag `gate` (and `land`, used by tools/land.sh) runs the `run` lines only; tag `rival` runs the `rival` lines only
+#        (the stachu3478#5 set: `line` and `ghost` on the maps of his live matches); any other tag runs all three kinds;
 #        under tools/land.sh (STUB_LANDING_BASE set) a landing that cannot change this bot runs the SMOKE lines only.
 # One line per scenario: PASS/FAIL, the label <map>-<side>:<scenario>, the outcome, the final score, the alive counts, the
 # tick it ended and the tower shots (ours:theirs), then `| errors: N `. Logs go to ./out/ (gitignored).
@@ -28,8 +29,20 @@ fi
 # one scenario, in a worker process: writes its report line into <dir>/<n> (see the xargs call at the end)
 if [[ "$1" == --one ]]; then
   local_n=$2; map=$3; start=$4; sc=$5; ticks=$6; TAG=$7; dir=$8
-  label="${map#map-}"; label="${label%.txt}-$start:$sc"
-  raw=$(LOGTAG="${TAG}-${label%%:*}-" MAP="$map" START="$start" "$NODE" --import ./register.mjs run.mjs "$ticks" "$sc" 2>&1)
+  if [[ "$map" == replay:* ]]; then
+    # a played match: its map, bodies, start cells and our side (run.mjs REPLAY=); looked up in ./replays/, then in
+    # ~/ScreepsArena/replays/ — a line whose record is on neither is skipped loudly (stderr), not failed
+    rp="${map#replay:}"; label="${rp[1,8]}:$sc"
+    found=( ./replays/$rp*.replay.json.gz(N) $HOME/ScreepsArena/replays/$rp*.replay.json.gz(N) )
+    if (( ${#found} == 0 )); then
+      print -r -- "rival: SKIPPED $label — no record $rp in ./replays/ or ~/ScreepsArena/replays/ (tools/match-log.py replay $rp)" >&2
+      print -r -- "#SKIP" > "$dir/$local_n"; exit 0
+    fi
+    raw=$(LOGTAG="${TAG}-" REPLAY="$rp" "$NODE" --import ./register.mjs run.mjs "$ticks" "$sc" 2>&1)
+  else
+    label="${map#map-}"; label="${label%.txt}-$start:$sc"
+    raw=$(LOGTAG="${TAG}-${label%%:*}-" MAP="$map" START="$start" "$NODE" --import ./register.mjs run.mjs "$ticks" "$sc" 2>&1)
+  fi
   line=$(print -r -- "$raw" | grep '^done:' | tail -1)
   # done: <outcome> score=a/b alive=x/y errors=N end=T tw=s/s time=..s log=...
   outcome=$(print -r -- "$line" | sed -E 's/^done: (.*) score=.*/\1/')
@@ -46,7 +59,7 @@ if [[ "$1" == --one ]]; then
   elif [[ "$outcome" == "our army destroyed"* ]]; then verdict=FAIL
   elif (( a > b )); then verdict=PASS
   else verdict=FAIL; fi
-  printf '%-4s %-16s %-32s score %s:%s alive %s t=%s tw %s | errors: %s \n' "$verdict" "$label" "$outcome" "$a" "$b" "$alive" "$end" "$tw" "$errors" > "$dir/$local_n"
+  printf '%-4s %-18s %-32s score %s:%s alive %s t=%s tw %s | errors: %s \n' "$verdict" "$label" "$outcome" "$a" "$b" "$alive" "$end" "$tw" "$errors" > "$dir/$local_n"
   exit 0
 fi
 
@@ -86,9 +99,10 @@ for s in $SMOKE; do SMOKE_SET[$s]=1; done
 mkdir -p out
 PLANDIR=$(mktemp -d)
 N=0
-run() { # $1 = map file, $2 = START (p1|p2), $3 = scenario, $4 = ticks — collected here, executed below
+run() { # $1 = map file or replay:<id>, $2 = START (p1|p2) or -, $3 = scenario, $4 = ticks — collected here, executed below
   local lb="${1#map-}" ticks=$4
   lb="${lb%.txt}-$2:$3"
+  [[ "$TAG" == rival ]] && return 0
   (( ${+SMOKE_SET[$lb]} )) && SMOKE_FOUND[$lb]=1
   if (( SMOKE_ONLY )); then (( ${+SMOKE_SET[$lb]} )) || return 0; ticks=$SMOKE_TICKS; fi
   N=$((N + 1)); print -r -- "$N $1 $2 $3 $ticks $TAG $PLANDIR" >> "$PLANDIR/plan"
@@ -96,6 +110,11 @@ run() { # $1 = map file, $2 = START (p1|p2), $3 = scenario, $4 = ticks — colle
 # grind: run by `zsh regress.sh <tag>` for any tag but gate/land — the other side of each map (the terrain is NOT point
 # symmetric: 1600 of 10 000 cells differ from their mirror, so p2 on map 1 is another match) and the mirror match
 grind() { if [[ "$TAG" == land || "$TAG" == gate ]]; then return; fi; run "$@"; }
+# rival: never in the gate — `zsh regress.sh rival` runs these alone, any tag but gate/land runs them with the rest
+rival() {
+  if [[ "$TAG" == land || "$TAG" == gate ]]; then return; fi
+  N=$((N + 1)); print -r -- "$N $1 $2 $3 $4 $TAG $PLANDIR" >> "$PLANDIR/plan"
+}
 
 # the gate: each live map from the side we played it on live (map 1: replay 6ab90e68, we were player 1; map 2: the v1
 # log of 6ab90ed9, we were player 2), against the three scripts, the whole 5000 ticks
@@ -115,16 +134,38 @@ grind map-live2.txt p1 farm 5000
 grind map-live1.txt p1 mirror 5000
 grind map-live2.txt p2 mirror 5000
 
+# STACHU3478#5 (27.09.2026): the bot that beat v5-v7 live. `line` is the model of him (run.mjs, measured on these six
+# records), `line+lag` the same with its healers hanging back (his two lost records), `ghost` his recorded track with
+# fire and healing by rule. Each record is the map, the bodies and our side of one live match. Live against him (the
+# match store): v5 1-1, v6 1-3, v7 1-3, v9 2-2; per record: 91898 v5 lost, 91924 v6 lost, 919a7 v6 won, 91a90 v7 lost,
+# 91b4b v9 won, 91b62 v9 lost. Calibrated on 27.09.2026 with one bundle per commit of v5, v6, v7, v9 and v11, each on
+# all six records (README.md, "How close"):
+#   `line`     our army won 2 fights of 30 (v5 twice) against the live 5 of 13 — his good fight, stronger than his
+#              average; the version that played a record reproduces every live loss in its shape (v6 on 91924: hits lost
+#              ours/his +100 20206/5577 against the record's 20025/4400) and neither live win;
+#   `line+lag` v6 and v9 won 1 fight of 6 each and outlasted him on score in 1 and 2 more — his weaker form;
+#   `ghost`    our side walks its recorded cells tick for tick until 4-12 ticks before contact (v6 on 91924, v9 on
+#              91b4b and 91b62: the stand's engine is the live one up to the fight), then wins nearly every exchange —
+#              his fire and healing are not the record's, so a `ghost` line measures the approach, not the fight.
+# PASS here means we beat him (or outscored him with a remnant); a `line` line that FAILs is what these lines are for.
+for g in 6ab91898064dc919caaaabf4 6ab91924064dc991b9aaac0a 6ab919a7064dc90424aaac1e 6ab91a90064dc93f08aaac57 6ab91b4b064dc9cfb4aaac81 6ab91b62064dc93a33aaac88; do
+  rival replay:$g - line 5000
+  rival replay:$g - line+lag 5000
+  rival replay:$g - ghost 5000
+done
+rival map-live1.txt p1 line 5000
+rival map-live2.txt p2 line 5000
+
 # a SMOKE label without a gate line would shrink the smoke silently: checked on every gate run, so its own landing catches it
 if [[ "$TAG" == land || "$TAG" == gate ]]; then
   for s in $SMOKE; do
-    (( ${+SMOKE_FOUND[$s]} )) || printf '%-4s %-16s %-32s | errors: %s \n' FAIL smoke "no gate line $s" 1
+    (( ${+SMOKE_FOUND[$s]} )) || printf '%-4s %-18s %-32s | errors: %s \n' FAIL smoke "no gate line $s" 1
   done
 fi
 
 if [[ -s "$PLANDIR/plan" ]]; then xargs -P "$JOBS" -n 7 zsh "$SELF" --one < "$PLANDIR/plan"; fi
 for ((i = 1; i <= N; i++)); do
-  if [[ -s "$PLANDIR/$i" ]]; then cat "$PLANDIR/$i"
-  else printf '%-4s %-16s %-32s | errors: %s \n' FAIL "scenario-$i" "worker produced nothing" 1; fi
+  if [[ -s "$PLANDIR/$i" ]]; then [[ "$(head -c 5 "$PLANDIR/$i")" == "#SKIP" ]] || cat "$PLANDIR/$i"
+  else printf '%-4s %-18s %-32s | errors: %s \n' FAIL "scenario-$i" "worker produced nothing" 1; fi
 done
 rm -rf "$PLANDIR"

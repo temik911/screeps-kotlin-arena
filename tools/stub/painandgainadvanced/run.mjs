@@ -1,14 +1,20 @@
 // Offline runner for Pain and Gain ADVANCED: a live map (MAP=map-liveN.txt, written by mapfrom.py) with the arena's
 // fixed layout — eleven flags, four towers linked to four of them, eight 2500 containers, sixteen creeps a side — and a
 // scripted enemy. Usage (see README.md):
-//   node --import ./register.mjs run.mjs <ticks> none|rush|farm|mirror
+//   node --import ./register.mjs run.mjs <ticks> none|rush|farm|line|line+lag|mirror|ghost
 //   env: MAP=<file> (default map-live1.txt)  START=p1|p2 (the side our bot drives, default p1)  LOGTAG=<prefix>
+//        REPLAY=<game id | id prefix | path to .replay.json.gz> — the map, the bodies and the start cells of a played
+//          match, and our side is the side we played there (US=<name>, default temik911); MAP and START are ignored.
+//          Any scenario plays on it; `ghost` needs it (the enemy walks the recorded cells).
 //        BOT=<bundle url>  NOCLOCK=1 (getCpuTime() answers 0 — the run is deterministic on any machine)
-//        TRACE=<t0>-<t1> (our creeps' cells and fatigue every tick of that window, to stdout)  STATUS=<n> (a status line
-//        to stdout every n ticks, default 500; the log gets one every 100)
+//        TRACE=<t0>-<t1> (our creeps' cells and fatigue every tick of that window, to stdout)  LINETRACE=<t0>-<t1> (the
+//        `line` script's state per tick)  STATUS=<n> (a status line to stdout every n ticks, default 500; the log gets
+//        one every 100)
 // The bot always drives the START side (owner 0); the other side (owner 1) is the enemy script, or with `mirror` a
 // second, fully separate instance of the same bundle (hooks.mjs gives it its own module graph). Logs go to ./out/.
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { world, process as step, idx, inBounds, range, creeps, live, towerPower } from './world.mjs';
 import { Creep } from './game/prototypes/creep.mjs';
@@ -21,14 +27,31 @@ import { getDirection } from './game/utils.mjs';
 import { TOWER_POWER_ATTACK, TOWER_RANGE, TOWER_ENERGY_COST, TOWER_CAPACITY, CARRY_CAPACITY } from './game/constants.mjs';
 
 // the bundle of THIS worktree's build (the parallel-sessions rules: the stub tests what the worktree built)
-const BUNDLE_DIR = new URL('../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/painandgainadvanced/', import.meta.url);
-const BOT = process.env.BOT || new URL('PainAndGainAdvanced.export.mjs', BUNDLE_DIR).href;
+const BOT = process.env.BOT || new URL('../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/painandgainadvanced/PainAndGainAdvanced.export.mjs', import.meta.url).href;
+const BUNDLE_DIR = new URL('./', BOT);   // the mirror loads its second copy from the same bundle
 const MAP = process.env.MAP || fileURLToPath(new URL('map-live1.txt', import.meta.url));
-const START = process.env.START || 'p1';
-if (START !== 'p1' && START !== 'p2') throw new Error(`START must be p1 or p2, got ${START}`);
 const ticks = Math.min(parseInt(process.argv[2] || String(TICKS_LIMIT), 10), TICKS_LIMIT);
-const scenario = process.argv[3] || 'none';
-if (!['none', 'rush', 'farm', 'mirror'].includes(scenario)) throw new Error(`unknown scenario ${scenario}`);
+// a scenario and its modifiers: `line+lag` is the line whose healers keep their rank (below)
+const [scenario, ...MODS] = (process.argv[3] || 'none').split('+');
+if (!['none', 'rush', 'farm', 'line', 'mirror', 'ghost'].includes(scenario)) throw new Error(`unknown scenario ${scenario}`);
+if (MODS.some((m) => m !== 'lag') || (MODS.length && scenario !== 'line')) throw new Error(`unknown modifier in ${process.argv[3]}`);
+// REPLAY: ./replays/ first (a record kept with the stub), then ~/ScreepsArena/replays/ (tools/match-log.py replay <id>)
+function findReplay(arg) {
+  if (existsSync(arg)) return arg;
+  for (const dir of [fileURLToPath(new URL('replays/', import.meta.url)), `${homedir()}/ScreepsArena/replays/`]) {
+    if (!existsSync(dir)) continue;
+    const hits = readdirSync(dir).filter((f) => f.endsWith('.replay.json.gz') && f.startsWith(arg));
+    if (hits.length === 1) return dir + hits[0];
+  }
+  throw new Error(`REPLAY ${arg}: no single <id>.replay.json.gz in ./replays/ or ~/ScreepsArena/replays/`);
+}
+const REPLAY = process.env.REPLAY ? JSON.parse(gunzipSync(readFileSync(findReplay(process.env.REPLAY))).toString('utf8')) : null;
+if (scenario === 'ghost' && !REPLAY) throw new Error('ghost needs REPLAY=<id or path>');
+const US = process.env.US || 'temik911';
+// our side in the replay (0 = player 1): the side of our username; in self-play the first side
+const REC_US = REPLAY ? ((REPLAY.meta.players.find((p) => String(p.username).startsWith(US)) || { side: 0 }).side) : 0;
+const START = REPLAY ? (REC_US === 0 ? 'p1' : 'p2') : (process.env.START || 'p1');
+if (START !== 'p1' && START !== 'p2') throw new Error(`START must be p1 or p2, got ${START}`);
 const TRACE = process.env.TRACE ? process.env.TRACE.split('-').map((v) => parseInt(v, 10)) : null;
 const STATUS = parseInt(process.env.STATUS || '500', 10);
 world.ticksLimit = TICKS_LIMIT;
@@ -66,10 +89,23 @@ const ARMY = [
   ['heavy_healer_1', 11, 10, T4H8M6], ['heavy_healer_2', 13, 10, T4H8M6],
 ];
 
+const roleOf = (b) => (b.includes(C) ? 'puller' : b.includes(H) ? 'healer' : b.includes(R) ? 'ranged' : 'melee');
+const PART = { a: A, r: R, h: H, m: M, t: T, c: C, w: 'work' };
+const expandBody = (s) => [...s.matchAll(/([a-z])(\d+)/g)].flatMap(([, ch, n]) => Array(+n).fill(PART[ch] || M));
+// the record of a replay: every creep's cell after each tick (ghost), and what the match did — its contact tick, both
+// sides' hits per tick, deaths — to set the stand's numbers against (the report at the end)
+const ghostPos = new Map();   // creep id -> [tick] -> {x, y} while it lived
+const rec = { contact: null, hits: [], deaths: [0, 0], ticks: 0, winner: '', end: [0, 0] };
 function build() {
-  const rows = readFileSync(MAP, 'utf8').split('\n').filter((r) => r.length > 0);
-  if (rows.length !== 100) throw new Error(`map must have 100 rows, got ${rows.length}`);
-  rows.forEach((r, y) => { if (r.length !== 100) throw new Error(`row ${y} has ${r.length} chars`); for (let x = 0; x < 100; x++) world.terrain[idx(x, y)] = r[x] === '#' ? 1 : r[x] === '~' ? 2 : 0; });
+  if (REPLAY) {
+    let i = 0;
+    for (const [, ch, n] of REPLAY.terrain.matchAll(/([wps])(\d+)/g)) for (let k = 0; k < +n; k++, i++) world.terrain[idx(i % 100, Math.floor(i / 100))] = ch === 'w' ? 1 : ch === 's' ? 2 : 0;
+    if (i !== 10000) throw new Error(`replay terrain has ${i} cells`);
+  } else {
+    const rows = readFileSync(MAP, 'utf8').split('\n').filter((r) => r.length > 0);
+    if (rows.length !== 100) throw new Error(`map must have 100 rows, got ${rows.length}`);
+    rows.forEach((r, y) => { if (r.length !== 100) throw new Error(`row ${y} has ${r.length} chars`); for (let x = 0; x < 100; x++) world.terrain[idx(x, y)] = r[x] === '#' ? 1 : r[x] === '~' ? 2 : 0; });
+  }
   for (const [id, x, y, flagId] of STRUCTURES) {
     const o = flagId ? new StructureTower(x, y, undefined) : new StructureContainer(x, y, 2500, 2500);
     o.id = id;
@@ -77,16 +113,48 @@ function build() {
     world.objects.push(o);
   }
   for (const [id, x, y, type, score] of FLAGS) { const f = new ScoreFlag(x, y, type, score); f.id = id; world.objects.push(f); }
+  if (REPLAY) {
+    // the creeps as the record's tick 0 has them; owner 0 is our side of the record
+    const t0 = REPLAY.ticks.find((tk) => tk.k === 0);
+    for (const [id, sd, x, y, , , b] of t0.n) {
+      const c = new Creep(x, y, sd === REC_US ? 0 : 1, expandBody(b));
+      c.id = id; c.role = roleOf(c.body.map((p) => p.type));
+      world.objects.push(c);
+    }
+    readRecord();
+    return;
+  }
   // player 1's creeps first, as the live object list has them; owner 0 is the side our bot drives
   for (const p of [1, 2]) {
     const owner = (START === 'p1') === (p === 1) ? 0 : 1;
     for (const [role, x, y, b] of ARMY) {
       const c = p === 1 ? new Creep(x, y, owner, b) : new Creep(98 - x, 98 - y, owner, b);
       c.id = `pg_player${p}_${role}`;
-      c.role = role.startsWith('puller') ? 'puller' : b.includes(H) ? 'healer' : b.includes(R) ? 'ranged' : 'melee';
+      c.role = roleOf(b);
       world.objects.push(c);
     }
   }
+}
+function readRecord() {
+  const last = new Map(), sideOf = new Map(), hitsOf = new Map(), puller = new Set();
+  rec.ticks = REPLAY.meta.ticks;
+  const w = REPLAY.meta.result || {};
+  rec.winner = w.draw ? 'draw' : w.winnerName || (REPLAY.meta.players.find((p) => p.side === w.winner) || {}).username || '?';
+  for (const tk of REPLAY.ticks) {
+    for (const [id, sd, x, y, h, , b] of tk.n || []) { sideOf.set(id, sd === REC_US ? 0 : 1); last.set(id, { x, y }); hitsOf.set(id, h); if (/c\d/.test(b)) puller.add(id); if (!ghostPos.has(id)) ghostPos.set(id, []); }
+    for (const [id, x, y, h] of tk.u || []) { last.set(id, { x, y }); hitsOf.set(id, h); }
+    for (const id of tk.x || []) { last.delete(id); hitsOf.delete(id); rec.deaths[sideOf.get(id)]++; }
+    for (const [id, pos] of last) ghostPos.get(id)[tk.k] = pos;
+    const sum = [0, 0];
+    for (const [id, h] of hitsOf) sum[sideOf.get(id)] += h;
+    rec.hits[tk.k] = sum;
+    if (rec.contact === null) {
+      const o = [...last].filter(([id]) => sideOf.get(id) === 0 && !puller.has(id)).map(([, p]) => p);
+      const e = [...last].filter(([id]) => sideOf.get(id) === 1 && !puller.has(id)).map(([, p]) => p);
+      if (o.some((a) => e.some((b) => range(a, b) <= 3))) rec.contact = tk.k;
+    }
+  }
+  for (const [id] of last) rec.end[sideOf.get(id)]++;
 }
 build();
 
@@ -209,11 +277,15 @@ function pullers(mine) {
     const f = pullerPost.get(p.id);
     if (!f) continue;
     if (p.x !== f.x || p.y !== f.y) { stepDown(p, flowTo(f.x, f.y)); continue; }
-    const tw = world.objects.find((o) => o.exists && o.kind === 'tower' && o.flagId === f.id);
-    const box = world.objects.filter((o) => o.exists && o.kind === 'container' && range(o, f) <= 1).sort((a, b) => b.store.energy - a.store.energy)[0];
-    if (tw && tw.owner === p.owner && tw.store.energy < TOWER_CAPACITY && p.store.energy > 0) p.transfer(tw, 'energy');
-    else if (box && box.store.energy > 0 && p.store.free() >= CARRY_CAPACITY) p.withdraw(box, 'energy');
+    feed(p, f);
   }
+}
+/** A puller on a tower flag: withdraw from the container beside it, keep the tower full once it is its side's. */
+function feed(p, f) {
+  const tw = world.objects.find((o) => o.exists && o.kind === 'tower' && o.flagId === f.id);
+  const box = world.objects.filter((o) => o.exists && o.kind === 'container' && range(o, f) <= 1).sort((a, b) => b.store.energy - a.store.energy)[0];
+  if (tw && tw.owner === p.owner && tw.store.energy < TOWER_CAPACITY && p.store.energy > 0) p.transfer(tw, 'energy');
+  else if (box && box.store.energy > 0 && p.store.free() >= CARRY_CAPACITY) p.withdraw(box, 'energy');
 }
 /** The enemy's towers: the nearest creep of ours in range (the hardest shot), else the most wounded of its own. */
 function enemyTowers(mine, ours) {
@@ -274,6 +346,201 @@ function farm(mine, ours) {
   }
 }
 
+// ---------- line: stachu3478#5 ----------
+// The bot that beat v5-v7 live (27.09.2026). Measured on the replays 6ab91898 (v5), 6ab91924 (v6), 6ab91a90 (v7),
+// 6ab91b4b and 6ab91b62 (v9), the first 100 ticks of contact: all sixteen walk at our army as one body at the heavy
+// pace — head to tail 3-6 cells — and take no flag (only what they walk over). In contact, by the distance to our
+// nearest fighter, his heavy melee stand at 1-3 (mode 2-3: the shield — stripped by our fire, still in front), the
+// light melee at 2-4, the ranged at 2-3, the healers at 3-4, the pullers at 4-5. His ranged shoot one target, the lowest
+// hits in reach (83-92 % of shots), nearly always from 3; a mass attack comes when it out-damages a single shot (10/4/1
+// at 1/2/3 summed above 10: with three of ours within two it was mass 133 times of 133, with two 47 of 76). His melee
+// swing at the adjacent lowest hits (100 %). His healers heal ADJACENT (192-215 heals of a hurt mate in the window
+// against 54-131 ranged heals), one on a mate as a rule and two on one in 20-28 % of healing ticks.
+// The approach: his body is slow long before contact — its centroid moved 5 cells in the first 80 ticks of 6ab91924,
+// 14 in 6ab91898, and crept at 0.1-0.25 cells a tick after that (the line reforming, one cell at a time) until 7-11
+// cells from our army, then pushed in at the heavy pace; 6ab91a90 alone came in at 0.3-0.4. Contact: t=102-314.
+// Modelled: distances are steps to our nearest fighter (walls respected). The head is the front member (the melee)
+// nearest to us; in contact each role stands at its distance (LINE_GOAL), before contact the others keep ranks behind
+// the head (LINE_OFFSET: heavy ranged and heavy healers 2, light ranged and light healers 3, pullers 4) and the head
+// steps only while nobody is more than two behind its slot, once in CREEP_EVERY ticks until CREEP_NEAR cells from us
+// and every tick after; a creep behind its slot swaps cells with a mate that belongs further back or stands ahead of
+// its own slot, and sidesteps round its own members when nothing is free downhill; a ranged or a healer with one of
+// ours adjacent steps back; a healer leaves its rank for the most wounded mate (two for one that lost 50+ hits the
+// tick before). A creep that wanted to move and has not for six ticks is stuck and does not hold the line back.
+const CREEP_NEAR = 10, CREEP_EVERY = 5, LAG = 3;
+const LINE_GOAL = { heavy_melee: 2, melee: 2, heavy_ranged: 3, ranged: 3, heavy_healer: 3, healer: 3, puller: 5 };
+const LINE_OFFSET = { heavy_melee: 0, melee: 1, heavy_ranged: 2, ranged: 3, heavy_healer: 2, healer: 3, puller: 4 };
+function lineKey(c) {
+  const key = c.id.replace(/^pg_player\d_/, '').replace(/_\d+$/, '');
+  if (key in LINE_GOAL) return key;
+  return (c.body.length > 8 ? 'heavy_' : '') + c.role;   // not a live id: by body
+}
+/** Steps (every passable cell costs 1) from every cell to the nearest goal: the line's distances, walls respected. */
+function steps(goals) {
+  const dist = new Int32Array(10000).fill(INF);
+  const q = new Int32Array(10000);
+  let h = 0, t = 0;
+  for (const g of goals) { const i = idx(g.x, g.y); if (dist[i] !== 0) { dist[i] = 0; q[t++] = i; } }
+  while (h < t) {
+    const i = q[h++], x = (i / 100) | 0, y = i % 100;
+    for (let k = 0; k < 8; k++) {
+      const nx = x + DX[k], ny = y + DY[k];
+      if (!passable(nx, ny)) continue;
+      const n = idx(nx, ny);
+      if (dist[n] > dist[i] + 1) { dist[n] = dist[i] + 1; q[t++] = n; }
+    }
+  }
+  return dist;
+}
+/** One step along a field, down (toward) or up (away), plain before swamp at an equal value, into a free cell — or,
+ *  when `canSwap(o)` allows it, into the cell of a standing mate that takes this creep's cell in exchange (the engine
+ *  moves both): a melee line that fell behind its own ranks passes through them instead of waiting behind them. */
+function stepField(c, f, away, canSwap, from) {
+  if (!canMove(c)) return false;
+  const here = f[idx(c.x, c.y)], mine = idx(c.x, c.y);
+  let best = -1, bk = 0, bs = 0, bo = null;
+  for (let k = 0; k < 8; k++) {
+    const nx = c.x + DX[k], ny = c.y + DY[k];
+    if (!passable(nx, ny)) continue;
+    const n = idx(nx, ny), v = f[n];
+    if (away ? v <= here || v >= INF : v >= here) continue;
+    const key = away ? -v : v, sw = world.terrain[n] === 2 ? 1 : 0;
+    let o = null;
+    if (!free(c, n)) {
+      o = occ.get(n);
+      if (!canSwap || !o || o.owner !== c.owner || leaving.has(o.id) || claim.has(n) || claim.has(mine) || !canMove(o) || !canSwap(o)) continue;
+    }
+    // a free cell beats a swap at the same value
+    const kk = key * 4 + (o ? 2 : 0) + sw;
+    if (best < 0 || kk < bk) { best = n; bk = kk; bo = o; }
+  }
+  if (best < 0 && !away && from !== undefined) {
+    // nothing downhill: a free cell at the same value, not the one it came from — a blob flows round its own members
+    for (let k = 0; k < 8; k++) {
+      const nx = c.x + DX[k], ny = c.y + DY[k];
+      if (!passable(nx, ny)) continue;
+      const n = idx(nx, ny);
+      if (f[n] !== here || n === from || !free(c, n)) continue;
+      const sw = world.terrain[n] === 2 ? 1 : 0;
+      if (best < 0 || sw < bs) { best = n; bs = sw; }
+    }
+  }
+  if (best < 0) return false;
+  if (bo) { bo.move(getDirection(c.x - bo.x, c.y - bo.y)); claim.add(mine); leaving.set(bo.id, mine); }
+  moveTo(c, best);
+  return true;
+}
+const lineState = { last: new Map(), prev: new Map(), wanted: new Map(), still: new Map(), hits: new Map() };
+const LINETRACE = process.env.LINETRACE ? process.env.LINETRACE.split('-').map((v) => parseInt(v, 10)) : null;
+function line(mine, ours) {
+  const goals = ours.filter((o) => o.role !== 'puller');
+  const targets = goals.length ? goals : ours;
+  if (!targets.length) return;
+  const D = steps(targets);
+  const d = (c) => D[idx(c.x, c.y)];
+  // a creep that wanted to move and has not for six ticks is stuck: it does not hold the line
+  for (const c of mine) {
+    const p = lineState.last.get(c.id), moved = p === undefined || p !== idx(c.x, c.y);
+    if (moved && p !== undefined) lineState.prev.set(c.id, p);   // the cell it came from: a sidestep does not go back there
+    lineState.still.set(c.id, moved || !lineState.wanted.get(c.id) ? 0 : (lineState.still.get(c.id) || 0) + 1);
+    lineState.last.set(c.id, idx(c.x, c.y));
+    lineState.wanted.set(c.id, false);
+  }
+  const stuck = (c) => (lineState.still.get(c.id) || 0) >= 6;
+  // the front: his melee (kept in front however stripped); with none left, whatever has the lowest offset
+  const minOff = Math.min(...mine.map((c) => LINE_OFFSET[lineKey(c)]));
+  const front = mine.filter((c) => LINE_OFFSET[lineKey(c)] === minOff);
+  // L is the head — the front member nearest to us; every rank's slot counts from it, and the head steps only while
+  // no one (stuck or nursing excepted) is more than two behind its slot: the head never leaves the tail
+  const L = Math.min(...front.map(d));
+  const frontGoal = Math.max(...front.map((c) => LINE_GOAL[lineKey(c)]));
+  const inContact = L <= frontGoal + 1;
+  const ranked = (c) => Math.max(LINE_GOAL[lineKey(c)], L + LINE_OFFSET[lineKey(c)] - minOff);
+  // +lag: his healers hang LAG cells behind their rank and never close in (the records he lost: 7-11 cells back)
+  const lagging = (c) => MODS.includes('lag') && c.role === 'healer';
+  const slot = (c) => (lagging(c) ? ranked(c) + LAG : inContact ? LINE_GOAL[lineKey(c)] : ranked(c));
+  // healers: the most wounded mate first, two healers for one that lost 50+ hits last tick
+  const lost = (c) => Math.max(0, (lineState.hits.get(c.id) ?? c.hits) - c.hits);
+  const healers = mine.filter((c) => live(c, H) > 0);
+  const patientOf = new Map();
+  const wounded = mine.filter((c) => c.hits < c.hitsMax).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits));
+  // +lag: the healers do not walk to the wounded — the two records of six he LOST (919a7, 91b4b) had his heavy healers
+  // 7-11 cells behind a front that was being stripped, where the four he won had them at 3-4 (see `slot` above)
+  for (const m of MODS.includes('lag') ? [] : wounded) {
+    if (patientOf.size === healers.length) break;
+    const idle = healers.filter((h) => !patientOf.has(h.id)).sort((a, b) => range(a, m) - range(b, m) || b.body.length - a.body.length);
+    for (const h of idle.slice(0, lost(m) >= 50 ? 2 : 1)) patientOf.set(h.id, m);
+  }
+  for (const c of mine) lineState.hits.set(c.id, c.hits);
+  const together = mine.every((c) => stuck(c) || patientOf.has(c.id) || d(c) <= slot(c) + 2);
+  // fire: melee the adjacent lowest; ranged a mass attack when it out-damages one shot, else the lowest in reach
+  for (const c of mine) {
+    if (live(c, A) > 0) { const t = ours.filter((o) => range(c, o) <= 1).sort((a, b) => a.hits - b.hits)[0]; if (t) c.attack(t); }
+    if (live(c, R) > 0) {
+      const reach = ours.filter((o) => range(c, o) <= 3);
+      if (reach.reduce((s, o) => s + [10, 10, 4, 1][range(c, o)], 0) > 10) c.rangedMassAttack();
+      else if (reach.length) c.rangedAttack(reach.sort((a, b) => a.hits - b.hits || range(c, a) - range(c, b))[0]);
+    }
+    if (live(c, H) > 0) {
+      const m = patientOf.get(c.id);
+      const adj = mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 1).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits))[0];
+      const near = mine.filter((o) => o.hits < o.hitsMax && range(c, o) <= 3).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits))[0];
+      if (m && range(c, m) <= 1) c.heal(m);
+      else if (adj) c.heal(adj);
+      else if (m && range(c, m) <= 3) c.rangedHeal(m);
+      else if (!m && near) c.rangedHeal(near);
+    }
+  }
+  // LINETRACE=t0-t1: the line's state per tick of the window (the head L, contact, together, each creep's distance/slot)
+  if (LINETRACE && world.tick >= LINETRACE[0] && world.tick <= LINETRACE[1]) origLog(`line t=${world.tick} L=${L} contact=${inContact} together=${together} ${mine.map((c) => `${lineKey(c)}@${c.x},${c.y}:${d(c)}/${slot(c)}${stuck(c) ? 's' : ''}${patientOf.get(c.id) ? 'p' : ''}`).join(' ')}`);
+  // move, front first
+  for (const c of mine.slice().sort((a, b) => d(a) - d(b))) {
+    const m = patientOf.get(c.id);
+    if (m && m !== c) {
+      if (range(c, m) > 1) { lineState.wanted.set(c.id, true); stepField(c, flowNow(m.x, m.y), false); }
+      continue;
+    }
+    const here = d(c);
+    // the line steps one cell ahead of its rearmost member, and only when every rank is at its slot
+    // the head's pace: one step in CREEP_EVERY ticks until CREEP_NEAR cells from us, then full
+    const creeping = L > CREEP_NEAR && world.tick % CREEP_EVERY !== 0;
+    // (while it creeps, a front member closes only a gap of two to the head: the distance is to OUR army, which moves too)
+    const goal = front.includes(c) ? Math.max(LINE_GOAL[lineKey(c)], creeping ? L + 1 : together ? L - 1 : L) : slot(c);
+    // a mate gives way (the two swap cells) when it belongs further back than this one or stands ahead of its own slot
+    const givesWay = (o) => !patientOf.has(o.id) && (LINE_OFFSET[lineKey(o)] > LINE_OFFSET[lineKey(c)] || d(o) < slot(o));
+    if (here > goal) { lineState.wanted.set(c.id, true); stepField(c, D, false, givesWay, lineState.prev.get(c.id)); }
+    else if (here <= 1 && live(c, A) === 0 && c.role !== 'melee') stepField(c, D, true);
+  }
+}
+// ---------- ghost: the recorded opponent of a replay ----------
+// Every creep of his takes, each tick, one step toward the cell the record has it on after this tick (a path step when
+// it fell two or more behind); a creep of ours on that cell refuses the step and the ghost catches up when it frees.
+// Fatigue is not paid — the record already paid it. Fire and healing are by rule (as in `rush`): the recorded targets
+// stood where OUR recorded army stood, and the live bot is somewhere else. A ghost that outlives its record stands
+// where it ended and keeps fighting; a puller of his on a tower flag of his feeds the tower. What it measures is the
+// opening and the approach — his route, tempo and formation are the real ones; the exchange is not.
+const ghostMeta = { on: 0, off: 0, outlived: 0, ourOn: 0, ourOff: 0, ourDev: null, ourDevWhere: '' };
+function ghost(mine, ours) {
+  const t = world.tick;
+  // our own creeps against OUR record: the first tick our build walks a cell the live one did not
+  for (const o of ours) {
+    const r = ghostPos.get(o.id), p = r && r[t - 1];
+    if (!p) continue;
+    ghostMeta.ourOn++;
+    if (p.x !== o.x || p.y !== o.y) { ghostMeta.ourOff++; if (ghostMeta.ourDev === null) { ghostMeta.ourDev = t - 1; ghostMeta.ourDevWhere = `${o.id} at (${o.x},${o.y}) recorded (${p.x},${p.y})`; } }
+  }
+  const flags = world.objects.filter((o) => o.exists && o.kind === 'flag');
+  for (const c of mine) {
+    c.fatigue = 0;
+    const r = ghostPos.get(c.id), prev = r && r[t - 1], p = r && r[t];
+    if (prev) { ghostMeta.on++; if (prev.x !== c.x || prev.y !== c.y) ghostMeta.off++; } else ghostMeta.outlived++;
+    act(c, mine, ours);
+    if (c.role === 'puller') { const f = flags.find((x) => x.x === c.x && x.y === c.y); if (f) feed(c, f); }
+    if (!p || (p.x === c.x && p.y === c.y)) continue;
+    if (range(c, p) <= 1) moveTo(c, idx(p.x, p.y)); else stepDown(c, flowNow(p.x, p.y));
+  }
+}
+
 // ---------- mirror: a second instance of the bot drives the enemy ----------
 let mirrorLoop = null;
 if (scenario === 'mirror') {
@@ -287,9 +554,13 @@ function enemyTick() {
   const ours = creeps().filter((c) => c.owner === 0);
   if (scenario === 'none') return;
   beginMoves();
-  pullers(mine);
-  if (scenario === 'rush') rush(mine, ours);
-  else if (scenario === 'farm') farm(mine, ours);
+  if (scenario === 'ghost') ghost(mine, ours);
+  else if (scenario === 'line') line(mine, ours);
+  else {
+    pullers(mine);
+    if (scenario === 'rush') rush(mine, ours);
+    else if (scenario === 'farm') farm(mine, ours);
+  }
   enemyTowers(mine, ours);
 }
 
@@ -319,6 +590,17 @@ const bot = await import(BOT);
 let loopErrors = 0, mirrorErrors = 0, firstError = null, firstMirrorError = null;
 const t0 = Date.now();
 let ended = '', endTick = 0, movedOurs = 0;
+// the entry, as tools/stub/painandgain measures it: the first tick a fighter of each side stands within three of the
+// other's, and the hits each side lost over the next 20/50/100 ticks — the fight's quality as numbers the outcome does
+// not carry; with REPLAY the record's own entry is printed beside it
+const entry = { contact: null, hits: [], deaths: [0, 0], alive: [0, 0] };
+function entryTick(t, c0, c1) {
+  entry.hits[t] = [c0.reduce((a, c) => a + c.hits, 0), c1.reduce((a, c) => a + c.hits, 0)];
+  const f0 = c0.filter((c) => c.role !== 'puller'), f1 = c1.filter((c) => c.role !== 'puller');
+  if (entry.contact === null && f0.some((a) => f1.some((b) => range(a, b) <= 3))) entry.contact = t;
+}
+const lostAfter = (arr, t0, dd, i) => { const a = arr[Math.max(0, t0 - 1)] || arr[t0], b = arr[Math.min(t0 + dd, arr.length - 1)]; return a && b ? Math.round(a[i] - b[i]) : '?'; };
+const entryLine = (arr, c) => (c === null ? 'no contact' : `contact t=${c} hits lost ours/his +20 ${lostAfter(arr, c, 20, 0)}/${lostAfter(arr, c, 20, 1)} +50 ${lostAfter(arr, c, 50, 0)}/${lostAfter(arr, c, 50, 1)} +100 ${lostAfter(arr, c, 100, 0)}/${lostAfter(arr, c, 100, 1)}`);
 const side = (o) => (o === 0 ? '+' : o === 1 ? '-' : '0');
 const sum = (cs) => { const m = {}; for (const c of cs) { const s = c.summary(); m[s] = (m[s] || 0) + 1; } return Object.entries(m).map(([k, v]) => `${k}x${v}`).join(' '); };
 function status(t) {
@@ -348,6 +630,7 @@ for (let t = 1; t <= ticks; t++) {
   step(Resource);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
   movedOurs += c0.filter((c) => c.moved === t).length;
+  entryTick(t, c0, c1);
   if (TRACE && t >= TRACE[0] && t <= TRACE[1]) origLog(`trace t=${t} ${c0.map((c) => `${c.id.replace(/^pg_player\d_/, '')}@${c.x},${c.y}${c.fatigue ? '/' + c.fatigue : ''}${c.store.energy ? 'e' + c.store.energy : ''}`).join(' ')}`);
   if (t % 100 === 0 || t === 1) { const s = status(t); lines.push(s); if (t % STATUS === 0) origLog(s); }
   endTick = t;
@@ -361,7 +644,7 @@ if (endTick % 100 !== 0) lines.push(status(endTick));
 
 const outDir = fileURLToPath(new URL('out/', import.meta.url));
 mkdirSync(outDir, { recursive: true });
-const log = `${outDir}run-${process.env.LOGTAG || ''}${scenario}.log`;
+const log = `${outDir}run-${process.env.LOGTAG || ''}${[scenario, ...MODS].join('+')}${REPLAY ? '-' + String(REPLAY.meta.gameId || 'replay').slice(0, 8) : ''}.log`;
 const st = world.stats;
 const c0 = creeps().filter((c) => c.owner === 0).length, c1 = creeps().filter((c) => c.owner === 1).length;
 const fxLine = (p) => Object.entries(st.effectsMax[p]).map(([k, v]) => `${k.replace(/^eff_|_modifier$/g, '')}=${v}@${st.effectTicks[p][k]}t`).join(' ') || '-';
@@ -369,6 +652,12 @@ const report = [
   `towers: ours shots=${st.towerShots[0]} dmg=${Math.round(st.towerDamage[0])} heals=${st.towerHeals[0]} fed=${st.towerFed[0]} | enemy shots=${st.towerShots[1]} dmg=${Math.round(st.towerDamage[1])} heals=${st.towerHeals[1]} fed=${st.towerFed[1]}`,
   `effects (strongest value @ ticks held): ours ${fxLine(0)} | enemy ${fxLine(1)}`,
   `hits loss taken: ours=${st.hitsLoss[0]} enemy=${st.hitsLoss[1]}; moves under a fatigue multiplier: ours=${st.fatigueMoves[0]} (+${st.fatigueExtra[0]} fatigue) enemy=${st.fatigueMoves[1]} (+${st.fatigueExtra[1]})`,
+  `entry: ${entryLine(entry.hits, entry.contact)}`,
+  ...(REPLAY ? [
+    `record ${REPLAY.meta.gameId || ''}: ${rec.winner} won in ${rec.ticks} ticks, deaths ours=${rec.deaths[0]} his=${rec.deaths[1]}, alive at the end ${rec.end[0]}:${rec.end[1]}; we are ${START}`,
+    `record entry: ${entryLine(rec.hits, rec.contact)}`,
+  ] : []),
+  ...(scenario === 'ghost' ? [`ghost: his creeps off their recorded cell ${ghostMeta.off} of ${ghostMeta.on} creep-ticks, outlived the record ${ghostMeta.outlived}; OURS off our recorded cell ${ghostMeta.ourOff} of ${ghostMeta.ourOn}, first at t=${ghostMeta.ourDev} (${ghostMeta.ourDevWhere})`] : []),
   `flags at the end: ours [${world.objects.filter((f) => f.kind === 'flag' && f.owner === 0).map((f) => f.id.replace('pg_flag_', '')).join(',')}] enemy [${world.objects.filter((f) => f.kind === 'flag' && f.owner === 1).map((f) => f.id.replace('pg_flag_', '')).join(',')}]`,
 ];
 writeFileSync(log, lines.join('\n') + '\n\n=== STUB ===\n' + report.join('\n') + '\n\n=== EVENTS ===\n' + world.events.join('\n') + '\n');
