@@ -5,7 +5,9 @@
 #   1. the branch is not main, has no uncommitted changes, and is rebased on main (main is an ancestor of HEAD);
 #   2. ./gradlew build;
 #   3. every tools/stub/*/regress.sh — every line must carry the arena's pass marker and zero errors: PASS (the
-#      regress.sh of an arena decides what a win is — Pain and Gain has no spawns) or ENEMY SPAWN DESTROYED;
+#      regress.sh of an arena decides what a win is — Pain and Gain has no spawns) or ENEMY SPAWN DESTROYED; each runs
+#      with STUB_LANDING_BASE=<main>, so an arena's suite can see what the landing changes and, when that cannot change
+#      its own bot (other arenas' folders, prose), run a small smoke set instead of its full gate — Pain and Gain does;
 #   4. fast-forward main: `git fetch . <branch>:main` when main is checked out nowhere, else `git merge --ff-only`
 #      in the checkout that has main (only if that tree is clean — the one thing a session may do to the root);
 #   5. tag the landed commit if asked;
@@ -34,7 +36,7 @@ if (( stub )); then
   for r in tools/stub/*/regress.sh; do
     [[ -f "$r" ]] || continue
     echo "land: stub $r"
-    out=$(zsh "$r" land)
+    out=$(STUB_LANDING_BASE=$(git rev-parse main) zsh "$r" land)
     print -r -- "$out"
     if [[ -z "$out" ]] || print -r -- "$out" | grep -vqE '(PASS|ENEMY SPAWN DESTROYED).*errors: 0 '; then
       echo "land: stub regression failed — a scenario has no PASS / ENEMY SPAWN DESTROYED line with zero errors"; exit 1

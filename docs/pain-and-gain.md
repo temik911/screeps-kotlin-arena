@@ -310,7 +310,14 @@ lead. Maps `map-match1..35.txt` are the `DEBUG_MAP` dumps of thirty-five live ma
 were player 2); enemy scripts `none|scouts|grab|rush|greedy|army|hunter|kite|sleeper|nine|…|spread|roost|farm|camp|tour|split|blitz|scatter|brawl (+dart)|screen+focus (+poke, +blob, +blob+dense)|ghost` (`SLEEP=` the wake-up tick; the full list with each form's live model is in the README — `scatter` is the match-240 scatterer built from the replay, v100; `brawl` is けろびー's blob of matches 238/249 with the stand's `ours act:` uptime line, v101; `ghost` with `REPLAY=<id>.replay.json.gz` is the recorded opponent of a live match walking its replay while our bot plays live — the map, flags, bodies and start cells come from the replay too; see Match analysis below).
 `zsh tools/stub/painandgain/regress.sh <tag>` runs every scenario on the twenty-five live maps and prints one `PASS`/`FAIL`
 line each (pass = the enemy army destroyed, or the match ended with our score ahead, with zero errors); it is the
-landing gate in `tools/land.sh`. The synthetic point-symmetric map with the pre-match guessed bodies is kept for hand
+landing gate in `tools/land.sh`. Since 27.09.2026 only for landings that can change this bot: `tools/land.sh` passes
+`STUB_LANDING_BASE` (main at the landing), and when the landing touches nothing this bot is built from or run by —
+other arenas' packages, stubs and folders, prose, top-level `tools/` — the bundle is the one that passed the full gate
+at our own last landing and the stub is deterministic, so the suite runs the eight `SMOKE` lines instead (a brawl with
+heals, a block, a rush, the camp, the scatterer, our runners, two ghosts; ≈ 10 s against ≈ 2 min). The operator's
+reason: three other arenas were paying our two minutes on every landing of theirs. Our own landings, `types/`, the
+build and shared starter code still get the full gate, and so does every run without the variable (`identity.sh`,
+`play.py --ab --dry`, `zsh regress.sh gate` by hand). The synthetic point-symmetric map with the pre-match guessed bodies is kept for hand
 runs only (its `rush` is a points draw with v9: M3H3 healers and T2M5A3 melee behave nothing like the real army).
 
 ## Match analysis

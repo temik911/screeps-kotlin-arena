@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Full stub regression for the Pain and Gain bot against THIS worktree's build (run.mjs imports ../../../build/js/...).
 # Usage: zsh tools/stub/painandgain/regress.sh [tag]        JOBS=<n> to change the parallel width (default 8)
-#        tag `gate` (and `land`, used by tools/land.sh) runs the `run` lines only; any other tag runs `grind` lines too
+#        tag `gate` (and `land`, used by tools/land.sh) runs the `run` lines only; any other tag runs `grind` lines too;
+#        under tools/land.sh (STUB_LANDING_BASE set) a landing that cannot change this bot runs the SMOKE lines only
 # One line per scenario: PASS/FAIL, the outcome, errors. Logs go to ./out/ (gitignored).
 # Pass = the enemy army destroyed, or the match ended (unreachable lead / 2000 ticks) with our score ahead — with
 # errors: 0. tools/land.sh checks for a line with PASS (or ENEMY SPAWN DESTROYED for arenas with spawns) and errors: 0.
@@ -86,6 +87,45 @@ fi
 
 TAG=${1:-cur}
 JOBS=${JOBS:-8}
+# ЧУЖАЯ ПОСАДКА ГОНЯЕТ ДЫМ, А НЕ ГЕЙТ (27.09.2026, оператор: «у нас уже три арены кроме твоей, и каждая тратит колоссальное
+# время на прогон твоих кейсов при посадке — для посадки оставить малую часть, остальные гонять локально»). tools/land.sh
+# ставит STUB_LANDING_BASE — main на момент посадки. Если посадка не трогает ничего, из чего собирается и чем гоняется этот
+# бот (только чужие пакеты, стенды и папки арен, документы и инструменты верхнего уровня tools/), бандл этого бота тот же, что
+# прошёл полный гейт при своей посадке, стенд детерминирован, и 140 строк лишь повторили бы известный ответ: идут строки SMOKE
+# — восемь за ≈ 10 с вместо ≈ 2 мин (замер 27.09.2026 на v695: все восемь PASS, самая долгая 8 с). Они ловят то, что чужая
+# посадка ещё может сломать, — бандл не грузится или падает на пути API: бой с лечением и массовым огнём, флаги с дебаффами,
+# бегуны, призрак из записи. Своя посадка (пакет, стенд, папка арены) и всё, что входит в каждый бандл (types/, сборка,
+# общий код starter), гоняют полный гейт; без переменной — тоже: `regress.sh land` зовут identity.sh и play.py --ab --dry, и
+# им нужны все строки. Проверки lint/graph/impure идут в обоих случаях (≈ 2 с).
+SMOKE=(
+  match28:brawl+heals                # блоб на паритете: удар, выстрел, лечение вплотную и издалека
+  match35:screen+focus+blob+heals    # строй-стена: изготовка, фронт, фокус
+  match5:rush                        # раш на старте
+  match33:camp                       # фермер паркуется на центральном флаге: гонка флагов, дебаффы
+  match30:scatter                    # бегуны врага в углы с первого тика
+  match2:scouts                      # наши бегуны; мы — второй игрок (START=match2)
+  ghost:6aa857af41cd282325e3224f:ghost    # призрак: загрузчик записи, проходы раздачи catchall и pinned
+  ghost:6aaed35be761baf61d030b80:ghost    # призрак на весь матч с флагами
+)
+landing_reaches_me() {   # 0 — посадка может изменить то, что гоняет этот стенд; при сомнении — да
+  local files f
+  files=$(git diff --name-only "$STUB_LANDING_BASE"...HEAD 2>/dev/null) || return 0
+  for f in ${(f)files}; do
+    case "$f" in
+      starter/src/jsMain/kotlin/season4/painandgain/*|tools/stub/painandgain/*|arenas/season4-pain_and_gain/*) return 0 ;;
+      starter/src/jsMain/kotlin/season*/*/*|starter/src/jsTest/*|tools/*|arenas/*|docs/*|*.md) ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
+}
+SMOKE_ONLY=0
+if [[ "$TAG" == land && -n "${STUB_LANDING_BASE:-}" && -z "${ONLY:-}" ]]; then
+  if landing_reaches_me; then print -r -- "painandgain: полный гейт — посадка трогает сборку этого бота или его стенд" >&2
+  else SMOKE_ONLY=1; print -r -- "painandgain: дым ${#SMOKE} строк — посадка не трогает этот бот (полный гейт: zsh regress.sh gate)" >&2; fi
+fi
+typeset -A SMOKE_SET SMOKE_FOUND
+for s in $SMOKE; do SMOKE_SET[$s]=1; done
 mkdir -p out
 PLANDIR=$(mktemp -d)
 N=0
@@ -120,11 +160,13 @@ grind() { if [[ "$TAG" == land || "$TAG" == gate ]]; then return; fi; run "$@"; 
 typeset -A ONLY_SET
 if [[ -n "${ONLY:-}" ]]; then while IFS= read -r l; do [[ -n "$l" ]] && ONLY_SET[$l]=1; done < "$ONLY"; fi
 run() { # $1 = map file or -, $2 = START or -, $3 = scenario — collected here, executed in parallel below
+  local lb
+  if [[ "$1" == replay:* ]]; then lb="${1#replay:}"; lb="ghost:${lb%%.*}:$3"; else lb="${1#map-}"; lb="${lb%.txt}:$3"; fi
   if [[ -n "${ONLY:-}" ]]; then
-    local lb
-    if [[ "$1" == replay:* ]]; then lb="${1#replay:}"; lb="ghost:${lb%%.*}:$3"; else lb="${1#map-}"; lb="${lb%.txt}:$3"; fi
     [[ -n "${ONLY_SET[$lb]:-}" ]] || return 0
   fi
+  (( ${+SMOKE_SET[$lb]} )) && SMOKE_FOUND[$lb]=1
+  (( SMOKE_ONLY && ! ${+SMOKE_SET[$lb]} )) && return 0
   N=$((N + 1)); print -r -- "$N $1 $2 $3 $TAG $PLANDIR" >> "$PLANDIR/plan"
 }
 run map-match1.txt -      grab
@@ -488,6 +530,13 @@ run replay:6aaed110e761baf25a030b5c.replay.json.gz - ghost
 # из 600 новейших записей хранилища обе строки разом закрывает одна — v282 против ●ω<♥♪#6 (catchall 1, pinned 2; 1,7 с, 302 КБ).
 run replay:6aa857af41cd282325e3224f.replay.json.gz - ghost
 
+
+# строка SMOKE без строки гейта сжала бы дым молча: проверка идёт в каждом прогоне гейта, поэтому ловит её своя посадка
+if [[ ("$TAG" == land || "$TAG" == gate) && -z "${ONLY:-}" ]]; then
+  for s in $SMOKE; do
+    (( ${+SMOKE_FOUND[$s]} )) || printf '%-4s %-22s %-40s | errors: %s \n' FAIL smoke "no gate line $s" 1
+  done
+fi
 
 SKIPPED=0
 xargs -P "$JOBS" -n 6 zsh "$SELF" --one < "$PLANDIR/plan"
