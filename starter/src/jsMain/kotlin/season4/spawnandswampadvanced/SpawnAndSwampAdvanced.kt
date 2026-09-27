@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v15"
+    private const val BOT_VERSION = "v16"
 
     private const val LOG_EVERY = 50
 
@@ -715,7 +715,10 @@ object SpawnAndSwampAdvanced {
             return
         }
         // площадка в досягаемости и дому ничто не грозит: строим циклом дебюта (копка и стройка — одно действие)
-        val site = mySites.filter { getRange(w, it) <= 3 }.sortedWith(compareBy<ConstructionSite> { if (isRampartSite(it)) 0 else 1 }.thenBy { getRange(w, it) }).firstOrNull()
+        // башня раньше рампартов: рампарт над спавном его армия пробивает за ~40 тиков, и добытчики v15 отстраивали
+        // его снова и снова, не дойдя до башни
+        val site = mySites.filter { getRange(w, it) <= 3 }
+            .sortedWith(compareBy<ConstructionSite> { if (isRampartSite(it)) 1 else 0 }.thenBy { getRange(w, it) }).firstOrNull()
         // на клетке площадки стоит крип — стройка препятствия не идёт; v6 так простоял 400 тиков: боец встал на
         // площадку башни, рабочий с полным запасом каждый тик «строил» впустую и не копал, спавн жил на +1 в тик
         val siteFree = site != null && (isRampartSite(site) || getObjectsByPrototype(Creep::class).none { it.x == site.x && it.y == site.y })
@@ -846,10 +849,9 @@ object SpawnAndSwampAdvanced {
         if (towerAt(b, all) != null) return
         if (b.towerCell != null) { println("tower at (${b.towerCell}) gone t=$t"); b.towerCell = null }
         if (mine.none { isCombat(it) }) return
-        // башня базы — после сейфа, если дом ещё не трогали: её 1250 — сто с лишним тиков всей добычи, а сейф за
-        // те же деньги пробойщика отдаёт 10000
-        val v = vault
-        if (v != null && v.stage != "run" && !attackedOnce) return
+        // башня — сразу после первого бойца, без ожидания сейфа (v9–v15 ждали его, если дом не трогали): против армии
+        // けろびー из девяти M4R3H1 v15 остался с площадкой башни на 450/1250 и потерял обе базы; у спавна она снимает
+        // M4R3H1 за два выстрела и держит 3000
         val blocked = blockedCells(all)
         fun exits(extra: Pos): Int {
             var n = 0
@@ -885,6 +887,9 @@ object SpawnAndSwampAdvanced {
         val have = all.filter { (it is StructureRampart || it is ConstructionSite && isRampartSite(it)) && it.asDynamic().my == true }
             .map { posOf(it) }.toSet()
         if (all.any { it is ConstructionSite && it.asDynamic().my == true && isRampartSite(it) && cheb(posOf(it), b.spawnCell) <= 2 }) return
+        // пока у базы строится башня — новых рампартов не ставим: энергия добытчиков одна
+        val tc = b.towerCell
+        if (tc != null && all.any { it is ConstructionSite && it.asDynamic().my == true && it.x == tc.x && it.y == tc.y }) return
         val next = want.firstOrNull { it !in have } ?: return
         val r = createConstructionSite(next.x, next.y, StructureRampart::class.js)
         println("rampart site t=$t at (${next.x},${next.y}) base=(${b.spawnCell.x},${b.spawnCell.y}) err=${r.error}")
