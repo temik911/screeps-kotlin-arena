@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 3
+const val BOT_VERSION = 4
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -203,19 +203,29 @@ object PainAndGainAdvanced {
 
     // ------------------------------------------------------------------ pullers and towers
 
-    /** Our two tower flags: of the four, the two nearest our pullers' start by path. */
-    private fun homeTowerFlags(): List<ScoreFlag> {
+    /**
+     * The pullers' posts: one sits on our tower flag that does not slow us (the RANGED one nearer our start: its tower,
+     * fed from the container beside the flag, keeps the flag), the other on the hits-loss flag nearer us, the cheapest
+     * debuff there is (−1 a tick a creep, which idle healers give back). Neither takes our FATIGUE flag: it doubles the
+     * fatigue of every creep of ours that weighs — the heavies walk four ticks a plain step, the light hunters two —
+     * for the rest of the match, and no opponent of the field takes his (27.09.2026: v3 held it from t≈35 and its
+     * hunters could not catch two survivors in two thousand ticks).
+     */
+    private fun homePosts(): List<ScoreFlag> {
         val start = mine.filter { it.role == Role.PULLER }.ifEmpty { mine }
         if (start.isEmpty()) return emptyList()
         val sx = start.sumOf { it.x } / start.size; val sy = start.sumOf { it.y } / start.size
-        return flags.filter { f -> towers.any { Grid.range(it.x, it.y, f.x, f.y) <= 1 } }
-            .sortedBy { Grid.to(it.x, it.y, 1)[Grid.idx(sx, sy)] }.take(2)
+        val here = Grid.idx(sx, sy)
+        val tower = flags.filter { f -> f.effectType != EFF_FATIGUE && towers.any { Grid.range(it.x, it.y, f.x, f.y) <= 1 } }
+            .minByOrNull { Grid.to(it.x, it.y, 1)[here] }
+        val loss = flags.filter { it.effectType == EFF_HITS_LOSS_T }.minByOrNull { Grid.to(it.x, it.y, 1)[here] }
+        return listOfNotNull(tower, loss)
     }
 
     private var homeFlags: List<String> = emptyList()
 
     private fun pullers() {
-        if (homeFlags.isEmpty()) homeFlags = homeTowerFlags().map { it.id }
+        if (homeFlags.isEmpty()) homeFlags = homePosts().map { it.id }
         val ps = mine.filter { it.role == Role.PULLER }
         for (p in ps) {
             if (p.id !in pullerPost) {
@@ -226,6 +236,14 @@ object PainAndGainAdvanced {
             }
             val post = flags.firstOrNull { it.id == pullerPost[p.id] } ?: continue
             val tower = towers.firstOrNull { Grid.range(it.x, it.y, post.x, post.y) <= 1 }
+            // a post without a tower is kept by standing on it only while no armed enemy is about to kill the puller:
+            // then the puller falls back to the army and comes back when the way is clear
+            val danger = theirs.any { it.armed && Grid.range(it.x, it.y, p.x, p.y) <= PULLER_DANGER }
+            if (tower == null && danger) {
+                val army = mine.filter { it.role != Role.PULLER }
+                if (army.isNotEmpty()) { val a = army.minByOrNull { Grid.range(it.x, it.y, p.x, p.y) }!!; stepToward(p, Grid.to(a.x, a.y, 1), 100) }
+                continue
+            }
             val box = containers.filter { Grid.range(it.x, it.y, post.x, post.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
             if (p.x == post.x && p.y == post.y) {
                 hold(p)
@@ -309,7 +327,7 @@ object PainAndGainAdvanced {
             else -> Mode.RETREAT
         }
         val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
-        val sweepFlag = if (swept) flags.filter { it.my != true }.minByOrNull { Grid.to(it.x, it.y)[Grid.idx(cx, cy)] } else null
+        val sweepFlag = if (swept) sweepTarget(cx, cy) else null
         val objective = sweepFlag ?: centre
         val next = want ?: when {
             swept -> Mode.SWEEP
@@ -332,10 +350,34 @@ object PainAndGainAdvanced {
                 val goal = home?.let { h -> flags.firstOrNull { Grid.range(it.x, it.y, h.x, h.y) <= 1 } } ?: centre
                 march(restGroup, goal.x, goal.y)
             }
-            Mode.MARCH, Mode.SWEEP -> if (restGroup.isNotEmpty()) march(restGroup, objective.x, objective.y)
+            Mode.MARCH -> if (restGroup.isNotEmpty()) march(restGroup, objective.x, objective.y)
+            Mode.SWEEP -> if (restGroup.isNotEmpty()) { march(restGroup, objective.x, objective.y); capture(restGroup, objective) }
             Mode.HOLD -> hold(restGroup, objective.x, objective.y)
         }
         for (h in hunters) hunt(h)
+    }
+
+    /** The flag the sweep takes next: the most score it swings (a flag of his counts twice — he loses it and we gain
+     *  it) per tick of the group's walk; our own fatigue flag only when nothing else is left, since holding it halves
+     *  the speed of the hunters the sweep needs. */
+    private fun sweepTarget(cx: Int, cy: Int): ScoreFlag? {
+        val here = Grid.idx(cx, cy)
+        return flags.filter { it.my != true }.maxByOrNull { f ->
+            val swing = f.scorePerTick * (if (f.my == false) 2 else 1) * (if (f.effectType == EFF_FATIGUE) 0.05 else 1.0)
+            swing / (10.0 + Grid.to(f.x, f.y)[here])
+        }
+    }
+
+    /** Someone has to stand ON the flag: the march goes to the area round it, and v3's sweep stood two cells from a
+     *  flag of his for 1500 ticks without taking it (lost to kerobii#6 on points with 12 against his 2). The nearest
+     *  creep of the group walks onto the cell. */
+    private fun capture(group: List<Unit>, f: ScoreFlag) {
+        if (f.my == true) return
+        val fc = Grid.idx(f.x, f.y)
+        if (group.any { it.cell == fc }) return
+        val field = Grid.to(f.x, f.y)
+        val who = group.filter { it.moves > 0 }.minByOrNull { field[it.cell] * 10 + (if (it.heavy) 5 else 0) } ?: return
+        stepToward(who, field, 900)
     }
 
     private fun assignHunters(army: List<Unit>): List<Unit> {
@@ -444,45 +486,16 @@ object PainAndGainAdvanced {
     // ------------------------------------------------------------------ fire and heal
 
     private fun fire(army: List<Unit>) {
-        // what each enemy would take this tick from everything of ours that reaches it
-        val incoming = HashMap<String, Double>()
-        for (e in theirs) {
-            var dmg = 0.0
-            for (u in army) {
-                val r = Grid.range(u.x, u.y, e.x, e.y)
-                if (r <= 1) dmg += u.melee * 30 * ourFx.attack
-                if (r <= 3) dmg += u.ranged * 10 * ourFx.ranged
-            }
-            incoming[e.id] = dmg
+        for (shot in Fire.assign(army, theirs, ourFx, theirFx)) {
+            if (shot.mass) shot.shooter.c.rangedMassAttack()
+            else if (shot.shooter.melee > 0 && Grid.range(shot.shooter.x, shot.shooter.y, shot.target!!.x, shot.target.y) <= 1) shot.shooter.c.attack(shot.target.c)
+            else shot.shooter.c.rangedAttack(shot.target!!.c)
         }
-        for (u in army) {
-            if (u.melee > 0) {
-                val tgt = theirs.filter { Grid.range(it.x, it.y, u.x, u.y) <= 1 }.maxByOrNull { focusScore(it, incoming) }
-                if (tgt != null) u.c.attack(tgt.c)
-            }
-            if (u.ranged > 0) {
-                val inReach = theirs.filter { Grid.range(it.x, it.y, u.x, u.y) <= 3 }
-                if (inReach.isNotEmpty()) {
-                    val mass = inReach.sumOf { when (Grid.range(it.x, it.y, u.x, u.y)) { 0, 1 -> 10; 2 -> 4; else -> 1 }.toInt() }
-                    if (mass > 10) u.c.rangedMassAttack()
-                    else u.c.rangedAttack(inReach.maxByOrNull { focusScore(it, incoming) }!!.c)
-                }
-            }
-            if (u.heal > 0) healOne(u)
+        // a melee creep with RANGED parts too is not in this army; a heavy melee swings, and a ranged one within one
+        // of its target still shoots — the engine runs attack and rangedAttack in separate pipelines
+        for (h in Fire.heals(army, theirs, ourFx, theirFx)) {
+            if (h.ranged) h.healer.c.rangedHeal(h.target.c) else h.healer.c.heal(h.target.c)
         }
-    }
-
-    private fun focusScore(e: Unit, incoming: Map<String, Double>): Double {
-        val dmg = (incoming[e.id] ?: 0.0) * theirFx.damageTaken
-        val kill = if (dmg >= e.hits) 2.0 else 1.0
-        return kill * (e.melee * 30 + e.ranged * 10 + e.heal * 12 + 5) * minOf(1.0, dmg / e.hits.toDouble() + 0.05)
-    }
-
-    private fun healOne(u: Unit) {
-        val adj = mine.filter { it.deficit > 0 && Grid.range(it.x, it.y, u.x, u.y) <= 1 }.maxByOrNull { it.deficit }
-        if (adj != null) { u.c.heal(adj.c); return }
-        val far = mine.filter { it.deficit > 0 && Grid.range(it.x, it.y, u.x, u.y) <= 3 }.maxByOrNull { it.deficit }
-        if (far != null) u.c.rangedHeal(far.c)
     }
 
     // ------------------------------------------------------------------ steps
@@ -542,9 +555,12 @@ object PainAndGainAdvanced {
     }
 
     private const val EFF_CENTRE = "eff_damage_taken_modifier"
+    private const val EFF_FATIGUE = "eff_fatigue_modifier"
+    private const val EFF_HITS_LOSS_T = "eff_hits_loss"
+    const val PULLER_DANGER = 5
     const val ENGAGE_RANGE = 8
-    const val FIGHT_RATIO = 1.1
-    const val RETREAT_RATIO = 0.8
+    const val FIGHT_RATIO = 0.9
+    const val RETREAT_RATIO = 0.7
     const val ESCORT_LEAD = 2
     const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
