@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v22"
+    private const val BOT_VERSION = "v23"
 
     private const val LOG_EVERY = 50
 
@@ -170,6 +170,8 @@ object SpawnAndSwampAdvanced {
     private var spawnUpAt = -1
     private var defending = false
     private var attackedOnce = false
+    /** Дом держит нынешние угрозы: их нет, или прогон дома (бойцы и кормленые башни) против них выигран. */
+    private var homeHolds = true
     /** Рождения его боевых крипов: тик, урон+лечение, хиты — из них его производство к нашему подходу. */
     private val enemyBirths = ArrayList<Pair<Int, List<String>>>()
     private val enemyCombatSeen = HashSet<String>()
@@ -591,6 +593,12 @@ object SpawnAndSwampAdvanced {
         defending = if (defending) wide.isNotEmpty() else near.isNotEmpty()
         if (defending) attackedOnce = true
         val threats = if (defending) wide else emptyList()
+        homeHolds = threats.isEmpty() || run {
+            val towersNow = all.filter { it is StructureTower && it.asDynamic().my == true && energyOf(it) > 0 }.unsafeCast<List<StructureTower>>()
+            val ours = mine.filter { !it.spawning && isCombat(it) && idOf(it) !in wave && idOf(it) !in roleOf }.map { simOf(it) } +
+                towersNow.filter { tw -> threats.any { getRange(it, tw) <= TOWER_RANGE } }.map { simTowerOf(it, all) }
+            simulate(ours, threats.map { simOf(it) }).win
+        }
         val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
         for (b in bases) {
             val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
@@ -970,9 +978,12 @@ object SpawnAndSwampAdvanced {
         } else if (haveWork < needWork && freeSlots > 0) {
             body = workerBody(needWork - haveWork, energy)
             why = "work $haveWork/$needWork"
-        } else if (b === bases.first() && threat.isEmpty() && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
+        // расширение и сейф — и под угрозой, если дом её держит (место работ проверяет свою безопасность само): v22
+        // проиграл stachu3478 при двух источниках против его пяти — его харассеры у нашей базы держали «угрозу»
+        // постоянно, и после второго спавна на 862-м мы не расширились ни разу
+        } else if (b === bases.first() && homeHolds && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
             return
-        } else if (b === bases.first() && threat.isEmpty() && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
+        } else if (b === bases.first() && homeHolds && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
@@ -1301,7 +1312,11 @@ object SpawnAndSwampAdvanced {
                 val guards = enemyCombat.filter { getRange(it, sp) <= reach }
                 val births = projectedBirths(t, toSp).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
                 val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
-                val local = guards.map { simOf(it) } + births + towersNear.map { simTowerOf(it, all) } + simSpawnOf(sp, all)
+                // и те его бойцы, что уже рядом с нашей группой: их видит прогон отхода, и без них удар и отход v22
+                // сменяли друг друга каждый тик (1568–1574)
+                val center = homeGroup.minByOrNull { c -> homeGroup.sumOf { getRange(it, c) } }!!
+                val nearUs = enemyCombat.filter { e -> getRange(e, center) <= LOCAL_RANGE && e !in guards }
+                val local = (guards + nearUs).map { simOf(it) } + births + towersNear.map { simTowerOf(it, all) } + simSpawnOf(sp, all)
                 val rs = simulate(homeGroup.map { simOf(it) }, local)
                 if (rs.win && rs.keep >= PUSH_KEEP) {
                     for (f in homeGroup) wave.add(idOf(f))
