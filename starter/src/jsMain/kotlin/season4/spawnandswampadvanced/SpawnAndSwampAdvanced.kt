@@ -95,7 +95,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v9"
+    private const val BOT_VERSION = "v10"
 
     private const val LOG_EVERY = 50
 
@@ -540,7 +540,7 @@ object SpawnAndSwampAdvanced {
         val enemyCombat = theirs.filter { isCombat(it) }
         val enemyTowers = all.filter { it is StructureTower && it.asDynamic().my == false }.unsafeCast<List<StructureTower>>()
 
-        val homeSpawns = bases.mapNotNull { b -> b.spawnId?.let { byId[it] } } + listOfNotNull(vault?.spawnId?.let { byId[it] })
+        val homeSpawns = homeSpawnObjects(byId)
         val workersAll = mine.filter { liveParts(it, WORK) > 0 }
         val near = homeThreats(enemyCombat, homeSpawns, workersAll, 0)
         val wide = homeThreats(enemyCombat, homeSpawns, workersAll, THREAT_RELEASE)
@@ -985,7 +985,7 @@ object SpawnAndSwampAdvanced {
     ) {
         val fighters = mine.filter { !it.spawning && isCombat(it) && idOf(it) !in roleOf }
         wave.retainAll(fighters.map { idOf(it) }.toSet())
-        val homeSpawns = bases.mapNotNull { b -> b.spawnId?.let { byId[it] } }
+        val homeSpawns = homeSpawnObjects(byId)
         // сбор — у спавна, ближайшего к сопернику: туда сходятся бойцы всех баз
         val enemy = enemyStart
         val home: Position = homeSpawns.minByOrNull { if (enemy == null) 0 else getRange(it, cell(enemy)) }
@@ -1060,10 +1060,15 @@ object SpawnAndSwampAdvanced {
             val local = threats.filter { getRange(it, target) <= LOCAL_RANGE }
             val ours = power(homeGroup) + towerPower(myTowers.filter { getRange(it, target) <= TOWER_RANGE })
             val striking = getRange(target, anchor) <= RANGED_RANGE + 1 || workers.any { getRange(target, it) <= RANGED_RANGE + 1 }
-            engage = (ours >= power(local) || striking) && getRange(target, anchor) <= HOME_THREAT_RANGE + 3
+            // предела погони нет: угроза по определению в домашней зоне и выпадает из неё сама. v9 бил только в 13
+            // клетках от спавна, а защита держится до 15 — угроза в этом зазоре держала защиту (и запрет волны) вечно
+            engage = ours >= power(local) || striking
         }
         val blocked = blockedCells(all)
         val reserved = reservedCells(all)
+        // допуск сбора растёт с толпой: квадрат со стороной 2r+1 вмещает всех вдвое с запасом (v9: 35 бойцов у точки с
+        // допуском 2 — 25 клеток — забили клетки у спавна, и новорождённому некуда было выйти)
+        val rallySpread = maxOf(2, kotlin.math.ceil(kotlin.math.sqrt(2.0 * homeGroup.size) / 2).toInt())
         for (f in homeGroup) {
             if (idOf(f) in wave) continue
             shoot(f, theirs, enemyObjects)
@@ -1074,10 +1079,15 @@ object SpawnAndSwampAdvanced {
                 // сбор — не у самого спавна, а в точке сбора: клетки у спавна, добытчиков, башни и площадок заняты
                 // делом (выход для рождения, копка, стройка), и боец на них ломает базу
                 val rally = rallyFor(anchor, reserved, blocked)
-                if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > 2) f.moveTo(cell(rally))
+                if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) f.moveTo(cell(rally))
             }
         }
     }
+
+    /** Все наши спавны: базы и сейф. Один список для угроз, сбора и защиты — v9 считал его в двух местах, и во втором
+     *  не было спавна сейфа: угроза у сейфа держала защиту, а бойцы стояли у первой базы до конца матча. */
+    private fun homeSpawnObjects(byId: Map<String, GameObject>): List<GameObject> =
+        bases.mapNotNull { b -> b.spawnId?.let { byId[it] } } + listOfNotNull(vault?.spawnId?.let { byId[it] })
 
     /** Клетки, на которых боец не стоит: у спавна (выходы для рождения), клетки добытчиков, башни и наших площадок. */
     private fun reservedCells(all: Array<GameObject>): Set<Pos> {
@@ -1086,6 +1096,11 @@ object SpawnAndSwampAdvanced {
             for (x in b.spawnCell.x - 1..b.spawnCell.x + 1) for (y in b.spawnCell.y - 1..b.spawnCell.y + 1) out.add(Pos(x, y))
             out.addAll(b.slots)
             b.towerCell?.let { out.add(it) }
+        }
+        vault?.let { v ->
+            for (x in v.spawnCell.x - 1..v.spawnCell.x + 1) for (y in v.spawnCell.y - 1..v.spawnCell.y + 1) out.add(Pos(x, y))
+            v.towerCell?.let { out.add(it) }
+            v.wall?.let { out.add(it) }
         }
         for (o in all) if (o is ConstructionSite && o.asDynamic().my == true) out.add(Pos(o.x, o.y))
         return out
@@ -1100,7 +1115,8 @@ object SpawnAndSwampAdvanced {
         for (dx in -5..5) for (dy in -5..5) {
             val c = Pos(anchor.x + dx, anchor.y + dy)
             val r = cheb(c, Pos(anchor.x, anchor.y))
-            if (r < 4 || c in reserved || !walkable(c, blocked)) continue
+            // не внутри сейфа: из кармана один выход шириной в клетку, и волна из него вытекала бы по одному
+            if (r < 4 || c in reserved || !walkable(c, blocked) || vault?.interior?.contains(c) == true) continue
             val score = (if (enemy == null) 0 else cheb(c, enemy)) * 10 + (if (isSwamp(c)) 5 else 0)
             if (score < bestScore) { bestScore = score; best = c }
         }
