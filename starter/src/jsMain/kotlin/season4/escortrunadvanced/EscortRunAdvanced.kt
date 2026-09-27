@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 16
+const val BOT_VERSION = 17
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -402,7 +402,7 @@ object EscortRunAdvanced {
             // flags long before a race through the centre could be, and every stronger bot of the field wins late
             // (stachu3478#3 ~950, けろびー ~1700): inside a one-cell pass one melee reaches the wall, so the wall falls at
             // the pace of the strongest one
-            (breachLeft(w) || corridorLeft(w)) && w.fighters.isNotEmpty() && armyAdequate(w) && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
+            (breachLeft(w) || (corridorLeft(w) && armyAdequate(w))) && w.fighters.isNotEmpty() && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
             // the convoy's pullers once home has its guard: M{need} per escort for the convoy's period
             puller != null -> { pullerFor = puller.second; puller.first }
             // the outpost's pioneer: the second economy
