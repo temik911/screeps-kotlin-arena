@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 178
+    private const val BOT_VERSION = 179
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6413,6 +6413,10 @@ object SpawnAndSwamp {
     private const val USE_MARCH_MELEE = false
     /** After any re-buy the raid does not gather at home, his builder alive or not (v178). */
     private const val USE_RAID_NEVER_GATHER = true
+    /** A waiting raid keeps away only from his guns within RAID_LURK_FLEE, not RAID_LURK_RANGE (v179). */
+    private const val USE_RAID_CLOSE_LURK = true
+    /** His gun's range of three and three steps of the pair's head start (v179). */
+    private const val RAID_LURK_FLEE = 6
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6682,6 +6686,12 @@ object SpawnAndSwamp {
         val go = if (strikeFits && !raidHome) target else if (raidHome) null else prey
         if (USE_RAID_TOUR) raidTargetId = go?.id ?: if (strikeFits) null else raidTargetId
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
+        // …WAITING BY THE TARGET, AWAY ONLY FROM A GUN THAT REACHES IT (v179): fleeing every gun within twelve cells kept the
+        // pair 20-49 cells from his main in 88 % of the free ticks against kerobi — his M5R5 walk a ring 20-45 cells round
+        // it — so the windows were as many as in the wins and the strikes half as many (57-82 ticks at the main against
+        // 151-157); the pair walks any ground a cell a tick, his M5R5 a swamp cell in five, and a gun is dangerous only
+        // once within its range of three and a few steps
+        val lurkFlee = if (USE_RAID_CLOSE_LURK) RAID_LURK_FLEE else RAID_LURK_RANGE
         for (r in raiders) {
             // waiting for his guns to go, the pair holds where it stands rather than walking home and back
             // …and, since v167, near its target at the lurk range: waiting at our house it was 82 cells from the strike
@@ -6704,9 +6714,9 @@ object SpawnAndSwamp {
             // walks off to RAID_LURK_RANGE from his nearest mobile armed creep and waits there
             val hunters = if (USE_RAID_LURK && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
                 e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
-                    getRange(e, r) < RAID_LURK_RANGE } else emptyList()
+                    getRange(e, r) < lurkFlee } else emptyList()
             if (hunters.isNotEmpty() && canMove(r)) {
-                val away = searchPath(r, hunters.map { SearchGoal(pos = InfluenceMap.cell(it.x, it.y), range = RAID_LURK_RANGE) }.toTypedArray(),
+                val away = searchPath(r, hunters.map { SearchGoal(pos = InfluenceMap.cell(it.x, it.y), range = lurkFlee) }.toTypedArray(),
                     SearchPathOptions(flee = true, costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)).path.firstOrNull()
                 if (away != null) TrafficManager.request(r, away, HAULER_LOADED_PRIORITY)
             } else if (getRange(r, goal) > range && canMove(r)) {
