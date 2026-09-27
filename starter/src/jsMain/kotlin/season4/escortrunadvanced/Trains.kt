@@ -49,6 +49,26 @@ internal object Trains {
         return true
     }
 
+    /**
+     * The forward train, for an escort with no live MOVE (a head with none cannot move() at all): the first puller walks
+     * ahead on the route and pulls the escort into its cell; the other pullers, pure MOVE and weightless, follow on
+     * their own. v29's M5T40 lost all five MOVE to damage from the head (MOVE stand first in every segment of its body)
+     * and its reverse train stood 3400 ticks in the centre, blocking another (stand, stachu1 bottom, 1550-4905).
+     */
+    fun forward(escort: Creep, chain: List<Creep>, leadNext: Position?): Boolean {
+        if (chain.isEmpty()) return false
+        val lead = chain[0]
+        lead.pull(escort)
+        if (leadNext == null || lead.fatigue > 0) return false
+        lead.move(dirTo(lead, leadNext))
+        // the pull form, move(puller): the direction form refuses a creep with no live MOVE (ERR_NO_BODYPART), this one
+        // sets the intent without the MOVE and fatigue checks and the engine moves the creep if it is pulled this tick
+        escort.asDynamic().move(lead)
+        var ahead: Position = escort
+        for (p in chain.drop(1)) { if (getRange(p, ahead) >= 1) p.move(dirTo(p, ahead)); ahead = p }
+        return true
+    }
+
     /** Period of a train on plain / swamp: ceil(weight × rate / (2 × Σ MOVE)). */
     fun period(weight: Int, moves: Int, swamp: Boolean): Int = Bodies.period(weight, moves, swamp)
 

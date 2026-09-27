@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 29
+const val BOT_VERSION = 30
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -303,6 +303,7 @@ object EscortRunAdvanced {
         val opBase: Position? = w.outpostSpawn ?: outpost?.let { cellOf(it.spawnCell) }
         decideArmy(w, outpostG, outF, opBase)
         runArmy(w, outpostG, outF, opBase, outpostRally(w), false)
+        evictSites(w)
         TrafficManager.resolve(w.active.filter { idOf(it) !in escortIds && idOf(it) !in pinned && Bodies.liveMoves(it) > 0 }, w.active + w.enemies)
         if (w.now % LOG_EVERY == 0 || w.now == 2) logStatus(w)
     }
@@ -561,8 +562,12 @@ object EscortRunAdvanced {
         // kerobii persona's raid of four T3M8R5 and a healer killed every hauler between the source and the spawn and
         // the economy stood at zero for 600 ticks (v18/v19, kerobii top)
         val raid = raided(w)
-        val shelters = if (raid) basesRamparts(w, spawn).filter { k -> k != key(spawn) && k !in innerCells(w) &&
-            (w.occupant[k] == null || w.occupant[k]?.my == true && idOf(w.occupant[k]!!) !in escortIds) }.toMutableList() else ArrayList()
+        // a shelter is a rampart no creep stands on: a cell held by our pinned harvester admitted the hauler to its
+        // side and nowhere else — v23 against stachu3478 kept one hauler 1256-1705 ticks beside the rampart over a harvest
+        // spot, the pile beside it untouched (6ab95e32, 6ab95e92, 6ab96128)
+        val stillKeys = stillCells.mapTo(HashSet()) { key(it) }
+        val shelters = if (raid) basesRamparts(w, spawn).filter { k -> k != key(spawn) && k !in innerCells(w) && k !in spots && k !in stillKeys &&
+            w.occupant[k] == null }.toMutableList() else ArrayList()
         // ...but only a hauler his fire can reach hides: a cell off our ramparts within his reach (three for a ranged
         // part, one for a melee part) plus SHELTER_MARGIN. v23 against stachu3478#2 kept both haulers on ramparts from
         // 420 to the end — his siege stood by our block all match, home "defended" all match — and the spawn lived on
@@ -849,6 +854,24 @@ object EscortRunAdvanced {
     }
 
     private fun rampartAt(k: Int) = getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
+
+    /**
+     * A creep of ours on the site of an obstacle (the tower) steps off it: no flow of ours enters such a site, but one
+     * that stood there before the site was laid stood on — v23's hauler waiting for its load on the tower's cell (4,3)
+     * kept the tower unbuilt for 1456 ticks (6ab95e32), and a site under a creep does not build.
+     */
+    private fun evictSites(w: World) {
+        val still = stillCells.mapTo(HashSet()) { key(it) }
+        for (c in w.active) {
+            if (idOf(c) in escortIds || key(c) !in still || Bodies.liveMoves(c) == 0) continue
+            val out = DIRECTIONS.map { (dx, dy) -> cell(c.x + dx, c.y + dy) }.firstOrNull { p ->
+                DistanceMap.inBounds(p.x, p.y) && !DistanceMap.isWall(p.x, p.y) && key(p) !in still && !w.occupant.containsKey(key(p)) &&
+                    !w.enemyRamparts.containsKey(key(p))
+            } ?: continue
+            pinned.remove(idOf(c))
+            TrafficManager.request(c, out, YIELD_PRIORITY)
+        }
+    }
 
     /** Our block at tick one: the ramparts within two of the home spawn. */
     private var blockCells: List<Int>? = null
@@ -1230,6 +1253,31 @@ object EscortRunAdvanced {
             if (key(e) == flag) { Trains.step(e, chain, null); continue }
             val f = routeFlow(w, flag)
             val here = f[key(e)]
+            // an escort with no live MOVE cannot head its train: its first puller leads (Trains.forward)
+            if (Bodies.liveMoves(e) == 0 && chain.isNotEmpty()) {
+                val lead = chain[0]
+                val ld = f[key(lead)]
+                if (ld in 0 until here) {
+                    val leadNext = DIRECTIONS.map { (dx, dy) -> cell(lead.x + dx, lead.y + dy) }
+                        .filter { p -> DistanceMap.inBounds(p.x, p.y) && f[key(p)] in 0 until ld && !w.occupant.containsKey(key(p)) }
+                        .minByOrNull { f[key(it)] }
+                    Trains.forward(e, chain, if (key(lead) == flag) null else leadNext)
+                } else {
+                    // the lead gets in front: round the escort, cell by cell beside it, to the free cell nearest the flag
+                    val front = DIRECTIONS.map { (dx, dy) -> cell(e.x + dx, e.y + dy) }
+                        .filter { p -> DistanceMap.inBounds(p.x, p.y) && f[key(p)] in 0 until here && !w.occupant.containsKey(key(p)) }
+                        .minByOrNull { f[key(it)] }
+                    val via = front?.let { fr ->
+                        if (getRange(lead, fr) <= 1) fr else DIRECTIONS.map { (dx, dy) -> cell(lead.x + dx, lead.y + dy) }
+                            .filter { p -> DistanceMap.inBounds(p.x, p.y) && !DistanceMap.isWall(p.x, p.y) && getRange(p, e) == 1 &&
+                                !w.occupant.containsKey(key(p)) && !w.enemyRamparts.containsKey(key(p)) }
+                            .minByOrNull { getRange(it, fr) }
+                    }
+                    if (via != null) lead.move(getDirection(via.x - lead.x, via.y - lead.y))
+                }
+                if (w.now % LOG_EVERY == 0) println("convoy t=${w.now}: ${Bodies.summaryOf(e)}${at(e)} forward lead=${at(lead)} -> ${at(cellOf(flag))} left=$here")
+                continue
+            }
             // the next cell: the one nearest the flag that is free, holds our own first puller (a swap), or holds one of
             // ours that is not in any train (it will step aside); another train's creep or his creep is waited out
             val trainIds = HashSet<String>().apply { addAll(escortIds); addAll(pullerOf.keys) }
@@ -1255,7 +1303,9 @@ object EscortRunAdvanced {
             }
             val stepped = Trains.step(e, chain, next)
             if (w.now % LOG_EVERY == 0 || (stepped && next != null && key(next) == flag))
-                println("convoy t=${w.now}: ${Bodies.summaryOf(e)}${at(e)} f${e.fatigue} chain=${chain.sumOf { it.body.size }}M -> ${at(cellOf(flag))} left=$here")
+                println("convoy t=${w.now}: ${Bodies.summaryOf(e)}${at(e)} f${e.fatigue} chain=${chain.sumOf { it.body.size }}M -> ${at(cellOf(flag))} left=$here" +
+                    (if (next == null) " blocked=" + DIRECTIONS.map { (dx, dy) -> (e.x + dx) * 100 + (e.y + dy) }.filter { k -> DistanceMap.inBounds(k / 100, k % 100) && f[k] in 0 until here }
+                        .joinToString(",") { k -> "${at(cellOf(k))}:${w.occupant[k]?.let { o -> (if (o.my) "our " else "his ") + Bodies.summaryOf(o) + (if (idOf(o) in escortIds) "E" else if (idOf(o) in pullerOf.keys) "P" else "") + (if (idOf(o) in pinned) "pin" else "") } ?: "free"}" } else ""))
         }
     }
 
@@ -1793,8 +1843,14 @@ object EscortRunAdvanced {
             metWay.map { Bodies.unitOf(it) to 0 } + joiners.map { Bodies.unitOf(it.first) to it.second } + spawnUnits, towerDps = atTarget)
         val dps = maxOf(1, capped(group).sumOf { it.dps() })
         val done = (rampart + sink + target.hits) / dps
-        val clearUs = units(group).also { Bodies.spreadDamage(it, onWay) }
-        val clear = Bodies.fight(clearUs, units(metWay + joiners.filter { it.second <= done }.map { it.first }) + spawnUnits.filter { it.second <= done }.map { it.first }, towerDps = atTarget)
+        // the clearing meets everyone who comes before it AND the kill after it are over: counting only those who came
+        // within the kill alone, v23 went on sieges "clear, win" whose clearing, breach and kill outlasted the way back of
+        // stachu3478's army and his next fighters — sixteen of ours died in the field, his block took no damage (six
+        // losses, 6ab95e32 ... 6ab96128)
+        fun clearWith(until: Int): Bodies.Outcome = Bodies.fight(units(group).also { Bodies.spreadDamage(it, onWay) },
+            units(metWay + joiners.filter { it.second <= until }.map { it.first }) + spawnUnits.filter { it.second <= until }.map { it.first }, towerDps = atTarget)
+        val first = clearWith(done)
+        val clear = clearWith(first.ticks + done)
         val desc = "race=$race clear=$clear way=${if (flow === opFlow(w, target)) "round" else "plain"} eta=$eta inWay=${inWay.size} join=${joiners.count { it.second <= done }} spawn=${spawnUnits.size}" +
             (if (slots < Int.MAX_VALUE) " slots=$slots${if (sink > 0) " sink=$sink" else ""}" else "")
         lastOpWhy = desc
@@ -2130,7 +2186,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
