@@ -35,6 +35,8 @@ import screeps.api.structures.StructureRampart
  *  - `rush` — то же, но ДО дебюта и вместо него (экономика без гонки, как けろびー#29, у которого эскорт весь матч дома);
  *  - `icpt` — перехватчик stachu3478 при СВОЕЙ гонке: M1A1 после дебюта идёт к их поезду и бьёт тягачей (без них
  *    эскорт — 4 тика на клетку), потом эскорт (стендовая строка match4:icpt открыта с v12);
+ *  - `kk` — убийца хранителя: M1A1 после дебюта идёт к их флагу, бьёт стоящих на нём и рядом и сам встаёт на флаг
+ *    вооружённым захватчиком;
  *  - `army` — после остальных приёмов, раз за разом: стрелок M5R5 охотится на их эскорт, по дороге бьёт тягачей
  *    (вместе с ECON2 стенда — экономика, которой бот не играет: так выглядел бы けろびー#29 с блокировщиками);
  *  - `choke` — M1 ПОСЛЕ дебюта встаёт на клетку впереди их поезда, где обход дороже всего (болото вокруг узкого
@@ -43,9 +45,9 @@ import screeps.api.structures.StructureRampart
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("rush", "squat", "plug", "icpt", "choke", "blk", "chase", "army")
+    private val ORDER = listOf("rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
-    private val LATE = setOf("icpt", "choke", "blk", "chase", "army")
+    private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
     private const val BUILD_RANGE = 3
 
@@ -79,7 +81,7 @@ internal object RedTeam {
         "squat", "choke", "blk", "chase" -> arrayOf(MOVE)
         // армия: стрелок M5R5 (1000) — достаёт эскорт с трёх клеток, 50 урона в тик; повторяется, пока идёт матч
         "army", "rush" -> Array(5) { MOVE } + Array(5) { screeps.api.RANGED_ATTACK }
-        "icpt" -> arrayOf(MOVE, screeps.api.ATTACK)
+        "icpt", "kk" -> arrayOf(MOVE, screeps.api.ATTACK)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
@@ -115,6 +117,7 @@ internal object RedTeam {
                 "chase" -> chase(w, c)
                 "army", "rush" -> army(w, c)
                 "icpt" -> icpt(w, c)
+                "kk" -> keeperKiller(w, c)
             }
         }
     }
@@ -197,6 +200,17 @@ internal object RedTeam {
         val goal: Creep = pullers.minByOrNull { getRange(c, it) } ?: esc
         if (getRange(c, goal) > 1) EscortRun.stepRed(w, c, goal, 1)
         log(w, c, "icpt", "on ${Bodies.summaryOf(goal)}@(${goal.x},${goal.y})")
+    }
+
+    private fun keeperKiller(w: EscortRun.World, c: Creep) {
+        val flag = w.enemyFlag ?: return
+        val near = w.enemies.filter { getRange(c, it) <= 1 && it !== w.enemyEscort }
+        val onFlag = near.firstOrNull { it.x == flag.x && it.y == flag.y }
+        (onFlag ?: near.minByOrNull { it.hits })?.let { c.attack(it) }
+        if (c.x == flag.x && c.y == flag.y) { log(w, c, "kk", "on flag"); return }
+        val occupied = w.occupant[flag.x * 100 + flag.y]
+        EscortRun.stepRed(w, c, flag, if (occupied == null) 0 else 1)
+        log(w, c, "kk", "to flag")
     }
 
     private const val CHASE_AHEAD = 10
