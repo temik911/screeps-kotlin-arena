@@ -280,7 +280,10 @@ object EscortRunAdvanced {
 
     private fun runEscorts(w: World) {
         if (escortHome.isEmpty() && w.escorts.isNotEmpty()) {
-            val cells = innerCells(w).toMutableList()
+            // the escorts' cells are the ones farthest from the home source, whichever escort takes which: v2's first
+            // match gave each escort its nearest inner cell, those were the source side of the spawn, and a hauler stood
+            // behind them for 3 000 ticks while the harvest piled up on the ground
+            val cells = innerCells(w).take(w.escorts.size).toMutableList()
             for (e in w.escorts.sortedByDescending { Bodies.period(it, false) }) {
                 val best = cells.minByOrNull { getRange(e, cellOf(it)) } ?: break
                 escortHome[idOf(e)] = best
@@ -339,12 +342,25 @@ object EscortRunAdvanced {
                 }
             } else {
                 if (getRange(c, spawn) <= 1) c.transfer(spawn, RESOURCE_ENERGY)
-                else {
-                    val f = flowTo("spawn", spawn, Bodies.swampCost(c))
-                    DistanceMap.flowStep(f, c.x, c.y, 1, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(c, it, HAULER_PRIORITY) }
-                }
+                else dock(w, c, spawn)
             }
         }
+    }
+
+    /**
+     * To a free cell beside the spawn, walking round our escorts: every cell beside the spawn is an inner cell, the
+     * escorts hold three of them for the whole match, and a field that only knows the spawn sends the hauler into the
+     * back of an escort (it then asks for that cell forever — the escort is not a mover and never yields).
+     */
+    private fun dock(w: World, c: Creep, spawn: StructureSpawn) {
+        val still = w.escorts.map { cell(it.x, it.y) }
+        val free = DIRECTIONS.map { (dx, dy) -> cell(spawn.x + dx, spawn.y + dy) }
+            .filter { !DistanceMap.isWall(it.x, it.y) && (w.occupant[key(it)]?.let { o -> idOf(o) == idOf(c) || idOf(o) !in escortIds } ?: true) }
+        if (free.isEmpty()) return
+        val k = "dock:" + free.joinToString(",") { key(it).toString() }
+        val now = getTicks()
+        val f = flowCache[k]?.takeIf { flowTick[k] == now } ?: DistanceMap.flowFieldToAny(free, still, Bodies.swampCost(c)).also { flowCache[k] = it; flowTick[k] = now }
+        DistanceMap.flowStep(f, c.x, c.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(c, it, HAULER_PRIORITY) }
     }
 
     // ==================== the army: what to do ====================
