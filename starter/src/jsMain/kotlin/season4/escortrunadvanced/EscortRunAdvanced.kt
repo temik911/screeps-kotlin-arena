@@ -10,9 +10,13 @@ import screeps.api.TOWER_CAPACITY
 import screeps.api.TOWER_COOLDOWN
 import screeps.api.TOWER_POWER_ATTACK
 import screeps.api.TOWER_RANGE
+import screeps.api.TOWER_ENERGY_COST
+import screeps.api.createConstructionSite
+import screeps.api.structures.StructureTower
 import screeps.api.BodyPartType
 import screeps.api.CARRY
 import screeps.api.CREEP_SPAWN_TIME
+import screeps.api.ConstructionSite
 import screeps.api.Creep
 import screeps.api.Flag
 import screeps.api.GameObject
@@ -45,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 6
+const val BOT_VERSION = 7
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -126,7 +130,8 @@ object EscortRunAdvanced {
     private val MELEE = Bodies.body(MOVE to 5, ATTACK to 5)
     private val RANGED = Bodies.body(MOVE to 5, RANGED_ATTACK to 5)
     private val HARVESTER_FIRST = Bodies.body(WORK to 3, MOVE to 1)
-    private val HARVESTER_NEXT = Bodies.body(WORK to 2, MOVE to 1)
+    /** The second harvester builds the home works and feeds the tower: it carries. */
+    private val HARVESTER_NEXT = Bodies.body(WORK to 2, CARRY to 2, MOVE to 1)
     private val HAULER = Bodies.body(CARRY to 2, MOVE to 1)
     /** The wall breaker: as much ATTACK as one spawn holds with MOVE enough for two ticks a plain cell. */
     private const val BREAKER_ATTACK = 9
@@ -175,11 +180,14 @@ object EscortRunAdvanced {
 
     fun tick() {
         val w = sense()
-        stillCells = w.escorts.map { cell(it.x, it.y) }
+        stillCells = w.escorts.map { cell(it.x, it.y) } + getObjectsByPrototype(ConstructionSite::class)
+            .filter { it.exists && it.my == true && works?.any { p -> p.first == "tower" && p.second == key(it) } == true }.map { cell(it.x, it.y) }
         if (w.now == 1) probe(w)
         if (w.now in 2..5) printMap((w.now - 2) * 25)
         if (w.now == 1) chooseBreach(w)
         runSpawn(w)
+        runWorks(w)
+        runTowers(w)
         runEscorts(w)
         runEconomy(w)
         decideArmy(w)
@@ -209,7 +217,8 @@ object EscortRunAdvanced {
         val enemyRamparts = HashMap<Int, StructureRampart>()
         for (r in ramparts) if (r.my != true) enemyRamparts[key(r)] = r
         val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }
-        val blocked: List<Position> = spawns + walls + sources + ramparts.filter { it.my != true }
+        val towers = getObjectsByPrototype(StructureTower::class).filter { it.exists }
+        val blocked: List<Position> = spawns + walls + sources + towers + ramparts.filter { it.my != true }
         DistanceMap.syncStructures(blocked)
         val occupant = HashMap<Int, Creep>()
         for (c in active) occupant[key(c)] = c
@@ -364,6 +373,7 @@ object EscortRunAdvanced {
                 val f = flowTo("spot", cellOf(spot), Bodies.swampCost(h))
                 DistanceMap.flowStep(f, h.x, h.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(h, it, WORKER_PRIORITY) }
             }
+            if (Bodies.live(h, CARRY) > 0 && workAndFeed(w, h, src)) continue
             if (getRange(h, src) <= 1) h.harvest(src)
         }
         for (c in w.haulers) {
@@ -408,6 +418,120 @@ object EscortRunAdvanced {
         val st = DistanceMap.flowStep(f, c.x, c.y, 0, w.occupant.keys, w.enemyAt)
         st?.let { TrafficManager.request(c, it, HAULER_PRIORITY) }
         return "${free.size} f=${f[key(c)]} step=${st?.let { at(it) }}"
+    }
+
+    // ==================== home works: ramparts over the economy, a tower fed by the harvester ====================
+
+    /** What to build at home, in order: (kind, cell). */
+    private var works: List<Pair<String, Int>>? = null
+    /** The tick home was first defended — raids unlock the tower before its fighter count. */
+    private var attackedAt = -1
+
+    /**
+     * Computed once the harvest spots are known. けろびー#11 raided our source three times with his T3M8R5 and healers
+     * (568, 900, 1650 — 6ab92ec4) and killed every harvester and hauler each time: the economy stood in the open seven
+     * cells from the spawn. So, as Spawn and Swamp advanced learned against the same raiders: a rampart over each
+     * harvest spot (200 energy for 10 000 hits of shield — a creep on its own rampart takes no damage), a tower beside the
+     * second spot so the harvester there builds and feeds it with no hauler, a rampart over the tower, and ramparts
+     * along the haulers' way from the first spot to our block.
+     */
+    private fun planWorks(w: World) {
+        if (works != null) return
+        val spawn = w.mySpawn ?: return
+        val src = w.homeSource ?: return
+        val spots = harvestSpots(w).take(2)
+        if (spots.size < 2) { works = emptyList(); return }
+        fun free(k: Int) = DistanceMap.inBounds(k / 100, k % 100) && !DistanceMap.isWall(k / 100, k % 100) &&
+            k !in w.myRamparts && k !in spots && k != key(src)
+        val tower = DIRECTIONS.map { (dx, dy) -> (spots[1] / 100 + dx) * 100 + (spots[1] % 100 + dy) }.filter { free(it) }
+            .sortedWith(compareBy<Int>({ -spots.count { s -> cheb(s, it) <= 1 } }, { getRange(cellOf(it), spawn) },
+                { if (DistanceMap.isSwamp(it / 100, it % 100)) 1 else 0 })).firstOrNull()
+        val f = DistanceMap.flowFieldTo(spawn, stillCells + listOfNotNull(tower?.let { cellOf(it) }), 1)
+        // only what the builder on the second spot reaches (range 3): a site out of its reach would hold the one-site
+        // queue for good
+        val route = descend(f, spots[0]).filter { it !in w.myRamparts && it !in spots && it != key(spawn) && it != tower && cheb(it, spots[1]) <= 3 }
+        val list = ArrayList<Pair<String, Int>>()
+        for (s in spots) list.add("rampart" to s)
+        if (tower != null) { list.add("tower" to tower); list.add("rampart" to tower) }
+        for (r in route) list.add("rampart" to r)
+        works = list
+        println("works: " + list.joinToString(" ") { "${it.first}${at(cellOf(it.second))}" })
+    }
+
+    /** How many fighters must stand before each kind is built, unless home has been attacked. */
+    private fun worksGate(kind: String, index: Int, w: World): Boolean {
+        val fighters = w.fighters.size
+        val attacked = attackedAt >= 0
+        return when {
+            kind == "tower" -> fighters >= 2 || attacked
+            index < 2 -> fighters >= 1 || attacked
+            else -> fighters >= 3 || attacked
+        }
+    }
+
+    private fun builtAt(k: Int, kind: String): Boolean = when (kind) {
+        "tower" -> getObjectsByPrototype(StructureTower::class).any { it.exists && it.my == true && key(it) == k }
+        else -> getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
+    }
+
+    /** One site at a time: the first unbuilt work whose gate is open. */
+    private fun runWorks(w: World) {
+        planWorks(w)
+        val list = works ?: return
+        val sites = getObjectsByPrototype(ConstructionSite::class).filter { it.exists && it.my == true }
+        if (sites.isNotEmpty()) return
+        for ((i, pair) in list.withIndex()) {
+            val (kind, k) = pair
+            if (builtAt(k, kind)) continue
+            if (!worksGate(kind, i, w)) return
+            val r = if (kind == "tower") createConstructionSite(k / 100, k % 100, StructureTower::class.js)
+                else createConstructionSite(k / 100, k % 100, StructureRampart::class.js)
+            println("works t=${w.now}: $kind site ${at(cellOf(k))} err=${r.error}")
+            return
+        }
+    }
+
+    /**
+     * A harvester with CARRY: the tower beside it eats first (one shot is 10 energy, and without it home has no guard),
+     * then a site within reach is built from its store, topped up from a pile beside it, and otherwise it harvests.
+     * Harvest and build are one action a tick. A tower site under a creep does not build (Spawn and Swamp advanced v6 lost
+     * 400 ticks so), so our movers treat it as a wall (stillCells).
+     */
+    private fun workAndFeed(w: World, h: Creep, src: Source): Boolean {
+        val carried = h.store[RESOURCE_ENERGY] ?: 0
+        val tower = getObjectsByPrototype(StructureTower::class).firstOrNull {
+            it.exists && it.my == true && getRange(it, h) <= 1 && (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0
+        }
+        if (tower != null && carried > 0) {
+            h.transfer(tower, RESOURCE_ENERGY)
+            if (getRange(h, src) <= 1) h.harvest(src)
+            return true
+        }
+        val site = getObjectsByPrototype(ConstructionSite::class).filter { it.exists && it.my == true && getRange(it, h) <= 3 }
+            .firstOrNull { s -> w.occupant[key(s)] == null || isRampartSite(s) } ?: return false
+        if (carried >= BUILD_POWER * Bodies.live(h, WORK)) { h.build(site); return true }
+        val pile = w.piles.filter { getRange(it, h) <= 1 }.maxByOrNull { it.amount }
+        if (pile != null && (h.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0) h.pickup(pile)
+        if (carried > 0 && pile == null && src.energy == 0) { h.build(site); return true }
+        if (getRange(h, src) <= 1) h.harvest(src)
+        return true
+    }
+
+    private fun isRampartSite(s: ConstructionSite): Boolean {
+        val list = works ?: return false
+        return list.any { it.first == "rampart" && it.second == key(s) } && list.none { it.first == "tower" && it.second == key(s) && !builtAt(key(s), "tower") }
+    }
+
+    /** Towers fire at the nearest armed enemy in range (the damage falls 50 a cell), the weakest of equals; else heal. */
+    private fun runTowers(w: World) {
+        for (tw in getObjectsByPrototype(StructureTower::class).filter { it.exists && it.my == true }) {
+            if ((tw.store[RESOURCE_ENERGY] ?: 0) < TOWER_ENERGY_COST || tw.cooldown > 0) continue
+            val foe = w.enemies.filter { getRange(tw, it) <= TOWER_RANGE }
+                .sortedWith(compareBy<Creep>({ if (Bodies.isArmed(it) || idOf(it) in escortIds) 0 else 1 }, { getRange(tw, it) }, { it.hits })).firstOrNull()
+            if (foe != null) { tw.attack(foe); continue }
+            val hurt = w.active.filter { it.hits < it.hitsMax && getRange(tw, it) <= TOWER_RANGE }.maxByOrNull { it.hitsMax - it.hits }
+            if (hurt != null) tw.heal(hurt)
+        }
     }
 
     // ==================== the breach ====================
@@ -657,6 +781,7 @@ object EscortRunAdvanced {
         val from: Position? = if (group.isEmpty()) null else cell(group.sumOf { it.x } / group.size, group.sumOf { it.y } / group.size)
         if (threats.isNotEmpty()) {
             mode = "defend"; modeTarget = null
+            if (attackedAt < 0) attackedAt = w.now
         } else {
             // strike: an escort of his outside his ramparts, where the fight against everything guarding it is ours
             // of several, the one nearest to our group: any kill wins, so the soonest one
@@ -802,7 +927,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
