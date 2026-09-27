@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 18
+const val BOT_VERSION = 19
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -384,9 +384,43 @@ object PainAndGainAdvanced {
         println("style t=$t: ${if (fighter) "fighter" else "farmer"} his rate=${theirFx.rate} his flags=${flags.count { it.my == false }} spread=$out")
     }
 
+    /**
+     * Garrisons: a creep that stands on a flag we took in a sweep and stays there. Against kerobii#7 our ten beat his
+     * four by t=2000 and still lost on points: the group walked from flag to flag at the heavies' pace while his four
+     * runners flipped each one back behind it (7 flags to our 2 at t=2000, 25 a tick to 9). A flag with a creep of ours
+     * on it cannot be flipped without killing that creep. A healer holds best (it heals itself), then the slowest; the
+     * group keeps at least GROUP_MIN.
+     */
+    private val garrisonOf = HashMap<String, String>()   // creep id -> flag id
+
+    private fun garrisons(army: List<Unit>) {
+        garrisonOf.entries.removeAll { (cid, fid) -> army.none { it.id == cid } || flags.none { it.id == fid } }
+        for (u in army) {
+            val fid = garrisonOf[u.id] ?: continue
+            val f = flags.firstOrNull { it.id == fid } ?: continue
+            if (u.x == f.x && u.y == f.y) hold(u) else stepToward(u, Grid.to(f.x, f.y), 700)
+        }
+    }
+
+    private fun maybeGarrison(group: List<Unit>, f: ScoreFlag) {
+        if (f.my != true || garrisonOf.containsValue(f.id)) return
+        val free = group.filter { it.id !in garrisonOf }
+        if (free.size <= GROUP_MIN) return
+        val on = free.firstOrNull { it.x == f.x && it.y == f.y } ?: return
+        // the one on the cell stays if it is a healer or a heavy; otherwise it swaps duty with the nearest healer
+        val keeper = if (on.heal > 0 || on.heavy) on else free.filter { it.heal > 0 }.minByOrNull { Grid.range(it.x, it.y, f.x, f.y) } ?: on
+        garrisonOf[keeper.id] = f.id
+        println("garrison t=$t: ${keeper.id.substringAfterLast("player").drop(2)} holds (${f.x},${f.y})")
+    }
+
     private fun army() {
-        val army = mine.filter { it.role != Role.PULLER }
-        if (army.isEmpty()) return
+        val all = mine.filter { it.role != Role.PULLER }
+        if (all.isEmpty()) return
+        garrisons(all)
+        val army = all.filter { it.id !in garrisonOf }
+        // garrisons fire and heal whether or not a group is left: with the group dead and only garrisons standing, the
+        // stand's rush lost five of them to our own hits-loss flags, unhealed, from t=954 to t=1453
+        if (army.isEmpty()) { fire(all); return }
         val group = mainGroup(army)
         val cx = group.sumOf { it.x } / group.size; val cy = group.sumOf { it.y } / group.size
         val foes = theirs.filter { it.armed || it.heal > 0 }
@@ -420,6 +454,10 @@ object PainAndGainAdvanced {
             near.isEmpty() -> null
             breakingOff -> null
             engaged -> Mode.FIGHT
+            // at the fortress the fight is contact only: Hardy#3 twice drew v17-v18 out into the corridor — the duel
+            // over what was within fourteen (a scout, his army still behind the wall) said fight at t=110, and the
+            // army walked into his whole army 8-15 cells from our tower, 15 lost for 6 by t=171
+            fighter && !swept && !nearUnderTower(near) -> null
             swept && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             head.size < zone.size && local.ratio >= INITIATIVE_RATIO && !fighter -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
@@ -431,7 +469,7 @@ object PainAndGainAdvanced {
             else -> Mode.STAND
         }
         val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
-        val sweepFlag = if (swept || breakingOff) sweepTarget(cx, cy) else null
+        val sweepFlag = if (swept || breakingOff) sweepTarget(cx, cy, group.size) else null
         val fortress = if (fighter && !swept) fortressFlag() else null
         val objective = sweepFlag ?: fortress ?: (if (guarded(centre, group)) safeFlag(cx, cy, group) else null) ?: centre
         // survival: with the army broken and the score ours, what is left lives under our fed tower — it heals them and
@@ -444,7 +482,7 @@ object PainAndGainAdvanced {
         val shelter = if (surviving) ourFedTowers().minByOrNull { Grid.range(it.x, it.y, cx, cy) } else null
         if (shelter != null) {
             if (mode != Mode.RETREAT) { mode = Mode.RETREAT; modeSince = t; println("mode t=$t: RETREAT survive under (${shelter.x},${shelter.y}) armed=${army.count { it.armed }}:${foes.count { it.armed }} score=$ourScore:$theirScore") }
-            fire(army)
+            fire(all)
             for (u in army) if (Grid.range(u.x, u.y, shelter.x, shelter.y) > 1) stepToward(u, Grid.to(shelter.x, shelter.y), 80, stopAt = 1)
             return
         }
@@ -455,7 +493,7 @@ object PainAndGainAdvanced {
         }
         if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} whole=${whole.ratio.asDynamic().toFixed(2)} near=${near.size} group=${group.size}/${army.size} obj=${objective.x},${objective.y}") }
 
-        fire(army)
+        fire(all)
         // hunters: in a sweep, light armed creeps go in pairs after the enemy's survivors — a lone runner sits on a flag
         // or walks between them, and an `h4m4` heals itself 48 a tick, more than one `r4m4` does to it
         val hunters = if (mode == Mode.SWEEP || (swept && mode != Mode.RETREAT)) assignHunters(army) else { hunterOf.clear(); emptyList() }
@@ -475,7 +513,10 @@ object PainAndGainAdvanced {
                 // on its way is its most forward one, and it walked alone into Hardy#1's army on the centre
                 if (restGroup.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= restGroup.size) capture(restGroup, objective)
             }
-            Mode.SWEEP -> if (restGroup.isNotEmpty()) { march(restGroup, objective.x, objective.y); capture(restGroup, objective) }
+            Mode.SWEEP -> if (restGroup.isNotEmpty()) {
+                march(restGroup, objective.x, objective.y); capture(restGroup, objective)
+                for (f in flags) if (f.my == true && restGroup.any { it.x == f.x && it.y == f.y }) maybeGarrison(restGroup, f)
+            }
             Mode.HOLD -> if (fortress != null && objective === fortress) {
                 val a = fortressAnchor(fortress, foes)
                 hold(restGroup, Grid.xOf(a), Grid.yOf(a))
@@ -503,6 +544,13 @@ object PainAndGainAdvanced {
             if (d < bestD) { bestD = d; best = Grid.idx(x, y) }
         }
         return best
+    }
+
+    /** At least one of the near is inside our fortress tower's strong reach — the fight is ours to take there. */
+    private fun nearUnderTower(near: List<Unit>): Boolean {
+        val f = fortressFlag() ?: return true
+        val tw = towers.firstOrNull { Grid.range(it.x, it.y, f.x, f.y) <= 1 } ?: return true
+        return near.any { Grid.range(it.x, it.y, tw.x, tw.y) <= FORTRESS_STRIKE_R }
     }
 
     private fun fortressNear(cx: Int, cy: Int): Boolean = fortressFlag()?.let { Grid.range(it.x, it.y, cx, cy) <= FORTRESS_R } ?: true
@@ -544,9 +592,13 @@ object PainAndGainAdvanced {
     /** The flag the sweep takes next: the most score it swings (a flag of his counts twice — he loses it and we gain
      *  it) per tick of the group's walk; our own fatigue flag only when nothing else is left, since holding it halves
      *  the speed of the hunters the sweep needs. */
-    private fun sweepTarget(cx: Int, cy: Int): ScoreFlag? {
+    private fun sweepTarget(cx: Int, cy: Int, groupSize: Int = 99): ScoreFlag? {
         val here = Grid.idx(cx, cy)
-        return flags.filter { it.my != true }.maxByOrNull { f ->
+        // a flag under his fed tower is his puller on the cell and a 1000-shot every ten ticks at whoever comes to kill
+        // it: a small group does not go there (the stand's rush: four of ours sent to his fatigue tower died one by one)
+        val hisFed = towers.filter { it.my == false && (it.store[RESOURCE_ENERGY] ?: 0) > 0 }
+        return flags.filter { f -> f.my != true && (groupSize >= TOWER_ASSAULT_MIN || hisFed.none { Grid.range(it.x, it.y, f.x, f.y) <= 1 }) }
+            .maxByOrNull { f ->
             val swing = f.scorePerTick * (if (f.my == false) 2 else 1) * (if (f.effectType == EFF_FATIGUE) 0.05 else 1.0)
             swing / (10.0 + Grid.to(f.x, f.y)[here])
         }
@@ -799,6 +851,8 @@ object PainAndGainAdvanced {
     const val INITIATIVE_RATIO = 1.3
     const val MEND_AT = 250
     const val SURVIVE_ARMED = 2
+    const val GROUP_MIN = 4
+    const val TOWER_ASSAULT_MIN = 8
     const val STALE_T = 300
     const val CLASSIFY_T = 45
     const val CONFIRM_T = 100
@@ -809,6 +863,7 @@ object PainAndGainAdvanced {
     const val FARMER_RATE = 12
     const val FORTRESS_R = 8
     const val ANCHOR_BEHIND = 3
+    const val FORTRESS_STRIKE_R = 10
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
