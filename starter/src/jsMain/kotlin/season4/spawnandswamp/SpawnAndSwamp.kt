@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 189
+    private const val BOT_VERSION = 190
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4574,20 +4574,30 @@ object SpawnAndSwamp {
                 lagging
             }
 
+            val holdTowers: List<TowerInfo> = if (!marching || !siegeHold) emptyList()
+                else if (USE_HOLD_TARGET_TOWERS && enemySpawn != null) coveringTowers(ctx, listOf(enemySpawn))
+                else ctx.enemyTowers.filter { it.fed }
             val step: Position? = when {
                 !canMove(creep) -> null // обездвижен — только стреляет
                 mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix) ?: pathStep(creep, mySpawn, 1, ctx.dangerMatrix)
                 hold -> null
                 // волна держит кромку башни: из-под огня кормленной башни — прочь; в поле — обычный шаг, но не
                 // в её дальность (враг у кромки бьётся по локальному счёту, см. localAggressive)
-                marching && siegeHold && coveringTowers(ctx, listOf(creep), 0).isNotEmpty() -> towerEdgeStep(creep, ctx)
+                // …THE EDGE OF THE TOWERS OVER ITS TARGET, NOT OF EVERY TOWER OF HIS (v190). Against marlyman#371 wave 1
+                // (M6A6, 3×M8R4) held at (27-29,27-30) for 630 ticks (780-1410) with its target (2,97) under no tower: the
+                // next cell of the march, (27,31), was plain at range 20 of his main's tower (7,48) — a shot of 50 — and
+                // every holding step into any fed tower's reach was refused; its reinforcement held 80 of 82 lines for the
+                // frozen front, his unescorted builder raised two spawns 7-13 cells from it, and both groups reached (2,97)
+                // apart at 1480-1500 and died. The hold waits outside what defends the target; the march field — which
+                // prices every tower's fire against the ticks (v181) — chooses the way past the others
+                marching && siegeHold && holdTowers.any { InfluenceMap.towerShot(getRange(it.pos, creep)) > 0.0 } -> towerEdgeStep(creep, ctx, holdTowers)
                 // A HOLDING FRONT KEEPS THE EDGE OF HIS CREEPS' FIRE TOO, NOT ONLY OF HIS TOWERS (v107). With no tower on the
                 // way "hold" was a march: against ●ω<♥♪#2 (t=550) f74 and f100, locally weaker, stepped west into his pair
                 // at (56,8) with another seven cells behind them, and both died with nothing of his dead. A holding step
                 // may not take more of his fire than the cell it leaves — out of combat only: in it the fight's own score steps
                 // (the edge held in combat froze the gate's tower+stream front before his stream: 574 -> 1321)
                 marching && siegeHold -> bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, breaching, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt)
-                    ?.takeIf { s -> coveringTowers(ctx, listOf(InfluenceMap.cell(s.x, s.y)), 0).isEmpty() &&
+                    ?.takeIf { s -> holdTowers.none { InfluenceMap.towerShot(getRange(it.pos, InfluenceMap.cell(s.x, s.y))) > 0.0 } &&
                         (!USE_HOLD_FIRE_EDGE || inCombat || InfluenceMap.damageAt(s.x, s.y, combatEnemies) <= InfluenceMap.damageAt(creep.x, creep.y, combatEnemies)) }
                 else -> bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, breaching, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt)
             }
@@ -5653,8 +5663,8 @@ object SpawnAndSwamp {
     }
 
     /** Шаг из-под огня кормленных башен врага: бегство от их клеток за предел дальности выстрела. */
-    private fun towerEdgeStep(creep: Creep, ctx: Ctx): Position? {
-        val goals = ctx.enemyTowers.filter { it.fed }.map { SearchGoal(pos = InfluenceMap.cell(it.pos.x, it.pos.y), range = InfluenceMap.towerFalloffRange.toInt()) }.toTypedArray()
+    private fun towerEdgeStep(creep: Creep, ctx: Ctx, towers: List<TowerInfo> = ctx.enemyTowers.filter { it.fed }): Position? {
+        val goals = towers.map { SearchGoal(pos = InfluenceMap.cell(it.pos.x, it.pos.y), range = InfluenceMap.towerFalloffRange.toInt()) }.toTypedArray()
         if (goals.isEmpty()) return null
         return searchPath(creep, goals, SearchPathOptions(flee = true, costMatrix = ctx.dangerMatrix)).path.firstOrNull()
     }
@@ -6492,6 +6502,8 @@ object SpawnAndSwamp {
     /** The raid's race: a walking target as fast as the pair is not struck, his gun fires from its reach off, and the
      *  weakest raider must also walk out of his reach after the kill (raidOutlasts, v189). */
     private const val USE_RAID_RACE_EXIT = true
+    /** A holding front keeps the edge of the towers over its target only, not of every fed tower of his (v190). */
+    private const val USE_HOLD_TARGET_TOWERS = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
