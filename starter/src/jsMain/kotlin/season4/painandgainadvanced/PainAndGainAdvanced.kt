@@ -366,7 +366,12 @@ object PainAndGainAdvanced {
                 val goal = home?.let { h -> flags.firstOrNull { Grid.range(it.x, it.y, h.x, h.y) <= 1 } } ?: centre
                 march(restGroup, goal.x, goal.y)
             }
-            Mode.MARCH -> if (restGroup.isNotEmpty()) { march(restGroup, objective.x, objective.y); capture(restGroup, objective) }
+            Mode.MARCH -> if (restGroup.isNotEmpty()) {
+                march(restGroup, objective.x, objective.y)
+                // on the march the flag is stepped on only when the group is there: the nearest creep of a group still
+                // on its way is its most forward one, and it walked alone into Hardy#1's army on the centre
+                if (restGroup.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= restGroup.size) capture(restGroup, objective)
+            }
             Mode.SWEEP -> if (restGroup.isNotEmpty()) { march(restGroup, objective.x, objective.y); capture(restGroup, objective) }
             Mode.HOLD -> hold(restGroup, objective.x, objective.y)
         }
