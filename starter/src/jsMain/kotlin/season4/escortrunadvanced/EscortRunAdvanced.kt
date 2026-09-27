@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 27
+const val BOT_VERSION = 28
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -459,6 +459,18 @@ object EscortRunAdvanced {
     /** Two melee to one ranged: the melee is three times the damage per energy against anything that stands still (an
      *  escort, a rampart), the ranged is what reaches a kiter. */
     private fun nextFighter(w: World): Array<BodyPartType> {
+        // a siege at home is fought from our ramparts, where a melee hits only what stands beside one and a ranged all
+        // within three: the body that does more to his creeps there per energy. stachu3478#2's trios stood two and three
+        // cells off our block — his M5R5 gnawing at range three, his M8A6 held back — and v26's melee on the ramparts
+        // reached none of them while two ranged did 100 a tick against his healers' 144 (6ab96311)
+        val base = w.mySpawn
+        val threats = if (base != null) threatsTo(w, homeG, base) else emptyList()
+        if (threats.isNotEmpty()) {
+            fun reach(r: Int) = threats.count { e -> w.myRamparts.any { k -> cheb(k, key(e)) <= r } }
+            val melee = Bodies.unitOf(MELEE).dps().toDouble() / Bodies.cost(MELEE) * reach(1)
+            val ranged = Bodies.unitOf(RANGED).dps().toDouble() / Bodies.cost(RANGED) * reach(3)
+            if (ranged > melee) return RANGED
+        }
         val melee = w.fighters.count { Bodies.isMelee(it) }
         val ranged = w.fighters.count { Bodies.isRanged(it) }
         return if (ranged * 2 < melee) RANGED else MELEE
@@ -1715,7 +1727,13 @@ object EscortRunAdvanced {
         val ids = inWay.mapTo(HashSet()) { idOf(it) }
         val flow = wayFor(w, from, target)
         // ticks, not the field's value: the danger price inflates the field (an M5X5 walks a cell a tick on plain)
-        val eta = pathCells(w, from, target).size
+        // an escort inside his block has no way to it — every neighbour is his rampart and the field never leaves the
+        // target's cell — so its way is measured through his ramparts: the walk to the block the siege breaks anyway.
+        // v26's sieges were weighed at "eta=0" from our base eighty cells away (6ab96380 at 672: kill 57 against his 89)
+        val eta = pathCells(w, from, target).size.takeIf { it > 0 || getRange(from, target) <= 1 } ?: run {
+            val open = DistanceMap.flowFieldOpen(target, w.enemyRamparts.keys, ARMY_SWAMP_COST)
+            anchor(open, from)?.let { open[key(it)] } ?: getRange(from, target)
+        }
         val rampart = (w.enemyRamparts[key(target)]?.hits ?: 0) +
             (if (!meleeReachable(w, target)) breachCell(w, target)?.let { w.enemyRamparts[key(it)]?.hits } ?: 0 else 0)
         // the cells a melee of ours strikes an escort in the open from: its walkable neighbours with no creep of his on
@@ -2088,7 +2106,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
