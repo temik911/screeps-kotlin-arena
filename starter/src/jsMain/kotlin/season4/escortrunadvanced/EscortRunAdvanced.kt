@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 33
+const val BOT_VERSION = 34
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -196,6 +196,12 @@ object EscortRunAdvanced {
     private const val PIONEER_TRIES = 3
     /** Extensions beside the harvest spots, at most. */
     private const val EXTENSIONS = 5
+    /** His escorts' pace toward his flags: sampled every 10 ticks over the last 100. */
+    private const val DELIVERY_SAMPLE = 10
+    private const val DELIVERY_WINDOW = 100
+    /** Build costs measured by the v7 probe (CONSTRUCTION_COST: spawn 1000, rampart 200). */
+    private const val SPAWN_BUILD_COST = 1000
+    private const val RAMPART_BUILD_COST = 200
     /** Cells beyond his reach a hauler keeps from his fighters during a raid (they walk a cell a tick, as it does). */
     private const val SHELTER_MARGIN = 2
     /** After a pioneer dies on its way, the next one waits this long. */
@@ -282,6 +288,7 @@ object EscortRunAdvanced {
         if (w.now in 2..5) printMap((w.now - 2) * 25)
         if (w.now == 1) { chooseBreach(w); planOutpost(w); w.mySpawn?.let { sp -> blockCells = w.myRamparts.filter { cheb(it, key(sp)) <= 2 } } }
         assignOrigins(w)
+        hisDeliveryIn(w)  // sampled every tick, whoever asks
         runSpawn(w)
         runOutpostSpawn(w)
         runWorks(w)
@@ -446,7 +453,7 @@ object EscortRunAdvanced {
             // it waits for two fighters at home, not for an army that beats all of his: against a bot that out-produces
             // us (stachu3478, 1.6 times our income with OUR far source) that gate never opened and the pioneer never went
             outpost != null && w.outpostSpawn == null && w.pioneers.isEmpty() && pioneersSent < PIONEER_TRIES &&
-                w.fighters.size >= 2 && pioneerOk -> PIONEER
+                w.fighters.size >= 2 && pioneerOk && hisDeliveryIn(w) > pioneerPayback(w) -> PIONEER
             else -> nextFighter(w)
         }
         if (energy(w) < Bodies.cost(order)) return
@@ -716,6 +723,9 @@ object EscortRunAdvanced {
     private fun worksGate(kind: String, index: Int, w: World): Boolean {
         val fighters = w.fighters.size
         val attacked = attackedAt >= 0
+        // while all his escorts close in on his flags, the energy goes into fighters: a kill is the only way left, and
+        // an extension, a tower or a far rampart pays after the match is over (stachu3478#4 on his flags by ~800)
+        if (index >= 2 && hisDeliveryIn(w) != Int.MAX_VALUE) return false
         return when {
             kind == "tower" -> (attacked && fighters >= 1 && !armyAdequate(w)) || (fighters >= 6 && armyAdequate(w))
             kind == "extension" -> fighters >= 1 && armyAdequate(w)
@@ -850,6 +860,13 @@ object EscortRunAdvanced {
         // the sources' stock at the start: the replay does not carry it, and a stock above the regen is energy only as
         // many WORK as drain it early can take
         println("sources: " + getObjectsByPrototype(Source::class).filter { it.exists }.joinToString(" ") { "${at(it)}=${it.energy}/${it.energyCapacity}" })
+        // probe: may a rampart of ours stand on HIS flag? A rampart is a wall to his creeps, and his escort must stand on
+        // the flag's cell — the site is laid and removed at once, only its answer is kept
+        println("probe flagSite: " + w.enemyFlags.joinToString(" ") { f ->
+            val r = createConstructionSite(f.x, f.y, StructureRampart::class.js)
+            r.`object`?.remove()
+            "${at(f)}=${r.error ?: "ok"}"
+        })
     }
 
     private fun rampartAt(k: Int) = getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
@@ -870,6 +887,57 @@ object EscortRunAdvanced {
             pinned.remove(idOf(c))
             TrafficManager.request(c, out, YIELD_PRIORITY)
         }
+    }
+
+    /** His escorts' distance to his nearest flag, sampled every DELIVERY_SAMPLE ticks: id -> (tick, distance). */
+    private val hisDist = HashMap<String, ArrayDeque<Pair<Int, Int>>>()
+    private var hisFlagField: IntArray? = null
+    private var hisFlagFieldAt = -1_000
+    private var deliveryAt = -1
+    private var deliveryVal = Int.MAX_VALUE
+
+    /**
+     * Ticks until his LAST escort stands on a flag, each at the pace it kept over the last DELIVERY_WINDOW ticks —
+     * Int.MAX_VALUE while any of them is not closing in (the match is not a race yet). stachu3478#4 walks M10T40 and
+     * M5T40 to his flags from tick one and is on them by ~800; v31 put 850 into a pioneer at 542 and 550 into a second
+     * harvester, and struck at his escorts by his flags on "eta 88-97" while a swarm of nineteen gathered (6ab97594,
+     * 6ab96aed).
+     */
+    private fun hisDeliveryIn(w: World): Int {
+        if (deliveryAt == w.now) return deliveryVal
+        deliveryAt = w.now
+        deliveryVal = Int.MAX_VALUE
+        val flags = w.enemyFlags
+        if (flags.isEmpty() || w.enemyEscorts.isEmpty()) return deliveryVal
+        if (hisFlagField == null || w.now - hisFlagFieldAt >= DELIVERY_WINDOW) {
+            hisFlagField = DistanceMap.flowFieldToAny(flags.map { cell(it.x, it.y) }, emptyList(), 1); hisFlagFieldAt = w.now
+        }
+        val f = hisFlagField!!
+        var worst = 0
+        var racing = true
+        for (e in w.enemyEscorts) {
+            val d = f[key(e)].takeIf { it >= 0 } ?: flags.minOf { getRange(it, e) }
+            val q = hisDist.getOrPut(idOf(e)) { ArrayDeque() }
+            if (q.isEmpty() || w.now - q.last().first >= DELIVERY_SAMPLE) {
+                q.addLast(w.now to d)
+                while (q.size > DELIVERY_WINDOW / DELIVERY_SAMPLE + 1) q.removeFirst()
+            }
+            if (d == 0) continue
+            val (t0, d0) = q.first()
+            val span = w.now - t0
+            if (span < DELIVERY_SAMPLE || d0 - d <= 0) { racing = false; continue }
+            worst = maxOf(worst, d * span / (d0 - d))
+        }
+        if (racing) deliveryVal = worst
+        return deliveryVal
+    }
+
+    /** What an outpost gives back only after: the pioneer, the spawn and its two ramparts at one source's income, plus
+     *  the pioneer's walk. */
+    private fun pioneerPayback(w: World): Int {
+        val site = outpost?.spawnCell ?: return Int.MAX_VALUE
+        val walk = w.mySpawn?.let { getRange(it, cellOf(site)) } ?: 0
+        return (Bodies.cost(PIONEER) + SPAWN_BUILD_COST + 2 * RAMPART_BUILD_COST) / (SOURCE_ENERGY_REGEN + 1) + walk
     }
 
     /** Our block at tick one: the ramparts within two of the home spawn. */
@@ -2225,7 +2293,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally homeRound opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally homeRound deliveryClock opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
@@ -2266,6 +2334,7 @@ object EscortRunAdvanced {
             "haulers=${w.haulers.size} fighters=${w.fighters.size}(${w.fighters.joinToString(",") { Bodies.summaryOf(it) + at(it) + (if (originOf[idOf(it)] == "outpost") "o" else "") }}) " +
             "ours=${w.escorts.joinToString(" ") { "${at(it)}h${it.hits}" }} his=${w.enemyEscorts.joinToString(" ") { "${at(it)}h${it.hits}${if (onRampart(w, it, false)) "r" else ""}" }} " +
             "enemies=${w.enemies.filter { idOf(it) !in escortIds }.joinToString(",") { Bodies.summaryOf(it) + at(it) }} cpu=${getCpuTime() / 1_000_000}" +
+            (hisDeliveryIn(w).let { if (it == Int.MAX_VALUE) "" else " deliverIn=$it" }) +
             (if (lastStrikeWhy.isNotEmpty()) " strike?=$lastStrikeWhy" else ""))
         lastStrikeWhy = ""
     }
