@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 24
+const val BOT_VERSION = 25
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -399,6 +399,7 @@ object EscortRunAdvanced {
         // kerobii persona's M5A5 at 174 before our second harvester (264), 90 ticks of half a source (v21)
         val raceOn = w.enemyEscorts.any { !onRampart(w, it, false) && mobile(w, it) } && w.fighters.isEmpty()
         val puller = nextPuller(w)
+        replanOutpost(w)
         val pioneerOk = pioneerMayGo(w)
         var pullerFor: String? = null
         // under a raid the army cannot beat, the economy's creeps are not made: they step out into his fire. The stand's
@@ -421,8 +422,10 @@ object EscortRunAdvanced {
             // the convoy's pullers once home has its guard: M{need} per escort for the convoy's period
             puller != null -> { pullerFor = puller.second; puller.first }
             // the outpost's pioneer: the second economy
+            // it waits for two fighters at home, not for an army that beats all of his: against a bot that out-produces
+            // us (stachu3478, 1.6 times our income with OUR far source) that gate never opened and the pioneer never went
             outpost != null && w.outpostSpawn == null && w.pioneers.isEmpty() && pioneersSent < PIONEER_TRIES &&
-                w.fighters.size >= 2 && armyAdequate(w) && pioneerOk -> PIONEER
+                w.fighters.size >= 2 && pioneerOk -> PIONEER
             else -> nextFighter(w)
         }
         if (energy(w) < Bodies.cost(order)) return
@@ -779,15 +782,15 @@ object EscortRunAdvanced {
      * edge, round the centre), and the harvester on it adds ten a tick. The spawn's cell is taken as in Spawn and Swamp
      * advanced: two from the source, with the most cells beside both, not swamp, the nearer to our flags.
      */
-    private fun planOutpost(w: World) {
+    private fun planOutpost(w: World, skip: Set<Int> = emptySet()) {
         val my = w.mySpawn ?: return
         val his = w.enemySpawn
         val flags = w.myFlags
         if (flags.isEmpty()) return
         val sources = getObjectsByPrototype(Source::class).filter { s ->
-            s.exists && getRange(s, my) > 20 && (his == null || getRange(s, his) > 20)
+            s.exists && getRange(s, my) > 20 && (his == null || getRange(s, his) > 20) && key(s) !in skip
         }
-        val src = sources.minByOrNull { s -> flags.minOf { getRange(it, s) } } ?: return
+        val src = sources.minByOrNull { s -> flags.minOf { getRange(it, s) } } ?: run { outpost = null; println("outpost: none left"); return }
         var best: Outpost? = null
         var bestScore = Int.MIN_VALUE
         for (dx in -2..2) for (dy in -2..2) {
@@ -814,6 +817,35 @@ object EscortRunAdvanced {
     }
 
     private fun rampartAt(k: Int) = getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
+
+    /** Far sources he has taken: we move our outpost off them before the pioneer walks into his tower. */
+    private val takenSources = HashSet<Int>()
+
+    /**
+     * His economy lives on the outpost's source: a worker of his beside it, or a structure or site of his within three.
+     * stachu3478#1 builds by (96,24) from EITHER side — as the bottom player next to OUR flag — with a worker there by
+     * ~335, a rampart at 381 and a tower at 722; v25's first draft sent our pioneer there at 669 and it stood at home the
+     * rest of the match, no way past his tower (stand, stachu1 top). The other far source he leaves alone.
+     */
+    private fun sourceTaken(w: World, src: Int): Boolean {
+        val c = cellOf(src)
+        if (w.enemies.any { Bodies.isWorker(it) && getRange(it, c) <= 2 }) return true
+        val his = getObjectsByPrototype(StructureSpawn::class).filter { it.exists && it.my == false } +
+            getObjectsByPrototype(StructureTower::class).filter { it.exists && it.my == false } +
+            getObjectsByPrototype(StructureRampart::class).filter { it.exists && it.my == false } +
+            getObjectsByPrototype(StructureExtension::class).filter { it.exists && it.my == false } +
+            getObjectsByPrototype(ConstructionSite::class).filter { it.exists && it.my == false }
+        return his.any { getRange(it, c) <= 3 }
+    }
+
+    /** Before our spawn stands there, a taken source gives our outpost up for the next one. */
+    private fun replanOutpost(w: World) {
+        val op = outpost ?: return
+        if (w.outpostSpawn != null || !sourceTaken(w, op.source)) return
+        takenSources.add(op.source)
+        println("outpost t=${w.now}: source ${at(cellOf(op.source))} is his — replanning")
+        planOutpost(w, takenSources)
+    }
 
     private val pioneerSeen = HashMap<String, Int>()
     private var pioneerLostAt = -1
@@ -2001,7 +2033,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
