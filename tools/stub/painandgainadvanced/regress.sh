@@ -163,7 +163,10 @@ rival map-live2.txt p2 line 5000
 # 14-15 of ours alive: it waits under its tower (FIGHT t=136) instead of walking out to meet him. 9465b v19 lost (291):
 # our fatigue flag taken at t=61 halved the heavies' march, he caught its tail at the fortress pocket's mouth; `chase`
 # on it destroys v19 at t=338 and loses to v20 (the flag waits for the army to hold) at t=401, 13 of ours alive
-for g in 6ab9349f22f112830c18f0b5 6ab93d0422f1120c3418f22c 6ab916f5064dc963c9aaabc0 6ab9465b22f1123ac118f3f5; do
+# 94ce2 and 94cef: v20's first cut lost both (300 ticks) — its second puller, waiting unguarded by our fatigue flag, drew
+# him south for a hundred ticks, and he came back onto our army standing in a column (`chase` walks at the nearest
+# creep of ours, pullers included, since)
+for g in 6ab9349f22f112830c18f0b5 6ab93d0422f1120c3418f22c 6ab916f5064dc963c9aaabc0 6ab9465b22f1123ac118f3f5 6ab94ce222f112071318f589 6ab94cef22f112e5e418f58d; do
   rival replay:$g - chase 5000
   rival replay:$g - ghost 5000
 done

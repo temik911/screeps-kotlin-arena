@@ -1,6 +1,6 @@
 #!/bin/zsh
-# ab.sh <bundle A | -> <bundle B | -> ["scenarios"] — two builds of the bot on the eleven records of the rival suite
-# (seven of stachu3478#5, four of Hardy#3), BOTH sides of each map (US= flips the side we drive), each scenario
+# ab.sh <bundle A | -> <bundle B | -> ["scenarios"] — two builds of the bot on the thirteen records of the rival suite
+# (seven of stachu3478#5, six of Hardy#3), BOTH sides of each map (US= flips the side we drive), each scenario
 # (default "chase line"); one line per run and a TOTAL per build: wins by annihilation (W), losses (L), wins on the
 # score (S), and the hits each side lost 100 ticks after contact, summed.
 #
@@ -17,7 +17,7 @@ export NODE_OPTIONS="${STUB_NODE_FLAGS---max-semi-space-size=2 --max-old-space-s
 A=$1; B=$2; SC=(${=${3:-chase line}})
 typeset -A opp
 for r in 6ab91898 6ab91924 6ab919a7 6ab91a90 6ab91b4b 6ab91b62 6ab930ac; do opp[$r]=stachu3478; done
-for r in 6ab9349f 6ab93d04 6ab916f5 6ab9465b; do opp[$r]=Hardy; done
+for r in 6ab9349f 6ab93d04 6ab916f5 6ab9465b 6ab94ce2 6ab94cef; do opp[$r]=Hardy; done
 for lab in A B; do
   bun=${(P)lab}; w=0; l=0; d=0; o=0; h=0
   for s in $SC; do for r in ${(ok)opp}; do for us in temik911 ${opp[$r]}; do

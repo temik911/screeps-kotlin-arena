@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 20
+const val BOT_VERSION = 21
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -508,14 +508,21 @@ object PainAndGainAdvanced {
         // (t=219, killing his heavy melee by t=250); in the three losses it stood and he arrived formed
         val head = foes.filter { e -> group.any { Grid.range(it.x, it.y, e.x, e.y) <= LOCAL_R } }
         val local = Duel(group, head.ifEmpty { foes }, ourFx, theirFx, towerDpsAt(ourFedTowers(), cx, cy), towerDpsAt(theirTowers(), cx, cy))
+        // at the fortress the army forms when he comes, not when he strikes: it stood as it had arrived, and in the two
+        // live losses of v20's first cut that was a column along the tower's wall — Hardy#3 came onto its end, his
+        // melee swung 40-59 times in 75 ticks to our 18-24. Formed as soon as any of his armed is within ZONE_R (melee
+        // at our front's range, ranged a cell behind, healers by the hurt), it neither closes nor gives ground; on
+        // the rival records, both sides, 40 won, 1 lost, 3 on the score against 33, 3 and 8 standing as it came
+        val atFortress = fighter && !swept && fortressNear(cx, cy)
         val want = when {
+            near.isEmpty() && atFortress && zone.any { it.armed } && !breakingOff -> Mode.STAND
             near.isEmpty() -> null
             breakingOff -> null
             engaged -> Mode.FIGHT
             // at the fortress the fight is contact only: Hardy#3 twice drew v17-v18 out into the corridor — the duel
             // over what was within fourteen (a scout, his army still behind the wall) said fight at t=110, and the
             // army walked into his whole army 8-15 cells from our tower, 15 lost for 6 by t=171
-            fighter && !swept && !nearUnderTower(near) -> null
+            fighter && !swept && !nearUnderTower(near) -> if (atFortress) Mode.STAND else null
             swept && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             head.size < zone.size && local.ratio >= INITIATIVE_RATIO && !fighter -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
