@@ -27,11 +27,16 @@ import screeps.api.structures.StructureRampart
  *    ближайшей к их эскорту;
  *  - `plug` — строитель W1C4M4 (500) берёт 200 энергии из контейнера у правого края и ставит НАШ рампарт на клетку
  *    чужого флага: рампарт пропускает только владельца и строится под крипом, поэтому их хранитель на флаге стройке
- *    не мешает, а их эскорт на флаг больше не войдёт.
+ *    не мешает, а их эскорт на флаг больше не войдёт;
+ *  - `choke` — M1 ПОСЛЕ дебюта встаёт на клетку впереди их поезда, где обход дороже всего (болото вокруг узкого
+ *    прохода), и туда, куда успевает раньше поезда; когда поезд обошёл — перебегает на следующую (M1 ходит клетку в
+ *    тик, поезд — в два). Замер по 120 маршрутам: один такой крип стоит поезду медианно 18 тиков, два — 36.
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("squat", "plug")
+    private val ORDER = listOf("squat", "plug", "choke")
+    /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
+    private val LATE = setOf("choke")
     private const val RAMPART_COST = 200
     private const val BUILD_RANGE = 3
 
@@ -62,16 +67,16 @@ internal object RedTeam {
     }
 
     private fun bodyOf(trick: String): Array<BodyPartType> = when (trick) {
-        "squat" -> arrayOf(MOVE)
+        "squat", "choke" -> arrayOf(MOVE)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
 
-    /** true — спавн занят приёмом в этот тик (заказал или копит на него): основная логика ждёт. */
-    fun spawn(w: EscortRun.World, energy: Int): Boolean {
+    /** true — спавн занят приёмом в этот тик (заказал или копит на него): основная логика ждёт. [late] — после дебюта. */
+    fun spawn(w: EscortRun.World, energy: Int, late: Boolean): Boolean {
         if (tricks.isEmpty() || pendingBody != null) return false
         for (t in ORDER) {
-            if (t !in tricks || t in ordered) continue
+            if (t !in tricks || t in ordered || (t in LATE) != late) continue
             val body = bodyOf(t)
             if (energy < Bodies.cost(body)) return true
             if (EscortRun.order(w, body, "red:$t", "persona ${describe()}")) {
@@ -92,6 +97,7 @@ internal object RedTeam {
             when (trick) {
                 "squat" -> squat(w, c)
                 "plug" -> plug(w, c)
+                "choke" -> choke(w, c)
             }
         }
     }
@@ -153,6 +159,109 @@ internal object RedTeam {
         }
         val r = c.build(site)
         log(w, c, "plug", "build ${site.progress}/${site.progressTotal} r=$r e=$carried")
+    }
+
+    // ---------- choke ----------
+
+    private var chokeTarget = -1
+    private var chokeAt = -1
+
+    private fun cost(k: Int) = if (DistanceMap.isSwamp(k / 100, k % 100)) 10 else 2
+
+    /** Клетки пути по полю от `from` (не включая) до цели — спуском по убыванию. */
+    private fun route(flow: IntArray, from: Position): List<Int> {
+        val out = ArrayList<Int>()
+        var cell = from.x * 100 + from.y
+        var guard = 0
+        while (flow[cell] > 0 && guard++ < 400) {
+            val cx = cell / 100; val cy = cell % 100
+            var best = -1
+            var bestD = flow[cell]
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val x = cx + dx; val y = cy + dy
+                if (!DistanceMap.inBounds(x, y)) continue
+                val d = flow[x * 100 + y]
+                if (d in 0 until bestD) { bestD = d; best = x * 100 + y }
+            }
+            if (best < 0) break
+            out.add(best)
+            cell = best
+        }
+        return out
+    }
+
+    /**
+     * Цена обхода клетки route[i] поездом (равнина 2, болото 10): кратчайший путь в окне 11×11 от route[i-1] до одной из
+     * route[i+1..i+4] в обход route[i] против того же отрезка по маршруту. Нет обхода в окне — 60.
+     */
+    private fun penalty(route: List<Int>, i: Int, prev: Int): Int {
+        val c = route[i]
+        val cx = c / 100; val cy = c % 100
+        val r = 5
+        val dist = HashMap<Int, Int>()
+        val pq = ArrayList<Pair<Int, Int>>()
+        dist[prev] = 0; pq.add(0 to prev)
+        while (pq.isNotEmpty()) {
+            var bi = 0
+            for (j in pq.indices) if (pq[j].first < pq[bi].first) bi = j
+            val (d, k) = pq.removeAt(bi)
+            if (d > (dist[k] ?: Int.MAX_VALUE)) continue
+            val kx = k / 100; val ky = k % 100
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val x = kx + dx; val y = ky + dy
+                if (kotlin.math.abs(x - cx) > r || kotlin.math.abs(y - cy) > r) continue
+                if (DistanceMap.isWall(x, y)) continue
+                val n = x * 100 + y
+                if (n == c) continue
+                val nd = d + cost(n)
+                if (nd < (dist[n] ?: Int.MAX_VALUE)) { dist[n] = nd; pq.add(nd to n) }
+            }
+        }
+        var best = 60
+        var along = cost(c)
+        for (k in 1..4) {
+            if (i + k >= route.size) break
+            along += cost(route[i + k])
+            val d = dist[route[i + k]] ?: continue
+            best = minOf(best, d - along)
+        }
+        return maxOf(0, best)
+    }
+
+    private fun choke(w: EscortRun.World, c: Creep) {
+        val esc = w.enemyEscort ?: return
+        val flow = w.enemyEscortFlow ?: return
+        val theirRoute = route(flow, esc)
+        if (theirRoute.size < 3) { log(w, c, "choke", "their route ${theirRoute.size}"); return }
+        val ahead = theirRoute.toHashSet()
+        val stale = chokeTarget < 0 || chokeTarget !in ahead || w.now - chokeAt >= 5
+        if (stale) {
+            val ourRoute = w.escort?.let { e -> w.escortFlow?.let { route(it, e).toHashSet() } } ?: HashSet()
+            val flag = w.enemyFlag
+            var best = -1; var bestPen = 0; var bestEta = 0
+            var theirEta = 0
+            var prev = esc.x * 100 + esc.y
+            for (i in theirRoute.indices) {
+                val k = theirRoute[i]
+                theirEta += cost(k)
+                val kx = k / 100; val ky = k % 100
+                val ourEta = getRange(c, pos(kx, ky)) * 6 / 5 + 3
+                if (i >= 1 && ourEta < theirEta && k !in ourRoute && !(flag != null && kx == flag.x && ky == flag.y)) {
+                    val p = penalty(theirRoute, i, prev)
+                    if (p > bestPen || (p == bestPen && p > 0 && theirEta < bestEta)) { best = k; bestPen = p; bestEta = theirEta }
+                }
+                prev = k
+            }
+            if (best != chokeTarget) println("red t=${w.now} choke: target ${if (best < 0) "none" else "(${best / 100},${best % 100}) pen=$bestPen theirEta=$bestEta"}")
+            chokeTarget = best; chokeAt = w.now
+        }
+        if (chokeTarget < 0) { log(w, c, "choke", "no target"); return }
+        val tx = chokeTarget / 100; val ty = chokeTarget % 100
+        if (c.x == tx && c.y == ty) { log(w, c, "choke", "on ($tx,$ty)"); return }
+        EscortRun.stepRed(w, c, pos(tx, ty), 0)
+        log(w, c, "choke", "to ($tx,$ty)")
     }
 
     private fun pos(x: Int, y: Int): Position = js("({})").unsafeCast<Position>().also { it.asDynamic().x = x; it.asDynamic().y = y }

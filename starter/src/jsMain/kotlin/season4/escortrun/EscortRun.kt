@@ -451,7 +451,7 @@ object EscortRun {
         if (spawn.spawning != null) return
         val e = energyOf(w)
         val escort = w.escort
-        if (RedTeam.spawn(w, e)) return
+        if (RedTeam.spawn(w, e, late = false)) return
 
         // 1. дебют: тягачи по прогону. (v16-v17 меняли против «экономиста» второго тягача на охрану поезда: stachu3478
         //    это било в трёх из пяти, но けろびー — тоже экономист по первому заказу, без раннего бойца, — его M5A1 со
@@ -465,6 +465,8 @@ object EscortRun {
             } else saving(w, "opening puller", Bodies.cost(body))
             return
         }
+
+        if (RedTeam.spawn(w, e, late = true)) return
 
         val ours = ourArrival(w)
         val theirs = theirArrival(w)
