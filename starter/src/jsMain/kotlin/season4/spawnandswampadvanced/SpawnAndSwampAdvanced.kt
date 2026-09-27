@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v14"
+    private const val BOT_VERSION = "v15"
 
     private const val LOG_EVERY = 50
 
@@ -927,21 +927,9 @@ object SpawnAndSwampAdvanced {
         } else if (haveWork < needWork && freeSlots > 0) {
             body = workerBody(needWork - haveWork, energy)
             why = "work $haveWork/$needWork"
-        } else if (b === bases.first() && threat.isEmpty() && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
+        } else if (b === bases.first() && threat.isEmpty() && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
             return
-        } else if (bases.size == 1 && expansion == null && builderId == null && !builderPending && fighters.isNotEmpty() &&
-            threat.isEmpty() && b === bases.first() && (vault == null || vault?.stage == "run")) {
-            body = builderBody()
-            if (energy < costOf(body)) return
-            val target = expansionTarget(spawn, getObjectsByPrototype(Source::class), getObjects())
-                ?.takeIf { worksiteSafe(listOf(it.spawnCell)) } ?: run {
-                return spawnFighter(t, spawn, energy, why = "army")
-            }
-            val r = spawn.spawnCreep(body)
-            val c = r.`object`
-            println("spawn t=$t ${bodyText(body)} cost=${costOf(body)} energy=$energy why=expansion to (${target.spawnCell.x},${target.spawnCell.y}) err=${r.error}")
-            if (r.error == null) { builderPending = true; expansion = target; expansionPlaced = false }
-            println("spawn object id=${c?.let { idOf(it) }}")
+        } else if (b === bases.first() && threat.isEmpty() && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
@@ -949,6 +937,31 @@ object SpawnAndSwampAdvanced {
         if (energy < costOf(body)) return
         val r = spawn.spawnCreep(body)
         println("spawn t=$t ${bodyText(body)} cost=${costOf(body)} energy=$energy why=$why err=${r.error}")
+    }
+
+    /**
+     * Строитель следующего спавна — раньше сейфа и независимо от него: источник даёт 10 в тик до конца матча, с 400-го
+     * тика это ~46000, а сейф — 10000 один раз. v14 ждал «работающего» сейфа, сейф застрял под бойцами stachu3478, и
+     * второй спавн не встал ни разу за две ничьи. Цели — все «наши» источники по очереди, пока они есть и место работ
+     * свободно от его бойцов. Возвращает, занят ли спавн (копит на строителя или заказал его).
+     */
+    private var expansionPlanAt = -1000
+    private var expansionPlan: Base? = null
+
+    private fun expansionOrder(t: Int, spawn: StructureSpawn, energy: Int): Boolean {
+        if (expansion != null || builderId != null || builderPending) return false
+        if (t - expansionPlanAt >= LOG_EVERY) {
+            expansionPlanAt = t
+            expansionPlan = expansionTarget(spawn, getObjectsByPrototype(Source::class), getObjects())
+        }
+        val target = expansionPlan ?: return false
+        if (!worksiteSafe(listOf(target.spawnCell))) return false
+        val body = builderBody()
+        if (energy < costOf(body)) return true
+        val r = spawn.spawnCreep(body)
+        println("spawn t=$t ${bodyText(body)} cost=${costOf(body)} energy=$energy why=expansion to (${target.spawnCell.x},${target.spawnCell.y}) err=${r.error}")
+        if (r.error == null) { builderPending = true; expansion = target; expansionPlaced = false; expansionPlan = null; expansionPlanAt = -1000 }
+        return true
     }
 
     /** Заказ для сейфа: пробойщик, пока стена цела; строитель — когда пролом готов или откроется раньше, чем
