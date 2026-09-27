@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 174
+    private const val BOT_VERSION = 175
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6395,6 +6395,9 @@ object SpawnAndSwamp {
     /** Arm at the door only when the house loses there; a striking raider holds its cell; a keeper without WORK is none
      *  while no tower stands; the raid's re-buys survive a closed window (v174). */
     private const val USE_HOUSE_FIRST = true
+    /** The last-stand pair is re-bought with any number of his spawns; a raider walks to a free cell next to its target
+     *  (v175). */
+    private const val USE_RAID_ALL_SPAWNS = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6487,7 +6490,10 @@ object SpawnAndSwamp {
         // main, and nobody struck it: the pair was re-bought only for a new builder, and there was none. It is bought while
         // what is left of the match covers the pair's birth, its walk and the kill
         if (USE_RAID_LAST && (raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil())) &&
-            raidAlive(ctx) < RAID_SIZE && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
+            // …with any number of his spawns (v175): the clock below already sums them all. With three his count never let
+            // the pair be re-bought — in v174 against kerobi his spawns at 3 and no builder of his meant 0 wins, a loss and
+            // five draws, while his main stood free of his guns for 758-931 ticks in a row and his bare spawns for 604-1266
+            raidAlive(ctx) < RAID_SIZE && (if (USE_RAID_ALL_SPAWNS) ctx.enemySpawns.isNotEmpty() else ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS) &&
             ctx.enemyCreeps.none { isHisBuilder(it) }) {
             // the walk ends NEXT to his spawn (v167): its own cell is blocked, the field there is -1, and v161-v166 read the
             // walk as "never" in every game — no `raid last` line in any log, the rule had never run
@@ -6686,7 +6692,24 @@ object SpawnAndSwamp {
                     SearchPathOptions(flee = true, costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)).path.firstOrNull()
                 if (away != null) TrafficManager.request(r, away, HAULER_LOADED_PRIORITY)
             } else if (getRange(r, goal) > range && canMove(r)) {
-                val step = searchPath(r, SearchGoal(pos = goal, range = range), opts).path.firstOrNull()
+                // …to a FREE cell next to the target (v175): the path ignores our creeps, its first step led into the cell the
+                // striking mate holds since v174, and the second raider stood at range 2 beside seven free cells (223 raider-
+                // ticks, ~20000 of damage in v174's games against kerobi)
+                val freeNext: Position? = if (!USE_RAID_ALL_SPAWNS || go == null || range != 1) null else run {
+                    val taken = ctx.myCreeps.filter { it.id != r.id }.mapTo(HashSet()) { it.x * 100 + it.y }
+                    var best: Position? = null
+                    for (dx in -1..1) for (dy in -1..1) {
+                        val x = goal.x + dx
+                        val y = goal.y + dy
+                        if ((dx == 0 && dy == 0) || x < 0 || y < 0 || x > 99 || y > 99 || (x * 100 + y) in taken) continue
+                        val cell = InfluenceMap.cell(x, y)
+                        if (getTerrainAt(cell) == TERRAIN_WALL || ctx.blocked.any { it.x == x && it.y == y }) continue
+                        if (best == null || getRange(r, cell) < getRange(r, best)) best = cell
+                    }
+                    best
+                }
+                val step = if (freeNext != null) searchPath(r, SearchGoal(pos = freeNext, range = 0), opts).path.firstOrNull()
+                    else searchPath(r, SearchGoal(pos = goal, range = range), opts).path.firstOrNull()
                 if (step != null) TrafficManager.request(r, step, HAULER_LOADED_PRIORITY)
             }
         }
