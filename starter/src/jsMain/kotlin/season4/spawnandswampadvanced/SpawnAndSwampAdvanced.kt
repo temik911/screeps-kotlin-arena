@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v36"
+    private const val BOT_VERSION = "v37"
 
     private const val LOG_EVERY = 50
 
@@ -572,7 +572,13 @@ object SpawnAndSwampAdvanced {
                     val wo = wallObject(v, all)
                     val out = v.outside
                     if (wo == null || out == null) { roleOf.remove(idOf(c)); continue }
-                    if (getRange(c, wo) > 1) go(c, cell(out)) else c.attack(wo)
+                    // последний удар — только при строителе сейфа у пролома: пролом, открытый до его прихода, — это его
+                    // сейф (stachu3478 выносил наш карман носильщиками, пока пролом стоял открытым без строителя сотни тиков)
+                    val hit = liveParts(c, ATTACK) * ATTACK_POWER
+                    val left = wo.asDynamic().hits.unsafeCast<Int>()
+                    val builderNear = mine.any { roleOf[idOf(it)] == v.builderRole && !it.spawning && cheb(posOf(it), out) <= 3 }
+                    if (getRange(c, wo) > 1) go(c, cell(out))
+                    else if (left > 2 * hit || builderNear) c.attack(wo)
                 }
                 role.startsWith("vaultBuilder:") -> runVaultBuilder(t, c, v, all, mySites, mySpawns)
             }
@@ -1148,9 +1154,11 @@ object SpawnAndSwampAdvanced {
         // расширение и сейф — и под угрозой, если дом её держит (место работ проверяет свою безопасность само): v22
         // проиграл stachu3478 при двух источниках против его пяти — его харассеры у нашей базы держали «угрозу»
         // постоянно, и после второго спавна на 862-м мы не расширились ни разу
-        } else if (b === bases.first() && homeHolds && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
-            return
+        // сейф раньше расширения: его 10000 заберёт тот, кто вскроет первым (stachu3478 вынес наш карман к ~1000-му, пока
+        // v36 строил сначала второй спавн), а источник подождёт
         } else if (homeHolds && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
+            return
+        } else if (b === bases.first() && homeHolds && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
