@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v25"
+    private const val BOT_VERSION = "v26"
 
     private const val LOG_EVERY = 50
 
@@ -1145,8 +1145,8 @@ object SpawnAndSwampAdvanced {
         return List(k) { i -> val types = recent[i % recent.size].second; SimUnit(types, types.size * 100) }
     }
 
-    private fun calibStart(t: Int, kind: String, ours: List<Creep>, theirs: List<Creep>, r: SimResult) {
-        calibEnd(t, "superseded", emptyMap())
+    private fun calibStart(t: Int, kind: String, ours: List<Creep>, theirs: List<Creep>, r: SimResult, byId: Map<String, GameObject>) {
+        calibEnd(t, "superseded", byId)
         calib = Calib(kind, t, ours.map { idOf(it) }.toSet(), theirs.map { idOf(it) }.toSet(),
             ours.sumOf { it.hits }, theirs.sumOf { it.hits }, r.keep, r.win)
     }
@@ -1328,7 +1328,7 @@ object SpawnAndSwampAdvanced {
         if ((threats.isEmpty() || lastCall) && homeGroup.isNotEmpty() && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
             val r = simulate(homeGroup.map { simOf(it) }, enemyAtArrival)
             if ((r.win && r.keep >= PUSH_KEEP) || lastCall) {
-                calibStart(t, "push", homeGroup, enemyCombat, r)
+                calibStart(t, "push", homeGroup, enemyCombat, r, byId)
                 for (f in homeGroup) wave.add(idOf(f))
                 println("push t=$t wave=${wave.size} home=${homeGroup.size} vs ${enemyAtArrival.size} (army ${enemyCombat.size} towers ${fedTowers.size}+$pending arrival=$arrival) " +
                     "sim keep=${(r.keep * 100).toInt()}% ticks=${r.ticks}${if (lastCall) " lastCall" else ""}")
@@ -1353,7 +1353,7 @@ object SpawnAndSwampAdvanced {
                 val local = (guards + nearUs).map { simOf(it) } + births + towersNear.map { simTowerOf(it, all) } + simSpawnOf(sp, all)
                 val rs = simulate(homeGroup.map { simOf(it) }, local)
                 if (rs.win && rs.keep >= PUSH_KEEP) {
-                    calibStart(t, "strike", homeGroup, guards + nearUs, rs)
+                    calibStart(t, "strike", homeGroup, guards + nearUs, rs, byId)
                     for (f in homeGroup) wave.add(idOf(f))
                     println("strike t=$t wave=${wave.size} at spawn (${sp.x},${sp.y}) guards=${guards.size} births=${births.size} towers=${towersNear.size} " +
                         "arrival=$toSp sim keep=${(rs.keep * 100).toInt()}% (whole army: ${(r.keep * 100).toInt()}% win=${r.win})")
