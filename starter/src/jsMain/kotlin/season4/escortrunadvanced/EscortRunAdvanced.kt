@@ -21,6 +21,8 @@ import screeps.api.Creep
 import screeps.api.Flag
 import screeps.api.GameObject
 import screeps.api.HEAL
+import screeps.api.HEAL_POWER
+import screeps.api.RANGED_HEAL_POWER
 import screeps.api.MOVE
 import screeps.api.Position
 import screeps.api.RANGED_ATTACK
@@ -50,7 +52,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 37
+const val BOT_VERSION = 38
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -770,7 +772,10 @@ object EscortRunAdvanced {
         for ((i, pair) in list.withIndex()) {
             val (kind, k) = pair
             if (builtAt(k, kind)) continue
-            if (!worksGate(kind, i, w)) return
+            // a closed gate skips its work, it does not stop the queue: the extension's gate (an adequate army) closes
+            // exactly when the tower's (attacked, army not adequate) opens, and v36 never built its tower in two sieges
+            // of stachu3478#2 behind the extension (3,4) (6ab97f20, 6ab984a3)
+            if (!worksGate(kind, i, w)) continue
             val r = when (kind) {
                 "tower" -> createConstructionSite(k / 100, k % 100, StructureTower::class.js)
                 "extension" -> createConstructionSite(k / 100, k % 100, StructureExtension::class.js)
@@ -822,9 +827,35 @@ object EscortRunAdvanced {
     }
 
     /** Towers fire at the nearest armed enemy in range (the damage falls 50 a cell), the weakest of equals; else heal. */
+    /** The creep of his our volley kills this tick (or comes nearest to killing): its towers ready, our ranged within
+     *  three, our melee beside it, against its hits and the healing his healers beside (12 a part) and within three (4 a
+     *  part) can give it. v36 spread its fire — each tower on the nearest, each ranged on the weakest in its own reach —
+     *  and his healers took back 89-96 % of 70k-200k damage a match (stachu3478#2, 6ab97f20, 6ab981b5, 6ab984a3). */
+    private fun chooseVolley(w: World): String? {
+        val towers = getObjectsByPrototype(StructureTower::class).filter { it.exists && it.my == true && (it.store[RESOURCE_ENERGY] ?: 0) >= TOWER_ENERGY_COST && it.cooldown == 0 }
+        val shooters = w.fighters.filter { !it.spawning }
+        var best: Creep? = null
+        var bestScore = Int.MIN_VALUE
+        for (e in w.enemyArmed) {
+            val volley = shooters.sumOf { f -> (if (getRange(f, e) <= 1) Bodies.meleeDps(f) else 0) + (if (getRange(f, e) <= 3) Bodies.rangedDps(f) else 0) } +
+                towers.sumOf { t -> getRange(t, e).let { r -> if (r > TOWER_RANGE) 0 else maxOf(0, TOWER_POWER_ATTACK - TOWER_FALL * (maxOf(1, r) - 1)) } }
+            if (volley <= 0) continue
+            val heal = w.enemies.sumOf { h -> getRange(h, e).let { r -> when { r <= 1 -> Bodies.live(h, HEAL) * HEAL_POWER; r <= 3 -> Bodies.live(h, HEAL) * RANGED_HEAL_POWER; else -> 0 } } }
+            val score = volley - heal - e.hits
+            if (score > bestScore) { bestScore = score; best = e }
+        }
+        return best?.let { idOf(it) }
+    }
+
+    /** This tick's volley target (chooseVolley). */
+    private var volleyTarget: String? = null
+
     private fun runTowers(w: World) {
+        volleyTarget = chooseVolley(w)
         for (tw in getObjectsByPrototype(StructureTower::class).filter { it.exists && it.my == true }) {
             if ((tw.store[RESOURCE_ENERGY] ?: 0) < TOWER_ENERGY_COST || tw.cooldown > 0) continue
+            val volley = volleyTarget?.let { id -> w.enemies.firstOrNull { idOf(it) == id && getRange(tw, it) <= TOWER_RANGE } }
+            if (volley != null) { tw.attack(volley); continue }
             val foe = w.enemies.filter { getRange(tw, it) <= TOWER_RANGE }
                 .sortedWith(compareBy<Creep>({ if (Bodies.isArmed(it) || idOf(it) in escortIds) 0 else 1 }, { getRange(tw, it) }, { it.hits })).firstOrNull()
             if (foe != null) { tw.attack(foe); continue }
@@ -883,6 +914,12 @@ object EscortRunAdvanced {
         println("sources: " + getObjectsByPrototype(Source::class).filter { it.exists }.joinToString(" ") { "${at(it)}=${it.energy}/${it.energyCapacity}" })
         // probe: may a rampart of ours stand on HIS flag? A rampart is a wall to his creeps, and his escort must stand on
         // the flag's cell — the site is laid and removed at once, only its answer is kept
+        w.mySpawn?.let { sp ->
+            val corner = cell(sp.x - 2, sp.y - 2)
+            val r = createConstructionSite(corner.x, corner.y, StructureTower::class.js)
+            r.`object`?.remove()
+            println("probe towerUnderRampart: ${at(corner)}=${r.error ?: "ok"}")
+        }
         println("probe flagSite: " + w.enemyFlags.joinToString(" ") { f ->
             val r = createConstructionSite(f.x, f.y, StructureRampart::class.js)
             r.`object`?.remove()
@@ -2331,6 +2368,29 @@ object EscortRunAdvanced {
         return w.myRamparts.filter { k -> getRange(cellOf(k), base) <= HOME_RADIUS && (op == null || (k != op.spawnCell && k !in op.slots)) }
     }
 
+    /** Each defender's rampart, kept from tick to tick. */
+    private val heldCell = HashMap<String, Int>()
+
+    /** The next cell toward `target` over our ramparts only (8-connected), or null when no rampart way leads there. */
+    private fun rampartStep(w: World, f: Creep, target: Int): Position? {
+        val dist = HashMap<Int, Int>()
+        val q = ArrayDeque<Int>()
+        dist[target] = 0; q.addLast(target)
+        while (q.isNotEmpty()) {
+            val k = q.removeFirst()
+            if (k == key(f)) break
+            for ((dx, dy) in DIRECTIONS) {
+                val nk = (k / 100 + dx) * 100 + (k % 100 + dy)
+                if (nk in dist || nk !in w.myRamparts) continue
+                dist[nk] = dist[k]!! + 1; q.addLast(nk)
+            }
+        }
+        val here = dist[key(f)] ?: return null
+        return DIRECTIONS.map { (dx, dy) -> (f.x + dx) * 100 + (f.y + dy) }
+            .filter { k -> (dist[k] ?: Int.MAX_VALUE) < here && w.occupant[k]?.let { o -> o.my && idOf(o) !in escortIds && idOf(o) !in pinned } != false }
+            .minByOrNull { dist[it]!! }?.let { cellOf(it) }
+    }
+
     private fun holdRamparts(w: World, fighters: List<Creep>, threats: List<Creep>, base: Position?): Set<String>? {
         if (threats.isEmpty() || fighters.isEmpty() || base == null) return null
         // his whole group, not the part inside our radius: every fighter of his within SALLY_LINK of one already counted
@@ -2366,11 +2426,19 @@ object EscortRunAdvanced {
         fun near(k: Int) = threats.minOf { getRange(it, cellOf(k)) }
         for (f in fighters.sortedByDescending { Bodies.meleeDps(it) }) {
             val want = if (Bodies.isMelee(f)) 1 else 3
-            val cell = cells.filter { it !in taken }
+            // a defender keeps its rampart while a threat is in its reach there: v36's greedy re-choice every tick sent
+            // defenders from rampart to rampart across the cells outside — 102-297 such steps a match, 44 fighters dead
+            // outside a living rampart of ours against stachu3478#2 (6ab97f20, 6ab981b5, 6ab984a3)
+            val kept = heldCell[idOf(f)]?.takeIf { it in cells && it !in taken && near(it) <= want }
+            val cell = kept ?: cells.filter { it !in taken }
                 .minWithOrNull(compareBy<Int>({ maxOf(0, near(it) - want) }, { getRange(cellOf(it), f) })) ?: continue
             taken.add(cell)
             placed.add(idOf(f))
-            if (key(f) != cell) step(w, f, cellOf(cell), 0)
+            heldCell[idOf(f)] = cell
+            if (key(f) == cell) { pinned.add(idOf(f)); continue }
+            // on a rampart it walks on ramparts only; off them it comes by the plain way
+            if (key(f) in w.myRamparts) rampartStep(w, f, cell)?.let { TrafficManager.request(f, it, FIGHTER_PRIORITY) }
+            else step(w, f, cellOf(cell), 0)
         }
         return placed
     }
@@ -2436,6 +2504,7 @@ object EscortRunAdvanced {
         // the fire order the operation was weighed with: a race puts the target first, a clearing puts his armed first
         val clearing = g.inOp && g.plan == "clear"
         fun rank(e: Creep): Int = when {
+            !g.inOp && idOf(e) == volleyTarget -> -1
             clearing && Bodies.isArmed(e) -> 0
             target != null && idOf(e) == modeTarget -> 1
             idOf(e) in escortIds -> 2
@@ -2456,7 +2525,8 @@ object EscortRunAdvanced {
             val mass = inRange.filter { !onRampart(w, it, false) }.sumOf { when (getRange(it, f)) { 0, 1 -> 10; 2 -> 4; else -> 1 }.toInt() }
             val best = inRange.sortedWith(compareBy({ rank(it) }, { it.hits })).firstOrNull()
             val targetFar = target != null && best != null && idOf(best) == modeTarget && getRange(best, f) > 1
-            if (mass > 10 && !targetFar) f.rangedMassAttack()
+            val volleyHere = !g.inOp && best != null && idOf(best) == volleyTarget
+            if (mass > 10 && !targetFar && !volleyHere) f.rangedMassAttack()
             else if (best != null) f.rangedAttack(best)
         }
         if (Bodies.live(f, HEAL) > 0) {
@@ -2470,7 +2540,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally homeRound deliveryClock denyFlag=ifOut convoyTowers hisKill=duel kiters opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally homeRound deliveryClock denyFlag=ifOut convoyTowers hisKill=duel kiters holdOnRamparts volley worksSkip opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
