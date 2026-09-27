@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v37"
+    private const val BOT_VERSION = "v38"
 
     private const val LOG_EVERY = 50
 
@@ -180,6 +180,12 @@ object SpawnAndSwampAdvanced {
     private var builderPending = false
     private var expansion: Base? = null
     private var expansionPlaced = false
+    /** Основатель: стартовый рабочий, который уйдёт строить вторую базу, как только первую насытит полный добытчик на
+     *  замену. Он уже оплачен и уже умеет строить спавн, а замена стоит 600 против 850 строителя — и выходит на ~500
+     *  тиков раньше: けろびー#15 так ставит второй спавн к 683–733-му, v37 ставил к 1117–2129-му и сыграл с ним три ничьи
+     *  из четырёх при его 22 энергии в тик на армию против наших 10. */
+    private var founderId: String? = null
+    private var founderPlan: Base? = null
     /** Волна: id бойцов, ушедших в атаку. Пусто — армия дома. */
     private val wave = HashSet<String>()
     private var lastPosture = ""
@@ -672,7 +678,15 @@ object SpawnAndSwampAdvanced {
             val sp = mySpawns.firstOrNull { it.x == b.spawnCell.x && it.y == b.spawnCell.y }
             if (sp != null) {
                 b.spawnId = idOf(sp)
-                if (spawnUpAt < 0) spawnUpAt = t
+                if (spawnUpAt < 0) {
+                    spawnUpAt = t
+                    val starter = mine.firstOrNull { !it.spawning && liveParts(it, WORK) > 0 && slotOf[idOf(it)]?.let { s -> b.slots.contains(s) } == true }
+                    val plan = if (starter == null) null else expansionTarget(sp, sources, all)
+                    if (starter != null && plan != null) {
+                        founderId = idOf(starter); founderPlan = plan
+                        println("founder plan t=$t ${bodyOf(starter)} -> (${plan.spawnCell.x},${plan.spawnCell.y})")
+                    }
+                }
                 println("spawn up t=$t at (${sp.x},${sp.y}) e=${energyOf(sp)}")
             }
         }
@@ -808,6 +822,25 @@ object SpawnAndSwampAdvanced {
             builderId = null
             expansion = null
             expansionPlaced = false
+        }
+        // основатель уходит, когда замена вышла из спавна и одна насыщает источник первой базы
+        val fid = founderId
+        val plan = founderPlan
+        if (fid != null && plan != null && builderId == null && expansion == null && !builderPending) {
+            val founder = mine.firstOrNull { idOf(it) == fid }
+            val b1 = bases.firstOrNull()
+            if (founder == null || b1 == null) { founderId = null; founderPlan = null }
+            else {
+                val needWork = (SOURCE_ENERGY_REGEN + HARVEST_POWER - 1) / HARVEST_POWER
+                val stay = mine.filter { c ->
+                    idOf(c) != fid && !c.spawning && idOf(c) !in roleOf && liveParts(c, WORK) > 0 && cheb(posOf(c), b1.spawnCell) <= 2
+                }.sumOf { liveParts(it, WORK) }
+                if (stay >= needWork && worksiteSafe(listOf(plan.spawnCell))) {
+                    builderId = fid; expansion = plan; expansionPlaced = false
+                    slotOf.remove(fid); founderId = null; founderPlan = null
+                    println("founder t=$t ${bodyOf(founder)} leaves for (${plan.spawnCell.x},${plan.spawnCell.y})")
+                }
+            }
         }
         for (w in workers) {
             val id = idOf(w)
@@ -992,7 +1025,7 @@ object SpawnAndSwampAdvanced {
 
     private fun homeWork(b: Base, mine: List<Creep>): Int =
         mine.filter { c ->
-            idOf(c) != builderId &&
+            idOf(c) != builderId && idOf(c) != founderId &&
                 (slotOf[idOf(c)]?.let { b.slots.contains(it) } == true || (c.spawning && getRange(c, cell(b.spawnCell)) <= 1 && liveParts(c, WORK) > 0))
         }.sumOf { liveParts(it, WORK) }
 
@@ -1139,7 +1172,11 @@ object SpawnAndSwampAdvanced {
         val energy = energyOf(spawn)
         val needWork = (SOURCE_ENERGY_REGEN + HARVEST_POWER - 1) / HARVEST_POWER
         val haveWork = homeWork(b, mine)
-        val freeSlots = b.slots.count { it !in slotOf.values.toSet() }
+        val held = slotOf.filterKeys { it != founderId }.values.toSet()
+        val freeSlots = b.slots.count { it !in held }
+        // доход идёт (кто-то уже копает на базе) — ждём полное тело: v37 рожал по 200 добытчиков M1W1C1 (2 в тик вместо
+        // 10), и шесть таких легли на клетках одной базы; нет никого — рожаем, что можем, иначе спавн живёт на +1 в тик
+        val incomeFlows = mine.any { !it.spawning && liveParts(it, WORK) > 0 && slotOf[idOf(it)]?.let { s -> b.slots.contains(s) } == true }
         val fighters = mine.filter { isCombat(it) && idOf(it) !in wave }
         val threat = threats
         val body: Array<BodyPartType>
@@ -1149,7 +1186,7 @@ object SpawnAndSwampAdvanced {
             // то же: тринадцать тел по 300 проиграли трём M5R5 на равной энергии)
             return spawnFighter(t, spawn, energy, why = "threat")
         } else if (haveWork < needWork && freeSlots > 0) {
-            body = workerBody(needWork - haveWork, energy)
+            body = workerBody(needWork - haveWork, if (incomeFlows) Int.MAX_VALUE / 2 else energy)
             why = "work $haveWork/$needWork"
         // расширение и сейф — и под угрозой, если дом её держит (место работ проверяет свою безопасность само): v22
         // проиграл stachu3478 при двух источниках против его пяти — его харассеры у нашей базы держали «угрозу»
