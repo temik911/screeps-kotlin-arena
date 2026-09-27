@@ -420,8 +420,12 @@ def fame_games(c, arena_id):
     }})()""")
 
 
-def history(c, arena_id, limit, us):
-    """The arena's last rating matches from the server (`/api/arena/<id>/rating-history`), newest first."""
+def history(c, arena_id, limit):
+    """The arena's last rating matches from the server (`/api/arena/<id>/rating-history`), newest first.
+
+    A row is the match document less its terrain — `game`, `codes`, `users`, `user`, `ratingHistory` — so the result is
+    read by the one reading every tool shares (`tools/match-log.py` outcome), never by `result.winner` on its own."""
+    ml = _match_log()
     rows = c.json_eval(f"""(async () => {{
       {JS_GET}
       const r = await GET('{API}/arena/{arena_id}/rating-history?limit={int(limit)}&offset=0');
@@ -429,26 +433,17 @@ def history(c, arena_id, limit, us):
       return JSON.stringify((j.history || []).map(h => {{
         const g = h.game || {{}};
         return {{id: g._id || h._id, created: g.createdAt || h.createdAt, ticks: (g.meta && g.meta.ticks) || g.ticks || 0,
-                winner: g.result ? g.result.winner : null, draw: !!(g.result && g.result.draw),
-                users: (h.users || []).map(u => ({{id: u._id, name: u.username}})),
-                codes: (h.codes || []).map(x => ({{user: x.user, version: x.version}})),
+                doc: {{user: h.user, codes: h.codes || [], users: h.users || [],
+                       game: {{status: g.status, result: g.result, usersCode: g.usersCode || [], firstPlayerIndex: g.firstPlayerIndex}}}},
                 rating: h.ratingHistory ? [h.ratingHistory.previousRating, h.ratingHistory.rating, h.ratingHistory.rank] : null}};
       }}));
     }})()""")
     out = []
     for h in rows:
-        me = next((u["id"] for u in h["users"] if (u["name"] or "").startswith(us)), None)
-        w = h["winner"]
-        if h["draw"] or w is None or w == -1:
-            res = "draw"
-        elif isinstance(w, int) and 0 <= w < len(h["codes"]):
-            res = "won" if h["codes"][w]["user"] == me else "lost"
-        else:
-            res = str(w)
-        # the opponent's code version next to the name: a username is not a bot (07.09.2026)
-        foes = ", ".join(f"{u['name']}#{next((c.get('version', '?') for c in h['codes'] if c['user'] == u['id']), '?')}" for u in h["users"] if u["id"] != me)   # a code entry without a version: the built-in System bot
-        ver = next((c["version"] for c in h["codes"] if c["user"] == me), None)
-        out.append(dict(id=h["id"], created=h["created"], ticks=h["ticks"], result=res, opponent=foes, rating=h["rating"], code=ver))
+        doc = h["doc"]
+        ours, _, foe = ml.sides(doc)
+        out.append(dict(id=h["id"], created=h["created"], ticks=h["ticks"], result=ml.outcome(doc) or "?",
+                        opponent=foe or "?", rating=h["rating"], code=ours))
     return out
 
 
@@ -456,24 +451,21 @@ def state(c, gid):
     return c.json_eval(f"""(async () => {{
       {JS_GET}
       const r = await GET('{API}/game/{gid}');
-      const j = await r.json(); const g = j.game || {{}};
-      return JSON.stringify({{status: g.game?.status, winner: g.game?.result?.winner,
-                              rating: g.ratingHistory, users: (g.users || []).map(u => u.username),
-                              codes: (g.codes || []).map(x => x.user), me: g.user}});
+      const j = await r.json(); const g = j.game || {{}}; const i = g.game || {{}};
+      return JSON.stringify({{status: i.status, rating: g.ratingHistory, users: (g.users || []).map(u => u.username),
+                              doc: {{user: g.user, codes: g.codes || [], users: g.users || [],
+                                     game: {{status: i.status, result: i.result, usersCode: i.usersCode || [],
+                                             firstPlayerIndex: i.firstPlayerIndex}}}}}});
     }})()""")
 
 
 def outcome(s):
-    """won / lost / draw, decided by the winning code's owner — not by the rating delta."""
+    """won / lost / draw, decided by the winning code's owner — not by the rating delta; read by `tools/match-log.py`
+    outcome, the one reading of `result.winner` every tool shares (it is the score of `usersCode[0]`, not an index into
+    `codes[]` — this function misread it until 27.09.2026)."""
     if s.get("status") != "finished":
         return s.get("status") or "?"
-    w = s.get("winner")
-    if w == 0.5:
-        return "draw"
-    codes, me = s.get("codes") or [], s.get("me")
-    if isinstance(w, int) and 0 <= w < len(codes):
-        return "won" if codes[w] == me else "lost"
-    return f"winner={w}"
+    return _match_log().outcome(s.get("doc")) or "?"
 
 
 def wait(c, gid, timeout=1800):
@@ -537,7 +529,7 @@ def main():
     ap.add_argument("--test", metavar="BOT", help="play UNRATED test games against one bot: 'Name#version', a bare name, or a code id")
     ap.add_argument("--test-list", action="store_true", help="list the bots available for unrated test games and exit")
     ap.add_argument("--history", type=int, metavar="N", help="print the arena's last N rating matches from the server and exit")
-    ap.add_argument("--us", default="temik911", help="our username prefix (for --history)")
+    ap.add_argument("--us", default="temik911", help=argparse.SUPPRESS)  # kept for old command lines: a history row names us by id
     ap.add_argument("--ab", nargs=2, metavar=("REF_A", "REF_B"), help="a live A/B of two refs (tags, branches, commits): temporary worktrees, "
                     "alternating hands against the --test bot, -n hands PER SIDE, then series.py compare / shares / reach")
     ap.add_argument("--dry", action="store_true", help="with --ab: no client and no game — both builds, both payloads, each side's hand is the arena's stub gate")
@@ -652,7 +644,7 @@ def main():
 
     arena = pick(c, a.arena)
     if a.history:
-        for h in reversed(history(c, arena["id"], a.history, a.us)):
+        for h in reversed(history(c, arena["id"], a.history)):
             t = h["created"] or ""
             try:
                 when = time.strftime('%d.%m %H:%M', time.localtime(time.mktime(time.strptime(t[:19], '%Y-%m-%dT%H:%M:%S')) - time.timezone + (3600 if time.localtime().tm_isdst else 0)))

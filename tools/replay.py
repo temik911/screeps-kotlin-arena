@@ -112,10 +112,23 @@ def load(path):
 
 
 def our_side(meta, us):
-    for p in meta['players']:
-        if p['username'].startswith(us):
-            return p['side']
-    sys.exit(f"no player named {us}* in {[p['username'] for p in meta['players']]}; pass --us")
+    sides = [p['side'] for p in meta['players'] if p['username'].startswith(us)]
+    if len(sides) == 1:
+        return sides[0]
+    if not sides:
+        sys.exit(f"no player named {us}* in {[p['username'] for p in meta['players']]}; pass --us")
+    # self-play: both sides carry our name, and the name picked the first of them whichever had played for us. Ours is
+    # the side of the code that started the game, and only the match document says which that is — every replay is
+    # built from it (`match-log.py replay` stores it on the way), so it is in the store beside the replay
+    import importlib.util, os
+    spec = importlib.util.spec_from_file_location('match_log', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'match-log.py'))
+    ml = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ml)
+    gid = meta.get('gameId')
+    side = ml.our_slot(ml.meta_of(os.path.join(ml.STORE, str(gid), 'game.json')))
+    if side is None:
+        sys.exit(f"{gid}: both sides are {us}* and the match document is not in the store — tools/match-log.py fetch {gid}")
+    return side
 
 
 def ticks(doc):

@@ -70,7 +70,6 @@ _spec.loader.exec_module(matchlog)
 
 CACHE_DIR = os.path.expanduser("~/.cache/screeps-arena-series")
 CACHE_VERSION = 5  # bump when the parsed shape changes, so stale files are re-read instead of trusted
-US = "temik911"
 NUM = re.compile(r"-?\d+(?:\.\d+)?")
 # the bot prints Int.MAX_VALUE and its cousins (1073741823 = 2^30-1, 268435455 = 2^28-1) for "no
 # answer"; averaging one silently turns a missing verdict into a number. The cut is computed, not
@@ -110,8 +109,7 @@ def rows(args):
             continue
         if getattr(args, "version", None) and r["version"] not in args.version:
             continue
-        if getattr(args, "opponent", None) and not any(
-                args.opponent.lower() in (u or "").lower() for u in r["users"] if u != US):
+        if getattr(args, "opponent", None) and args.opponent.lower() not in foe(r).lower():
             continue
         r["logs"] = logs[game]
         out.append(r)
@@ -123,9 +121,11 @@ def rows(args):
 
 
 def foe(r):
-    # the opponent's NAME only; `bot` below adds his code version — every table keys on bot(r)
-    others = [u for u in r["users"] if u and u != US]
-    return others[0] if others else "?"
+    # the opponent's NAME only; `bot` below adds his code version — every table keys on bot(r). Taken from describe's
+    # `opponent`, the owner of the OTHER code of the pair, not "the user who is not us": in self-play that is nobody,
+    # and a league of our payload against our stored bots came out as "?"
+    name = r.get("opponent") or "?"
+    return name.rsplit("#", 1)[0] if r.get("opp_code") is not None else name
 
 
 def bot(r):

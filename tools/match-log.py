@@ -100,22 +100,86 @@ def meta_of(path):
     return data.get("game") if isinstance(data, dict) and "game" in data else data
 
 
+# ---------------------------------------------------------------- who won
+# `result.winner` of `/api/game/<id>` is the SCORE of `game.usersCode[0]` — 1 that code won, 0 the other one did, 0.5 a
+# draw — and not an index into `codes[]`. The two lists hold the same pair of codes in different orders: `usersCode` in
+# the order the game was set up, the code that started it first (ours in all 12 400 stored games), and `codes` sorted by
+# code id, that is by upload time (12 400 of 12 400). Read as an index into `codes`, `winner` comes out right only while
+# our code is the newer of the two — always so for a test's fresh upload, usually for a rating game — and flips the
+# result whenever the opponent uploaded after us: 6ab8bc9e and 6a9c7d61 were written `lost` with the rating up,
+# 6a9c7d73 `won` with it down (Escort Run, 27.09.2026). Measured over the store: the score reading agrees with the sign of
+# every nonzero rating change (1 988 up at winner=1, 947 down at winner=0, none against). A stored replay's
+# `meta.result` is derived from these same two fields (`replay_result`), so it is not a second witness; every tool reads
+# the result through `outcome` below and none reads `winner` on its own.
+def winning_code(inner):
+    """The index into `usersCode` of the code that won, "draw", or None when the match has no readable result."""
+    raw = (inner.get("result") or {}).get("winner")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    if raw == 0.5:
+        return "draw"
+    return {1: 0, 0: 1}.get(raw)
+
+
+def our_code_index(meta):
+    """Our position in `usersCode`, or None when neither code is ours (a match of two other players).
+
+    In self-play both codes are ours — the payload against one of our stored codes (`tools/er-league.py`, or
+    `play.py --test 'temik911#N'`) — and the one that played for us is the payload: the code that STARTED the game,
+    which the server puts first. The first of ours in `usersCode` order is therefore right in both cases. Not "the code
+    without a version": that is an upload, and a red-team persona stored by `er-league.py --save-as` is an upload too."""
+    inner = meta.get("game") or {}
+    owner = {c.get("_id"): c.get("user") for c in meta.get("codes") or []}
+    return next((i for i, cid in enumerate(inner.get("usersCode") or []) if owner.get(cid) == meta.get("user")), None)
+
+
+def slot_of(code_index, first):
+    """The board slot (a replay's `side`) of `usersCode[code_index]`: `firstPlayerIndex == 1` swaps the pair."""
+    return (1 - code_index) if first == 1 else code_index
+
+
+def our_slot(meta):
+    """Our side in the match's replay, or None — the side `tools/replay.py` cannot tell by name in self-play."""
+    i = our_code_index(meta or {})
+    return None if i is None else slot_of(i, int(((meta or {}).get("game") or {}).get("firstPlayerIndex") or 0))
+
+
 def outcome(meta):
-    """'won' / 'lost' / 'draw' / '' — winner is an index into the match's code list."""
+    """'won' / 'lost' / 'draw' / 'error' / '' — see the note above: `winner` is the score of `usersCode[0]`."""
     if not meta:
         return ""
     inner = meta.get("game") or {}
     res = inner.get("result") or {}
     if inner.get("status") != "finished":
         return inner.get("status") or ""
-    win = res.get("winner")
-    codes = meta.get("codes") or []
-    me = meta.get("user")
-    if win is None or win == 0.5:
+    win = winning_code(inner)
+    if win is None:
+        # a match that never ran is not a draw: 6aa0603f finished with `runner init error` and no winner at all
+        return "error" if res.get("status") not in (None, "ok") else f"winner={res.get('winner')}"
+    if win == "draw":
         return "draw"
-    if isinstance(win, int) and 0 <= win < len(codes):
-        return "won" if codes[win].get("user") == me else "lost"
-    return str(win)
+    ours = our_code_index(meta)
+    if ours is None:
+        return ""
+    return "won" if win == ours else "lost"
+
+
+def sides(meta):
+    """(our code version, the opponent's code version, the opponent as name#version) — from the two entries of
+    `usersCode`, ours found by `our_code_index`; not from "the code whose user is me", which in self-play is both of
+    them and left the opponent nameless. A code without a version (an upload, the System bot) names its user alone."""
+    ours = our_code_index(meta) if meta else None
+    if ours is None:
+        return None, None, ""
+    by_id = {c.get("_id"): c for c in meta.get("codes") or []}
+    names = {u.get("_id"): u.get("username") for u in meta.get("users") or []}
+    order = (meta.get("game") or {}).get("usersCode") or []
+    foe = by_id.get(order[1 - ours]) if len(order) == 2 else None
+    if not foe:
+        return (by_id.get(order[ours]) or {}).get("version"), None, ""
+    name = names.get(foe.get("user")) or "?"
+    return ((by_id.get(order[ours]) or {}).get("version"), foe.get("version"),
+            f"{name}#{foe['version']}" if foe.get("version") is not None else name)
 
 
 def log_ticks(game, logs):
@@ -161,24 +225,16 @@ def describe(game, logs, metas):
     # the code versions the match was played with — the server's per-user upload counter, one per side. An opponent's
     # username is not a bot: けろびー played version 1 as a blob on 06.09 and version 3 on 07.09, and the two lose and win
     # differently; read results by name AND version (07.09.2026, the operator)
-    our_code, opp_code = None, None
-    if meta:
-        for c in meta.get("codes") or []:
-            if c.get("user") == meta.get("user"):
-                our_code = c.get("version")
-            else:
-                opp_code = c.get("version")
+    our_code, opp_code, opponent = sides(meta)
     if meta and meta.get("ratingHistory"):
         r = meta["ratingHistory"]
         rating = f"{r.get('previousRating')}->{r.get('rating')}"
         if isinstance(r.get("rating"), (int, float)) and isinstance(r.get("previousRating"), (int, float)):
             delta = r["rating"] - r["previousRating"]
     users = [u.get("username") for u in (meta or {}).get("users", [])]
-    me_name = next((u.get("username") for u in (meta or {}).get("users", []) if u.get("_id") == (meta or {}).get("user")), None)
     return dict(game=game, arena=greet, when=when, chunks=len(chunks), version=version, tuning=tuning,
                 last=max(chunks) if chunks else 0, result=outcome(meta), rating=rating, delta=delta,
-                users=users, our_code=our_code, opp_code=opp_code,
-                opponent="/".join(f"{u}#{opp_code}" if opp_code is not None else u for u in users if u and u != me_name))
+                users=users, our_code=our_code, opp_code=opp_code, opponent=opponent)
 
 
 def full_log(game, logs):
@@ -382,16 +438,18 @@ def replay_players(outer):
 
 
 def replay_result(inner, players, first):
-    """`result.winner` is the score of usersCode[0]: 1 it won, 0 the other did, 0.5 a draw — mapped to board slots."""
+    """`result.winner` is the score of usersCode[0] (`winning_code`) — mapped to board slots. `winnerName` names a user,
+    not a side, and in self-play both sides carry the same name: read `winner` against our side (`our_slot`, which
+    `tools/replay.py` our_side falls back to), never against the name."""
     res = inner.get("result") or {}
     raw = res.get("winner")
     status = res.get("status")
-    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+    code_winner = winning_code(inner)
+    if code_winner is None:
         return {"winner": None, "winnerName": None, "draw": False, "status": status, "raw": raw}
-    if raw != int(raw):
+    if code_winner == "draw":
         return {"winner": None, "winnerName": None, "draw": True, "status": status, "raw": raw}
-    code_winner = 0 if raw == 1 else 1
-    slot = (1 - code_winner) if first == 1 else code_winner
+    slot = slot_of(code_winner, first)
     name = players[slot]["username"] if slot < len(players) else None
     return {"winner": slot, "winnerName": name, "draw": False, "status": status, "raw": raw}
 

@@ -19,20 +19,25 @@ three questions that came up on 08.09.2026 and are worth re-asking whenever the 
             is NOT convicted; separating it from the opponent needs an experiment, not another cut of these records)
 
 Reading it: a match counts only if it is `finished` and its `log-100.json` chunk is stored (`tools/match-log.py fetch`
-brings the chunks down). The outcome comes from `game.json` the way match-log.py reads it — `winner` is an INDEX into
-the match's code list, not a user id. The opponent is name#version, because one けろびー is several bots.
+brings the chunks down). The outcome and the opponent come from `game.json` through match-log.py (`outcome`, `sides`) —
+`winner` is the score of `usersCode[0]`, not an index into anything. The opponent is name#version, because one けろびー
+is several bots.
 
     tools/flagcut.py                 # every cut, all builds and the recent ones
     tools/flagcut.py --builds v133   # restrict to given bot versions (repeatable, comma-separated)
 """
 import argparse
 import glob
+import importlib.util
 import json
 import os
 import re
 from collections import Counter, defaultdict
 
 GAMES = os.path.expanduser('~/ScreepsArena/games')
+_spec = importlib.util.spec_from_file_location('match_log', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'match-log.py'))
+ml = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ml)
 RECENT = ('v131', 'v132', 'v133', 'v134')
 
 
@@ -51,14 +56,8 @@ def read_store(builds=None):
         inner = g.get('game') or {}
         if inner.get('status') != 'finished':
             continue
-        res = inner.get('result') or {}
-        me, code_list = g.get('user'), (g.get('codes') or [])
-        win = res.get('winner')
-        if win is None or win == 0.5:
-            outcome = 'draw'
-        elif isinstance(win, int) and 0 <= win < len(code_list):
-            outcome = 'won' if code_list[win].get('user') == me else 'lost'
-        else:
+        outcome = ml.outcome(g)
+        if outcome not in ('won', 'lost', 'draw'):
             continue
         text = '\n'.join(log[k] for k in sorted(log, key=lambda x: int(x)) if isinstance(log[k], str))
         if 'pain-and-gain' not in text:
@@ -67,10 +66,7 @@ def read_store(builds=None):
         ver = m.group(1) if m else '?'
         if builds and ver not in builds:
             continue
-        users = {u['_id']: u.get('username', '?') for u in (g.get('users') or [])}
-        codes = {c.get('user'): c.get('version') for c in (g.get('codes') or [])}
-        foe_id = next((u for u in users if u != me), None)
-        foe = f"{users.get(foe_id, '?')}#{codes.get(foe_id, '?')}"
+        foe = ml.sides(g)[2] or '?'
 
         # the centre flag of this map, from the opening `flags:` line
         centre, best = None, 1e9
