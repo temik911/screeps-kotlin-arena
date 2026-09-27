@@ -48,6 +48,15 @@ object Grid {
 
     fun to(x: Int, y: Int, swampCost: Int = 5): IntArray = field("c$x,$y", intArrayOf(idx(x, y)), swampCost)
 
+    /** A field to every passable cell within Chebyshev [r] of (x, y): a group's goal is an area, not a cell. Toward a
+     *  single cell a diagonal approach has exactly one neighbour that is nearer, so fourteen creeps walking to one
+     *  cell form one diagonal file whose head stands on the goal and whose rest only trade places (v3, 27.09.2026). */
+    fun area(x: Int, y: Int, r: Int, swampCost: Int = 5): IntArray {
+        val goals = ArrayList<Int>()
+        for (yy in y - r..y + r) for (xx in x - r..x + r) if (inside(xx, yy) && !wall(xx, yy)) goals.add(idx(xx, yy))
+        return field("a$x,$y,$r", goals.toIntArray(), swampCost)
+    }
+
     /** A field that is not cached — its goals change every tick (the enemy's creeps). */
     fun fresh(goals: IntArray, swampCost: Int = 5): IntArray = dijkstra(goals, swampCost)
 

@@ -132,6 +132,7 @@ object PainAndGainAdvanced {
         lastOur = mine.size; lastTheir = theirs.size
 
         held.clear()
+        ourAt.clear(); for (u in mine) ourAt[u.cell] = u
         trackStuck()
         army()
         pullers()
@@ -146,6 +147,7 @@ object PainAndGainAdvanced {
      *  no one steps into them and the traffic does not push them — a waiting creep swapped BACK by the one behind
      *  it moves the group nowhere, and v2's first march deadlocked exactly so, 14 creeps for 1000 ticks. */
     private val held = HashSet<Int>()
+    private val ourAt = HashMap<Int, Unit>()
     private val lastCell = HashMap<String, Int>()
     private val stillFor = HashMap<String, Int>()
     private fun trackStuck() {
@@ -311,7 +313,7 @@ object PainAndGainAdvanced {
         val objective = sweepFlag ?: centre
         val next = want ?: when {
             swept -> Mode.SWEEP
-            army.count { Grid.range(it.x, it.y, objective.x, objective.y) <= 3 } * 2 >= army.size -> Mode.HOLD
+            group.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= group.size -> Mode.HOLD
             else -> Mode.MARCH
         }
         if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} whole=${whole.ratio.asDynamic().toFixed(2)} near=${near.size} group=${group.size}/${army.size} obj=${objective.x},${objective.y}") }
@@ -381,13 +383,14 @@ object PainAndGainAdvanced {
      */
     private fun march(army: List<Unit>, gx: Int, gy: Int) {
         if (army.isEmpty()) return
-        val f = Grid.to(gx, gy)
+        val f = Grid.area(gx, gy, ARRIVE_R)
         val slowest = army.filter { it.moves > 0 }.maxOfOrNull { it.ticksPerStep(ourFx.fatigue) } ?: return
         val pacers = army.filter { it.moves > 0 && it.ticksPerStep(ourFx.fatigue) >= slowest }
         val live = pacers.filter { (stillFor[it.id] ?: 0) < STUCK_TICKS }.ifEmpty { pacers }
         val front = live.minOf { f[it.cell] }
-        for (u in army.sortedByDescending { f[it.cell] }) {
-            if (f[u.cell] <= 1) continue
+        // front first: a creep deciding its step knows whether the one ahead of it is stepping away this tick
+        for (u in army.sortedBy { f[it.cell] }) {
+            if (f[u.cell] == 0) continue
             if (u !in pacers && f[u.cell] < front - ESCORT_LEAD) continue
             stepToward(u, f, if (u in pacers) 200 + f[u.cell] else f[u.cell])
         }
@@ -404,8 +407,8 @@ object PainAndGainAdvanced {
                 if (u.x == gx && u.y == gy) hold(u) else stepToward(u, f, 1000)
                 continue
             }
-            if (Grid.range(u.x, u.y, gx, gy) <= 2) continue
-            stepToward(u, f, f[u.cell])
+            if (Grid.range(u.x, u.y, gx, gy) <= ARRIVE_R) continue
+            stepToward(u, Grid.area(gx, gy, ARRIVE_R), 10)
         }
     }
 
@@ -489,20 +492,40 @@ object PainAndGainAdvanced {
 
     private fun occupiedByEnemy(i: Int) = theirs.any { it.cell == i }
 
-    /** One step down the field; `stopAt` is the field value at which the creep is where it wants to be. */
+    /**
+     * One step down the field; `stopAt` is the field value at which the creep is where it wants to be. A nearer cell
+     * held by one of ours that is not stepping away this tick is not taken by a swap (a swap moves the pair nowhere):
+     * the creep takes another nearer cell, or steps aside to a free cell as near as its own, and only when neither
+     * exists asks for the occupied one.
+     */
     private fun stepToward(u: Unit, f: IntArray, priority: Int, stopAt: Int = 0) {
         val here = f[u.cell]
         if (here <= stopAt) return
-        var best = -1; var bestV = here
+        var bestFree = -1; var bestFreeV = here
+        var bestAny = -1; var bestAnyV = here
+        var side = -1; var sideScore = Int.MAX_VALUE
         for (k in 0 until 8) {
             val nx = u.x + dxs[k]; val ny = u.y + dys[k]
             if (!Grid.inside(nx, ny) || Grid.wall(nx, ny)) continue
             val n = Grid.idx(nx, ny)
             if (n in towerCells || n in held || occupiedByEnemy(n)) continue
             val v = f[n]
-            if (v < bestV) { bestV = v; best = n }
+            val occ = ourAt[n]
+            val free = occ == null || occ === u || Traffic.wants(occ.c)
+            if (v < bestAnyV) { bestAnyV = v; bestAny = n }
+            if (free && v < bestFreeV) { bestFreeV = v; bestFree = n }
+            if (free && occ == null && v == here) {
+                // aside: the free cell of equal cost whose own nearer neighbours are least crowded
+                val crowd = Grid.neighbours(nx, ny).count { m -> f[m] < v && ourAt[m] != null }
+                if (crowd < sideScore) { sideScore = crowd; side = n }
+            }
         }
-        if (best >= 0) Traffic.want(u.c, best, priority)
+        val pick = when {
+            bestFree >= 0 -> bestFree
+            side >= 0 -> side
+            else -> bestAny
+        }
+        if (pick >= 0) Traffic.want(u.c, pick, priority)
     }
 
     private fun stepAway(u: Unit, from: List<Unit>, priority: Int) {
@@ -523,6 +546,7 @@ object PainAndGainAdvanced {
     const val FIGHT_RATIO = 1.1
     const val RETREAT_RATIO = 0.8
     const val ESCORT_LEAD = 2
+    const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
     const val GROUP_LINK = 4
     const val SWEEP_RATIO = 4.0
