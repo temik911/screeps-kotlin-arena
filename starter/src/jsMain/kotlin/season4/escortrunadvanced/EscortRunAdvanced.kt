@@ -49,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 10
+const val BOT_VERSION = 11
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -132,6 +132,16 @@ object EscortRunAdvanced {
     private const val DANGER_COST = 40
     /** A running operation is dropped only after its simulation has lost this many ticks in a row. */
     private const val DROP_AFTER = 3
+    /** The convoy's period on plain: the pullers bring each train's MOVE to weight / 2. */
+    private const val CONVOY_PERIOD = 2
+    /** Home fighters before the convoy's pullers are made. */
+    private const val CONVOY_MIN_GUARD = 1
+    /** His fighter this close to a route or an escort on the way is the guard's business. */
+    private const val CONVOY_GUARD_RADIUS = 8
+    private const val PULLER_PRIORITY = 90
+    private const val YIELD_PRIORITY = 95
+    /** A fighter of his that has not changed cell for this many ticks holds a position and is not coming. */
+    private const val STILL_TICKS = 30
 
     private const val FIGHTER_PRIORITY = 30
     private const val HAULER_PRIORITY = 20
@@ -232,7 +242,9 @@ object EscortRunAdvanced {
         runOutpostSpawn(w)
         runWorks(w)
         runTowers(w)
-        runEscorts(w)
+        if (!convoyOn) runEscorts(w)
+        trackEnemies(w)
+        runConvoy(w)
         runEconomy(w)
         runPioneers(w)
         val fighters = w.fighters.filter { !it.spawning }
@@ -243,7 +255,7 @@ object EscortRunAdvanced {
         val opBase: Position? = w.outpostSpawn ?: outpost?.let { cellOf(it.spawnCell) }
         decideArmy(w, outpostG, outF, opBase)
         runArmy(w, outpostG, outF, opBase, outpostRally(w), false)
-        TrafficManager.resolve(w.active.filter { idOf(it) !in escortIds && Bodies.liveMoves(it) > 0 }, w.active + w.enemies)
+        TrafficManager.resolve(w.active.filter { idOf(it) !in escortIds && idOf(it) !in pinned && Bodies.liveMoves(it) > 0 }, w.active + w.enemies)
         if (w.now % LOG_EVERY == 0 || w.now == 2) logStatus(w)
     }
 
@@ -345,22 +357,30 @@ object EscortRunAdvanced {
         // his escort already out of his ramparts and nobody of ours to strike it: the first fighter goes before the second
         // half of the economy — Hardy#1 walks all three to the flags from tick 0 and is on them by 568 (6ab9255d)
         val raceOn = w.enemyEscorts.any { !onRampart(w, it, false) } && w.fighters.isEmpty()
+        val puller = nextPuller(w)
+        var pullerFor: String? = null
         val order: Array<BodyPartType> = when {
             w.harvesters.isEmpty() -> HARVESTER_FIRST
             w.haulers.isEmpty() -> HAULER
             raceOn -> MELEE
             works < WORK_TARGET -> HARVESTER_NEXT
             w.haulers.size < HAULERS -> HAULER
-            // the outpost's pioneer after the first fighter: the second economy pays from the moment it stands
+            // then the delivery: the corridor's breaker, then the pullers — the trains through the corridor are on the
+            // flags long before a race through the centre could be, and every stronger bot of the field wins late
+            // (stachu3478#3 ~950, けろびー ~1700): inside a one-cell pass one melee reaches the wall, so the wall falls at
+            // the pace of the strongest one
+            (breachLeft(w) || corridorLeft(w)) && w.fighters.isNotEmpty() && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
+            // the convoy's pullers once home has its guard: M{need} per escort for the convoy's period
+            puller != null -> { pullerFor = puller.second; puller.first }
+            // the outpost's pioneer: the second economy
             outpost != null && w.outpostSpawn == null && w.pioneers.isEmpty() && pioneersSent < PIONEER_TRIES &&
-                w.fighters.isNotEmpty() -> PIONEER
-            // inside a one-cell pass one melee reaches the wall, so the wall falls at the pace of the strongest one
-            breachLeft(w) && w.fighters.size >= 2 && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
+                w.fighters.size >= 2 -> PIONEER
             else -> nextFighter(w)
         }
         if (energy(w) < Bodies.cost(order)) return
         val r = spawn.spawnCreep(order)
         if (r.error == null) {
+            pullerFor?.let { pullerOrders.addLast(it) }
             if (order.any { it == ATTACK || it == RANGED_ATTACK || it == HEAL }) armyMade++
             if (order.count { it == WORK } >= WORK_TARGET) pioneersSent++
             println("spawn t=${w.now}: ${Bodies.summary(order)} e=${energy(w)} army=$armyMade")
@@ -535,7 +555,7 @@ object EscortRunAdvanced {
         val fighters = w.fighters.size
         val attacked = attackedAt >= 0
         return when {
-            kind == "tower" -> fighters >= 2 || attacked
+            kind == "tower" -> fighters >= 4 || attacked
             index < 2 -> fighters >= 1 || attacked
             else -> fighters >= 3 || attacked
         }
@@ -735,6 +755,183 @@ object EscortRunAdvanced {
         return out.sortedBy { k -> if (his.isEmpty()) 0 else his.minOf { getRange(it, cellOf(k)) } }
     }
 
+    // ==================== the convoy: all three escorts to the flags ====================
+
+    /** Escort id -> the flag cell it goes to (fixed when the convoy is planned). */
+    private var convoyFlags: Map<String, Int>? = null
+    /** Puller id -> the escort it pulls; escorts waiting for a puller being born, in spawn order. */
+    private val pullerOf = HashMap<String, String>()
+    private val pullerOrders = ArrayDeque<String>()
+    private val lastChains = HashMap<String, List<String>>()
+    private var convoyOn = false
+    private var convoyAt = -1
+    /** Creeps moved by direct intents this tick (the trains) — kept out of the traffic manager. */
+    private val pinned = HashSet<String>()
+
+    private fun isPuller(c: Creep) = Bodies.isPureMove(c) && c.body.size >= 3
+
+    /** Pullers are told apart from scouts by size; each is tied to the escort it was ordered for when first seen. */
+    private fun assignPullers(w: World) {
+        for (c in w.mine) {
+            if (!isPuller(c) || idOf(c) in pullerOf) continue
+            val e = pullerOrders.removeFirstOrNull() ?: w.escorts.firstOrNull()?.let { idOf(it) } ?: continue
+            pullerOf[idOf(c)] = e
+        }
+        if (w.now % 100 == 0) pullerOf.keys.retainAll(w.mine.mapTo(HashSet()) { idOf(it) })
+    }
+
+    private fun pullersFor(w: World, e: Creep) = w.mine.filter { pullerOf[idOf(it)] == idOf(e) }
+
+    /** MOVE the pullers must add to escort `e` for the convoy's period. */
+    private fun pullNeed(e: Creep) = Trains.movesFor(Bodies.weight(e), Bodies.liveMoves(e), CONVOY_PERIOD)
+
+    /** The route field of a flag: plain 1, swamp 5 (a pulled train's swamp period is five times its plain one), and the
+     *  danger price round his fighters. */
+    private fun routeFlow(w: World, flag: Int): IntArray {
+        val k = "route:$flag"
+        val now = getTicks()
+        flowCache[k]?.takeIf { flowTick[k] == now }?.let { return it }
+        val cost = IntArray(10000)
+        for (e in w.enemyArmed) for (dx in -DANGER_RADIUS..DANGER_RADIUS) for (dy in -DANGER_RADIUS..DANGER_RADIUS) {
+            val x = e.x + dx; val y = e.y + dy
+            if (DistanceMap.inBounds(x, y)) cost[x * 100 + y] = DANGER_COST
+        }
+        // no still cells here: the escorts ARE the ones walking (v11's first build blocked their own cells and the
+        // trains stood at home with the start given)
+        val f = DistanceMap.flowFieldCost(cellOf(flag), cost, ARMY_SWAMP_COST, emptyList())
+        flowCache[k] = f
+        flowTick[k] = now
+        return f
+    }
+
+    /**
+     * Which escort goes to which flag: the assignment whose slowest arrival is soonest (all trains share the convoy's
+     * period, so the longest route decides), ties by the total. Six permutations.
+     */
+    private fun planConvoy(w: World): Map<String, Int>? {
+        val es = w.escorts
+        val flags = w.myFlags.map { key(it) }
+        if (es.size != 3 || flags.size < 3) return null
+        val d = es.map { e -> flags.map { f -> pathCells(w, e, cellOf(f)).size.takeIf { it > 0 } ?: 9999 } }
+        var best: List<Int>? = null
+        var bestMax = Int.MAX_VALUE; var bestSum = Int.MAX_VALUE
+        for (a in 0..2) for (b in 0..2) for (c in 0..2) {
+            if (a == b || b == c || a == c) continue
+            val ds = listOf(d[0][a], d[1][b], d[2][c])
+            val mx = ds.max(); val sm = ds.sum()
+            if (mx < bestMax || (mx == bestMax && sm < bestSum)) { bestMax = mx; bestSum = sm; best = listOf(a, b, c) }
+        }
+        val pick = best ?: return null
+        return es.indices.associate { i -> idOf(es[i]) to flags[pick[i]] }
+    }
+
+    /** The convoy is wanted once home has a guard and nothing threatens it. */
+    private fun convoyWanted(w: World): Boolean =
+        homeG.mode != "defend" && w.fighters.count { originOf[idOf(it)] != "outpost" } >= CONVOY_MIN_GUARD
+
+    /** The next puller the home spawn should make, or null: M{need} for the escort shortest of its MOVE. The order is
+     *  queued by the caller only when the spawn takes it (the puller is tied to its escort when first seen). */
+    private fun nextPuller(w: World): Pair<Array<BodyPartType>, String>? {
+        if (convoyOn || !convoyWanted(w)) return null
+        for (e in w.escorts.sortedByDescending { pullNeed(it) }) {
+            val short = pullNeed(e) - pullersFor(w, e).sumOf { it.body.size }
+            if (short <= 0) continue
+            return Bodies.body(MOVE to minOf(short, SPAWN_ENERGY_CAPACITY / Bodies.cost(MOVE))) to idOf(e)
+        }
+        return null
+    }
+
+    /** Where and when each of his creeps last changed cell. */
+    private val enemyMoved = HashMap<String, Pair<Int, Int>>()
+
+    private fun trackEnemies(w: World) {
+        for (e in w.enemies) {
+            val was = enemyMoved[idOf(e)]
+            if (was == null || was.first != key(e)) enemyMoved[idOf(e)] = key(e) to w.now
+        }
+        if (w.now % 100 == 0) enemyMoved.keys.retainAll(w.enemies.mapTo(HashSet()) { idOf(it) })
+    }
+
+    private fun mobile(w: World, e: Creep) = (enemyMoved[idOf(e)]?.second ?: 0) >= w.now - STILL_TICKS
+
+    /**
+     * The fight the guard takes on by setting out: everything of his near any of the routes, and every fighter of his
+     * that is on the move anywhere — a hunter or a siege army can meet a train that walks two ticks a cell anywhere on
+     * its way. A blob that holds its cell is not coming: the danger-priced route goes round it (stand, blob+harvest: the
+     * convoy through the centre, round a blob of M5R5, was on the flags at 883). v11's first build counted only what
+     * stood near the routes at the start and met the stand's siege army halfway (hunt/siege+harvest, three escorts lost).
+     */
+    private fun convoyThreats(w: World, plan: Map<String, Int>): List<Creep> {
+        val cells = HashSet<Int>()
+        for (e in w.escorts) { val f = plan[idOf(e)] ?: continue; cells.addAll(pathCells(w, e, cellOf(f))) }
+        return w.enemyArmed.filter { en -> mobile(w, en) || cells.any { k -> maxOf(kotlin.math.abs(k / 100 - en.x), kotlin.math.abs(k % 100 - en.y)) <= CONVOY_GUARD_RADIUS } }
+    }
+
+    /**
+     * Before the start the pullers stand beside their escort; the convoy starts when every escort has its MOVE and the
+     * home guard's simulation against everything near the routes is ours. Then each escort heads its train down its
+     * route (the danger-priced field to its flag) and stops on the flag.
+     */
+    private fun runConvoy(w: World) {
+        pinned.clear()
+        assignPullers(w)
+        if (w.escorts.size != 3) return
+        val plan = convoyFlags ?: planConvoy(w)?.also { convoyFlags = it; println("convoy: plan " + w.escorts.joinToString(" ") { e -> "${Bodies.summaryOf(e)}->${it[idOf(e)]?.let { f -> at(cellOf(f)) }}" }) } ?: return
+        val ready = w.escorts.all { e -> Trains.chainOf(e, pullersFor(w, e), lastChains[idOf(e)] ?: emptyList()) { idOf(it) }.sumOf { it.body.size } >= pullNeed(e) }
+        if (!convoyOn && ready) {
+            val guard = w.fighters.filter { originOf[idOf(it)] != "outpost" && !it.spawning }
+            val sim = Bodies.fight(units(guard), units(convoyThreats(w, plan)))
+            if (sim.weWin && sim.margin() >= STRIKE_MARGIN) {
+                convoyOn = true; convoyAt = w.now
+                println("convoy t=${w.now}: START guard=${guard.size} sim=$sim")
+            } else if (w.now % LOG_EVERY == 0) println("convoy t=${w.now}: ready, waiting — sim=$sim")
+        }
+        for (e in w.escorts) {
+            val flag = plan[idOf(e)] ?: continue
+            val mine = pullersFor(w, e)
+            val chain = Trains.chainOf(e, mine, lastChains[idOf(e)] ?: emptyList()) { idOf(it) }
+            lastChains[idOf(e)] = chain.map { idOf(it) }
+            // pullers not in the chain walk to its tail
+            val tail: Position = chain.lastOrNull() ?: e
+            for (p in mine) {
+                if (p.spawning || p in chain || getRange(p, tail) <= 1) continue
+                val f = flowTo("tail", tail, 1)
+                DistanceMap.flowStep(f, p.x, p.y, 1, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(p, it, PULLER_PRIORITY) }
+            }
+            if (!convoyOn) continue
+            pinned.add(idOf(e)); for (p in chain) pinned.add(idOf(p))
+            if (key(e) == flag) { Trains.step(e, chain, null); continue }
+            val f = routeFlow(w, flag)
+            val here = f[key(e)]
+            // the next cell: the one nearest the flag that is free, holds our own first puller (a swap), or holds one of
+            // ours that is not in any train (it will step aside); another train's creep or his creep is waited out
+            val trainIds = HashSet<String>().apply { addAll(escortIds); addAll(pullerOf.keys) }
+            var next: Position? = null
+            var bestD = here
+            for ((dx, dy) in DIRECTIONS) {
+                val x = e.x + dx; val y = e.y + dy
+                if (!DistanceMap.inBounds(x, y)) continue
+                val d = f[x * 100 + y]
+                if (d < 0 || d >= bestD) continue
+                val occ = w.occupant[x * 100 + y]
+                val ok = occ == null || (chain.isNotEmpty() && occ === chain[0]) || (occ.my && idOf(occ) !in trainIds)
+                if (!ok) continue
+                bestD = d; next = cell(x, y)
+            }
+            // one of ours (not of a train) stands on the next cell: it steps aside this tick, the train goes next tick
+            val occ = next?.let { w.occupant[key(it)] }
+            if (occ != null && occ.my && idOf(occ) !in trainIds) {
+                DIRECTIONS.map { (dx, dy) -> cell(occ.x + dx, occ.y + dy) }
+                    .firstOrNull { c -> !DistanceMap.isWall(c.x, c.y) && !w.occupant.containsKey(key(c)) && key(c) != key(e) }
+                    ?.let { TrafficManager.request(occ, it, YIELD_PRIORITY) }
+                next = null
+            }
+            val stepped = Trains.step(e, chain, next)
+            if (w.now % LOG_EVERY == 0 || (stepped && next != null && key(next) == flag))
+                println("convoy t=${w.now}: ${Bodies.summaryOf(e)}${at(e)} f${e.fatigue} chain=${chain.sumOf { it.body.size }}M -> ${at(cellOf(flag))} left=$here")
+        }
+    }
+
     // ==================== the breach ====================
 
     /** The wall cells to break, in the order our path meets them (null — nothing worth breaking). */
@@ -829,7 +1026,32 @@ object EscortRunAdvanced {
             breachPath = path.filter { it in comp }
             println("breach: ${comp.size} walls, first ${breachPath?.firstOrNull()?.let { at(cellOf(it)) }}, way $len vs $len0")
         }
+        // the corridor: the wall group whose removal shortens our escorts' way to one of our flags the most — a way to
+        // the flags that does not cross the centre, where けろびー holds a blob with two towers and stachu3478#3 a swarm
+        val start = startNear(DistanceMap.flowFieldTo(my, emptyList(), ARMY_SWAMP_COST), my) ?: return
+        var bestGain = 0
+        for (comp in comps) {
+            if (comp == breachWalls) continue
+            for (flag in w.myFlags) {
+                val closed = DistanceMap.flowFieldTo(flag, emptyList(), ARMY_SWAMP_COST)[start]
+                val f = DistanceMap.flowFieldOpen(flag, comp, ARMY_SWAMP_COST)
+                val open = f[start]
+                if (closed < 0 || open < 0) continue
+                val gain = closed - open
+                if (gain > bestGain && gain * 5 >= closed) {
+                    bestGain = gain
+                    corridorPath = descend(f, start).filter { it in comp }
+                }
+            }
+        }
+        corridorPath?.let { println("corridor: ${it.size} walls, first ${it.firstOrNull()?.let { k -> at(cellOf(k)) }}, a flag's way shorter by $bestGain") }
     }
+
+    /** The corridor's walls in the order our way meets them (null — no corridor worth breaking). */
+    private var corridorPath: List<Int>? = null
+
+    /** The corridor is broken while it stands and the convoy has not started (a breach gains nothing once they walk). */
+    private fun corridorLeft(w: World): Boolean = !convoyOn && corridorPath?.any { w.walls.containsKey(it) } == true
 
     /**
      * A breach is worth its walls only while there is something behind it to strike: an escort of his standing out of
@@ -843,9 +1065,10 @@ object EscortRunAdvanced {
         return w.enemyEscorts.any { !onRampart(w, it, false) && getRange(it, his) <= BREACH_TARGET_RANGE }
     }
 
-    /** The wall to hit now: the first one of the chosen group still standing along our way. */
+    /** The wall to hit now: the pass while there is a target behind it, else the corridor to our flags — the first wall
+     *  of the group still standing along our way. */
     private fun breachTarget(w: World): StructureWall? {
-        val path = breachPath ?: return null
+        val path = (if (breachLeft(w)) breachPath else if (corridorLeft(w)) corridorPath else null) ?: return null
         val k = path.firstOrNull { w.walls.containsKey(it) }
         if (k == null) {
             if (breachOpenedAt < 0) { breachOpenedAt = w.now; println("breach t=${w.now}: OPEN") }
@@ -1076,6 +1299,10 @@ object EscortRunAdvanced {
             if (picked != null) {
                 mode = "strike"; modeTarget = idOf(picked.first)
                 if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} sim=${picked.second} group=${group.size}/${fighters.size}")
+            } else if (convoyOn && g === homeG) {
+                // the home army walks with the convoy
+                mode = "convoy"
+                if (prev != mode) println("army ${g.name} t=${w.now}: CONVOY guard=${fighters.size}")
             } else if (siegeSim != null && siegeTarget != null && siegeSim.weWin && siegeSim.margin() >= siegeNeed) {
                 mode = "siege"
                 modeTarget = idOf(siegeTarget)
@@ -1133,10 +1360,11 @@ object EscortRunAdvanced {
         for (f in fighters) act(w, f, g, target)
         // reserves (not in the running operation) break the wall while nothing threatens home
         val reserves = fighters.filter { !(inOp && idOf(it) in g.members) }
-        val breaching = if (breach && g.mode != "defend" && breachLeft(w)) runBreach(w, reserves) else emptySet()
+        val breaching = if (breach && g.mode != "defend" && (breachLeft(w) || corridorLeft(w))) runBreach(w, reserves) else emptySet()
         val walled = if (g.mode == "defend") holdRamparts(w, fighters, threats, base) else emptySet()
         for (f in fighters) {
             if (idOf(f) in breaching || idOf(f) in walled) continue
+            if (g.mode == "convoy") { guardConvoy(w, f); continue }
             val focus: Position? = when {
                 g.mode == "defend" -> threats.minByOrNull { getRange(it, f) }
                 inOp && idOf(f) in g.members -> target
@@ -1194,6 +1422,26 @@ object EscortRunAdvanced {
             if (key(f) != cell) step(w, f, cellOf(cell), 0)
         }
         return placed
+    }
+
+    /**
+     * A guard of the convoy: his fighter within CONVOY_GUARD_RADIUS of an escort of ours is met (the nearest one); else the
+     * guard keeps three cells from the nearest escort still on its way — not beside it, where it would stand on the
+     * train's next cell. His creep on one of our flags is met too: a blocker must die before the escort steps on.
+     */
+    private fun guardConvoy(w: World, f: Creep) {
+        val plan = convoyFlags ?: return
+        val walking = w.escorts.filter { e -> plan[idOf(e)]?.let { key(e) != it } == true }
+        val blockers = w.enemies.filter { en -> plan.values.any { fl -> getRange(en, cellOf(fl)) <= 1 } && idOf(en) !in escortIds }
+        val threats = w.enemyArmed.filter { en -> w.escorts.any { getRange(it, en) <= CONVOY_GUARD_RADIUS } } + blockers
+        val foe = threats.minByOrNull { getRange(it, f) }
+        if (foe != null) {
+            val want = if (Bodies.isMelee(f)) 1 else 3
+            if (getRange(f, foe) > want) step(w, f, foe, want)
+            return
+        }
+        val e = walking.minByOrNull { getRange(it, f) } ?: w.escorts.minByOrNull { getRange(it, f) } ?: return
+        if (getRange(f, e) > 3) step(w, f, e, 3)
     }
 
     /** An enemy rampart next to the target escort that has a cell beside it we can stand on. */
@@ -1268,7 +1516,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD corridor=auto homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
