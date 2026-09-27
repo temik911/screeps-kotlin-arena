@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v33"
+    private const val BOT_VERSION = "v34"
 
     private const val LOG_EVERY = 50
 
@@ -915,8 +915,11 @@ object SpawnAndSwampAdvanced {
         // его спавн у центрального был к нему на восемь тиков ближе, источник стоял свободным до ~820-го, а к 1200-му у
         // него было четыре источника против наших двух. Лучший из БЕЗОПАСНЫХ — как с v22
         val hisStuff = all.filter { it.asDynamic().my == false && (it is StructureSpawn || it is ConstructionSite) }
-        val free = ranked.filter { (s, us, them) -> them * 2 >= us && hisStuff.none { getRange(it, s) <= INTRUDER_SOURCE_RANGE + 1 } }
-        for ((s, _, _) in free.sortedWith(compareBy<Triple<Source, Int, Int>> { it.third }.thenBy { it.second })) {
+        // v30–v32 брали «самый близкий к нему» из всех, куда он не вдвое ближе, — и слали строителя через всю карту к ЕГО
+        // второму домашнему источнику (три быстрых поражения от stachu3478): спорный — это где мы не дальше его больше
+        // чем на четверть пути, и из таких первым — с наименьшим нашим запасом
+        val free = ranked.filter { (s, us, them) -> us * 4 <= them * 5 && hisStuff.none { getRange(it, s) <= INTRUDER_SOURCE_RANGE + 1 } }
+        for ((s, _, _) in free.sortedWith(compareBy<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
             planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) }?.let { return it }
         }
         return null
@@ -1182,6 +1185,9 @@ object SpawnAndSwampAdvanced {
     /** Заказ для сейфа: пробойщик, пока стена цела; строитель — когда пролом готов или откроется раньше, чем
      *  строитель дойдёт (оставшиеся хиты стены / урон пробойщика против пути строителя). Возвращает, занят ли спавн. */
     private fun vaultOrder(t: Int, spawn: StructureSpawn, energy: Int): Boolean {
+        // вложения по одному: пока строитель расширения в пути, сейф ждёт — v32 заказал строителя (850) и пробойщика
+        // (910) за 80 тиков, и к приходу армии stachu3478 дом держали двое
+        if (expansion != null || builderPending) return false
         val all = getObjects()
         // один сейф в работе за раз: начатый доводим, иначе — первый по очереди, до которого можно
         val started = vaults.firstOrNull { it.stage != "run" && (hasRole(it.breacherRole) || hasRole(it.builderRole)) }
