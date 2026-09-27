@@ -319,6 +319,7 @@ object PainAndGainAdvanced {
     }
 
     private val hunterOf = HashMap<String, String>()   // our hunter id -> enemy id
+    private var surviving = false
 
     private fun army() {
         val army = mine.filter { it.role != Role.PULLER }
@@ -364,8 +365,12 @@ object PainAndGainAdvanced {
         val objective = sweepFlag ?: (if (guarded(centre, group)) safeFlag(cx, cy, group) else null) ?: centre
         // survival: with the army broken and the score ours, what is left lives under our fed tower — it heals them and
         // shoots what comes; one creep of ours alive when the lead outgrows 43 a tick for the ticks left ends the match
-        val broken = army.count { it.armed } <= SURVIVE_ARMED && foes.count { it.armed } > army.count { it.armed } * 2
-        val shelter = if (broken && ourScore >= theirScore) ourFedTowers().minByOrNull { Grid.range(it.x, it.y, cx, cy) } else null
+        // latched: a healed-back part must not end it — a v11 test left the shelter at t=301 when a heal gave one of our
+        // stripped ranged its RANGED part again, and the three walked out to die by t=1640 while we led 3308 to 805
+        val ourArmed = army.count { it.armed }; val hisArmed = foes.count { it.armed }
+        if (ourArmed <= SURVIVE_ARMED && hisArmed > ourArmed * 2) surviving = true
+        if (ourArmed >= hisArmed || ourScore < theirScore) surviving = false
+        val shelter = if (surviving) ourFedTowers().minByOrNull { Grid.range(it.x, it.y, cx, cy) } else null
         if (shelter != null) {
             if (mode != Mode.RETREAT) { mode = Mode.RETREAT; modeSince = t; println("mode t=$t: RETREAT survive under (${shelter.x},${shelter.y}) armed=${army.count { it.armed }}:${foes.count { it.armed }} score=$ourScore:$theirScore") }
             fire(army)
