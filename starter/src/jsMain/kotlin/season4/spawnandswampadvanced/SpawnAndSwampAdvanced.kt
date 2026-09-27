@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v35"
+    private const val BOT_VERSION = "v36"
 
     private const val LOG_EVERY = 50
 
@@ -1530,6 +1530,16 @@ object SpawnAndSwampAdvanced {
         // кормленых башен — и тех площадок башен, что достроятся к подходу (v5 лёг под достроившейся). Уже ушедшая волна
         // не держит дом: дом, который сам по прогону побеждает, выходит следом
         // последний призыв не ждёт тишины дома: v22 досидел ничью, потому что его харассеры держали угрозу до 5000-го
+        // прибор: почему волна не выходит — раз в 100 тиков, пока дома есть бойцы и волны нет
+        if (wave.isEmpty() && homeGroup.isNotEmpty() && t % 100 == 0) {
+            val r0 = if (pushers.isEmpty()) null else simulate(pushers.map { simOf(it) }, enemyForPush)
+            println("pushcheck t=$t home=${homeGroup.size} def=${defenders.size} pushers=${pushers.size} threats=${threats.size} " +
+                "ours dps=${pushers.sumOf { dpsOf(it) }} heal=${pushers.sumOf { healOf(it) }} hits=${pushers.sumOf { it.hits }} | " +
+                "his units=${enemyForPush.size} dps=${enemyForPush.sumOf { it.dps() }} heal=${enemyForPush.sumOf { it.heal() }} " +
+                "hits=${enemyForPush.sumOf { it.hits }} (creeps ${enemyCombat.size - threatIds.size} births ${projectedBirths(t, arrival, enemySpawnObjs.size).size} " +
+                "towers ${fedTowers.size}+$pending spawn ${nearSpawn?.let { simSpawnOf(it, all).hits }}) arrival=$arrival | " +
+                "sim ${r0?.let { "win=${it.win} keep=${(it.keep * 100).toInt()}% ticks=${it.ticks} left=${it.left}/${it.theirLeft}" }}")
+        }
         if (pushers.isNotEmpty() && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
             val r = simulate(pushers.map { simOf(it) }, enemyForPush)
             if ((r.win && r.keep >= PUSH_KEEP) || lastCall) {
