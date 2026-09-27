@@ -2,6 +2,9 @@
 // enemy. Usage (see README.md and docs/escort-run.md):
 //   node --import ./register.mjs run.mjs <ticks> none|race|rush|melee|guard|hunt|train[+harvest][+pull]
 //   env: MAP=<file> START=match2 (we are player 2) LOGTAG=<prefix> BOT=<bundle url> PULL_MODEL=engine|off TRACE=from-to
+//   bot against bot (docs/escort-run-redteam.md): BOT2=<bundle url of the enemy, a SEPARATE copy of a build — one module
+//   graph per side> PERSONA=/PERSONA2=<red-team tricks of each side> GAME=<a stored match's game.json: its real terrain
+//   plus the fixed layout, the 48 corridor walls included>
 // Win: our escort stands on our flag, or the enemy escort dies. Loss: the mirror. Draw: 2000 ticks.
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -14,12 +17,17 @@ import { StructureSpawn } from './game/prototypes/spawn.mjs';
 import { StructureContainer } from './game/prototypes/container.mjs';
 import { EscortCreep } from './arena/season_4/escort_run/basic/prototypes.mjs';
 import { StructureRampart } from './game/prototypes/rampart.mjs';
+import { StructureWall } from './game/prototypes/wall.mjs';
 import { CostMatrix, searchPath } from './game/path-finder.mjs';
 import { getDirection } from './game/utils.mjs';
 
 // the bundle of THIS worktree's build (see the parallel-sessions rules: the stub tests what the worktree built)
 const BOT = process.env.BOT || new URL('../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/escortrun/EscortRun.export.mjs', import.meta.url).href;
 const MAP = process.env.MAP; // path to a 100-row DEBUG_MAP dump: '#' wall, '~' swamp, anything else plain
+const GAME = process.env.GAME; // path to a stored game.json: terrain string y*100+x, '1' wall, '2' swamp
+const LIVE = !!(MAP || GAME);
+const BOT2 = process.env.BOT2;
+const PERSONA = process.env.PERSONA || 'main', PERSONA2 = process.env.PERSONA2 || 'main';
 const ticks = parseInt(process.argv[2] || '2000', 10);
 const TRACE = process.env.TRACE ? process.env.TRACE.split('-').map((v) => parseInt(v, 10)) : null;
 const scenario = (process.argv[3] || 'none').split('+');
@@ -52,8 +60,8 @@ function buildMap() {
 }
 // match 1 (04.09.2026): the live layout — a source in each base corner, two more plus two 2500-containers on the far
 // right edge, the flags in the far corners, spawns starting at 500 energy
-const OURS = MAP ? { spawn: [9, 90], escort: [7, 92], source: [2, 97], flag: [95, 95] } : { spawn: [6, 93], escort: [7, 92], source: [9, 95], flag: [93, 93] };
-const ENEMY = MAP ? { spawn: [9, 9], escort: [7, 7], source: [2, 2], flag: [95, 4] } : { spawn: [6, 6], escort: [7, 7], source: [9, 4], flag: [93, 6] };
+const OURS = LIVE ? { spawn: [9, 90], escort: [7, 92], source: [2, 97], flag: [95, 95] } : { spawn: [6, 93], escort: [7, 92], source: [9, 95], flag: [93, 93] };
+const ENEMY = LIVE ? { spawn: [9, 9], escort: [7, 7], source: [2, 2], flag: [95, 4] } : { spawn: [6, 6], escort: [7, 7], source: [9, 4], flag: [93, 6] };
 // 500 on every map: measured by the first live match (04.09.2026); the synthetic map's 1000 was the guess before it
 const SPAWN_START = 500;
 function place(side, owner) {
@@ -64,7 +72,7 @@ function place(side, owner) {
   world.terrain[idx(side.spawn[0], side.spawn[1])] = 0; world.terrain[idx(side.source[0], side.source[1])] = 0; world.terrain[idx(side.escort[0], side.escort[1])] = 0; world.terrain[idx(side.flag[0], side.flag[1])] = 0;
   // the live layout: 24 ramparts of the owner round its spawn (5x5, the spawn cell included in the live match — here the
   // spawn cell is left out, it is impassable anyway); a creep on its own rampart takes its hits into the rampart
-  if (MAP) for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
+  if (LIVE) for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
     if (!dx && !dy) continue;
     world.objects.push(new StructureRampart(side.spawn[0] + dx, side.spawn[1] + dy, owner));
   }
@@ -75,12 +83,22 @@ function buildLiveMap(path) {
   if (rows.length !== 100) throw new Error(`map must have 100 rows, got ${rows.length}`);
   rows.forEach((r, y) => { if (r.length !== 100) throw new Error(`row ${y} has ${r.length} chars`); for (let x = 0; x < 100; x++) world.terrain[idx(x, y)] = r[x] === '#' ? 1 : r[x] === '~' ? 2 : 0; });
 }
-if (MAP) buildLiveMap(MAP); else buildMap();
+function buildGameMap(path) {
+  const g = JSON.parse(readFileSync(path, 'utf8'));
+  const t = ((g.game || {}).game || {}).terrain;
+  if (!t || t.length !== 10000) throw new Error(`${path}: no 10000-char terrain`);
+  for (let y = 0; y < 100; y++) for (let x = 0; x < 100; x++) { const ch = t[y * 100 + x]; world.terrain[idx(x, y)] = ch === '1' ? 1 : ch === '2' ? 2 : 0; }
+  // the fixed layout on every live map: the "secret passes" are walled by structures, not by terrain — 19 walls along
+  // y=9 and y=90 (x 43..61) and 10 along x=6 (y 45..54), 3000 hits each (the first live probe, docs/escort-run.md)
+  for (let x = 43; x <= 61; x++) { world.objects.push(new StructureWall(x, 9, 3000)); world.objects.push(new StructureWall(x, 90, 3000)); }
+  for (let y = 45; y <= 54; y++) world.objects.push(new StructureWall(6, y, 3000));
+}
+if (GAME) buildGameMap(GAME); else if (MAP) buildLiveMap(MAP); else buildMap();
 const swap = process.env.START === 'match2';
 const ours = place(swap ? ENEMY : OURS, 0);
 const theirs = place(swap ? OURS : ENEMY, 1);
 // far-side energy: two sources and two 2500-containers on the right edge (match 1 coordinates when a live map is used)
-if (MAP) {
+if (LIVE) {
   world.objects.push(new Source(96, 24, 1000, 1000)); world.objects.push(new Source(96, 75, 1000, 1000));
   world.objects.push(new StructureContainer(92, 49, 2500, 2500)); world.objects.push(new StructureContainer(92, 50, 2500, 2500));
 } else {
@@ -334,6 +352,8 @@ function enemyTick() {
 
 // ---------- run ----------
 const lines = [];
+const lines2 = [];
+let sink = lines; // where the bot's console goes: ours, or the enemy bot's while it runs
 let loopErrors = 0;
 const origWrite = process.stdout.write.bind(process.stdout);
 let buf = '';
@@ -343,25 +363,36 @@ process.stdout.write = (chunk) => {
   while ((i = buf.indexOf('\n')) >= 0) {
     const s = buf.slice(0, i);
     buf = buf.slice(i + 1);
-    lines.push(s);
-    if (s.startsWith('loop error')) loopErrors++;
+    sink.push(s);
+    if (s.startsWith('loop error') && sink === lines) loopErrors++;
   }
   return true;
 };
 const origLog = (...args) => origWrite(args.join(' ') + '\n');
-console.log = (...args) => { const s = args.join(' '); lines.push(s); if (s.startsWith('loop error')) loopErrors++; };
+console.log = (...args) => { const s = args.join(' '); sink.push(s); if (s.startsWith('loop error') && sink === lines) loopErrors++; };
 const bot = await import(BOT);
+const bot2 = BOT2 ? await import(BOT2) : null;
 const t0 = Date.now();
 let ended = '';
 let cpuMax = 0, cpuMaxTick = 0, cpuSlow = 0;
 for (let t = 1; t <= ticks; t++) {
   world.perspective = 0;
+  globalThis.ER_PERSONA = PERSONA;
   const tLoop = performance.now();
   try { bot.loop(); } catch (e) { loopErrors++; lines.push('loop error (uncaught): ' + (e && e.stack || e)); }
   const msLoop = performance.now() - tLoop;
   if (msLoop > cpuMax) { cpuMax = msLoop; cpuMaxTick = t; }
   if (msLoop > 50) cpuSlow++;
-  enemyTick();
+  if (bot2) {
+    // the enemy is a bot too: its own module graph (a separate copy of a build), its own view of the world, its own
+    // console
+    world.perspective = 1;
+    globalThis.ER_PERSONA = PERSONA2;
+    sink = lines2;
+    try { bot2.loop(); } catch (e) { lines2.push('loop error (uncaught): ' + (e && e.stack || e)); }
+    sink = lines;
+    world.perspective = 0;
+  } else enemyTick();
   step(Resource);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
   if (TRACE && t >= TRACE[0] && t <= TRACE[1]) {
@@ -385,6 +416,7 @@ const outDir = fileURLToPath(new URL('out/', import.meta.url));
 mkdirSync(outDir, { recursive: true });
 const log = `${outDir}run-${process.env.LOGTAG || ''}${scenario.join('+')}.log`;
 writeFileSync(log, lines.join('\n') + '\n\n=== EVENTS ===\n' + world.events.join('\n') + '\n');
+if (bot2) writeFileSync(log.replace(/\.log$/, '.enemy.log'), lines2.join('\n') + '\n');
 const c0 = creeps().filter((c) => c.owner === 0).length, c1 = creeps().filter((c) => c.owner === 1).length;
 origLog(`done: ${ended || `DRAW: ${ticks} ticks`} alive=${c0}/${c1} escort=${ours.esc.exists ? ours.esc.hits : 0}/${theirs.esc.exists ? theirs.esc.hits : 0} errors=${loopErrors} time=${((Date.now() - t0) / 1000).toFixed(1)}s log=${log}`);
 const errs = lines.filter((l) => l.startsWith('loop error'));
