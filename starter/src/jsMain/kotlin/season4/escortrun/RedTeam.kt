@@ -30,15 +30,17 @@ import screeps.api.structures.StructureRampart
  *    не мешает, а их эскорт на флаг больше не войдёт;
  *  - `blk` — тот же захватчик чужого флага, но ПОСЛЕ дебюта, первым заказом (так играл ShuP1#3: его M1 на 51-м сел на
  *    наш флаг раньше хранителя v23, 6ab8fcb0);
+ *  - `chase` — M1 после дебюта всегда стоит на их пути в CHASE_AHEAD клетках впереди поезда, не выбирая узких мест:
+ *    держит клетку, пока поезд её не прошёл, и перебегает (стендовый `chk` так обыгрывал v24 три раза из четырёх);
  *  - `choke` — M1 ПОСЛЕ дебюта встаёт на клетку впереди их поезда, где обход дороже всего (болото вокруг узкого
  *    прохода), и туда, куда успевает раньше поезда; когда поезд обошёл — перебегает на следующую (M1 ходит клетку в
  *    тик, поезд — в два). Замер по 120 маршрутам: один такой крип стоит поезду медианно 18 тиков, два — 36.
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("squat", "plug", "choke", "blk")
+    private val ORDER = listOf("squat", "plug", "choke", "blk", "chase")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
-    private val LATE = setOf("choke", "blk")
+    private val LATE = setOf("choke", "blk", "chase")
     private const val RAMPART_COST = 200
     private const val BUILD_RANGE = 3
 
@@ -69,7 +71,7 @@ internal object RedTeam {
     }
 
     private fun bodyOf(trick: String): Array<BodyPartType> = when (trick) {
-        "squat", "choke", "blk" -> arrayOf(MOVE)
+        "squat", "choke", "blk", "chase" -> arrayOf(MOVE)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
@@ -100,6 +102,7 @@ internal object RedTeam {
                 "squat", "blk" -> squat(w, c)
                 "plug" -> plug(w, c)
                 "choke" -> choke(w, c)
+                "chase" -> chase(w, c)
             }
         }
     }
@@ -164,6 +167,25 @@ internal object RedTeam {
     }
 
     // ---------- choke ----------
+
+    private const val CHASE_AHEAD = 10
+    private var chaseTarget = -1
+
+    private fun chase(w: EscortRun.World, c: Creep) {
+        val esc = w.enemyEscort ?: return
+        val flow = w.enemyEscortFlow ?: return
+        val route = Chokes.route(flow, esc)
+        if (route.size < 3) return
+        val t = chaseTarget
+        val holding = t >= 0 && c.x == t / 100 && c.y == t % 100 && flow[t] >= 0 && flow[esc.x * 100 + esc.y] > flow[t]
+        if (!holding && (t < 0 || t !in route.toHashSet() || flow[esc.x * 100 + esc.y] <= flow[t])) {
+            chaseTarget = route[minOf(CHASE_AHEAD, route.size - 2)]
+            println("red t=${w.now} chase: park (${chaseTarget / 100},${chaseTarget % 100})")
+        }
+        val g = chaseTarget
+        if (c.x == g / 100 && c.y == g % 100) { log(w, c, "chase", "holding"); return }
+        EscortRun.stepRed(w, c, pos(g / 100, g % 100), 0)
+    }
 
     /** Тот же блокировщик, что у основной логики (EscortRun.runChoke): взломщик отличается только тем, когда он куплен. */
     private fun choke(w: EscortRun.World, c: Creep) {
