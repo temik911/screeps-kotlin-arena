@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 203
+    private const val BOT_VERSION = 204
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6646,8 +6646,12 @@ object SpawnAndSwamp {
     private const val USE_FLEET_FIRST = true
     /** A hauler with no live CARRY is not fleet; the fort's pile builder yields to a short fleet too (v201). */
     private const val USE_HULK_NOT_HAULER = true
-    /** A strike the race has taken is walked on a matrix of obstacles only, not round the fire (runRaiders, v202). */
-    private const val USE_RAID_DIRECT_STRIKE = true
+    /** A strike the race has taken is walked on a matrix of obstacles only, not round the fire (runRaiders, v202).
+     *  OFF (v204): A/B v201 / v202 against けろびー#50 (6+6) 4-0-2 / 2-2-2, and the pair's hits at 450 were 3600, 3300,
+     *  3600, 3240, 3600, 3600 against 3600, 3600, 2580, 2136, 2050, 3600 — by 600 three v202 pairs were dead against one.
+     *  The race prices his fire only from the pair's arrival (`t > first`), not on the walk: walked straight, the pair
+     *  paid the fire the detour had spared it. The walk's fire has to enter the race before the walk can be straight */
+    private const val USE_RAID_DIRECT_STRIKE = false
     /** A re-buy window that lapsed with no raider bought reopens the re-buy and the last stand (v202). */
     private const val USE_RAID_REOPEN = true
     /** A recall off a winning siege waits while the house outlasts the siege left and the walk back (v203). */
