@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v29"
+    private const val BOT_VERSION = "v30"
 
     private const val LOG_EVERY = 50
 
@@ -903,9 +903,14 @@ object SpawnAndSwampAdvanced {
         val blocked = blockedCells(all)
         val ranked = sources.filter { idOf(it) !in taken }.map { s -> Triple(s, pathTicks(from, s), enemyFrom.minOf { pathTicks(it, s) }) }
         println("expansion: candidates " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})us=${it.second}/them=${it.third}" })
-        // лучший из БЕЗОПАСНЫХ: v20 брал только первый по запасу, а у него стояла армия けろびー — и не расширялся вовсе,
-        // когда два других наших источника были свободны
-        for ((s, _, _) in ranked.filter { it.second < it.third }.sortedWith(compareByDescending<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
+        // кандидат — любой свободный источник (без его спавна или площадки рядом), кроме глубоко его (к нему он вдвое
+        // ближе нас); первым — самый спорный: тот, до которого ему ближе всего, — его он заберёт раньше, а спокойный
+        // наш подождёт. v29 брал только «наши» (мы ближе его спавна) и отдал stachu3478 свой второй домашний источник:
+        // его спавн у центрального был к нему на восемь тиков ближе, источник стоял свободным до ~820-го, а к 1200-му у
+        // него было четыре источника против наших двух. Лучший из БЕЗОПАСНЫХ — как с v22
+        val hisStuff = all.filter { it.asDynamic().my == false && (it is StructureSpawn || it is ConstructionSite) }
+        val free = ranked.filter { (s, us, them) -> them * 2 >= us && hisStuff.none { getRange(it, s) <= INTRUDER_SOURCE_RANGE + 1 } }
+        for ((s, _, _) in free.sortedWith(compareBy<Triple<Source, Int, Int>> { it.third }.thenBy { it.second })) {
             planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) }?.let { return it }
         }
         return null
@@ -1510,7 +1515,11 @@ object SpawnAndSwampAdvanced {
                 // защитники — все его бойцы, что дойдут до цели не позже нас (стоят к ней не дальше, чем мы): v18 бил
                 // по «стражам в 15 клетках», слал одного-двух бойцов на спавн без стражей, и по дороге их ловила его
                 // армия — 40–48 потерянных крипов за ничью
-                val reach = maxOf(STRIKE_GUARD_RANGE, getRange(home, sp))
+                // …и за время осады: хиты спавна с рампартом на наш урон — v28 бил группами по 1–7 «спавн без стражей»,
+                // а его бродячая армия успевала к осаде (60 потерянных крипов в поражении от stachu3478)
+                val ourDps = homeGroup.sumOf { dpsOf(it) }.coerceAtLeast(1)
+                val siegeTicks = simSpawnOf(sp, all).hits / ourDps
+                val reach = maxOf(STRIKE_GUARD_RANGE, getRange(home, sp) + siegeTicks)
                 val guards = enemyCombat.filter { getRange(it, sp) <= reach }
                 val births = projectedBirths(t, toSp, enemySpawnObjs.size).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
                 val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
