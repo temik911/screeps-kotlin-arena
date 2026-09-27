@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 2
+const val BOT_VERSION = 3
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -79,7 +79,7 @@ fun towerPower(power: Int, r: Int): Double {
     return power * (1 - TOWER_FALLOFF * f)
 }
 
-enum class Mode { MARCH, HOLD, FIGHT, RETREAT }
+enum class Mode { MARCH, HOLD, FIGHT, RETREAT, SWEEP }
 
 /**
  * v2 — the first bot that plays. Rules and layout were measured by the v1 probe (27.09.2026, `docs/pain-and-gain-advanced.md`):
@@ -162,7 +162,7 @@ object PainAndGainAdvanced {
     private fun probe() {
         println("hello season4 pain-and-gain-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} TICKS_LIMIT=$TICKS_LIMIT MAX_SCORE_PER_TICK=$MAX_SCORE_PER_TICK")
-        println("tuning: engage=$ENGAGE_RANGE fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO slack=$MARCH_SLACK towerMin=$TOWER_MIN_DAMAGE")
+        println("tuning: engage=$ENGAGE_RANGE fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE")
         println("flagtypes: ${JSON.stringify(FLAG_TYPES)}")
         println("consts: TOWER_RANGE=$TOWER_RANGE TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_POWER_HEAL=$TOWER_POWER_HEAL " +
             "TOWER_OPTIMAL_RANGE=$TOWER_OPTIMAL_RANGE TOWER_FALLOFF_RANGE=$TOWER_FALLOFF_RANGE TOWER_FALLOFF=$TOWER_FALLOFF " +
@@ -267,54 +267,134 @@ object PainAndGainAdvanced {
     private fun towerDpsAt(list: List<StructureTower>, x: Int, y: Int): Double =
         list.sumOf { towerPower(TOWER_POWER_ATTACK, Grid.range(it.x, it.y, x, y)) / TOWER_COOLDOWN }
 
+    /** The largest cluster of our fighters, creeps linked when within GROUP_LINK of each other. Decisions are the main
+     *  group's: v2 let any straggler "see" an enemy and put the whole army in a fight it was forty cells away from. */
+    private fun mainGroup(army: List<Unit>): List<Unit> {
+        val seen = HashSet<String>()
+        var best: List<Unit> = emptyList()
+        for (s in army) {
+            if (s.id in seen) continue
+            val comp = ArrayList<Unit>(); val queue = ArrayList<Unit>(); queue.add(s); seen.add(s.id)
+            while (queue.isNotEmpty()) {
+                val u = queue.removeAt(queue.size - 1); comp.add(u)
+                for (v in army) if (v.id !in seen && Grid.range(u.x, u.y, v.x, v.y) <= GROUP_LINK) { seen.add(v.id); queue.add(v) }
+            }
+            if (comp.size > best.size) best = comp
+        }
+        return best
+    }
+
+    private val hunterOf = HashMap<String, String>()   // our hunter id -> enemy id
+
     private fun army() {
         val army = mine.filter { it.role != Role.PULLER }
         if (army.isEmpty()) return
-        val cx = army.sumOf { it.x } / army.size; val cy = army.sumOf { it.y } / army.size
+        val group = mainGroup(army)
+        val cx = group.sumOf { it.x } / group.size; val cy = group.sumOf { it.y } / group.size
         val foes = theirs.filter { it.armed || it.heal > 0 }
-        val near = foes.filter { e -> army.any { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGE_RANGE } }
+        val near = foes.filter { e -> group.any { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGE_RANGE } }
         if (near.isNotEmpty() && firstContact == 0) firstContact = t
-        val duel = Duel(army, near.ifEmpty { foes }, ourFx, theirFx, towerDpsAt(ourFedTowers(), cx, cy), towerDpsAt(theirTowers(), cx, cy))
+        val duel = Duel(group, near.ifEmpty { foes }, ourFx, theirFx, towerDpsAt(ourFedTowers(), cx, cy), towerDpsAt(theirTowers(), cx, cy))
+        val whole = Duel(army, foes, ourFx, theirFx)
+        // the enemy's fighting strength is gone when what is left of it loses to our army many times over, or when no
+        // more than a pair of its armed creeps is left: then its flags and its survivors are what the score is
+        val swept = foes.isEmpty() || whole.ratio >= SWEEP_RATIO || foes.count { it.armed } <= 2
         val want = when {
             near.isEmpty() -> null
+            swept && near.all { e -> group.count { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGE_RANGE } > 0 } && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
             mode == Mode.FIGHT && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             else -> Mode.RETREAT
         }
-        val objective = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
-        val next = want ?: if (army.count { Grid.range(it.x, it.y, objective.x, objective.y) <= 3 } * 2 >= army.size) Mode.HOLD else Mode.MARCH
-        if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} near=${near.size} ours=${army.size}") }
+        val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
+        val sweepFlag = if (swept) flags.filter { it.my != true }.minByOrNull { Grid.to(it.x, it.y)[Grid.idx(cx, cy)] } else null
+        val objective = sweepFlag ?: centre
+        val next = want ?: when {
+            swept -> Mode.SWEEP
+            army.count { Grid.range(it.x, it.y, objective.x, objective.y) <= 3 } * 2 >= army.size -> Mode.HOLD
+            else -> Mode.MARCH
+        }
+        if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} whole=${whole.ratio.asDynamic().toFixed(2)} near=${near.size} group=${group.size}/${army.size} obj=${objective.x},${objective.y}") }
 
         fire(army)
+        // hunters: in a sweep, light armed creeps go in pairs after the enemy's survivors — a lone runner sits on a flag
+        // or walks between them, and an `h4m4` heals itself 48 a tick, more than one `r4m4` does to it
+        val hunters = if (mode == Mode.SWEEP || (swept && mode != Mode.RETREAT)) assignHunters(army) else { hunterOf.clear(); emptyList() }
+        val rest = army.filter { it !in hunters }
+        val restGroup = group.filter { it !in hunters }
+        for (u in rest) if (u !in restGroup && u.moves > 0) rejoin(u, restGroup.ifEmpty { group })
         when (mode) {
-            Mode.FIGHT -> fight(army)
+            Mode.FIGHT -> fight(restGroup)
             Mode.RETREAT -> {
                 val home = ourFedTowers().minByOrNull { Grid.to(it.x, it.y)[Grid.idx(cx, cy)] }
-                val goal = home?.let { h -> flags.firstOrNull { Grid.range(it.x, it.y, h.x, h.y) <= 1 } } ?: objective
-                march(army, goal.x, goal.y)
+                val goal = home?.let { h -> flags.firstOrNull { Grid.range(it.x, it.y, h.x, h.y) <= 1 } } ?: centre
+                march(restGroup, goal.x, goal.y)
             }
-            Mode.MARCH -> march(army, objective.x, objective.y)
-            Mode.HOLD -> hold(army, objective.x, objective.y)
+            Mode.MARCH, Mode.SWEEP -> if (restGroup.isNotEmpty()) march(restGroup, objective.x, objective.y)
+            Mode.HOLD -> hold(restGroup, objective.x, objective.y)
         }
+        for (h in hunters) hunt(h)
     }
 
-    /** Everyone walks the field to the goal, but no one more than MARCH_SLACK ahead of the rearmost: the group moves
-     *  at the pace of its slowest (the heavies take two ticks a plain step), and the rear pushes through the waiting. */
+    private fun assignHunters(army: List<Unit>): List<Unit> {
+        val prey = theirs.sortedBy { e -> army.minOf { Grid.range(it.x, it.y, e.x, e.y) } }
+        val pool = army.filter { !it.heavy && it.armed && it.moves > 0 }.toMutableList()
+        hunterOf.keys.retainAll { id -> pool.any { it.id == id } && theirs.any { e -> e.id == hunterOf[id] } }
+        for (e in prey) {
+            val on = hunterOf.count { it.value == e.id }
+            repeat(maxOf(0, HUNT_PAIR - on)) {
+                val free = pool.filter { it.id !in hunterOf }.minByOrNull { Grid.range(it.x, it.y, e.x, e.y) } ?: return@repeat
+                hunterOf[free.id] = e.id
+            }
+        }
+        return pool.filter { it.id in hunterOf }
+    }
+
+    private fun hunt(h: Unit) {
+        val prey = theirs.firstOrNull { it.id == hunterOf[h.id] } ?: return
+        val stop = if (h.melee > 0) 1 else 2
+        if (Grid.range(h.x, h.y, prey.x, prey.y) <= stop) return
+        stepToward(h, preyField(prey), 60)
+    }
+
+    private val preyFields = HashMap<Int, IntArray>()
+    private var preyTick = -1
+    private fun preyField(e: Unit): IntArray {
+        if (preyTick != t) { preyFields.clear(); preyTick = t }
+        return preyFields.getOrPut(e.cell) { Grid.fresh(intArrayOf(e.cell)) }
+    }
+
+    private fun rejoin(u: Unit, group: List<Unit>) {
+        if (group.isEmpty()) return
+        val gx = group.sumOf { it.x } / group.size; val gy = group.sumOf { it.y } / group.size
+        val anchor = group.minByOrNull { Grid.range(it.x, it.y, gx, gy) }!!
+        if (Grid.range(u.x, u.y, anchor.x, anchor.y) <= 2) return
+        stepToward(u, Grid.to(anchor.x, anchor.y), 20)
+    }
+
+    /**
+     * The group walks the field to the goal at the pace of its slowest creeps, the heavies (two ticks a plain step,
+     * four with one fatigue flag of ours): they never wait. The faster ones keep within ESCORT_LEAD of the heavies'
+     * front and, when ahead, stand where they are without holding the cell, so a heavy behind pushes past them. v2
+     * made the front wait for the rear and held the waiting cells — the rear then had nowhere to step, and on two maps
+     * of five the army stood a thousand ticks and more.
+     */
     private fun march(army: List<Unit>, gx: Int, gy: Int) {
+        if (army.isEmpty()) return
         val f = Grid.to(gx, gy)
-        // a creep that has not moved for a while is not the pace of the group: it is stuck, and waiting for it is how a
-        // group stops for good
-        val pace = army.filter { (stillFor[it.id] ?: 0) < STUCK_TICKS }.ifEmpty { army }
-        val rear = pace.maxOf { f[it.cell] }
-        val waiting = army.filter { f[it.cell] <= 1 || f[it.cell] < rear - MARCH_SLACK }
-        for (u in waiting) hold(u)
+        val slowest = army.filter { it.moves > 0 }.maxOfOrNull { it.ticksPerStep(ourFx.fatigue) } ?: return
+        val pacers = army.filter { it.moves > 0 && it.ticksPerStep(ourFx.fatigue) >= slowest }
+        val live = pacers.filter { (stillFor[it.id] ?: 0) < STUCK_TICKS }.ifEmpty { pacers }
+        val front = live.minOf { f[it.cell] }
         for (u in army.sortedByDescending { f[it.cell] }) {
-            if (u in waiting) continue
-            stepToward(u, f, f[u.cell])
+            if (f[u.cell] <= 1) continue
+            if (u !in pacers && f[u.cell] < front - ESCORT_LEAD) continue
+            stepToward(u, f, if (u in pacers) 200 + f[u.cell] else f[u.cell])
         }
     }
 
     private fun hold(army: List<Unit>, gx: Int, gy: Int) {
+        if (army.isEmpty()) return
         val f = Grid.to(gx, gy)
         val keeper = army.firstOrNull { it.x == gx && it.y == gy }
             ?: army.filter { it.role == Role.HEALER }.minByOrNull { f[it.cell] }
@@ -332,6 +412,7 @@ object PainAndGainAdvanced {
     /** In a fight: melee close on the nearest enemy, ranged stand at three from their target and out of the enemy's
      *  melee reach, healers go to the most hurt of ours and keep out of the enemy's melee. */
     private fun fight(army: List<Unit>) {
+        if (army.isEmpty()) return
         val toFoe = Grid.fresh(theirs.map { it.cell }.toIntArray())
         val enemyMelee = theirs.filter { it.melee > 0 }
         for (u in army) {
@@ -441,7 +522,10 @@ object PainAndGainAdvanced {
     const val ENGAGE_RANGE = 8
     const val FIGHT_RATIO = 1.1
     const val RETREAT_RATIO = 0.8
-    const val MARCH_SLACK = 6
+    const val ESCORT_LEAD = 2
     const val STUCK_TICKS = 6
+    const val GROUP_LINK = 4
+    const val SWEEP_RATIO = 4.0
+    const val HUNT_PAIR = 2
     const val TOWER_MIN_DAMAGE = 200.0
 }
