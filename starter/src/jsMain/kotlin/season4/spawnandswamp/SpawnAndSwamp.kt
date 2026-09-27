@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 213
+    private const val BOT_VERSION = 214
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2415,7 +2415,8 @@ object SpawnAndSwamp {
             job != null && ctx.builders[0].body.count { it.type == WORK && it.hits > 0 } < keeperBody(ctx, job.site?.let { InfluenceMap.cell(it.x, it.y) }, job.left, flow).count { it == WORK }
         }
         if (USE_FORT_KEEPER_FIRST && USE_FORT_HOME && fortHome && homeSpawnTurn && ctx.myTowers.isEmpty() && (ctx.builders.isEmpty() || keeperShort) &&
-            siteJobs.any { it.site != null && it.inTime } && !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
+            (siteJobs.any { it.site != null && it.inTime } || (USE_FORT_RAMPART_FIRST && ctx.builders.isEmpty() && fortSpot(ctx) != null)) &&
+            !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty())) {
             val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
             val towerJob = if (USE_RAID_FINISH) siteJobs.filter { it.kind == "StructureTower" && it.inTime }.minByOrNull { it.left } else null
             val keeper = if (towerJob != null) keeperBody(ctx, towerJob.site?.let { InfluenceMap.cell(it.x, it.y) }, towerJob.left, flow)
@@ -6481,8 +6482,15 @@ object SpawnAndSwamp {
     /** The fortified house ramparts its tower spot first and puts the tower site under it (v143).
      *  OFF — measured live 26.09.2026: the engine takes a tower site on our rampart (err=null, up to 98 shots), but the
      *  A/B against kerobi#35/#22 (4+4 each) went v142 0-4-4 / v143 1-6-1 — by rating (draws +1..+6 against him, losses
-     *  -6..-7) v142 is ahead; the earlier keeper and the rampart's 200 buy no house that v142 did not keep. */
-    private const val USE_FORT_RAMPART_FIRST = false
+     *  -6..-7) v142 is ahead; the earlier keeper and the rampart's 200 buy no house that v142 did not keep.
+     *  ON again (v214), on a different bot: all three early losses to けろびー since v195 (v197, v202, v213) went one way —
+     *  his M5A1 stepped the tower's site off at 1190-1245 of 1250 (415, 494, 496), the house then stood with no tower and
+     *  fell to his storm by 700-850; over 101 games with him, with a tower 72-23-1, without one 1-0-4, and his storm before
+     *  t=1000 took the house in 0 of 96 games with a tower against 3 of 4 without. A site is one strike for the whole
+     *  build (62-144 ticks); under our rampart his M5A1 needs 10000/30 = 333 ticks of strikes. v143's verdict came from
+     *  a bot with no raid and a fort flagged at 322-666; the fort's reserve and its keeper-first purchase now also hold
+     *  while the spot's rampart is built (fortPending, the keeper's turn) — they looked only at the tower's site */
+    private const val USE_FORT_RAMPART_FIRST = true
     /** In a fortified house the keeper is bought before haulers while its tower is not up, and re-bought under a raid
      *  once it is (spawnIfNeeded, v145). */
     private const val USE_FORT_KEEPER_FIRST = true
@@ -7601,7 +7609,10 @@ object SpawnAndSwamp {
     private fun fortPending(ctx: Ctx): Boolean {
         if (!fortIncomplete(ctx)) return false
         if (!USE_FORT_HONEST) return ctx.myTowers.isNotEmpty() || siteJobs.any { it.kind == "StructureTower" && it.inTime }
-        val towerInTime = siteJobs.any { it.kind == "StructureTower" && it.inTime }
+        // (v214) while the fort's spot is ramparted first there is no tower site yet, and the fort is pending all the same
+        val spotPhase = USE_FORT_RAMPART_FIRST && fortHome && ctx.myTowers.isEmpty() && siteJobs.none { it.kind == "StructureTower" } &&
+            fortSpot(ctx) != null
+        val towerInTime = siteJobs.any { it.kind == "StructureTower" && it.inTime } || spotPhase
         if (ctx.myTowers.isEmpty()) return towerInTime
         if (fortTwin && ctx.myTowers.size < 2 && !fortIncomplete(ctx, withTwin = false)) return towerInTime
         return true
