@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 188
+    private const val BOT_VERSION = 189
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6489,6 +6489,9 @@ object SpawnAndSwamp {
     private const val USE_COLUMN_ANY_WAVE = true
     /** A marching wave does not wait for a mate that went after a creep of his on the way (runFighters' cohesion, v188). */
     private const val USE_ENGAGED_NOT_WAITED = true
+    /** The raid's race: a walking target as fast as the pair is not struck, his gun fires from its reach off, and the
+     *  weakest raider must also walk out of his reach after the kill (raidOutlasts, v189). */
+    private const val USE_RAID_RACE_EXIT = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6579,12 +6582,21 @@ object SpawnAndSwamp {
      * over the ground at its own pace — take the weakest raider's hits; the pair is worth its next builders.
      */
     private fun raidOutlasts(ctx: Ctx, raiders: List<Creep>, target: Position, left: Int, field: IntArray, healed: Boolean = false): Boolean {
+        // A WALKING CREEP AS FAST AS THE PAIR IS NOT STRUCK (v189). The race took the target as standing, and his builder on
+        // plain walks a cell a tick like the pair: against けろびー#50 pairs chased escorted builders for 50-85 ticks with no
+        // strike and lost 900-1230 of their hits (in the wins 0-30), the builder living on 768-952 ticks. A creep that
+        // moved last tick and is not slower than a raider where it stands is struck once it stops — the pair waits for that
+        if (USE_RAID_RACE_EXIT) {
+            val walker = ctx.enemyCreeps.firstOrNull { it.x == target.x && it.y == target.y }
+            if (walker != null && enemyPrevCell[walker.id].let { it != null && it != walker.x * 100 + walker.y } &&
+                periodAt(walker, walker.x, walker.y) <= raiders.minOf { periodAt(it, walker.x, walker.y) }) return false
+        }
         val strikes = raiders.map { r -> (getRange(r, target) - 1).coerceAtLeast(0) to r.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER }
             .filter { it.second > 0 }
         if (strikes.isEmpty()) return false
         val weakest = raiders.minOf { it.hits }
         val first = strikes.minOf { it.first }
-        val fire = ArrayList<Pair<Int, Double>>()
+        val fire = ArrayList<Triple<Int, Double, Int>>()
         // a creep is healed by his healers from the tick they walk next to it (v186); a structure is not
         val heal = ArrayList<Pair<Int, Double>>()
         for (e in ctx.combatEnemies) {
@@ -6596,7 +6608,7 @@ object SpawnAndSwamp {
             val reach = if (p.ranged > 0.0) RANGED_RANGE else 1
             val at = if (e.body.none { it.type == MOVE && it.hits > 0 }) { if (getRange(e, target) <= reach + 1) 0 else continue }
                 else (pathTicks(e, field, e.x * 100 + e.y).coerceAtMost(Int.MAX_VALUE / 4) - reach * plainPeriod(e)).coerceAtLeast(0)
-            fire.add(at to dmg)
+            fire.add(Triple(at, dmg, reach))
         }
         // the race ends by the tick the slowest raider alone would have taken it
         val horizon = strikes.maxOf { it.first } + left / strikes.minOf { it.second } + 1
@@ -6605,8 +6617,17 @@ object SpawnAndSwamp {
         for (t in 1..horizon) {
             for ((a, d) in strikes) if (t > a) dealt += d
             for ((a, h) in heal) if (t > a) dealt -= h
-            if (dealt >= left) return true
-            if (t > first) for ((a, d) in fire) if (t > a) taken += d
+            // …and the pair must walk out of his reach after the kill (v189): the race ended at the kill, the fight did not
+            // — against けろびー#50 a pair entered a bare spawn with the race at 95 % of its weakest raider's hits, took the
+            // spawn and both died (505, 550) with his M5R5 as fast on plain; in all seven wins the entries were at 75 % or
+            // less. The fire of the kill's tick is taken for the reach's cells more at a cell a tick
+            if (dealt >= left) {
+                if (!USE_RAID_RACE_EXIT) return true
+                val rate = fire.sumOf { (a, d, _) -> if (t > a) d else 0.0 }
+                return taken + rate * (RANGED_RANGE + 1) < weakest
+            }
+            // …and his gun at the target reaches the pair while it is still on its way in, from its reach off (v189)
+            for ((a, d, reach) in fire) if (t > a && (t > first || (USE_RAID_RACE_EXIT && t + reach > first))) taken += d
             if (taken >= weakest) return false
         }
         return false
