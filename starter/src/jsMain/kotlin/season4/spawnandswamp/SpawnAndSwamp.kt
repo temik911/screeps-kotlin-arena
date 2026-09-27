@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 200
+    private const val BOT_VERSION = 201
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -972,7 +972,11 @@ object SpawnAndSwamp {
             // …and, while no tower of ours stands, with a live WORK (v174): against kerobi#48 his storm shot off all the
             // keeper's WORK and the tower's site stood at 603/1250 for 226 ticks with no keeper bought in its place
             (!USE_HOUSE_FIRST || c.body.any { it.type == WORK && it.hits > 0 } || getObjectsByPrototype(StructureTower::class).any { it.my == true && it.exists }) }
-        val haulers = active.filter { c -> c.body.any { it.type == CARRY } && c.body.none { it.type == WORK } }
+        // A HULK IS NOT A HAULER (v201): his M5A1 shoots off a hauler's CARRY and leaves its MOVE, and the hulk carried
+        // nothing yet counted as fleet — against けろびー#49 (v200 loss) the log read `haulers=5` to 559 with three hulks
+        // among them, so the fleet-first rule never saw the fleet short and the payback check refused the replacement
+        val haulers = active.filter { c -> (if (USE_HULK_NOT_HAULER) c.body.any { it.type == CARRY && it.hits > 0 } else c.body.any { it.type == CARRY }) &&
+            c.body.none { it.type == WORK } }
         val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } && !(USE_RAID && isRaider(c)) }
         // армия врага — И лекари: M4H2 без оружия считался «мягкой» целью, как хаулер, и бойцы шли за ним
         // как за рейдером — прямо в его конвой из четырёх M3R3 (матч 13, t=1150); в локальном перевесе его
@@ -2373,6 +2377,8 @@ object SpawnAndSwamp {
         // and met five of his spawns. In the five games where the pair came out whole, the first was born before the flag
         // …and a re-buy (v163) too: `raidWanted` resets the pair, and it stood after the pile builder's `fpSave`, which
         // returned first for 516 ticks against kerobi#49 — no `raid again` in all twenty games of the v160 series
+        // (v200) the fleet below its own peak while the economy wants a hauler: the savings ahead of the hauler yield
+        val fleetShort = USE_FLEET_FIRST && ctx.haulers.size < haulerPeak && needHauler
         if (USE_RAID_LAST && USE_RAID && !armNow && (if (USE_RAID_TOPUP) raidWanted(ctx) && (raidOrdered in 1 until RAID_SIZE || raidRebuyAt >= 0)
                 else raidOrdered in 1 until RAID_SIZE && raidWanted(ctx))) {
             val price = RAID_BODY.sumOf { cost(it) }
@@ -2383,7 +2389,6 @@ object SpawnAndSwamp {
             // Against けろびー (v198 draws) his M5A1 killed 3 of 5 haulers by 479 in one game and all 5 by 628 in another;
             // the spawn kept saving for a raider of 990 at the income two haulers (or none) bring, the fleet stayed at 2 and
             // 0, there was no raider for 774 and 1160 ticks while his army stood far from his main, and both were draws
-            val fleetShort = USE_FLEET_FIRST && ctx.haulers.size < haulerPeak && needHauler
             if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2) && !fleetShort) return reach("rSave2")
             if (energy < price) { reach("rSkip2") } else {
             val r = spawn.spawnCreep(RAID_BODY)
@@ -2426,7 +2431,11 @@ object SpawnAndSwamp {
         // tower in those draws). The builder waits at `pileWaitCell` and runs its jobs as against everyone else
         // …and not while we have no hauler (v163): against kerobi#49 his M5A1 killed all six by 695 and the saving held
         // the spawn's regeneration for 516 ticks while a hauler (200) would have brought 6-8 a tick back
+        // …and not while the fleet is short of its own peak (v201): v200's fleet-first let the raider's saving pass, and the
+        // turn went to this saving instead of the hauler — against けろびー#50 (a v200 draw) the fleet stood below its peak
+        // while two pile builders of 600 were bought and died with 120/1000 built, and no raider lived for 676 ticks
         if (USE_FORT_PILE && USE_PILE_SPAWN && USE_FORT_HOME && fortHome && !lastStand && (!USE_RAID_TOPUP || ctx.haulers.isNotEmpty()) &&
+            !(USE_HULK_NOT_HAULER && fleetShort) &&
             ctx.myTowers.isNotEmpty() && !fortIncomplete(ctx, withTwin = false) &&
             ctx.builders.isNotEmpty() && !armNow && pileOrderedAt != getTicks() && ctx.myCreeps.none { isPileBuilder(it) } &&
             arenaInfo.ticksLimit - getTicks() > 2 * (PILE_BODY.size * CREEP_SPAWN_TIME +
@@ -6619,6 +6628,8 @@ object SpawnAndSwamp {
     private const val USE_LAST_SHOT = true
     /** The raider's saving yields to a hauler while the fleet is below its own peak and the economy wants one (v200). */
     private const val USE_FLEET_FIRST = true
+    /** A hauler with no live CARRY is not fleet; the fort's pile builder yields to a short fleet too (v201). */
+    private const val USE_HULK_NOT_HAULER = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
