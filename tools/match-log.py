@@ -282,7 +282,7 @@ def fetch_game(c, gid):
       }};
       const g = await get('{API}/game/{gid}');
       if (g && g.ok) out.game = await g.text();
-      for (let t = 100; t <= 3000; t += 100) {{
+      for (let t = 100; t <= 10000; t += 100) {{  // the loop ends at the first missing chunk; 3000 cut Spawn and Swamp advanced (5000 ticks) short
         const r = await get('{API}/game/{gid}/log/' + t);
         if (!r || !r.ok) break;
         const body = await r.text();
