@@ -49,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 8
+const val BOT_VERSION = 9
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -126,6 +126,8 @@ object EscortRunAdvanced {
     private const val DANGER_RADIUS = 3
     /** A breach is worth it while an escort of his stands out of his ramparts this close to his spawn. */
     private const val BREACH_TARGET_RANGE = 15
+    /** How long before our arrival his army is taken to start answering an operation. */
+    private const val NOTICE_TICKS = 25
 
     private const val FIGHTER_PRIORITY = 30
     private const val HAULER_PRIORITY = 20
@@ -989,7 +991,11 @@ object EscortRunAdvanced {
         val dps = maxOf(1, group.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) })
         var need = target.hits + (w.enemyRamparts[key(target)]?.hits ?: 0)
         if (!meleeReachable(w, target)) need += breachCell(w, target)?.let { w.enemyRamparts[key(it)]?.hits } ?: 0
-        val done = eta + need / dps
+        // he answers what he sees coming, not our leaving home: those join who reach the target within the kill plus the
+        // last NOTICE_TICKS of our way. Counting the whole way, v8 never struck けろびー#15's two escorts standing out of
+        // his ramparts by his spawn from 179 to ~1600 with the pass open from 743 — his blob sat 45 cells off in the
+        // centre, a 9-tick kill away (6ab93352)
+        val done = minOf(eta, NOTICE_TICKS) + need / dps
         val joiners = w.enemyArmed.filter { idOf(it) !in ids && getRange(it, target) <= done }
         return Bodies.fight(units(group), units(inWay + joiners))
     }
@@ -1204,7 +1210,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=round danger=$DANGER_RADIUS joiners=eta breach=ifTarget defend=ramparts homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=round danger=$DANGER_RADIUS joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
