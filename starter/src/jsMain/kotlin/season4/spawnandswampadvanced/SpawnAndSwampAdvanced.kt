@@ -30,6 +30,8 @@ import screeps.api.SPAWN_HITS
 import screeps.api.SearchGoal
 import screeps.api.SearchPathOptions
 import screeps.api.Source
+import screeps.api.CostMatrix
+import screeps.api.FindPathOptions
 import screeps.api.TERRAIN_SWAMP
 import screeps.api.TERRAIN_WALL
 import screeps.api.TOWER_COOLDOWN
@@ -96,7 +98,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v26"
+    private const val BOT_VERSION = "v27"
 
     private const val LOG_EVERY = 50
 
@@ -127,6 +129,12 @@ object SpawnAndSwampAdvanced {
     /** Защита снимается, только когда угроз нет и на столько клеток дальше: без запаса стрелки соперника, кружащие
      *  у границы (けろびー, v4), переключали позу каждые два-три тика, и наши бегали за ними туда-обратно. */
     private const val THREAT_RELEASE = 5
+    /** Урон его бойца, делённый на это, — надбавка к цене клетки в его досягаемости: `M5R5` (50) даёт +25 на клетку, и
+     *  проход сквозь зону одного стрелка (~7 клеток) обходится дороже обхода в пару десятков клеток. */
+    private const val DANGER_SCALE = 2
+    /** Башня бьёт на 20 клеток с затуханием; опасна до десяти, где выстрел ещё больше половины. */
+    private const val TOWER_DANGER_RANGE = 10
+
     /** Место работ (пролом сейфа, клетка второго спавна) безопасно, если его боевых крипов нет ближе стольких клеток:
      *  дальность стрелка плюс путь, который он проходит, пока пробойщик ломает стену. */
     private const val WORKSITE_SAFE = 12
@@ -185,7 +193,10 @@ object SpawnAndSwampAdvanced {
     /** Роли крипов вне экономики баз и армии: пробойщик, строитель сейфа. Заказанный крип узнаётся по телу. */
     private val roleOf = HashMap<String, String>()
     private val pendingRoles = ArrayList<Pair<String, String>>()
-    private var vault: Vault? = null
+    /** Оба кармана с контейнерами: свой первым (по пути от стартов), второй — следом, когда свой работает или его
+     *  место небезопасно. Оператор 27.09.2026: второй «точно такой же закуток был прямо около нашего дополнительного
+     *  спавна и полностью свободен», а бот видел только свой. */
+    private val vaults = ArrayList<Vault>()
     private var holdTicks = 0
     /** Чужие площадки башен: id → (тик, прогресс) при первой встрече — из них скорость его стройки. */
     private val enemySiteSeen = HashMap<String, Pair<Int, Int>>()
@@ -277,6 +288,56 @@ object SpawnAndSwampAdvanced {
         return if (r.incomplete) Int.MAX_VALUE / 4 else r.cost
     }
 
+    // ---------- опасность ----------
+
+    /** Карта опасности тика: клетки, куда достаёт (или за шаг достанет) его боец, дорожают на его урон, делённый на
+     *  `DANGER_SCALE`; клетки под его кормлеными башнями — на их выстрел в тик. Ею ходят все, кто не в бою: рабочие,
+     *  строители, пробойщик, заправщик, пополнение к сбору и к волне. Оператор 27.09.2026: «наши крипы при ходьбе не
+     *  учитывают опасность клетки и пытаются пройти через кучу вражеских боевых крипов и просто умирают по одиночке». */
+    private var danger: CostMatrix? = null
+
+    private fun buildDanger(enemyCombat: List<Creep>, enemyTowers: List<StructureTower>) {
+        val add = HashMap<Int, Int>()
+        for (e in enemyCombat) {
+            val dps = dpsOf(e)
+            if (dps <= 0) continue
+            val r = (if (liveParts(e, RANGED_ATTACK) > 0) RANGED_RANGE else 1) + 1
+            for (dx in -r..r) for (dy in -r..r) {
+                val x = e.x + dx; val y = e.y + dy
+                if (x !in 0..99 || y !in 0..99) continue
+                add[x * 100 + y] = (add[x * 100 + y] ?: 0) + dps
+            }
+        }
+        for (tw in enemyTowers) {
+            if (energyOf(tw) <= 0) continue
+            val r = TOWER_DANGER_RANGE
+            for (dx in -r..r) for (dy in -r..r) {
+                val x = tw.x + dx; val y = tw.y + dy
+                if (x !in 0..99 || y !in 0..99) continue
+                add[x * 100 + y] = (add[x * 100 + y] ?: 0) + (towerShot(maxOf(kotlin.math.abs(dx), kotlin.math.abs(dy))) / TOWER_COOLDOWN).toInt()
+            }
+        }
+        if (add.isEmpty()) { danger = null; return }
+        val m = CostMatrix()
+        for ((k, d) in add) {
+            val x = k / 100; val y = k % 100
+            val ter = getTerrainAt(cell(x, y))
+            if (ter == TERRAIN_WALL) continue
+            val base = if (ter == TERRAIN_SWAMP) 10 else 2
+            m.set(x, y, minOf(254, base + d / DANGER_SCALE))
+        }
+        danger = m
+    }
+
+    /** Ход в обход опасности (для тех, кто не в бою). */
+    private fun go(c: Creep, target: Position) {
+        val m = danger
+        if (m == null) { c.moveTo(target); return }
+        val o: dynamic = js("({})")
+        o.costMatrix = m
+        c.moveTo(target, o.unsafeCast<FindPathOptions>())
+    }
+
     // ---------- рельеф и клетки ----------
 
     private fun blockedCells(all: Array<GameObject>): Set<Pos> {
@@ -328,11 +389,16 @@ object SpawnAndSwampAdvanced {
     private const val VAULT_REACH = 6
 
     private class Vault(
-        val containers: List<Pos>, val interior: Set<Pos>, val wall: Pos?, val outside: Pos?,
-        val spawnCell: Pos, val towerCell: Pos?,
+        val index: Int, val containers: List<Pos>, val interior: Set<Pos>, val sealed: Boolean,
+        val breaches: List<Pair<Pos, Pos>>, val spawnCell: Pos, val towerCell: Pos?,
     ) {
-        var stage = if (wall == null) "build" else "breach"
+        /** Клетка пролома и клетка снаружи у неё — выбираются в момент заказа пробойщика, от ближайшего нашего спавна. */
+        var wall: Pos? = null
+        var outside: Pos? = null
+        var stage = if (sealed) "breach" else "build"
         var spawnId: String? = null
+        val breacherRole get() = "breacher:$index"
+        val builderRole get() = "vaultBuilder:$index"
     }
 
     private fun neighbours(p: Pos): List<Pos> {
@@ -341,79 +407,80 @@ object SpawnAndSwampAdvanced {
         return out
     }
 
-    private fun planVault(from: Position, start: Position, all: Array<GameObject>) {
+    private fun planVaults(start: Position, all: Array<GameObject>) {
         val ourStart = posOf(start)
         val enemy = enemyStart ?: return
         val containers = all.filter { it is StructureContainer }.map { posOf(it) }
         if (containers.isEmpty()) return
-        // кластеры контейнеров (в двух клетках друг от друга); свой — тот, что ближе к нашему старту, чем к его
+        // кластеры контейнеров (в двух клетках друг от друга)
         val clusters = ArrayList<MutableList<Pos>>()
         for (c in containers) {
             val home = clusters.firstOrNull { cl -> cl.any { cheb(it, c) <= 2 } }
             if (home != null) home.add(c) else clusters.add(mutableListOf(c))
         }
         fun center(cl: List<Pos>) = Pos(cl.sumOf { it.x } / cl.size, cl.sumOf { it.y } / cl.size)
-        // свой карман — по ПУТИ от стартов (до его окрестности: внутрь пути нет): v20 мерил прямой от спавна у (67,1),
-        // и ближним оказался чужой карман за центральной стеной — пробой там так и не начался
+        // свой карман — первым, по ПУТИ от стартов (до его окрестности: внутрь пути нет): v20 мерил прямой от спавна у
+        // (67,1), и «своим» оказался карман за центральной стеной
         fun reach(from: Pos, c: Pos): Int {
             val r = searchPath(cell(from), SearchGoal(pos = cell(c), range = VAULT_REACH), SearchPathOptions(plainCost = 1, swampCost = 5))
             return if (r.incomplete) Int.MAX_VALUE / 4 else r.cost
         }
-        val cluster = clusters.maxByOrNull { reach(enemy, center(it)) - reach(ourStart, center(it)) } ?: return
-        val c0 = center(cluster)
-        if (reach(ourStart, c0) >= reach(enemy, c0)) { println("vault: no cluster on our side"); return }
-        val walls = all.filter { it is StructureWall && cheb(posOf(it), c0) <= 8 }.map { posOf(it) }.toSet()
-        fun open(p: Pos) = p.x in 0..99 && p.y in 0..99 && getTerrainAt(cell(p)) != TERRAIN_WALL && p !in walls
-        // внутренность кармана: заливка от контейнеров; дошла до края окна — карман рельефом не запечатан
-        val limit = 9
-        val interior = HashSet<Pos>()
-        val queue = ArrayDeque(cluster)
-        interior.addAll(cluster)
-        var sealed = true
-        while (queue.isNotEmpty()) {
-            val p = queue.removeFirst()
-            for (n in neighbours(p)) {
-                if (n in interior || !open(n)) continue
-                if (cheb(n, c0) >= limit) { sealed = false; continue }
-                interior.add(n)
-                queue.addLast(n)
-            }
-        }
-        // клетки, где может стоять соперник: проходимые вне кармана
-        fun outsideOpen(p: Pos) = open(p) && p !in interior
-        var wall: Pos? = null
-        var outside: Pos? = null
-        if (sealed) {
-            var best = Int.MAX_VALUE
-            for (w in walls) {
-                if (neighbours(w).none { it in interior }) continue
-                for (n in neighbours(w)) {
-                    if (!outsideOpen(n)) continue
-                    val cost = pathTicks(from, cell(n))
-                    if (cost < best) { best = cost; wall = w; outside = n }
+        val ordered = clusters.sortedByDescending { reach(enemy, center(it)) - reach(ourStart, center(it)) }
+        for (cluster in ordered) {
+            val c0 = center(cluster)
+            val walls = all.filter { it is StructureWall && cheb(posOf(it), c0) <= 8 }.map { posOf(it) }.toSet()
+            fun open(p: Pos) = p.x in 0..99 && p.y in 0..99 && getTerrainAt(cell(p)) != TERRAIN_WALL && p !in walls
+            // внутренность кармана: заливка от контейнеров; дошла до края окна — карман рельефом не запечатан
+            val limit = 9
+            val interior = HashSet<Pos>()
+            val queue = ArrayDeque(cluster)
+            interior.addAll(cluster)
+            var sealed = true
+            while (queue.isNotEmpty()) {
+                val p = queue.removeFirst()
+                for (n in neighbours(p)) {
+                    if (n in interior || !open(n)) continue
+                    if (cheb(n, c0) >= limit) { sealed = false; continue }
+                    interior.add(n)
+                    queue.addLast(n)
                 }
             }
-            if (wall == null) { println("vault: sealed but no breachable wall"); return }
-        }
-        // глубина клетки: расстояние до ближайшей клетки, где может встать соперник (пролом закрыт рампартом)
-        fun depth(p: Pos): Int {
-            var d = 99
-            for (dx in -6..6) for (dy in -6..6) {
-                val q = Pos(p.x + dx, p.y + dy)
-                if (q != wall && outsideOpen(q)) d = minOf(d, cheb(p, q))
+            fun outsideOpen(p: Pos) = open(p) && p !in interior
+            val breaches = ArrayList<Pair<Pos, Pos>>()
+            if (sealed) for (w in walls) {
+                if (neighbours(w).none { it in interior }) continue
+                for (n in neighbours(w)) if (outsideOpen(n)) breaches.add(w to n)
             }
-            return d
+            if (sealed && breaches.isEmpty()) { println("vault: sealed but no breachable wall at ${c0.x},${c0.y}"); continue }
+            // глубина клетки: расстояние до ближайшей клетки, где может встать соперник (пролом закроет наш рампарт)
+            fun depth(p: Pos): Int {
+                var d = 99
+                for (dx in -6..6) for (dy in -6..6) {
+                    val q = Pos(p.x + dx, p.y + dy)
+                    if (outsideOpen(q)) d = minOf(d, cheb(p, q))
+                }
+                return d
+            }
+            val free = interior.filter { it !in cluster }
+            val spawnCell = free.filter { c -> cluster.any { cheb(it, c) <= 1 } }
+                .maxWithOrNull(compareBy<Pos> { minOf(depth(it), RANGED_RANGE + 1) }.thenBy { c -> cluster.count { cheb(it, c) <= 1 } }) ?: continue
+            val towerCell = free.filter { it != spawnCell && cluster.any { c -> cheb(c, it) <= 1 } }
+                .maxWithOrNull(compareBy<Pos> { minOf(depth(it), RANGED_RANGE + 1) }.thenByDescending { cheb(it, spawnCell) })
+            val v = Vault(vaults.size, cluster, interior, sealed, breaches, spawnCell, towerCell)
+            vaults.add(v)
+            println("vault ${v.index}: containers=${cluster.joinToString(" ") { "${it.x},${it.y}" }} sealed=$sealed interior=${interior.size} " +
+                "breaches=${breaches.size} spawn=${spawnCell.x},${spawnCell.y} depth=${depth(spawnCell)} tower=${towerCell?.let { "${it.x},${it.y}" }} " +
+                "reach us=${reach(ourStart, c0)} them=${reach(enemy, c0)}")
         }
-        val free = interior.filter { it !in cluster && it != wall }
-        val spawnCell = free.filter { c -> cluster.any { cheb(it, c) <= 1 } }
-            .maxWithOrNull(compareBy<Pos> { minOf(depth(it), RANGED_RANGE + 1) }.thenBy { c -> cluster.count { cheb(it, c) <= 1 } }
-                .thenByDescending { c -> wall?.let { cheb(it, c) } ?: 0 }) ?: return
-        val towerCell = free.filter { it != spawnCell && cheb(it, spawnCell) >= 1 && cluster.any { c -> cheb(c, it) <= 1 } }
-            .maxWithOrNull(compareBy<Pos> { minOf(depth(it), RANGED_RANGE + 1) }.thenByDescending { cheb(it, spawnCell) })
-        vault = Vault(cluster, interior, wall, outside, spawnCell, towerCell)
-        println("vault: containers=${cluster.joinToString(" ") { "${it.x},${it.y}" }} sealed=$sealed interior=${interior.size} " +
-            "wall=${wall?.let { "${it.x},${it.y}" }} outside=${outside?.let { "${it.x},${it.y}" }} spawn=${spawnCell.x},${spawnCell.y} " +
-            "depth=${depth(spawnCell)} tower=${towerCell?.let { "${it.x},${it.y}" }}")
+    }
+
+    /** Пролом — клетка стены, до которой ближе всего идти от этого спавна (по пути). */
+    private fun chooseBreach(v: Vault, from: Position) {
+        if (!v.sealed || v.wall != null) return
+        val best = v.breaches.minByOrNull { pathTicks(from, cell(it.second)) } ?: return
+        v.wall = best.first
+        v.outside = best.second
+        println("vault ${v.index}: breach at (${best.first.x},${best.first.y}) from (${from.x},${from.y})")
     }
 
     /** Пробойщик: столько пар MOVE+ATTACK, сколько вмещает спавн — ATTACK бьёт стену втрое сильнее RANGED за почти
@@ -438,8 +505,10 @@ object SpawnAndSwampAdvanced {
     private fun worksiteSafe(cells: List<Pos>): Boolean =
         getObjectsByPrototype(Creep::class).none { c -> !c.my && isCombat(c) && cells.any { cheb(posOf(c), it) <= WORKSITE_SAFE } }
 
-    private fun wallObject(v: Vault, all: Array<GameObject>): GameObject? =
-        v.wall?.let { w -> all.firstOrNull { it is StructureWall && it.x == w.x && it.y == w.y } }
+    private fun wallObject(v: Vault, all: Array<GameObject>): GameObject? {
+        val w = v.wall ?: return null
+        return all.firstOrNull { it is StructureWall && it.x == w.x && it.y == w.y }
+    }
 
     private fun resolveRoles(t: Int, mine: List<Creep>) {
         roleOf.keys.retainAll(mine.map { idOf(it) }.toSet())
@@ -456,26 +525,30 @@ object SpawnAndSwampAdvanced {
     private fun hasRole(role: String) = roleOf.containsValue(role) || pendingRoles.any { it.first == role }
 
     private fun runVault(t: Int, mine: List<Creep>, all: Array<GameObject>, mySpawns: List<StructureSpawn>) {
-        val v = vault ?: return
-        if (v.stage == "breach" && v.wall != null && wallObject(v, all) == null) {
-            v.stage = "build"
-            println("vault: breached t=$t at (${v.wall.x},${v.wall.y})")
-        }
-        if (v.spawnId == null) {
-            val sp = mySpawns.firstOrNull { it.x == v.spawnCell.x && it.y == v.spawnCell.y }
-            if (sp != null) { v.spawnId = idOf(sp); v.stage = "run"; println("vault: spawn up t=$t at (${sp.x},${sp.y})") }
+        for (v in vaults) {
+            val w = v.wall
+            if (v.stage == "breach" && w != null && wallObject(v, all) == null) {
+                v.stage = "build"
+                println("vault ${v.index}: breached t=$t at (${w.x},${w.y})")
+            }
+            if (v.spawnId == null) {
+                val sp = mySpawns.firstOrNull { it.x == v.spawnCell.x && it.y == v.spawnCell.y }
+                if (sp != null) { v.spawnId = idOf(sp); v.stage = "run"; println("vault ${v.index}: spawn up t=$t at (${sp.x},${sp.y})") }
+            }
         }
         val mySites = all.filter { it is ConstructionSite && it.asDynamic().my == true }.unsafeCast<List<ConstructionSite>>()
         for (c in mine) {
             if (c.spawning) continue
-            when (roleOf[idOf(c)]) {
-                "breacher" -> {
-                    val w = wallObject(v, all)
+            val role = roleOf[idOf(c)] ?: continue
+            val v = vaults.getOrNull(role.substringAfter(':', "").toIntOrNull() ?: -1) ?: continue
+            when {
+                role.startsWith("breacher:") -> {
+                    val wo = wallObject(v, all)
                     val out = v.outside
-                    if (w == null || out == null) { roleOf.remove(idOf(c)); continue }
-                    if (getRange(c, w) > 1) c.moveTo(cell(out)) else c.attack(w)
+                    if (wo == null || out == null) { roleOf.remove(idOf(c)); continue }
+                    if (getRange(c, wo) > 1) go(c, cell(out)) else c.attack(wo)
                 }
-                "vaultBuilder" -> runVaultBuilder(t, c, v, all, mySites, mySpawns)
+                role.startsWith("vaultBuilder:") -> runVaultBuilder(t, c, v, all, mySites, mySpawns)
             }
         }
     }
@@ -485,7 +558,7 @@ object SpawnAndSwampAdvanced {
 
     private fun runVaultBuilder(t: Int, c: Creep, v: Vault, all: Array<GameObject>, mySites: List<ConstructionSite>, mySpawns: List<StructureSpawn>) {
         val me = posOf(c)
-        if (v.stage == "breach") { v.outside?.let { if (cheb(me, it) > 2) c.moveTo(cell(it)) }; return }
+        if (v.stage == "breach") { v.outside?.let { if (cheb(me, it) > 2) go(c, cell(it)) }; return }
         val full = v.containers.mapNotNull { containerAt(it, all) }.filter { energyOf(it) > 0 }
         // внутри: сперва площадки — рампарт в пролом, спавн, башня (по одной, по очереди)
         if (me in v.interior) {
@@ -513,11 +586,11 @@ object SpawnAndSwampAdvanced {
             val nearC: Structure? = full.firstOrNull { getRange(c, it) <= 1 }
                 ?: vaultSpawn?.takeIf { full.isEmpty() && getRange(c, it) <= 1 && energyOf(it) > 0 }
             if (nearC != null && free > 0) c.withdraw(nearC, RESOURCE_ENERGY)
-            if (full.isEmpty() && vaultSpawn != null && nearC == null && e == 0) { c.moveTo(vaultSpawn); return }
+            if (full.isEmpty() && vaultSpawn != null && nearC == null && e == 0) { go(c, vaultSpawn); return }
             if (e > 0 && getRange(c, site) <= 3) c.build(site)
             val spot = v.interior.filter { p -> p !in v.containers && p != v.spawnCell && p != v.towerCell && full.any { cheb(posOf(it), p) <= 1 } && cheb(p, posOf(site)) <= 3 }
                 .minByOrNull { cheb(it, me) }
-            if (spot != null && spot != me) c.moveTo(cell(spot)) else if (spot == null && getRange(c, site) > 3) c.moveTo(site)
+            if (spot != null && spot != me) go(c, cell(spot)) else if (spot == null && getRange(c, site) > 3) go(c, site)
             return
         }
         // заправщик: из контейнера в спавн сейфа и его башню
@@ -529,11 +602,11 @@ object SpawnAndSwampAdvanced {
             else -> null
         }
         if (e > 0 && sink != null) {
-            if (getRange(c, sink) <= 1) c.transfer(sink, RESOURCE_ENERGY) else c.moveTo(sink)
+            if (getRange(c, sink) <= 1) c.transfer(sink, RESOURCE_ENERGY) else go(c, sink)
             return
         }
         val src = full.minByOrNull { getRange(c, it) } ?: return
-        if (free > 0) { if (getRange(c, src) <= 1) c.withdraw(src, RESOURCE_ENERGY) else c.moveTo(src) }
+        if (free > 0) { if (getRange(c, src) <= 1) c.withdraw(src, RESOURCE_ENERGY) else go(c, src) }
     }
 
     // ---------- тик ----------
@@ -557,7 +630,7 @@ object SpawnAndSwampAdvanced {
             if (w != null) {
                 openingPlan(w, sources, all)
                 val home = bases.firstOrNull()?.let { cell(it.spawnCell) } ?: w
-                planVault(home, w, all)
+                planVaults(w, all)
             }
         }
         resolveRoles(t, mine)
@@ -584,6 +657,7 @@ object SpawnAndSwampAdvanced {
         }
 
         val enemyCombat = theirs.filter { isCombat(it) }
+        buildDanger(enemyCombat, all.filter { it is StructureTower && it.asDynamic().my == false }.unsafeCast<List<StructureTower>>())
         for (e in enemyCombat) if (enemyCombatSeen.add(idOf(e))) enemyBirths.add(t to typesOf(e))
         if (enemySpawnSeenAt < 0 && all.any { it is StructureSpawn && it.asDynamic().my == false }) enemySpawnSeenAt = t
         for (b in bases) {
@@ -619,12 +693,13 @@ object SpawnAndSwampAdvanced {
             val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
             if (sp.spawning == null) runSpawn(t, b, sp, mine, threats)
         }
-        (vault?.spawnId?.let { byId[it] } as? StructureSpawn)?.let { sp ->
-            if (sp.spawning != null) return@let
+        for (v in vaults) {
+            val sp = v.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
+            if (sp.spawning != null) continue
             // заправщик погиб — сейф рождает себе нового: без него спавн сейфа живёт на +1 в тик
-            val left = vault?.containers?.sumOf { p -> containerAt(p, all)?.let { energyOf(it) } ?: 0 } ?: 0
-            if (!hasRole("vaultBuilder") && left > 0) order(t, sp, energyOf(sp), fillerBody(), "vaultBuilder")
-            else spawnFighter(t, sp, energyOf(sp), why = "vault")
+            val left = v.containers.sumOf { p -> containerAt(p, all)?.let { energyOf(it) } ?: 0 }
+            if (!hasRole(v.builderRole) && left > 0) order(t, sp, energyOf(sp), fillerBody(), v.builderRole)
+            else spawnFighter(t, sp, energyOf(sp), why = "vault${v.index}")
         }
 
         logChanges(t, all, mine)
@@ -701,7 +776,7 @@ object SpawnAndSwampAdvanced {
             val base = bases.firstOrNull { it.slots.contains(slot) } ?: continue
             val src = byId[base.sourceId] as? Source ?: continue
             if (w.x != slot.x || w.y != slot.y) {
-                w.moveTo(cell(slot))
+                go(w, cell(slot))
                 if (getRange(w, src) > 1) continue
             }
             val spawn = base.spawnId?.let { byId[it] } as? StructureSpawn
@@ -804,7 +879,7 @@ object SpawnAndSwampAdvanced {
         val base = expansion ?: return
         val src = byId[base.sourceId] as? Source ?: return
         val slot = base.slots.minByOrNull { getRange(w, cell(it)) } ?: return
-        if (getRange(w, src) > 1) { w.moveTo(cell(slot)); return }
+        if (getRange(w, src) > 1) { go(w, cell(slot)); return }
         // по предложению оператора: сперва рампарт ПОД СОБОЙ, потом рампарт на клетку спавна, потом спавн под ним —
         // строитель и будущий спавн с первого часа под 10000 хитов (v4–v10 строили голый спавн, stachu3478 снёс его
         // вместе со строителем)
@@ -886,7 +961,7 @@ object SpawnAndSwampAdvanced {
         // башня — после сейфа, если дом ещё не трогали. v16 ставил её сразу после первого бойца: 1250 из добычи на
         // 330–460-м тике — ровно когда приходят первые M4R3H1 けろびー, и спавн без притока проиграл дважды к 500-му.
         // Ранний дом держат сторожевые рампарты (planRamparts), башня — ответ на нападение
-        val v = vault
+        val v = vaults.firstOrNull()
         if (v != null && v.stage != "run" && !attackedOnce) return
         val blocked = blockedCells(all)
         fun exits(extra: Pos): Int {
@@ -989,7 +1064,7 @@ object SpawnAndSwampAdvanced {
         // постоянно, и после второго спавна на 862-м мы не расширились ни разу
         } else if (b === bases.first() && homeHolds && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
             return
-        } else if (b === bases.first() && homeHolds && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
+        } else if (homeHolds && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
@@ -1027,24 +1102,38 @@ object SpawnAndSwampAdvanced {
     /** Заказ для сейфа: пробойщик, пока стена цела; строитель — когда пролом готов или откроется раньше, чем
      *  строитель дойдёт (оставшиеся хиты стены / урон пробойщика против пути строителя). Возвращает, занят ли спавн. */
     private fun vaultOrder(t: Int, spawn: StructureSpawn, energy: Int): Boolean {
-        val v = vault ?: return false
-        if (v.stage == "run") return false
         val all = getObjects()
-        // его башня у сейфа (けろびー поставил передовую базу с башней в девяти клетках от нашего пролома, и пробойщик
-        // со строителем легли под ней): пока она стоит, сейф — не стройка, а цель для армии
-        val near = listOfNotNull(v.wall, v.spawnCell)
-        if (all.any { it is StructureTower && it.asDynamic().my == false && near.any { p -> cheb(posOf(it), p) <= 12 } }) return false
-        // место работ под его бойцами — не заказываем: v13 перекупал пробойщика M7A7 двадцать раз подряд, каждый шёл к
-        // стене один и ложился под тремя M4R3H1 けろびー; армия сперва расчищает, потом сейф
-        if (!worksiteSafe(listOfNotNull(v.outside, v.spawnCell))) return false
-        if (v.stage == "breach" && !hasRole("breacher")) return order(t, spawn, energy, breacherBody(), "breacher")
-        if (hasRole("vaultBuilder")) return false
-        val wallLeft = wallObject(v, all)?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
-        val breacher = getObjectsByPrototype(Creep::class).firstOrNull { roleOf[idOf(it)] == "breacher" }
-        val breakTicks = if (wallLeft <= 0) 0 else if (breacher == null || getRange(breacher, cell(v.wall!!)) > 1) Int.MAX_VALUE
-            else wallLeft / maxOf(1, liveParts(breacher, ATTACK) * ATTACK_POWER)
-        val walk = pathTicks(spawn, cell(v.outside ?: v.spawnCell))
-        if (breakTicks <= walk + vaultBuilderBody().size * CREEP_SPAWN_TIME) return order(t, spawn, energy, vaultBuilderBody(), "vaultBuilder")
+        // один сейф в работе за раз: начатый доводим, иначе — первый по очереди, до которого можно
+        val started = vaults.firstOrNull { it.stage != "run" && (hasRole(it.breacherRole) || hasRole(it.builderRole)) }
+        // карман, который он уже выпил или занял своей постройкой, — не сейф
+        val candidates = if (started != null) listOf(started) else vaults.filter { v ->
+            v.stage != "run" && v.containers.sumOf { p -> containerAt(p, all)?.let { energyOf(it) } ?: 0 } > 0 &&
+                all.none { it.asDynamic().my == false && it is Structure && Pos(it.x, it.y) in v.interior }
+        }
+        for (v in candidates) {
+            // заказывает база, ближайшая к сейфу: второй карман — у нашего дополнительного спавна
+            val nearestBase = bases.mapNotNull { b -> b.spawnId?.let { id -> getObjects().firstOrNull { idOf(it) == id } } }
+                .minByOrNull { getRange(it, cell(v.spawnCell)) } ?: continue
+            if (nearestBase.x != spawn.x || nearestBase.y != spawn.y) { if (started != null) return false; continue }
+            chooseBreach(v, spawn)
+            // его башня у сейфа (けろびー ставил передовую базу с башней в девяти клетках от нашего пролома, и пробойщик
+            // со строителем легли под ней): пока она стоит, сейф — не стройка, а цель для армии
+            val near = listOfNotNull(v.wall, v.spawnCell)
+            if (all.any { it is StructureTower && it.asDynamic().my == false && near.any { p -> cheb(posOf(it), p) <= 12 } }) continue
+            // место работ под его бойцами — не заказываем: v13 перекупал пробойщика M7A7 двадцать раз подряд, каждый шёл к
+            // стене один и ложился под тремя M4R3H1 けろびー; армия сперва расчищает, потом сейф
+            if (!worksiteSafe(listOfNotNull(v.outside, v.spawnCell))) continue
+            if (v.stage == "breach" && !hasRole(v.breacherRole)) return order(t, spawn, energy, breacherBody(), v.breacherRole)
+            if (hasRole(v.builderRole)) return false
+            val wallLeft = wallObject(v, all)?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
+            val breacher = getObjectsByPrototype(Creep::class).firstOrNull { roleOf[idOf(it)] == v.breacherRole }
+            val w = v.wall
+            val breakTicks = if (wallLeft <= 0) 0 else if (breacher == null || w == null || getRange(breacher, cell(w)) > 1) Int.MAX_VALUE
+                else wallLeft / maxOf(1, liveParts(breacher, ATTACK) * ATTACK_POWER)
+            val walk = pathTicks(spawn, cell(v.outside ?: v.spawnCell))
+            if (breakTicks <= walk + vaultBuilderBody().size * CREEP_SPAWN_TIME) return order(t, spawn, energy, vaultBuilderBody(), v.builderRole)
+            return false
+        }
         return false
     }
 
@@ -1405,7 +1494,8 @@ object SpawnAndSwampAdvanced {
                     val d = toGoal[f] ?: 0
                     val fighting = theirs.any { isCombat(it) && getRange(f, it) <= RANGED_RANGE + 1 }
                     if (hold && d - frontD <= COHESION && !fighting) continue
-                    if (d > keep) f.moveTo(goal)
+                    // к цели напрямую — только когда она рядом (бой); остальной путь — в обход его бойцов и башен
+                    if (d > keep) { if (d <= LOCAL_RANGE) f.moveTo(goal) else go(f, goal) }
                 }
             } else for (f in waveNow) { shoot(f, theirs, enemyObjects); healAct(f, mine, waveNow) }
         }
@@ -1461,7 +1551,7 @@ object SpawnAndSwampAdvanced {
             if (prey != null && idOf(f) in hunters) {
                 // строителя бьём с дальности стрелка; на площадку встаём — во внешнем мире чужую площадку давят ногой
                 val want = if (prey is ConstructionSite) 0 else RANGED_RANGE - 1
-                if (getRange(f, prey) > want) f.moveTo(prey)
+                if (getRange(f, prey) > want) go(f, prey)
                 continue
             }
             val onRampart = myRampartAt(Pos(f.x, f.y), all)
@@ -1475,22 +1565,21 @@ object SpawnAndSwampAdvanced {
                 // проигранная угроза: держимся у СВОЕГО ближайшего спавна, в укрытии — внутри сейфа, если он ближе всех,
                 // иначе в точке сбора этой базы — и копимся, пока прогон не скажет «бьём»
                 val mySpawn = homeSpawns.minByOrNull { getRange(f, it) } ?: anchor
-                val inVault = vault?.let { v -> v.spawnId != null && mySpawn.x == v.spawnCell.x && mySpawn.y == v.spawnCell.y } == true
-                if (inVault) {
-                    val v = vault!!
-                    if (Pos(f.x, f.y) !in v.interior || Pos(f.x, f.y) in reserved) {
-                        val spot = v.interior.filter { it !in reserved && it !in v.containers }.minByOrNull { cheb(it, Pos(f.x, f.y)) }
-                        if (spot != null) f.moveTo(cell(spot))
+                val vv = vaults.firstOrNull { v -> v.spawnId != null && mySpawn.x == v.spawnCell.x && mySpawn.y == v.spawnCell.y }
+                if (vv != null) {
+                    if (Pos(f.x, f.y) !in vv.interior || Pos(f.x, f.y) in reserved) {
+                        val spot = vv.interior.filter { it !in reserved && it !in vv.containers }.minByOrNull { cheb(it, Pos(f.x, f.y)) }
+                        if (spot != null) go(f, cell(spot))
                     }
                 } else {
                     val rally = rallyFor(mySpawn, reserved, blocked)
-                    if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) f.moveTo(cell(rally))
+                    if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) go(f, cell(rally))
                 }
             } else {
                 // сбор — не у самого спавна, а в точке сбора: клетки у спавна, добытчиков, башни и площадок заняты
                 // делом (выход для рождения, копка, стройка), и боец на них ломает базу
                 val rally = rallyFor(anchor, reserved, blocked)
-                if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) f.moveTo(cell(rally))
+                if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) go(f, cell(rally))
             }
         }
     }
@@ -1534,14 +1623,14 @@ object SpawnAndSwampAdvanced {
         val me = Pos(f.x, f.y)
         val taken = getObjectsByPrototype(Creep::class).filter { it !== f }.map { posOf(it) }.toSet()
         val spot = guardCells(b, all).filter { myRampartAt(it, all) && (it == me || it !in taken) }.minByOrNull { cheb(it, me) } ?: return false
-        if (spot != me) f.moveTo(cell(spot))
+        if (spot != me) go(f, cell(spot))
         return true
     }
 
     /** Все наши спавны: базы и сейф. Один список для угроз, сбора и защиты — v9 считал его в двух местах, и во втором
      *  не было спавна сейфа: угроза у сейфа держала защиту, а бойцы стояли у первой базы до конца матча. */
     private fun homeSpawnObjects(byId: Map<String, GameObject>): List<GameObject> =
-        bases.mapNotNull { b -> b.spawnId?.let { byId[it] } } + listOfNotNull(vault?.spawnId?.let { byId[it] })
+        bases.mapNotNull { b -> b.spawnId?.let { byId[it] } } + vaults.mapNotNull { v -> v.spawnId?.let { byId[it] } }
 
     /** Клетки, на которых боец не стоит: у спавна (выходы для рождения), клетки добытчиков, башни и наших площадок. */
     private fun reservedCells(all: Array<GameObject>): Set<Pos> {
@@ -1551,9 +1640,11 @@ object SpawnAndSwampAdvanced {
             out.addAll(b.slots)
             b.towerCell?.let { out.add(it) }
         }
-        vault?.let { v ->
-            for (x in v.spawnCell.x - 1..v.spawnCell.x + 1) for (y in v.spawnCell.y - 1..v.spawnCell.y + 1) out.add(Pos(x, y))
-            v.towerCell?.let { out.add(it) }
+        for (v in vaults) {
+            if (v.stage == "run" || v.wall != null) {
+                for (x in v.spawnCell.x - 1..v.spawnCell.x + 1) for (y in v.spawnCell.y - 1..v.spawnCell.y + 1) out.add(Pos(x, y))
+                v.towerCell?.let { out.add(it) }
+            }
             v.wall?.let { out.add(it) }
         }
         for (o in all) if (o is ConstructionSite && o.asDynamic().my == true) out.add(Pos(o.x, o.y))
@@ -1570,7 +1661,7 @@ object SpawnAndSwampAdvanced {
             val c = Pos(anchor.x + dx, anchor.y + dy)
             val r = cheb(c, Pos(anchor.x, anchor.y))
             // не внутри сейфа: из кармана один выход шириной в клетку, и волна из него вытекала бы по одному
-            if (r < 4 || c in reserved || !walkable(c, blocked) || vault?.interior?.contains(c) == true) continue
+            if (r < 4 || c in reserved || !walkable(c, blocked) || vaults.any { it.interior.contains(c) }) continue
             val score = (if (enemy == null) 0 else cheb(c, enemy)) * 10 + (if (isSwamp(c)) 5 else 0)
             if (score < bestScore) { bestScore = score; best = c }
         }
@@ -1630,7 +1721,7 @@ object SpawnAndSwampAdvanced {
         if (dpsOf(f) > 0) return false
         val wounded = group.filter { it !== f && it.hits < it.hitsMax }.maxByOrNull { it.hitsMax - it.hits }
         val lead = wounded ?: group.filter { it !== f && dpsOf(it) > 0 }.minByOrNull { getRange(f, it) }
-        if (lead != null && getRange(f, lead) > 1) f.moveTo(lead)
+        if (lead != null && getRange(f, lead) > 1) go(f, lead)
         return true
     }
 
