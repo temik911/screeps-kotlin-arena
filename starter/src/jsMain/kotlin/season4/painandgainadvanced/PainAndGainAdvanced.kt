@@ -169,7 +169,7 @@ object PainAndGainAdvanced {
     private fun probe() {
         println("hello season4 pain-and-gain-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} TICKS_LIMIT=$TICKS_LIMIT MAX_SCORE_PER_TICK=$MAX_SCORE_PER_TICK")
-        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R local=$LOCAL_R initiative=$INITIATIVE_RATIO fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE classify=$CLASSIFY_T spread=$SPREAD_R/$FIGHTER_MAX_OUT fighterRate=$FIGHTER_MAX_RATE fortressR=$FORTRESS_R")
+        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R local=$LOCAL_R initiative=$INITIATIVE_RATIO fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE classify=$CLASSIFY_T spread=$SPREAD_R/$FIGHTER_MAX_OUT fighterRate=$FIGHTER_MAX_RATE fortressR=$FORTRESS_R fatigueMargin=$FATIGUE_MARGIN")
         println("flagtypes: ${JSON.stringify(FLAG_TYPES)}")
         println("consts: TOWER_RANGE=$TOWER_RANGE TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_POWER_HEAL=$TOWER_POWER_HEAL " +
             "TOWER_OPTIMAL_RANGE=$TOWER_OPTIMAL_RANGE TOWER_FALLOFF_RANGE=$TOWER_FALLOFF_RANGE TOWER_FALLOFF=$TOWER_FALLOFF " +
@@ -283,11 +283,12 @@ object PainAndGainAdvanced {
                 continue
             }
             val box = containers.filter { Grid.range(it.x, it.y, post.x, post.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
-            // the fatigue flag doubles our own fatigue: it is stepped on only once the army has stood at its fortress.
-            // v19 took it at t=61 with the army still 10-15 cells out; the heavies' step went from 2 ticks to 4, the
-            // army arrived at t≈120 instead of ≈90, and Hardy#3 walking behind it caught its tail at the pocket's
-            // mouth, 13 lost for 7 by t=200. Until then the puller waits beside it, between the tower and the box
-            if (post.effectType == EFF_FATIGUE && post.my != true && !settled) {
+            // the fatigue flag doubles our own fatigue, and its owner pays it in every step of a march and of a fight:
+            // v19 took it at t=61 with the army still 10-15 cells out, the heavies' step went from 2 ticks to 4, the
+            // army reached its fortress at t≈120 instead of ≈90, and Hardy#3 walking behind it caught its tail at the
+            // pocket's mouth, 13 lost for 7 by t=200. So the puller waits beside it, between the tower and the box,
+            // and steps on when `fatigueDue` says its fatigue can no longer cost a fight or the score needs its 5
+            if (post.effectType == EFF_FATIGUE && post.my != true && !fatigueDue(post)) {
                 val spot = besideFlag(post, tower, box)
                 if (p.cell == spot) {
                     hold(p)
@@ -308,6 +309,23 @@ object PainAndGainAdvanced {
                 stepToward(p, Grid.to(post.x, post.y, if (p.weight == 0) 1 else 5), 100)
             }
         }
+    }
+
+    /**
+     * Our fatigue flag is due when its fatigue can cost no fight — his army is broken or ours is gone (`settled`) — or
+     * when the score needs it: at the rates that stand the match ends lost, and the flag's 5 a tick (10 when it is his)
+     * from now to the end, less FATIGUE_MARGIN ticks, is no more than it takes to win. Taking it as late as still
+     * wins keeps the fight that comes before at our own speed: on 11 record maps, both sides, against both rival
+     * models, the flag taken only after his army broke lost 2 of 44 against 5 for v19 (taken at t≈60) and 4 for the
+     * flag taken once the army held, and our hits lost 100 ticks after contact came to 266 000 against 303 000.
+     */
+    private fun fatigueDue(f: ScoreFlag): Boolean {
+        if (settled) return true
+        val left = TICKS_LIMIT - t
+        val atEnd = (ourScore - theirScore) + (ourFx.rate - theirFx.rate) * left
+        if (atEnd > 0) return false
+        val gain = f.scorePerTick * (if (f.my == false) 2 else 1)
+        return gain * (left - FATIGUE_MARGIN) <= -atEnd
     }
 
     /** A cell beside the flag that reaches both its tower and its box (off the flag), else any free one beside it. */
@@ -374,8 +392,7 @@ object PainAndGainAdvanced {
 
     private val hunterOf = HashMap<String, String>()   // our hunter id -> enemy id
     private var surviving = false
-    /** The army has stood at its objective (or swept, or is gone): from then on its march no longer pays for our
-     *  fatigue flag. */
+    /** His army is broken (we swept) or ours is gone: from then on no fight pays for our fatigue flag. */
     private var settled = false
     private var lastDeathT = 0
     /** A fight that kills nobody: 300 ticks in FIGHT without a death on either side. Against 76561198870429455#11 our
@@ -523,7 +540,7 @@ object PainAndGainAdvanced {
         }
         if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} whole=${whole.ratio.asDynamic().toFixed(2)} near=${near.size} group=${group.size}/${army.size} obj=${objective.x},${objective.y}") }
 
-        if (mode == Mode.HOLD || mode == Mode.SWEEP) settled = true
+        if (mode == Mode.SWEEP) settled = true
         fire(all)
         // hunters: in a sweep, light armed creeps go in pairs after the enemy's survivors — a lone runner sits on a flag
         // or walks between them, and an `h4m4` heals itself 48 a tick, more than one `r4m4` does to it
@@ -894,6 +911,7 @@ object PainAndGainAdvanced {
     const val FARMER_RATE = 12
     const val FORTRESS_R = 8
     const val ANCHOR_BEHIND = 3
+    const val FATIGUE_MARGIN = 300
     const val FORTRESS_STRIKE_R = 10
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
