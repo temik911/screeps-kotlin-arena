@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 207
+    private const val BOT_VERSION = 208
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -470,6 +470,10 @@ object SpawnAndSwamp {
      */
     private val knownHaulers = HashSet<String>()
     private var haulersLost = 0
+    /** The price of what the spawn saves for this tick, 0 when it saves for nothing (v208; set in spawnIfNeeded). */
+    private var spawnSavePrice = 0
+    /** The fleet was short of its own peak with a hauler wanted this tick (v208; set in spawnIfNeeded). */
+    private var fleetShortNow = false
     /** The most haulers alive at once so far this match (v200, see fleetShort). */
     private var haulerPeak = 0
     private var haulerCargoLost = 0
@@ -1222,6 +1226,8 @@ object SpawnAndSwamp {
         // без этого хода роняет сбор с 20.1 до 12.5 в тик и снимает победу вовсе. Площадки ставит
         // ПЕРВЫЙ ход тика — они общие, и три хода поставили бы три
         val freeSpawns = ctx.mySpawns.filter { it.spawning == null }.sortedByDescending { it.store[RESOURCE_ENERGY] ?: 0 }
+        spawnSavePrice = 0
+        fleetShortNow = false
         if (freeSpawns.isEmpty()) spawnIfNeeded(ctx, defenders, homeBound, alarm, enemyArrival, spawnUnderFire, null, true)
         else freeSpawns.forEachIndexed { i, sp ->
             spawnIfNeeded(ctx, defenders, homeBound, alarm, enemyArrival, spawnUnderFire, sp, i == 0)
@@ -2379,6 +2385,7 @@ object SpawnAndSwamp {
         // returned first for 516 ticks against kerobi#49 — no `raid again` in all twenty games of the v160 series
         // (v200) the fleet below its own peak while the economy wants a hauler: the savings ahead of the hauler yield
         val fleetShort = USE_FLEET_FIRST && ctx.haulers.size < haulerPeak && needHauler
+        if (fleetShort) fleetShortNow = true
         if (USE_RAID_LAST && USE_RAID && !armNow && (if (USE_RAID_TOPUP) raidWanted(ctx) && (raidOrdered in 1 until RAID_SIZE || raidRebuyAt >= 0)
                 else raidOrdered in 1 until RAID_SIZE && raidWanted(ctx))) {
             val price = RAID_BODY.sumOf { cost(it) }
@@ -2389,7 +2396,7 @@ object SpawnAndSwamp {
             // Against けろびー (v198 draws) his M5A1 killed 3 of 5 haulers by 479 in one game and all 5 by 628 in another;
             // the spawn kept saving for a raider of 990 at the income two haulers (or none) bring, the fleet stayed at 2 and
             // 0, there was no raider for 774 and 1160 ticks while his army stood far from his main, and both were draws
-            if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2) && !fleetShort) return reach("rSave2")
+            if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2) && !fleetShort) { spawnSavePrice = maxOf(spawnSavePrice, price); return reach("rSave2") }
             if (energy < price) { reach("rSkip2") } else {
             val r = spawn.spawnCreep(RAID_BODY)
             reach(if (r.error == null) "rBuy" else "err")
@@ -2448,7 +2455,7 @@ object SpawnAndSwamp {
                 if (DEBUG_LOG) println("spawn: pile builder (fort) cost=$price energy=$energy err=${r.error}")
                 return
             }
-            if (!spawnUnderFire && !lastStand) return reach("fpSave")
+            if (!spawnUnderFire && !lastStand) { spawnSavePrice = maxOf(spawnSavePrice, price); return reach("fpSave") }
         }
         // A STANDING FORT RE-BUYS ITS KEEPER FIRST (v154). Its tower holds one shot and the spawn's regeneration alone is a
         // shot every ten ticks (~90 a tick at range <=4, more than an M5H3 heals); with the keeper dead the tower is
@@ -2484,8 +2491,9 @@ object SpawnAndSwamp {
             }
             if (!alarm && deficit <= 0.0) return reach("pbSave")
         }
+        // (v208) the fort's reserve does not hold the hauler's turn while the fleet is short of its own peak
         val haulerTurn = needHauler && !fighterFirst && liveHaulers <= liveFighters + HAULER_LEAD && haulerOrderedAt != getTicks() &&
-            !(fortReserve && ctx.haulers.isNotEmpty())
+            !(fortReserve && ctx.haulers.isNotEmpty() && !(USE_SPAWN_KNOWS_SAVING && fleetShort))
 
         if (haulerTurn) {
             val affordable = minOf(HAULER_BLOCKS_MAX, energy / blockCost())
@@ -6665,6 +6673,9 @@ object SpawnAndSwamp {
     /** The raid races both walks to a bare target — the detour and the straight one, each with its length and its
      *  fire — and walks the one whose target falls first (v207). */
     private const val USE_RAID_TWO_PLANS = true
+    /** The spawn's saving is known: the keeper's surplus is beyond it, the keeper does not build from the spawn while the
+     *  fleet is short, and the fort's reserve does not hold the hauler's turn then (v208). */
+    private const val USE_SPAWN_KNOWS_SAVING = true
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
@@ -7630,8 +7641,11 @@ object SpawnAndSwamp {
         val calm = ctx.combatEnemies.none { getRange(it, spawn) <= TOWER_FALLOFF_RANGE }
         // …and the spawn's surplus, not the towers' ten (v163): a tower holds one shot, so "every tower full" was nearly
         // always true — the twin's site was laid at 1598 at an income of 1 and took 433 just before his storm
+        // …beyond what the spawn is saving for (v208): half the spawn (500) is below a raider (990), and against けろびー#49
+        // (v206) the keeper built the second tower 1427-1706 holding the spawn at 470-600 while the lone raider's mate
+        // was never bought
         val surplus = calm && ctx.myTowers.all { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) == 0 } &&
-            (!USE_RAID_TOPUP || (spawn.store[RESOURCE_ENERGY] ?: 0) >= SPAWN_ENERGY_CAPACITY / 2)
+            (!USE_RAID_TOPUP || (spawn.store[RESOURCE_ENERGY] ?: 0) >= maxOf(SPAWN_ENERGY_CAPACITY / 2, if (USE_SPAWN_KNOWS_SAVING) spawnSavePrice else 0))
         val twin = if (surplus) ctx.mySites.firstOrNull { (it.progressTotal ?: 0) == buildCost("StructureTower") && getRange(b, it) <= BUILD_RANGE } else null
         var act = "-"
         if (carrying > 0) {
@@ -7641,7 +7655,11 @@ object SpawnAndSwamp {
                 twin != null -> { b.build(twin); act = "twin" }
             }
         }
-        if (free > 0 && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1) b.withdraw(spawn, RESOURCE_ENERGY)
+        // …and while the fleet is short of its peak the keeper takes from the spawn only to feed a tower with his army in
+        // its reach (v208): against けろびー#48 (v206) the fort's ramparts and tower took 1850 — all the income of 352-981,
+        // the spawn at 5 or less for 610 ticks — while his M5A1 killed four of five haulers and none was bought back
+        val mayDraw = !(USE_SPAWN_KNOWS_SAVING && fleetShortNow) || (!calm && ctx.myTowers.any { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 })
+        if (mayDraw && free > 0 && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1) b.withdraw(spawn, RESOURCE_ENERGY)
         val step = if (b.x != post.x || b.y != post.y) pathStep(b, post, 0, ctx.dangerMatrix) else null
         if (step != null && canMove(b)) TrafficManager.request(b, step, HAULER_LOADED_PRIORITY)
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
