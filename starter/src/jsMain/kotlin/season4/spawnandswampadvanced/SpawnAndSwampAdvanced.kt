@@ -49,6 +49,7 @@ import screeps.api.getObjectsByPrototype
 import screeps.api.getRange
 import screeps.api.getTerrainAt
 import screeps.api.getTicks
+import screeps.api.getCpuTime
 import screeps.api.searchPath
 import screeps.api.structures.Structure
 import screeps.api.structures.StructureContainer
@@ -95,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v12"
+    private const val BOT_VERSION = "v13"
 
     private const val LOG_EVERY = 50
 
@@ -106,8 +107,10 @@ object SpawnAndSwampAdvanced {
     private const val PUSH_RATIO = 1.3
     /** Волна выходит, если по прогону боя побеждает и сохраняет не меньше этой доли своих хитов: запас на то, чего
      *  прогон не видит — подход под огнём, строй, мили у спавна. Ланчестер с лечением «как уроном» пускал волну 1,3×
-     *  против пар стрелок+лекарь 76561198870429455 и stachu3478 — обе волны v11 легли и отошли. */
-    private const val PUSH_KEEP = 0.3
+     *  против пар стрелок+лекарь 76561198870429455 и stachu3478 — обе волны v11 легли и отошли. v12 с долей 0,3
+     *  против stachu3478 вышел трижды (прогон обещал 57 %, 39 % и 30 %) и трижды отошёл с потерями: прогон считает
+     *  бой всей волной разом, а волна приходит растянутой — половина, пока калибровки по замерам нет. */
+    private const val PUSH_KEEP = 0.5
     /** Прогон дольше этого не смотрим: бой, который не решается за столько тиков, для решения — ничья. */
     private const val SIM_LIMIT = 300
     /** Угроза дому: боевой враг в стольких клетках от нашего спавна или от нашего рабочего (дальность стрелка плюс
@@ -473,9 +476,13 @@ object SpawnAndSwampAdvanced {
         val free = c.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
         val site = vaultSites.firstOrNull()
         if (site != null && liveParts(c, WORK) > 0) {
-            // стоим у контейнера в досягаемости площадки: берём и строим в один тик
-            val nearC = full.firstOrNull { getRange(c, it) <= 1 }
+            // стоим у контейнера в досягаемости площадки: берём и строим в один тик; контейнеры пусты — берём из спавна
+            // сейфа (v12: соперник пробил рампарт, когда сейф опустел, и строителю было не из чего закрыть пролом)
+            val vaultSpawn = mySpawns.firstOrNull { idOf(it) == v.spawnId }
+            val nearC: Structure? = full.firstOrNull { getRange(c, it) <= 1 }
+                ?: vaultSpawn?.takeIf { full.isEmpty() && getRange(c, it) <= 1 && energyOf(it) > 0 }
             if (nearC != null && free > 0) c.withdraw(nearC, RESOURCE_ENERGY)
+            if (full.isEmpty() && vaultSpawn != null && nearC == null && e == 0) { c.moveTo(vaultSpawn); return }
             if (e > 0 && getRange(c, site) <= 3) c.build(site)
             val spot = v.interior.filter { p -> p !in v.containers && p != v.spawnCell && p != v.towerCell && full.any { cheb(posOf(it), p) <= 1 } && cheb(p, posOf(site)) <= 3 }
                 .minByOrNull { cheb(it, me) }
@@ -705,8 +712,9 @@ object SpawnAndSwampAdvanced {
         // на клетке площадки стоит крип — стройка препятствия не идёт; v6 так простоял 400 тиков: боец встал на
         // площадку башни, рабочий с полным запасом каждый тик «строил» впустую и не копал, спавн жил на +1 в тик
         val siteFree = site != null && (isRampartSite(site) || getObjectsByPrototype(Creep::class).none { it.x == site.x && it.y == site.y })
-        // рампарт строится и под огнём: 200 за 10000 хитов дешевле любого бойца; остальное — только в тишине
-        if (site != null && siteFree && (!defending || isRampartSite(site))) {
+        // все наши площадки у базы — оборона (рампарты и башня), и строятся они и под угрозой: v12 весь матч «защищался»
+        // и так и не начал башню первой базы (0/1250 к 2500-му)
+        if (site != null && siteFree) {
             if (e >= batchFor(w) || (src.energy == 0 && e > 0)) {
                 if (w.build(site).asDynamic().unsafeCast<Int>() == 0) return
             } else if (src.energy > 0) { w.harvest(src); return }
@@ -1360,9 +1368,12 @@ object SpawnAndSwampAdvanced {
         }
         if (liveParts(f, RANGED_ATTACK) == 0) return false
         val inRange = theirs.filter { getRange(f, it) <= RANGED_RANGE }
+        // массовый — размазанный урон, его отлечивают; при лекарях рядом бьём в одного, как считает прогон
+        val healers = inRange.any { healOf(it) > 0 }
         val mass = inRange.sumOf { when (getRange(f, it)) { 0, 1 -> 10; 2 -> 4; else -> 1 } }
-        if (mass > 10) { f.rangedMassAttack(); return true }
-        val target = inRange.sortedWith(compareBy<Creep> { if (isCombat(it)) 0 else 1 }.thenBy { it.hits }).firstOrNull()
+        if (!healers && mass > 10) { f.rangedMassAttack(); return true }
+        // порядок целей — как в прогоне: лекари первыми, затем самые битые боевые, затем остальные
+        val target = inRange.sortedWith(compareBy<Creep> { if (healOf(it) > 0) 0 else if (isCombat(it)) 1 else 2 }.thenBy { it.hits }).firstOrNull()
         if (target != null) { f.rangedAttack(target); return true }
         val st = enemyObjects.filter { it is Structure && getRange(f, it) <= RANGED_RANGE }
             .sortedWith(compareBy<GameObject> { if (it is StructureTower) 0 else if (it is StructureRampart) 1 else if (it is StructureSpawn) 2 else 3 })
@@ -1453,7 +1464,7 @@ object SpawnAndSwampAdvanced {
         t: Int, mine: List<Creep>, theirs: List<Creep>, mySpawns: List<StructureSpawn>, sources: Array<Source>, all: Array<GameObject>,
     ) {
         val carried = mine.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
-        println("t=$t mine=${mine.size} [${mine.joinToString(" ") { "${bodyOf(it)}@${it.x},${it.y}" }}] carried=$carried wave=${wave.size} " +
+        println("t=$t mine=${mine.size} [${mine.joinToString(" ") { "${bodyOf(it)}@${it.x},${it.y}" }}] carried=$carried wave=${wave.size} cpu=${getCpuTime() / 1_000_000}ms " +
             "spawns=${mySpawns.joinToString(" ") { describe(it) }} sites=${all.filter { it is ConstructionSite && it.asDynamic().my == true }.joinToString(" ") { describe(it) }}")
         println("sources t=$t " + sources.joinToString(" ") { "(${it.x},${it.y})${it.energy}" } + " bases=" +
             bases.joinToString(" ") { b -> "src${b.sourceId}:work=${homeWork(b, mine)}" })
