@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 25
+const val BOT_VERSION = 26
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -184,6 +184,10 @@ object EscortRunAdvanced {
     private val BREAKER = Bodies.interleaved(ATTACK, BREAKER_ATTACK, 5)
     /** The outpost's pioneer walks ninety cells: a MOVE on every part, WORK to saturate the source, one CARRY to build. */
     private val PIONEER = Bodies.body(WORK to 5, CARRY to 1, MOVE to 6)
+    /** Raises the block's fallen ramparts from an inner cell (every cell of the block is within three of it), taking
+     *  the energy from the spawn beside it: 200 for 10000 hits against a siege trio of ~2900 that takes ~43 ticks to
+     *  gnaw one down. The arena has no repair (Creep has no repair(), a tower only attacks and heals). */
+    private val MASON = Bodies.body(WORK to 4, CARRY to 2, MOVE to 1)
     /** The outpost spawn's own worker steps one cell to its slot. */
     private val PIONEER_WORKER = Bodies.body(WORK to 5, CARRY to 1, MOVE to 1)
     private const val PIONEER_TRIES = 3
@@ -258,6 +262,8 @@ object EscortRunAdvanced {
         val outpostSpawn: StructureSpawn?,
         /** Workers of the outpost: WORK enough to saturate a source alone. */
         val pioneers: List<Creep>,
+        /** Builders inside our block who raise its fallen ramparts again. */
+        val masons: List<Creep>,
     )
 
     /** The spawn we started with: every other spawn of ours is the outpost's. */
@@ -269,7 +275,7 @@ object EscortRunAdvanced {
             .filter { it.exists && it.my == true && works?.any { p -> p.first == "tower" && p.second == key(it) } == true }.map { cell(it.x, it.y) }
         if (w.now == 1) probe(w)
         if (w.now in 2..5) printMap((w.now - 2) * 25)
-        if (w.now == 1) { chooseBreach(w); planOutpost(w) }
+        if (w.now == 1) { chooseBreach(w); planOutpost(w); w.mySpawn?.let { sp -> blockCells = w.myRamparts.filter { cheb(it, key(sp)) <= 2 } } }
         assignOrigins(w)
         runSpawn(w)
         runOutpostSpawn(w)
@@ -280,6 +286,7 @@ object EscortRunAdvanced {
         runConvoy(w)
         runEconomy(w)
         runPioneers(w)
+        runMasons(w)
         val fighters = w.fighters.filter { !it.spawning }
         val homeF = fighters.filter { originOf[idOf(it)] != "outpost" }
         val outF = fighters.filter { originOf[idOf(it)] == "outpost" }
@@ -335,7 +342,8 @@ object EscortRunAdvanced {
             myRamparts = myRamparts, enemyRamparts = enemyRamparts, occupant = occupant,
             enemyAt = enemies.mapTo(HashSet()) { key(it) }, blocked = blocked,
             fighters = others.filter { Bodies.wasArmed(it) },
-            harvesters = mine.filter { idOf(it) !in escortIds && Bodies.isWorker(it) && !isPioneer(it) },
+            harvesters = mine.filter { idOf(it) !in escortIds && Bodies.isWorker(it) && !isPioneer(it) && !isMason(it) },
+            masons = mine.filter { idOf(it) !in escortIds && isMason(it) },
             pioneers = mine.filter { idOf(it) !in escortIds && isPioneer(it) },
             outpostSpawn = outpostSpawn,
             haulers = mine.filter { idOf(it) !in escortIds && Bodies.isHauler(it) },
@@ -351,6 +359,10 @@ object EscortRunAdvanced {
 
     /** An outpost worker: WORK enough to saturate a source alone (home harvesters are split in two). */
     private fun isPioneer(c: Creep) = c.body.count { it.type == WORK } >= WORK_TARGET
+
+    /** The mason's body is its mark: no harvester of ours carries four WORK and two CARRY. */
+    private fun isMason(c: Creep) = c.body.count { it.type == WORK } == MASON.count { it == WORK } &&
+        c.body.count { it.type == CARRY } == MASON.count { it == CARRY } && c.body.none { it.type == ATTACK || it.type == RANGED_ATTACK || it.type == HEAL }
 
     /** A fighter belongs to the spawn it was born at. */
     private fun assignOrigins(w: World) {
@@ -408,6 +420,9 @@ object EscortRunAdvanced {
         // at 950-1227, met a spawn saving for a breaker it never afforded and gnawed through to our M3T42 (v24 draft)
         val raided = raided(w)
         val order: Array<BodyPartType> = when {
+            // a fallen rampart of our block: the mason first — v23 against stachu3478#1/#2 lost its M3T42 at 1983 and
+            // 1600 to sieges that gnawed the block down one rampart after another (6ab95e32, 6ab95e92)
+            w.harvesters.isNotEmpty() && w.masons.isEmpty() && blockGaps(w).isNotEmpty() -> MASON
             raided && w.harvesters.isNotEmpty() -> nextFighter(w)
             w.harvesters.isEmpty() -> HARVESTER_FIRST
             w.haulers.isEmpty() -> HAULER
@@ -817,6 +832,43 @@ object EscortRunAdvanced {
     }
 
     private fun rampartAt(k: Int) = getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
+
+    /** Our block at tick one: the ramparts within two of the home spawn. */
+    private var blockCells: List<Int>? = null
+
+    /** The block's cells whose rampart has fallen. */
+    private fun blockGaps(w: World): List<Int> = blockCells?.filter { it !in w.myRamparts } ?: emptyList()
+
+    /**
+     * A mason stands on a free inner cell of the block — on our rampart, beside the spawn — takes energy from the spawn
+     * and raises the block's fallen ramparts: one site at a time on a gap no creep of his stands on, the gap nearest the
+     * escorts first.
+     */
+    private fun runMasons(w: World) {
+        val spawn = w.mySpawn ?: return
+        val homes = escortHome.values.toSet()
+        for (m in w.masons.filter { !it.spawning }) {
+            val post = innerCells(w).filter { k -> k !in homes && (w.occupant[k] == null || idOf(w.occupant[k]!!) == idOf(m)) }
+                .minByOrNull { getRange(cellOf(it), m) }
+            if (post != null && key(m) != post) {
+                val f = flowTo("mason", cellOf(post), Bodies.swampCost(m))
+                DistanceMap.flowStep(f, m.x, m.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(m, it, HAULER_PRIORITY + 20) }
+            } else if (post != null) pinned.add(idOf(m))
+            val carried = m.store[RESOURCE_ENERGY] ?: 0
+            val gaps = blockGaps(w)
+            val site = getObjectsByPrototype(ConstructionSite::class).firstOrNull { it.exists && it.my == true && key(it) in gaps && getRange(it, m) <= 3 }
+            if (site != null && carried > 0) m.build(site)
+            if (getRange(m, spawn) <= 1 && (m.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0) m.withdraw(spawn, RESOURCE_ENERGY)
+            if (site == null) {
+                val next = gaps.filter { k -> w.occupant[k]?.my != false && getRange(cellOf(k), m) <= 3 }
+                    .minByOrNull { k -> w.escorts.minOfOrNull { e -> getRange(e, cellOf(k)) } ?: 0 }
+                if (next != null) {
+                    val r = createConstructionSite(next / 100, next % 100, StructureRampart::class.js)
+                    println("mason t=${w.now}: rampart site ${at(cellOf(next))} err=${r.error} gaps=${gaps.size}")
+                }
+            }
+        }
+    }
 
     /** Far sources he has taken: we move our outpost off them before the pioneer walks into his tower. */
     private val takenSources = HashSet<Int>()
@@ -2033,7 +2085,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
