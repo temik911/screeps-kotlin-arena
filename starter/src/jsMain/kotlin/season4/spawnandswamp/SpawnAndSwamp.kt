@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 177
+    private const val BOT_VERSION = 178
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6411,6 +6411,8 @@ object SpawnAndSwamp {
      *  3-0-1 / 3-0-1. A cheaper march sends the wave out before it is whole; the model said three draws would convert,
      *  the games turned four wins into draws. v177 plays v175's game. */
     private const val USE_MARCH_MELEE = false
+    /** After any re-buy the raid does not gather at home, his builder alive or not (v178). */
+    private const val USE_RAID_NEVER_GATHER = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6576,7 +6578,10 @@ object SpawnAndSwamp {
         // — 180-600 ticks in four v172 draws with #50 — exactly while his guns stood 36-92 cells from his ramparted main;
         // alone at 90 a tick it would have struck up to 18000 in the ~200 ticks the gathering took. The survivor stays at
         // the target and chips it; the newborn walks there on its own
-        val lastStandRaid = USE_RAID_NO_GATHER && raidRebuyAt >= 0 && ctx.enemyCreeps.none { isHisBuilder(it) }
+        // …and after ANY re-buy (v178): with his builder alive the survivor still went home — 210-280 ticks in three draws
+        // with kerobi#48/#49 while the builder stood 8-32 cells off (once 2 cells at 350/800) and then raised 1-3 spawns;
+        // in the wins the gathering took 20-120 ticks and the builder died anyway. It stays and strikes the builder
+        val lastStandRaid = USE_RAID_NO_GATHER && raidRebuyAt >= 0 && (USE_RAID_NEVER_GATHER || ctx.enemyCreeps.none { isHisBuilder(it) })
         val gathering = !lastStandRaid && (raidOrdered < RAID_SIZE && getTicks() <= buyUntil ||
             ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= buyUntil + 60))
         val guns = ctx.combatEnemies.filter { InfluenceMap.profileOf(it).ranged > 0.0 }
