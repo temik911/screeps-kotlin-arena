@@ -617,6 +617,13 @@ def main():
             for label in "AB":
                 push_zip(c, payloads[label])            # the page holds ONE payload of ours: every hand sends its own side's
                 r = start(c, arena["id"], code_id=row["codeId"])
+                # a full per-user slot is a wait here too, as in a series: 27.09.2026 an A/B of spawn-and-swamp-advanced
+                # ended after one hand on "Running games limit exceeded" while three other sessions were playing
+                for _ in range(60):
+                    if r.get("id") or "limit exceeded" not in str(r.get("err") or r.get("raw") or "").lower():
+                        break
+                    time.sleep(10)
+                    r = start(c, arena["id"], code_id=row["codeId"])
                 if r["status"] not in (200, 201) or not r.get("id"):
                     print(f"ab {i}{label}: start failed ({r['status']} {r.get('err')}) {r.get('raw') or ''}")
                     break
