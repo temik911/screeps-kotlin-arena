@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 28
+const val BOT_VERSION = 29
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -209,6 +209,8 @@ object EscortRunAdvanced {
      * and runs its own operations — a threat at home must not pull the outpost's fighters across the map.
      */
     internal class Garrison(val name: String) {
+        /** The running operation's kill time at its last evaluation (ticks from then). */
+        var lastEta = 0
         var mode = "hold"
         var modeTarget: String? = null
         var modeSince = 0
@@ -1142,6 +1144,9 @@ object EscortRunAdvanced {
     private var enemyProduced = 0
     private val producedAt = ArrayDeque<Pair<Int, Int>>()
     private var lastEnemyBody: Array<BodyPartType>? = null
+    /** His last fighter that walks a plain cell a tick — what his spawn sends to a strike by his base (his breaker, a
+     *  cell in ten ticks, was the "last body" v23 multiplied into phantoms). */
+    private var lastEnemyFighter: Array<BodyPartType>? = null
 
     private fun trackEnemies(w: World) {
         for (e in w.enemies) {
@@ -1154,6 +1159,7 @@ object EscortRunAdvanced {
             val body = Array(e.body.size) { e.body[it].type }
             enemyProduced += Bodies.cost(body)
             lastEnemyBody = body
+            if (Bodies.period(e, false) <= 1) lastEnemyFighter = body
         }
         if (w.now % 25 == 0) { producedAt.addLast(w.now to enemyProduced); while (producedAt.size > 40) producedAt.removeFirst() }
     }
@@ -1165,7 +1171,7 @@ object EscortRunAdvanced {
      * at 800 (6ab93ca9).
      */
     private fun reinforcements(w: World, ticks: Int): List<Bodies.Unit> {
-        val body = lastEnemyBody ?: return emptyList()
+        val body = lastEnemyFighter ?: lastEnemyBody ?: return emptyList()
         val past = producedAt.firstOrNull { it.first >= w.now - PRODUCTION_WINDOW } ?: return emptyList()
         val span = maxOf(1, w.now - past.first)
         val energy = (enemyProduced - past.second).toLong() * ticks / span
@@ -1758,16 +1764,22 @@ object EscortRunAdvanced {
             }
         }
         val others = w.enemyEscorts.filter { idOf(it) != idOf(target) }
-        val joiners = w.enemyArmed.filter { e ->
+        // each comes at its own pace: its steps to reach times its period. けろびー's A10M1 (a cell in ten ticks, melee only)
+        // counted as 300 a tick on our whole group from the corridor, and v23's strikes on his tail waited for it (6ab95f3f,
+        // 6ab961a0 at 1250: "race=fail ours=0/3000"); a slow melee on our way is walked past, not met
+        fun arrival(e: Creep) = maxOf(0, getRange(e, target) - (if (Bodies.isMelee(e) || Bodies.rangedDps(e) == 0) 1 else 3)) * Bodies.period(e, false)
+        val slowWay = inWay.filter { Bodies.period(it, false) > 1 && Bodies.rangedDps(it) == 0 }
+        val metWay = inWay.filter { it !in slowWay }
+        val joiners = (w.enemyArmed.filter { e ->
             idOf(e) !in ids && others.none { o -> getRange(o, e) <= ESCORT_GUARD_RADIUS && getRange(o, e) < getRange(target, e) }
-        }.map { e -> e to maxOf(0, getRange(e, target) - minOf(eta, NOTICE_TICKS)) }
+        } + slowWay).map { e -> e to maxOf(0, arrival(e) - minOf(eta, NOTICE_TICKS)) }
         // by his spawn, what it makes while we walk joins too: its energy now and its income till we are there, as
         // bodies of his last kind (or M5A5) stepping out next to the target. v17's lone first M5A5 raced to けろびー's
         // escorts by his spawn at 204 on "kill in 34 ticks" and met his T3M8R5 born at 226 (6ab94dbe, 6ab94e11)
         val spawnUnits = ArrayList<Pair<Bodies.Unit, Int>>()
         val his = w.enemySpawn
         if (his != null && getRange(his, target) <= SPAWN_GUARD_RANGE) {
-            val body = lastEnemyBody ?: MELEE
+            val body = lastEnemyFighter ?: MELEE
             val energy = (his.store[RESOURCE_ENERGY] ?: 0) + ENEMY_INCOME * (eta + NOTICE_TICKS)
             val n = minOf(10, energy / maxOf(1, Bodies.cost(body)))
             for (i in 0 until n) spawnUnits.add(Bodies.unitOf(body) to maxOf(0, getRange(his, target) + i * body.size * CREEP_SPAWN_TIME - eta))
@@ -1778,11 +1790,11 @@ object EscortRunAdvanced {
         val atTarget = towerDpsAt(towers, target)
         val raceUs = capped(group).also { Bodies.spreadDamage(it, onWay) }
         val race = Bodies.race(raceUs, rampart + sink, target.hits, target.hitsMax,
-            inWay.map { Bodies.unitOf(it) to 0 } + joiners.map { Bodies.unitOf(it.first) to it.second } + spawnUnits, towerDps = atTarget)
+            metWay.map { Bodies.unitOf(it) to 0 } + joiners.map { Bodies.unitOf(it.first) to it.second } + spawnUnits, towerDps = atTarget)
         val dps = maxOf(1, capped(group).sumOf { it.dps() })
         val done = (rampart + sink + target.hits) / dps
         val clearUs = units(group).also { Bodies.spreadDamage(it, onWay) }
-        val clear = Bodies.fight(clearUs, units(inWay + joiners.filter { it.second <= done }.map { it.first }) + spawnUnits.filter { it.second <= done }.map { it.first }, towerDps = atTarget)
+        val clear = Bodies.fight(clearUs, units(metWay + joiners.filter { it.second <= done }.map { it.first }) + spawnUnits.filter { it.second <= done }.map { it.first }, towerDps = atTarget)
         val desc = "race=$race clear=$clear way=${if (flow === opFlow(w, target)) "round" else "plain"} eta=$eta inWay=${inWay.size} join=${joiners.count { it.second <= done }} spawn=${spawnUnits.size}" +
             (if (slots < Int.MAX_VALUE) " slots=$slots${if (sink > 0) " sink=$sink" else ""}" else "")
         lastOpWhy = desc
@@ -1812,7 +1824,15 @@ object EscortRunAdvanced {
         // took 1700 while the melee were 40-60 cells behind, and his blob came home first (6ab94124, t=833-967)
         val walking = fighters.filter { Bodies.liveMoves(it) > 0 && Bodies.period(it, false) <= 1 }
         val group = if (inOp) {
-            val core = walking.filter { idOf(it) in g.members }
+            // a member stays while it brings its weapon to the target before the kill: its steps to reach times its
+            // period now. The first hundred damage take an interleaved body's head MOVE and make it period 2 — the old
+            // "fast only" filter then sent it home mid-race and the rest lost the race: seven times in five matches
+            // against けろびー (6ab95f3f at 910 and 1428, 6ab961a0 at 916, ...)
+            val tgt0 = g.modeTarget?.let { id -> w.enemies.firstOrNull { idOf(it) == id } }
+            val core = fighters.filter { f ->
+                idOf(f) in g.members && Bodies.liveMoves(f) > 0 && Bodies.meleeDps(f) + Bodies.rangedDps(f) > 0 &&
+                    (tgt0 == null || maxOf(0, getRange(f, tgt0) - (if (Bodies.isMelee(f)) 1 else 3)) * Bodies.period(f, false) <= maxOf(g.lastEta, 1))
+            }
             val c = if (core.isEmpty()) null else cell(core.sumOf { it.x } / core.size, core.sumOf { it.y } / core.size)
             val tgt = g.modeTarget?.let { id -> w.enemies.firstOrNull { idOf(it) == id } }
             core + walking.filter { f -> idOf(f) !in g.members && c != null && tgt != null && getRange(f, tgt) <= getRange(c, tgt) + JOIN_SLACK }
@@ -1851,11 +1871,11 @@ object EscortRunAdvanced {
         lastSiegeWhy = "${siegeTarget?.let { at(it) }} $siegeEv need=$siegeNeed"
         val wasDefending = prev == "defend"
         if (picked != null) {
-            mode = "strike"; modeTarget = idOf(picked.first); plan = picked.second.plan
+            mode = "strike"; modeTarget = idOf(picked.first); plan = picked.second.plan; g.lastEta = picked.second.eta
             if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} plan=$plan ${picked.second} kill=${picked.second.eta} hisKill=${if (threats.isEmpty()) "-" else hisKill.toString()} group=${group.size}/${fighters.size}")
         } else if (siegeEv != null && siegeTarget != null && siegeEv.ok && threats.isNotEmpty() && beats(siegeEv.eta, prev == "siege")) {
             mode = "siege"
-            modeTarget = idOf(siegeTarget); plan = siegeEv.plan
+            modeTarget = idOf(siegeTarget); plan = siegeEv.plan; g.lastEta = siegeEv.eta
             if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} plan=$plan $siegeEv kill=${siegeEv.eta} hisKill=$hisKill group=${group.size}/${fighters.size}")
         } else if (threats.isNotEmpty() && !(breachFor < Int.MAX_VALUE && beats(breachFor))) {
             mode = "defend"
@@ -1869,7 +1889,7 @@ object EscortRunAdvanced {
             if (prev != mode) println("army ${g.name} t=${w.now}: CONVOY guard=${fighters.size}")
         } else if (siegeEv != null && siegeTarget != null && siegeEv.ok) {
             mode = "siege"
-            modeTarget = idOf(siegeTarget); plan = siegeEv.plan
+            modeTarget = idOf(siegeTarget); plan = siegeEv.plan; g.lastEta = siegeEv.eta
             if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} plan=$plan $siegeEv group=${group.size}/${fighters.size}")
         } else {
             mode = "hold"
@@ -1951,10 +1971,14 @@ object EscortRunAdvanced {
                 // siege on an escort no melee can reach: break the rampart beside it that we can stand next to
                 val goal = if (g.mode == "siege" && target != null && !meleeReachable(w, target)) breachCell(w, target) ?: target else focus
                 if (getRange(f, goal) > 1) { if (opMember) stepOp(w, f, goal, 1) else step(w, f, goal, 1) }
+                // in reach it stays: with no request of its own the traffic swapped it with the melee behind it, which
+                // asked for its cell — two melee on one target struck 16 times of 38 (けろびー, 6ab95f3f 1411-1431)
+                else pinned.add(idOf(f))
             } else {
                 val meleeNear = w.enemyArmed.filter { Bodies.meleeDps(it) > 0 && getRange(it, f) <= 1 }
                 if (meleeNear.isNotEmpty()) kite(w, f, meleeNear)
                 else if (getRange(f, focus) > 3) { if (opMember) stepOp(w, f, focus, 3) else step(w, f, focus, 3) }
+                else pinned.add(idOf(f))
             }
         }
     }
@@ -2106,7 +2130,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
