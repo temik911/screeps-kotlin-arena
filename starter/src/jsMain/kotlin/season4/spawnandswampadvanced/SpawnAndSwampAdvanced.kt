@@ -98,7 +98,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v27"
+    private const val BOT_VERSION = "v28"
 
     private const val LOG_EVERY = 50
 
@@ -318,14 +318,29 @@ object SpawnAndSwampAdvanced {
             }
         }
         if (add.isEmpty()) { danger = null; return }
-        val m = CostMatrix()
+        val cost = HashMap<Int, Int>()
         for ((k, d) in add) {
             val x = k / 100; val y = k % 100
             val ter = getTerrainAt(cell(x, y))
             if (ter == TERRAIN_WALL) continue
             val base = if (ter == TERRAIN_SWAMP) 10 else 2
-            m.set(x, y, minOf(254, base + d / DANGER_SCALE))
+            cost[k] = minOf(254, base + d / DANGER_SCALE)
         }
+        // своя матрица отключает у поиска пути обход препятствий: он не знает ни крипов, ни построек (basic записал то
+        // же). v27 без этого вёл строителя сейфа сквозь StructureWall — тот простоял у пролома до смерти, другой не
+        // сдвинулся за 1300 тиков. Препятствия и крипы — непроходимы, свой рампарт — безопасная клетка
+        for (o in getObjects()) {
+            if (o.x !in 0..99 || o.y !in 0..99) continue
+            val k = o.x * 100 + o.y
+            when {
+                o is Creep -> cost[k] = 255
+                o is StructureRampart && o.asDynamic().my == true -> if ((cost[k] ?: 0) < 255) cost[k] = 1
+                o is Structure && o !is StructureContainer && o !is StructureRampart -> cost[k] = 255
+                o is StructureRampart -> cost[k] = 255
+            }
+        }
+        val m = CostMatrix()
+        for ((k, v) in cost) m.set(k / 100, k % 100, v)
         danger = m
     }
 
