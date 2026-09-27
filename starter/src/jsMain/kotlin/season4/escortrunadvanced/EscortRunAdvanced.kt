@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 35
+const val BOT_VERSION = 36
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -951,12 +951,13 @@ object EscortRunAdvanced {
         return deliveryVal
     }
 
-    /** What an outpost gives back only after: the pioneer, the spawn and its two ramparts at one source's income, plus
-     *  the pioneer's walk. */
+    /** What an outpost gives back only after: the pioneer's walk, the spawn and its two ramparts harvested and built at
+     *  one source's regen (no income meanwhile), then the pioneer and all of it earned back at the spawn's income. */
     private fun pioneerPayback(w: World): Int {
         val site = outpost?.spawnCell ?: return Int.MAX_VALUE
         val walk = w.mySpawn?.let { getRange(it, cellOf(site)) } ?: 0
-        return (Bodies.cost(PIONEER) + SPAWN_BUILD_COST + 2 * RAMPART_BUILD_COST) / (SOURCE_ENERGY_REGEN + 1) + walk
+        val works = SPAWN_BUILD_COST + 2 * RAMPART_BUILD_COST
+        return walk + works / SOURCE_ENERGY_REGEN + (Bodies.cost(PIONEER) + works) / (SOURCE_ENERGY_REGEN + 1)
     }
 
     /** The flag we keep walled: his flag, the far source a worker harvests by, the cell it stands on (within three of
@@ -998,7 +999,24 @@ object EscortRunAdvanced {
         if (w.fighters.isEmpty()) return false
         if (denierLostAt >= 0 && w.now - denierLostAt < PIONEER_RETRY) return false
         if (hisDeliveryIn(w) == Int.MAX_VALUE) return false
-        return w.enemyEscorts.none { key(it) == d.flag }
+        if (w.enemyEscorts.any { key(it) == d.flag }) return false
+        // and only with a way there now: v35's denier against けろびー#14 was born at 1189 with his blob across the only
+        // way (the centre) and stood by the spawn to the end — 1000 energy out of the race for his tail (6ab97a5c)
+        val spawn = w.mySpawn ?: return false
+        val weight = DENIER.size - DENIER.count { it == MOVE }
+        val moves = DENIER.count { it == MOVE }
+        val f = denyFlow(w, d, maxOf(1, Bodies.period(weight, moves, true) / maxOf(1, Bodies.period(weight, moves, false))))
+        return startNear(f, spawn) != null
+    }
+
+    /** The denier's way to its cell: cells within four of his fighters and within his towers' deadly reach are walls. */
+    private fun denyFlow(w: World, d: Deny, swampCost: Int): IntArray {
+        val tr = (TOWER_POWER_ATTACK - TOWER_DANGER_SHOT) / TOWER_FALL + 1
+        val danger = (w.enemyArmed.flatMap { e -> (-4..4).flatMap { dx -> (-4..4).map { dy -> cell(e.x + dx, e.y + dy) } } } +
+            hisTowers().flatMap { t -> (-tr..tr).flatMap { dx -> (-tr..tr).map { dy -> cell(t.x + dx, t.y + dy) } } })
+            .filter { DistanceMap.inBounds(it.x, it.y) && getRange(it, cellOf(d.slot)) > 2 }
+        return if (danger.isEmpty()) flowTo("deny", cellOf(d.slot), swampCost)
+            else DistanceMap.flowFieldTo(cellOf(d.slot), danger + stillCells, swampCost)
     }
 
     /**
@@ -1011,13 +1029,15 @@ object EscortRunAdvanced {
         val src = getObjectsByPrototype(Source::class).firstOrNull { it.exists && key(it) == d.source } ?: return
         for (c in w.deniers.filter { !it.spawning }) {
             if (key(c) != d.slot) {
-                val tr = (TOWER_POWER_ATTACK - TOWER_DANGER_SHOT) / TOWER_FALL + 1
-                val danger = (w.enemyArmed.flatMap { e -> (-4..4).flatMap { dx -> (-4..4).map { dy -> cell(e.x + dx, e.y + dy) } } } +
-                    hisTowers().flatMap { t -> (-tr..tr).flatMap { dx -> (-tr..tr).map { dy -> cell(t.x + dx, t.y + dy) } } })
-                    .filter { DistanceMap.inBounds(it.x, it.y) && getRange(it, cellOf(d.slot)) > 2 }
-                val f = if (danger.isEmpty()) flowTo("deny", cellOf(d.slot), Bodies.swampCost(c))
-                    else DistanceMap.flowFieldTo(cellOf(d.slot), danger + stillCells, Bodies.swampCost(c))
-                DistanceMap.flowStep(f, c.x, c.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(c, it, WORKER_PRIORITY + 5) }
+                val f = denyFlow(w, d, Bodies.swampCost(c))
+                val st = DistanceMap.flowStep(f, c.x, c.y, 0, w.occupant.keys, w.enemyAt)
+                if (st != null) TrafficManager.request(c, st, WORKER_PRIORITY + 5)
+                else w.mySpawn?.takeIf { getRange(c, it) <= 1 }?.let { home ->
+                    // no safe way yet: off the spawn's cells, or it cannot put a creep out (the pioneer's rule)
+                    DIRECTIONS.map { (dx, dy) -> cell(c.x + dx, c.y + dy) }
+                        .firstOrNull { p -> getRange(p, home) >= 2 && !DistanceMap.isWall(p.x, p.y) && !w.occupant.containsKey(key(p)) }
+                        ?.let { TrafficManager.request(c, it, WORKER_PRIORITY + 5) }
+                }
                 if (getRange(c, src) > 1) continue
             } else pinned.add(idOf(c))
             val carried = c.store[RESOURCE_ENERGY] ?: 0
@@ -1326,6 +1346,16 @@ object EscortRunAdvanced {
     private fun convoyWanted(w: World): Boolean {
         if (homeG.mode == "defend" || w.fighters.count { originOf[idOf(it)] != "outpost" } < CONVOY_MIN_GUARD) return false
         val plan = convoyFlags ?: return false
+        // his towers along each escort's route, a cell every CONVOY_PERIOD ticks: no guard answers a tower, so an escort
+        // whose route takes its hits is not sent. v35 set out through the centre under けろびー#14's towers (44,53)
+        // (45,53) with our corridor standing — the only route — and lost a train's pullers and the match at 1300
+        // (test game 6ab97ae4)
+        val towers = hisTowers()
+        if (towers.isNotEmpty()) for (e in w.escorts) {
+            val flag = plan[idOf(e)] ?: continue
+            val burn = descend(routeFlow(w, flag), key(e)).sumOf { k -> towerDpsAt(towers, cellOf(k)) } * CONVOY_PERIOD
+            if (burn >= e.hits) return false
+        }
         val sim = convoySim(w, plan)
         return sim.weWin && sim.margin() >= STRIKE_MARGIN
     }
@@ -2385,7 +2415,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally homeRound deliveryClock denyFlag opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally homeRound deliveryClock denyFlag convoyTowers opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
