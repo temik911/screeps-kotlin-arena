@@ -3,6 +3,7 @@ package season4.escortrun
 import screeps.api.ATTACK
 import screeps.api.BodyPartType
 import screeps.api.CARRY
+import screeps.api.ConstructionSite
 import screeps.api.Creep
 import screeps.api.Flag
 import screeps.api.GameObject
@@ -63,7 +64,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v27"
+    private const val BOT_VERSION = "v28"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -160,6 +161,8 @@ object EscortRun {
         /** Сооружение, закрывшее наш флаг (их рампарт или стена на клетке флага, или все проходимые соседи флага под
          *  сооружениями — тогда ближнее к эскорту); null — флаг открыт. */
         val flagBlocker: GameObject?,
+        /** Их стройплощадка на нашем флаге или вплотную: рампарт на ней достроится за десятки тиков. */
+        val flagSite: ConstructionSite?,
     )
 
     fun tick() {
@@ -273,6 +276,7 @@ object EscortRun {
             occupant = occupant, enemyAt = enemyAt, blocked = blocked, blockedForEnemy = blockedForEnemy, myRamparts = ramparts.filter { it.my == true },
             escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow, escortFlowRaw = escortFlowRaw,
             flagBlocker = flagBlockerOf(myFlag, escort, walls, ramparts),
+            flagSite = myFlag?.let { f -> getObjectsByPrototype(ConstructionSite::class).firstOrNull { it.exists && it.my == false && getRange(it, f) <= 1 } },
         )
     }
 
@@ -684,12 +688,33 @@ object EscortRun {
      * двумя блокировщиками брала у v25 35 % рук), так что время есть, а энергии — 1 в тик: ранний дешёвый мили
      * наносит больше урона к сроку, чем поздний большой, поэтому покупается сразу, как есть 130.
      */
+    /** Поле к клетке ожидания пролома: в трёх клетках от флага, ближайшей к нему по пути эскорта. */
+    private fun breachWaitFlow(w: World): IntArray? {
+        val flag = w.myFlag ?: return null
+        val raw = w.escortFlowRaw ?: return null
+        var best = -1
+        var bestD = Int.MAX_VALUE
+        for (dx in -3..3) for (dy in -3..3) {
+            if (maxOf(kotlin.math.abs(dx), kotlin.math.abs(dy)) != 3) continue
+            val x = flag.x + dx; val y = flag.y + dy
+            if (!DistanceMap.inBounds(x, y) || DistanceMap.isWall(x, y)) continue
+            val d = raw[x * 100 + y]
+            if (d in 0 until bestD) { bestD = d; best = x * 100 + y }
+        }
+        if (best < 0) return null
+        return flowTo("breachWait:$best", cellPos(best), w.blocked, 5)
+    }
+
     private fun breachOrder(w: World, e: Int): Boolean {
-        val b = w.flagBlocker ?: return false
+        // их площадка на нашем флаге — пролом начинается, пока рампарт ещё строится: первый проломщик иначе ждал 130
+        // до ~331-го при рампарте на ~259-м и опаздывал к их финишу на ~815-м (офлайн, затычка + блокировщик, 4 из 40)
+        val b: GameObject = w.flagBlocker ?: w.flagSite ?: return false
         if (fightersOn(w, BREACH) >= MAX_BREACHERS) return false
-        val min = Bodies.cost(MOVE) + Bodies.cost(ATTACK)
-        if (e < min) { saving(w, "breacher", min); return true }
-        val body = meleeBody(minOf(e, SPAWN_ENERGY_CAPACITY)) ?: return false
+        // тело — как у быстрого охотника: минимум «ждать энергию + идти + ломать 10 000»; M1A1 шёл по болоту 120 тиков и
+        // ломал 333 — дольше, чем подождать M2A2
+        val hits = if (w.flagBlocker != null) ((b.asDynamic().hits as? Int) ?: 10000) else 10000
+        val body = fastHunter(w, b.unsafeCast<Position>(), hits, e, emptyList())?.first ?: meleeBody(minOf(e, SPAWN_ENERGY_CAPACITY)) ?: return false
+        if (e < Bodies.cost(body)) { saving(w, "breacher ${Bodies.summary(body)}", Bodies.cost(body)); return true }
         if (order(w, body, "breacher", "our flag shut by ${protoName(b)}@(${b.asDynamic().x},${b.asDynamic().y}) hits=${b.asDynamic().hits}")) fighterQueue.addLast(BREACH)
         return true
     }
@@ -1095,7 +1120,10 @@ object EscortRun {
     private fun runTrain(w: World) {
         keeperStepAside = null
         val escort = w.escort ?: return
-        val flow = (if (holding) homeFlow(w) else null) ?: w.escortFlow ?: return
+        // флаг закрыт и проломщики в пути — поезд ждёт в трёх клетках от флага: у входа в карман он занимал клетки, с
+        // которых бьют рампарт, и из двух проломщиков бил один (офлайн, затычка: 4 поражения из 40 на ~815-м)
+        val waiting = w.flagBlocker != null && fightersOn(w, BREACH) > 0
+        val flow = (if (holding) homeFlow(w) else null) ?: (if (waiting) breachWaitFlow(w) else null) ?: w.escortFlow ?: return
         val flag = w.myFlag ?: return
         pinned.add(idOf(escort))
         // проверка буксировки результатом: после шага с цепью усталость обязана быть меньше пешей
@@ -1446,10 +1474,10 @@ object EscortRun {
             var why: String
             val threat = if (escort != null) w.enemyArmed.filter { dist(it, escort) <= THREAT_RANGE && dist(it, f) <= 20 }.minByOrNull { dist(it, f) } else null
             if (role == BREACH) {
-                val b = w.flagBlocker
+                val b = w.flagBlocker ?: w.flagSite
                 if (b == null) { fighterRole[id] = ESCORT_GUARD } else {
                     val bp = b.unsafeCast<Position>()
-                    if (dist(f, bp) <= 1) { f.attack(b); if (DEBUG_LOG && w.now % LOG_EVERY == 0) println("fighter t=${w.now}: $id breach ${protoName(b)} hits=${b.asDynamic().hits}"); continue }
+                    if (dist(f, bp) <= 1) { if (w.flagBlocker != null) f.attack(b); if (DEBUG_LOG && w.now % LOG_EVERY == 0) println("fighter t=${w.now}: $id breach ${protoName(b)} hits=${b.asDynamic().hits}"); continue }
                     // по дороге бьёт соседних врагов: их блокировщик в узком коридоре держал троих проломщиков в трёх
                     // клетках друг за другом до конца матча (офлайн, затычка с погоней, 6ab906a0)
                     attackBest(f, w, null)
