@@ -727,6 +727,13 @@ def main():
             print(f"{i}/{a.count}: the payload is not on the page any more, sending it again")
             size = push_zip(c, data)
         r = start(c, arena["id"], fame=a.fame, code_id=test_code)
+        # the server caps the games running per USER, across arenas: with other sessions in series of their own, a start
+        # answers "Running games limit exceeded" (27.09.2026, three arenas at once) — that is a wait, not the end
+        for _ in range(60):
+            if r.get("id") or "limit exceeded" not in str(r.get("err") or r.get("raw") or "").lower():
+                break
+            time.sleep(10)
+            r = start(c, arena["id"], fame=a.fame, code_id=test_code)
         if r["status"] not in (200, 201) or not r.get("id"):
             print(f"{i}/{a.count}: start failed ({r['status']} {r.get('err')}) {r.get('raw') or ''}")
             break
