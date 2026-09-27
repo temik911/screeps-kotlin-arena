@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 10
+const val BOT_VERSION = 11
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport

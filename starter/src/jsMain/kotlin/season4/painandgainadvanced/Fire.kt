@@ -125,16 +125,12 @@ object Fire {
             shooters.removeAll(onIt)
             left.remove(tgt)
         }
-        // a ranged creep with no target of the focus in reach, or with several enemies close, takes the mass attack
-        // when its 10 / 4 / 1 per part over everything in three beats its single shot
+        // the mass attack only when surrounded (three of his next to the shooter): spread over his line under his
+        // healing it removes nothing, and v9 fired it ninety times in a fight it had to win on one target at a time
         val out = ArrayList<Shot>()
         for (s in shots) {
             val u = s.shooter
-            if (u.melee == 0 && u.ranged > 0) {
-                val near = theirs.filter { Grid.range(it.x, it.y, u.x, u.y) <= 3 }
-                val mass = near.sumOf { e -> when (Grid.range(e.x, e.y, u.x, u.y)) { 0, 1 -> 10; 2 -> 4; else -> 1 }.toDouble() }
-                if (near.size >= 3 && mass > 10 * 1.5) { out.add(Shot(u, null, true)); continue }
-            }
+            if (u.melee == 0 && u.ranged > 0 && theirs.count { Grid.range(it.x, it.y, u.x, u.y) <= 1 } >= 3) { out.add(Shot(u, null, true)); continue }
             out.add(s)
         }
         // shooters left with nothing assigned (their targets all out-healed) still fire at whatever is in reach

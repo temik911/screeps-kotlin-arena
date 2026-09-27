@@ -66,13 +66,16 @@ object Formation {
                 reach + safe + behind
             }
             Role.HEALER -> {
+                // beside the patient a heal is 12 a part, from three it is 4: his healers stood beside theirs and ours
+                // (v9) healed from range two times in three — the risk that matters is his melee next to the cell, not
+                // his ranged, which reach a cell behind the line as well
                 val nearPatient = if (patient == null) 0.0 else {
                     val r = Grid.range(Grid.xOf(cell), Grid.yOf(cell), patient.x, patient.y)
-                    if (r <= 1) 30.0 else if (r <= 3) 12.0 - r else -r * 3.0
+                    if (r <= 1) 45.0 else if (r <= 3) 8.0 - r else -r * 3.0
                 }
-                val safe = when { dm <= 1 -> -50.0; dm <= 2 -> -20.0; d <= 1 -> -15.0; else -> 0.0 }
-                val behind = if (d < c.front + 2) -(c.front + 2 - d) * 4 else 0.0
-                nearPatient + safe + behind + minOf(d, 6.0) * 0.5
+                val safe = when { dm <= 1 -> -60.0; dm <= 2 -> -8.0; else -> 0.0 }
+                val behind = if (!engaged && d < c.front + 2) -(c.front + 2 - d) * 3 else 0.0
+                nearPatient + safe + behind + minOf(d, 6.0) * 0.3
             }
             Role.PULLER -> 0.0
         }
