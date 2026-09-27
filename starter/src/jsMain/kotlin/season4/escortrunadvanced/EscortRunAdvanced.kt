@@ -49,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 7
+const val BOT_VERSION = 8
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -120,6 +120,12 @@ object EscortRunAdvanced {
     private const val CLUSTER_RADIUS = 8
     /** Defending, the home radius widens by this much, so a threat standing on its edge does not flip the mode. */
     private const val DEFEND_KEEP = 4
+    /** Defenders leave the ramparts only when the open fight leaves them this share of their hit points. */
+    private const val DEFEND_OPEN_MARGIN = 0.5
+    /** An operation's way treats every cell this close to his fighters (not by the target) as a wall. */
+    private const val DANGER_RADIUS = 3
+    /** A breach is worth it while an escort of his stands out of his ramparts this close to his spawn. */
+    private const val BREACH_TARGET_RANGE = 15
 
     private const val FIGHTER_PRIORITY = 30
     private const val HAULER_PRIORITY = 20
@@ -136,15 +142,34 @@ object EscortRunAdvanced {
     /** The wall breaker: as much ATTACK as one spawn holds with MOVE enough for two ticks a plain cell. */
     private const val BREAKER_ATTACK = 9
     private val BREAKER = Bodies.body(MOVE to 5, ATTACK to BREAKER_ATTACK)
+    /** The outpost's pioneer walks ninety cells: a MOVE on every part, WORK to saturate the source, one CARRY to build. */
+    private val PIONEER = Bodies.body(WORK to 5, CARRY to 1, MOVE to 6)
+    /** The outpost spawn's own worker steps one cell to its slot. */
+    private val PIONEER_WORKER = Bodies.body(WORK to 5, CARRY to 1, MOVE to 1)
+    private const val PIONEER_TRIES = 3
 
     // ---------- state between ticks ----------
     private val escortIds = HashSet<String>()
     private val escortHome = HashMap<String, Int>()
-    private var mode = "hold"
-    private var modeTarget: String? = null
-    private var modeSince = 0
-    /** The fighters of the running strike or siege. */
-    private var members: Set<String> = emptySet()
+    /**
+     * One army per base: the fighters born at the home spawn and those born at the outpost's. Each defends its own base
+     * and runs its own operations — a threat at home must not pull the outpost's fighters across the map.
+     */
+    internal class Garrison(val name: String) {
+        var mode = "hold"
+        var modeTarget: String? = null
+        var modeSince = 0
+        /** The fighters of the running strike or siege. */
+        var members: Set<String> = emptySet()
+        /** The tick this base was first defended. */
+        var attackedAt = -1
+        val inOp get() = mode == "strike" || mode == "siege"
+    }
+
+    private val homeG = Garrison("home")
+    private val outpostG = Garrison("outpost")
+    /** Which base a fighter belongs to: the spawn it was born at. */
+    private val originOf = HashMap<String, String>()
     private var armyMade = 0
     private val flowCache = HashMap<String, IntArray>()
     private val flowTick = HashMap<String, Int>()
@@ -176,7 +201,14 @@ object EscortRunAdvanced {
         val enemyArmed: List<Creep>,
         val piles: List<Resource>,
         val walls: HashMap<Int, StructureWall>,
+        /** Our spawn at the outpost (any spawn of ours but the home one). */
+        val outpostSpawn: StructureSpawn?,
+        /** Workers of the outpost: WORK enough to saturate a source alone. */
+        val pioneers: List<Creep>,
     )
+
+    /** The spawn we started with: every other spawn of ours is the outpost's. */
+    private var homeSpawnKey = -1
 
     fun tick() {
         val w = sense()
@@ -184,14 +216,23 @@ object EscortRunAdvanced {
             .filter { it.exists && it.my == true && works?.any { p -> p.first == "tower" && p.second == key(it) } == true }.map { cell(it.x, it.y) }
         if (w.now == 1) probe(w)
         if (w.now in 2..5) printMap((w.now - 2) * 25)
-        if (w.now == 1) chooseBreach(w)
+        if (w.now == 1) { chooseBreach(w); planOutpost(w) }
+        assignOrigins(w)
         runSpawn(w)
+        runOutpostSpawn(w)
         runWorks(w)
         runTowers(w)
         runEscorts(w)
         runEconomy(w)
-        decideArmy(w)
-        runArmy(w)
+        runPioneers(w)
+        val fighters = w.fighters.filter { !it.spawning }
+        val homeF = fighters.filter { originOf[idOf(it)] != "outpost" }
+        val outF = fighters.filter { originOf[idOf(it)] == "outpost" }
+        decideArmy(w, homeG, homeF, w.mySpawn)
+        runArmy(w, homeG, homeF, w.mySpawn, rallyCells(w), true)
+        val opBase: Position? = w.outpostSpawn ?: outpost?.let { cellOf(it.spawnCell) }
+        decideArmy(w, outpostG, outF, opBase)
+        runArmy(w, outpostG, outF, opBase, outpostRally(w), false)
         TrafficManager.resolve(w.active.filter { idOf(it) !in escortIds && Bodies.liveMoves(it) > 0 }, w.active + w.enemies)
         if (w.now % LOG_EVERY == 0 || w.now == 2) logStatus(w)
     }
@@ -209,7 +250,9 @@ object EscortRunAdvanced {
         val enemies = creeps.filter { !it.my && !it.spawning }
         val active = mine.filter { !it.spawning }
         val spawns = getObjectsByPrototype(StructureSpawn::class).filter { it.exists }
-        val mySpawn = spawns.firstOrNull { it.my == true }
+        if (homeSpawnKey < 0) spawns.firstOrNull { it.my == true }?.let { homeSpawnKey = key(it) }
+        val mySpawn = spawns.firstOrNull { it.my == true && key(it) == homeSpawnKey }
+        val outpostSpawn = spawns.firstOrNull { it.my == true && key(it) != homeSpawnKey }
         val flags = getObjectsByPrototype(Flag::class).filter { it.exists }
         val sources = getObjectsByPrototype(Source::class).filter { it.exists }
         val ramparts = getObjectsByPrototype(StructureRampart::class).filter { it.exists }
@@ -233,7 +276,9 @@ object EscortRunAdvanced {
             myRamparts = myRamparts, enemyRamparts = enemyRamparts, occupant = occupant,
             enemyAt = enemies.mapTo(HashSet()) { key(it) }, blocked = blocked,
             fighters = others.filter { Bodies.wasArmed(it) },
-            harvesters = mine.filter { idOf(it) !in escortIds && Bodies.isWorker(it) },
+            harvesters = mine.filter { idOf(it) !in escortIds && Bodies.isWorker(it) && !isPioneer(it) },
+            pioneers = mine.filter { idOf(it) !in escortIds && isPioneer(it) },
+            outpostSpawn = outpostSpawn,
             haulers = mine.filter { idOf(it) !in escortIds && Bodies.isHauler(it) },
             enemyArmed = enemies.filter { idOf(it) !in escortIds && Bodies.isArmed(it) },
             piles = getObjectsByPrototype(Resource::class).filter { it.exists && it.resourceType == RESOURCE_ENERGY },
@@ -244,6 +289,19 @@ object EscortRunAdvanced {
     /** Cells our own creeps must walk round: the escorts standing at home. They never yield (they are not movers), so a
      *  field through them sends a creep into an escort's back for good. */
     private var stillCells: List<Position> = emptyList()
+
+    /** An outpost worker: WORK enough to saturate a source alone (home harvesters are split in two). */
+    private fun isPioneer(c: Creep) = c.body.count { it.type == WORK } >= WORK_TARGET
+
+    /** A fighter belongs to the spawn it was born at. */
+    private fun assignOrigins(w: World) {
+        for (c in w.mine) {
+            if (idOf(c) in originOf || idOf(c) in escortIds) continue
+            val op = w.outpostSpawn
+            originOf[idOf(c)] = if (op != null && getRange(c, op) <= 1) "outpost" else "home"
+        }
+        if (w.now % 100 == 0) originOf.keys.retainAll(w.mine.mapTo(HashSet()) { idOf(it) })
+    }
 
     /** A flow field for our movers: round the structures and round our standing escorts. */
     private fun flowTo(name: String, target: Position, swampCost: Int): IntArray =
@@ -283,6 +341,9 @@ object EscortRunAdvanced {
             raceOn -> MELEE
             works < WORK_TARGET -> HARVESTER_NEXT
             w.haulers.size < HAULERS -> HAULER
+            // the outpost's pioneer after the first fighter: the second economy pays from the moment it stands
+            outpost != null && w.outpostSpawn == null && w.pioneers.isEmpty() && pioneersSent < PIONEER_TRIES &&
+                w.fighters.isNotEmpty() -> PIONEER
             // inside a one-cell pass one melee reaches the wall, so the wall falls at the pace of the strongest one
             breachLeft(w) && w.fighters.size >= 2 && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
             else -> nextFighter(w)
@@ -291,6 +352,7 @@ object EscortRunAdvanced {
         val r = spawn.spawnCreep(order)
         if (r.error == null) {
             if (order.any { it == ATTACK || it == RANGED_ATTACK || it == HEAL }) armyMade++
+            if (order.count { it == WORK } >= WORK_TARGET) pioneersSent++
             println("spawn t=${w.now}: ${Bodies.summary(order)} e=${energy(w)} army=$armyMade")
         }
     }
@@ -425,7 +487,7 @@ object EscortRunAdvanced {
     /** What to build at home, in order: (kind, cell). */
     private var works: List<Pair<String, Int>>? = null
     /** The tick home was first defended — raids unlock the tower before its fighter count. */
-    private var attackedAt = -1
+    private val attackedAt get() = homeG.attackedAt
 
     /**
      * Computed once the harvest spots are known. けろびー#11 raided our source three times with his T3M8R5 and healers
@@ -534,6 +596,127 @@ object EscortRunAdvanced {
         }
     }
 
+    // ==================== the outpost: a second spawn by the far source ====================
+
+    /** The outpost's plan: the source it lives on, the spawn's cell two from it, and the cells beside both (a harvester
+     *  there harvests and hands the energy to the spawn in the same tick). */
+    private class Outpost(val source: Int, val spawnCell: Int, val slots: List<Int>)
+    private var outpost: Outpost? = null
+    private var pioneersSent = 0
+
+    /**
+     * Planned at tick one. A second spawn is a second economy: every side has the same income — one source regenerates 10
+     * a tick, the spawn 1 — and the far edge holds two more sources nobody lives on. stachu3478 built his spawn by his flag
+     * (94,26) at 994 with a tower under a rampart (6ab92e1f). Ours goes by the far source nearest to our flags: its
+     * fighters stand where both sides' escorts end their way (the flags of the two sides are joined along the right
+     * edge, round the centre), and the harvester on it adds ten a tick. The spawn's cell is taken as in Spawn and Swamp
+     * advanced: two from the source, with the most cells beside both, not swamp, the nearer to our flags.
+     */
+    private fun planOutpost(w: World) {
+        val my = w.mySpawn ?: return
+        val his = w.enemySpawn
+        val flags = w.myFlags
+        if (flags.isEmpty()) return
+        val sources = getObjectsByPrototype(Source::class).filter { s ->
+            s.exists && getRange(s, my) > 20 && (his == null || getRange(s, his) > 20)
+        }
+        val src = sources.minByOrNull { s -> flags.minOf { getRange(it, s) } } ?: return
+        var best: Outpost? = null
+        var bestScore = Int.MIN_VALUE
+        for (dx in -2..2) for (dy in -2..2) {
+            val c = (src.x + dx) * 100 + (src.y + dy)
+            if (cheb(c, key(src)) != 2 || !DistanceMap.inBounds(c / 100, c % 100) || DistanceMap.isWall(c / 100, c % 100)) continue
+            if (flags.any { key(it) == c }) continue
+            val slots = ArrayList<Int>()
+            var exits = 0
+            for ((ax, ay) in DIRECTIONS) {
+                val a = (c / 100 + ax) * 100 + (c % 100 + ay)
+                if (!DistanceMap.inBounds(a / 100, a % 100) || DistanceMap.isWall(a / 100, a % 100) || flags.any { key(it) == a }) continue
+                if (cheb(a, key(src)) == 1) slots.add(a) else exits++
+            }
+            if (slots.isEmpty() || exits == 0) continue
+            val score = slots.size * 1000 + (if (DistanceMap.isSwamp(c / 100, c % 100)) 0 else 100) + minOf(exits, 3) * 10 -
+                flags.minOf { getRange(it, cellOf(c)) }
+            if (score > bestScore) { bestScore = score; best = Outpost(key(src), c, slots) }
+        }
+        outpost = best
+        println("outpost: " + (best?.let { "source ${at(cellOf(it.source))} spawn ${at(cellOf(it.spawnCell))} slots ${it.slots.joinToString(" ") { s -> at(cellOf(s)) }}" } ?: "none"))
+    }
+
+    private fun rampartAt(k: Int) = getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
+
+    /**
+     * A pioneer (W5C1M6) walks to the outpost's slot — round his fighters, whose cells within four are walls to it —
+     * and, standing there, builds a rampart under itself, a rampart on the spawn's cell and the spawn under that rampart
+     * (Spawn and Swamp advanced: a bare spawn and its builder were razed by stachu3478 before the order changed), harvesting
+     * between batches. Once the spawn stands it harvests and hands everything to it every tick.
+     */
+    private fun runPioneers(w: World) {
+        val op = outpost ?: return
+        val src = getObjectsByPrototype(Source::class).firstOrNull { it.exists && key(it) == op.source } ?: return
+        val taken = HashSet<Int>()
+        for (p in w.pioneers.filter { !it.spawning }.sortedBy { getRange(it, src) }) {
+            val slot = op.slots.filter { it !in taken }.minByOrNull { getRange(cellOf(it), p) } ?: continue
+            taken.add(slot)
+            if (key(p) != slot) {
+                val danger = w.enemyArmed.flatMap { e -> (-4..4).flatMap { dx -> (-4..4).map { dy -> cell(e.x + dx, e.y + dy) } } }
+                    .filter { DistanceMap.inBounds(it.x, it.y) && getRange(it, cellOf(slot)) > 2 }
+                val f = if (danger.isEmpty()) flowTo("pioneer", cellOf(slot), Bodies.swampCost(p))
+                    else DistanceMap.flowFieldTo(cellOf(slot), danger + stillCells, Bodies.swampCost(p))
+                DistanceMap.flowStep(f, p.x, p.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(p, it, WORKER_PRIORITY + 5) }
+                if (getRange(p, src) > 1) continue
+            }
+            val e = p.store[RESOURCE_ENERGY] ?: 0
+            val spawn = w.outpostSpawn
+            if (spawn != null) {
+                if (getRange(p, src) <= 1) p.harvest(src)
+                if (e > 0 && getRange(p, spawn) <= 1) p.transfer(spawn, RESOURCE_ENERGY)
+                continue
+            }
+            val next: Pair<Int, String> = when {
+                key(p) in op.slots && !rampartAt(key(p)) -> key(p) to "rampart"
+                !rampartAt(op.spawnCell) -> op.spawnCell to "rampart"
+                else -> op.spawnCell to "spawn"
+            }
+            val sites = getObjectsByPrototype(ConstructionSite::class).filter { it.exists && it.my == true }
+            var site = sites.firstOrNull { key(it) == next.first }
+            if (site == null && sites.none { getRange(it, p) <= 3 && key(it) != next.first }) {
+                val r = if (next.second == "spawn") createConstructionSite(next.first / 100, next.first % 100, StructureSpawn::class.js)
+                    else createConstructionSite(next.first / 100, next.first % 100, StructureRampart::class.js)
+                println("outpost t=${w.now}: ${next.second} site ${at(cellOf(next.first))} err=${r.error}")
+                site = r.`object`
+            }
+            if (site == null) site = sites.filter { getRange(it, p) <= 3 }.minByOrNull { getRange(it, p) }
+            if (site != null && (e >= Bodies.live(p, CARRY) * 50 || (src.energy == 0 && e > 0))) p.build(site)
+            else if (getRange(p, src) <= 1) p.harvest(src)
+        }
+    }
+
+    /** The outpost's spawn: a harvester for its slot when none stands there, then fighters of the outpost's garrison. */
+    private fun runOutpostSpawn(w: World) {
+        val spawn = w.outpostSpawn ?: return
+        if (spawn.spawning != null) return
+        val order = if (w.pioneers.none { !it.spawning && getRange(it, spawn) <= 3 }) PIONEER_WORKER else nextFighter(w)
+        if ((spawn.store[RESOURCE_ENERGY] ?: 0) < Bodies.cost(order)) return
+        val r = spawn.spawnCreep(order)
+        if (r.error == null) println("outpost spawn t=${w.now}: ${Bodies.summary(order)}")
+    }
+
+    /** Where the outpost's idle fighters stand: round its spawn, the side facing his flags first. */
+    private fun outpostRally(w: World): List<Int> {
+        val op = outpost ?: return emptyList()
+        val his = w.enemyFlags
+        val out = ArrayList<Int>()
+        for (dx in -3..3) for (dy in -3..3) {
+            val k = (op.spawnCell / 100 + dx) * 100 + (op.spawnCell % 100 + dy)
+            if (cheb(k, op.spawnCell) < 2 || k in op.slots || k == op.source) continue
+            if (!DistanceMap.inBounds(k / 100, k % 100) || DistanceMap.isWall(k / 100, k % 100)) continue
+            if (w.myFlags.any { key(it) == k }) continue
+            out.add(k)
+        }
+        return out.sortedBy { k -> if (his.isEmpty()) 0 else his.minOf { getRange(it, cellOf(k)) } }
+    }
+
     // ==================== the breach ====================
 
     /** The wall cells to break, in the order our path meets them (null — nothing worth breaking). */
@@ -630,7 +813,17 @@ object EscortRunAdvanced {
         }
     }
 
-    private fun breachLeft(w: World) = breachPath?.any { w.walls.containsKey(it) } == true
+    /**
+     * A breach is worth its walls only while there is something behind it to strike: an escort of his standing out of
+     * his ramparts by his base. けろびー#11 kept two escorts outside his block for 1200 ticks (6ab92dd5) — the pass was
+     * the way to them; stachu3478#1 kept his on ramparts and it was HIS siege that walked through the pass we had opened,
+     * 22 ticks after it fell (6ab92e1f).
+     */
+    private fun breachLeft(w: World): Boolean {
+        if (breachPath?.any { w.walls.containsKey(it) } != true) return false
+        val his = w.enemySpawn ?: return false
+        return w.enemyEscorts.any { !onRampart(w, it, false) && getRange(it, his) <= BREACH_TARGET_RANGE }
+    }
 
     /** The wall to hit now: the first one of the chosen group still standing along our way. */
     private fun breachTarget(w: World): StructureWall? {
@@ -685,12 +878,13 @@ object EscortRunAdvanced {
 
     private fun units(cs: List<Creep>) = cs.map { Bodies.unitOf(it) }
 
-    /** Enemy fighters near home. Once defending, the radius widens by DEFEND_KEEP: v4 flipped DEFEND/HOLD every tick
-     *  against an M5R5 standing at exactly twelve (stachu3478#1, 6ab92799) and its fighters walked out and back. */
-    private fun homeThreats(w: World): List<Creep> {
-        val spawn = w.mySpawn ?: return emptyList()
-        val radius = HOME_RADIUS + (if (mode == "defend") DEFEND_KEEP else 0)
-        return w.enemyArmed.filter { getRange(it, spawn) <= radius }
+    /** Enemy fighters near a garrison's base. Once defending, the radius widens by DEFEND_KEEP: v4 flipped DEFEND/HOLD
+     *  every tick against an M5R5 standing at exactly twelve (stachu3478#1, 6ab92799) and its fighters walked out and
+     *  back. */
+    private fun threatsTo(w: World, g: Garrison, base: Position?): List<Creep> {
+        if (base == null) return emptyList()
+        val radius = HOME_RADIUS + (if (g.mode == "defend") DEFEND_KEEP else 0)
+        return w.enemyArmed.filter { getRange(it, base) <= radius }
     }
 
     /** The largest bunch of our fighters all within CLUSTER_RADIUS of one of them — the group an operation takes. */
@@ -700,9 +894,40 @@ object EscortRunAdvanced {
     /** His fighters that stand by this escort of his (they will be in the fight). */
     private fun guardsOf(w: World, e: Creep) = w.enemyArmed.filter { getRange(it, e) <= ESCORT_GUARD_RADIUS }
 
-    /** The cells our group walks from `from` to `target`, down the army's flow field (at most 250). */
-    private fun pathCells(from: Position, target: Position): List<Int> {
-        val f = flowTo("army", target, ARMY_SWAMP_COST)
+    /**
+     * The army's way to a target round his fighters: every cell within DANGER_RADIUS of an armed creep of his that is not
+     * guarding the target is a wall. v5 measured a strike only along the straight way — through stachu3478#3's swarm of
+     * M1A1 in the centre — while his M10T40 stood 200 ticks by his flag 29 cells from the nearest of them; the way round
+     * was 135 ticks without a single meeting (6ab92e36). Where no way round exists the plain field is used.
+     */
+    private fun opFlow(w: World, target: Position): IntArray {
+        val k = "op:${key(target)}"
+        val now = getTicks()
+        flowCache[k]?.takeIf { flowTick[k] == now }?.let { return it }
+        val danger = ArrayList<Position>()
+        for (e in w.enemyArmed) {
+            if (getRange(e, target) <= ESCORT_GUARD_RADIUS) continue
+            for (dx in -DANGER_RADIUS..DANGER_RADIUS) for (dy in -DANGER_RADIUS..DANGER_RADIUS) {
+                val x = e.x + dx; val y = e.y + dy
+                if (DistanceMap.inBounds(x, y)) danger.add(cell(x, y))
+            }
+        }
+        val f = if (danger.isEmpty()) flowTo("army", target, ARMY_SWAMP_COST)
+            else DistanceMap.flowFieldTo(target, danger + stillCells, ARMY_SWAMP_COST)
+        flowCache[k] = f
+        flowTick[k] = now
+        return f
+    }
+
+    /** The field a group of ours takes to the target: round his fighters when that way exists from where it stands. */
+    private fun wayFor(w: World, from: Position, target: Position): IntArray {
+        val round = opFlow(w, target)
+        return if (DistanceMap.inBounds(from.x, from.y) && round[key(from)] >= 0) round else flowTo("army", target, ARMY_SWAMP_COST)
+    }
+
+    /** The cells our group walks from `from` to `target`, down its way (at most 250). */
+    private fun pathCells(w: World, from: Position, target: Position): List<Int> {
+        val f = wayFor(w, from, target)
         val out = ArrayList<Int>()
         var x = from.x; var y = from.y
         if (!DistanceMap.inBounds(x, y) || f[x * 100 + y] < 0) return out
@@ -730,7 +955,7 @@ object EscortRunAdvanced {
      * T3M8R5 and three healers holding the centre (6ab9267a).
      */
     private fun inTheWay(w: World, from: Position, target: Creep): List<Creep> {
-        val path = pathCells(from, target)
+        val path = pathCells(w, from, target)
         return w.enemyArmed.filter { e ->
             getRange(e, target) <= ESCORT_GUARD_RADIUS || path.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= PATH_RADIUS }
         }
@@ -748,20 +973,25 @@ object EscortRunAdvanced {
      * one no melee reaches) over our firepower, against the nearest fighter of his that is not already in the simulated
      * fight. A strike through the left-edge pass meets no one on the way, and his blob in the centre is what arrives.
      */
-    private fun beatsReinforcements(w: World, fighters: List<Creep>, from: Position, target: Creep): Boolean {
-        val inWay = inTheWay(w, from, target).mapTo(HashSet()) { idOf(it) }
-        val others = w.enemyArmed.filter { idOf(it) !in inWay }
-        if (others.isEmpty()) return true
-        val all = Bodies.fight(units(fighters), units(w.enemyArmed))
-        if (all.weWin && all.margin() >= KEEP_MARGIN) return true
-        val flow = flowTo("army", target, ARMY_SWAMP_COST)
-        val eta = fighters.mapNotNull { f -> flow[key(f)].takeIf { it >= 0 } }.maxOrNull() ?: return false
-        val dps = fighters.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) }
-        if (dps == 0) return false
+    /**
+     * The fight an operation meets: what is on our way and by the target, plus every other fighter of his that can reach
+     * the target (a cell a tick at best — the range is the soonest he comes) before the kill is done — our way there (the
+     * group's slowest, along its way) plus the damage still between us and the dead escort (its hits, its rampart's, and
+     * the rampart beside it for one no melee reaches) over our firepower. v5 vetoed the operation outright when anybody
+     * could come sooner than that, and so never struck a far escort at all (6ab92e36, 6ab92dd5); the question is not whether
+     * he comes but whether we still win when he does.
+     */
+    private fun opFight(w: World, group: List<Creep>, from: Position, target: Creep): Bodies.Outcome {
+        val inWay = inTheWay(w, from, target)
+        val ids = inWay.mapTo(HashSet()) { idOf(it) }
+        val flow = wayFor(w, from, target)
+        val eta = group.mapNotNull { f -> flow[key(f)].takeIf { it >= 0 } }.maxOrNull() ?: 0
+        val dps = maxOf(1, group.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) })
         var need = target.hits + (w.enemyRamparts[key(target)]?.hits ?: 0)
         if (!meleeReachable(w, target)) need += breachCell(w, target)?.let { w.enemyRamparts[key(it)]?.hits } ?: 0
-        val theirs = others.minOf { getRange(it, target) }
-        return eta + need / dps < theirs
+        val done = eta + need / dps
+        val joiners = w.enemyArmed.filter { idOf(it) !in ids && getRange(it, target) <= done }
+        return Bodies.fight(units(group), units(inWay + joiners))
     }
 
     /**
@@ -770,49 +1000,51 @@ object EscortRunAdvanced {
      * cluster of our fighters. The group walks without waiting — a group that waits for its rear waited for every newborn
      * at home in v4, and 51 fighters stood strung out for 4000 ticks (6ab927b0); a fighter born later is a reserve.
      */
-    private fun decideArmy(w: World) {
-        val fighters = w.fighters.filter { !it.spawning }
-        val prev = mode
-        val prevTarget = modeTarget
-        val threats = homeThreats(w)
-        val inOp = prev == "strike" || prev == "siege"
-        val group = if (inOp) fighters.filter { idOf(it) in members } else cluster(fighters)
+    private fun decideArmy(w: World, g: Garrison, fighters: List<Creep>, base: Position?) {
+        val prev = g.mode
+        val prevTarget = g.modeTarget
+        val threats = threatsTo(w, g, base)
+        val inOp = g.inOp
+        val group = if (inOp) fighters.filter { idOf(it) in g.members } else cluster(fighters)
         val ours = units(group)
         val from: Position? = if (group.isEmpty()) null else cell(group.sumOf { it.x } / group.size, group.sumOf { it.y } / group.size)
+        var mode: String
+        var modeTarget: String? = null
         if (threats.isNotEmpty()) {
-            mode = "defend"; modeTarget = null
-            if (attackedAt < 0) attackedAt = w.now
+            mode = "defend"
+            if (g.attackedAt < 0) g.attackedAt = w.now
         } else {
             // strike: an escort of his outside his ramparts, where the fight against everything guarding it is ours
             // of several, the one nearest to our group: any kill wins, so the soonest one
             var picked: Pair<Creep, Bodies.Outcome>? = null
             for (e in w.enemyEscorts.filter { !onRampart(w, it, false) }) {
                 if (from == null) break
-                val sim = Bodies.fight(ours, units(inTheWay(w, from, e)))
+                val sim = opFight(w, group, from, e)
                 val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
-                if (sim.weWin && sim.margin() >= need && beatsReinforcements(w, group, from, e) &&
-                    (picked == null || getRange(e, from) < getRange(picked.first, from)))
+                if (sim.weWin && sim.margin() >= need && (picked == null || getRange(e, from) < getRange(picked.first, from)))
                     picked = e to sim
             }
             val siegeNeed = if (prev == "siege") KEEP_MARGIN else SIEGE_MARGIN
             val siegeTarget = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits } ?: w.enemyEscorts.minByOrNull { it.hits }
-            val siegeSim = if (from != null && siegeTarget != null && group.size >= SIEGE_MIN_FIGHTERS) Bodies.fight(ours, units(inTheWay(w, from, siegeTarget))) else null
+            val siegeSim = if (from != null && siegeTarget != null && group.size >= SIEGE_MIN_FIGHTERS) opFight(w, group, from, siegeTarget) else null
             if (picked != null) {
                 mode = "strike"; modeTarget = idOf(picked.first)
-                if (prev != mode || prevTarget != modeTarget) println("army t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} sim=${picked.second} group=${group.size}/${fighters.size}")
-            } else if (siegeSim != null && siegeSim.weWin && siegeSim.margin() >= siegeNeed && beatsReinforcements(w, group, from!!, siegeTarget!!)) {
+                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} sim=${picked.second} group=${group.size}/${fighters.size}")
+            } else if (siegeSim != null && siegeTarget != null && siegeSim.weWin && siegeSim.margin() >= siegeNeed) {
                 mode = "siege"
                 modeTarget = idOf(siegeTarget)
-                if (prev != mode || prevTarget != modeTarget) println("army t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} sim=$siegeSim group=${group.size}/${fighters.size}")
+                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} sim=$siegeSim group=${group.size}/${fighters.size}")
             } else {
-                mode = "hold"; modeTarget = null
+                mode = "hold"
             }
         }
-        members = if (mode == "strike" || mode == "siege") group.mapTo(HashSet()) { idOf(it) } else emptySet()
+        g.mode = mode
+        g.modeTarget = modeTarget
+        g.members = if (g.inOp) group.mapTo(HashSet()) { idOf(it) } else emptySet()
         if (prev != mode) {
-            if (mode == "defend") println("army t=${w.now}: DEFEND against ${threats.joinToString(" ") { "${Bodies.summaryOf(it)}${at(it)}" }} fighters=${fighters.size}")
-            if (mode == "hold") println("army t=${w.now}: HOLD (was $prev)")
-            modeSince = w.now
+            if (mode == "defend") println("army ${g.name} t=${w.now}: DEFEND against ${threats.joinToString(" ") { "${Bodies.summaryOf(it)}${at(it)}" }} fighters=${fighters.size}")
+            if (mode == "hold") println("army ${g.name} t=${w.now}: HOLD (was $prev)")
+            g.modeSince = w.now
         }
     }
 
@@ -826,40 +1058,70 @@ object EscortRunAdvanced {
             .sortedBy { k -> val dx = k / 100 - 50; val dy = k % 100 - 50; dx * dx + dy * dy }
     }
 
-    private fun runArmy(w: World) {
-        val fighters = w.fighters.filter { !it.spawning }
+    private fun runArmy(w: World, g: Garrison, fighters: List<Creep>, base: Position?, rally: List<Int>, breach: Boolean) {
         if (fighters.isEmpty()) return
-        val target: Creep? = modeTarget?.let { id -> w.enemies.firstOrNull { idOf(it) == id } }
-        val threats = homeThreats(w)
-        val rally = rallyCells(w)
+        val target: Creep? = g.modeTarget?.let { id -> w.enemies.firstOrNull { idOf(it) == id } }
+        val threats = threatsTo(w, g, base)
         var rallyIdx = 0
-        val inOp = mode == "strike" || mode == "siege"
-        for (f in fighters) act(w, f, target)
+        val inOp = g.inOp
+        for (f in fighters) act(w, f, g, target)
         // reserves (not in the running operation) break the wall while nothing threatens home
-        val reserves = fighters.filter { !(inOp && idOf(it) in members) }
-        val breaching = if (mode != "defend") runBreach(w, reserves) else emptySet()
+        val reserves = fighters.filter { !(inOp && idOf(it) in g.members) }
+        val breaching = if (breach && g.mode != "defend" && breachLeft(w)) runBreach(w, reserves) else emptySet()
+        val walled = if (g.mode == "defend") holdRamparts(w, fighters, threats) else emptySet()
         for (f in fighters) {
-            if (idOf(f) in breaching) continue
+            if (idOf(f) in breaching || idOf(f) in walled) continue
             val focus: Position? = when {
-                mode == "defend" -> threats.minByOrNull { getRange(it, f) }
-                inOp && idOf(f) in members -> target
+                g.mode == "defend" -> threats.minByOrNull { getRange(it, f) }
+                inOp && idOf(f) in g.members -> target
                 else -> null
             }
             if (focus == null) {
-                val spot = rally.getOrNull(rallyIdx++) ?: continue
+                val spot = rally.getOrNull(rallyIdx++)
+                if (spot == null) { if (base != null && getRange(f, base) > 4) step(w, f, base, 4); continue }
                 if (key(f) != spot) step(w, f, cellOf(spot), 0)
                 continue
             }
+            val opMember = inOp && idOf(f) in g.members
             if (Bodies.isMelee(f)) {
                 // siege on an escort no melee can reach: break the rampart beside it that we can stand next to
-                val goal = if (mode == "siege" && target != null && !meleeReachable(w, target)) breachCell(w, target) ?: target else focus
-                if (getRange(f, goal) > 1) step(w, f, goal, 1)
+                val goal = if (g.mode == "siege" && target != null && !meleeReachable(w, target)) breachCell(w, target) ?: target else focus
+                if (getRange(f, goal) > 1) { if (opMember) stepOp(w, f, goal, 1) else step(w, f, goal, 1) }
             } else {
                 val meleeNear = w.enemyArmed.filter { Bodies.meleeDps(it) > 0 && getRange(it, f) <= 1 }
                 if (meleeNear.isNotEmpty()) kite(w, f, meleeNear)
-                else if (getRange(f, focus) > 3) step(w, f, focus, 3)
+                else if (getRange(f, focus) > 3) { if (opMember) stepOp(w, f, focus, 3) else step(w, f, focus, 3) }
             }
         }
+    }
+
+    /**
+     * Defending from our ramparts: unless the fight in the open is ours with a wide margin, every defender takes a free
+     * rampart of ours nearest to the threat — a melee one beside it if there is one, a ranged one within three — and
+     * fights from there, taking no damage while the rampart holds. v5 walked out to meet stachu3478#1's M7A6M1, M4R5M1
+     * and M4H3M1 one by one: eleven fighters, no kill, all dead in the ten cells north of our block, while the rampart
+     * next to the cell his melee struck from stood free (6ab92e1f). Returns the defenders placed.
+     */
+    private fun holdRamparts(w: World, fighters: List<Creep>, threats: List<Creep>): Set<String> {
+        if (threats.isEmpty() || fighters.isEmpty()) return emptySet()
+        val open = Bodies.fight(units(fighters), units(threats))
+        if (open.weWin && open.margin() >= DEFEND_OPEN_MARGIN) return emptySet()
+        val spawnKey = w.mySpawn?.let { key(it) }
+        val towerCells = works?.filter { it.first == "tower" }?.map { it.second }?.toSet() ?: emptySet()
+        val cells = w.myRamparts.filter { k -> k != spawnKey && k !in towerCells &&
+            (w.occupant[k]?.let { o -> o.my && idOf(o) !in escortIds } ?: true) }
+        val taken = HashSet<Int>()
+        val placed = HashSet<String>()
+        fun near(k: Int) = threats.minOf { getRange(it, cellOf(k)) }
+        for (f in fighters.sortedByDescending { Bodies.meleeDps(it) }) {
+            val want = if (Bodies.isMelee(f)) 1 else 3
+            val cell = cells.filter { it !in taken }
+                .minWithOrNull(compareBy<Int>({ maxOf(0, near(it) - want) }, { getRange(cellOf(it), f) })) ?: continue
+            taken.add(cell)
+            placed.add(idOf(f))
+            if (key(f) != cell) step(w, f, cellOf(cell), 0)
+        }
+        return placed
     }
 
     /** An enemy rampart next to the target escort that has a cell beside it we can stand on. */
@@ -869,6 +1131,12 @@ object EscortRunAdvanced {
                 val x = it.x + dx; val y = it.y + dy
                 DistanceMap.inBounds(x, y) && !DistanceMap.isWall(x, y) && !w.enemyRamparts.containsKey(x * 100 + y) } }
             .minByOrNull { r -> w.enemyRamparts[key(r)]?.hits ?: 0 }
+    }
+
+    /** An operation's member walks its way round his fighters (opFlow). */
+    private fun stepOp(w: World, c: Creep, goal: Position, range: Int) {
+        val f = wayFor(w, c, goal)
+        DistanceMap.flowStep(f, c.x, c.y, range, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(c, it, FIGHTER_PRIORITY) }
     }
 
     private fun step(w: World, c: Creep, goal: Position, range: Int) {
@@ -892,7 +1160,8 @@ object EscortRunAdvanced {
     }
 
     /** Fire: an escort of his first (it is the win), then the weakest armed, then anything; heal the most hurt. */
-    private fun act(w: World, f: Creep, target: Creep?) {
+    private fun act(w: World, f: Creep, g: Garrison, target: Creep?) {
+        val modeTarget = g.modeTarget
         fun rank(e: Creep): Int = when {
             target != null && idOf(e) == modeTarget -> 0
             idOf(e) in escortIds -> 1
@@ -902,7 +1171,7 @@ object EscortRunAdvanced {
         if (Bodies.live(f, ATTACK) > 0) {
             val adj = w.enemies.filter { getRange(it, f) <= 1 }.sortedWith(compareBy({ rank(it) }, { it.hits })).firstOrNull()
             if (adj != null) f.attack(adj)
-            else if (mode == "siege" && target != null) {
+            else if (g.mode == "siege" && target != null) {
                 breachCell(w, target)?.takeIf { getRange(it, f) <= 1 }?.let { r -> w.enemyRamparts[key(r)]?.let { f.attack(it) } }
             }
         }
@@ -927,7 +1196,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=round danger=$DANGER_RADIUS joiners=eta breach=ifTarget defend=ramparts homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
@@ -962,8 +1231,10 @@ object EscortRunAdvanced {
     }
 
     private fun logStatus(w: World) {
-        println("t=${w.now} e=${energy(w)} mode=$mode${modeTarget?.let { "($it)" } ?: ""} work=${w.harvesters.sumOf { Bodies.live(it, WORK) }} " +
-            "haulers=${w.haulers.size} fighters=${w.fighters.size}(${w.fighters.joinToString(",") { Bodies.summaryOf(it) + at(it) }}) " +
+        println("t=${w.now} e=${energy(w)} home=${homeG.mode}${homeG.modeTarget?.let { "($it)" } ?: ""} outpost=${outpostG.mode}${outpostG.modeTarget?.let { "($it)" } ?: ""}" +
+            "${w.outpostSpawn?.let { "[spawn e${it.store[RESOURCE_ENERGY]}]" } ?: ""} pioneers=${w.pioneers.joinToString(",") { at(it) }} " +
+            "work=${w.harvesters.sumOf { Bodies.live(it, WORK) }} " +
+            "haulers=${w.haulers.size} fighters=${w.fighters.size}(${w.fighters.joinToString(",") { Bodies.summaryOf(it) + at(it) + (if (originOf[idOf(it)] == "outpost") "o" else "") }}) " +
             "ours=${w.escorts.joinToString(" ") { "${at(it)}h${it.hits}" }} his=${w.enemyEscorts.joinToString(" ") { "${at(it)}h${it.hits}${if (onRampart(w, it, false)) "r" else ""}" }} " +
             "enemies=${w.enemies.filter { idOf(it) !in escortIds }.joinToString(",") { Bodies.summaryOf(it) + at(it) }} cpu=${getCpuTime() / 1_000_000}")
     }
