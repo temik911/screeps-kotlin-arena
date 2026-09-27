@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v19"
+    private const val BOT_VERSION = "v20"
 
     private const val LOG_EVERY = 50
 
@@ -1266,7 +1266,11 @@ object SpawnAndSwampAdvanced {
                 // четырьмя стражами. Против них: стражи в 15 клетках, его доля будущих рождений на путь, башни рядом
                 val sp = enemySpawnObjs.minByOrNull { pathTicks(home, it) }!!
                 val toSp = pathTicks(home, sp)
-                val guards = enemyCombat.filter { getRange(it, sp) <= STRIKE_GUARD_RANGE }
+                // защитники — все его бойцы, что дойдут до цели не позже нас (стоят к ней не дальше, чем мы): v18 бил
+                // по «стражам в 15 клетках», слал одного-двух бойцов на спавн без стражей, и по дороге их ловила его
+                // армия — 40–48 потерянных крипов за ничью
+                val reach = maxOf(STRIKE_GUARD_RANGE, getRange(home, sp))
+                val guards = enemyCombat.filter { getRange(it, sp) <= reach }
                 val births = projectedBirths(t, toSp).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
                 val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
                 val local = guards.map { simOf(it) } + births + towersNear.map { simTower(it.hits ?: TOWER_HITS) }
@@ -1350,8 +1354,10 @@ object SpawnAndSwampAdvanced {
             intruder = intruders(all, theirs, homeSpawns).minByOrNull { i -> homeGroup.minOf { getRange(it, i) } }
             val it0 = intruder
             if (it0 != null) {
-                val guards = enemyCombat.filter { getRange(it, it0) <= LOCAL_RANGE }.map { simOf(it) }
+                // как и у удара: против всех его бойцов, что дойдут до нарушителя не позже нашего ближнего охотника
                 val sorted = homeGroup.sortedBy { getRange(it, it0) }
+                val reach = maxOf(LOCAL_RANGE, getRange(sorted.first(), it0))
+                val guards = enemyCombat.filter { getRange(it, it0) <= reach }.map { simOf(it) }
                 for (k in 1..sorted.size) {
                     val h = sorted.take(k)
                     val r = simulate(h.map { simOf(it) }, guards)
