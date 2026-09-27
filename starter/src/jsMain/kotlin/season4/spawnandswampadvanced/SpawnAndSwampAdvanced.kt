@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v16"
+    private const val BOT_VERSION = "v17"
 
     private const val LOG_EVERY = 50
 
@@ -849,9 +849,11 @@ object SpawnAndSwampAdvanced {
         if (towerAt(b, all) != null) return
         if (b.towerCell != null) { println("tower at (${b.towerCell}) gone t=$t"); b.towerCell = null }
         if (mine.none { isCombat(it) }) return
-        // башня — сразу после первого бойца, без ожидания сейфа (v9–v15 ждали его, если дом не трогали): против армии
-        // けろびー из девяти M4R3H1 v15 остался с площадкой башни на 450/1250 и потерял обе базы; у спавна она снимает
-        // M4R3H1 за два выстрела и держит 3000
+        // башня — после сейфа, если дом ещё не трогали. v16 ставил её сразу после первого бойца: 1250 из добычи на
+        // 330–460-м тике — ровно когда приходят первые M4R3H1 けろびー, и спавн без притока проиграл дважды к 500-му.
+        // Ранний дом держат сторожевые рампарты (planRamparts), башня — ответ на нападение
+        val v = vault
+        if (v != null && v.stage != "run" && !attackedOnce) return
         val blocked = blockedCells(all)
         fun exits(extra: Pos): Int {
             var n = 0
@@ -883,7 +885,11 @@ object SpawnAndSwampAdvanced {
     private fun planRamparts(t: Int, b: Base, mine: List<Creep>, all: Array<GameObject>) {
         if (mine.none { isCombat(it) } && !attackedOnce) return
         val occupied = b.slots.filter { s -> mine.any { it.x == s.x && it.y == s.y && idOf(it) in slotOf } }
-        val want = listOf(b.spawnCell) + occupied
+        // сторожевые: клетки-выходы спавна под рампартом, по одной на каждого бойца дома и ещё одна — боец на своём
+        // рампарте неуязвим, пока тот цел (двум M4R3H1 на 10000 нужно ~170 тиков), и рождается спавн прямо на них
+        val homeFighters = mine.count { isCombat(it) && idOf(it) !in wave && idOf(it) !in roleOf }
+        val guards = guardCells(b, all).take(homeFighters + 1)
+        val want = listOf(b.spawnCell) + guards + occupied
         val have = all.filter { (it is StructureRampart || it is ConstructionSite && isRampartSite(it)) && it.asDynamic().my == true }
             .map { posOf(it) }.toSet()
         if (all.any { it is ConstructionSite && it.asDynamic().my == true && isRampartSite(it) && cheb(posOf(it), b.spawnCell) <= 2 }) return
@@ -894,6 +900,18 @@ object SpawnAndSwampAdvanced {
         val r = createConstructionSite(next.x, next.y, StructureRampart::class.js)
         println("rampart site t=$t at (${next.x},${next.y}) base=(${b.spawnCell.x},${b.spawnCell.y}) err=${r.error}")
     }
+
+    /** Клетки-выходы спавна базы: соседние со спавном, проходимые, не клетки добытчиков и не клетка башни; первыми —
+     *  ближние к сопернику (оттуда приходят). */
+    private fun guardCells(b: Base, all: Array<GameObject>): List<Pos> {
+        val blocked = blockedCells(all)
+        val enemy = enemyStart
+        return neighbours(b.spawnCell).filter { it !in b.slots && it != b.towerCell && walkable(it, blocked) }
+            .sortedBy { if (enemy == null) 0 else cheb(it, enemy) }
+    }
+
+    private fun myRampartAt(p: Pos, all: Array<GameObject>) =
+        all.any { it is StructureRampart && it.asDynamic().my == true && it.x == p.x && it.y == p.y }
 
     private fun isRampartSite(o: GameObject): Boolean {
         val st = o.asDynamic().structure
@@ -1303,8 +1321,13 @@ object SpawnAndSwampAdvanced {
             shoot(f, theirs, enemyObjects)
             if (healAct(f, mine, homeGroup)) continue
             if (fleeMelee(f, enemyCombat)) continue
+            val onRampart = myRampartAt(Pos(f.x, f.y), all)
             if (engage && target != null) {
                 if (getRange(f, target) > RANGED_RANGE) f.moveTo(target)
+            } else if (target != null && onRampart && theirs.any { isCombat(it) && getRange(f, it) <= RANGED_RANGE + 2 }) {
+                // на своём рампарте у боя — стоим: он принимает урон, а мы стреляем
+            } else if (target != null && holdOnGuard(f, homeSpawns, all)) {
+                // проигранная угроза: встали на свободный сторожевой рампарт своего ближайшего спавна
             } else if (target != null) {
                 // проигранная угроза: держимся у СВОЕГО ближайшего спавна, в укрытии — внутри сейфа, если он ближе всех,
                 // иначе в точке сбора этой базы — и копимся, пока прогон не скажет «бьём»
@@ -1327,6 +1350,17 @@ object SpawnAndSwampAdvanced {
                 if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) f.moveTo(cell(rally))
             }
         }
+    }
+
+    /** Встать на свободный сторожевой рампарт у ближайшего своего спавна; `false`, если таких нет. */
+    private fun holdOnGuard(f: Creep, homeSpawns: List<GameObject>, all: Array<GameObject>): Boolean {
+        val sp = homeSpawns.minByOrNull { getRange(f, it) } ?: return false
+        val b = bases.firstOrNull { it.spawnCell.x == sp.x && it.spawnCell.y == sp.y } ?: return false
+        val me = Pos(f.x, f.y)
+        val taken = getObjectsByPrototype(Creep::class).filter { it !== f }.map { posOf(it) }.toSet()
+        val spot = guardCells(b, all).filter { myRampartAt(it, all) && (it == me || it !in taken) }.minByOrNull { cheb(it, me) } ?: return false
+        if (spot != me) f.moveTo(cell(spot))
+        return true
     }
 
     /** Все наши спавны: базы и сейф. Один список для угроз, сбора и защиты — v9 считал его в двух местах, и во втором
