@@ -248,7 +248,11 @@ object EscortRun {
         for (c in enemies) { val k = key(c); val was = enemyStill[idOf(c)]; if (was == null || was.first != k) enemyStill[idOf(c)] = k to now }
         enemyStill.keys.retainAll(enemies.mapTo(HashSet()) { idOf(it) })
         val stops = if (escort != null && escortFlowRaw != null) {
-            val ahead = Chokes.route(escortFlowRaw, escort).drop(1).toHashSet()
+            // и на СЛЕДУЮЩЕЙ клетке тоже: без неё стена пропадала, когда эскорт подходил вплотную, поле возвращалось к
+            // пути сквозь блокировщика, обход «врагов в шести клетках» уводил в сторону на болото, а оттуда прежнее
+            // поле звало назад — эскорт качался по 400 усталости за шаг и стоял у блокировщика 50-100 тиков
+            // (офлайн-лига, v24 против раннего блокировщика: 16 поражений из 80)
+            val ahead = Chokes.route(escortFlowRaw, escort).toHashSet()
             enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) && isStill(it, now) && key(it) in ahead && (myFlag == null || getRange(it, myFlag) > FLAG_GUARD_RANGE) }
         } else emptyList()
         val escortFlow = if (stops.isEmpty() || myFlag == null) escortFlowRaw
