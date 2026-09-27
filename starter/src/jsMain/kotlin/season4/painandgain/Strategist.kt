@@ -2952,9 +2952,9 @@ internal class StrategyInputs(private val ctx: Ctx, private val meas: ArmyMeasur
     val underTheirFire = combatArmy.any { InfluenceMap.damageAt(it.x, it.y, meas.forces.combatEnemies) > 0.0 }
     // его ствол уже достаёт нашу армию (v645, см. USE_FIST_FIGHT_IN_REACH): его вооружённый в дальности выстрела от нашего боевого
     val hisGunsReach = meas.forces.armedEnemies.any { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE } }
-    /** у нашей армии только его стволы: его вооружённые рядом (в RANGED_RANGE + 1) есть, и ни у кого нет живого ATTACK (v696) */
-    val hisGunsOnly = meas.forces.armedEnemies.filter { e -> combatArmy.any { getRange(e, it) <= RANGED_RANGE + 1 } }
-        .let { near -> near.isNotEmpty() && near.none { InfluenceMap.profileOf(it).melee > 0.0 } }
+    /** против нас одни его стволы: они достают нашу армию, и ни у одного его вооружённого на карте нет живого ATTACK (v699) —
+     *  не «рядом»: на краю лагеря стоят стрелки, а его мили в двух шагах за ними (match33:camp, t=187) */
+    val hisGunsOnly = hisGunsReach && meas.forces.armedEnemies.none { InfluenceMap.profileOf(it).melee > 0.0 }
     private val retreatByDistance = Memory.enemyDistHist.size >= 2 && Memory.enemyDistHist.last() > Memory.enemyDistHist.first()
     // ...и по ЕГО шагу (v222, см. USE_RETREAT_BY_HIS_STEP): его центр сейчас против его центра в начале окна, оба — от
     // нашего центра в начале окна
