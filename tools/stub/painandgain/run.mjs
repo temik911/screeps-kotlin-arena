@@ -20,6 +20,7 @@ import { getDirection } from './game/utils.mjs';
 
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
+import { homedir } from 'node:os';
 // the bundle of THIS worktree's build (see the parallel-sessions rules: the stub tests what the worktree built)
 const BOT = process.env.BOT || new URL('../../../build/js/packages/screeps-kotlin-arena-starter/kotlin/screeps-kotlin-arena-starter/season4/painandgain/PainAndGain.export.mjs', import.meta.url).href;
 const MAP = process.env.MAP; // path to a 100-row DEBUG_MAP dump: '#' wall, '~' swamp, anything else plain
@@ -123,13 +124,32 @@ function buildLiveMap(path) {
     world.objects.push(new Creep(x, y, 1, body));
   }
 }
+// OUR SIDE OF THE RECORD (27.09.2026, a finding of the session that reworked the won/lost reading in tools/match-log.py): by
+// name while one side carries it. In self-play (`play.py --test 'temik911#N'`) both do, and the name took side 0 whichever
+// had played for us — the ghost would drive OUR payload as the enemy and replay the wrong half. Ours is then the side of
+// the code that STARTED the game, the first of ours in `usersCode`, swapped by `firstPlayerIndex`: match-log.py `our_slot`,
+// copied here; the match document lies in the store beside the replay (`match-log.py replay` stores it). No document — a
+// loud stop, not side 0. No side by our name at all (someone else's match) keeps side 0, as before.
+function ourSide(meta) {
+  const name = process.env.US || 'temik911';
+  const sides = meta.players.filter((pl) => pl.username.startsWith(name)).map((pl) => pl.side);
+  if (sides.length <= 1) return sides.length ? sides[0] : 0;
+  const path = `${process.env.GAMES || homedir() + '/ScreepsArena/games'}/${meta.gameId}/game.json`;
+  let doc = null;
+  try { const raw = readFileSync(path); doc = JSON.parse((raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw) : raw).toString('utf8')); } catch { /* below */ }
+  const m = doc && ('game' in doc ? doc.game : doc);
+  const owner = new Map((m?.codes || []).map((c) => [c._id, c.user]));
+  const i = (m?.game?.usersCode || []).findIndex((cid) => owner.get(cid) === m.user);
+  if (i < 0) throw new Error(`ghost: both sides of ${meta.gameId} are ${name}* and ${path} does not say which is ours — tools/match-log.py fetch ${meta.gameId}`);
+  return +(m.game.firstPlayerIndex || 0) === 1 ? 1 - i : i;
+}
 function buildFromReplay(doc) {
   let i = 0;
   for (const [, ch, n] of doc.terrain.matchAll(/([wps])(\d+)/g)) for (let k = 0; k < +n; k++, i++) world.terrain[idx(i % 100, Math.floor(i / 100))] = ch === 'w' ? 1 : ch === 's' ? 2 : 0;
   if (i !== 10000) throw new Error(`replay terrain has ${i} cells`);
   const TYPE = { vulnerability: ['eff_damage_taken_modifier', 5], heal_reduction: ['eff_heal_modifier', 4], attack_reduction: ['eff_attack_modifier', 3], ranged_attack_reduction: ['eff_ranged_attack_modifier', 3] };
   for (const o of doc.objects) if (o.kind === 'flag') { const [t, sc] = TYPE[o.id.replace(/^pg_flag_/, '').replace(/_[ab]$/, '')]; world.objects.push(new ScoreFlag(o.x, o.y, t, sc)); }
-  const us = (doc.meta.players.find((pl) => pl.username.startsWith(process.env.US || 'temik911')) || { side: 0 }).side;
+  const us = ourSide(doc.meta);
   ghostMeta.us = us; ghostMeta.ticks = doc.meta.ticks; ghostMeta.winner = doc.meta.result.winnerName; ghostMeta.id = doc.meta.shortId || doc.meta.gameId;   // a replay fetched through the API carries no shortId
   // the record's hits per side per tick and its first contact (a fighter of each side within three) — the entry measure
   // printed at the end compares the exchange of the first 20/50/100 ticks after contact here against the record's
