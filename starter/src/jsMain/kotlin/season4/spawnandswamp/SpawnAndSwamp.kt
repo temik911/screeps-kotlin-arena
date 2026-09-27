@@ -65,6 +65,8 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.ln
+import kotlin.math.round
 import kotlin.math.sqrt
 
 @OptIn(ExperimentalJsExport::class)
@@ -115,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 180
+    private const val BOT_VERSION = 181
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3513,6 +3515,8 @@ object SpawnAndSwamp {
     private var towerFireTick = -1
     private var towerFire: IntArray? = null
     private var towerFireSig = IntArray(0)
+    /** The exponent of the tick's price in hits the fire field was built with this tick (v181, see towerFireField). */
+    private var towerFireShift = 0
 
     private fun flowTo(ctx: Ctx, target: Position): IntArray =
         flowCache.getOrPut(target.x * 100 + target.y) { DistanceMap.flowFieldTo(target, ctx.blocked) }
@@ -3532,6 +3536,22 @@ object SpawnAndSwamp {
         val sig = fed.map { it.pos.x * 100 + it.pos.y }.sorted().toIntArray()
         if (!sig.contentEquals(towerFireSig)) { assaultCache.clear(); towerFireSig = sig }
         if (fed.isEmpty()) return null
+        // A TICK IS PRICED IN THE HITS OF THE ARMY THAT WALKS (v181). The field added a hit of fire to a tick of the walk
+        // one for one, so a tick of the whole wave was worth one hit: against marlyman#453 (t=1472, his main the last
+        // spawn left, 528 ticks to the clock) the army at his north corridor walked the field south round his tower —
+        // 149 cells, 181 ticks, against 43 and 51 — to save about 300 of fire, a third of one shot; it came one by one
+        // from 1650 and the match was a draw with his main untouched. What the army can still do is its hits spread over
+        // the ticks left: a tick lost costs H/T of it as surely as H/T of hits lost does, so a hit of fire is priced at
+        // T/H ticks. Early (a few M8R4 at t=300) that is half a tick, late with a full army a sixteenth.
+        // The price is rounded to a power of two: each price is its own field per target, and a price that moved with
+        // every hit the army lost would rebuild them all every tick (v115: 27 ms a tick when they were)
+        val shift = if (!USE_TICK_PRICE) 0 else {
+            val hits = ctx.fighters.filter { inArms(it) }.sumOf { it.hits }.toDouble()
+            val left = (arenaInfo.ticksLimit - getTicks()).coerceAtLeast(1)
+            val ratio = hits / left
+            if (ratio <= 1.0) 0 else round(ln(ratio) / ln(2.0)).toInt().coerceIn(0, 10)
+        }
+        towerFireShift = shift
         val fire = IntArray(10000)
         towerFire = fire
         for (t in fed) {
@@ -3545,6 +3565,7 @@ object SpawnAndSwamp {
                 fire[i] = minOf(DistanceMap.FIRE_CAP, fire[i] + ceil(shot).toInt())
             }
         }
+        if (shift > 0) for (i in fire.indices) if (fire[i] > 0) fire[i] = (fire[i] + (1 shl shift) - 1) shr shift
         return fire
     }
 
@@ -3555,7 +3576,7 @@ object SpawnAndSwamp {
      *  урон, и обход в них не входит — оценка выхода становится оптимистичнее на длину обхода. */
     private fun assaultTo(ctx: Ctx, target: Position): IntArray {
         val fire = towerFireField(ctx) ?: return flowTo(ctx, target)
-        return assaultCache.getOrPut(target.x * 100 + target.y) {
+        return assaultCache.getOrPut(towerFireShift * 10000 + target.x * 100 + target.y) {
             DistanceMap.flowFieldTo(target, ctx.blocked, DistanceMap.SWAMP_COST, fire)
         }
     }
@@ -6419,6 +6440,8 @@ object SpawnAndSwamp {
     private const val RAID_LURK_FLEE = 6
     /** A pile builder under fire finishes a spawn that fits the ticks it keeps its WORK (runPileBuilder, v180). */
     private const val USE_PILE_FINISH = true
+    /** The approach field prices a tick in the army's hits over the ticks left, not at one hit (towerFireField, v181). */
+    private const val USE_TICK_PRICE = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
