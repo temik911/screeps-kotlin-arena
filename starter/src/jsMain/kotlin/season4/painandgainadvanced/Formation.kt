@@ -20,6 +20,7 @@ object Formation {
         val foeMelee: IntArray,   // walking steps to his nearest creep with ATTACK: a melee has to walk to strike
         val front: Int,           // our line: the least range to him among our creeps with a weapon
         val blocked: (Int) -> Boolean,
+        val focus: Unit? = null,  // the target the group fires at (Fire.focusId): the guns go where they reach it
     ) {
         /** Range to his nearest armed creep — ranged fire and healing reach by range, through walls. */
         fun foe(cell: Int): Int {
@@ -30,13 +31,13 @@ object Formation {
         }
     }
 
-    fun ctx(ours: List<Unit>, theirs: List<Unit>, blocked: (Int) -> Boolean): Ctx {
+    fun ctx(ours: List<Unit>, theirs: List<Unit>, blocked: (Int) -> Boolean, focus: Unit? = null): Ctx {
         val armed = theirs.filter { it.armed || it.heal > 0 }.ifEmpty { theirs }
         val melee = theirs.filter { it.melee > 0 }
         val foeMelee = if (melee.isEmpty()) IntArray(Grid.N * Grid.N) { Grid.INF } else Grid.fresh(melee.map { it.cell }.toIntArray(), 1)
         val c = Ctx(armed, foeMelee, 99, blocked)
         val front = ours.filter { it.armed }.minOfOrNull { c.foe(it.cell) } ?: 99
-        return Ctx(armed, foeMelee, front, blocked)
+        return Ctx(armed, foeMelee, front, blocked, focus)
     }
 
     /** The cell `u` wants next (its own cell when it should stay), or -1 when nothing is better than standing. */
@@ -57,10 +58,18 @@ object Formation {
         val d = c.foe(cell).toDouble()
         val dm = c.foeMelee[cell].toDouble()
         return when (role) {
-            Role.MELEE -> if (engaged) -d * 10 else -kotlin.math.abs(d - maxOf(1.0, c.front.toDouble())) * 10 - (if (d < c.front) 5.0 else 0.0)
+            // engaged, the melee go for the focus — his line keeps its (often stripped) melee two in front as a shield,
+            // and a melee that closes on the nearest swings at the shield while his guns behind it shoot
+            Role.MELEE -> if (engaged) {
+                val f = c.focus
+                if (f != null) -Grid.range(Grid.xOf(cell), Grid.yOf(cell), f.x, f.y) * 10.0 - d else -d * 10
+            } else -kotlin.math.abs(d - maxOf(1.0, c.front.toDouble())) * 10 - (if (d < c.front) 5.0 else 0.0)
             Role.RANGED -> {
-                // three from his nearest is the most a single shot reaches; nearer only feeds his melee
-                val reach = if (d <= 3) 20.0 - (3 - d) * 2 else -(d - 3) * (if (engaged) 8.0 else 2.0)
+                // within three of the focus when engaged — three from his nearest is three from his shield, and his
+                // ranged one row behind it are then out of our reach while ours are in theirs
+                val f = c.focus
+                val df = if (engaged && f != null) Grid.range(Grid.xOf(cell), Grid.yOf(cell), f.x, f.y).toDouble() else d
+                val reach = if (df <= 3) 20.0 - (3 - df) * 2 else -(df - 3) * (if (engaged) 8.0 else 2.0)
                 val safe = when { dm <= 1 -> -60.0; dm <= 2 -> -25.0; else -> 0.0 }
                 val behind = if (!engaged && d < c.front + 1) -12.0 else 0.0
                 reach + safe + behind
