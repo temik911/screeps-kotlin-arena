@@ -468,7 +468,11 @@ object EscortRunAdvanced {
     private fun chooseBreach(w: World) {
         val my = w.mySpawn ?: return
         val his = w.enemySpawn ?: return
-        val base = DistanceMap.flowFieldTo(his, emptyList(), ARMY_SWAMP_COST)
+        // his spawn stands inside his block of ramparts, which we cannot walk: the way is measured to it as if his
+        // ramparts were open (the question is how to reach the block, not how to enter it) — without that no field
+        // leaves his spawn and v5's first build found "no way" for every wall group
+        val hisBlock = w.enemyRamparts.keys
+        val base = DistanceMap.flowFieldOpen(his, hisBlock, ARMY_SWAMP_COST)
         val s0 = startNear(base, my)
         val basePath = s0?.let { descend(base, it) } ?: emptyList()
         val len0 = s0?.let { base[it] } ?: Int.MAX_VALUE
@@ -476,7 +480,7 @@ object EscortRunAdvanced {
         val comps = wallComponents(w.walls.keys)
         println("breach: ${comps.size} wall groups, way between the spawns $len0 (${basePath.size} cells)")
         for (comp in comps) {
-            val f = DistanceMap.flowFieldOpen(his, comp, ARMY_SWAMP_COST)
+            val f = DistanceMap.flowFieldOpen(his, comp + hisBlock, ARMY_SWAMP_COST)
             val s = startNear(f, my)
             if (s == null) { println("breach? ${comp.size} walls from ${at(cellOf(comp.first()))}: no way"); continue }
             val path = descend(f, s)
