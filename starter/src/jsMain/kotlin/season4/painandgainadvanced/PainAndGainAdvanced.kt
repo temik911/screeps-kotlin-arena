@@ -166,7 +166,7 @@ object PainAndGainAdvanced {
     private fun probe() {
         println("hello season4 pain-and-gain-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} TICKS_LIMIT=$TICKS_LIMIT MAX_SCORE_PER_TICK=$MAX_SCORE_PER_TICK")
-        println("tuning: engage=$ENGAGE_RANGE fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE")
+        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE")
         println("flagtypes: ${JSON.stringify(FLAG_TYPES)}")
         println("consts: TOWER_RANGE=$TOWER_RANGE TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_POWER_HEAL=$TOWER_POWER_HEAL " +
             "TOWER_OPTIMAL_RANGE=$TOWER_OPTIMAL_RANGE TOWER_FALLOFF_RANGE=$TOWER_FALLOFF_RANGE TOWER_FALLOFF=$TOWER_FALLOFF " +
@@ -330,9 +330,14 @@ object PainAndGainAdvanced {
         // the enemy's fighting strength is gone when what is left of it loses to our army many times over, or when no
         // more than a pair of its armed creeps is left: then its flags and its survivors are what the score is
         val swept = foes.isEmpty() || whole.ratio >= SWEEP_RATIO || foes.count { it.armed } <= 2
+        // engaged: his armed within ENGAGED_R of our group. A group in contact does not retreat — at equal speed a
+        // retreat only turns backs to his guns: v4 against Hardy#1 went from 9 against 9 at t=92 to 1 against 8 at
+        // t=200 walking home (the basic arena's `no-escape-equal-speed`)
+        val engaged = foes.any { e -> e.armed && group.any { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGED_R } }
         val want = when {
             near.isEmpty() -> null
-            swept && near.all { e -> group.count { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGE_RANGE } > 0 } && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
+            engaged -> Mode.FIGHT
+            swept && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
             mode == Mode.FIGHT && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             else -> Mode.RETREAT
@@ -611,8 +616,9 @@ object PainAndGainAdvanced {
     const val GUARD_R = 8
     const val PULLER_MEND = 0.6
     const val ENGAGE_RANGE = 8
-    const val FIGHT_RATIO = 0.9
-    const val RETREAT_RATIO = 0.7
+    const val FIGHT_RATIO = 1.15
+    const val RETREAT_RATIO = 0.8
+    const val ENGAGED_R = 4
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
