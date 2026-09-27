@@ -473,11 +473,14 @@ object EscortRunAdvanced {
         val basePath = s0?.let { descend(base, it) } ?: emptyList()
         val len0 = s0?.let { base[it] } ?: Int.MAX_VALUE
         var best: Triple<Set<Int>, List<Int>, Int>? = null
-        for (comp in wallComponents(w.walls.keys)) {
+        val comps = wallComponents(w.walls.keys)
+        println("breach: ${comps.size} wall groups, way between the spawns $len0 (${basePath.size} cells)")
+        for (comp in comps) {
             val f = DistanceMap.flowFieldOpen(his, comp, ARMY_SWAMP_COST)
-            val s = startNear(f, my) ?: continue
+            val s = startNear(f, my)
+            if (s == null) { println("breach? ${comp.size} walls from ${at(cellOf(comp.first()))}: no way"); continue }
             val path = descend(f, s)
-            if (path.none { it in comp }) continue
+            if (path.none { it in comp }) { println("breach? ${comp.size} walls from ${at(cellOf(comp.first()))}: way ${f[s]} does not use it"); continue }
             val far = path.filter { getRange(cellOf(it), my) > 12 && getRange(cellOf(it), his) > 12 }
             if (far.isEmpty()) continue
             val overlap = far.count { c -> basePath.any { cheb(c, it) <= 4 } }.toDouble() / far.size
