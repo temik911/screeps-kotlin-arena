@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 199
+    private const val BOT_VERSION = 200
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -470,6 +470,8 @@ object SpawnAndSwamp {
      */
     private val knownHaulers = HashSet<String>()
     private var haulersLost = 0
+    /** The most haulers alive at once so far this match (v200, see fleetShort). */
+    private var haulerPeak = 0
     private var haulerCargoLost = 0
     private val haulerCargo = HashMap<String, Int>()
     /** Hauler deaths and the fleet's size per tick over the production window: its mean life (haulerPaysBack, v122). */
@@ -498,6 +500,7 @@ object SpawnAndSwamp {
     }
 
     private fun measureHaulerLoss(ctx: Ctx) {
+        haulerPeak = maxOf(haulerPeak, ctx.haulers.size)
         val alive = ctx.myCreeps.mapTo(HashSet()) { it.id }
         val gone = knownHaulers.filter { it !in alive }
         val now = getTicks()
@@ -2375,7 +2378,13 @@ object SpawnAndSwamp {
             val price = RAID_BODY.sumOf { cost(it) }
             // …saved for only while a fleet brings the energy (v171): against kerobi#49 `rSave2` held the spawn 944 ticks
             // (460-1500) at an income of 0 while the haulers went 4 -> 0 unreplaced, and the house fell at 1592
-            if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2)) return reach("rSave2")
+            // …NOT WHILE THE FLEET IS SHORT OF WHAT IT WAS (v200). The saving counts on an income the fleet brings; when
+            // his raider has cut the fleet below its own peak and the economy wants a hauler back, the hauler goes first.
+            // Against けろびー (v198 draws) his M5A1 killed 3 of 5 haulers by 479 in one game and all 5 by 628 in another;
+            // the spawn kept saving for a raider of 990 at the income two haulers (or none) bring, the fleet stayed at 2 and
+            // 0, there was no raider for 774 and 1160 ticks while his army stood far from his main, and both were draws
+            val fleetShort = USE_FLEET_FIRST && ctx.haulers.size < haulerPeak && needHauler
+            if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2) && !fleetShort) return reach("rSave2")
             if (energy < price) { reach("rSkip2") } else {
             val r = spawn.spawnCreep(RAID_BODY)
             reach(if (r.error == null) "rBuy" else "err")
@@ -6604,6 +6613,8 @@ object SpawnAndSwamp {
     /** His last spawn, when our guns in reach take what is left of it before his fire takes them, is shot first and
      *  the guns hold their cells (v199). */
     private const val USE_LAST_SHOT = true
+    /** The raider's saving yields to a hauler while the fleet is below its own peak and the economy wants one (v200). */
+    private const val USE_FLEET_FIRST = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
