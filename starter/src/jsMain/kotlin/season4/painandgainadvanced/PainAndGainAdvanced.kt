@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 17
+const val BOT_VERSION = 18
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -127,8 +127,8 @@ object PainAndGainAdvanced {
         theirFx = Effects(flags, false)
         ourScore += ourFx.rate
         theirScore += theirFx.rate
-        if (mine.size < lastOur) ourDeaths += lastOur - mine.size
-        if (theirs.size < lastTheir) theirDeaths += lastTheir - theirs.size
+        if (mine.size < lastOur) { ourDeaths += lastOur - mine.size; lastDeathT = t }
+        if (theirs.size < lastTheir) { theirDeaths += lastTheir - theirs.size; lastDeathT = t }
         lastOur = mine.size; lastTheir = theirs.size
 
         held.clear()
@@ -347,6 +347,12 @@ object PainAndGainAdvanced {
 
     private val hunterOf = HashMap<String, String>()   // our hunter id -> enemy id
     private var surviving = false
+    private var lastDeathT = 0
+    /** A fight that kills nobody: 300 ticks in FIGHT without a death on either side. Against 76561198870429455#11 our
+     *  two heavy ranged and his two heavy healers faced each other in a corner from t≈500 to t=4500 — neither side's
+     *  fire beat the other's healing — while his three flags outscored our two; the fight held the army because his
+     *  guns were within four. While his flags score at least ours, such a fight is left for his flags. */
+    private var breakOffUntil = 0
     /** His style, latched at CLASSIFY_T: a FIGHTER keeps his army together and takes at most one flag (stachu3478#5
      *  none, Hardy#1 the centre), a farmer spreads runners over five to seven flags by t=100 (kerobii#6/#12,
      *  76561198870429455). Against a fighter the centre is a coin toss — his formed line against ours at parity, lost
@@ -398,7 +404,13 @@ object PainAndGainAdvanced {
         // engaged: his armed within ENGAGED_R of our group. A group in contact does not retreat — at equal speed a
         // retreat only turns backs to his guns: v4 against Hardy#1 went from 9 against 9 at t=92 to 1 against 8 at
         // t=200 walking home (the basic arena's `no-escape-equal-speed`)
-        val engaged = foes.any { e -> e.armed && group.any { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGED_R } }
+        val stale = mode == Mode.FIGHT && t - lastDeathT > STALE_T && t - modeSince > STALE_T
+        if (stale && theirFx.rate >= ourFx.rate && t >= breakOffUntil) {
+            breakOffUntil = t + STALE_T
+            println("stale t=$t: no death in ${t - lastDeathT} ticks, rate ${ourFx.rate}:${theirFx.rate} — off to his flags")
+        }
+        val breakingOff = t < breakOffUntil
+        val engaged = !breakingOff && foes.any { e -> e.armed && group.any { Grid.range(it.x, it.y, e.x, e.y) <= ENGAGED_R } }
         // the head of his approach: what of his is within LOCAL_R of our group. Walking in a column he brings its head
         // first, and the head alone loses — v6's one win over stachu3478#5 in four was the one where it closed first
         // (t=219, killing his heavy melee by t=250); in the three losses it stood and he arrived formed
@@ -406,9 +418,10 @@ object PainAndGainAdvanced {
         val local = Duel(group, head.ifEmpty { foes }, ourFx, theirFx, towerDpsAt(ourFedTowers(), cx, cy), towerDpsAt(theirTowers(), cx, cy))
         val want = when {
             near.isEmpty() -> null
+            breakingOff -> null
             engaged -> Mode.FIGHT
             swept && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
-            head.size < zone.size && local.ratio >= INITIATIVE_RATIO && (!fighter || fortressNear(cx, cy)) -> Mode.FIGHT
+            head.size < zone.size && local.ratio >= INITIATIVE_RATIO && !fighter -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
             mode == Mode.FIGHT && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             duel.ratio < RETREAT_RATIO -> Mode.RETREAT
@@ -418,7 +431,7 @@ object PainAndGainAdvanced {
             else -> Mode.STAND
         }
         val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
-        val sweepFlag = if (swept) sweepTarget(cx, cy) else null
+        val sweepFlag = if (swept || breakingOff) sweepTarget(cx, cy) else null
         val fortress = if (fighter && !swept) fortressFlag() else null
         val objective = sweepFlag ?: fortress ?: (if (guarded(centre, group)) safeFlag(cx, cy, group) else null) ?: centre
         // survival: with the army broken and the score ours, what is left lives under our fed tower — it heals them and
@@ -436,7 +449,7 @@ object PainAndGainAdvanced {
             return
         }
         val next = want ?: when {
-            swept -> Mode.SWEEP
+            swept || breakingOff -> Mode.SWEEP
             group.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= group.size -> Mode.HOLD
             else -> Mode.MARCH
         }
@@ -786,6 +799,7 @@ object PainAndGainAdvanced {
     const val INITIATIVE_RATIO = 1.3
     const val MEND_AT = 250
     const val SURVIVE_ARMED = 2
+    const val STALE_T = 300
     const val CLASSIFY_T = 45
     const val CONFIRM_T = 100
     const val CONFIRM_R = 12
