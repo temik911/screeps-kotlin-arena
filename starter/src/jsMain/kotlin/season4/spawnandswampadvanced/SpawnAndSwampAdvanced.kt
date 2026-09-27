@@ -366,7 +366,7 @@ object SpawnAndSwampAdvanced {
     ) {
         val workers = mine.filter { !it.spawning && liveParts(it, WORK) > 0 }
         slotOf.keys.retainAll(workers.map { idOf(it) }.toSet())
-        if (builderId != null && workers.none { idOf(it) == builderId }) {
+        if (builderId != null && mine.none { idOf(it) == builderId }) {
             println("builder lost t=$t")
             builderId = null
             expansion = null
@@ -407,40 +407,43 @@ object SpawnAndSwampAdvanced {
         return null
     }
 
-    /** Добытчик на клетке у источника и спавна: копает каждый тик и сдаёт, когда следующая копка переполнила бы
-     *  его; спавн полон — достраивает площадки в досягаемости. */
-    private var deliveryProbe = 0
-
+    /** Добытчик на клетке у источника и спавна: копает и сдаёт в ОДИН тик, каждый тик. Движок исполняет копку
+     *  раньше сдачи, а сдаёт запас начала тика: v2, сдававший раз в семь тиков перед переполнением, терял копку
+     *  переполнения (7 в тик вместо 8 у W4, замер 27.09.2026); сдача каждый тик оставляет в запасе одну копку и не
+     *  теряет ничего. Спавн полон — копает, пока есть место, и достраивает площадки в досягаемости. */
     private fun harvestAndDeliver(t: Int, w: Creep, src: Source, spawn: StructureSpawn, mySites: List<ConstructionSite>) {
         val e = w.store[RESOURCE_ENERGY] ?: 0
         val cap = w.store.getCapacity(RESOURCE_ENERGY) ?: 0
         val h = HARVEST_POWER * liveParts(w, WORK)
         val spawnFree = spawn.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
-        val hv = if (src.energy > 0 && getRange(w, src) <= 1 && (e + h <= cap || spawnFree > 0)) w.harvest(src) else null
-        var tr: Any? = null
-        if (e > 0 && spawnFree > 0 && getRange(w, spawn) <= 1 && e + h > cap) tr = w.transfer(spawn, RESOURCE_ENERGY)
-        if (spawnFree <= 0 && e > 0) {
+        val canDeliver = e > 0 && spawnFree > 0 && getRange(w, spawn) <= 1
+        // копка исполняется раньше сдачи: место под неё — от запаса начала тика
+        if (src.energy > 0 && getRange(w, src) <= 1 && cap - e >= h) {
+            w.harvest(src)
+        } else if (spawnFree <= 0 && e > 0) {
             val site = mySites.filter { getRange(w, it) <= 3 }.minByOrNull { getRange(w, it) }
-            if (site != null && hv == null) w.build(site)
+            if (site != null) w.build(site)
         }
-        // замер движка: можно ли копать и сдавать в один тик (первые тики после спавна)
-        if (tr != null && deliveryProbe < 6) {
-            deliveryProbe++
-            println("probe t=$t harvest+transfer: hv=$hv tr=$tr store=$e spawnE=${energyOf(spawn)}")
-        }
+        if (canDeliver) w.transfer(spawn, RESOURCE_ENERGY)
     }
 
     // ---------- второй спавн ----------
 
+    /** Путь в тиках тела 1:1 (равнина 1, болото 5): так ходят строитель и рабочий старта. */
+    private fun pathTicks(from: Position, to: Position): Int {
+        val r = searchPath(from, SearchGoal(pos = to, range = 1), SearchPathOptions(plainCost = 1, swampCost = 5))
+        return if (r.incomplete) Int.MAX_VALUE / 4 else r.cost
+    }
+
+    /** Цель второго спавна: «наш» источник — наш спавн доходит до него раньше, чем стартовая клетка соперника, — и
+     *  из таких ближайший по пути. */
     private fun expansionTarget(from: Position, sources: Array<Source>, all: Array<GameObject>): Base? {
         val enemy = enemyStart ?: return null
         val taken = bases.map { it.sourceId }.toSet()
         val blocked = blockedCells(all)
-        val candidates = sources.filter { idOf(it) !in taken }.filter { s ->
-            // «наш» источник: к нему ближе мы, чем стартовая клетка соперника
-            getRange(from, s) < getRange(cell(enemy), s)
-        }.sortedBy { getRange(from, it) }
-        for (s in candidates) planBase(s, from, blocked)?.let { return it }
+        val ranked = sources.filter { idOf(it) !in taken }.map { s -> Triple(s, pathTicks(from, s), pathTicks(cell(enemy), s)) }
+        println("expansion: candidates " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})us=${it.second}/them=${it.third}" })
+        for ((s, _, _) in ranked.filter { it.second < it.third }.sortedBy { it.second }) planBase(s, from, blocked)?.let { return it }
         return null
     }
 
@@ -487,8 +490,10 @@ object SpawnAndSwampAdvanced {
     }
 
     private fun homeWork(b: Base, mine: List<Creep>): Int =
-        mine.filter { c -> slotOf[idOf(c)]?.let { b.slots.contains(it) } == true || (c.spawning && getRange(c, cell(b.spawnCell)) <= 1 && liveParts(c, WORK) > 0) }
-            .sumOf { liveParts(it, WORK) }
+        mine.filter { c ->
+            idOf(c) != builderId &&
+                (slotOf[idOf(c)]?.let { b.slots.contains(it) } == true || (c.spawning && getRange(c, cell(b.spawnCell)) <= 1 && liveParts(c, WORK) > 0))
+        }.sumOf { liveParts(it, WORK) }
 
     /** Угрозы дому: боевые враги у наших спавнов или у наших рабочих. */
     private fun homeThreats(enemyCombat: List<Creep>, homeSpawns: List<GameObject>, workers: List<Creep>): List<Creep> =
