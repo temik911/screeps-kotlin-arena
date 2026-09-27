@@ -37,6 +37,8 @@ import screeps.api.TOWER_FALLOFF
 import screeps.api.TOWER_FALLOFF_RANGE
 import screeps.api.TOWER_OPTIMAL_RANGE
 import screeps.api.TOWER_POWER_ATTACK
+import screeps.api.TOWER_RANGE
+import screeps.api.TOWER_ENERGY_COST
 import screeps.api.WORK
 import screeps.api.arenaInfo
 import screeps.api.createConstructionSite
@@ -91,7 +93,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v4"
+    private const val BOT_VERSION = "v5"
 
     private const val LOG_EVERY = 50
 
@@ -106,6 +108,9 @@ object SpawnAndSwampAdvanced {
      *  несколько шагов подхода). */
     private const val HOME_THREAT_RANGE = 10
     private const val WORKER_THREAT_RANGE = 6
+    /** Защита снимается, только когда угроз нет и на столько клеток дальше: без запаса стрелки соперника, кружащие
+     *  у границы (けろびー, v4), переключали позу каждые два-три тика, и наши бегали за ними туда-обратно. */
+    private const val THREAT_RELEASE = 5
     /** Волна держится: передний ждёт, пока остальные не подойдут на столько клеток. */
     private const val COHESION = 3
     /** Крип врага, до которого столько клеток от волны, — местная угроза для решения об отходе. */
@@ -117,6 +122,7 @@ object SpawnAndSwampAdvanced {
     /** База: спавн (или его будущая клетка), её источник и клетки, смежные с обоими. */
     private class Base(val sourceId: String, val spawnCell: Pos, val slots: List<Pos>) {
         var spawnId: String? = null
+        var towerCell: Pos? = null
     }
 
     private val bases = ArrayList<Base>()
@@ -136,6 +142,7 @@ object SpawnAndSwampAdvanced {
     private var enemyKnown: Set<String> = emptySet()
     private var myKnown: Map<String, String> = emptyMap()
     private var spawnUpAt = -1
+    private var defending = false
 
     // ---------- мелочи ----------
     private fun idOf(o: GameObject): String = o.id.asDynamic().toString().unsafeCast<String>()
@@ -307,7 +314,16 @@ object SpawnAndSwampAdvanced {
 
         val homeSpawns = bases.mapNotNull { b -> b.spawnId?.let { byId[it] } }
         val workersAll = mine.filter { liveParts(it, WORK) > 0 }
-        val threats = homeThreats(enemyCombat, homeSpawns, workersAll)
+        val near = homeThreats(enemyCombat, homeSpawns, workersAll, 0)
+        val wide = homeThreats(enemyCombat, homeSpawns, workersAll, THREAT_RELEASE)
+        defending = if (defending) wide.isNotEmpty() else near.isNotEmpty()
+        val threats = if (defending) wide else emptyList()
+        val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
+        for (b in bases) {
+            val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
+            planTower(t, b, sp, mine, all)
+        }
+        runTowers(myTowers, theirs, mine)
 
         runWorkers(t, mine, byId, sites.filter { it.my == true }, sources, all, enemyCombat)
         runArmy(t, mine, theirs, enemyCombat, enemyTowers, all, byId, threats)
@@ -423,6 +439,21 @@ object SpawnAndSwampAdvanced {
         val e = w.store[RESOURCE_ENERGY] ?: 0
         val cap = w.store.getCapacity(RESOURCE_ENERGY) ?: 0
         val h = HARVEST_POWER * liveParts(w, WORK)
+        // башня рядом ест первой: один выстрел — 10, а без неё дом беззащитен
+        val tower = getObjectsByPrototype(StructureTower::class).firstOrNull {
+            it.my == true && getRange(w, it) <= 1 && (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0
+        }
+        if (tower != null && e > 0) {
+            if (src.energy > 0 && getRange(w, src) <= 1 && cap - e >= h) w.harvest(src)
+            w.transfer(tower, RESOURCE_ENERGY)
+            return
+        }
+        // площадка в досягаемости и дому ничто не грозит: строим циклом дебюта (копка и стройка — одно действие)
+        val site = mySites.filter { getRange(w, it) <= 3 }.minByOrNull { getRange(w, it) }
+        if (site != null && !defending) {
+            if (e >= batchFor(w) || (src.energy == 0 && e > 0)) w.build(site) else if (src.energy > 0) w.harvest(src)
+            return
+        }
         val spawnFree = spawn.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
         val canDeliver = e > 0 && spawnFree > 0 && getRange(w, spawn) <= 1
         // копка исполняется раньше сдачи: место под неё — от запаса начала тика
@@ -508,11 +539,65 @@ object SpawnAndSwampAdvanced {
                 (slotOf[idOf(c)]?.let { b.slots.contains(it) } == true || (c.spawning && getRange(c, cell(b.spawnCell)) <= 1 && liveParts(c, WORK) > 0))
         }.sumOf { liveParts(it, WORK) }
 
-    /** Угрозы дому: боевые враги у наших спавнов или у наших рабочих. */
-    private fun homeThreats(enemyCombat: List<Creep>, homeSpawns: List<GameObject>, workers: List<Creep>): List<Creep> =
+    /** Угрозы дому: боевые враги у наших спавнов или у наших рабочих (с запасом `extra` — для снятия защиты). */
+    private fun homeThreats(enemyCombat: List<Creep>, homeSpawns: List<GameObject>, workers: List<Creep>, extra: Int): List<Creep> =
         enemyCombat.filter { e ->
-            homeSpawns.any { getRange(e, it) <= HOME_THREAT_RANGE } || workers.any { getRange(e, it) <= WORKER_THREAT_RANGE }
+            homeSpawns.any { getRange(e, it) <= HOME_THREAT_RANGE + extra } || workers.any { getRange(e, it) <= WORKER_THREAT_RANGE + extra }
         }
+
+    // ---------- башня ----------
+
+    private fun towerAt(b: Base, all: Array<GameObject>): GameObject? {
+        val c = b.towerCell ?: return null
+        return all.firstOrNull { (it is StructureTower || it is ConstructionSite) && it.x == c.x && it.y == c.y && it.asDynamic().my == true }
+    }
+
+    /** Башня у базы: ставится, когда у дома уже есть боец (первые тики спавна кормят бойца, который прикроет
+     *  стройку); клетка — рядом с клетками добытчиков (они её строят и кормят без шага), не отнимая у спавна
+     *  последний выход. Кормленая башня — 1000 в упор и ~550 на десяти клетках раз в десять тиков при 3000 хитов:
+     *  против стрелков, кружащих у дома (けろびー), и потока мили-лекарей (Hardy) это дешевле любого бойца. */
+    private fun planTower(t: Int, b: Base, spawn: StructureSpawn, mine: List<Creep>, all: Array<GameObject>) {
+        if (towerAt(b, all) != null) return
+        if (b.towerCell != null) { println("tower at (${b.towerCell}) gone t=$t"); b.towerCell = null }
+        if (mine.none { isCombat(it) }) return
+        val blocked = blockedCells(all)
+        fun exits(extra: Pos): Int {
+            var n = 0
+            for (x in b.spawnCell.x - 1..b.spawnCell.x + 1) for (y in b.spawnCell.y - 1..b.spawnCell.y + 1) {
+                val p = Pos(x, y)
+                if (p != b.spawnCell && p != extra && p !in b.slots && walkable(p, blocked)) n++
+            }
+            return n
+        }
+        var best: Pos? = null
+        var bestScore = Int.MIN_VALUE
+        for (dx in -3..3) for (dy in -3..3) {
+            val c = Pos(b.spawnCell.x + dx, b.spawnCell.y + dy)
+            if (c == b.spawnCell || c in b.slots || !walkable(c, blocked)) continue
+            val feeders = b.slots.count { cheb(it, c) <= 1 }
+            if (feeders == 0 || exits(c) == 0) continue
+            val score = feeders * 1000 + (if (isSwamp(c)) 0 else 100) - cheb(c, b.spawnCell)
+            if (score > bestScore) { bestScore = score; best = c }
+        }
+        val c = best ?: return
+        val r = createConstructionSite(c.x, c.y, StructureTower::class.js)
+        println("tower site t=$t at (${c.x},${c.y}) base=(${b.spawnCell.x},${b.spawnCell.y}) err=${r.error}")
+        if (r.error == null) b.towerCell = c
+    }
+
+    /** Башня бьёт боевого врага в досягаемости (ближнего — у него выстрел сильнее), при равенстве — самого битого;
+     *  без врагов лечит самого битого нашего. */
+    private fun runTowers(towers: List<StructureTower>, theirs: List<Creep>, mine: List<Creep>) {
+        for (tw in towers) {
+            if (energyOf(tw) < TOWER_ENERGY_COST || tw.cooldown > 0) continue
+            val foe = theirs.filter { getRange(tw, it) <= TOWER_RANGE }
+                .sortedWith(compareBy<Creep> { if (isCombat(it)) 0 else 1 }.thenBy { getRange(tw, it) }.thenBy { it.hits })
+                .firstOrNull()
+            if (foe != null) { tw.attack(foe); continue }
+            val hurt = mine.filter { !it.spawning && it.hits < it.hitsMax && getRange(tw, it) <= TOWER_RANGE }.maxByOrNull { it.hitsMax - it.hits }
+            if (hurt != null) tw.heal(hurt)
+        }
+    }
 
     private fun runSpawn(t: Int, b: Base, spawn: StructureSpawn, mine: List<Creep>, threats: List<Creep>) {
         val energy = energyOf(spawn)
@@ -524,9 +609,9 @@ object SpawnAndSwampAdvanced {
         val body: Array<BodyPartType>
         val why: String
         if (threat.isNotEmpty() && power(fighters) < power(threat) * PUSH_RATIO) {
-            body = fighterBody(energy)
-            why = "threat"
-            if (body.size < 4) return
+            // только полное тело: v4 рожал под угрозой M2R2 по одному, и все они погибли поодиночке (basic измерил
+            // то же: тринадцать тел по 300 проиграли трём M5R5 на равной энергии)
+            return spawnFighter(t, spawn, energy, why = "threat")
         } else if (haveWork < needWork && freeSlots > 0) {
             body = workerBody(needWork - haveWork, energy)
             why = "work $haveWork/$needWork"
@@ -658,15 +743,26 @@ object SpawnAndSwampAdvanced {
                 if (range > keep) f.moveTo(goal)
             }
         }
-        // дом: защита от угроз всей кучей, иначе сбор у спавна
+        // дом: угрозу бьём всей кучей, если на месте сильнее (с башнями) или она уже бьёт спавн или рабочего;
+        // иначе держимся у спавна — туда ей придётся подойти на выстрел. За пределы домашней зоны не гонимся
+        val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
+        val workers = mine.filter { liveParts(it, WORK) > 0 }
+        val target = threats.minByOrNull { e -> homeSpawns.minOfOrNull { getRange(e, it) } ?: 0 }
+        val anchor: Position = target?.let { tg -> homeSpawns.minByOrNull { getRange(tg, it) } } ?: home
+        var engage = false
+        if (target != null) {
+            val local = threats.filter { getRange(it, target) <= LOCAL_RANGE }
+            val ours = power(homeGroup) + towerPower(myTowers.filter { getRange(it, target) <= TOWER_RANGE })
+            val striking = getRange(target, anchor) <= RANGED_RANGE + 1 || workers.any { getRange(target, it) <= RANGED_RANGE + 1 }
+            engage = (ours >= power(local) || striking) && getRange(target, anchor) <= HOME_THREAT_RANGE + 3
+        }
         for (f in homeGroup) {
             if (idOf(f) in wave) continue
             shoot(f, theirs, enemyObjects)
             if (fleeMelee(f, enemyCombat)) continue
-            val target = threats.minByOrNull { getRange(f, it) }
-            if (target != null) {
+            if (engage && target != null) {
                 if (getRange(f, target) > RANGED_RANGE) f.moveTo(target)
-            } else if (getRange(f, home) > 3) f.moveTo(home)
+            } else if (getRange(f, anchor) > 2) f.moveTo(anchor)
         }
     }
 
