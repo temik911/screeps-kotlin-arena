@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 26
+const val BOT_VERSION = 27
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -176,8 +176,11 @@ object EscortRunAdvanced {
     private val RANGED = Bodies.interleaved(RANGED_ATTACK, 5, 5)
     /** Both harvesters carry: they hand the harvest to the extensions beside their spots (see planWorks). */
     private val HARVESTER_FIRST = Bodies.body(WORK to 3, CARRY to 1, MOVE to 1)
-    /** The second harvester builds the home works and feeds the tower: it carries. */
-    private val HARVESTER_NEXT = Bodies.body(WORK to 2, CARRY to 2, MOVE to 1)
+    /** The second harvester builds the home works and feeds the tower: it carries. Four WORK, not two: a source starts
+     *  with 1000 in stock (the v21 greeting: 1000/1000 all four), and only WORK above the regen's five take it — seven
+     *  drain it in ~250 ticks for 150 more energy; けろびー's nine WORK had 3356 harvested by 300 against our 1392. The
+     *  stand's personas made four to seven fighters by 1000 instead of three to five. */
+    private val HARVESTER_NEXT = Bodies.body(WORK to 4, CARRY to 1, MOVE to 1)
     private val HAULER = Bodies.body(CARRY to 2, MOVE to 1)
     /** The wall breaker: as much ATTACK as one spawn holds with MOVE enough for two ticks a plain cell. */
     private const val BREAKER_ATTACK = 9
@@ -2085,7 +2088,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
