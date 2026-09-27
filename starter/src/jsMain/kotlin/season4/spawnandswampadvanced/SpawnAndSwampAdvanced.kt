@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v20"
+    private const val BOT_VERSION = "v21"
 
     private const val LOG_EVERY = 50
 
@@ -610,9 +610,9 @@ object SpawnAndSwampAdvanced {
 
     // ---------- дебют ----------
 
-    /** Домашний источник — тот, до которого рабочий дойдёт раньше; при равенстве — БЛИЖЕ к сопернику: дальний и так
-     *  останется нашим для расширения, а спорный займёт он (stachu3478 ставил спавн у нашего второго домашнего
-     *  источника на ~820-м тике, пока v17 расширялся на центральный). */
+    /** Домашний источник — тот, до которого рабочий дойдёт раньше; при равенстве — дальше от соперника. v19 брал
+     *  ближний к нему по прямой, но прямая через центральную стену врёт: stachu3478 пошёл ко второму нашему источнику
+     *  снизу, а v19 встал у верхнего — и проиграл. Спорный источник у нас забирает охота на его строителя. */
     private fun openingPlan(w: Creep, sources: Array<Source>, all: Array<GameObject>) {
         val blocked = blockedCells(all)
         val enemy = enemyStart
@@ -620,7 +620,7 @@ object SpawnAndSwampAdvanced {
             val ticks = ticksTo(w, s, 1)
             val far = if (enemy == null) 0 else getRange(cell(enemy), s)
             Triple(s, ticks, far)
-        }.sortedWith(compareBy<Triple<Source, Int, Int>> { it.second }.thenBy { it.third })
+        }.sortedWith(compareBy<Triple<Source, Int, Int>> { it.second }.thenByDescending { it.third })
         println("opening: sources by arrival " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})t=${it.second}" })
         for ((src, ticks, _) in ranked) {
             val base = planBase(src, w, blocked) ?: continue
@@ -1135,7 +1135,21 @@ object SpawnAndSwampAdvanced {
     private fun simOf(c: Creep) = SimUnit(typesOf(c), c.hits)
 
     /** Башня как боец прогона: выстрел на дальности нашего стрелка у неё (4 клетки) раз в перезарядку. */
-    private fun simTower(hits: Int) = SimUnit(emptyList(), hits, (towerShot(RANGED_RANGE + 1) / TOWER_COOLDOWN).toInt(), TOWER_HITS)
+    private fun simTower(hits: Int) = SimUnit(emptyList(), hits, (towerShot(RANGED_RANGE + 1) / TOWER_COOLDOWN).toInt(), hits)
+
+    /** Его спавн как цель прогона: без урона, хиты спавна плюс рампарт на его клетке. */
+    private fun simSpawnOf(sp: GameObject, all: Array<GameObject>): SimUnit {
+        val rampart = all.firstOrNull { it is StructureRampart && it.x == sp.x && it.y == sp.y }?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
+        val hits = (sp.asDynamic().hits?.unsafeCast<Int>() ?: SPAWN_HITS) + rampart
+        return SimUnit(emptyList(), hits, 0, hits)
+    }
+
+    /** Башня под рампартом бьётся вместе с ним: весь урон по ней сперва снимает рампарт. v20 считал башню бойцом на
+     *  3000, волна из 13 шла на обещанные 55 % против двух башен под рампартами (13000 каждая) — вернулись трое. */
+    private fun simTowerOf(tw: StructureTower, all: Array<GameObject>): SimUnit {
+        val rampart = all.firstOrNull { it is StructureRampart && it.x == tw.x && it.y == tw.y }?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
+        return simTower((tw.hits ?: TOWER_HITS) + rampart)
+    }
 
     /** Бой по тикам: обе стороны бьют одновременно всем уроном в одну цель (лекарей первыми, потом самого битого,
      *  башни последними; перебор урона уходит в следующую), лечение возвращает хиты самым битым. Лечение считается
@@ -1231,8 +1245,11 @@ object SpawnAndSwampAdvanced {
         val enemySpawnObjs = all.filter { it is StructureSpawn && it.asDynamic().my == false }
         val arrival = if (enemySpawnObjs.isEmpty()) 0 else enemySpawnObjs.minOf { pathTicks(home, it) }
         val fedTowers = enemyTowers.filter { energyOf(it) > 0 }
+        // его ближний спавн — тоже в прогоне: боец без урона с хитами спавна и рампарта над ним. Волна побеждает,
+        // только снеся его под огнём башен, а не перебив защитников
+        val nearSpawn = enemySpawnObjs.minByOrNull { pathTicks(home, it) }
         val enemyAtArrival = enemyCombat.map { simOf(it) } + projectedBirths(t, arrival) +
-            fedTowers.map { simTower(it.hits ?: TOWER_HITS) } + List(pending) { simTower(TOWER_HITS) }
+            fedTowers.map { simTowerOf(it, all) } + List(pending) { simTower(TOWER_HITS) } + listOfNotNull(nearSpawn?.let { simSpawnOf(it, all) })
         armyCache = fighters.map { simOf(it) } to enemyAtArrival
         val lastCall = t > arenaInfo.ticksLimit - 600
         val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
@@ -1242,7 +1259,7 @@ object SpawnAndSwampAdvanced {
         // из-за четверых, круживших у базы вне выстрела; спавн под рампартом их ждёт
         val striking = threats.filter { e -> homeSpawns.any { getRange(e, it) <= RANGED_RANGE + 1 } || mine.any { liveParts(it, WORK) > 0 && getRange(e, it) <= RANGED_RANGE + 1 } }
         if (wave.isNotEmpty() && striking.isNotEmpty() && !lastCall) {
-            val home0 = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && threats.any { getRange(it, tw) <= TOWER_RANGE } }.map { simTower(it.hits ?: TOWER_HITS) }
+            val home0 = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && threats.any { getRange(it, tw) <= TOWER_RANGE } }.map { simTowerOf(it, all) }
             val r = simulate(home0, threats.map { simOf(it) })
             if (!r.win) {
                 println("recall t=$t wave=${wave.size} home=${homeGroup.size} vs threats=${threats.size} sim=${r.left}/${r.theirLeft}")
@@ -1273,7 +1290,7 @@ object SpawnAndSwampAdvanced {
                 val guards = enemyCombat.filter { getRange(it, sp) <= reach }
                 val births = projectedBirths(t, toSp).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
                 val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
-                val local = guards.map { simOf(it) } + births + towersNear.map { simTower(it.hits ?: TOWER_HITS) }
+                val local = guards.map { simOf(it) } + births + towersNear.map { simTowerOf(it, all) } + simSpawnOf(sp, all)
                 val rs = simulate(homeGroup.map { simOf(it) }, local)
                 if (rs.win && rs.keep >= PUSH_KEEP) {
                     for (f in homeGroup) wave.add(idOf(f))
@@ -1289,7 +1306,7 @@ object SpawnAndSwampAdvanced {
             val local = enemyCombat.filter { getRange(it, center) <= LOCAL_RANGE }
             val localTowers = fedTowers.filter { getRange(it, center) <= TOWER_FALLOFF_RANGE / 2 }
             if (local.isNotEmpty() || localTowers.isNotEmpty()) {
-                val r = simulate(waveCreeps.map { simOf(it) }, local.map { simOf(it) } + localTowers.map { simTower(it.hits ?: TOWER_HITS) })
+                val r = simulate(waveCreeps.map { simOf(it) }, local.map { simOf(it) } + localTowers.map { simTowerOf(it, all) })
                 if (!r.win) {
                     println("retreat t=$t wave=${waveCreeps.size} vs local=${local.size}+${localTowers.size}tw sim=${r.left}/${r.theirLeft} ticks=${r.ticks}")
                     wave.clear()
@@ -1341,7 +1358,7 @@ object SpawnAndSwampAdvanced {
             // спавнов по одному шли в толпу из 36 у входа в сейф. Предела погони нет: угроза по определению в домашней
             // зоне (v9: зазор между пределом погони и снятием защиты держал защиту вечно)
             val local = threats.filter { getRange(it, target) <= LOCAL_RANGE }
-            val ours = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && getRange(tw, target) <= TOWER_RANGE }.map { simTower(it.hits ?: TOWER_HITS) }
+            val ours = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && getRange(tw, target) <= TOWER_RANGE }.map { simTowerOf(it, all) }
             engage = simulate(ours, local.map { simOf(it) }).win
         }
         // нарушители: его строитель или площадка спавна/башни на нашей территории — у наших спавнов или у «наших»
