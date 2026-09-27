@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 11
+const val BOT_VERSION = 12
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -134,6 +134,9 @@ object PainAndGainAdvanced {
         held.clear()
         ourAt.clear(); for (u in mine) ourAt[u.cell] = u
         trackStuck()
+        classify()
+        // a fighter that starts farming is no longer played from a fortress
+        if (fighter && theirFx.rate >= FARMER_RATE) { fighter = false; println("style t=$t: farmer now, his rate=${theirFx.rate}") }
         army()
         pullers()
         towersAct()
@@ -166,7 +169,7 @@ object PainAndGainAdvanced {
     private fun probe() {
         println("hello season4 pain-and-gain-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} TICKS_LIMIT=$TICKS_LIMIT MAX_SCORE_PER_TICK=$MAX_SCORE_PER_TICK")
-        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R local=$LOCAL_R initiative=$INITIATIVE_RATIO fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE")
+        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R local=$LOCAL_R initiative=$INITIATIVE_RATIO fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE classify=$CLASSIFY_T fighterRate=$FIGHTER_MAX_RATE fortressR=$FORTRESS_R")
         println("flagtypes: ${JSON.stringify(FLAG_TYPES)}")
         println("consts: TOWER_RANGE=$TOWER_RANGE TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_POWER_HEAL=$TOWER_POWER_HEAL " +
             "TOWER_OPTIMAL_RANGE=$TOWER_OPTIMAL_RANGE TOWER_FALLOFF_RANGE=$TOWER_FALLOFF_RANGE TOWER_FALLOFF=$TOWER_FALLOFF " +
@@ -224,11 +227,23 @@ object PainAndGainAdvanced {
         return listOfNotNull(tower, loss)
     }
 
+    /** Our tower flag of a type: of the two such flags, the one nearer our start. */
+    private fun homeTowerOf(type: String): ScoreFlag? {
+        val here = startCell
+        return flags.filter { f -> f.effectType == type && towers.any { Grid.range(it.x, it.y, f.x, f.y) <= 1 } }
+            .minByOrNull { Grid.to(it.x, it.y, 1)[here] }
+    }
+    private var startCell = 0
+
     private var homeFlags: List<String> = emptyList()
     private val mending = HashSet<String>()
 
     private fun pullers() {
-        if (homeFlags.isEmpty()) homeFlags = homePosts().map { it.id }
+        if (homeFlags.isEmpty()) {
+            homeFlags = homePosts().map { it.id }
+            val start = mine.filter { it.role == Role.PULLER }.ifEmpty { mine }
+            if (start.isNotEmpty()) startCell = Grid.idx(start.sumOf { it.x } / start.size, start.sumOf { it.y } / start.size)
+        }
         val ps = mine.filter { it.role == Role.PULLER }
         for (p in ps) {
             if (p.id !in pullerPost) {
@@ -236,6 +251,15 @@ object PainAndGainAdvanced {
                 val free = homeFlags.mapNotNull { id -> flags.firstOrNull { it.id == id } }.filter { it.id !in taken }
                 val pick = free.minByOrNull { Grid.to(it.x, it.y, 1)[p.cell] } ?: continue
                 pullerPost[p.id] = pick.id
+            }
+            if (fighter) {
+                // the second puller moves from the hits-loss flag to our fatigue tower: against a fighter the army
+                // stands at its fortress, where fatigue costs it nothing, and a second fed tower holds 5 a tick more
+                val cur = flags.firstOrNull { it.id == pullerPost[p.id] }
+                if (cur != null && cur.effectType == EFF_HITS_LOSS_T) {
+                    val other = homeTowerOf(EFF_FATIGUE)
+                    if (other != null && pullerPost.values.none { it == other.id }) pullerPost[p.id] = other.id
+                }
             }
             val post = flags.firstOrNull { it.id == pullerPost[p.id] } ?: continue
             val tower = towers.firstOrNull { Grid.range(it.x, it.y, post.x, post.y) <= 1 }
@@ -320,6 +344,18 @@ object PainAndGainAdvanced {
 
     private val hunterOf = HashMap<String, String>()   // our hunter id -> enemy id
     private var surviving = false
+    /** His style, latched at CLASSIFY_T: a FIGHTER keeps his army together and takes at most one flag (stachu3478#5
+     *  none, Hardy#1 the centre), a farmer spreads runners over five to seven flags by t=100 (kerobii#6/#12,
+     *  76561198870429455). Against a fighter the centre is a coin toss — his formed line against ours at parity, lost
+     *  in two tests of four — while our flags already lead him by 12 a tick: v12 plays him from a fortress. */
+    private var fighter = false
+    private var classified = false
+    private fun classify() {
+        if (classified || t < CLASSIFY_T) return
+        classified = true
+        fighter = theirFx.rate <= FIGHTER_MAX_RATE
+        println("style t=$t: ${if (fighter) "fighter" else "farmer"} his rate=${theirFx.rate} his flags=${flags.count { it.my == false }}")
+    }
 
     private fun army() {
         val army = mine.filter { it.role != Role.PULLER }
@@ -351,7 +387,7 @@ object PainAndGainAdvanced {
             near.isEmpty() -> null
             engaged -> Mode.FIGHT
             swept && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
-            head.size < zone.size && local.ratio >= INITIATIVE_RATIO -> Mode.FIGHT
+            head.size < zone.size && local.ratio >= INITIATIVE_RATIO && (!fighter || fortressNear(cx, cy)) -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
             mode == Mode.FIGHT && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             duel.ratio < RETREAT_RATIO -> Mode.RETREAT
@@ -362,7 +398,8 @@ object PainAndGainAdvanced {
         }
         val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
         val sweepFlag = if (swept) sweepTarget(cx, cy) else null
-        val objective = sweepFlag ?: (if (guarded(centre, group)) safeFlag(cx, cy, group) else null) ?: centre
+        val fortress = if (fighter && !swept) fortressFlag() else null
+        val objective = sweepFlag ?: fortress ?: (if (guarded(centre, group)) safeFlag(cx, cy, group) else null) ?: centre
         // survival: with the army broken and the score ours, what is left lives under our fed tower — it heals them and
         // shoots what comes; one creep of ours alive when the lead outgrows 43 a tick for the ticks left ends the match
         // latched: a healed-back part must not end it — a v11 test left the shelter at t=301 when a heal gave one of our
@@ -410,6 +447,21 @@ object PainAndGainAdvanced {
         }
         for (h in hunters) hunt(h)
     }
+
+    /** The fortress: our fed tower flag nearer our start that a puller of ours holds — the army stands round its tower. */
+    private fun fortressNear(cx: Int, cy: Int): Boolean = fortressFlag()?.let { Grid.range(it.x, it.y, cx, cy) <= FORTRESS_R } ?: true
+
+    private fun fortressFlag(): ScoreFlag? {
+        // latched once chosen: the second tower gets fed later, and a fortress that moved to it would march the army
+        // across the map for nothing
+        fortressId?.let { id -> flags.firstOrNull { it.id == id && it.my == true }?.let { return it } }
+        val fed = ourFedTowers()
+        val pick = flags.filter { f -> f.my == true && fed.any { Grid.range(it.x, it.y, f.x, f.y) <= 1 } }
+            .minByOrNull { Grid.to(it.x, it.y, 1)[startCell] }
+        fortressId = pick?.id
+        return pick
+    }
+    private var fortressId: String? = null
 
     /** A flag his army stands at with more than ours can take: the duel of our group against his fighters within
      *  GUARD_R of the flag, at the flag, is below FIGHT_RATIO. */
@@ -526,7 +578,8 @@ object PainAndGainAdvanced {
             val h = healers.minByOrNull { Grid.range(it.x, it.y, u.x, u.y) } ?: continue
             stepToward(u, Grid.to(h.x, h.y), 15, stopAt = 1)
         }
-        val keeper = army.firstOrNull { it.x == gx && it.y == gy }
+        val flagHeld = mine.any { it.role == Role.PULLER && it.x == gx && it.y == gy }
+        val keeper = if (flagHeld) null else army.firstOrNull { it.x == gx && it.y == gy }
             ?: army.filter { it.role == Role.HEALER }.minByOrNull { f[it.cell] }
             ?: army.minByOrNull { f[it.cell] }
         for (u in army) {
@@ -690,6 +743,10 @@ object PainAndGainAdvanced {
     const val INITIATIVE_RATIO = 1.3
     const val MEND_AT = 250
     const val SURVIVE_ARMED = 2
+    const val CLASSIFY_T = 150
+    const val FIGHTER_MAX_RATE = 5
+    const val FARMER_RATE = 12
+    const val FORTRESS_R = 8
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
