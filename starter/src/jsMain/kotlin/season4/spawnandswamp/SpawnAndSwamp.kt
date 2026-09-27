@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 194
+    private const val BOT_VERSION = 195
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6508,8 +6508,14 @@ object SpawnAndSwamp {
     private const val USE_RAID_AGAIN_ANY = true
     /** The front's siege verdict is priced by its own route's interceptors, and the spawn race counts our rampart (v185). */
     private const val USE_FRONT_OWN_ROUTE = true
-    /** A waiting raid strikes a standing gun of his by its target when the pair outlasts it (runRaiders, v186). */
-    private const val USE_RAID_GUN_PREY = true
+    /** A waiting raid strikes a standing gun of his by its target when the pair outlasts it (runRaiders, v186).
+     *  OFF (v195): the v193 series went 15-0-5 with all five draws against けろびー (1-0-5 against #48/#49/#50, v188 had
+     *  11-0-4), and 15 of the 27 raider deaths in those draws were strikes on his guns (2-3 before). No gun of his ever
+     *  stood alone: each "prey" had his guns within 6 or healers within 3 — at t=622 of one draw the race said the kill in
+     *  11 ticks for 83 % of the weakest's hits, his M5R5 stepped back, a healer took its cell, 11 strikes of 40 landed,
+     *  the gun was healed from 370 and both raiders died in 27 ticks; each death left 109-475 ticks with no raider, and
+     *  the two nearest draws missed 2640 and 3460 of his main. The race cannot see a gun's squad */
+    private const val USE_RAID_GUN_PREY = false
     /** The column chain of the march's cohesion runs through fighters of any wave (v187). */
     private const val USE_COLUMN_ANY_WAVE = true
     /** A marching wave does not wait for a mate that went after a creep of his on the way (runFighters' cohesion, v188). */
@@ -6525,8 +6531,9 @@ object SpawnAndSwamp {
     private const val USE_HOLD_TARGET_TOWERS = true
     /** The siege body question leaves out of its crew the melee whose going hangs on its own answer (runFighters, v192). */
     private const val USE_BODY_BY_ITS_CREW = true
-    /** A standing gun of his within a raider's flight range is prey too, not only one by the target (v193). */
-    private const val USE_RAID_GUN_NEAR = true
+    /** A standing gun of his within a raider's flight range is prey too, not only one by the target (v193).
+     *  OFF (v195) with USE_RAID_GUN_PREY, see there. */
+    private const val USE_RAID_GUN_NEAR = false
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
