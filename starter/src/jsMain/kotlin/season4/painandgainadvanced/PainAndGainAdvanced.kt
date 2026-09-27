@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 9
+const val BOT_VERSION = 10
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -247,8 +247,15 @@ object PainAndGainAdvanced {
             if (tower == null && p.hits < p.hitsMax * PULLER_MEND) mending.add(p.id)
             if (p.hits >= p.hitsMax - 50) mending.remove(p.id)
             if (tower == null && (danger || p.id in mending)) {
-                val army = mine.filter { it.role != Role.PULLER }
-                if (army.isNotEmpty()) { val a = army.minByOrNull { Grid.range(it.x, it.y, p.x, p.y) }!!; stepToward(p, Grid.to(a.x, a.y, 1), 100) }
+                // to the healers if we have any, else under our fed tower, which heals it: the last creep of ours in a
+                // lost fight died of our own hits-loss flag at t=2600 while we led 28 077 to 0, with 1300 ticks to go
+                // before the lead would have ended the match
+                val healers = mine.filter { it.heal > 0 }
+                val tw = ourFedTowers().minByOrNull { Grid.range(it.x, it.y, p.x, p.y) }
+                when {
+                    healers.isNotEmpty() -> { val a = healers.minByOrNull { Grid.range(it.x, it.y, p.x, p.y) }!!; stepToward(p, Grid.to(a.x, a.y, 1), 100, stopAt = 1) }
+                    tw != null -> stepToward(p, Grid.to(tw.x, tw.y, 1), 100, stopAt = 1)
+                }
                 continue
             }
             val box = containers.filter { Grid.range(it.x, it.y, post.x, post.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
@@ -355,6 +362,16 @@ object PainAndGainAdvanced {
         val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
         val sweepFlag = if (swept) sweepTarget(cx, cy) else null
         val objective = sweepFlag ?: (if (guarded(centre, group)) safeFlag(cx, cy, group) else null) ?: centre
+        // survival: with the army broken and the score ours, what is left lives under our fed tower — it heals them and
+        // shoots what comes; one creep of ours alive when the lead outgrows 43 a tick for the ticks left ends the match
+        val broken = army.count { it.armed } <= SURVIVE_ARMED && foes.count { it.armed } > army.count { it.armed } * 2
+        val shelter = if (broken && ourScore >= theirScore) ourFedTowers().minByOrNull { Grid.range(it.x, it.y, cx, cy) } else null
+        if (shelter != null) {
+            if (mode != Mode.RETREAT) { mode = Mode.RETREAT; modeSince = t; println("mode t=$t: RETREAT survive under (${shelter.x},${shelter.y}) armed=${army.count { it.armed }}:${foes.count { it.armed }} score=$ourScore:$theirScore") }
+            fire(army)
+            for (u in army) if (Grid.range(u.x, u.y, shelter.x, shelter.y) > 1) stepToward(u, Grid.to(shelter.x, shelter.y), 80, stopAt = 1)
+            return
+        }
         val next = want ?: when {
             swept -> Mode.SWEEP
             group.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= group.size -> Mode.HOLD
@@ -667,6 +684,7 @@ object PainAndGainAdvanced {
     const val LOCAL_R = 10
     const val INITIATIVE_RATIO = 1.3
     const val MEND_AT = 250
+    const val SURVIVE_ARMED = 2
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
