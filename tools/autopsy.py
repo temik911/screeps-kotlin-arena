@@ -930,7 +930,8 @@ def resolve(args):
             info['opp_code'] = d.get('opp_code')
             for g in logs:
                 dd = ml.describe(g, logs, metas)
-                if ('pain-and-gain' in dd['arena'] or not dd['arena']) and any(u in dd['users'] for u in foes) and dd['result'] in ('won', 'lost'):
+                # the opponent's record in THIS match's arena: a basic and an advanced level of one mode are two arenas
+                if (dd['arena'] == d['arena'] or not dd['arena']) and any(u in dd['users'] for u in foes) and dd['result'] in ('won', 'lost'):
                     history.append(dict(game=g, when=time.strftime('%d.%m %H:%M', time.localtime(dd['when'])), result=dd['result'], ticks=dd['last'], rating=dd['rating'], code=dd.get('opp_code')))
             history.sort(key=lambda h: h['when'])
             history = history[-12:]

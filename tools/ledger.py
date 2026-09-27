@@ -117,7 +117,7 @@ def main():
         meta = ml.meta_of(metas[g]) if g in metas else None
         if d['result'] not in ('won', 'lost'):
             continue
-        if 'pain-and-gain' not in d['arena'] and not (meta and meta.get('arena') == args.arena_id):
+        if not ml.arena_matches('pain-and-gain', d['arena']) and not (meta and meta.get('arena') == args.arena_id):
             continue
         games.append((d['when'], g, d))
     games.sort()

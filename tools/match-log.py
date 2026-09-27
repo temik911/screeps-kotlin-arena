@@ -164,6 +164,17 @@ def outcome(meta):
     return "won" if win == ours else "lost"
 
 
+def arena_matches(want, arena):
+    """The `--arena` filter every tool shares: `want` is a substring of the greeting's arena (`season4/pain-and-gain`),
+    except that a mode's advanced level answers only to a filter that says `advanced`. The two levels are separate
+    arenas under one server name (Spawn and Swamp, then Pain and Gain, 27.09.2026), their bots greet as
+    `spawn-and-swamp` / `spawn-and-swamp-advanced`, and a bare substring put every advanced match into the basic
+    session's series, ledger and version tables."""
+    if not want:
+        return True
+    return want in arena and ("advanced" in want or "advanced" not in arena)
+
+
 def sides(meta):
     """(our code version, the opponent's code version, the opponent as name#version) — from the two entries of
     `usersCode`, ours found by `our_code_index`; not from "the code whose user is me", which in self-play is both of
@@ -702,7 +713,7 @@ def cmd_list(args):
     games = sorted(set(logs) | set(metas))
     rows = [describe(g, logs, metas) for g in games]
     if args.arena:
-        rows = [r for r in rows if args.arena in r["arena"]]
+        rows = [r for r in rows if arena_matches(args.arena, r["arena"])]
     rows.sort(key=lambda r: r["when"])
     if not args.all:
         rows = rows[-args.limit:]

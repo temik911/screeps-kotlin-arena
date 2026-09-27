@@ -105,7 +105,7 @@ def rows(args):
         r = matchlog.describe(game, logs, metas)
         if relabel is not None:
             r["version"] = int(relabel[game])
-        if args.arena and args.arena not in r["arena"]:
+        if not matchlog.arena_matches(args.arena, r["arena"]):
             continue
         if getattr(args, "version", None) and r["version"] not in args.version:
             continue

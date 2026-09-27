@@ -60,7 +60,7 @@ def read_store(builds=None):
         if outcome not in ('won', 'lost', 'draw'):
             continue
         text = '\n'.join(log[k] for k in sorted(log, key=lambda x: int(x)) if isinstance(log[k], str))
-        if 'pain-and-gain' not in text:
+        if 'pain-and-gain' not in text or 'pain-and-gain-advanced' in text:  # the advanced level is another arena
             continue
         m = re.search(r'hello season4 pain-and-gain (v\d+)', text)
         ver = m.group(1) if m else '?'
