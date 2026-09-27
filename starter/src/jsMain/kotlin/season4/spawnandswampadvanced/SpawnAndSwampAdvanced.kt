@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v17"
+    private const val BOT_VERSION = "v18"
 
     private const val LOG_EVERY = 50
 
@@ -111,6 +111,9 @@ object SpawnAndSwampAdvanced {
      *  против stachu3478 вышел трижды (прогон обещал 57 %, 39 % и 30 %) и трижды отошёл с потерями: прогон считает
      *  бой всей волной разом, а волна приходит растянутой — половина, пока калибровки по замерам нет. */
     private const val PUSH_KEEP = 0.5
+    /** У его спавна «стоит» то, что в стольких клетках от него: защитники, которые успеют к удару по этому спавну. */
+    private const val STRIKE_GUARD_RANGE = 15
+
     /** Прогон дольше этого не смотрим: бой, который не решается за столько тиков, для решения — ничья. */
     private const val SIM_LIMIT = 300
     /** Угроза дому: боевой враг в стольких клетках от нашего спавна или от нашего рабочего (дальность стрелка плюс
@@ -1229,7 +1232,10 @@ object SpawnAndSwampAdvanced {
         val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
         // дом под угрозой, которую он сам (с башнями) по прогону не держит, — волна возвращается: v10 ушёл волной, а
         // поток его M3R3 перебил добытчиков, которых спавн рожал заново каждые 13 тиков
-        if (wave.isNotEmpty() && threats.isNotEmpty() && !lastCall) {
+        // …и только если угроза бьёт: в досягаемости спавна или рабочего. v17 развернул волну из 14, шедшую на победу,
+        // из-за четверых, круживших у базы вне выстрела; спавн под рампартом их ждёт
+        val striking = threats.filter { e -> homeSpawns.any { getRange(e, it) <= RANGED_RANGE + 1 } || mine.any { liveParts(it, WORK) > 0 && getRange(e, it) <= RANGED_RANGE + 1 } }
+        if (wave.isNotEmpty() && striking.isNotEmpty() && !lastCall) {
             val home0 = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && threats.any { getRange(it, tw) <= TOWER_RANGE } }.map { simTower(it.hits ?: TOWER_HITS) }
             val r = simulate(home0, threats.map { simOf(it) })
             if (!r.win) {
@@ -1247,6 +1253,23 @@ object SpawnAndSwampAdvanced {
                 for (f in homeGroup) wave.add(idOf(f))
                 println("push t=$t wave=${wave.size} home=${homeGroup.size} vs ${enemyAtArrival.size} (army ${enemyCombat.size} towers ${fedTowers.size}+$pending arrival=$arrival) " +
                     "sim keep=${(r.keep * 100).toInt()}% ticks=${r.ticks}${if (lastCall) " lastCall" else ""}")
+            } else if (enemySpawnObjs.isNotEmpty()) {
+                // удар по его ближнему спавну: против всей армии не выигрываем, но расширение у нас под боком стерегут
+                // немногие. stachu3478 ставил спавн у центрального источника на нашей стороне, убил нашего строителя и
+                // перерос нас по источникам (32 крипа против 11 к 3000-му) — а его передовые спавны стояли под двумя-
+                // четырьмя стражами. Против них: стражи в 15 клетках, его доля будущих рождений на путь, башни рядом
+                val sp = enemySpawnObjs.minByOrNull { pathTicks(home, it) }!!
+                val toSp = pathTicks(home, sp)
+                val guards = enemyCombat.filter { getRange(it, sp) <= STRIKE_GUARD_RANGE }
+                val births = projectedBirths(t, toSp).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
+                val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
+                val local = guards.map { simOf(it) } + births + towersNear.map { simTower(it.hits ?: TOWER_HITS) }
+                val rs = simulate(homeGroup.map { simOf(it) }, local)
+                if (rs.win && rs.keep >= PUSH_KEEP) {
+                    for (f in homeGroup) wave.add(idOf(f))
+                    println("strike t=$t wave=${wave.size} at spawn (${sp.x},${sp.y}) guards=${guards.size} births=${births.size} towers=${towersNear.size} " +
+                        "arrival=$toSp sim keep=${(rs.keep * 100).toInt()}% (whole army: ${(r.keep * 100).toInt()}% win=${r.win})")
+                }
             }
         }
         val waveCreeps = fighters.filter { idOf(it) in wave }
