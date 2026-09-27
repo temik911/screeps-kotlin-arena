@@ -146,9 +146,13 @@ let enemyQueue = [];
 // 'blk'  — an M1 blocker for OUR flag at the first 50 after the puller (and the keeper, if any); 'blk1' — on tick 1,
 //          before the puller (#7: the puller then waits till t=51).
 // 'icpt' — stachu's interceptor: one M1A1 at t=50 that walks to our train, kills the puller and then chips the escort.
+// 'chk'  — the league's choke (docs/escort-run-redteam.md): an M1 at the first 50 after the puller parks on OUR
+//          escort's path where it leaves the centre and, once our escort has gone around, runs 12 cells ahead of it
+//          along its path and parks again (an M1 walks a cell a tick, the train one in two).
 const roleOf = new Map();
+let chkTarget = null;
 const done = {};
-const REV = () => has('rev') || has('keep') || has('blk') || has('blk1') || has('rush8') || has('econ');
+const REV = () => has('rev') || has('keep') || has('blk') || has('blk1') || has('rush8') || has('econ') || has('chk');
 function orderRole(body, role) {
   const r = theirs.sp.spawnCreep(body);
   if (r.object) { roleOf.set(r.object.id, role); done[role] = (done[role] || 0) + 1; world.events.push(`t=${world.tick} enemy orders ${r.object.summary()} as ${role}`); return true; }
@@ -175,6 +179,7 @@ function metaEnemyTick(mine, oursC) {
     else if (has('econ') && done.icpt && !done.guard3 && world.tick >= 171 && e >= 390) orderRole([M, M, M, A, A, A], 'guard3');
     else if (!haveP && !has('rush8') && !has('econ') && e >= 500) orderRole(PULLER, 'puller');
     else if (haveP && has('keep') && !done.keep) { if (e >= 50) orderRole([M], 'keep'); }
+    else if (haveP && has('chk') && !done.chk) { if (e >= 50) orderRole([M], 'chk'); }
     else if (haveP && has('blk') && !done.blk) { if (e >= 50) orderRole([M], 'blk'); }
     else if (has('icpt') && !done.icpt && world.tick >= 50 && e >= 130) orderRole([M, A], 'icpt');
     else if (has('rush8') && !done.rush8 && world.tick >= 20 && e >= 440) orderRole([M, M, M, M, A, A, A], 'rush8');
@@ -211,6 +216,21 @@ function metaEnemyTick(mine, oursC) {
       if (c.x === target.x && c.y === target.y) continue;
       if (range(c, target) <= 1) { if (!creepAt(target.x, target.y) && !(role === 'keep' && range(esc, target) <= 1)) c.move(getDirection(target.x - c.x, target.y - c.y)); continue; }
       stepToward(c, target, 1);
+    } else if (role === 'chk') {
+      const ourEsc = ours.esc && ours.esc.exists ? ours.esc : null;
+      if (!ourEsc) continue;
+      const path = searchPath(ourEsc, { pos: ours.flag, range: 0 }, { costMatrix: structMatrix() }).path;
+      if (path.length < 4) continue;
+      const onPath = (t) => t && path.some((p) => p.x === t.x && p.y === t.y);
+      let t = chkTarget;
+      if (!onPath(t)) {
+        // first park: where the path leaves the centre towards the flag; afterwards 12 cells ahead of the escort
+        const i = chkTarget ? Math.min(12, path.length - 3) : Math.max(0, path.findIndex((p) => Math.abs(p.x - 50) + Math.abs(p.y - 50) >= 16));
+        t = chkTarget = { x: path[i].x, y: path[i].y };
+        world.events.push(`t=${world.tick} enemy chk parks at (${t.x},${t.y})`);
+      }
+      if (c.x === t.x && c.y === t.y) continue;
+      stepToward(c, t, 0);
     } else if (role === 'econ') {
       // stays at home: the stub pays its income as spawn regen
     } else if (role === 'guard3') {

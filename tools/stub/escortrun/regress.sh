@@ -128,3 +128,11 @@ run  map-match1.txt - rush8
 # second puller
 run  map-match4.txt - econ+icpt
 run  map-match1.txt - econ+icpt
+# the league's choke (docs/escort-run-redteam.md): an M1 after their puller parks on OUR path where it leaves the
+# centre and runs 12 cells ahead of our train whenever it has gone around. Open by construction: after the opening one
+# M1 is 50 ticks of income, our keeper goes first (the live field sends M1s to our flag at 51 — ShuP1#3, 6ab8fcb0), and
+# a clearer at 130 comes after their choke has cost us 18-26 ticks
+open map-match4.txt - rev+chk
+open map-match1.txt - rev+chk
+open map-match4.txt - rev+keep+chk
+run  map-match1.txt - rev+keep+chk

@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v23"
+    private const val BOT_VERSION = "v24"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -550,9 +550,9 @@ object EscortRun {
             // центра, часто идёт к СВОЕМУ флагу, а без хранителя наш флаг брал их поздний блокировщик (стенд
             // rev+keep+blk при блокировщике на 51-м: страж на 231-м, поражение на 298-м)
             if (ours > KEEPER_MIN_LEAD && scoutsOn(w, KEEP) == 0 && guard == 0 && squatters.isEmpty() && w.enemies.none { onCell(it, myFlag) }) {
-                // их маршрут раньше хранителя, если хранитель, купленный на 50 тиков позже, всё равно придёт раньше
-                // любого их разведчика: так бил v19 и v21 взломщик лиги (блокировщик на 51-м, хранитель на 101-м)
-                if (!needGuard && rival > keeperEta + Bodies.cost(MOVE) + 3 && chokeOrder(w, e)) return
+                // хранитель — раньше блокировщика их маршрута. v22-v23 ставили блокировщик первым, когда их разведчиков
+                // ещё не видно (так лига била v21, 3-1), и живьём отдали флаг ShuP1#3: его M1, рождённый в тот же 51-й
+                // тик, у центра читался идущим к своему флагу и сел на наш к ~190-му, до нашего хранителя (6ab8fcb0)
                 val body = Bodies.moves(1)
                 if (e >= Bodies.cost(body)) { if (order(w, body, "keeper", "our flag is empty; keeperEta=$keeperEta rivalEta=$rival ours=$ours theirs=$theirs")) scoutQueue.addLast(KEEP); return }
                 saving(w, "keeper", Bodies.cost(body)); return
@@ -654,6 +654,10 @@ object EscortRun {
     }
 
     /** Чужие крипы на НАШЕМ маршруте впереди эскорта (кроме тех, что у нашего флага — это дело стража флага), по порядку пути. */
+    /** Их крипы, хоть раз СТОЯВШИЕ на нашем пути впереди эскорта: блокировщик перебегает и стоящим бывает недолго
+     *  (стенд chk: чистильщик копился и снимался, пока тот бежал), поэтому метка остаётся до его смерти. */
+    private val harassers = HashSet<String>()
+
     private fun routeBlockers(w: World, stillOnly: Boolean = false): List<Pair<Creep, Int>> {
         val esc = w.escort ?: return emptyList()
         val flow = w.escortFlowRaw ?: return emptyList()
@@ -666,16 +670,21 @@ object EscortRun {
     }
 
     private fun clearOrder(w: World, e: Int): Boolean {
-        if (fightersOn(w, CLEAR) > 0) return false
         val esc = w.escort ?: return false
         val flow = w.escortFlowRaw ?: return false
-        val (b, i) = routeBlockers(w, stillOnly = true).firstOrNull() ?: return false
+        // метка: стоящий на нашем пути впереди, и обход его клетки стоит нам не меньше CLEAR_MIN_PENALTY
         val route = Chokes.route(flow, esc)
-        val pen = Chokes.penalty(route, i, if (i == 0) key(esc) else route[i - 1])
-        if (pen < CLEAR_MIN_PENALTY) return false
+        for ((c, i) in routeBlockers(w, stillOnly = true)) {
+            if (idOf(c) in harassers) continue
+            val pen = Chokes.penalty(route, i, if (i == 0) key(esc) else route[i - 1])
+            if (pen >= CLEAR_MIN_PENALTY) { harassers.add(idOf(c)); println("route t=${w.now}: harasser ${idOf(c)} ${Bodies.summaryOf(c)}@(${c.x},${c.y}) costs us $pen") }
+        }
+        harassers.retainAll(w.enemies.mapTo(HashSet()) { idOf(it) })
+        if (fightersOn(w, CLEAR) > 0) return false
+        val b = w.enemies.filter { idOf(it) in harassers }.minByOrNull { dist(it, esc) } ?: return false
         val (body, arrive) = fastHunter(w, b, b.hits, e, listOf(b)) ?: return false
         if (e >= Bodies.cost(body)) {
-            if (order(w, body, "clearer", "on our route ${Bodies.summaryOf(b)}@(${b.x},${b.y}) costs us $pen; arrive=$arrive")) fighterQueue.addLast(CLEAR)
+            if (order(w, body, "clearer", "harasser ${Bodies.summaryOf(b)}@(${b.x},${b.y}); arrive=$arrive")) fighterQueue.addLast(CLEAR)
             return true
         }
         saving(w, "clearer ${Bodies.summary(body)}", Bodies.cost(body)); return true
@@ -1389,6 +1398,7 @@ object EscortRun {
                 role == CLEAR -> {
                     // чистильщик: первый чужой крип на нашем пути; нет — идёт впереди поезда по его маршруту
                     target = routeBlockers(w).firstOrNull()?.first
+                        ?: escort?.let { e -> w.enemies.filter { idOf(it) in harassers }.minByOrNull { dist(it, e) } }
                     why = if (target != null) "clear" else "lead"
                     if (target == null && escort != null) {
                         val r = w.escortFlow?.let { Chokes.route(it, escort) }
