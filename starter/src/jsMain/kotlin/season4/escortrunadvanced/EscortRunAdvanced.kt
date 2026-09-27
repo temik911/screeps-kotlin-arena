@@ -43,6 +43,7 @@ import screeps.api.getRange
 import screeps.api.getTerrainAt
 import screeps.api.getTicks
 import screeps.api.structures.StructureContainer
+import screeps.api.structures.StructureExtension
 import screeps.api.structures.StructureRampart
 import screeps.api.structures.StructureSpawn
 import screeps.api.structures.StructureWall
@@ -122,6 +123,8 @@ object EscortRunAdvanced {
     private const val DEFEND_KEEP = 4
     /** Defenders leave the ramparts only when the open fight leaves them this share of their hit points. */
     private const val DEFEND_OPEN_MARGIN = 0.5
+    /** His fighters this close to a counted one are one group with it. */
+    private const val SALLY_LINK = 6
     /** An operation's way treats every cell this close to his fighters (not by the target) as a wall. */
     private const val DANGER_RADIUS = 3
     /** A breach is worth it while an escort of his stands out of his ramparts this close to his spawn. */
@@ -152,6 +155,10 @@ object EscortRunAdvanced {
     private const val STILL_TICKS = 30
     /** His production rate is measured over this many ticks. */
     private const val PRODUCTION_WINDOW = 300
+    /** His tower's shot falls this much a cell (runtime TOWER_FALLOFF_RANGE 21: 1000 at range 1, 50 at range 20). */
+    private const val TOWER_FALL = 50
+    /** A cell where his tower's shot is this strong or more gets the danger price. */
+    private const val TOWER_DANGER_SHOT = 400
 
     private const val FIGHTER_PRIORITY = 30
     private const val HAULER_PRIORITY = 20
@@ -161,7 +168,8 @@ object EscortRunAdvanced {
 
     private val MELEE = Bodies.interleaved(ATTACK, 5, 5)
     private val RANGED = Bodies.interleaved(RANGED_ATTACK, 5, 5)
-    private val HARVESTER_FIRST = Bodies.body(WORK to 3, MOVE to 1)
+    /** Both harvesters carry: they hand the harvest to the extensions beside their spots (see planWorks). */
+    private val HARVESTER_FIRST = Bodies.body(WORK to 3, CARRY to 1, MOVE to 1)
     /** The second harvester builds the home works and feeds the tower: it carries. */
     private val HARVESTER_NEXT = Bodies.body(WORK to 2, CARRY to 2, MOVE to 1)
     private val HAULER = Bodies.body(CARRY to 2, MOVE to 1)
@@ -173,6 +181,8 @@ object EscortRunAdvanced {
     /** The outpost spawn's own worker steps one cell to its slot. */
     private val PIONEER_WORKER = Bodies.body(WORK to 5, CARRY to 1, MOVE to 1)
     private const val PIONEER_TRIES = 3
+    /** Extensions beside the harvest spots, at most. */
+    private const val EXTENSIONS = 5
     /** After a pioneer dies on its way, the next one waits this long. */
     private const val PIONEER_RETRY = 300
 
@@ -264,8 +274,11 @@ object EscortRunAdvanced {
         val fighters = w.fighters.filter { !it.spawning }
         val homeF = fighters.filter { originOf[idOf(it)] != "outpost" }
         val outF = fighters.filter { originOf[idOf(it)] == "outpost" }
-        decideArmy(w, homeG, homeF, w.mySpawn)
-        runArmy(w, homeG, homeF, w.mySpawn, rallyCells(w), true)
+        // home is the spawn — or, with it razed, where our escorts stand: v13 lost its spawn to stachu3478#2 at 2141 and the
+        // defence, blind with no base, sent eleven fighters to a siege away from the escorts (6ab941cf)
+        val homeBase: Position? = w.mySpawn ?: w.escorts.takeIf { it.isNotEmpty() }?.let { es -> cell(es.sumOf { it.x } / es.size, es.sumOf { it.y } / es.size) }
+        decideArmy(w, homeG, homeF, homeBase)
+        runArmy(w, homeG, homeF, homeBase, rallyCells(w), true)
         val opBase: Position? = w.outpostSpawn ?: outpost?.let { cellOf(it.spawnCell) }
         decideArmy(w, outpostG, outF, opBase)
         runArmy(w, outpostG, outF, opBase, outpostRally(w), false)
@@ -297,7 +310,8 @@ object EscortRunAdvanced {
         for (r in ramparts) if (r.my != true) enemyRamparts[key(r)] = r
         val walls = getObjectsByPrototype(StructureWall::class).filter { it.exists }
         val towers = getObjectsByPrototype(StructureTower::class).filter { it.exists }
-        val blocked: List<Position> = spawns + walls + sources + towers + ramparts.filter { it.my != true }
+        val extensions = getObjectsByPrototype(StructureExtension::class).filter { it.exists }
+        val blocked: List<Position> = spawns + walls + sources + towers + extensions + ramparts.filter { it.my != true }
         DistanceMap.syncStructures(blocked)
         val occupant = HashMap<Int, Creep>()
         for (c in active) occupant[key(c)] = c
@@ -362,7 +376,9 @@ object EscortRunAdvanced {
 
     // ==================== spawn ====================
 
-    private fun energy(w: World) = w.mySpawn?.store?.get(RESOURCE_ENERGY) ?: 0
+    /** What the home spawn can pay: its own store and every extension of ours (the spawn pays from both). */
+    private fun energy(w: World) = (w.mySpawn?.store?.get(RESOURCE_ENERGY) ?: 0) +
+        getObjectsByPrototype(StructureExtension::class).filter { it.exists && it.my == true }.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
 
     private fun runSpawn(w: World) {
         val spawn = w.mySpawn ?: return
@@ -557,10 +573,19 @@ object EscortRunAdvanced {
         // only what the builder on the second spot reaches (range 3): a site out of its reach would hold the one-site
         // queue for good
         val route = descend(f, spots[0]).filter { it !in w.myRamparts && it !in spots && it != key(spawn) && it != tower && cheb(it, spots[1]) <= 3 }
+        // extensions beside the spots: the harvesters put the harvest straight into them every tick and the spawn pays
+        // from them — no pile (a pile loses energy every tick) and no hauler. Measured on six v13 matches: at equal
+        // harvest (10 a tick) our spawn received 5.3 a tick, けろびー's 9.2 — he keeps extensions by his harvester (4,4)
+        // (6,6) and makes 1180-energy bodies from them. The first cell of the haulers' way stays free for the overflow.
+        val keep = route.firstOrNull()
+        val exts = spots.flatMap { s -> DIRECTIONS.map { (dx, dy) -> (s / 100 + dx) * 100 + (s % 100 + dy) } }.distinct()
+            .filter { free(it) && it != tower && it != keep }
+            .sortedBy { e -> -spots.count { s -> cheb(s, e) <= 1 } }.take(EXTENSIONS)
         val list = ArrayList<Pair<String, Int>>()
         for (s in spots) list.add("rampart" to s)
+        for (e in exts) list.add("extension" to e)
         if (tower != null) { list.add("tower" to tower); list.add("rampart" to tower) }
-        for (r in route) list.add("rampart" to r)
+        for (r in route) if (r !in exts) list.add("rampart" to r)
         works = list
         println("works: " + list.joinToString(" ") { "${it.first}${at(cellOf(it.second))}" })
     }
@@ -571,6 +596,7 @@ object EscortRunAdvanced {
         val attacked = attackedAt >= 0
         return when {
             kind == "tower" -> fighters >= 4 || (attacked && fighters >= 1)
+            kind == "extension" -> fighters >= 1
             index < 2 -> fighters >= 1 || attacked
             else -> fighters >= 3 || attacked
         }
@@ -578,6 +604,7 @@ object EscortRunAdvanced {
 
     private fun builtAt(k: Int, kind: String): Boolean = when (kind) {
         "tower" -> getObjectsByPrototype(StructureTower::class).any { it.exists && it.my == true && key(it) == k }
+        "extension" -> getObjectsByPrototype(StructureExtension::class).any { it.exists && it.my == true && key(it) == k }
         else -> getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
     }
 
@@ -591,8 +618,11 @@ object EscortRunAdvanced {
             val (kind, k) = pair
             if (builtAt(k, kind)) continue
             if (!worksGate(kind, i, w)) return
-            val r = if (kind == "tower") createConstructionSite(k / 100, k % 100, StructureTower::class.js)
-                else createConstructionSite(k / 100, k % 100, StructureRampart::class.js)
+            val r = when (kind) {
+                "tower" -> createConstructionSite(k / 100, k % 100, StructureTower::class.js)
+                "extension" -> createConstructionSite(k / 100, k % 100, StructureExtension::class.js)
+                else -> createConstructionSite(k / 100, k % 100, StructureRampart::class.js)
+            }
             println("works t=${w.now}: $kind site ${at(cellOf(k))} err=${r.error}")
             return
         }
@@ -615,7 +645,16 @@ object EscortRunAdvanced {
             return true
         }
         val site = getObjectsByPrototype(ConstructionSite::class).filter { it.exists && it.my == true && getRange(it, h) <= 3 }
-            .firstOrNull { s -> w.occupant[key(s)] == null || isRampartSite(s) } ?: return false
+            .firstOrNull { s -> w.occupant[key(s)] == null || isRampartSite(s) }
+        if (site == null) {
+            // no site: the harvest goes into an extension beside it, harvest and transfer in the same tick
+            val ext = getObjectsByPrototype(StructureExtension::class).firstOrNull {
+                it.exists && it.my == true && getRange(it, h) <= 1 && (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0
+            } ?: return false
+            if (carried > 0) h.transfer(ext, RESOURCE_ENERGY)
+            if (getRange(h, src) <= 1) h.harvest(src)
+            return true
+        }
         if (carried >= BUILD_POWER * Bodies.live(h, WORK)) { h.build(site); return true }
         val pile = w.piles.filter { getRange(it, h) <= 1 }.maxByOrNull { it.amount }
         if (pile != null && (h.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0) h.pickup(pile)
@@ -722,7 +761,10 @@ object EscortRunAdvanced {
             val slot = op.slots.filter { it !in taken }.minByOrNull { getRange(cellOf(it), p) } ?: continue
             taken.add(slot)
             if (key(p) != slot) {
-                val danger = w.enemyArmed.flatMap { e -> (-4..4).flatMap { dx -> (-4..4).map { dy -> cell(e.x + dx, e.y + dy) } } }
+                // round his fighters and round his towers (a pioneer died to the one at (44,46) on (54,52) — 6ab941fb)
+                val tr = (TOWER_POWER_ATTACK - TOWER_DANGER_SHOT) / TOWER_FALL + 1
+                val danger = (w.enemyArmed.flatMap { e -> (-4..4).flatMap { dx -> (-4..4).map { dy -> cell(e.x + dx, e.y + dy) } } } +
+                    hisTowers().flatMap { t -> (-tr..tr).flatMap { dx -> (-tr..tr).map { dy -> cell(t.x + dx, t.y + dy) } } })
                     .filter { DistanceMap.inBounds(it.x, it.y) && getRange(it, cellOf(slot)) > 2 }
                 val f = if (danger.isEmpty()) flowTo("pioneer", cellOf(slot), Bodies.swampCost(p))
                     else DistanceMap.flowFieldTo(cellOf(slot), danger + stillCells, Bodies.swampCost(p))
@@ -829,6 +871,7 @@ object EscortRunAdvanced {
             val x = e.x + dx; val y = e.y + dy
             if (DistanceMap.inBounds(x, y)) cost[x * 100 + y] = DANGER_COST
         }
+        markTowers(cost)
         // no still cells here: the escorts ARE the ones walking (v11's first build blocked their own cells and the
         // trains stood at home with the start given)
         val f = DistanceMap.flowFieldCost(cellOf(flag), cost, ARMY_SWAMP_COST, emptyList())
@@ -1248,6 +1291,7 @@ object EscortRunAdvanced {
                 if (DistanceMap.inBounds(x, y)) { cost[x * 100 + y] = DANGER_COST; any = true }
             }
         }
+        if (markTowers(cost)) any = true
         val f = if (!any) flowTo("army", target, ARMY_SWAMP_COST)
             else DistanceMap.flowFieldCost(target, cost, ARMY_SWAMP_COST, stillCells)
         flowCache[k] = f
@@ -1335,6 +1379,51 @@ object EscortRunAdvanced {
      * could come sooner than that, and so never struck a far escort at all (6ab92e36, 6ab92dd5); the question is not whether
      * he comes but whether we still win when he does.
      */
+    /** The danger price round his towers: a cell where a tower's shot is TOWER_DANGER_SHOT or more costs as much as a
+     *  cell beside his fighter. True if any cell got the price. */
+    private fun markTowers(cost: IntArray): Boolean {
+        var any = false
+        for (tw in hisTowers()) {
+            val r = (TOWER_POWER_ATTACK - TOWER_DANGER_SHOT) / TOWER_FALL + 1
+            for (dx in -r..r) for (dy in -r..r) {
+                val x = tw.x + dx; val y = tw.y + dy
+                if (DistanceMap.inBounds(x, y)) { cost[x * 100 + y] = maxOf(cost[x * 100 + y], DANGER_COST); any = true }
+            }
+        }
+        return any
+    }
+
+    /**
+     * The pass first: while the pass to his base is being broken, a strike on an escort behind it waits if finishing the
+     * walls (their hits over the group's damage) and walking through beats the way round. v13 against けろびー#7/#11 pulled
+     * the crew off the pass for strikes round the centre, under his towers, eleven and fourteen times; the pass stood with
+     * 20 680 and 11 220 hits left — 77 and 42 ticks of one M5A9 — and his escorts waited outside his ramparts 844-1250
+     * (6ab94164, 6ab941fb). The one win came through the pass, open at 725 (6ab94124).
+     */
+    private fun breachFirst(w: World, group: List<Creep>, from: Position, target: Creep): Boolean {
+        val path = breachPath ?: return false
+        if (!breachLeft(w)) return false
+        val left = path.filter { w.walls.containsKey(it) }
+        if (left.isEmpty()) return false
+        // inside a one-cell pass one melee reaches the wall and two ranged behind it
+        val dps = maxOf(1, (group.maxOfOrNull { Bodies.meleeDps(it) } ?: 0) +
+            group.filter { Bodies.isRanged(it) }.map { Bodies.rangedDps(it) }.sortedDescending().take(2).sum())
+        val work = left.sumOf { w.walls[it]?.hits ?: 0 } / dps
+        val through = DistanceMap.flowFieldOpen(target, left.toSet(), ARMY_SWAMP_COST)
+        val start = anchor(through, from) ?: return false
+        val round = pathCells(w, from, target).size
+        return work + through[key(start)] < round
+    }
+
+    /** His towers — they shoot 1000 at range 1, 50 less a cell, once a TOWER_COOLDOWN. */
+    private fun hisTowers() = getObjectsByPrototype(StructureTower::class).filter { it.exists && it.my == false }
+
+    /** His towers' damage per tick at `p`. */
+    private fun towerDpsAt(towers: List<StructureTower>, p: Position): Int = towers.sumOf { tw ->
+        val r = getRange(tw, p)
+        if (r > TOWER_RANGE) 0 else maxOf(0, TOWER_POWER_ATTACK - TOWER_FALL * (maxOf(1, r) - 1)) / TOWER_COOLDOWN
+    }
+
     /** An operation weighed: can the group kill the target, and in which order it fires — "race" (the escort first, the
      *  arena ends with it) or "clear" (his fighters first, then the escort). */
     internal class OpEval(val ok: Boolean, val plan: String, val margin: Double, val desc: String) {
@@ -1367,11 +1456,17 @@ object EscortRunAdvanced {
         val joiners = w.enemyArmed.filter { e ->
             idOf(e) !in ids && others.none { o -> getRange(o, e) <= ESCORT_GUARD_RADIUS && getRange(o, e) < getRange(target, e) }
         }.map { e -> e to maxOf(0, getRange(e, target) - minOf(eta, NOTICE_TICKS)) }
-        val race = Bodies.race(units(group), rampart, target.hits, target.hitsMax,
-            inWay.map { Bodies.unitOf(it) to 0 } + joiners.map { Bodies.unitOf(it.first) to it.second })
+        // his towers: what they take off us along the way (a cell a tick) and what they fire into the fight at the target
+        val towers = hisTowers()
+        val onWay = pathCells(w, from, target).sumOf { k -> towerDpsAt(towers, cellOf(k)) }
+        val atTarget = towerDpsAt(towers, target)
+        val raceUs = units(group).also { Bodies.spreadDamage(it, onWay) }
+        val race = Bodies.race(raceUs, rampart, target.hits, target.hitsMax,
+            inWay.map { Bodies.unitOf(it) to 0 } + joiners.map { Bodies.unitOf(it.first) to it.second }, towerDps = atTarget)
         val dps = maxOf(1, group.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) })
         val done = (rampart + target.hits) / dps
-        val clear = Bodies.fight(units(group), units(inWay + joiners.filter { it.second <= done }.map { it.first }))
+        val clearUs = units(group).also { Bodies.spreadDamage(it, onWay) }
+        val clear = Bodies.fight(clearUs, units(inWay + joiners.filter { it.second <= done }.map { it.first }), towerDps = atTarget)
         val desc = "race=$race clear=$clear way=${if (flow === opFlow(w, target)) "round" else "plain"} eta=$eta inWay=${inWay.size} join=${joiners.count { it.second <= done }}"
         lastOpWhy = desc
         return when {
@@ -1418,6 +1513,7 @@ object EscortRunAdvanced {
             var picked: Pair<Creep, OpEval>? = null
             for (e in w.enemyEscorts.filter { !onRampart(w, it, false) }) {
                 if (from == null) break
+                if (prev != "strike" && breachFirst(w, group, from, e)) continue
                 val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
                 val ev = opEval(w, group, from, e, need)
                 if (ev.ok && (picked == null || getRange(e, from) < getRange(picked.first, from))) picked = e to ev
@@ -1541,7 +1637,16 @@ object EscortRunAdvanced {
 
     private fun holdRamparts(w: World, fighters: List<Creep>, threats: List<Creep>, base: Position?): Set<String> {
         if (threats.isEmpty() || fighters.isEmpty() || base == null) return emptySet()
-        val open = Bodies.fight(units(fighters), units(threats))
+        // his whole group, not the part inside our radius: every fighter of his within SALLY_LINK of one already counted
+        // — stachu3478's M4R5M1 stood at twelve with its M4H3M1 one cell outside, v13 walked out against "one ranged" and
+        // lost twelve M5A5 one by one (6ab94091, 6ab941cf)
+        val his = threats.toMutableList()
+        var grew = true
+        while (grew) {
+            grew = false
+            for (e in w.enemyArmed) if (e !in his && his.any { getRange(it, e) <= SALLY_LINK }) { his.add(e); grew = true }
+        }
+        val open = Bodies.fight(units(fighters), units(his))
         if (open.weWin && open.margin() >= DEFEND_OPEN_MARGIN) return emptySet()
         val spawnKey = w.mySpawn?.let { key(it) }
         val towerCells = works?.filter { it.first == "tower" }?.map { it.second }?.toSet() ?: emptySet()

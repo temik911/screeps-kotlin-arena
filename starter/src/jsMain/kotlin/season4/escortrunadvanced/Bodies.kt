@@ -151,7 +151,7 @@ internal object Bodies {
      * A draw by the horizon (both sides heal more than they take) counts as a loss for us: a fight we cannot finish is
      * not a fight to start.
      */
-    fun fight(ours: List<Unit>, theirs: List<Unit>, horizon: Int = 300): Outcome {
+    fun fight(ours: List<Unit>, theirs: List<Unit>, horizon: Int = 300, towerDps: Int = 0): Outcome {
         val us = ours.filter { it.alive() }.toMutableList()
         val them = theirs.filter { it.alive() }.toMutableList()
         val usStart = us.sumOf { it.total() }
@@ -171,7 +171,7 @@ internal object Bodies {
             for (u in ourMass) mass(them, u.count(RANGED_ATTACK) * RANGED_ATTACK_POWER)
             for (u in theirMass) mass(us, u.count(RANGED_ATTACK) * RANGED_ATTACK_POWER)
             spread(them, ourDmg)
-            spread(us, theirDmg)
+            spread(us, theirDmg + towerDps)
             us.removeAll { !it.alive() }
             them.removeAll { !it.alive() }
             mend(us, ourHeal)
@@ -194,7 +194,7 @@ internal object Bodies {
      * (`theirs` = unit to the tick it arrives) and fire at our weakest. v10's simulation weighed the whole fight and struck
      * nothing while stachu3478#3's M10T40 stood 200 ticks by his flag with no guard nearer than 28 ticks (6ab939c2).
      */
-    fun race(ours: List<Unit>, rampart: Int, escort: Int, escortMax: Int, theirs: List<Pair<Unit, Int>>, horizon: Int = 300): Race {
+    fun race(ours: List<Unit>, rampart: Int, escort: Int, escortMax: Int, theirs: List<Pair<Unit, Int>>, horizon: Int = 300, towerDps: Int = 0): Race {
         val us = ours.filter { it.alive() }.toMutableList()
         val start = us.sumOf { it.total() }
         if (us.isEmpty()) return Race(false, 0, 0, 0)
@@ -207,13 +207,19 @@ internal object Bodies {
             hp -= d
             if (hp <= 0) return Race(true, t, us.sumOf { it.total() }, start)
             if (ramp <= 0) hp = minOf(escortMax, hp + active.sumOf { it.heal() })
-            spread(us, active.sumOf { it.dps() })
+            spread(us, active.sumOf { it.dps() } + towerDps)
             us.removeAll { !it.alive() }
             if (us.isEmpty()) return Race(false, t, 0, start)
             mend(us, us.sumOf { it.heal() })
         }
         return Race(false, horizon, us.sumOf { it.total() }, start)
     }
+
+    /** Damage taken before a fight (his towers along our way), spread on the weakest first. `towerDps` in fight() and
+     *  race() is the same thing during the fight: his towers are not in `theirs` — nothing we fire kills a tower under
+     *  its rampart, and v13's strike groups died to the two in the centre on their way (けろびー, 6ab94164/6ab941fb:
+     *  nine fighters and a pioneer at range 5-13 of (44,46)). */
+    fun spreadDamage(side: List<Unit>, damage: Int) = spread(side, damage)
 
     private val MELEE_PART = ATTACK
     /** How many melee of the other side must be alive for a ranged unit to count on a mass attack. */
