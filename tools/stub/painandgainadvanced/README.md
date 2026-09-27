@@ -28,6 +28,7 @@ REPLAY=6ab91b62 $NODE --import ./register.mjs run.mjs 5000 ghost                
 REPLAY=6ab9349f $NODE --import ./register.mjs run.mjs 5000 chase                            # Hardy#3's model on v17's lost match
 zsh regress.sh gate                                                                         # the gate, one line per scenario
 zsh regress.sh rival                                                                        # the stachu3478#5 set, never in the gate
+zsh ab.sh file://<old build>/.../PainAndGainAdvanced.export.mjs -                              # two builds, 11 records x both sides x chase/line
 ```
 
 Env: `MAP` (default `map-live1.txt`), `START=p1|p2` (the side the bot drives; the other side is the script),
@@ -76,6 +77,9 @@ attacks and shots went to in the first 50 ticks; with `REPLAY` the record's own 
   them; five cells out the ranks collapse into a brawl — melee and healers at one, ranged at two, mass attack when it
   out-damages one shot; with our army dead the clump goes for our pullers. The same machinery as `line` (`formation()`
   with a profile), so a third opponent is a third profile.
+- `chase+sit` — the same clump takes the centre and holds it, turning on our fighters only when one comes within ten of
+  the flag: a fighter who outscores a fortress (5 a tick to its 3) without ever walking to it. It is what the fatigue
+  flag's score rule (v20) is measured on — the rule has to take the flag in time to win on the score.
 - `ghost` (needs `REPLAY`) — his recorded track: every creep of his steps each tick toward the cell the record has it on
   (a path step when it fell behind; a creep of ours on the cell refuses it), pays no fatigue (the record did), fires and
   heals by the `rush` rules, and stands where the record ends if it outlives it. The report adds how often his creeps

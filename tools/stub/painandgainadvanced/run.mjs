@@ -411,6 +411,7 @@ const CHASE = {
   offset: { heavy_melee: 0, melee: 0, heavy_ranged: 2, ranged: 0, heavy_healer: 1, healer: 0, puller: 4 },
   front: ['heavy_melee'], contact: 5, creepNear: 0, creepEvery: 1, backOff: false, flagFirst: true, engage: 8, pullersStay: true,
   yieldAtSlot: true, weighted: true, noWait: true, escort: { heavy_healer: ['heavy_melee'], healer: ['melee', 'heavy_melee'] },
+  pullersToo: true,
 };
 function lineKey(c) {
   const key = c.id.replace(/^pg_player\d_/, '').replace(/_\d+$/, '');
@@ -478,8 +479,19 @@ function formation(all, ours, P) {
   const mine = P.pullersStay ? all.filter((c) => c.role !== 'puller') : all;
   if (!mine.length) return;
   const G0 = P.goal, OFF = P.offset;
-  const goals = ours.filter((o) => o.role !== 'puller');
-  const targets = goals.length ? goals : ours;
+  // Hardy#3 (chase) walks at the nearest creep of ours, pullers included: v20's second puller, waiting unguarded beside
+  // our fatigue flag, drew his army south at t=100-200 of two live matches (6ab94ce2, 6ab94cef) while v19's, on the flag
+  // under its fed tower, was farther from him than our army; stachu3478#5 (line) is measured on our fighters only
+  const goals = ours.filter((o) => P.pullersToo || o.role !== 'puller');
+  let targets = goals.length ? goals : ours;
+  // ... and as ONE body: the creep of ours nearest (by path) to his clump's middle is the target of all of them — with
+  // every creep walking to its own nearest the clump split between the puller and our army, which live it never did
+  if (P.pullersToo && targets.length > 1) {
+    const mx = Math.round(mine.reduce((a, c) => a + c.x, 0) / mine.length), my = Math.round(mine.reduce((a, c) => a + c.y, 0) / mine.length);
+    const near = mine.slice().sort((a, b) => (Math.abs(a.x - mx) + Math.abs(a.y - my)) - (Math.abs(b.x - mx) + Math.abs(b.y - my)))[0];
+    const from = P.weighted ? flowTo(near.x, near.y) : steps([near]);
+    targets = [targets.slice().sort((a, b) => from[idx(a.x, a.y)] - from[idx(b.x, b.y)])[0]];
+  }
   if (!targets.length) return;
   // distances: steps (every cell 1), or with `weighted` the path cost (plain 1, swamp 5 — a pathfinder's route, which
   // walks round a swamp where the heavies would pay ten ticks a cell)

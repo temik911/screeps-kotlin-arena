@@ -269,16 +269,17 @@ object PainAndGainAdvanced {
             // the fatigue flag doubles our own fatigue, and its owner pays it in every step of a march and of a fight:
             // v19 took it at t=61 with the army still 10-15 cells out, the heavies' step went from 2 ticks to 4, the
             // army reached its fortress at t≈120 instead of ≈90, and Hardy#3 walking behind it caught its tail at the
-            // pocket's mouth, 13 lost for 7 by t=200. So the puller waits beside it, between the tower and the box,
-            // and steps on when `fatigueDue` says its fatigue can no longer cost a fight or the score needs its 5; a
-            // tower that is not ours yet does not cover it, so while it waits it keeps away from his guns like a
-            // puller on a post without a tower
+            // pocket's mouth, 13 lost for 7 by t=200. So the puller goes to it only when `fatigueDue` says its fatigue
+            // can no longer cost a fight or the score needs its 5, and until then waits in the fortress beside its
+            // flag: waiting by the fatigue flag itself, under a tower not yet ours, it was the creep of ours nearest
+            // to Hardy#3, who walks at the nearest — his army went south after it at t=100-200 of two live matches and
+            // came to the fortress a hundred ticks late, onto the end of an army standing in a column (both lost)
             val waiting = post.effectType == EFF_FATIGUE && post.my != true && !fatigueDue(post)
             // and a puller on the hits-loss flag loses a hit a tick with no healer in reach: below PULLER_MEND of its
             // hits it walks to the army to be healed, and goes back full
             if (tower == null && p.hits < p.hitsMax * PULLER_MEND) mending.add(p.id)
             if (p.hits >= p.hitsMax - 50) mending.remove(p.id)
-            if ((tower == null || waiting) && (danger || p.id in mending)) {
+            if (tower == null && (danger || p.id in mending)) {
                 // to the healers if we have any, else under our fed tower, which heals it: the last creep of ours in a
                 // lost fight died of our own hits-loss flag at t=2600 while we led 28 077 to 0, with 1300 ticks to go
                 // before the lead would have ended the match
@@ -292,11 +293,14 @@ object PainAndGainAdvanced {
             }
             val box = containers.filter { Grid.range(it.x, it.y, post.x, post.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
             if (waiting) {
-                val spot = besideFlag(post, tower, box)
+                val home = fortressFlag() ?: post
+                val homeTower = towers.firstOrNull { Grid.range(it.x, it.y, home.x, home.y) <= 1 }
+                val homeBox = containers.filter { Grid.range(it.x, it.y, home.x, home.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
+                val spot = besideFlag(home, homeTower, homeBox)
                 if (p.cell == spot) {
                     hold(p)
-                    if (box != null && Grid.range(p.x, p.y, box.x, box.y) <= 1 && (box.store[RESOURCE_ENERGY] ?: 0) > 0 && p.energy <= p.carry * CARRY_CAPACITY - 50)
-                        p.c.withdraw(box, RESOURCE_ENERGY)
+                    if (homeBox != null && Grid.range(p.x, p.y, homeBox.x, homeBox.y) <= 1 && (homeBox.store[RESOURCE_ENERGY] ?: 0) > 0 && p.energy <= p.carry * CARRY_CAPACITY - 50)
+                        p.c.withdraw(homeBox, RESOURCE_ENERGY)
                 } else stepToward(p, Grid.to(Grid.xOf(spot), Grid.yOf(spot), if (p.weight == 0) 1 else 5), 100)
                 continue
             }
