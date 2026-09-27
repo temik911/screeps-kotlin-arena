@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 15
+const val BOT_VERSION = 16
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -123,6 +123,8 @@ object EscortRunAdvanced {
     private const val DEFEND_KEEP = 4
     /** Defenders leave the ramparts only when the open fight leaves them this share of their hit points. */
     private const val DEFEND_OPEN_MARGIN = 0.5
+    /** The army is adequate — investments may go on — when it beats his moving fighters with this share left. */
+    private const val ADEQUATE_MARGIN = 0.2
     /** His fighters this close to a counted one are one group with it. */
     private const val SALLY_LINK = 6
     /** An operation's way treats every cell this close to his fighters (not by the target) as a wall. */
@@ -400,12 +402,12 @@ object EscortRunAdvanced {
             // flags long before a race through the centre could be, and every stronger bot of the field wins late
             // (stachu3478#3 ~950, けろびー ~1700): inside a one-cell pass one melee reaches the wall, so the wall falls at
             // the pace of the strongest one
-            (breachLeft(w) || corridorLeft(w)) && w.fighters.isNotEmpty() && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
+            (breachLeft(w) || corridorLeft(w)) && w.fighters.isNotEmpty() && armyAdequate(w) && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
             // the convoy's pullers once home has its guard: M{need} per escort for the convoy's period
             puller != null -> { pullerFor = puller.second; puller.first }
             // the outpost's pioneer: the second economy
             outpost != null && w.outpostSpawn == null && w.pioneers.isEmpty() && pioneersSent < PIONEER_TRIES &&
-                w.fighters.size >= 2 && pioneerOk -> PIONEER
+                w.fighters.size >= 2 && armyAdequate(w) && pioneerOk -> PIONEER
             else -> nextFighter(w)
         }
         if (energy(w) < Bodies.cost(order)) return
@@ -590,15 +592,39 @@ object EscortRunAdvanced {
         println("works: " + list.joinToString(" ") { "${it.first}${at(cellOf(it.second))}" })
     }
 
-    /** How many fighters must stand before each kind is built, unless home has been attacked. */
+    private var adequateAt = -1
+    private var adequateVal = false
+
+    /**
+     * The army first: home's fighters beat every fighter of his that is on the move or near home, with a fifth of
+     * their hits to spare. Until then the energy goes into fighters, not into extensions, far ramparts, a breaker or a
+     * pioneer. v15 against 76561198870429455#5 made one M5A5 at 225 and the next fighter at 933 — between them 800 of
+     * extensions, a 1250 tower (opened by two M2A1 at the gate), ramparts, a breaker and a pioneer (6ab949ac).
+     */
+    private fun armyAdequate(w: World): Boolean {
+        if (adequateAt == w.now) return adequateVal
+        val home = w.fighters.filter { originOf[idOf(it)] != "outpost" && !it.spawning }
+        val base = w.mySpawn
+        val threats = w.enemyArmed.filter { mobile(w, it) || (base != null && getRange(it, base) <= HOME_RADIUS + DEFEND_KEEP) }
+        val v = if (threats.isEmpty()) home.isNotEmpty() else {
+            val sim = Bodies.fight(units(home), units(threats))
+            sim.weWin && sim.margin() >= ADEQUATE_MARGIN
+        }
+        adequateAt = w.now; adequateVal = v
+        return v
+    }
+
+    /** What must hold before each kind of home work is built. The spot ramparts come with the first fighter (cheap and
+     *  the harvesters live under them); extensions and far ramparts once the army is adequate; the tower when home is
+     *  attacked by what the army cannot beat, or once the army is adequate and six strong. */
     private fun worksGate(kind: String, index: Int, w: World): Boolean {
         val fighters = w.fighters.size
         val attacked = attackedAt >= 0
         return when {
-            kind == "tower" -> fighters >= 4 || (attacked && fighters >= 1)
-            kind == "extension" -> fighters >= 1
+            kind == "tower" -> (attacked && fighters >= 1 && !armyAdequate(w)) || (fighters >= 6 && armyAdequate(w))
+            kind == "extension" -> fighters >= 1 && armyAdequate(w)
             index < 2 -> fighters >= 1 || attacked
-            else -> fighters >= 3 || attacked
+            else -> fighters >= 3 && armyAdequate(w)
         }
     }
 
@@ -912,7 +938,7 @@ object EscortRunAdvanced {
         val longest = w.escorts.maxOfOrNull { e -> plan[idOf(e)]?.let { pathCells(w, e, cellOf(it)).size } ?: 0 } ?: 0
         // three trains are three targets and the guard is where one of them is: half of it must win alone. v11's second
         // build started with one guard against two M2A1 and the hunters took the train it was not beside (stand, hunt)
-        val half = guard.sortedByDescending { Bodies.meleeDps(it) + Bodies.rangedDps(it) }.take((guard.size + 1) / 2)
+        val half = guard.sortedByDescending { Bodies.meleeDps(it) + Bodies.rangedDps(it) }.take(guard.size / 2)
         val sim = Bodies.fight(units(half), units(convoyThreats(w, plan)) + reinforcements(w, longest * (CONVOY_PERIOD + 1)))
         convoySimAt = w.now; convoySimVal = sim
         return sim
@@ -1761,7 +1787,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
