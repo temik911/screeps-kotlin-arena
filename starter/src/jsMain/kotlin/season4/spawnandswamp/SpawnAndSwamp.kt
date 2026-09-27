@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 204
+    private const val BOT_VERSION = 205
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6656,6 +6656,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_REOPEN = true
     /** A recall off a winning siege waits while the house outlasts the siege left and the walk back (v203). */
     private const val USE_RECALL_OUTLASTS = true
+    /** The raid's race counts the fire of its straight walk, and a strike it takes is walked straight (v205). */
+    private const val USE_RAID_PATH_FIRE = true
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
@@ -6753,7 +6755,8 @@ object SpawnAndSwamp {
      * damage takes the target's `left` hits before his guns — each from the tick it walks within its reach of the target,
      * over the ground at its own pace — take the weakest raider's hits; the pair is worth its next builders.
      */
-    private fun raidOutlasts(ctx: Ctx, raiders: List<Creep>, target: Position, left: Int, field: IntArray, healed: Boolean = false): Boolean {
+    private fun raidOutlasts(ctx: Ctx, raiders: List<Creep>, target: Position, left: Int, field: IntArray, healed: Boolean = false,
+                             pathFire: DoubleArray? = null): Boolean {
         // A WALKING CREEP AS FAST AS THE PAIR IS NOT STRUCK (v189). The race took the target as standing, and his builder on
         // plain walks a cell a tick like the pair: against けろびー#50 pairs chased escorted builders for 50-85 ticks with no
         // strike and lost 900-1230 of their hits (in the wins 0-30), the builder living on 768-952 ticks. A creep that
@@ -6800,9 +6803,25 @@ object SpawnAndSwamp {
             }
             // …and his gun at the target reaches the pair while it is still on its way in, from its reach off (v189)
             for ((a, d, reach) in fire) if (t > a && (t > first || (USE_RAID_RACE_EXIT && t + reach > first))) taken += d
+            // …and the walk's own fire, cell by cell, before the pair is there (v205, see raidPathFire)
+            if (pathFire != null && t <= first && t - 1 < pathFire.size) taken += pathFire[t - 1]
             if (taken >= weakest) return false
         }
         return false
+    }
+
+    /** The fire the pair takes on its straight walk to `target` (v205): the walk found on a matrix of obstacles only, and
+     *  for each of its cells — a tick each, the pair's pace on any ground — the damage of his armed creeps that reach
+     *  that cell from where they stand (ranged within three, melee next to it). Null when there is no walk. */
+    private fun raidPathFire(ctx: Ctx, lead: Creep, target: Position): DoubleArray? {
+        val path = searchPath(lead, SearchGoal(pos = target, range = 1),
+            SearchPathOptions(costMatrix = InfluenceMap.passCostMatrix(ctx.enemyCreeps, ctx.blocked), plainCost = 2, swampCost = 2)).path
+        if (path.isEmpty()) return null
+        val guns = ctx.combatEnemies.map { it to InfluenceMap.profileOf(it) }.filter { (_, p) -> p.ranged + p.melee > 0.0 }
+        return DoubleArray(path.size) { i ->
+            val c = path[i]
+            guns.sumOf { (e, p) -> val r = getRange(e, c); (if (r <= RANGED_RANGE) p.ranged else 0.0) + (if (r <= 1) p.melee else 0.0) }
+        }
     }
 
     private fun raidWanted(ctx: Ctx): Boolean {
@@ -6998,11 +7017,17 @@ object SpawnAndSwamp {
         // is left to `finishing` and the retreat as before
         val raced = USE_RAID_RACE && target != null && raiders.none { getRange(it, pos(target)) <= 1 } &&
             (target.id !in spawnIds || rampartOn(ctx, pos(target)) <= 0)
+        // THE WALK'S FIRE IN THE RACE, AND THEN THE WALK STRAIGHT (v205). The race priced his fire only from the pair's
+        // arrival, and the walk went round all fire on a matrix priced for a hauler: against けろびー (v200-v201) the pair
+        // reached his first field builder 22-83 ticks late in all five draws while he raised a second field spawn; walked
+        // straight without the walk's fire in the race (v202) the pairs died on the way (4-0-2 / 2-2-2). With the walk's
+        // fire counted, the race that says "strike" says it of the straight walk, and the pair walks it
+        val walkFire = if (!USE_RAID_PATH_FIRE || !raced) null else raidPathFire(ctx, lead, pos(target!!))
         val strikeFits = if (raced) run {
             val t: GameObject = target!!
             val builder = ctx.enemyCreeps.firstOrNull { it.id == t.id }
-            if (builder != null) outlasts(builder)
-            else raidOutlasts(ctx, raiders, pos(t), ctx.enemySpawns.firstOrNull { it.id == t.id }?.hits ?: SPAWN_HITS, flowTo(ctx, pos(t)))
+            if (builder != null) (if (walkFire != null) raidOutlasts(ctx, raiders, builder, builder.hits, raceField(ctx, builder), pathFire = walkFire) else outlasts(builder))
+            else raidOutlasts(ctx, raiders, pos(t), ctx.enemySpawns.firstOrNull { it.id == t.id }?.hits ?: SPAWN_HITS, flowTo(ctx, pos(t)), pathFire = walkFire)
         } else target == null || target.id !in spawnIds || !USE_RAID_LAST || (!chipping && raiders.any { getRange(it, pos(target)) <= 1 }) || run {
             val shield = rampartOn(ctx, pos(target))
             if (shield <= 0) return@run true
@@ -7075,7 +7100,7 @@ object SpawnAndSwamp {
         // race had already accepted: against けろびー (v200-v201) the pair reached his first field builder 22-83 ticks
         // later than its shortest walk in the draws (half a tick in the wins), arriving with 3120-3600 of its 3600 hits,
         // while the builder raised his second field spawn in those ticks — all five v200+ draws with him went so
-        val strikeOpts = if (USE_RAID_DIRECT_STRIKE && strikeFits && !raidHome && target != null)
+        val strikeOpts = if ((USE_RAID_DIRECT_STRIKE || (USE_RAID_PATH_FIRE && walkFire != null)) && strikeFits && !raidHome && target != null)
             SearchPathOptions(costMatrix = InfluenceMap.passCostMatrix(ctx.enemyCreeps, ctx.blocked), plainCost = 2, swampCost = 2) else opts
         // …WAITING BY THE TARGET, AWAY ONLY FROM A GUN THAT REACHES IT (v179): fleeing every gun within twelve cells kept the
         // pair 20-49 cells from his main in 88 % of the free ticks against kerobi — his M5R5 walk a ring 20-45 cells round
