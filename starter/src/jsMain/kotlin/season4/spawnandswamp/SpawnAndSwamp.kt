@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 183
+    private const val BOT_VERSION = 184
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6450,6 +6450,8 @@ object SpawnAndSwamp {
     private const val USE_HUNTER_NOT_WAITED = true
     /** The raid enters a strike on a bare target only when the pair outlasts the kill under his guns (raidOutlasts, v183). */
     private const val USE_RAID_RACE = true
+    /** The pair is re-bought for his builder in the field with any number of his spawns, while the clock covers it (v184). */
+    private const val USE_RAID_AGAIN_ANY = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6577,8 +6579,19 @@ object SpawnAndSwamp {
         // (v174: a window that closed with the pair half-bought left raidOrdered at 1, and no re-buy ever fired again —
         // against kerobi#50 his main stood at 4810 for the last 660 ticks with nobody striking it)
         val pairClosed = raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil())
-        if (USE_RAID_BUILDERS_FIRST && pairClosed && raidAlive(ctx) < RAID_SIZE && getTicks() <= RAID_REBUY_UNTIL &&
-            ctx.enemySpawns.size <= RAID_REBUY_SPAWNS && ctx.enemyCreeps.any { isHisBuilder(it) && ctx.enemySpawns.all { sp -> getRange(sp, it) >= RAID_FIELD_RANGE } }) {
+        // …WITH ANY NUMBER OF HIS SPAWNS, WHILE THE CLOCK COVERS IT (v184). With three spawns of his or more the pair was
+        // never re-bought for a builder, and a builder by any of his spawns was not "in the field": against けろびー#48 (the
+        // 19-spawn draw) no raider lived after 699 while his builders raised spawn after spawn. More of his spawns is more
+        // bare targets, not fewer; and since v183 the pair enters only strikes it outlasts. The cut is what is left of the
+        // match — the pair's birth, its walk to the builder and the kill — as for the last-stand pair, and the field is
+        // the distance from his main, where his fort is built
+        val hisHome = ctx.enemySpawns.firstOrNull { it.id == hisMainId }
+        fun againFits(b: Creep): Boolean = arenaInfo.ticksLimit - getTicks() > RAID_SIZE * RAID_BODY.size * CREEP_SPAWN_TIME +
+            getRange(ctx.mySpawn, b) + b.hits / (RAID_SIZE * ATTACK_POWER * RAID_BODY.count { it == ATTACK })
+        if (USE_RAID_BUILDERS_FIRST && pairClosed && raidAlive(ctx) < RAID_SIZE &&
+            (USE_RAID_AGAIN_ANY || (getTicks() <= RAID_REBUY_UNTIL && ctx.enemySpawns.size <= RAID_REBUY_SPAWNS)) &&
+            ctx.enemyCreeps.any { isHisBuilder(it) && (if (USE_RAID_AGAIN_ANY) (hisHome == null || getRange(hisHome, it) >= RAID_FIELD_RANGE) && againFits(it)
+                else ctx.enemySpawns.all { sp -> getRange(sp, it) >= RAID_FIELD_RANGE }) }) {
             raidOrdered = if (USE_RAID_TOPUP) raidAlive(ctx) else 0
             raidRebuyAt = getTicks()
             raidHome = false
