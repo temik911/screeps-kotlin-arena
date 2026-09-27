@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v18"
+    private const val BOT_VERSION = "v19"
 
     private const val LOG_EVERY = 50
 
@@ -111,6 +111,10 @@ object SpawnAndSwampAdvanced {
      *  против stachu3478 вышел трижды (прогон обещал 57 %, 39 % и 30 %) и трижды отошёл с потерями: прогон считает
      *  бой всей волной разом, а волна приходит растянутой — половина, пока калибровки по замерам нет. */
     private const val PUSH_KEEP = 0.5
+    /** Нарушитель — его строитель или площадка спавна/башни у нашего источника в стольких клетках (спавн базы ставится в
+     *  двух шагах от источника, строитель — рядом с ним). */
+    private const val INTRUDER_SOURCE_RANGE = 4
+
     /** У его спавна «стоит» то, что в стольких клетках от него: защитники, которые успеют к удару по этому спавну. */
     private const val STRIKE_GUARD_RANGE = 15
 
@@ -606,7 +610,9 @@ object SpawnAndSwampAdvanced {
 
     // ---------- дебют ----------
 
-    /** Домашний источник — тот, до которого рабочий дойдёт раньше; при равенстве — дальше от соперника. */
+    /** Домашний источник — тот, до которого рабочий дойдёт раньше; при равенстве — БЛИЖЕ к сопернику: дальний и так
+     *  останется нашим для расширения, а спорный займёт он (stachu3478 ставил спавн у нашего второго домашнего
+     *  источника на ~820-м тике, пока v17 расширялся на центральный). */
     private fun openingPlan(w: Creep, sources: Array<Source>, all: Array<GameObject>) {
         val blocked = blockedCells(all)
         val enemy = enemyStart
@@ -614,7 +620,7 @@ object SpawnAndSwampAdvanced {
             val ticks = ticksTo(w, s, 1)
             val far = if (enemy == null) 0 else getRange(cell(enemy), s)
             Triple(s, ticks, far)
-        }.sortedWith(compareBy<Triple<Source, Int, Int>> { it.second }.thenByDescending { it.third })
+        }.sortedWith(compareBy<Triple<Source, Int, Int>> { it.second }.thenBy { it.third })
         println("opening: sources by arrival " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})t=${it.second}" })
         for ((src, ticks, _) in ranked) {
             val base = planBase(src, w, blocked) ?: continue
@@ -1334,6 +1340,28 @@ object SpawnAndSwampAdvanced {
             val ours = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && getRange(tw, target) <= TOWER_RANGE }.map { simTower(it.hits ?: TOWER_HITS) }
             engage = simulate(ours, local.map { simOf(it) }).win
         }
+        // нарушители: его строитель или площадка спавна/башни на нашей территории — у наших спавнов или у «наших»
+        // источников (к ним ближе наш спавн, чем его). Для угроз они невидимы (не боевые), и v17 спокойно смотрел, как
+        // stachu3478 170 тиков строит спавн у нашего источника. Охотники — ближайшие бойцы дома, сколько нужно, чтобы
+        // прогон против его бойцов рядом с нарушителем выиграл с запасом
+        val hunters = HashSet<String>()
+        var intruder: GameObject? = null
+        if (threats.isEmpty() && homeGroup.isNotEmpty()) {
+            intruder = intruders(all, theirs, homeSpawns).minByOrNull { i -> homeGroup.minOf { getRange(it, i) } }
+            val it0 = intruder
+            if (it0 != null) {
+                val guards = enemyCombat.filter { getRange(it, it0) <= LOCAL_RANGE }.map { simOf(it) }
+                val sorted = homeGroup.sortedBy { getRange(it, it0) }
+                for (k in 1..sorted.size) {
+                    val h = sorted.take(k)
+                    val r = simulate(h.map { simOf(it) }, guards)
+                    if (guards.isEmpty() || (r.win && r.keep >= PUSH_KEEP)) { h.forEach { hunters.add(idOf(it)) }; break }
+                }
+                if (hunters.isNotEmpty() && t % 10 == 0) println("hunt t=$t ${describe(it0)} hunters=${hunters.size} guards=${guards.size}")
+                if (hunters.isEmpty()) intruder = null
+            }
+        }
+        siteWatch(t, all, mine)
         val blocked = blockedCells(all)
         val reserved = reservedCells(all)
         // допуск сбора растёт с толпой: квадрат со стороной 2r+1 вмещает всех вдвое с запасом (v9: 35 бойцов у точки с
@@ -1344,6 +1372,13 @@ object SpawnAndSwampAdvanced {
             shoot(f, theirs, enemyObjects)
             if (healAct(f, mine, homeGroup)) continue
             if (fleeMelee(f, enemyCombat)) continue
+            val prey = intruder
+            if (prey != null && idOf(f) in hunters) {
+                // строителя бьём с дальности стрелка; на площадку встаём — во внешнем мире чужую площадку давят ногой
+                val want = if (prey is ConstructionSite) 0 else RANGED_RANGE - 1
+                if (getRange(f, prey) > want) f.moveTo(prey)
+                continue
+            }
             val onRampart = myRampartAt(Pos(f.x, f.y), all)
             if (engage && target != null) {
                 if (getRange(f, target) > RANGED_RANGE) f.moveTo(target)
@@ -1372,6 +1407,38 @@ object SpawnAndSwampAdvanced {
                 val rally = rallyFor(anchor, reserved, blocked)
                 if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) f.moveTo(cell(rally))
             }
+        }
+    }
+
+    /** Его небоевые крипы и площадки спавна/башни у наших спавнов (домашняя зона) или у «наших» источников. */
+    private fun intruders(all: Array<GameObject>, theirs: List<Creep>, homeSpawns: List<GameObject>): List<GameObject> {
+        val hisSpawns = all.filter { it is StructureSpawn && it.asDynamic().my == false }
+        val ours = all.filter { it is Source }.filter { s ->
+            val us = homeSpawns.minOfOrNull { getRange(it, s) } ?: Int.MAX_VALUE
+            val him = hisSpawns.minOfOrNull { getRange(it, s) } ?: Int.MAX_VALUE
+            us < him || bases.any { b -> b.sourceId == idOf(s) } || expansion?.sourceId == idOf(s)
+        }
+        fun inZone(o: GameObject) = homeSpawns.any { getRange(o, it) <= HOME_THREAT_RANGE + THREAT_RELEASE } ||
+            ours.any { getRange(o, it) <= INTRUDER_SOURCE_RANGE }
+        val towerCost = CONSTRUCTION_COST.asDynamic()["StructureTower"].unsafeCast<Int?>()
+        val sites = all.filter { it is ConstructionSite && it.asDynamic().my == false }.unsafeCast<List<ConstructionSite>>()
+            .filter { isSpawnSite(it) || it.progressTotal == towerCost }
+        return theirs.filter { !isCombat(it) && inZone(it) } + sites.filter { inZone(it) }
+    }
+
+    /** Замер движка: исчезает ли его площадка, на которую встал наш крип. */
+    private val siteStoodOn = HashMap<String, Int>()
+
+    private fun siteWatch(t: Int, all: Array<GameObject>, mine: List<Creep>) {
+        val sites = all.filter { it is ConstructionSite && it.asDynamic().my == false }
+        for (s in sites) if (mine.any { it.x == s.x && it.y == s.y } && idOf(s) !in siteStoodOn) {
+            siteStoodOn[idOf(s)] = t
+            println("probe t=$t stand on his site ${describe(s)}")
+        }
+        val live = sites.map { idOf(it) }.toSet()
+        for ((id, at) in siteStoodOn.entries.toList()) if (id !in live && at >= 0) {
+            println("probe t=$t his site stood on at t=$at is gone")
+            siteStoodOn[id] = -1
         }
     }
 
