@@ -133,6 +133,6 @@ run  map-match1.txt - econ+icpt
 # M1 is 50 ticks of income, our keeper goes first (the live field sends M1s to our flag at 51 — ShuP1#3, 6ab8fcb0), and
 # a clearer at 130 comes after their choke has cost us 18-26 ticks
 open map-match4.txt - rev+chk
-open map-match1.txt - rev+chk
+run  map-match1.txt - rev+chk
 open map-match4.txt - rev+keep+chk
 run  map-match1.txt - rev+keep+chk
