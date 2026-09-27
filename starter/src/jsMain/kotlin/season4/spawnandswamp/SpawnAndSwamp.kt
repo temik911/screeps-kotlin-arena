@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 212
+    private const val BOT_VERSION = 213
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4296,7 +4296,21 @@ object SpawnAndSwamp {
             pushing && waveMembers.isNotEmpty() -> true
             else -> false
         }
-        val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN
+        // THE HOLD WAITS FOR THE WAVE ALREADY ON ITS WAY (v213). With the post empty siegeJoin is `lose`, the budget took
+        // SIEGE_LIMIT, and the hold turned "late" while the next wave was marching: against marlyman#443 (v209) at 1660
+        // the front (M1A1×6, three M8R4, all whole) went in alone, took 1434 off his rampart and died by 1730; the second
+        // wave (three M12A5, M11R3, M8R4), out since 1658, came alone at 1855, took the rampart and his spawn to 2220 and
+        // died — about five ticks of its three melee short. The hold is in time too when the wave's members behind the
+        // front reach it and the front and they together take his spawn before the clock: all of them at the slowest one's
+        // arrival, the front waiting for them — which is what the hold is
+        val waveBehind = if (!USE_HOLD_WAITS_WAVE || enemySpawn == null) emptyList() else
+            waveMembers.filter { m -> waveFront.none { it.id == m.id } && liveMoves(m) > 0 }
+        val waveInTime = waveBehind.isNotEmpty() && run {
+            val arrive = travelTicksOf(waveBehind, assaultFlow, spawnFlow).coerceAtMost(arenaInfo.ticksLimit)
+            val together = siegeOutcome(waveFront + waveBehind, frontAttrition, siegeDefenders, siegeTowers, enemySpawn!!, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, etas = defEtas, arrive = arrive)
+            together.win && remaining > budget(arrive, together) + LATE_MARGIN
+        }
+        val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN || waveInTime
         // (v196) the wave with its own latecomers wins, and the post would not end the siege sooner: nothing to hold for
         val goWave = USE_WAVE_LATECOMERS && siegeGoWave.win && !(siegeJoin.win && siegeJoin.better(siegeGoWave))
         siegeHold = newPushing && !siegeGo.win && !goWave && waveMembers.isNotEmpty() && !frontCovered && holdInTime
@@ -6705,6 +6719,9 @@ object SpawnAndSwamp {
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
     private const val USE_NO_FUTILE_CHASE = true
+    /** The hold is in time while the wave's own members behind the front arrive and the siege with them ends before
+     *  the clock (v213). */
+    private const val USE_HOLD_WAITS_WAVE = true
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
