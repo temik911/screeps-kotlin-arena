@@ -369,9 +369,15 @@ internal class Deal(
     val hisMelee = armedEnemies.filter { InfluenceMap.profileOf(it).melee > 0.0 }
     // СТРЕЛОК НЕ ВЫХОДИТ ИЗ ДАЛЬНОСТИ ЕГО СТВОЛОВ, ПОКА У НЕГО НЕТ МИЛИ (v697, см. USE_RANGED_HOLDS_REACH_VS_GUNS): против
     // одних стрелков с лекарями перестрелку решает, чьи стволы в дальности, а шаг назад при равной скорости дистанции не даёт
-    private val holdsReach = USE_RANGED_HOLDS_REACH_VS_GUNS && armedEnemies.isNotEmpty() && hisMelee.isEmpty()
+    private val gunsOnly = armedEnemies.isNotEmpty() && hisMelee.isEmpty()
+    private val holdsReach = USE_RANGED_HOLDS_REACH_VS_GUNS && gunsOnly
     private fun reachesArmed(p: Position) = armedEnemies.any { getRange(p, it) <= RANGED_RANGE }
     private fun keepsReach(c: Creep) = holdsReach && hasRanged(c) && reachesArmed(c)
+    /** клетка вплотную к клетке нашего стрелка (назначенной или нынешней) и не ближе к его вооружённым, чем она (v698) */
+    private fun behindRanged(p: Position) = rangeds.any { r ->
+        val q = cellOf(r)
+        maxOf(abs(q.x - p.x), abs(q.y - p.y)) <= 1 && foeDist(p.x, p.y) >= foeDist(q.x, q.y)
+    }
     // СОГЛАСОВАННОСТЬ СТРОЯ (v200, оператор: «все ходы должны быть согласованными... не должно быть такого, что
     // наш крип пошёл в наступление без прикрытия; командир не должен отправлять крипов в строй врага, если он там
     // может сильно пострадать и без возможности быть вылеченным»). Клетка крипа считается ОТНОСИТЕЛЬНО уже
@@ -943,9 +949,15 @@ internal class Deal(
             // из первых — поставленных вплотную к теряющему хиты; снимается ДО раздачи — насыщение меняет режим следующему
             val fireMode = !met && rec.need.deliveryFireMode(c, living(army))
             rec.hfireAll.n++; if (fireMode) rec.hfireN.n++
-            if (!met) placeScored(c, 2, intentOf(c)).also { placed ->
+            // ЛЕКАРЬ ВПЛОТНУЮ ПОЗАДИ СТРЕЛКА, ПОКА У НЕГО НЕТ МИЛИ (v698, см. USE_HEALER_BEHIND_RANGED_VS_GUNS): клетка —
+            // вплотную к клетке нашего стрелка и не ближе к его вооружённым, чем она; нет такой — оценка как была
+            val behind = USE_HEALER_BEHIND_RANGED_VS_GUNS && gunsOnly && rangeds.isNotEmpty()
+            val placedBehind = !met && behind && placeScored(c, 2, intentOf(c), bound = { p -> behindRanged(p) })
+            if (placedBehind) rec.healBehind.n++
+            if (!met && !placedBehind) placeScored(c, 2, intentOf(c)).also { placed ->
                 if (placed) out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
             }
+            if (placedBehind) out[c.id]?.let { rec.need.saturateHeal(c, it.x, it.y, living(army)) }
             // ...и добор тоже вне досягаемости, пока такая клетка есть (v234)
             if (c.id !in out) place(c, { true }, { p -> danOf(c, p.key) })
             adjacencyGauge(c, fireMode)

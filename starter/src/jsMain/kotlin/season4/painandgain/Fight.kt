@@ -596,6 +596,9 @@ internal class DealRecord {
     /** СТРЕЛОК ДЕРЖИТ ДАЛЬНОСТЬ (v697, `rhold=отход/клетка`, см. USE_RANGED_HOLDS_REACH_VS_GUNS): назначений, где клетка
      *  вооружённого стрелка взята только из достающих его вооружённого — в отходе и в основной раздаче. */
     val reachHoldRetreat = g.counter("rhold"); val reachHoldPlace = g.counter("rhold", 1)
+    /** ЛЕКАРЬ ПОЗАДИ СТРЕЛКА (v698, `hbehind=`, см. USE_HEALER_BEHIND_RANGED_VS_GUNS): назначений лекаря в клетку вплотную
+     *  позади нашего стрелка. */
+    val healBehind = g.counter("hbehind")
 }
 
 /** Поля записи раздачи обязаны быть объявлены до первой печати строки `t=`, а первая настоящая запись появляется только с первым
