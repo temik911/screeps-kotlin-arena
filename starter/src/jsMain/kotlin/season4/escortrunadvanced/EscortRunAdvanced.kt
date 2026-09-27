@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 32
+const val BOT_VERSION = 33
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -1940,7 +1940,10 @@ object EscortRunAdvanced {
             }
             val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
             val ev = opEval(w, group, from, e, need)
-            if (from != null) lastStrikeWhy = "${Bodies.summaryOf(e)}${at(e)} $ev kill=${ev.eta}${if (threats.isEmpty()) "" else " hisKill=$hisKill"}"
+            // every candidate, not the last weighed: v28's line showed only the M5T40 and never said why the M10T40
+            // standing alone 250-450 ticks was not struck (stachu3478#3/#4, 6ab96aed, 6ab96b04)
+            if (from != null) lastStrikeWhy += (if (lastStrikeWhy.isEmpty()) "" else " | ") +
+                "${Bodies.summaryOf(e)}${at(e)} $ev kill=${ev.eta}${if (threats.isEmpty()) "" else " hisKill=$hisKill"}"
             // v22 flipped STRIKE/DEFEND four times in 50 ticks on kill 112 against hisKill 124-125 (6ab95ba9)
             if (ev.ok && beats(ev.eta, prev == "strike" && prevTarget == idOf(e)) && (picked == null || getRange(e, from) < getRange(picked.first, from))) picked = e to ev
         }
@@ -2039,6 +2042,10 @@ object EscortRunAdvanced {
             }
             if (focus == null) {
                 val spot = rally.getOrNull(rallyIdx++)
+                // far from home the way back is the operations' way round his fighters: v28's group, its strike dropped,
+                // walked home through the x=6 pass where his T3M8R5 pair stood and died there twice (けろびー#16, 6ab96902:
+                // 715/759 and 1467-1488)
+                if (base != null && getRange(f, base) > HOME_RADIUS) { stepOp(w, f, base, HOME_RADIUS); continue }
                 if (spot == null) { if (base != null && getRange(f, base) > 6) step(w, f, base, 6); continue }
                 if (key(f) != spot) step(w, f, cellOf(spot), 0)
                 continue
@@ -2218,7 +2225,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter=reach$SHELTER_MARGIN raceUnderRaid sally=catchable raceOn=mobile pinSpots crewOurSide corridor=ifConvoyWins,noneExposed keepRace access=slots outpost=farSource,untaken pioneer=fighters2 mason=rebuild stock=w7 body=byReach siegeEta=open woundedStay pinInReach joinPace shelter=free evictSites masonPost=block holdGaps outpostRamparts noLoneSally homeRound opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
