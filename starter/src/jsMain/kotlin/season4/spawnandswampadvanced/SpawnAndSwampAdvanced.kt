@@ -94,7 +94,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v6"
+    private const val BOT_VERSION = "v7"
 
     private const val LOG_EVERY = 50
 
@@ -460,9 +460,13 @@ object SpawnAndSwampAdvanced {
         }
         // площадка в досягаемости и дому ничто не грозит: строим циклом дебюта (копка и стройка — одно действие)
         val site = mySites.filter { getRange(w, it) <= 3 }.minByOrNull { getRange(w, it) }
-        if (site != null && !defending) {
-            if (e >= batchFor(w) || (src.energy == 0 && e > 0)) w.build(site) else if (src.energy > 0) w.harvest(src)
-            return
+        // на клетке площадки стоит крип — стройка препятствия не идёт; v6 так простоял 400 тиков: боец встал на
+        // площадку башни, рабочий с полным запасом каждый тик «строил» впустую и не копал, спавн жил на +1 в тик
+        val siteFree = site != null && getObjectsByPrototype(Creep::class).none { it.x == site.x && it.y == site.y }
+        if (site != null && siteFree && !defending) {
+            if (e >= batchFor(w) || (src.energy == 0 && e > 0)) {
+                if (w.build(site).asDynamic().unsafeCast<Int>() == 0) return
+            } else if (src.energy > 0) { w.harvest(src); return }
         }
         val spawnFree = spawn.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
         val canDeliver = e > 0 && spawnFree > 0 && getRange(w, spawn) <= 1
@@ -799,14 +803,49 @@ object SpawnAndSwampAdvanced {
             val striking = getRange(target, anchor) <= RANGED_RANGE + 1 || workers.any { getRange(target, it) <= RANGED_RANGE + 1 }
             engage = (ours >= power(local) || striking) && getRange(target, anchor) <= HOME_THREAT_RANGE + 3
         }
+        val blocked = blockedCells(all)
+        val reserved = reservedCells(all)
         for (f in homeGroup) {
             if (idOf(f) in wave) continue
             shoot(f, theirs, enemyObjects)
             if (fleeMelee(f, enemyCombat)) continue
             if (engage && target != null) {
                 if (getRange(f, target) > RANGED_RANGE) f.moveTo(target)
-            } else if (getRange(f, anchor) > 2) f.moveTo(anchor)
+            } else {
+                // сбор — не у самого спавна, а в точке сбора: клетки у спавна, добытчиков, башни и площадок заняты
+                // делом (выход для рождения, копка, стройка), и боец на них ломает базу
+                val rally = rallyFor(anchor, reserved, blocked)
+                if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > 2) f.moveTo(cell(rally))
+            }
         }
+    }
+
+    /** Клетки, на которых боец не стоит: у спавна (выходы для рождения), клетки добытчиков, башни и наших площадок. */
+    private fun reservedCells(all: Array<GameObject>): Set<Pos> {
+        val out = HashSet<Pos>()
+        for (b in bases) {
+            for (x in b.spawnCell.x - 1..b.spawnCell.x + 1) for (y in b.spawnCell.y - 1..b.spawnCell.y + 1) out.add(Pos(x, y))
+            out.addAll(b.slots)
+            b.towerCell?.let { out.add(it) }
+        }
+        for (o in all) if (o is ConstructionSite && o.asDynamic().my == true) out.add(Pos(o.x, o.y))
+        return out
+    }
+
+    /** Точка сбора у спавна: свободная проходимая клетка в 4–5 шагах от него, ближе всех к сопернику (равнина лучше):
+     *  бойцы в двух клетках от неё стоят не ближе двух шагов к спавну. */
+    private fun rallyFor(anchor: Position, reserved: Set<Pos>, blocked: Set<Pos>): Pos {
+        val enemy = enemyStart
+        var best = Pos(anchor.x, anchor.y)
+        var bestScore = Int.MAX_VALUE
+        for (dx in -5..5) for (dy in -5..5) {
+            val c = Pos(anchor.x + dx, anchor.y + dy)
+            val r = cheb(c, Pos(anchor.x, anchor.y))
+            if (r < 4 || c in reserved || !walkable(c, blocked)) continue
+            val score = (if (enemy == null) 0 else cheb(c, enemy)) * 10 + (if (isSwamp(c)) 5 else 0)
+            if (score < bestScore) { bestScore = score; best = c }
+        }
+        return best
     }
 
     private fun nearestTargetRange(f: Creep, enemyCombat: List<Creep>, enemyObjects: List<GameObject>, theirs: List<Creep>): Int {
