@@ -223,6 +223,7 @@ object PainAndGainAdvanced {
     }
 
     private var homeFlags: List<String> = emptyList()
+    private val mending = HashSet<String>()
 
     private fun pullers() {
         if (homeFlags.isEmpty()) homeFlags = homePosts().map { it.id }
@@ -239,7 +240,11 @@ object PainAndGainAdvanced {
             // a post without a tower is kept by standing on it only while no armed enemy is about to kill the puller:
             // then the puller falls back to the army and comes back when the way is clear
             val danger = theirs.any { it.armed && Grid.range(it.x, it.y, p.x, p.y) <= PULLER_DANGER }
-            if (tower == null && danger) {
+            // and a puller on the hits-loss flag loses a hit a tick with no healer in reach: below PULLER_MEND of its
+            // hits it walks to the army to be healed, and goes back full
+            if (tower == null && p.hits < p.hitsMax * PULLER_MEND) mending.add(p.id)
+            if (p.hits >= p.hitsMax - 50) mending.remove(p.id)
+            if (tower == null && (danger || p.id in mending)) {
                 val army = mine.filter { it.role != Role.PULLER }
                 if (army.isNotEmpty()) { val a = army.minByOrNull { Grid.range(it.x, it.y, p.x, p.y) }!!; stepToward(p, Grid.to(a.x, a.y, 1), 100) }
                 continue
@@ -493,7 +498,7 @@ object PainAndGainAdvanced {
         }
         // a melee creep with RANGED parts too is not in this army; a heavy melee swings, and a ranged one within one
         // of its target still shoots — the engine runs attack and rangedAttack in separate pipelines
-        for (h in Fire.heals(army, theirs, ourFx, theirFx)) {
+        for (h in Fire.heals(army, mine, theirs, ourFx, theirFx)) {
             if (h.ranged) h.healer.c.rangedHeal(h.target.c) else h.healer.c.heal(h.target.c)
         }
     }
@@ -558,6 +563,7 @@ object PainAndGainAdvanced {
     private const val EFF_FATIGUE = "eff_fatigue_modifier"
     private const val EFF_HITS_LOSS_T = "eff_hits_loss"
     const val PULLER_DANGER = 5
+    const val PULLER_MEND = 0.6
     const val ENGAGE_RANGE = 8
     const val FIGHT_RATIO = 0.9
     const val RETREAT_RATIO = 0.7

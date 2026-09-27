@@ -148,7 +148,7 @@ object Fire {
      * enemy can put on it this tick (a creep under fire is healed before it loses a part, not after). A healer
      * with nothing to restore tops up the most hurt in reach, since the hits-loss flags drain everyone.
      */
-    fun heals(ours: List<Unit>, theirs: List<Unit>, ourFx: Effects, theirFx: Effects): List<Heal> {
+    fun heals(healers: List<Unit>, ours: List<Unit>, theirs: List<Unit>, ourFx: Effects, theirFx: Effects): List<Heal> {
         val threat = HashMap<String, Double>()
         for (a in ours) {
             var d = 0.0
@@ -161,7 +161,7 @@ object Fire {
         }
         val given = HashMap<String, Double>()
         val out = ArrayList<Heal>()
-        for (h in ours.filter { it.heal > 0 }.sortedBy { u -> ours.count { Grid.range(it.x, it.y, u.x, u.y) <= 1 } }) {
+        for (h in healers.filter { it.heal > 0 }.sortedBy { u -> ours.count { Grid.range(it.x, it.y, u.x, u.y) <= 1 } }) {
             var best: Unit? = null; var bestV = 0.0; var bestRanged = false
             for (a in ours) {
                 val r = Grid.range(a.x, a.y, h.x, h.y)
