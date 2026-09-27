@@ -266,11 +266,19 @@ object PainAndGainAdvanced {
             // a post without a tower is kept by standing on it only while no armed enemy is about to kill the puller:
             // then the puller falls back to the army and comes back when the way is clear
             val danger = theirs.any { it.armed && Grid.range(it.x, it.y, p.x, p.y) <= PULLER_DANGER }
+            // the fatigue flag doubles our own fatigue, and its owner pays it in every step of a march and of a fight:
+            // v19 took it at t=61 with the army still 10-15 cells out, the heavies' step went from 2 ticks to 4, the
+            // army reached its fortress at t≈120 instead of ≈90, and Hardy#3 walking behind it caught its tail at the
+            // pocket's mouth, 13 lost for 7 by t=200. So the puller waits beside it, between the tower and the box,
+            // and steps on when `fatigueDue` says its fatigue can no longer cost a fight or the score needs its 5; a
+            // tower that is not ours yet does not cover it, so while it waits it keeps away from his guns like a
+            // puller on a post without a tower
+            val waiting = post.effectType == EFF_FATIGUE && post.my != true && !fatigueDue(post)
             // and a puller on the hits-loss flag loses a hit a tick with no healer in reach: below PULLER_MEND of its
             // hits it walks to the army to be healed, and goes back full
             if (tower == null && p.hits < p.hitsMax * PULLER_MEND) mending.add(p.id)
             if (p.hits >= p.hitsMax - 50) mending.remove(p.id)
-            if (tower == null && (danger || p.id in mending)) {
+            if ((tower == null || waiting) && (danger || p.id in mending)) {
                 // to the healers if we have any, else under our fed tower, which heals it: the last creep of ours in a
                 // lost fight died of our own hits-loss flag at t=2600 while we led 28 077 to 0, with 1300 ticks to go
                 // before the lead would have ended the match
@@ -283,12 +291,7 @@ object PainAndGainAdvanced {
                 continue
             }
             val box = containers.filter { Grid.range(it.x, it.y, post.x, post.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
-            // the fatigue flag doubles our own fatigue, and its owner pays it in every step of a march and of a fight:
-            // v19 took it at t=61 with the army still 10-15 cells out, the heavies' step went from 2 ticks to 4, the
-            // army reached its fortress at t≈120 instead of ≈90, and Hardy#3 walking behind it caught its tail at the
-            // pocket's mouth, 13 lost for 7 by t=200. So the puller waits beside it, between the tower and the box,
-            // and steps on when `fatigueDue` says its fatigue can no longer cost a fight or the score needs its 5
-            if (post.effectType == EFF_FATIGUE && post.my != true && !fatigueDue(post)) {
+            if (waiting) {
                 val spot = besideFlag(post, tower, box)
                 if (p.cell == spot) {
                     hold(p)

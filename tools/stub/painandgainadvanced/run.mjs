@@ -34,7 +34,7 @@ const ticks = Math.min(parseInt(process.argv[2] || String(TICKS_LIMIT), 10), TIC
 // a scenario and its modifiers: `line+lag` is the line whose healers keep their rank (below)
 const [scenario, ...MODS] = (process.argv[3] || 'none').split('+');
 if (!['none', 'rush', 'farm', 'line', 'chase', 'mirror', 'ghost'].includes(scenario)) throw new Error(`unknown scenario ${scenario}`);
-if (MODS.some((m) => m !== 'lag') || (MODS.length && scenario !== 'line')) throw new Error(`unknown modifier in ${process.argv[3]}`);
+if (MODS.some((m) => !((m === 'lag' && scenario === 'line') || (m === 'sit' && scenario === 'chase')))) throw new Error(`unknown modifier in ${process.argv[3]}`);
 // REPLAY: ./replays/ first (a record kept with the stub), then ~/ScreepsArena/replays/ (tools/match-log.py replay <id>)
 function findReplay(arg) {
   if (existsSync(arg)) return arg;
@@ -404,6 +404,7 @@ const LINE_KEYS = new Set(Object.keys(LINE.goal));
 // Against v17 and v18 on their own records it reproduces the timeline — the centre at t=75 (75 live), our army's FIGHT
 // at t=116 (115), contact at t=128 (128 and 121) — and the rout: our army destroyed at t=331 and 336 (298 and 311),
 // eight of his left (nine and eight); tools/stub/painandgainadvanced/README.md has the numbers.
+const SIT_R = 10;
 const CHASE = {
   name: 'chase',
   goal: { heavy_melee: 1, melee: 1, heavy_ranged: 2, ranged: 2, heavy_healer: 1, healer: 1, puller: 5 },
@@ -482,10 +483,16 @@ function formation(all, ours, P) {
   if (!targets.length) return;
   // distances: steps (every cell 1), or with `weighted` the path cost (plain 1, swamp 5 — a pathfinder's route, which
   // walks round a swamp where the heavies would pay ten ticks a cell)
-  const D = P.weighted ? flow(targets.map((o) => ({ x: o.x, y: o.y }))) : steps(targets);
+  // chase+sit: a fighter that takes the centre and holds it — his body stands round the flag and turns on our fighters
+  // only when one comes within SIT_R of it: the fighter who outscores a fortress (5 a tick to its 3) without ever
+  // walking to it, the case our fatigue flag's score rule is for
+  const sitFlag = P === CHASE && MODS.includes('sit') ? world.objects.find((o) => o.exists && o.kind === 'flag' && o.effectType === 'eff_damage_taken_modifier') : null;
+  const sitting = !!sitFlag && !goals.some((o) => Math.max(Math.abs(o.x - sitFlag.x), Math.abs(o.y - sitFlag.y)) <= SIT_R);
+  const aim = sitting ? [{ x: sitFlag.x, y: sitFlag.y }] : targets;
+  const D = P.weighted ? flow(aim.map((o) => ({ x: o.x, y: o.y }))) : steps(aim);
   // flagFirst: the body walks to the centre flag while it is not theirs and none of our fighters is within `engage`
   const centre = P.flagFirst ? world.objects.find((o) => o.exists && o.kind === 'flag' && o.effectType === 'eff_damage_taken_modifier') : null;
-  let toFlag = !!centre && centre.owner !== 1 && Math.min(...mine.map((c) => D[idx(c.x, c.y)])) > P.engage;
+  let toFlag = !!centre && centre.owner !== 1 && (sitting || Math.min(...mine.map((c) => D[idx(c.x, c.y)])) > P.engage);
   const F = toFlag ? (P.weighted ? flowTo(centre.x, centre.y) : flowSteps(centre)) : null;
   // the flag is on the way, not the stop: once the clump is within three of it, one creep (the nearest light) steps on
   // it and the rest walk on toward us — Hardy's clump crossed the centre at full pace (a light took it at t=75, the
