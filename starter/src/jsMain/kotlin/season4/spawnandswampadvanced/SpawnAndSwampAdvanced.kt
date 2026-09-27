@@ -95,7 +95,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v8"
+    private const val BOT_VERSION = "v9"
 
     private const val LOG_EVERY = 50
 
@@ -151,6 +151,7 @@ object SpawnAndSwampAdvanced {
     private var myKnown: Map<String, String> = emptyMap()
     private var spawnUpAt = -1
     private var defending = false
+    private var attackedOnce = false
     /** Роли крипов вне экономики баз и армии: пробойщик, строитель сейфа. Заказанный крип узнаётся по телу. */
     private val roleOf = HashMap<String, String>()
     private val pendingRoles = ArrayList<Pair<String, String>>()
@@ -544,6 +545,7 @@ object SpawnAndSwampAdvanced {
         val near = homeThreats(enemyCombat, homeSpawns, workersAll, 0)
         val wide = homeThreats(enemyCombat, homeSpawns, workersAll, THREAT_RELEASE)
         defending = if (defending) wide.isNotEmpty() else near.isNotEmpty()
+        if (defending) attackedOnce = true
         val threats = if (defending) wide else emptyList()
         val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
         for (b in bases) {
@@ -800,6 +802,10 @@ object SpawnAndSwampAdvanced {
         if (towerAt(b, all) != null) return
         if (b.towerCell != null) { println("tower at (${b.towerCell}) gone t=$t"); b.towerCell = null }
         if (mine.none { isCombat(it) }) return
+        // башня базы — после сейфа, если дом ещё не трогали: её 1250 — сто с лишним тиков всей добычи, а сейф за
+        // те же деньги пробойщика отдаёт 10000
+        val v = vault
+        if (v != null && v.stage != "run" && !attackedOnce) return
         val blocked = blockedCells(all)
         fun exits(extra: Pos): Int {
             var n = 0
