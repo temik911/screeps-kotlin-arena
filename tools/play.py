@@ -220,6 +220,13 @@ def ab_worktree(ref, label):
         raise SystemExit(f"ab: {wt} exists at another commit — remove it with `git worktree remove --force {wt}`")
     print(f"ab: building {ref} in {wt}", flush=True)
     r = subprocess.run(["./gradlew", "build", "-q"], cwd=wt, capture_output=True, text=True)
+    # A fresh worktree's first build fails now and then on its own and a second one passes (CLAUDE.md: the transient
+    # ERR_MODULE_NOT_FOUND in :starter:jsNodeTest; 27.09.2026 also an internal error of the Kotlin/JS compiler reading a
+    # klib): three spawn-and-swamp A/Bs that day died at the build and passed when simply started again. One more build
+    # before giving up; a real compile error fails both
+    if r.returncode:
+        print(f"ab: build of {ref} failed — building again once", flush=True)
+        r = subprocess.run(["./gradlew", "build", "-q"], cwd=wt, capture_output=True, text=True)
     if r.returncode:
         raise SystemExit(f"ab: build of {ref} failed:\n{(r.stdout + r.stderr)[-2000:]}")
     starter = os.path.join(wt, "build", "js", "packages", "screeps-kotlin-arena-starter")
