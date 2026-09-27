@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v32"
+    private const val BOT_VERSION = "v33"
 
     private const val LOG_EVERY = 50
 
@@ -1500,16 +1500,36 @@ object SpawnAndSwampAdvanced {
             }
         }
 
+        // волна делится: минимальный набор защитников (ближние к угрозам), при котором прогон дома с башнями угрозы
+        // бьёт, остаётся; остальные — кандидаты в волну, и их прогон — против его армии без этих угроз. v31 досидел
+        // ничью с 13 бойцами против его четырёх, башен и спавна: его одиночки кружили у наших баз, «угроза» не
+        // снималась, а волна ждала тишины дома — за игру ни одного выхода
+        val threatIds = threats.map { idOf(it) }.toSet()
+        var defenders: List<Creep> = emptyList()
+        if (threats.isNotEmpty() && !lastCall) {
+            val towersNearThreats = myTowers.filter { tw -> energyOf(tw) > 0 && threats.any { getRange(it, tw) <= TOWER_RANGE } }.map { simTowerOf(it, all) }
+            val byNearness = homeGroup.sortedBy { f -> threats.minOf { getRange(f, it) } }
+            // больше защитников — не хуже, поэтому минимальный набор ищется двоичным поиском (~5 прогонов, а не по одному)
+            val threatUnits = threats.map { simOf(it) }
+            fun holds(k: Int) = simulate(byNearness.take(k).map { simOf(it) } + towersNearThreats, threatUnits).win
+            var lo = 0
+            var hi = byNearness.size
+            if (!holds(hi)) lo = hi else while (lo < hi) { val mid = (lo + hi) / 2; if (holds(mid)) hi = mid else lo = mid + 1 }
+            defenders = byNearness.take(lo)
+        }
+        val pushers = homeGroup.filter { it !in defenders }
+        val enemyForPush = enemyCombat.filter { idOf(it) !in threatIds }.map { simOf(it) } + projectedBirths(t, arrival, enemySpawnObjs.size) +
+            fedTowers.map { simTowerOf(it, all) } + List(pending) { simTower(TOWER_HITS) } + listOfNotNull(nearSpawn?.let { simSpawnOf(it, all) })
         // выход волны: прогон всего дома против его армии к нашему приходу (с тем, что он родит по дороге) и его
         // кормленых башен — и тех площадок башен, что достроятся к подходу (v5 лёг под достроившейся). Уже ушедшая волна
         // не держит дом: дом, который сам по прогону побеждает, выходит следом
         // последний призыв не ждёт тишины дома: v22 досидел ничью, потому что его харассеры держали угрозу до 5000-го
-        if ((threats.isEmpty() || lastCall) && homeGroup.isNotEmpty() && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
-            val r = simulate(homeGroup.map { simOf(it) }, enemyAtArrival)
+        if (pushers.isNotEmpty() && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
+            val r = simulate(pushers.map { simOf(it) }, enemyForPush)
             if ((r.win && r.keep >= PUSH_KEEP) || lastCall) {
-                calibStart(t, "push", homeGroup, enemyCombat, r, byId)
-                for (f in homeGroup) wave.add(idOf(f))
-                println("push t=$t wave=${wave.size} home=${homeGroup.size} vs ${enemyAtArrival.size} (army ${enemyCombat.size} towers ${fedTowers.size}+$pending arrival=$arrival) " +
+                calibStart(t, "push", pushers, enemyCombat, r, byId)
+                for (f in pushers) wave.add(idOf(f))
+                println("push t=$t wave=${wave.size} home=${pushers.size}+${defenders.size}def vs ${enemyForPush.size} (army ${enemyCombat.size} towers ${fedTowers.size}+$pending arrival=$arrival) " +
                     "sim keep=${(r.keep * 100).toInt()}% ticks=${r.ticks}${if (lastCall) " lastCall" else ""}")
             } else if (enemySpawnObjs.isNotEmpty()) {
                 // удар по его ближнему спавну: против всей армии не выигрываем, но расширение у нас под боком стерегут
@@ -1523,21 +1543,21 @@ object SpawnAndSwampAdvanced {
                 // армия — 40–48 потерянных крипов за ничью
                 // …и за время осады: хиты спавна с рампартом на наш урон — v28 бил группами по 1–7 «спавн без стражей»,
                 // а его бродячая армия успевала к осаде (60 потерянных крипов в поражении от stachu3478)
-                val ourDps = homeGroup.sumOf { dpsOf(it) }.coerceAtLeast(1)
+                val ourDps = pushers.sumOf { dpsOf(it) }.coerceAtLeast(1)
                 val siegeTicks = simSpawnOf(sp, all).hits / ourDps
                 val reach = maxOf(STRIKE_GUARD_RANGE, getRange(home, sp) + siegeTicks)
-                val guards = enemyCombat.filter { getRange(it, sp) <= reach }
+                val guards = enemyCombat.filter { getRange(it, sp) <= reach && idOf(it) !in threatIds }
                 val births = projectedBirths(t, toSp, enemySpawnObjs.size).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
                 val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
                 // и те его бойцы, что уже рядом с нашей группой: их видит прогон отхода, и без них удар и отход v22
                 // сменяли друг друга каждый тик (1568–1574)
-                val center = homeGroup.minByOrNull { c -> homeGroup.sumOf { getRange(it, c) } }!!
-                val nearUs = enemyCombat.filter { e -> getRange(e, center) <= LOCAL_RANGE && e !in guards }
+                val center = pushers.minByOrNull { c -> pushers.sumOf { getRange(it, c) } }!!
+                val nearUs = enemyCombat.filter { e -> getRange(e, center) <= LOCAL_RANGE && e !in guards && idOf(e) !in threatIds }
                 val local = (guards + nearUs).map { simOf(it) } + births + towersNear.map { simTowerOf(it, all) } + simSpawnOf(sp, all)
-                val rs = simulate(homeGroup.map { simOf(it) }, local)
+                val rs = simulate(pushers.map { simOf(it) }, local)
                 if (rs.win && rs.keep >= PUSH_KEEP) {
-                    calibStart(t, "strike", homeGroup, guards + nearUs, rs, byId)
-                    for (f in homeGroup) wave.add(idOf(f))
+                    calibStart(t, "strike", pushers, guards + nearUs, rs, byId)
+                    for (f in pushers) wave.add(idOf(f))
                     println("strike t=$t wave=${wave.size} at spawn (${sp.x},${sp.y}) guards=${guards.size} births=${births.size} towers=${towersNear.size} " +
                         "arrival=$toSp sim keep=${(rs.keep * 100).toInt()}% (whole army: ${(r.keep * 100).toInt()}% win=${r.win})")
                 }
