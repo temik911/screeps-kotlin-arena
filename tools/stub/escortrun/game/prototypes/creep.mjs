@@ -50,7 +50,14 @@ export class Creep extends GameObject {
   pickup(target) { intent(this, 'pickup', { target }); return 0; }
   drop(res, amount) { intent(this, 'drop', { amount }); return 0; }
   harvest(target) { intent(this, 'harvest', { target }); return 0; }
-  build() { return -10; }
+  build(target) {
+    if (!target || !target.exists || target.kind !== 'site') return -7;
+    if (!this.body.some((p) => p.type === 'work' && p.hits > 0)) return -12;
+    if (!this.store || this.store.energy <= 0) return -6;
+    if (Math.max(Math.abs(this.x - target.x), Math.abs(this.y - target.y)) > 3) return -9;
+    intent(this, 'build', { target });
+    return 0;
+  }
   /** Engine pull.js: only owner, spawning, target validity and adjacency are checked — no MOVE, no fatigue test. */
   pull(target) { if (!target || !target.exists || target.kind !== 'creep' || target === this) return -7; if (target.owner !== this.owner) return -7; if (Math.max(Math.abs(target.x - this.x), Math.abs(target.y - this.y)) > 1) return -9; intent(this, 'pull', { target }); return 0; }
 }

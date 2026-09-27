@@ -1,5 +1,6 @@
 import { world, terrainAt, range as rangeOf, byId } from '../world.mjs';
 import { searchPath } from './path-finder.mjs';
+import { ConstructionSite } from './prototypes/construction-site.mjs';
 
 export function getObjectsByPrototype(proto) {
   return world.objects.filter((o) => o.exists && o instanceof proto);
@@ -27,4 +28,21 @@ export function findInRange(from, arr, r) { return arr.filter((o) => rangeOf(fro
 export function findClosestByRange(from, arr) { let best = null, bd = Infinity; for (const o of arr) { const d = rangeOf(from, o); if (d < bd) { bd = d; best = o; } } return best; }
 export function findClosestByPath(from, arr) { return findClosestByRange(from, arr); }
 export function findPath(from, to, opts) { return searchPath(from, to, opts).path; }
-export function createConstructionSite() { return { error: -10 }; }
+// construction (docs/escort-run-redteam.md): prices of the runtime's CONSTRUCTION_COST; a site is the owner's, one per
+// cell, never on terrain walls or on a blocking structure (a rampart may go over anything, even a creep)
+const SITE_COST = { StructureWall: 100, StructureRampart: 200, StructureExtension: 200, StructureContainer: 100, StructureRoad: 10, StructureSpawn: 1000, StructureTower: 1250 };
+export function createConstructionSite(a, b, c) {
+  const pos = typeof a === 'number' ? { x: a, y: b } : a;
+  const proto = typeof a === 'number' ? c : b;
+  const cost = proto && SITE_COST[proto.name];
+  if (!pos || cost === undefined) return { error: -10 };
+  if (terrainAt(pos.x, pos.y) === 1) return { error: -10 };
+  const here = world.objects.filter((o) => o.exists && o.x === pos.x && o.y === pos.y);
+  if (here.some((o) => o.kind === 'site')) return { error: -8 };
+  const structs = here.filter((o) => o.kind !== 'creep' && o.kind !== 'site' && o.kind !== 'resource' && o.kind !== 'flag');
+  if (proto.name === 'StructureRampart' ? structs.some((o) => o.kind === 'rampart') : structs.some((o) => o.kind !== 'rampart')) return { error: -10 };
+  const site = new ConstructionSite(pos.x, pos.y, world.perspective, cost);
+  site.proto = proto;
+  world.objects.push(site);
+  return { object: site };
+}

@@ -215,6 +215,32 @@ export function process(ResourceClass) {
       if (amount > 0) { c.store.energy -= amount; dropEnergy(c.x, c.y, amount, ResourceClass); }
     }
   }
+  // 3'. construction: BUILD_POWER 5 a WORK, energy spent one for one; an obstacle (wall, spawn, extension, tower) is not
+  // raised over a creep (ERR_INVALID_TARGET, "obstacle at the same square"), a rampart is; a finished structure has the
+  // runtime's hits (RAMPART_HITS / WALL_HITS 10000)
+  for (const [id, m] of world.intents) {
+    const c = byId(id);
+    if (!c || !c.exists || c.spawning || !m.build) continue;
+    const site = m.build.target;
+    if (!site || !site.exists || range(c, site) > 3 || c.store.energy <= 0) continue;
+    const name = site.proto && site.proto.name;
+    const obstacle = name === 'StructureWall' || name === 'StructureSpawn' || name === 'StructureExtension' || name === 'StructureTower';
+    if (obstacle && creepAt(site.x, site.y)) continue;
+    const add = Math.min(live(c, 'work') * 5, c.store.energy, site.progressTotal - site.progress);
+    site.progress += add; c.store.energy -= add;
+    if (site.progress >= site.progressTotal) {
+      site.exists = false;
+      const P = site.proto;
+      const made = name === 'StructureWall' ? new P(site.x, site.y, 10000)
+        : name === 'StructureRampart' ? new P(site.x, site.y, site.owner, 10000)
+        : name === 'StructureSpawn' ? new P(site.x, site.y, site.owner, 0)
+        : name === 'StructureContainer' ? new P(site.x, site.y, 0, 2000)
+        : new P(site.x, site.y, site.owner);
+      made.structureName = name;
+      world.objects.push(made);
+      world.events.push(`t=${t} ${site.owner === 0 ? 'ours' : 'enemy'} built ${name} at (${site.x},${site.y})`);
+    }
+  }
   // 4. movement (simultaneous, swaps and chains legal), with pull: see movePhase
   const pulledBy = movePhase(t);
   // 5. fatigue decay (tick.js:105-108 through _add-fatigue.js): live MOVEs rest their own creep first, the excess of a

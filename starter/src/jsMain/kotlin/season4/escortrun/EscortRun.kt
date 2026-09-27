@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v25"
+    private const val BOT_VERSION = "v26"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -157,6 +157,9 @@ object EscortRun {
         val enemyEscortFlow: IntArray?,
         /** Поле нашего эскорта БЕЗ чужих крипов: по нему видно, кто из них стоит на нашем пути (routeBlockers). */
         val escortFlowRaw: IntArray?,
+        /** Сооружение, закрывшее наш флаг (их рампарт или стена на клетке флага, или все проходимые соседи флага под
+         *  сооружениями — тогда ближнее к эскорту); null — флаг открыт. */
+        val flagBlocker: GameObject?,
     )
 
     fun tick() {
@@ -269,10 +272,28 @@ object EscortRun {
             enemyScouts = enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
             occupant = occupant, enemyAt = enemyAt, blocked = blocked, blockedForEnemy = blockedForEnemy, myRamparts = ramparts.filter { it.my == true },
             escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow, escortFlowRaw = escortFlowRaw,
+            flagBlocker = flagBlockerOf(myFlag, escort, walls, ramparts),
         )
     }
 
     private fun key(p: Position) = p.x * 100 + p.y
+
+    /**
+     * Затычка и печать (docs/escort-run-redteam.md): рампарт соперника пропускает только владельца и строится даже под
+     * нашим хранителем; стена — нет, но пять стен на соседях запечатывают карман флага на любой карте.
+     */
+    private fun flagBlockerOf(flag: Position?, escort: Creep?, walls: List<StructureWall>, ramparts: List<StructureRampart>): GameObject? {
+        if (flag == null) return null
+        fun at(x: Int, y: Int): GameObject? =
+            ramparts.firstOrNull { it.my == false && it.x == x && it.y == y } ?: walls.firstOrNull { it.x == x && it.y == y }
+        at(flag.x, flag.y)?.let { return it }
+        val around = DIRECTIONS.map { (dx, dy) -> flag.x + dx to flag.y + dy }
+            .filter { (x, y) -> DistanceMap.inBounds(x, y) && !DistanceMap.isTerrainWall(x, y) }
+        if (around.isEmpty()) return null
+        val shut = around.mapNotNull { (x, y) -> at(x, y) }
+        if (shut.size < around.size) return null
+        return shut.minByOrNull { if (escort != null) getRange(it, escort) else 0 }
+    }
 
     /** Где и с какого тика стоит каждый их крип: стоящий STILL_TICKS тиков и дольше — не прохожий, а стоянка. */
     private val enemyStill = HashMap<String, Pair<Int, Int>>()
@@ -512,6 +533,9 @@ object EscortRun {
         }
 
 
+        // 2''. наш флаг закрыт сооружением — пролом: мили на всю наличную энергию, затем ещё, пока пролом стоит
+        if (breachOrder(w, e)) return
+
         // гонка проиграна, только если их приход РАНЬШЕ нашего с запасом: ничьи по оценке на 51-м тике (наш 194-197,
         // их 196-210 во всей серии v11) на деле выигрывал наш поезд, а блокировщик, купленный первым «на всякий
         // случай», отдавал наш флаг их блокировщику (ricardo#5 трижды)
@@ -632,6 +656,23 @@ object EscortRun {
     }
 
     private var chokesOrdered = 0
+    /** Проломщиков одновременно не больше: каждый — ещё 30 урона в тик на часть ATTACK по 10 000 хитов. */
+    private const val MAX_BREACHERS = 3
+
+    /**
+     * Пролом закрытого флага. Их эскорт после затычки идёт без тягачей и финиширует к ~800-му (офлайн-лига: затычка с
+     * двумя блокировщиками брала у v25 35 % рук), так что время есть, а энергии — 1 в тик: ранний дешёвый мили
+     * наносит больше урона к сроку, чем поздний большой, поэтому покупается сразу, как есть 130.
+     */
+    private fun breachOrder(w: World, e: Int): Boolean {
+        val b = w.flagBlocker ?: return false
+        if (fightersOn(w, BREACH) >= MAX_BREACHERS) return false
+        val min = Bodies.cost(MOVE) + Bodies.cost(ATTACK)
+        if (e < min) { saving(w, "breacher", min); return true }
+        val body = meleeBody(minOf(e, SPAWN_ENERGY_CAPACITY)) ?: return false
+        if (order(w, body, "breacher", "our flag shut by ${protoName(b)}@(${b.asDynamic().x},${b.asDynamic().y}) hits=${b.asDynamic().hits}")) fighterQueue.addLast(BREACH)
+        return true
+    }
 
     private fun cellPos(k: Int): Position = InfluenceMap.cell(k / 100, k % 100)
 
@@ -752,6 +793,8 @@ object EscortRun {
     private const val APPROACH = "approach"
     private const val BLOCK = "block"
     private const val BREAK = "break"
+    /** Проломщик: бьёт сооружение, закрывшее наш флаг (затычка соперника). */
+    private const val BREACH = "breach"
     private const val GUARD_FLAG = "flag"
     private const val ESCORT_GUARD = "escort"
     /** Разведчик на узком месте ИХ маршрута (Chokes): встаёт туда, где обход дороже всего их поезду, и перебегает вперёд. */
@@ -1379,6 +1422,17 @@ object EscortRun {
             var lead: Position? = null
             var why: String
             val threat = if (escort != null) w.enemyArmed.filter { dist(it, escort) <= THREAT_RANGE && dist(it, f) <= 20 }.minByOrNull { dist(it, f) } else null
+            if (role == BREACH) {
+                val b = w.flagBlocker
+                if (b == null) { fighterRole[id] = ESCORT_GUARD } else {
+                    val bp = b.unsafeCast<Position>()
+                    if (dist(f, bp) <= 1) { f.attack(b); if (DEBUG_LOG && w.now % LOG_EVERY == 0) println("fighter t=${w.now}: $id breach ${protoName(b)} hits=${b.asDynamic().hits}"); continue }
+                    if (Bodies.liveMoves(f) == 0) continue
+                    val swampCost = maxOf(1, Bodies.period(Bodies.weight(f), Bodies.liveMoves(f), true))
+                    stepAround(w, f, bp, 1, swampCost, 5)?.let { TrafficManager.request(f, it, FIGHTER_PRIORITY) }
+                    continue
+                }
+            }
             if (holding && role == ESCORT_GUARD && escort != null) {
                 // дома: бьём всё, что достаём, и стоим на рампарте у эскорта — с рампарта урон приходится не в нас
                 attackBest(f, w, w.enemies.filter { dist(it, f) <= (if (melee) 1 else RANGED_RANGE) }.minByOrNull { it.hits })

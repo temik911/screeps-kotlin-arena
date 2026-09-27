@@ -80,7 +80,9 @@ internal object RedTeam {
     fun spawn(w: EscortRun.World, energy: Int, late: Boolean): Boolean {
         if (tricks.isEmpty() || pendingBody != null) return false
         for (t in ORDER) {
-            if (t !in tricks || t in ordered || (t in LATE) != late) continue
+            // при затычке гонки нет — поздние приёмы идут до дебюта, иначе они ждали тягачей до 200-го тика
+            val isLate = t in LATE && "plug" !in tricks
+            if (t !in tricks || t in ordered || isLate != late) continue
             val body = bodyOf(t)
             if (energy < Bodies.cost(body)) return true
             if (EscortRun.order(w, body, "red:$t", "persona ${describe()}")) {
