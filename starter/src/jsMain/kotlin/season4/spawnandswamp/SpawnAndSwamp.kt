@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 175
+    private const val BOT_VERSION = 176
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3125,8 +3125,16 @@ object SpawnAndSwamp {
      * говорит, кто победит, но не почём: M5R5 «побеждает» M3R3 один на один, отдавая 450 хитов и
      * скорость (матч 7, дважды). Бой берём, если эта цена укладывается в запас скорости группы.
      */
-    private fun fightCost(enemies: List<Creep>, ours: List<Creep>, towers: List<TowerInfo> = emptyList()): Double {
-        val ourDps = ours.sumOf { InfluenceMap.profileOf(it).ranged }
+    private fun fightCost(enemies: List<Creep>, ours: List<Creep>, towers: List<TowerInfo> = emptyList(), withMelee: Boolean = false): Double {
+        // …and on the march our melee deals its damage too (v176, `withMelee` from the two march prices): his damage is
+        // counted as ranged plus melee × meleeFactor, ours was ranged only — after v165 marlyman's waves were 61-86 % M12A5
+        // by damage, the march cost 0.55 of the wave's hits in the draws (0.29 in the wins; 9689 at t=1500 in one, ≈1280
+        // with the melee), and a wave of melee alone had an infinite cost
+        // …against a pack with no gun of its own only (v176b): melee packs walk into our melee — marlyman's interceptors were
+        // M5A1 and M3A3 — while shooters with healers are not reached by it, and counting it there sent the stub's waves
+        // into `tower+healball` (518 -> 1277)
+        val meleePack = enemies.isNotEmpty() && enemies.all { InfluenceMap.profileOf(it).ranged <= 0.0 }
+        val ourDps = if (withMelee && USE_MARCH_MELEE && meleePack) ours.sumOf { effectiveDps(it, enemies, null) } else ours.sumOf { InfluenceMap.profileOf(it).ranged }
         if (ourDps <= 0.0) return Double.MAX_VALUE
         // порядок целей — как у нашего фокуса (healAndShoot): лекари первыми, затем по хитам; лечение
         // живых вычитается из нашего урона — без этого пара M8R4 «брала» стаю из двух M3R3 и M4H2 за
@@ -3665,7 +3673,7 @@ object SpawnAndSwamp {
             val seed = unmet.first()
             val pack = combatEnemies.filter { getRange(it, seed) <= ENGAGE_RANGE + RANGED_RANGE }
             unmet.removeAll { u -> pack.any { it.id == u.id } }
-            attrition += fightCost(pack, offensive)
+            attrition += fightCost(pack, offensive, withMelee = true)
             val packPower = enemyPowerOf(pack, strikers)
             if (packPower > maxPack) { maxPack = packPower; maxPackCatch = meleeShare(pack) }
             // a RAID is a pack on our half or in the alarm ring (v133): his creeps born at his own spawn count as
@@ -3780,7 +3788,7 @@ object SpawnAndSwamp {
                         }
                     }
                     if (interceptors.isNotEmpty()) {
-                        val cost = fightCost(interceptors, offensive)
+                        val cost = fightCost(interceptors, offensive, withMelee = true)
                         if (cost + streamUnits * unitCost > attrition) attrition = cost + streamUnits * unitCost
                         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("intercept t=${getTicks()}: route=${route.size}/${k}t on=${interceptors.size} cost=${cost.toInt()} attrition=${attrition.toInt()}")
                     }
@@ -6398,6 +6406,8 @@ object SpawnAndSwamp {
     /** The last-stand pair is re-bought with any number of his spawns; a raider walks to a free cell next to its target
      *  (v175). */
     private const val USE_RAID_ALL_SPAWNS = true
+    /** The march's price counts our melee's damage, as his is counted (fightCost from the two march prices, v176). */
+    private const val USE_MARCH_MELEE = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
