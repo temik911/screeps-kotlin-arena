@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 23
+const val BOT_VERSION = 24
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -481,17 +481,38 @@ object PainAndGainAdvanced {
      */
     private val garrisonOf = HashMap<String, String>()   // creep id -> flag id
 
+    /**
+     * A garrison holds a flag against runners, not against his army: one that faces more fire than it heals itself
+     * leaves for the group, and a flag whose garrison died or left gets none for STALE_T ticks. Against kerobii#6 the
+     * sweep set a garrison on the centre four times in a row (t=658-877) — his army passes through it — and each died
+     * there: 9 of ours lost to his 3 by t=1000, and the match went on the score.
+     */
+    private val garrisonLost = HashMap<String, Int>()   // flag id -> tick its garrison died or left
     private fun garrisons(army: List<Unit>) {
-        garrisonOf.entries.removeAll { (cid, fid) -> army.none { it.id == cid } || flags.none { it.id == fid } }
+        garrisonOf.entries.removeAll { (cid, fid) ->
+            val gone = army.none { it.id == cid } || flags.none { it.id == fid }
+            if (gone) garrisonLost[fid] = t
+            gone
+        }
         for (u in army) {
             val fid = garrisonOf[u.id] ?: continue
             val f = flags.firstOrNull { it.id == fid } ?: continue
+            val fire = theirs.sumOf { e ->
+                val r = Grid.range(e.x, e.y, u.x, u.y)
+                (if (r <= 2) e.melee * 30 * theirFx.attack else 0.0) + (if (r <= 4) e.ranged * 10 * theirFx.ranged else 0.0)
+            } * ourFx.damageTaken
+            if (fire > u.heal * 12 * ourFx.heal) {
+                garrisonOf.remove(u.id); garrisonLost[fid] = t
+                println("garrison t=$t: ${u.id.substringAfterLast("player").drop(2)} leaves (${f.x},${f.y}) — ${fire.toInt()} a tick on it")
+                continue
+            }
             if (u.x == f.x && u.y == f.y) hold(u) else stepToward(u, Grid.to(f.x, f.y), 700)
         }
     }
 
     private fun maybeGarrison(group: List<Unit>, f: ScoreFlag) {
         if (f.my != true || garrisonOf.containsValue(f.id)) return
+        if ((garrisonLost[f.id] ?: -STALE_T) > t - STALE_T) return
         val free = group.filter { it.id !in garrisonOf }
         if (free.size <= GROUP_MIN) return
         val on = free.firstOrNull { it.x == f.x && it.y == f.y } ?: return
