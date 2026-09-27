@@ -20,6 +20,7 @@ object Formation {
         val foeMelee: IntArray,   // walking steps to his nearest creep with ATTACK: a melee has to walk to strike
         val front: Int,           // our line: the least range to him among our creeps with a weapon
         val blocked: (Int) -> Boolean,
+        val crowd: (Int) -> Int = { 0 },   // how many of ours stand next to a cell
     ) {
         /** Range to his nearest armed creep — ranged fire and healing reach by range, through walls. */
         fun foe(cell: Int): Int {
@@ -30,13 +31,13 @@ object Formation {
         }
     }
 
-    fun ctx(ours: List<Unit>, theirs: List<Unit>, blocked: (Int) -> Boolean): Ctx {
+    fun ctx(ours: List<Unit>, theirs: List<Unit>, blocked: (Int) -> Boolean, crowd: (Int) -> Int = { 0 }): Ctx {
         val armed = theirs.filter { it.armed || it.heal > 0 }.ifEmpty { theirs }
         val melee = theirs.filter { it.melee > 0 }
         val foeMelee = if (melee.isEmpty()) IntArray(Grid.N * Grid.N) { Grid.INF } else Grid.fresh(melee.map { it.cell }.toIntArray(), 1)
         val c = Ctx(armed, foeMelee, 99, blocked)
         val front = ours.filter { it.armed }.minOfOrNull { c.foe(it.cell) } ?: 99
-        return Ctx(armed, foeMelee, front, blocked)
+        return Ctx(armed, foeMelee, front, blocked, crowd)
     }
 
     /** The cell `u` wants next (its own cell when it should stay), or -1 when nothing is better than standing. */
@@ -63,7 +64,10 @@ object Formation {
                 val reach = if (d <= 3) 20.0 - (3 - d) * 2 else -(d - 3) * (if (engaged) 8.0 else 2.0)
                 val safe = when { dm <= 1 -> -60.0; dm <= 2 -> -25.0; else -> 0.0 }
                 val behind = if (!engaged && d < c.front + 1) -12.0 else 0.0
-                reach + safe + behind
+                // his mass attack hits every one of ours within three of his shooter, 10/4/1 a part: ranged packed three
+                // to a cell's neighbourhood feed it
+                val packed = if (engaged && d <= 4) -MASS_SPREAD * c.crowd(cell) else 0.0
+                reach + safe + behind + packed
             }
             Role.HEALER -> {
                 // beside the patient a heal is 12 a part, from three it is 4: his healers stood beside theirs and ours
@@ -82,5 +86,6 @@ object Formation {
     }
 
     private const val STAY_BONUS = 0.5
+    const val MASS_SPREAD = 3.0
     private const val SWAMP_PENALTY = 6.0
 }

@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 14
+const val BOT_VERSION = 15
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -612,9 +612,9 @@ object PainAndGainAdvanced {
     private fun place(army: List<Unit>, engaged: Boolean) {
         // a cell of ours whose creep is not stepping away this tick is not taken: taking it is a swap that moves the pair
         // nowhere and breaks the line
-        val ctx = Formation.ctx(army, theirs) { n ->
+        val ctx = Formation.ctx(army, theirs, { n ->
             n in towerCells || n in held || occupiedByEnemy(n) || ourAt[n]?.let { !Traffic.wants(it.c) } == true
-        }
+        }, { n -> val x = Grid.xOf(n); val y = Grid.yOf(n); army.count { Grid.range(it.x, it.y, x, y) == 1 } })
         // what each of ours needs this tick: its deficit and what his weapons in reach can put on it. Healers share a
         // need by their power — under focused fire the one being focused needs several of them, and v7's first cut
         // gave each patient one healer and lost the stand's rush, 10 for 10, which v6 won with 7 to 9 alive
