@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 209
+    private const val BOT_VERSION = 210
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -625,6 +625,8 @@ object SpawnAndSwamp {
     /** Дерёмся ли с врагом у дома (см. homeFight в runFighters): спавн под огнём, враг у ворот или
      *  гарнизон целиком сильнее. Иначе — пост отрядом и ждём подкрепления, а не по одному навстречу. */
     private var homeFight = false
+    /** The home garrison beats the home threats on its own count this tick (v210, see the melee's home fight). */
+    private var homeWinsNow = false
     private var homeMode = "-"
 
     /** Страховка от НЕВИДИМОГО урона: хиты и клетка бойца в прошлом тике; ghostHit — сколько снято
@@ -4179,6 +4181,7 @@ object SpawnAndSwamp {
         // весь отряд разом — это spawnUnderFire
         val homeAtGates = homeThreats.any { getRange(it, mySpawn) <= HOME_STANDOFF }
         homeFight = homeThreats.isNotEmpty() && (spawnUnderFire || homeAtGates || homeWins)
+        homeWinsNow = homeWins
         // в журнал — с причиной и счётом: «fight:gates(790/759)» читается без пересчёта
         homeMode = if (homeThreats.isEmpty()) "-" else (if (homeFight) "fight:" + (if (spawnUnderFire) "fire" else if (homeAtGates) "gates" else "wins") else "hold") +
             "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}]" +
@@ -4559,7 +4562,12 @@ object SpawnAndSwamp {
                 // whenever the builder stops to load, dump or build
                 USE_HUNTER_SHADOW && hunterPrey != null -> { target = hunterPrey; standoff = 1 }
                 huntOf[creep.id] != null -> { target = huntOf[creep.id]!!; standoff = if (melee) 1 else RANGED_RANGE }
-                homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
+                // …but not a marching melee to a home fight the garrison wins without it (v210): against marlyman#403
+                // (v206) homeFight read `wins` on the garrison's own count (1-2 guns beating his raiders), and the wave's
+                // M12A5 turned home 80-177 cells off — about 510 fighter-ticks — past his tower, where seven of them died,
+                // while our pile spawns they walked to fell anyway (the same in a v195 draw with #441)
+                homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) &&
+                    !(USE_WAVE_MELEE_STAYS && marching && melee && homeWinsNow) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
                 // поводок — про ПОГОНЮ, а не про осаду: мили, не идущий в волне, остаётся дома, потому
                 // что за кайтящей целью он уходил на другой край карты и становился турелью (02.09).
@@ -6681,6 +6689,8 @@ object SpawnAndSwamp {
     /** The spawn's saving is known: the keeper's surplus is beyond it, the keeper does not build from the spawn while the
      *  fleet is short, and the fort's reserve does not hold the hauler's turn then (v208). */
     private const val USE_SPAWN_KNOWS_SAVING = true
+    /** A marching melee does not turn home to a fight the garrison wins without it (v210). */
+    private const val USE_WAVE_MELEE_STAYS = true
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
