@@ -49,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 12
+const val BOT_VERSION = 13
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -132,6 +132,10 @@ object EscortRunAdvanced {
     private const val DANGER_COST = 40
     /** A running operation is dropped only after its simulation has lost this many ticks in a row. */
     private const val DROP_AFTER = 3
+    /** A race is taken when the escort dies with this share of the group's hit points still standing. */
+    private const val RACE_MARGIN = 0.1
+    /** A fighter joins a running operation if it is no more than this much farther from the target than the group. */
+    private const val JOIN_SLACK = 30
     /** The convoy's period on plain: the pullers bring each train's MOVE to weight / 2. */
     private const val CONVOY_PERIOD = 2
     /** Home fighters before the convoy's pullers are made. */
@@ -151,20 +155,22 @@ object EscortRunAdvanced {
 
     private const val LOG_EVERY = 50
 
-    private val MELEE = Bodies.body(MOVE to 5, ATTACK to 5)
-    private val RANGED = Bodies.body(MOVE to 5, RANGED_ATTACK to 5)
+    private val MELEE = Bodies.interleaved(ATTACK, 5, 5)
+    private val RANGED = Bodies.interleaved(RANGED_ATTACK, 5, 5)
     private val HARVESTER_FIRST = Bodies.body(WORK to 3, MOVE to 1)
     /** The second harvester builds the home works and feeds the tower: it carries. */
     private val HARVESTER_NEXT = Bodies.body(WORK to 2, CARRY to 2, MOVE to 1)
     private val HAULER = Bodies.body(CARRY to 2, MOVE to 1)
     /** The wall breaker: as much ATTACK as one spawn holds with MOVE enough for two ticks a plain cell. */
     private const val BREAKER_ATTACK = 9
-    private val BREAKER = Bodies.body(MOVE to 5, ATTACK to BREAKER_ATTACK)
+    private val BREAKER = Bodies.interleaved(ATTACK, BREAKER_ATTACK, 5)
     /** The outpost's pioneer walks ninety cells: a MOVE on every part, WORK to saturate the source, one CARRY to build. */
     private val PIONEER = Bodies.body(WORK to 5, CARRY to 1, MOVE to 6)
     /** The outpost spawn's own worker steps one cell to its slot. */
     private val PIONEER_WORKER = Bodies.body(WORK to 5, CARRY to 1, MOVE to 1)
     private const val PIONEER_TRIES = 3
+    /** After a pioneer dies on its way, the next one waits this long. */
+    private const val PIONEER_RETRY = 300
 
     // ---------- state between ticks ----------
     private val escortIds = HashSet<String>()
@@ -183,6 +189,8 @@ object EscortRunAdvanced {
         var attackedAt = -1
         /** Ticks in a row the running operation's simulation has lost. */
         var failStreak = 0
+        /** The running operation's fire order: "race" (the target first) or "clear" (his fighters first). */
+        var plan = ""
         val inOp get() = mode == "strike" || mode == "siege"
     }
 
@@ -360,6 +368,7 @@ object EscortRunAdvanced {
         // half of the economy — Hardy#1 walks all three to the flags from tick 0 and is on them by 568 (6ab9255d)
         val raceOn = w.enemyEscorts.any { !onRampart(w, it, false) } && w.fighters.isEmpty()
         val puller = nextPuller(w)
+        val pioneerOk = pioneerMayGo(w)
         var pullerFor: String? = null
         val order: Array<BodyPartType> = when {
             w.harvesters.isEmpty() -> HARVESTER_FIRST
@@ -376,7 +385,7 @@ object EscortRunAdvanced {
             puller != null -> { pullerFor = puller.second; puller.first }
             // the outpost's pioneer: the second economy
             outpost != null && w.outpostSpawn == null && w.pioneers.isEmpty() && pioneersSent < PIONEER_TRIES &&
-                w.fighters.size >= 2 -> PIONEER
+                w.fighters.size >= 2 && pioneerOk -> PIONEER
             else -> nextFighter(w)
         }
         if (energy(w) < Bodies.cost(order)) return
@@ -676,6 +685,24 @@ object EscortRunAdvanced {
     }
 
     private fun rampartAt(k: Int) = getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
+
+    private val pioneerSeen = HashMap<String, Int>()
+    private var pioneerLostAt = -1
+
+    /**
+     * Whether a pioneer may go now: none died in the last PIONEER_RETRY ticks and no fighter of his stands within
+     * HOME_RADIUS of the outpost's site. stachu3478#1's trios walked past our outpost site at 533, ~800 and ~1088 and killed
+     * all three pioneers on the same cell (95,74) — 2550 energy, four M5A5 (6ab93a12).
+     */
+    private fun pioneerMayGo(w: World): Boolean {
+        for (p in w.pioneers) pioneerSeen[idOf(p)] = w.now
+        val gone = pioneerSeen.filter { (id, _) -> w.pioneers.none { idOf(it) == id } }.keys
+        if (gone.isNotEmpty() && w.outpostSpawn == null) pioneerLostAt = w.now
+        for (id in gone) pioneerSeen.remove(id)
+        val op = outpost ?: return false
+        if (pioneerLostAt >= 0 && w.now - pioneerLostAt < PIONEER_RETRY) return false
+        return w.enemyArmed.none { getRange(it, cellOf(op.spawnCell)) <= HOME_RADIUS }
+    }
 
     /**
      * A pioneer (W5C1M6) walks to the outpost's slot — round his fighters, whose cells within four are walls to it —
@@ -1304,23 +1331,50 @@ object EscortRunAdvanced {
      * could come sooner than that, and so never struck a far escort at all (6ab92e36, 6ab92dd5); the question is not whether
      * he comes but whether we still win when he does.
      */
-    private fun opFight(w: World, group: List<Creep>, from: Position, target: Creep): Bodies.Outcome {
+    /** An operation weighed: can the group kill the target, and in which order it fires — "race" (the escort first, the
+     *  arena ends with it) or "clear" (his fighters first, then the escort). */
+    internal class OpEval(val ok: Boolean, val plan: String, val margin: Double, val desc: String) {
+        override fun toString() = desc
+    }
+
+    /**
+     * An operation on `target` for `group` standing at `from`. His fighters on our way meet us at the start of the fight,
+     * as do those guarding the target; every other fighter of his joins at its arrival — he answers what he sees coming,
+     * so he starts NOTICE_TICKS before we arrive, and a cell a tick is his best (v8, counting the whole of our way, never
+     * struck けろびー#15's two escorts standing out of his ramparts by his spawn from 179 to ~1600, 6ab93352). A fighter
+     * standing by ANOTHER escort of his is that escort's guard, not a reinforcement (v10: stachu3478#3's swarm stayed by
+     * his M3T42 and M5T40 all match while his M10T40 stood alone, 6ab939c2).
+     *
+     * Two plans. RACE: all fire into the target from the start — the arena ends when it dies, so it is enough that it
+     * dies before the group does, whatever the group loses. CLEAR: the group first beats everything there (the old
+     * simulation), then kills the escort. The race is taken when it wins; act() fires by the chosen plan (v10's act()
+     * struck the escort first while its simulation assumed the guards died first, and the guards killed our M5A5 with the
+     * escort at 2632 — 6ab939aa).
+     */
+    private fun opEval(w: World, group: List<Creep>, from: Position, target: Creep, need: Double): OpEval {
         val inWay = inTheWay(w, from, target)
         val ids = inWay.mapTo(HashSet()) { idOf(it) }
         val flow = wayFor(w, from, target)
         // ticks, not the field's value: the danger price inflates the field (an M5X5 walks a cell a tick on plain)
         val eta = pathCells(w, from, target).size
+        val rampart = (w.enemyRamparts[key(target)]?.hits ?: 0) +
+            (if (!meleeReachable(w, target)) breachCell(w, target)?.let { w.enemyRamparts[key(it)]?.hits } ?: 0 else 0)
+        val others = w.enemyEscorts.filter { idOf(it) != idOf(target) }
+        val joiners = w.enemyArmed.filter { e ->
+            idOf(e) !in ids && others.none { o -> getRange(o, e) <= ESCORT_GUARD_RADIUS && getRange(o, e) < getRange(target, e) }
+        }.map { e -> e to maxOf(0, getRange(e, target) - minOf(eta, NOTICE_TICKS)) }
+        val race = Bodies.race(units(group), rampart, target.hits, target.hitsMax,
+            inWay.map { Bodies.unitOf(it) to 0 } + joiners.map { Bodies.unitOf(it.first) to it.second })
         val dps = maxOf(1, group.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) })
-        var need = target.hits + (w.enemyRamparts[key(target)]?.hits ?: 0)
-        if (!meleeReachable(w, target)) need += breachCell(w, target)?.let { w.enemyRamparts[key(it)]?.hits } ?: 0
-        // he answers what he sees coming, not our leaving home: those join who reach the target within the kill plus the
-        // last NOTICE_TICKS of our way. Counting the whole way, v8 never struck けろびー#15's two escorts standing out of
-        // his ramparts by his spawn from 179 to ~1600 with the pass open from 743 — his blob sat 45 cells off in the
-        // centre, a 9-tick kill away (6ab93352)
-        val done = minOf(eta, NOTICE_TICKS) + need / dps
-        val joiners = w.enemyArmed.filter { idOf(it) !in ids && getRange(it, target) <= done }
-        lastOpWhy = "way=${if (flow === opFlow(w, target)) "round" else "plain"} eta=$eta done=$done inWay=${inWay.size} join=${joiners.size}"
-        return Bodies.fight(units(group), units(inWay + joiners))
+        val done = (rampart + target.hits) / dps
+        val clear = Bodies.fight(units(group), units(inWay + joiners.filter { it.second <= done }.map { it.first }))
+        val desc = "race=$race clear=$clear way=${if (flow === opFlow(w, target)) "round" else "plain"} eta=$eta inWay=${inWay.size} join=${joiners.count { it.second <= done }}"
+        lastOpWhy = desc
+        return when {
+            race.done && race.margin() >= RACE_MARGIN -> OpEval(true, "race", race.margin(), desc)
+            clear.weWin && clear.margin() >= need -> OpEval(true, "clear", clear.margin(), desc)
+            else -> OpEval(false, "", 0.0, desc)
+        }
     }
 
     /**
@@ -1334,44 +1388,53 @@ object EscortRunAdvanced {
         val prevTarget = g.modeTarget
         val threats = threatsTo(w, g, base)
         val inOp = g.inOp
-        val group = if (inOp) fighters.filter { idOf(it) in g.members } else cluster(fighters)
-        val ours = units(group)
+        // a running operation keeps its members and takes in whoever of ours can still reach it (a reserve born later
+        // stood at home while the one M5A5 of the strike died beside the escort it had brought to 698, 6ab939aa); a
+        // fighter with no live MOVE is no member — it cannot walk to anything
+        val walking = fighters.filter { Bodies.liveMoves(it) > 0 }
+        val group = if (inOp) {
+            val core = walking.filter { idOf(it) in g.members }
+            val c = if (core.isEmpty()) null else cell(core.sumOf { it.x } / core.size, core.sumOf { it.y } / core.size)
+            val tgt = g.modeTarget?.let { id -> w.enemies.firstOrNull { idOf(it) == id } }
+            core + walking.filter { f -> idOf(f) !in g.members && c != null && tgt != null && getRange(f, tgt) <= getRange(c, tgt) + JOIN_SLACK }
+        } else cluster(walking)
         val from: Position? = if (group.isEmpty()) null else cell(group.sumOf { it.x } / group.size, group.sumOf { it.y } / group.size)
         var mode: String
         var modeTarget: String? = null
+        var plan = ""
         if (threats.isNotEmpty()) {
             mode = "defend"
             if (g.attackedAt < 0) g.attackedAt = w.now
         } else {
-            // strike: an escort of his outside his ramparts, where the fight against everything guarding it is ours
+            // strike: an escort of his outside his ramparts that the group kills before it dies
             // of several, the one nearest to our group: any kill wins, so the soonest one
-            var picked: Pair<Creep, Bodies.Outcome>? = null
+            var picked: Pair<Creep, OpEval>? = null
             for (e in w.enemyEscorts.filter { !onRampart(w, it, false) }) {
                 if (from == null) break
-                val sim = opFight(w, group, from, e)
                 val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
-                if (sim.weWin && sim.margin() >= need && (picked == null || getRange(e, from) < getRange(picked.first, from)))
-                    picked = e to sim
+                val ev = opEval(w, group, from, e, need)
+                if (ev.ok && (picked == null || getRange(e, from) < getRange(picked.first, from))) picked = e to ev
             }
             val siegeNeed = if (prev == "siege") KEEP_MARGIN else SIEGE_MARGIN
             val siegeTarget = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits } ?: w.enemyEscorts.minByOrNull { it.hits }
-            val siegeSim = if (from != null && siegeTarget != null && group.size >= SIEGE_MIN_FIGHTERS) opFight(w, group, from, siegeTarget) else null
-            lastSiegeWhy = "${siegeTarget?.let { at(it) }} sim=$siegeSim need=$siegeNeed $lastOpWhy"
+            val siegeEv = if (from != null && siegeTarget != null && group.size >= SIEGE_MIN_FIGHTERS) opEval(w, group, from, siegeTarget, siegeNeed) else null
+            lastSiegeWhy = "${siegeTarget?.let { at(it) }} $siegeEv need=$siegeNeed"
             if (picked != null) {
-                mode = "strike"; modeTarget = idOf(picked.first)
-                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} sim=${picked.second} group=${group.size}/${fighters.size}")
+                mode = "strike"; modeTarget = idOf(picked.first); plan = picked.second.plan
+                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} plan=$plan ${picked.second} group=${group.size}/${fighters.size}")
             } else if (convoyOn && g === homeG) {
                 // the home army walks with the convoy
                 mode = "convoy"
                 if (prev != mode) println("army ${g.name} t=${w.now}: CONVOY guard=${fighters.size}")
-            } else if (siegeSim != null && siegeTarget != null && siegeSim.weWin && siegeSim.margin() >= siegeNeed) {
+            } else if (siegeEv != null && siegeTarget != null && siegeEv.ok) {
                 mode = "siege"
-                modeTarget = idOf(siegeTarget)
-                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} sim=$siegeSim group=${group.size}/${fighters.size}")
+                modeTarget = idOf(siegeTarget); plan = siegeEv.plan
+                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} plan=$plan $siegeEv group=${group.size}/${fighters.size}")
             } else {
                 mode = "hold"
             }
         }
+        g.plan = plan.ifEmpty { g.plan }
         // an operation is dropped only after DROP_AFTER lost ticks in a row, and only while its target lives
         if (inOp && mode == "hold" && prevTarget != null && w.enemies.any { idOf(it) == prevTarget }) {
             g.failStreak++
@@ -1543,11 +1606,14 @@ object EscortRunAdvanced {
     /** Fire: an escort of his first (it is the win), then the weakest armed, then anything; heal the most hurt. */
     private fun act(w: World, f: Creep, g: Garrison, target: Creep?) {
         val modeTarget = g.modeTarget
+        // the fire order the operation was weighed with: a race puts the target first, a clearing puts his armed first
+        val clearing = g.inOp && g.plan == "clear"
         fun rank(e: Creep): Int = when {
-            target != null && idOf(e) == modeTarget -> 0
-            idOf(e) in escortIds -> 1
-            Bodies.isArmed(e) -> 2
-            else -> 3
+            clearing && Bodies.isArmed(e) -> 0
+            target != null && idOf(e) == modeTarget -> 1
+            idOf(e) in escortIds -> 2
+            Bodies.isArmed(e) -> 3
+            else -> 4
         }
         if (Bodies.live(f, ATTACK) > 0) {
             val adj = w.enemies.filter { getRange(it, f) <= 1 }.sortedWith(compareBy({ rank(it) }, { it.hits })).firstOrNull()
@@ -1577,7 +1643,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +

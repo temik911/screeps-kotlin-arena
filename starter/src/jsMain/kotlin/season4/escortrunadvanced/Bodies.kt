@@ -86,6 +86,22 @@ internal object Bodies {
     fun rangedDps(c: Creep): Int = live(c, RANGED_ATTACK) * RANGED_ATTACK_POWER
     fun healPower(c: Creep): Int = live(c, HEAL) * HEAL_POWER
 
+    /**
+     * A fighter's body with its MOVE spread through it (M W M W …, the rest of the MOVE at the tail): damage takes parts
+     * from the head, and a body that starts with all its MOVE stands still after its first 500 damage — v10's M5A5 #221
+     * stood 252 ticks at (14,13) with five dead MOVE and 460 hits, and an M5R5 at 550 hits walked at period 5 (6ab939aa).
+     * Spread, half the damage leaves half the MOVE and half the weapon.
+     */
+    fun interleaved(weapon: BodyPartType, weapons: Int, moves: Int): Array<BodyPartType> {
+        val out = ArrayList<BodyPartType>()
+        var w = weapons; var m = moves
+        while (w > 0 || m > 0) {
+            if (m > 0) { out.add(MOVE); m-- }
+            if (w > 0) { out.add(weapon); w-- }
+        }
+        return out.toTypedArray()
+    }
+
     fun body(vararg groups: Pair<BodyPartType, Int>): Array<BodyPartType> {
         val out = ArrayList<BodyPartType>()
         for ((t, n) in groups) repeat(n) { out.add(t) }
@@ -164,6 +180,39 @@ internal object Bodies {
             if (them.isEmpty()) return Outcome(true, t, us.sumOf { it.total() }, 0, usStart, themStart)
         }
         return Outcome(false, horizon, us.sumOf { it.total() }, them.sumOf { it.total() }, usStart, themStart)
+    }
+
+    class Race(val done: Boolean, val ticks: Int, val oursLeft: Int, val oursStart: Int) {
+        fun margin(): Double = if (!done || oursStart == 0) 0.0 else oursLeft.toDouble() / oursStart
+        override fun toString() = "${if (done) "kill" else "fail"}/${ticks}t ours=$oursLeft/$oursStart"
+    }
+
+    /**
+     * A race to ONE kill — the arena ends when one of his escorts dies, so an operation is not "beat his army" but "the
+     * escort dies before our group does". Every tick all our weapons go into the target: the rampart under it first (a
+     * rampart takes no healing), then the escort, which his healers present mend; his fighters join at their arrival tick
+     * (`theirs` = unit to the tick it arrives) and fire at our weakest. v10's simulation weighed the whole fight and struck
+     * nothing while stachu3478#3's M10T40 stood 200 ticks by his flag with no guard nearer than 28 ticks (6ab939c2).
+     */
+    fun race(ours: List<Unit>, rampart: Int, escort: Int, escortMax: Int, theirs: List<Pair<Unit, Int>>, horizon: Int = 300): Race {
+        val us = ours.filter { it.alive() }.toMutableList()
+        val start = us.sumOf { it.total() }
+        if (us.isEmpty()) return Race(false, 0, 0, 0)
+        var ramp = rampart
+        var hp = escort
+        for (t in 1..horizon) {
+            val active = theirs.filter { it.second <= t && it.first.alive() }.map { it.first }
+            var d = us.sumOf { it.dps() }
+            if (ramp > 0) { val take = minOf(ramp, d); ramp -= take; d -= take }
+            hp -= d
+            if (hp <= 0) return Race(true, t, us.sumOf { it.total() }, start)
+            if (ramp <= 0) hp = minOf(escortMax, hp + active.sumOf { it.heal() })
+            spread(us, active.sumOf { it.dps() })
+            us.removeAll { !it.alive() }
+            if (us.isEmpty()) return Race(false, t, 0, start)
+            mend(us, us.sumOf { it.heal() })
+        }
+        return Race(false, horizon, us.sumOf { it.total() }, start)
     }
 
     private val MELEE_PART = ATTACK
