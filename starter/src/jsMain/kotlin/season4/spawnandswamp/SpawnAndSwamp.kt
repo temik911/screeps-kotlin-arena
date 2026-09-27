@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 186
+    private const val BOT_VERSION = 187
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4544,7 +4544,10 @@ object SpawnAndSwamp {
                 queue.add(creep); seen.add(creep.id)
                 while (queue.isNotEmpty()) {
                     val c = queue.removeFirst()
-                    for (m in mates) if (m.id !in seen && getRange(c, m) <= 2) { seen.add(m.id); queue.add(m) }
+                    // …through any fighter of ours, not only this wave's (v187): against ricardo#45 two columns of waves 1-6
+                    // stood at the edge of his two towers' reach from ~1380 to the clock with `win/7t` — the head of each
+                    // waited for a mate of its wave queued behind creeps of other waves in cells nobody could leave
+                    for (m in (if (USE_COLUMN_ANY_WAVE) fighters else mates)) if (m.id !in seen && getRange(c, m) <= 2) { seen.add(m.id); queue.add(m) }
                 }
                 seen
             }
@@ -6474,6 +6477,8 @@ object SpawnAndSwamp {
     private const val USE_FRONT_OWN_ROUTE = true
     /** A waiting raid strikes a standing gun of his by its target when the pair outlasts it (runRaiders, v186). */
     private const val USE_RAID_GUN_PREY = true
+    /** The column chain of the march's cohesion runs through fighters of any wave (v187). */
+    private const val USE_COLUMN_ANY_WAVE = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
