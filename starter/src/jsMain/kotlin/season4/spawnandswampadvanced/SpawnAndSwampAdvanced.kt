@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v34"
+    private const val BOT_VERSION = "v35"
 
     private const val LOG_EVERY = 50
 
@@ -862,8 +862,10 @@ object SpawnAndSwampAdvanced {
         // дом угрозу не держит — энергия в спавн (защитник), строим только рампарты (200 за 10000 — дешевле бойца);
         // держит или угроз нет — башня раньше рампартов (v16). v30 проиграл けろびー к 900-му: площадка башни встала на
         // 368-м от первого рейдера M3R3, 180 тиков вся добыча шла в неё, и спавн не родил ни одного защитника
-        val site = mySites.filter { getRange(w, it) <= 3 && (homeHolds || isRampartSite(it)) }
-            .sortedWith(compareBy<ConstructionSite> { if (isRampartSite(it) == homeHolds) 1 else 0 }.thenBy { getRange(w, it) }).firstOrNull()
+        // (v32 отдавал добычу спавну и строил только рампарты, пока дом не держит угрозу, — и против потока M4R3H1
+        // けろびー#1 башня базы так и не встала; откат к v16: башня раньше рампартов)
+        val site = mySites.filter { getRange(w, it) <= 3 }
+            .sortedWith(compareBy<ConstructionSite> { if (isRampartSite(it)) 1 else 0 }.thenBy { getRange(w, it) }).firstOrNull()
         // на клетке площадки стоит крип — стройка препятствия не идёт; v6 так простоял 400 тиков: боец встал на
         // площадку башни, рабочий с полным запасом каждый тик «строил» впустую и не копал, спавн жил на +1 в тик
         val siteFree = site != null && (isRampartSite(site) || getObjectsByPrototype(Creep::class).none { it.x == site.x && it.y == site.y })
@@ -915,11 +917,12 @@ object SpawnAndSwampAdvanced {
         // его спавн у центрального был к нему на восемь тиков ближе, источник стоял свободным до ~820-го, а к 1200-му у
         // него было четыре источника против наших двух. Лучший из БЕЗОПАСНЫХ — как с v22
         val hisStuff = all.filter { it.asDynamic().my == false && (it is StructureSpawn || it is ConstructionSite) }
-        // v30–v32 брали «самый близкий к нему» из всех, куда он не вдвое ближе, — и слали строителя через всю карту к ЕГО
-        // второму домашнему источнику (три быстрых поражения от stachu3478): спорный — это где мы не дальше его больше
-        // чем на четверть пути, и из таких первым — с наименьшим нашим запасом
+        // кандидаты — где мы не дальше его больше чем на четверть пути (v30–v32 слали строителя через всю карту к ЕГО
+        // второму домашнему источнику); порядок — как в v29, с наибольшего нашего запаса: «самый спорный первым» (v30,
+        // v34) уводил первого строителя к центральному источнику вместо нашего второго домашнего, и A/B против
+        // stachu3478#15 дал 2 из 4 против 4 из 4 у v29 — у него к 1500-му было 3–4 источника против наших двух
         val free = ranked.filter { (s, us, them) -> us * 4 <= them * 5 && hisStuff.none { getRange(it, s) <= INTRUDER_SOURCE_RANGE + 1 } }
-        for ((s, _, _) in free.sortedWith(compareBy<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
+        for ((s, _, _) in free.sortedWith(compareByDescending<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
             planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) }?.let { return it }
         }
         return null
@@ -1054,7 +1057,7 @@ object SpawnAndSwampAdvanced {
         if (all.any { it is ConstructionSite && it.asDynamic().my == true && isRampartSite(it) && cheb(posOf(it), b.spawnCell) <= 2 }) return
         // пока у базы строится башня — новых рампартов не ставим: энергия добытчиков одна
         val tc = b.towerCell
-        if (homeHolds && tc != null && all.any { it is ConstructionSite && it.asDynamic().my == true && it.x == tc.x && it.y == tc.y }) return
+        if (tc != null && all.any { it is ConstructionSite && it.asDynamic().my == true && it.x == tc.x && it.y == tc.y }) return
         val next = want.firstOrNull { it !in have } ?: return
         val r = createConstructionSite(next.x, next.y, StructureRampart::class.js)
         println("rampart site t=$t at (${next.x},${next.y}) base=(${b.spawnCell.x},${b.spawnCell.y}) err=${r.error}")
@@ -1185,9 +1188,6 @@ object SpawnAndSwampAdvanced {
     /** Заказ для сейфа: пробойщик, пока стена цела; строитель — когда пролом готов или откроется раньше, чем
      *  строитель дойдёт (оставшиеся хиты стены / урон пробойщика против пути строителя). Возвращает, занят ли спавн. */
     private fun vaultOrder(t: Int, spawn: StructureSpawn, energy: Int): Boolean {
-        // вложения по одному: пока строитель расширения в пути, сейф ждёт — v32 заказал строителя (850) и пробойщика
-        // (910) за 80 тиков, и к приходу армии stachu3478 дом держали двое
-        if (expansion != null || builderPending) return false
         val all = getObjects()
         // один сейф в работе за раз: начатый доводим, иначе — первый по очереди, до которого можно
         val started = vaults.firstOrNull { it.stage != "run" && (hasRole(it.breacherRole) || hasRole(it.builderRole)) }
