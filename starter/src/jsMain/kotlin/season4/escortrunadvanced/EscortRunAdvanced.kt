@@ -49,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 13
+const val BOT_VERSION = 14
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -136,6 +136,10 @@ object EscortRunAdvanced {
     private const val RACE_MARGIN = 0.1
     /** A fighter joins a running operation if it is no more than this much farther from the target than the group. */
     private const val JOIN_SLACK = 30
+    /** Within this range of the target a member waits for the group ... */
+    private const val STAGING_RANGE = 10
+    /** ... while its rear is more than this much farther from the target. */
+    private const val GROUP_SPREAD = 8
     /** The convoy's period on plain: the pullers bring each train's MOVE to weight / 2. */
     private const val CONVOY_PERIOD = 2
     /** Home fighters before the convoy's pullers are made. */
@@ -1391,7 +1395,10 @@ object EscortRunAdvanced {
         // a running operation keeps its members and takes in whoever of ours can still reach it (a reserve born later
         // stood at home while the one M5A5 of the strike died beside the escort it had brought to 698, 6ab939aa); a
         // fighter with no live MOVE is no member — it cannot walk to anything
-        val walking = fighters.filter { Bodies.liveMoves(it) > 0 }
+        // and only the fast ones: in a one-cell pass the file walks at its slowest, and v13's strike on けろびー's M10T40
+        // at his base came through the x=6 pass behind the breaker M5A9 (two ticks a cell) — the ranged arrived alone and
+        // took 1700 while the melee were 40-60 cells behind, and his blob came home first (6ab94124, t=833-967)
+        val walking = fighters.filter { Bodies.liveMoves(it) > 0 && Bodies.period(it, false) <= 1 }
         val group = if (inOp) {
             val core = walking.filter { idOf(it) in g.members }
             val c = if (core.isEmpty()) null else cell(core.sumOf { it.x } / core.size, core.sumOf { it.y } / core.size)
@@ -1501,6 +1508,12 @@ object EscortRunAdvanced {
                 continue
             }
             val opMember = inOp && idOf(f) in g.members
+            // near the target the group closes up: a member within STAGING_RANGE of it waits while the group's rear is
+            // more than GROUP_SPREAD farther, unless his fighters are already on it
+            if (opMember && target != null && getRange(f, target) <= STAGING_RANGE && w.enemyArmed.none { getRange(it, f) <= 4 }) {
+                val rear = fighters.filter { idOf(it) in g.members }.maxOf { getRange(it, target) }
+                if (rear - getRange(f, target) > GROUP_SPREAD) continue
+            }
             if (Bodies.isMelee(f)) {
                 // siege on an escort no melee can reach: break the rampart beside it that we can stand next to
                 val goal = if (g.mode == "siege" && target != null && !meleeReachable(w, target)) breachCell(w, target) ?: target else focus
@@ -1643,7 +1656,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
