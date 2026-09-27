@@ -49,7 +49,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 9
+const val BOT_VERSION = 10
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -128,6 +128,10 @@ object EscortRunAdvanced {
     private const val BREACH_TARGET_RANGE = 15
     /** How long before our arrival his army is taken to start answering an operation. */
     private const val NOTICE_TICKS = 25
+    /** What a cell near his fighter adds to the army's way: forty plain cells of detour are worth avoiding one. */
+    private const val DANGER_COST = 40
+    /** A running operation is dropped only after its simulation has lost this many ticks in a row. */
+    private const val DROP_AFTER = 3
 
     private const val FIGHTER_PRIORITY = 30
     private const val HAULER_PRIORITY = 20
@@ -165,9 +169,13 @@ object EscortRunAdvanced {
         var members: Set<String> = emptySet()
         /** The tick this base was first defended. */
         var attackedAt = -1
+        /** Ticks in a row the running operation's simulation has lost. */
+        var failStreak = 0
         val inOp get() = mode == "strike" || mode == "siege"
     }
 
+    private var lastSiegeWhy = ""
+    private var lastOpWhy = ""
     private val homeG = Garrison("home")
     private val outpostG = Garrison("outpost")
     /** Which base a fighter belongs to: the spawn it was born at. */
@@ -665,7 +673,15 @@ object EscortRunAdvanced {
                     .filter { DistanceMap.inBounds(it.x, it.y) && getRange(it, cellOf(slot)) > 2 }
                 val f = if (danger.isEmpty()) flowTo("pioneer", cellOf(slot), Bodies.swampCost(p))
                     else DistanceMap.flowFieldTo(cellOf(slot), danger + stillCells, Bodies.swampCost(p))
-                DistanceMap.flowStep(f, p.x, p.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(p, it, WORKER_PRIORITY + 5) }
+                val st = DistanceMap.flowStep(f, p.x, p.y, 0, w.occupant.keys, w.enemyAt)
+                val home = w.mySpawn
+                if (st != null) TrafficManager.request(p, st, WORKER_PRIORITY + 5)
+                else if (home != null && getRange(p, home) <= 1) {
+                    // no safe way yet: wait off the spawn's cells, or it cannot put a creep out
+                    DIRECTIONS.map { (dx, dy) -> cell(p.x + dx, p.y + dy) }
+                        .firstOrNull { c -> getRange(c, home) >= 2 && !DistanceMap.isWall(c.x, c.y) && !w.occupant.containsKey(key(c)) }
+                        ?.let { TrafficManager.request(p, it, WORKER_PRIORITY + 5) }
+                }
                 if (getRange(p, src) > 1) continue
             }
             val e = p.store[RESOURCE_ENERGY] ?: 0
@@ -906,16 +922,19 @@ object EscortRunAdvanced {
         val k = "op:${key(target)}"
         val now = getTicks()
         flowCache[k]?.takeIf { flowTick[k] == now }?.let { return it }
-        val danger = ArrayList<Position>()
+        // a price, not a wall: walls round his creeps opened and shut the only gap as they shuffled, and the army's
+        // decision flipped with them every tick (stand, blob+harvest: SIEGE/HOLD a thousand times)
+        val cost = IntArray(10000)
+        var any = false
         for (e in w.enemyArmed) {
             if (getRange(e, target) <= ESCORT_GUARD_RADIUS) continue
             for (dx in -DANGER_RADIUS..DANGER_RADIUS) for (dy in -DANGER_RADIUS..DANGER_RADIUS) {
                 val x = e.x + dx; val y = e.y + dy
-                if (DistanceMap.inBounds(x, y)) danger.add(cell(x, y))
+                if (DistanceMap.inBounds(x, y)) { cost[x * 100 + y] = DANGER_COST; any = true }
             }
         }
-        val f = if (danger.isEmpty()) flowTo("army", target, ARMY_SWAMP_COST)
-            else DistanceMap.flowFieldTo(target, danger + stillCells, ARMY_SWAMP_COST)
+        val f = if (!any) flowTo("army", target, ARMY_SWAMP_COST)
+            else DistanceMap.flowFieldCost(target, cost, ARMY_SWAMP_COST, stillCells)
         flowCache[k] = f
         flowTick[k] = now
         return f
@@ -924,15 +943,33 @@ object EscortRunAdvanced {
     /** The field a group of ours takes to the target: round his fighters when that way exists from where it stands. */
     private fun wayFor(w: World, from: Position, target: Position): IntArray {
         val round = opFlow(w, target)
-        return if (DistanceMap.inBounds(from.x, from.y) && round[key(from)] >= 0) round else flowTo("army", target, ARMY_SWAMP_COST)
+        return if (anchor(round, from) != null) round else flowTo("army", target, ARMY_SWAMP_COST)
+    }
+
+    /** The reachable cell nearest to `p` in field `f` — a group's centre often falls on the spawn or an escort's cell,
+     *  where a field has no value: the stand's blob+harvest line saw an empty way there, "nobody in the way", a won
+     *  siege, and the next tick a lost one, every six ticks for 3000 ticks. */
+    private fun anchor(f: IntArray, p: Position): Position? {
+        if (DistanceMap.inBounds(p.x, p.y) && f[key(p)] >= 0) return p
+        for (r in 1..5) {
+            var best: Position? = null
+            for (dx in -r..r) for (dy in -r..r) {
+                if (maxOf(kotlin.math.abs(dx), kotlin.math.abs(dy)) != r) continue
+                val x = p.x + dx; val y = p.y + dy
+                if (!DistanceMap.inBounds(x, y) || f[x * 100 + y] < 0) continue
+                if (best == null || f[x * 100 + y] < f[key(best)]) best = cell(x, y)
+            }
+            if (best != null) return best
+        }
+        return null
     }
 
     /** The cells our group walks from `from` to `target`, down its way (at most 250). */
     private fun pathCells(w: World, from: Position, target: Position): List<Int> {
         val f = wayFor(w, from, target)
         val out = ArrayList<Int>()
-        var x = from.x; var y = from.y
-        if (!DistanceMap.inBounds(x, y) || f[x * 100 + y] < 0) return out
+        val start = anchor(f, from) ?: return out
+        var x = start.x; var y = start.y
         for (i in 0 until 250) {
             out.add(x * 100 + y)
             val here = f[x * 100 + y]
@@ -987,7 +1024,8 @@ object EscortRunAdvanced {
         val inWay = inTheWay(w, from, target)
         val ids = inWay.mapTo(HashSet()) { idOf(it) }
         val flow = wayFor(w, from, target)
-        val eta = group.mapNotNull { f -> flow[key(f)].takeIf { it >= 0 } }.maxOrNull() ?: 0
+        // ticks, not the field's value: the danger price inflates the field (an M5X5 walks a cell a tick on plain)
+        val eta = pathCells(w, from, target).size
         val dps = maxOf(1, group.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) })
         var need = target.hits + (w.enemyRamparts[key(target)]?.hits ?: 0)
         if (!meleeReachable(w, target)) need += breachCell(w, target)?.let { w.enemyRamparts[key(it)]?.hits } ?: 0
@@ -997,6 +1035,7 @@ object EscortRunAdvanced {
         // centre, a 9-tick kill away (6ab93352)
         val done = minOf(eta, NOTICE_TICKS) + need / dps
         val joiners = w.enemyArmed.filter { idOf(it) !in ids && getRange(it, target) <= done }
+        lastOpWhy = "way=${if (flow === opFlow(w, target)) "round" else "plain"} eta=$eta done=$done inWay=${inWay.size} join=${joiners.size}"
         return Bodies.fight(units(group), units(inWay + joiners))
     }
 
@@ -1033,6 +1072,7 @@ object EscortRunAdvanced {
             val siegeNeed = if (prev == "siege") KEEP_MARGIN else SIEGE_MARGIN
             val siegeTarget = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits } ?: w.enemyEscorts.minByOrNull { it.hits }
             val siegeSim = if (from != null && siegeTarget != null && group.size >= SIEGE_MIN_FIGHTERS) opFight(w, group, from, siegeTarget) else null
+            lastSiegeWhy = "${siegeTarget?.let { at(it) }} sim=$siegeSim need=$siegeNeed $lastOpWhy"
             if (picked != null) {
                 mode = "strike"; modeTarget = idOf(picked.first)
                 if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} sim=${picked.second} group=${group.size}/${fighters.size}")
@@ -1044,12 +1084,18 @@ object EscortRunAdvanced {
                 mode = "hold"
             }
         }
+        // an operation is dropped only after DROP_AFTER lost ticks in a row, and only while its target lives
+        if (inOp && mode == "hold" && prevTarget != null && w.enemies.any { idOf(it) == prevTarget }) {
+            g.failStreak++
+            if (g.failStreak < DROP_AFTER) { mode = prev; modeTarget = prevTarget }
+        } else if (mode == prev && modeTarget == prevTarget) g.failStreak = 0
         g.mode = mode
         g.modeTarget = modeTarget
         g.members = if (g.inOp) group.mapTo(HashSet()) { idOf(it) } else emptySet()
         if (prev != mode) {
             if (mode == "defend") println("army ${g.name} t=${w.now}: DEFEND against ${threats.joinToString(" ") { "${Bodies.summaryOf(it)}${at(it)}" }} fighters=${fighters.size}")
-            if (mode == "hold") println("army ${g.name} t=${w.now}: HOLD (was $prev)")
+            if (mode == "hold") println("army ${g.name} t=${w.now}: HOLD (was $prev) group=${group.size} from=${from?.let { at(it) }} " +
+                "siege=${lastSiegeWhy}")
             g.modeSince = w.now
         }
     }
@@ -1062,8 +1108,20 @@ object EscortRunAdvanced {
         val spawn = w.mySpawn ?: return emptyList()
         // only the ramparts of home: v8's first build rallied the home army on the outpost's ramparts (they lie nearer to
         // the middle of the map) and it stood on the outpost's spawn site
-        return basesRamparts(w, spawn).filter { it !in inner && it != key(spawn) }
+        val ring = basesRamparts(w, spawn).filter { it !in inner && it != key(spawn) }
             .sortedBy { k -> val dx = k / 100 - 50; val dy = k % 100 - 50; dx * dx + dy * dy }
+        // then the rings outside the block, never a cell beside the spawn: with more fighters than ramparts the rest
+        // stood within four of the spawn, took its eight cells, and the spawn sat on 1000 energy unable to put a creep
+        // out (stand, blob+harvest)
+        val out = ArrayList<Int>()
+        for (r in 3..6) for (dx in -r..r) for (dy in -r..r) {
+            if (maxOf(kotlin.math.abs(dx), kotlin.math.abs(dy)) != r) continue
+            val k = (spawn.x + dx) * 100 + (spawn.y + dy)
+            if (!DistanceMap.inBounds(k / 100, k % 100) || DistanceMap.isWall(k / 100, k % 100) || k in w.myRamparts) continue
+            if (works?.any { it.second == k } == true || harvestSpots(w).take(2).contains(k)) continue
+            out.add(k)
+        }
+        return ring + out.sortedBy { k -> val dx = k / 100 - 50; val dy = k % 100 - 50; dx * dx + dy * dy }
     }
 
     private fun runArmy(w: World, g: Garrison, fighters: List<Creep>, base: Position?, rally: List<Int>, breach: Boolean) {
@@ -1086,7 +1144,7 @@ object EscortRunAdvanced {
             }
             if (focus == null) {
                 val spot = rally.getOrNull(rallyIdx++)
-                if (spot == null) { if (base != null && getRange(f, base) > 4) step(w, f, base, 4); continue }
+                if (spot == null) { if (base != null && getRange(f, base) > 6) step(w, f, base, 6); continue }
                 if (key(f) != spot) step(w, f, cellOf(spot), 0)
                 continue
             }
@@ -1210,7 +1268,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=round danger=$DANGER_RADIUS joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,tower,route outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +

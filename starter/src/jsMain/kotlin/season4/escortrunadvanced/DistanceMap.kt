@@ -106,6 +106,51 @@ object DistanceMap {
         return dial(target.x, target.y, block, maxOf(1, swampCost), Int.MAX_VALUE)
     }
 
+    /**
+     * Поле до цели с добавочной ЦЕНОЙ клеток (`extra[x * 100 + y]` сверх равнины/болота) вместо стен: так путь армии
+     * обходит его бойцов, пока обход есть, и не рвётся, когда его крип шевельнулся в щели (стены вокруг врагов
+     * открывали и закрывали обход через тик, и решение армии мигало вместе с ними — стенд, blob+harvest).
+     */
+    fun flowFieldCost(target: Position, extra: IntArray, swampCost: Int, extraBlocked: List<Position>): IntArray {
+        ensureStaticBlocked()
+        val block = staticBlocked!!.copyOf()
+        for (p in extraBlocked) if (inBounds(p.x, p.y)) block[index(p.x, p.y)] = true
+        if (inBounds(target.x, target.y)) block[index(target.x, target.y)] = false
+        scanTerrain()
+        val swamp = swampCells!!
+        var maxStep = maxOf(1, swampCost)
+        for (v in extra) if (v > 0) maxStep = maxOf(maxStep, maxOf(1, swampCost) + v)
+        val dist = IntArray(FIELD * FIELD) { -1 }
+        val buckets = Array(maxStep + 1) { ArrayDeque<Int>() }
+        val si = index(target.x, target.y)
+        dist[si] = 0
+        buckets[0].addLast(si)
+        var queued = 1
+        var current = 0
+        while (queued > 0) {
+            val bucket = buckets[current % (maxStep + 1)]
+            if (bucket.isEmpty()) { current++; continue }
+            val c = bucket.removeFirst()
+            queued--
+            if (dist[c] != current) continue
+            val cx = c / FIELD; val cy = c % FIELD
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = cx + dx; val ny = cy + dy
+                if (!inBounds(nx, ny)) continue
+                val ni = index(nx, ny)
+                if (block[ni]) continue
+                val next = current + (if (swamp[ni]) maxOf(1, swampCost) else 1) + extra[ni]
+                if (dist[ni] < 0 || next < dist[ni]) {
+                    dist[ni] = next
+                    buckets[next % (maxStep + 1)].addLast(ni)
+                    queued++
+                }
+            }
+        }
+        return dist
+    }
+
     /** Поле до НЕСКОЛЬКИХ целей сразу (ближайшая из них). */
     fun flowFieldToAny(targets: List<Position>, extraBlocked: List<Position>, swampCost: Int, maxDist: Int = Int.MAX_VALUE): IntArray {
         ensureStaticBlocked()
