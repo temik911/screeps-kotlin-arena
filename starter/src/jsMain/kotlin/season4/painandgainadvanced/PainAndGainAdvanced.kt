@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 12
+const val BOT_VERSION = 13
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -169,7 +169,7 @@ object PainAndGainAdvanced {
     private fun probe() {
         println("hello season4 pain-and-gain-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} TICKS_LIMIT=$TICKS_LIMIT MAX_SCORE_PER_TICK=$MAX_SCORE_PER_TICK")
-        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R local=$LOCAL_R initiative=$INITIATIVE_RATIO fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE classify=$CLASSIFY_T fighterRate=$FIGHTER_MAX_RATE fortressR=$FORTRESS_R")
+        println("tuning: engage=$ENGAGE_RANGE engaged=$ENGAGED_R local=$LOCAL_R initiative=$INITIATIVE_RATIO fightRatio=$FIGHT_RATIO retreatRatio=$RETREAT_RATIO lead=$ESCORT_LEAD link=$GROUP_LINK zone=$ZONE_R guard=$GUARD_R sweep=$SWEEP_RATIO pair=$HUNT_PAIR towerMin=$TOWER_MIN_DAMAGE classify=$CLASSIFY_T spread=$SPREAD_R/$FIGHTER_MAX_OUT fighterRate=$FIGHTER_MAX_RATE fortressR=$FORTRESS_R")
         println("flagtypes: ${JSON.stringify(FLAG_TYPES)}")
         println("consts: TOWER_RANGE=$TOWER_RANGE TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_POWER_HEAL=$TOWER_POWER_HEAL " +
             "TOWER_OPTIMAL_RANGE=$TOWER_OPTIMAL_RANGE TOWER_FALLOFF_RANGE=$TOWER_FALLOFF_RANGE TOWER_FALLOFF=$TOWER_FALLOFF " +
@@ -353,8 +353,13 @@ object PainAndGainAdvanced {
     private fun classify() {
         if (classified || t < CLASSIFY_T) return
         classified = true
-        fighter = theirFx.rate <= FIGHTER_MAX_RATE
-        println("style t=$t: ${if (fighter) "fighter" else "farmer"} his rate=${theirFx.rate} his flags=${flags.count { it.my == false }}")
+        // read early, by how his army walks: a farmer's runners are out on their flags from the first ticks (kerobii's
+        // melee took the centre at t=39), a fighter's sixteen walk as one. Read at t=150 (v12's first cut) the stand's
+        // line of stachu3478#5 caught our army on its way to the fortress at t=152 on three maps of eight
+        val cx = theirs.sumOf { it.x } / maxOf(1, theirs.size); val cy = theirs.sumOf { it.y } / maxOf(1, theirs.size)
+        val out = theirs.count { Grid.range(it.x, it.y, cx, cy) > SPREAD_R }
+        fighter = out <= FIGHTER_MAX_OUT && theirFx.rate <= FIGHTER_MAX_RATE
+        println("style t=$t: ${if (fighter) "fighter" else "farmer"} his rate=${theirFx.rate} his flags=${flags.count { it.my == false }} spread=$out")
     }
 
     private fun army() {
@@ -743,7 +748,9 @@ object PainAndGainAdvanced {
     const val INITIATIVE_RATIO = 1.3
     const val MEND_AT = 250
     const val SURVIVE_ARMED = 2
-    const val CLASSIFY_T = 150
+    const val CLASSIFY_T = 45
+    const val SPREAD_R = 10
+    const val FIGHTER_MAX_OUT = 2
     const val FIGHTER_MAX_RATE = 5
     const val FARMER_RATE = 12
     const val FORTRESS_R = 8
