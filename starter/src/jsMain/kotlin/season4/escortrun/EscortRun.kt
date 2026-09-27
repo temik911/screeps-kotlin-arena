@@ -958,7 +958,10 @@ object EscortRun {
     private fun runScouts(w: World) {
         for (s in w.scouts) {
             if (s.spawning || Bodies.liveMoves(s) == 0) continue
-            val mission = scoutMission[idOf(s)] ?: continue
+            var mission = scoutMission[idOf(s)] ?: continue
+            // флаг закрыт сооружением — хранители у флага только занимают клетки, с которых его ломают (офлайн: из двух
+            // проломщиков бил один, остальные соседи флага — эскорт, хранитель, второй хранитель): они уходят блокировать
+            if (w.flagBlocker != null && (mission == KEEP || mission == APPROACH)) { mission = BLOCK; scoutMission[idOf(s)] = BLOCK }
             if (mission == CHOKE) { runChoke(w, s); continue }
             if (mission == APPROACH) {
                 // второй хранитель: на клетке подхода нашего эскорта; эскорт, подойдя, сдвинет его (runTrain)
@@ -1427,6 +1430,9 @@ object EscortRun {
                 if (b == null) { fighterRole[id] = ESCORT_GUARD } else {
                     val bp = b.unsafeCast<Position>()
                     if (dist(f, bp) <= 1) { f.attack(b); if (DEBUG_LOG && w.now % LOG_EVERY == 0) println("fighter t=${w.now}: $id breach ${protoName(b)} hits=${b.asDynamic().hits}"); continue }
+                    // по дороге бьёт соседних врагов: их блокировщик в узком коридоре держал троих проломщиков в трёх
+                    // клетках друг за другом до конца матча (офлайн, затычка с погоней, 6ab906a0)
+                    attackBest(f, w, null)
                     if (Bodies.liveMoves(f) == 0) continue
                     val swampCost = maxOf(1, Bodies.period(Bodies.weight(f), Bodies.liveMoves(f), true))
                     stepAround(w, f, bp, 1, swampCost, 5)?.let { TrafficManager.request(f, it, FIGHTER_PRIORITY) }

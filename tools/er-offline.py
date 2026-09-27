@@ -78,7 +78,7 @@ def maps(n):
 def hand(args):
     game, swap, a, b, pa, pb = args
     env = dict(os.environ, GAME=game, BOT=a, BOT2=b, PERSONA=pa, PERSONA2=pb,
-               LOGTAG=f"off-{os.path.basename(os.path.dirname(game))[:8]}-{'b' if swap else 't'}-")
+               LOGTAG=f"off-{os.path.basename(os.path.dirname(game))[:8]}-{'top' if swap else 'bottom'}-")
     if swap:
         env["START"] = "match2"
     env.setdefault("NODE_OPTIONS", "--max-semi-space-size=2 --max-old-space-size=256")
