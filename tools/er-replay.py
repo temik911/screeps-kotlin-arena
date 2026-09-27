@@ -40,7 +40,11 @@ def main():
     doc = json.load(gzip.open(find(a.game), 'rt'))
     meta = doc['meta']
     names = {p['side']: f"{p['username']}#{p.get('codeVersion')}" for p in meta['players']}
-    us = next((p['side'] for p in meta['players'] if p['username'].startswith(a.us)), 0)
+    # by name alone self-play (a league game: both sides are ours) always labelled side 0 as us; replay.our_side reads
+    # the stored match document for which code started the game
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from replay import our_side
+    us = our_side(meta, a.us)
     who = lambda side: 'US ' if side == us else ('THM' if side in (0, 1) else '---')
     objs = {o['id']: o for o in doc['objects']}
     flags = {o['side']: (o['x'], o['y']) for o in doc['objects'] if o['kind'] == 'flag'}
