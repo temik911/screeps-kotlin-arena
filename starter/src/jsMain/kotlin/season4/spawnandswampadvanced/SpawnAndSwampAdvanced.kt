@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v38"
+    private const val BOT_VERSION = "v39"
 
     private const val LOG_EVERY = 50
 
@@ -215,6 +215,10 @@ object SpawnAndSwampAdvanced {
      *  спавна и полностью свободен», а бот видел только свой. */
     private val vaults = ArrayList<Vault>()
     private var holdTicks = 0
+    /** Цель удара: волна идёт к ЭТОМУ спавну, отвечая по дороге только тем, кто рядом, — прогон выбрал его среди всех. */
+    private var strikeTargetId: String? = null
+    /** Урон его башен по пути к его спавну: id спавна → (тик замера, урон). Путь меняется медленно — раз в 25 тиков. */
+    private val routeDamage = HashMap<String, Pair<Int, Int>>()
     /** Чужие площадки башен: id → (тик, прогресс) при первой встрече — из них скорость его стройки. */
     private val enemySiteSeen = HashMap<String, Pair<Int, Int>>()
 
@@ -1428,6 +1432,39 @@ object SpawnAndSwampAdvanced {
 
     /** Башня под рампартом бьётся вместе с ним: весь урон по ней сперва снимает рампарт. v20 считал башню бойцом на
      *  3000, волна из 13 шла на обещанные 55 % против двух башен под рампартами (13000 каждая) — вернулись трое. */
+    /** Урон его башен по дороге группы к цели: путь — по карте опасности, как ходит волна; на каждой клетке — выстрел
+     *  каждой башни, до которой клетка в досягаемости, на тики этой клетки (болото — 5 у тела 1:1). Прогон удара видит
+     *  только башни в 10 клетках от цели, а башня (48,78) けろびー била наши волны к его второму спавну с 15–20 клеток:
+     *  26900 урона за окна волн одной ничьей, ни одного выстрела в ответ. */
+    private fun routeTowerDamage(t: Int, from: Position, to: GameObject, towers: List<StructureTower>): Int {
+        if (towers.isEmpty()) return 0
+        routeDamage[idOf(to)]?.let { (at, d) -> if (t - at < 25) return d }
+        val o: dynamic = js("({})")
+        danger?.let { o.costMatrix = it }
+        o.plainCost = 1
+        o.swampCost = 5
+        val r = searchPath(from, SearchGoal(pos = to, range = RANGED_RANGE), o.unsafeCast<SearchPathOptions>())
+        val falloff = TOWER_FALLOFF_RANGE.asDynamic().unsafeCast<Double>()
+        var dmg = 0.0
+        for (p in r.path) {
+            val ticks = if (getTerrainAt(p) == TERRAIN_SWAMP) 5 else 1
+            for (tw in towers) {
+                val d = maxOf(kotlin.math.abs(p.x - tw.x), kotlin.math.abs(p.y - tw.y))
+                if (d < falloff) dmg += towerShot(d) / TOWER_COOLDOWN * ticks
+            }
+        }
+        routeDamage[idOf(to)] = t to dmg.toInt()
+        return dmg.toInt()
+    }
+
+    /** Группа после урона по дороге: башня бьёт в одного, пока не убьёт, — снимаем с самых слабых целиком. */
+    private fun preDamage(units: List<SimUnit>, dmg: Int): List<SimUnit> {
+        var left = dmg
+        val out = units.map { it.copy() }.sortedBy { it.hits }
+        for (u in out) { if (left <= 0) break; val take = minOf(left, u.hits); u.hits -= take; left -= take }
+        return out.filter { it.hits > 0 }
+    }
+
     private fun simTowerOf(tw: StructureTower, all: Array<GameObject>): SimUnit {
         val rampart = all.firstOrNull { it is StructureRampart && it.x == tw.x && it.y == tw.y }?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
         return simTower((tw.hits ?: TOWER_HITS) + rampart)
@@ -1513,6 +1550,7 @@ object SpawnAndSwampAdvanced {
     ) {
         val fighters = mine.filter { !it.spawning && isCombat(it) && idOf(it) !in roleOf }
         wave.retainAll(fighters.map { idOf(it) }.toSet())
+        if (wave.isEmpty()) strikeTargetId = null
         calib?.let { c -> if (wave.isEmpty()) calibEnd(t, "wiped", byId) else if (t - c.t0 >= SIM_LIMIT) calibEnd(t, "timeout", byId) }
         val homeSpawns = homeSpawnObjects(byId)
         // сбор — у спавна, ближайшего к сопернику: туда сходятся бойцы всех баз
@@ -1590,6 +1628,7 @@ object SpawnAndSwampAdvanced {
             if ((r.win && r.keep >= PUSH_KEEP) || lastCall) {
                 calibStart(t, "push", pushers, enemyCombat, r, byId)
                 for (f in pushers) wave.add(idOf(f))
+                strikeTargetId = null
                 println("push t=$t wave=${wave.size} home=${pushers.size}+${defenders.size}def vs ${enemyForPush.size} (army ${enemyCombat.size} towers ${fedTowers.size}+$pending arrival=$arrival) " +
                     "sim keep=${(r.keep * 100).toInt()}% ticks=${r.ticks}${if (lastCall) " lastCall" else ""}")
             } else if (enemySpawnObjs.isNotEmpty()) {
@@ -1597,14 +1636,23 @@ object SpawnAndSwampAdvanced {
                 // немногие. stachu3478 ставил спавн у центрального источника на нашей стороне, убил нашего строителя и
                 // перерос нас по источникам (32 крипа против 11 к 3000-му) — а его передовые спавны стояли под двумя-
                 // четырьмя стражами. Против них: стражи в 15 клетках, его доля будущих рождений на путь, башни рядом
-                val sp = enemySpawnObjs.minByOrNull { pathTicks(home, it) }!!
+                // цель — не ближний спавн, а тот, что прогон берёт с наибольшим запасом, с уроном башен по дороге:
+                // v37 бил по (32,96) все девять ударов ничьей, проходя под башней у его первого спавна
+                val center = pushers.minByOrNull { c -> pushers.sumOf { getRange(it, c) } }!!
+                val ourDps = pushers.sumOf { dpsOf(it) }.coerceAtLeast(1)
+                val start = pushers.sumOf { it.hits }.coerceAtLeast(1)
+                var best: GameObject? = null
+                var bestR: SimResult? = null
+                var bestKeep = -1.0
+                var bestFoes: List<Creep> = emptyList()
+                var bestInfo = ""
+                for (sp in enemySpawnObjs) {
                 val toSp = pathTicks(home, sp)
                 // защитники — все его бойцы, что дойдут до цели не позже нас (стоят к ней не дальше, чем мы): v18 бил
                 // по «стражам в 15 клетках», слал одного-двух бойцов на спавн без стражей, и по дороге их ловила его
                 // армия — 40–48 потерянных крипов за ничью
                 // …и за время осады: хиты спавна с рампартом на наш урон — v28 бил группами по 1–7 «спавн без стражей»,
                 // а его бродячая армия успевала к осаде (60 потерянных крипов в поражении от stachu3478)
-                val ourDps = pushers.sumOf { dpsOf(it) }.coerceAtLeast(1)
                 val siegeTicks = simSpawnOf(sp, all).hits / ourDps
                 val reach = maxOf(STRIKE_GUARD_RANGE, getRange(home, sp) + siegeTicks)
                 val guards = enemyCombat.filter { getRange(it, sp) <= reach && idOf(it) !in threatIds }
@@ -1612,15 +1660,24 @@ object SpawnAndSwampAdvanced {
                 val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
                 // и те его бойцы, что уже рядом с нашей группой: их видит прогон отхода, и без них удар и отход v22
                 // сменяли друг друга каждый тик (1568–1574)
-                val center = pushers.minByOrNull { c -> pushers.sumOf { getRange(it, c) } }!!
                 val nearUs = enemyCombat.filter { e -> getRange(e, center) <= LOCAL_RANGE && e !in guards && idOf(e) !in threatIds }
                 val local = (guards + nearUs).map { simOf(it) } + births + towersNear.map { simTowerOf(it, all) } + simSpawnOf(sp, all)
-                val rs = simulate(pushers.map { simOf(it) }, local)
-                if (rs.win && rs.keep >= PUSH_KEEP) {
-                    calibStart(t, "strike", pushers, guards + nearUs, rs, byId)
+                val route = routeTowerDamage(t, home, sp, fedTowers.filter { it !in towersNear })
+                val rs = simulate(preDamage(pushers.map { simOf(it) }, route), local)
+                val keep = rs.left.toDouble() / start
+                if (rs.win && keep >= PUSH_KEEP && keep > bestKeep) {
+                    best = sp; bestR = rs; bestKeep = keep; bestFoes = guards + nearUs
+                    bestInfo = "guards=${guards.size} births=${births.size} towers=${towersNear.size} route=$route arrival=$toSp"
+                }
+                }
+                val sp = best
+                val rs = bestR
+                if (sp != null && rs != null) {
+                    calibStart(t, "strike", pushers, bestFoes, SimResult(rs.win, bestKeep, rs.left, rs.theirLeft, rs.ticks), byId)
                     for (f in pushers) wave.add(idOf(f))
-                    println("strike t=$t wave=${wave.size} at spawn (${sp.x},${sp.y}) guards=${guards.size} births=${births.size} towers=${towersNear.size} " +
-                        "arrival=$toSp sim keep=${(rs.keep * 100).toInt()}% (whole army: ${(r.keep * 100).toInt()}% win=${r.win})")
+                    strikeTargetId = idOf(sp)
+                    println("strike t=$t wave=${wave.size} at spawn (${sp.x},${sp.y}) of ${enemySpawnObjs.size} $bestInfo " +
+                        "sim keep=${(bestKeep * 100).toInt()}% (whole army: ${(r.keep * 100).toInt()}% win=${r.win})")
                 }
             }
         }
@@ -1653,7 +1710,13 @@ object SpawnAndSwampAdvanced {
         val waveNow = fighters.filter { idOf(it) in wave }
         if (waveNow.isNotEmpty()) {
             val front = waveNow.minByOrNull { f -> nearestTargetRange(f, enemyCombat, enemyObjects, theirs) }!!
-            val goal = pickGoal(front, enemyCombat, enemyObjects, theirs)
+            // удар идёт к выбранному спавну: по дороге — только бойцы рядом с головой, у цели — обычный выбор (башня
+            // рядом со спавном бьётся первой)
+            val locked = strikeTargetId?.let { id -> enemyObjects.firstOrNull { idOf(it) == id } }
+            if (locked == null) strikeTargetId = null
+            val goal = if (locked != null && getRange(front, locked) > LOCAL_RANGE)
+                enemyCombat.filter { !it.spawning && getRange(front, it) <= LOCAL_RANGE }.minByOrNull { getRange(front, it) } ?: locked
+                else pickGoal(front, enemyCombat, enemyObjects, theirs)
             if (goal != null) {
                 // все идут к цели; передние ждут отставших, которые могут догнать, и не дольше срока
                 val toGoal = waveNow.associateWith { getRange(it, goal) }
