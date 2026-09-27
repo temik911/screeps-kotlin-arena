@@ -1054,7 +1054,9 @@ object EscortRunAdvanced {
     private fun rallyCells(w: World): List<Int> {
         val inner = innerCells(w).toHashSet()
         val spawn = w.mySpawn ?: return emptyList()
-        return w.myRamparts.filter { it !in inner && it != key(spawn) }
+        // only the ramparts of home: v8's first build rallied the home army on the outpost's ramparts (they lie nearer to
+        // the middle of the map) and it stood on the outpost's spawn site
+        return basesRamparts(w, spawn).filter { it !in inner && it != key(spawn) }
             .sortedBy { k -> val dx = k / 100 - 50; val dy = k % 100 - 50; dx * dx + dy * dy }
     }
 
@@ -1068,7 +1070,7 @@ object EscortRunAdvanced {
         // reserves (not in the running operation) break the wall while nothing threatens home
         val reserves = fighters.filter { !(inOp && idOf(it) in g.members) }
         val breaching = if (breach && g.mode != "defend" && breachLeft(w)) runBreach(w, reserves) else emptySet()
-        val walled = if (g.mode == "defend") holdRamparts(w, fighters, threats) else emptySet()
+        val walled = if (g.mode == "defend") holdRamparts(w, fighters, threats, base) else emptySet()
         for (f in fighters) {
             if (idOf(f) in breaching || idOf(f) in walled) continue
             val focus: Position? = when {
@@ -1102,13 +1104,19 @@ object EscortRunAdvanced {
      * and M4H3M1 one by one: eleven fighters, no kill, all dead in the ten cells north of our block, while the rampart
      * next to the cell his melee struck from stood free (6ab92e1f). Returns the defenders placed.
      */
-    private fun holdRamparts(w: World, fighters: List<Creep>, threats: List<Creep>): Set<String> {
-        if (threats.isEmpty() || fighters.isEmpty()) return emptySet()
+    /** Our ramparts belonging to the base at `base` (within HOME_RADIUS), less the outpost's spawn cell and worker slots. */
+    private fun basesRamparts(w: World, base: Position): List<Int> {
+        val op = outpost
+        return w.myRamparts.filter { k -> getRange(cellOf(k), base) <= HOME_RADIUS && (op == null || (k != op.spawnCell && k !in op.slots)) }
+    }
+
+    private fun holdRamparts(w: World, fighters: List<Creep>, threats: List<Creep>, base: Position?): Set<String> {
+        if (threats.isEmpty() || fighters.isEmpty() || base == null) return emptySet()
         val open = Bodies.fight(units(fighters), units(threats))
         if (open.weWin && open.margin() >= DEFEND_OPEN_MARGIN) return emptySet()
         val spawnKey = w.mySpawn?.let { key(it) }
         val towerCells = works?.filter { it.first == "tower" }?.map { it.second }?.toSet() ?: emptySet()
-        val cells = w.myRamparts.filter { k -> k != spawnKey && k !in towerCells &&
+        val cells = basesRamparts(w, base).filter { k -> k != spawnKey && k !in towerCells &&
             (w.occupant[k]?.let { o -> o.my && idOf(o) !in escortIds } ?: true) }
         val taken = HashSet<Int>()
         val placed = HashSet<String>()
