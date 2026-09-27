@@ -74,7 +74,7 @@ internal object Strategist {
     )
 
     /** Один вопрос о режиме командира: вход решения, признак «бой сейчас» и — для цепочки причин — уже выбранный режим. */
-    class ModeCase(val i: StrategyInputs, val fightNow: Boolean) { var mode: CmdMode = CmdMode.RACE }
+    class ModeCase(val i: StrategyInputs, val fightNow: Boolean, val kiting: Boolean) { var mode: CmdMode = CmdMode.RACE }
 
     /** Счётчики трёх таблиц решения (прибор `reach t=`): постура, режим командира, причина режима. */
     val postureTally = Tally("posture")
@@ -100,7 +100,7 @@ internal object Strategist {
     /** РЕЖИМ КОМАНДИРА: поход → гонка при застое или его отходе → бой → гонка. */
     private val MODE_RULES: List<Row<ModeCase, CmdMode>> by lazy { listOf<Row<ModeCase, CmdMode>>(
         Row("march", { i.marchNow }) { CmdMode.MARCH },
-        Row("race.stall", { i.stalled || i.hisRetreat }) { CmdMode.RACE },
+        Row("race.stall", { i.stalled || (i.hisRetreat && !kiting) }) { CmdMode.RACE },
         Row("fight", { fightNow }) { CmdMode.FIGHT },
         Row("race", { true }) { CmdMode.RACE },
     ) }
@@ -200,9 +200,15 @@ internal object Strategist {
         // отказ дистанции не даёт (скорость равная), а наш огонь снимает
         val fistInReach = USE_FIST_FIGHT_IN_REACH && !tourerMode() && i.hisGunsReach
         if (i.enemyMassed && USE_NO_FIST_FIGHT && fistInReach) fistReachTicks.n++
-        val fightNow = (!pushing && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
+        // ...И ПОД ЕГО ОГНЁМ БОЙ НЕ СНИМАЮТ НИ НАШ НАТИСК, НИ ЕГО ШАГ НАЗАД (v696, см. USE_FIGHT_UNDER_HIS_FIRE): его мили
+        // гибнут первыми, мощь по числу частей становится нашей, натиск по мощи включается — и армия уходит из боя в гонку,
+        // где приказ получают трое, а его сомкнутые стрелки с лекарями, отступив на четыре клетки, расстреливают остальных
+        // поодиночке. Шаг назад того, кто по нам стреляет, — кайт, а не отход
+        val holdUnderFire = USE_FIGHT_UNDER_HIS_FIRE && i.underTheirFire
+        val fightNow = ((!pushing || holdUnderFire) && i.underTheirFire && !i.fewFoes && !pre.withdrawing &&
             !(i.enemyMassed && USE_NO_FIST_FIGHT && !fistInReach)) || engageLost
-        val case = ModeCase(i, fightNow)
+        if (holdUnderFire && (pushing || i.hisRetreat)) fireHoldTicks.n++
+        val case = ModeCase(i, fightNow, holdUnderFire)
         val mode = walk(MODE_RULES, case, modeTally).act(case)
         // ...и причина берётся из той же цепочки (v215): прибор, повторяющий решение своим порядком, врёт ровно тогда,
         // когда бот меняется

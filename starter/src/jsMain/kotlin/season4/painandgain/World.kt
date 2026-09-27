@@ -2265,6 +2265,9 @@ internal val engageHeldTicks = Gauges.counter("engheld")
  *  видел строй, вставший у болота; по реплеям это одна игра из 95 против MetalicaX#13 — прибор говорит, так ли и живьём. */
 /** Прибор пола по цене (v684, `floorval=`): проверок пола, где флаг пропущен только ценой — по счёту штук он был бы закрыт. */
 internal val floorValueGauge = Gauges.counter("floorval")
+/** Прибор боя под огнём (v696, см. USE_FIGHT_UNDER_HIS_FIRE): `firehold=` — тиков, где его огонь по нашей армии удержал режим
+ *  боя, который наш натиск или «его отход» сняли бы. */
+internal val fireHoldTicks = Gauges.counter("firehold")
 
 internal val bogPre = Gauges.counter("bog")
 internal val bogFight = Gauges.counter("bog", 1)
