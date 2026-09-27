@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 22
+const val BOT_VERSION = 23
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -136,7 +136,7 @@ object PainAndGainAdvanced {
         trackStuck()
         classify()
         // a fighter that starts farming is no longer played from a fortress
-        if (fighter && theirFx.rate >= FARMER_RATE) { fighter = false; println("style t=$t: farmer now, his rate=${theirFx.rate}") }
+        if (fighter && fortressLoses()) { fighter = false; fortressId = null; println("style t=$t: out of the fortress — it loses on the score, rate ${ourFx.rate}:${theirFx.rate} score $ourScore:$theirScore") }
         army()
         pullers()
         towersAct()
@@ -339,6 +339,26 @@ object PainAndGainAdvanced {
         return gain * (left - FATIGUE_MARGIN) <= -atEnd
     }
 
+    /**
+     * The fortress loses when all it can hold — its flags and our fatigue flag — ends the match behind at the rates that
+     * stand: a fighter who holds more than that (the centre and a hits-loss flag, 9 a tick to its 8) and does not come
+     * wins on the score against an army that waits for him (the stub's `chase+sit+wide`: 13 095 to 38 657). He gets
+     * STALE_T ticks with no fight and no approach (FIGHT and STAND restart them) to come to us first — against his line
+     * our army wins under its tower and loses in the field: a first cut that went at once when his army was spread
+     * read `line`'s long column as a farmer's runners, walked out at t=300 and lost 2 to 13 by t=500 on a record v22
+     * wins. This replaced a named threshold, "a fighter at 12 a tick is a farmer".
+     */
+    private var losingSince = -1
+    private fun fortressLoses(): Boolean {
+        val left = TICKS_LIMIT - t
+        val f5 = flags.firstOrNull { f -> f.effectType == EFF_FATIGUE && pullerPost.values.any { it == f.id } }
+        val potential = ourFx.rate + (if (f5 != null && f5.my != true) f5.scorePerTick * (if (f5.my == false) 2 else 1) else 0)
+        val atEnd = (ourScore - theirScore) + (potential - theirFx.rate) * left
+        if (atEnd > 0) { losingSince = -1; return false }
+        if (losingSince < 0 || mode == Mode.FIGHT || mode == Mode.STAND) losingSince = t
+        return t - losingSince >= STALE_T
+    }
+
     /** A cell beside the flag that reaches both its tower and its box (off the flag), else any free one beside it. */
     private fun besideFlag(post: ScoreFlag, tower: StructureTower?, box: StructureContainer?): Int {
         var best = Grid.idx(post.x, post.y); var bestS = Int.MIN_VALUE
@@ -412,6 +432,15 @@ object PainAndGainAdvanced {
      *  fire beat the other's healing — while his three flags outscored our two; the fight held the army because his
      *  guns were within four. While his flags score at least ours, such a fight is left for his flags. */
     private var breakOffUntil = 0
+    /** Which of the last STALE_T ticks the army spent in FIGHT (a ring by t % STALE_T) and how many. */
+    private val fightRing = BooleanArray(STALE_T)
+    private var fightTicks = 0
+    private fun noteFight(fighting: Boolean) {
+        val i = t % STALE_T
+        if (fightRing[i]) fightTicks--
+        fightRing[i] = fighting
+        if (fighting) fightTicks++
+    }
     /** His style, latched at CLASSIFY_T: a FIGHTER keeps his army together and takes at most one flag (stachu3478#5
      *  none, Hardy#1 the centre), a farmer spreads runners over five to seven flags by t=100 (kerobii#6/#12,
      *  76561198870429455). Against a fighter the centre is a coin toss — his formed line against ours at parity, lost
@@ -497,7 +526,12 @@ object PainAndGainAdvanced {
         // engaged: his armed within ENGAGED_R of our group. A group in contact does not retreat — at equal speed a
         // retreat only turns backs to his guns: v4 against Hardy#1 went from 9 against 9 at t=92 to 1 against 8 at
         // t=200 walking home (the basic arena's `no-escape-equal-speed`)
-        val stale = mode == Mode.FIGHT && t - lastDeathT > STALE_T && t - modeSince > STALE_T
+        // a fight that has held the army most of the last STALE_T ticks with no death on either side — counted over the
+        // window, not from the last change of mode: against kerobii#6 the army swung between FIGHT and SWEEP every few
+        // ticks as his runners passed within ENGAGE_RANGE of it, the count restarted each time, and from t=500 to t=4000
+        // it "fought" what it could not catch (our heavy melee swung 0 times in t=1000-1500) while his runners held six
+        // flags to our four — lost on the score
+        val stale = t - lastDeathT > STALE_T && fightTicks * 2 >= STALE_T
         if (stale && theirFx.rate >= ourFx.rate && t >= breakOffUntil) {
             breakOffUntil = t + STALE_T
             println("stale t=$t: no death in ${t - lastDeathT} ticks, rate ${ourFx.rate}:${theirFx.rate} — off to his flags")
@@ -537,7 +571,11 @@ object PainAndGainAdvanced {
         val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
         val sweepFlag = if (swept || breakingOff) sweepTarget(cx, cy, group.size) else null
         val fortress = if (fighter && !swept) fortressFlag() else null
-        val objective = sweepFlag ?: fortress ?: (if (guarded(centre, group)) safeFlag(cx, cy, group) else null) ?: centre
+        // whether the centre is too well guarded is weighed with the whole army, not the group of this tick: with a
+        // straggler or two out of GROUP_LINK the group read 12 and 14 on alternate ticks, the duel 0.88 and 1.55, and the
+        // objective flipped between the centre and our own flag every tick — the stub's `chase+sit+wide` saw the army
+        // step to and fro, 419 steps in 50 ticks, for 1500 ticks
+        val objective = sweepFlag ?: fortress ?: (if (guarded(centre, army)) safeFlag(cx, cy, army) else null) ?: centre
         // survival: with the army broken and the score ours, what is left lives under our fed tower — it heals them and
         // shoots what comes; one creep of ours alive when the lead outgrows 43 a tick for the ticks left ends the match
         // latched: a healed-back part must not end it — a v11 test left the shelter at t=301 when a heal gave one of our
@@ -560,6 +598,7 @@ object PainAndGainAdvanced {
         if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} whole=${whole.ratio.asDynamic().toFixed(2)} near=${near.size} group=${group.size}/${army.size} obj=${objective.x},${objective.y}") }
 
         if (mode == Mode.SWEEP) settled = true
+        noteFight(mode == Mode.FIGHT)
         fire(all)
         // hunters: in a sweep, light armed creeps go in pairs after the enemy's survivors — a lone runner sits on a flag
         // or walks between them, and an `h4m4` heals itself 48 a tick, more than one `r4m4` does to it
@@ -581,17 +620,23 @@ object PainAndGainAdvanced {
                 if (restGroup.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= restGroup.size) capture(restGroup, objective)
             }
             Mode.SWEEP -> if (restGroup.isNotEmpty()) {
-                // an armed survivor of his that no pair of ours hunts and that walks no faster than our group is the
-                // group's to kill before any flag: against kerobii#5 our lights, the only hunters, were dead by t=700,
-                // and his one heavy melee killed six of our garrisons one by one from t=1104 to t=1506 while the group
-                // walked from flag to flag; with the garrisons gone our own hits-loss flags finished the rest (0 of 16
-                // at t=1963, annihilated while he had two). No garrison is set while that hunt is on
+                // an armed creep of his at one of our garrisons, that no pair of ours hunts and that walks no faster
+                // than our group, is the group's to kill before any flag: against kerobii#5 our lights, the only
+                // hunters, were dead by t=700, and his one heavy melee killed six of our garrisons one by one from
+                // t=1104 to t=1506 while the group walked from flag to flag; with the garrisons gone our own hits-loss
+                // flags finished the rest (0 of 16 at t=1963, annihilated while he had two). Only at a garrison: v22
+                // hunted every such creep, and against kerobii#6 (eleven left, swept by strength at t=445) the group
+                // chased his heavies round his centre among his healers while his runners held seven flags — lost on
+                // the score. The prey is kept while it stays such (the nearest flipped between two every tick). No
+                // garrison is set while the hunt is on
                 val pace = restGroup.filter { it.moves > 0 }.maxOfOrNull { it.ticksPerStep(ourFx.fatigue) } ?: 1
                 // (not under his fed tower with a group too small to take one — the sweep's own rule for flags)
                 val hisFed = towers.filter { it.my == false && (it.store[RESOURCE_ENERGY] ?: 0) > 0 }
+                val posts = garrisonOf.values.mapNotNull { id -> flags.firstOrNull { it.id == id } }
                 val loose = foes.filter { e -> e.armed && hunterOf.values.none { it == e.id } && e.ticksPerStep(theirFx.fatigue) >= pace &&
+                    posts.any { Grid.range(it.x, it.y, e.x, e.y) <= GUARD_R } &&
                     (restGroup.size >= TOWER_ASSAULT_MIN || hisFed.none { Grid.range(it.x, it.y, e.x, e.y) <= HUNT_TOWER_R }) }
-                val prey = loose.minByOrNull { Grid.to(it.x, it.y)[Grid.idx(cx, cy)] }
+                val prey = loose.firstOrNull { it.id == preyId } ?: loose.minByOrNull { Grid.to(it.x, it.y)[Grid.idx(cx, cy)] }
                 if (prey != null) {
                     if (preyId != prey.id) { preyId = prey.id; println("hunt t=$t: the group after ${prey.id.substringAfterLast("player").drop(2)} at (${prey.x},${prey.y})") }
                     march(restGroup, prey.x, prey.y)
@@ -943,7 +988,6 @@ object PainAndGainAdvanced {
     const val SPREAD_R = 10
     const val FIGHTER_MAX_OUT = 2
     const val FIGHTER_MAX_RATE = 5
-    const val FARMER_RATE = 12
     const val FORTRESS_R = 8
     const val ANCHOR_BEHIND = 3
     const val FATIGUE_MARGIN = 300

@@ -34,7 +34,8 @@ const ticks = Math.min(parseInt(process.argv[2] || String(TICKS_LIMIT), 10), TIC
 // a scenario and its modifiers: `line+lag` is the line whose healers keep their rank (below)
 const [scenario, ...MODS] = (process.argv[3] || 'none').split('+');
 if (!['none', 'rush', 'farm', 'line', 'chase', 'mirror', 'ghost'].includes(scenario)) throw new Error(`unknown scenario ${scenario}`);
-if (MODS.some((m) => !((m === 'lag' && scenario === 'line') || (m === 'sit' && scenario === 'chase')))) throw new Error(`unknown modifier in ${process.argv[3]}`);
+if (MODS.some((m) => !((m === 'lag' && scenario === 'line') || ((m === 'sit' || m === 'wide') && scenario === 'chase')))) throw new Error(`unknown modifier in ${process.argv[3]}`);
+if (MODS.includes('wide') && !MODS.includes('sit')) throw new Error('wide goes with sit: chase+sit+wide');
 // REPLAY: ./replays/ first (a record kept with the stub), then ~/ScreepsArena/replays/ (tools/match-log.py replay <id>)
 function findReplay(arg) {
   if (existsSync(arg)) return arg;
@@ -658,6 +659,23 @@ function enemyTick() {
   beginMoves();
   if (scenario === 'ghost') ghost(mine, ours);
   else if (scenario === 'line') formation(mine, ours, LINE);
+  else if (scenario === 'chase' && MODS.includes('wide')) {
+    // chase+sit+wide: the clump holds the centre and his light melee stands on the hits-loss flag nearer to it (L4) —
+    // 9 a tick against the 8 a fortress can hold (its flag and its fatigue flag), and nobody comes to the fortress: the
+    // fighter who outscores a fortress from where he stands
+    // he leaves once the centre is his and the fighter has been read as one (t=150): a runner out from the first tick
+    // is a farmer's, and the bot reads it so at t=45
+    const centreFlag = world.objects.find((o) => o.exists && o.kind === 'flag' && o.effectType === 'eff_damage_taken_modifier');
+    const runner = world.tick >= 150 && centreFlag && centreFlag.owner === 1 ? mine.find((c) => /_melee_1$/.test(c.id) && c.body.length <= 8) : null;
+    formation(mine.filter((c) => c !== runner), ours, CHASE);
+    if (runner) {
+      const cx = mine.reduce((a, c) => a + c.x, 0) / mine.length, cy = mine.reduce((a, c) => a + c.y, 0) / mine.length;
+      const post = world.objects.filter((o) => o.exists && o.kind === 'flag' && o.effectType === 'eff_hits_loss')
+        .sort((a, b) => Math.max(Math.abs(a.x - cx), Math.abs(a.y - cy)) - Math.max(Math.abs(b.x - cx), Math.abs(b.y - cy)))[0];
+      act(runner, mine, ours);
+      if (post && (runner.x !== post.x || runner.y !== post.y)) stepDown(runner, flowNow(post.x, post.y));
+    }
+  }
   else if (scenario === 'chase') formation(mine, ours, CHASE);
   else {
     pullers(mine);
