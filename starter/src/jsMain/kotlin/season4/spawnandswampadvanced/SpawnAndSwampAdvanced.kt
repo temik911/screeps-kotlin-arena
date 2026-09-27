@@ -1051,7 +1051,7 @@ object SpawnAndSwampAdvanced {
         if (all.any { it is ConstructionSite && it.asDynamic().my == true && isRampartSite(it) && cheb(posOf(it), b.spawnCell) <= 2 }) return
         // пока у базы строится башня — новых рампартов не ставим: энергия добытчиков одна
         val tc = b.towerCell
-        if (tc != null && all.any { it is ConstructionSite && it.asDynamic().my == true && it.x == tc.x && it.y == tc.y }) return
+        if (homeHolds && tc != null && all.any { it is ConstructionSite && it.asDynamic().my == true && it.x == tc.x && it.y == tc.y }) return
         val next = want.firstOrNull { it !in have } ?: return
         val r = createConstructionSite(next.x, next.y, StructureRampart::class.js)
         println("rampart site t=$t at (${next.x},${next.y}) base=(${b.spawnCell.x},${b.spawnCell.y}) err=${r.error}")
