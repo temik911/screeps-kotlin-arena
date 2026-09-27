@@ -147,6 +147,25 @@ const side = (o) => (o === 0 ? 'ours' : o === 1 ? 'enemy' : 'none');
 export function process(ResourceClass) {
   const t = world.tick;
   const st = world.stats;
+  // 0. flags and towers change hands BEFORE this tick's moves: a creep that steps onto a flag in tick t takes it in tick
+  // t+1, and the flag's effect acts on its side's moves from tick t+2. Measured on replay 6ab9349f: our puller stood on
+  // the fatigue flag after tick 64, the flag and its tower changed owner in tick 65 (the record's `w`), our heavies
+  // still moved at x1 fatigue in tick 65 and at x2 from tick 66. Until 27.09.2026 the stand took the flag in the tick of
+  // the step and laid the effect a tick later — two ticks early, and a `ghost` run left our recorded cells at t=66
+  const flags = world.objects.filter((o) => o.exists && o.kind === 'flag');
+  for (const f of flags) {
+    const c = creepAt(f.x, f.y);
+    if (c && f.owner !== c.owner) {
+      world.events.push(`t=${t} flag ${f.id} (${f.x},${f.y}) ${f.effectType}/${f.scorePerTick}: ${side(f.owner)} -> ${side(c.owner)} by ${c.id} ${c.summary()}`);
+      f.owner = c.owner;
+    }
+  }
+  for (const tw of world.objects) {
+    if (!tw.exists || tw.kind !== 'tower' || !tw.flagId) continue;
+    const f = flags.find((x) => x.id === tw.flagId);
+    const owner = f ? f.owner : undefined;
+    if (owner !== tw.owner) { world.events.push(`t=${t} tower (${tw.x},${tw.y}) ${side(tw.owner)} -> ${side(owner)} with ${tw.flagId}`); tw.owner = owner; }
+  }
   // 1. combat: creeps, towers, hits loss — summed per target, then damage, then heal
   const damage = new Map();
   const heals = new Map();
@@ -296,21 +315,8 @@ export function process(ResourceClass) {
   }
   // 4. fatigue decay
   for (const c of creeps()) c.fatigue = Math.max(0, c.fatigue - 2 * live(c, 'move'));
-  // 5. flags, towers, score, effects
-  const flags = world.objects.filter((o) => o.exists && o.kind === 'flag');
-  for (const f of flags) {
-    const c = creepAt(f.x, f.y);
-    if (c && f.owner !== c.owner) {
-      world.events.push(`t=${t} flag ${f.id} (${f.x},${f.y}) ${f.effectType}/${f.scorePerTick}: ${side(f.owner)} -> ${side(c.owner)} by ${c.id} ${c.summary()}`);
-      f.owner = c.owner;
-    }
-  }
-  for (const tw of world.objects) {
-    if (!tw.exists || tw.kind !== 'tower' || !tw.flagId) continue;
-    const f = flags.find((x) => x.id === tw.flagId);
-    const owner = f ? f.owner : undefined;
-    if (owner !== tw.owner) { world.events.push(`t=${t} tower (${tw.x},${tw.y}) ${side(tw.owner)} -> ${side(owner)} with ${tw.flagId}`); tw.owner = owner; }
-  }
+  // 5. score, effects — from the ownership the tick began with plus this tick's captures (step 0); the effects laid
+  // here act from the NEXT tick
   for (const p of [0, 1]) {
     const mine = flags.filter((f) => f.owner === p);
     world.score[p] += Math.min(world.maxScorePerTick, mine.reduce((s, f) => s + f.scorePerTick, 0));

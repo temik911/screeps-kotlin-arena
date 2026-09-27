@@ -1,14 +1,14 @@
 // Offline runner for Pain and Gain ADVANCED: a live map (MAP=map-liveN.txt, written by mapfrom.py) with the arena's
 // fixed layout — eleven flags, four towers linked to four of them, eight 2500 containers, sixteen creeps a side — and a
 // scripted enemy. Usage (see README.md):
-//   node --import ./register.mjs run.mjs <ticks> none|rush|farm|line|line+lag|mirror|ghost
+//   node --import ./register.mjs run.mjs <ticks> none|rush|farm|line|line+lag|chase|mirror|ghost
 //   env: MAP=<file> (default map-live1.txt)  START=p1|p2 (the side our bot drives, default p1)  LOGTAG=<prefix>
 //        REPLAY=<game id | id prefix | path to .replay.json.gz> — the map, the bodies and the start cells of a played
 //          match, and our side is the side we played there (US=<name>, default temik911); MAP and START are ignored.
 //          Any scenario plays on it; `ghost` needs it (the enemy walks the recorded cells).
 //        BOT=<bundle url>  NOCLOCK=1 (getCpuTime() answers 0 — the run is deterministic on any machine)
 //        TRACE=<t0>-<t1> (our creeps' cells and fatigue every tick of that window, to stdout)  LINETRACE=<t0>-<t1> (the
-//        `line` script's state per tick)  STATUS=<n> (a status line to stdout every n ticks, default 500; the log gets
+//        `line` / `chase` script's state per tick)  STATUS=<n> (a status line to stdout every n ticks, default 500; the log gets
 //        one every 100)
 // The bot always drives the START side (owner 0); the other side (owner 1) is the enemy script, or with `mirror` a
 // second, fully separate instance of the same bundle (hooks.mjs gives it its own module graph). Logs go to ./out/.
@@ -33,7 +33,7 @@ const MAP = process.env.MAP || fileURLToPath(new URL('map-live1.txt', import.met
 const ticks = Math.min(parseInt(process.argv[2] || String(TICKS_LIMIT), 10), TICKS_LIMIT);
 // a scenario and its modifiers: `line+lag` is the line whose healers keep their rank (below)
 const [scenario, ...MODS] = (process.argv[3] || 'none').split('+');
-if (!['none', 'rush', 'farm', 'line', 'mirror', 'ghost'].includes(scenario)) throw new Error(`unknown scenario ${scenario}`);
+if (!['none', 'rush', 'farm', 'line', 'chase', 'mirror', 'ghost'].includes(scenario)) throw new Error(`unknown scenario ${scenario}`);
 if (MODS.some((m) => m !== 'lag') || (MODS.length && scenario !== 'line')) throw new Error(`unknown modifier in ${process.argv[3]}`);
 // REPLAY: ./replays/ first (a record kept with the stub), then ~/ScreepsArena/replays/ (tools/match-log.py replay <id>)
 function findReplay(arg) {
@@ -360,19 +360,60 @@ function farm(mine, ours) {
 // 14 in 6ab91898, and crept at 0.1-0.25 cells a tick after that (the line reforming, one cell at a time) until 7-11
 // cells from our army, then pushed in at the heavy pace; 6ab91a90 alone came in at 0.3-0.4. Contact: t=102-314.
 // Modelled: distances are steps to our nearest fighter (walls respected). The head is the front member (the melee)
-// nearest to us; in contact each role stands at its distance (LINE_GOAL), before contact the others keep ranks behind
-// the head (LINE_OFFSET: heavy ranged and heavy healers 2, light ranged and light healers 3, pullers 4) and the head
-// steps only while nobody is more than two behind its slot, once in CREEP_EVERY ticks until CREEP_NEAR cells from us
+// nearest to us; in contact each role stands at its distance (LINE.goal), before contact the others keep ranks behind
+// the head (LINE.offset: heavy ranged and heavy healers 2, light ranged and light healers 3, pullers 4) and the head
+// steps only while nobody is more than two behind its slot, once in creepEvery ticks until creepNear cells from us
 // and every tick after; a creep behind its slot swaps cells with a mate that belongs further back or stands ahead of
 // its own slot, and sidesteps round its own members when nothing is free downhill; a ranged or a healer with one of
 // ours adjacent steps back; a healer leaves its rank for the most wounded mate (two for one that lost 50+ hits the
 // tick before). A creep that wanted to move and has not for six ticks is stuck and does not hold the line back.
-const CREEP_NEAR = 10, CREEP_EVERY = 5, LAG = 3;
-const LINE_GOAL = { heavy_melee: 2, melee: 2, heavy_ranged: 3, ranged: 3, heavy_healer: 3, healer: 3, puller: 5 };
-const LINE_OFFSET = { heavy_melee: 0, melee: 1, heavy_ranged: 2, ranged: 3, heavy_healer: 2, healer: 3, puller: 4 };
+const LAG = 3;
+// a formation script is a PROFILE for `formation()` below: the distance each role keeps from our nearest fighter in contact
+// (goal), the rank it keeps behind the head before contact (offset), which roles are the front, when contact begins
+// (null: one cell past the front's goal), the head's creep before contact (one step in creepEvery ticks until creepNear
+// cells from us), whether a ranged or healer with one of ours adjacent steps back, whether the body takes the centre
+// flag first (flagFirst: unless our fighters are within `engage` steps), and whether its pullers stay at home
+const LINE = {
+  name: 'line',
+  goal: { heavy_melee: 2, melee: 2, heavy_ranged: 3, ranged: 3, heavy_healer: 3, healer: 3, puller: 5 },
+  offset: { heavy_melee: 0, melee: 1, heavy_ranged: 2, ranged: 3, heavy_healer: 2, healer: 3, puller: 4 },
+  front: ['heavy_melee'], contact: null, creepNear: 10, creepEvery: 5, backOff: true, flagFirst: false, engage: 0, pullersStay: false,
+};
+const LINE_KEYS = new Set(Object.keys(LINE.goal));
+// ---------- chase: Hardy#3 ----------
+// The bot that routed v17 and v18 in 200-300 ticks (27.09.2026; records 6ab9349f v17 and 6ab93d04 v18, and 6ab916f5
+// where it beat v4 the same way). Measured on the records: his pullers never leave their start cells; the other
+// fourteen walk as one clump at the heavy pace (5 cells in 10 ticks) straight to the centre flag, which a light creep
+// of the clump takes at t=75, and on through it after OUR army, round the big wall to our fortress by the ranged-
+// reduction tower, and attack as they arrive (contact t=121-128); with the fight won they walk on to our pullers
+// (killed at t=198 on the tower flag and at t=297 on the fatigue flag). On the way the lights walk a cell ahead of the
+// heavy melee, the heavy healers one behind them and the heavy ranged two or three behind. In the 80 ticks after
+// contact, by the distance to our nearest fighter: heavy melee 1-2 (86 and 92 creep-ticks of 267), light melee 1-2,
+// light ranged 1-3, heavy ranged 2-5, light healers 1-2, heavy healers 1-3 — a brawl at arm's length, nobody steps
+// back. Melee swing at the adjacent lowest hits (90 % of swings); ranged shoot the lowest in reach (68-75 %, the
+// nearest 75-85 %) and mass-attack often (60 + 25 mass against 106 + 31 single shots of v17's record); healers heal
+// BESIDE (146-159 heals of a hurt mate against 20-55 from range), one on a mate, two in 13-25 % of healing ticks; his
+// heavy healers stood next to his heavy melee in 80 % of contact ticks and healed them (65, 54 heals) and the heavy
+// ranged, his light healers themselves and the melee.
+// Modelled: the clump walks to the centre flag and, once within three of it, sends its nearest light onto it and walks
+// on at the heavy pace toward our nearest fighter, round swamps (path costs 1/5), the heavy melee in front with the
+// lights beside them, the heavy healers one rank and the heavy ranged two behind; the front never waits (noWait), a
+// mate at its slot lets it through (yieldAtSlot); the healers escort — heavy healers the nearest heavy melee, light
+// healers the nearest melee — and heal what is hurt beside them; five cells out the ranks collapse into the brawl:
+// melee and healers to one, ranged to two. His pullers stay home. With our army dead the clump walks to our pullers.
+// Against v17 and v18 on their own records it reproduces the timeline — the centre at t=75 (75 live), our army's FIGHT
+// at t=116 (115), contact at t=128 (128 and 121) — and the rout: our army destroyed at t=331 and 336 (298 and 311),
+// eight of his left (nine and eight); tools/stub/painandgainadvanced/README.md has the numbers.
+const CHASE = {
+  name: 'chase',
+  goal: { heavy_melee: 1, melee: 1, heavy_ranged: 2, ranged: 2, heavy_healer: 1, healer: 1, puller: 5 },
+  offset: { heavy_melee: 0, melee: 0, heavy_ranged: 2, ranged: 0, heavy_healer: 1, healer: 0, puller: 4 },
+  front: ['heavy_melee'], contact: 5, creepNear: 0, creepEvery: 1, backOff: false, flagFirst: true, engage: 8, pullersStay: true,
+  yieldAtSlot: true, weighted: true, noWait: true, escort: { heavy_healer: ['heavy_melee'], healer: ['melee', 'heavy_melee'] },
+};
 function lineKey(c) {
   const key = c.id.replace(/^pg_player\d_/, '').replace(/_\d+$/, '');
-  if (key in LINE_GOAL) return key;
+  if (LINE_KEYS.has(key)) return key;
   return (c.body.length > 8 ? 'heavy_' : '') + c.role;   // not a live id: by body
 }
 /** Steps (every passable cell costs 1) from every cell to the nearest goal: the line's distances, walls respected. */
@@ -432,12 +473,31 @@ function stepField(c, f, away, canSwap, from) {
 }
 const lineState = { last: new Map(), prev: new Map(), wanted: new Map(), still: new Map(), hits: new Map() };
 const LINETRACE = process.env.LINETRACE ? process.env.LINETRACE.split('-').map((v) => parseInt(v, 10)) : null;
-function line(mine, ours) {
+function formation(all, ours, P) {
+  const mine = P.pullersStay ? all.filter((c) => c.role !== 'puller') : all;
+  if (!mine.length) return;
+  const G0 = P.goal, OFF = P.offset;
   const goals = ours.filter((o) => o.role !== 'puller');
   const targets = goals.length ? goals : ours;
   if (!targets.length) return;
-  const D = steps(targets);
-  const d = (c) => D[idx(c.x, c.y)];
+  // distances: steps (every cell 1), or with `weighted` the path cost (plain 1, swamp 5 — a pathfinder's route, which
+  // walks round a swamp where the heavies would pay ten ticks a cell)
+  const D = P.weighted ? flow(targets.map((o) => ({ x: o.x, y: o.y }))) : steps(targets);
+  // flagFirst: the body walks to the centre flag while it is not theirs and none of our fighters is within `engage`
+  const centre = P.flagFirst ? world.objects.find((o) => o.exists && o.kind === 'flag' && o.effectType === 'eff_damage_taken_modifier') : null;
+  let toFlag = !!centre && centre.owner !== 1 && Math.min(...mine.map((c) => D[idx(c.x, c.y)])) > P.engage;
+  const F = toFlag ? (P.weighted ? flowTo(centre.x, centre.y) : flowSteps(centre)) : null;
+  // the flag is on the way, not the stop: once the clump is within three of it, one creep (the nearest light) steps on
+  // it and the rest walk on toward us — Hardy's clump crossed the centre at full pace (a light took it at t=75, the
+  // centroid was 3 cells past it five ticks later)
+  let capturer = null;
+  if (toFlag && Math.min(...mine.map((c) => F[idx(c.x, c.y)])) <= 3) {
+    capturer = mine.slice().sort((a, b) => F[idx(a.x, a.y)] - F[idx(b.x, b.y)] || a.body.length - b.body.length)[0];
+    toFlag = false;
+  }
+  const G = toFlag ? F : D;
+  const d = (c) => G[idx(c.x, c.y)];
+  const goalOf = (c) => (toFlag ? 0 : G0[lineKey(c)]);
   // a creep that wanted to move and has not for six ticks is stuck: it does not hold the line
   for (const c of mine) {
     const p = lineState.last.get(c.id), moved = p === undefined || p !== idx(c.x, c.y);
@@ -447,31 +507,44 @@ function line(mine, ours) {
     lineState.wanted.set(c.id, false);
   }
   const stuck = (c) => (lineState.still.get(c.id) || 0) >= 6;
-  // the front: his melee (kept in front however stripped); with none left, whatever has the lowest offset
-  const minOff = Math.min(...mine.map((c) => LINE_OFFSET[lineKey(c)]));
-  const front = mine.filter((c) => LINE_OFFSET[lineKey(c)] === minOff);
-  // L is the head — the front member nearest to us; every rank's slot counts from it, and the head steps only while
-  // no one (stuck or nursing excepted) is more than two behind its slot: the head never leaves the tail
+  // the front: the profile's front roles (kept in front however stripped); with none left, whatever has the lowest offset
+  let front = mine.filter((c) => P.front.includes(lineKey(c)));
+  if (!front.length) { const m0 = Math.min(...mine.map((c) => OFF[lineKey(c)])); front = mine.filter((c) => OFF[lineKey(c)] === m0); }
+  const frontOff = Math.min(...front.map((c) => OFF[lineKey(c)]));
+  // L is the head — the front member nearest to the goal; every rank's slot counts from it, and the head steps only
+  // while no one (stuck or nursing excepted) is more than two behind its slot: the head never leaves the tail
   const L = Math.min(...front.map(d));
-  const frontGoal = Math.max(...front.map((c) => LINE_GOAL[lineKey(c)]));
-  const inContact = L <= frontGoal + 1;
-  const ranked = (c) => Math.max(LINE_GOAL[lineKey(c)], L + LINE_OFFSET[lineKey(c)] - minOff);
-  // +lag: his healers hang LAG cells behind their rank and never close in (the records he lost: 7-11 cells back)
-  const lagging = (c) => MODS.includes('lag') && c.role === 'healer';
-  const slot = (c) => (lagging(c) ? ranked(c) + LAG : inContact ? LINE_GOAL[lineKey(c)] : ranked(c));
+  const frontGoal = Math.max(...front.map(goalOf));
+  const inContact = !toFlag && L <= (P.contact ?? frontGoal + 1);
+  const ranked = (c) => Math.max(goalOf(c), L + OFF[lineKey(c)] - frontOff);
+  // line+lag: his healers hang LAG cells behind their rank and never close in (the records he lost: 7-11 cells back)
+  const lagMode = P === LINE && MODS.includes('lag');
+  const lagging = (c) => lagMode && c.role === 'healer';
+  // in contact the ranks collapse: every role goes to its goal distance
+  const slot = (c) => (lagging(c) ? ranked(c) + LAG : inContact ? goalOf(c) : ranked(c));
   // healers: the most wounded mate first, two healers for one that lost 50+ hits last tick
   const lost = (c) => Math.max(0, (lineState.hits.get(c.id) ?? c.hits) - c.hits);
   const healers = mine.filter((c) => live(c, H) > 0);
   const patientOf = new Map();
   const wounded = mine.filter((c) => c.hits < c.hitsMax).sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits));
-  // +lag: the healers do not walk to the wounded — the two records of six he LOST (919a7, 91b4b) had his heavy healers
-  // 7-11 cells behind a front that was being stripped, where the four he won had them at 3-4 (see `slot` above)
-  for (const m of MODS.includes('lag') ? [] : wounded) {
-    if (patientOf.size === healers.length) break;
-    const idle = healers.filter((h) => !patientOf.has(h.id)).sort((a, b) => range(a, m) - range(b, m) || b.body.length - a.body.length);
+  // line+lag: the healers do not walk to the wounded — the two records of six he LOST (919a7, 91b4b) had his heavy
+  // healers 7-11 cells behind a front that was being stripped, where the four he won had them at 3-4 (see `slot`)
+  // escort (chase): a healer keeps beside the nearest mate of the roles it escorts and heals what is hurt beside it —
+  // Hardy's heavy healers stood next to his heavy melee in 80 % of contact ticks and healed them and the heavy ranged;
+  // a healer whose escorted roles are dead takes a patient like any other
+  const escortOf = new Map();
+  if (P.escort) for (const h of healers) {
+    const roles = P.escort[lineKey(h)];
+    const cands = roles ? mine.filter((o) => o !== h && roles.includes(lineKey(o))) : [];
+    if (cands.length) escortOf.set(h.id, cands.sort((a, b) => range(h, a) - range(h, b))[0]);
+  }
+  for (const m of lagMode ? [] : wounded) {
+    if (patientOf.size + escortOf.size >= healers.length) break;
+    const idle = healers.filter((h) => !patientOf.has(h.id) && !escortOf.has(h.id)).sort((a, b) => range(a, m) - range(b, m) || b.body.length - a.body.length);
     for (const h of idle.slice(0, lost(m) >= 50 ? 2 : 1)) patientOf.set(h.id, m);
   }
   for (const c of mine) lineState.hits.set(c.id, c.hits);
+  // (an escort counts: the line waits for the healers walking with its melee — a patient's nurse does not)
   const together = mine.every((c) => stuck(c) || patientOf.has(c.id) || d(c) <= slot(c) + 2);
   // fire: melee the adjacent lowest; ranged a mass attack when it out-damages one shot, else the lowest in reach
   for (const c of mine) {
@@ -491,27 +564,37 @@ function line(mine, ours) {
       else if (!m && near) c.rangedHeal(near);
     }
   }
-  // LINETRACE=t0-t1: the line's state per tick of the window (the head L, contact, together, each creep's distance/slot)
-  if (LINETRACE && world.tick >= LINETRACE[0] && world.tick <= LINETRACE[1]) origLog(`line t=${world.tick} L=${L} contact=${inContact} together=${together} ${mine.map((c) => `${lineKey(c)}@${c.x},${c.y}:${d(c)}/${slot(c)}${stuck(c) ? 's' : ''}${patientOf.get(c.id) ? 'p' : ''}`).join(' ')}`);
+  // LINETRACE=t0-t1: the script's state per tick of the window (the head L, contact, together, each creep's distance/slot)
+  if (LINETRACE && world.tick >= LINETRACE[0] && world.tick <= LINETRACE[1]) origLog(`${P.name} t=${world.tick} L=${L}${toFlag ? ' flag' : ''} contact=${inContact} together=${together} ${mine.map((c) => `${lineKey(c)}@${c.x},${c.y}:${d(c)}/${slot(c)}~${Math.min(...targets.map((o) => range(c, o)))}${stuck(c) ? 's' : ''}${patientOf.get(c.id) ? 'p' : ''}${escortOf.get(c.id) ? 'e' : ''}`).join(' ')}`);
+  if (capturer && (capturer.x !== centre.x || capturer.y !== centre.y)) stepField(capturer, F, false, (o) => o !== capturer && !front.includes(o));
   // move, front first
   for (const c of mine.slice().sort((a, b) => d(a) - d(b))) {
-    const m = patientOf.get(c.id);
+    if (c === capturer) continue;
+    const m = patientOf.get(c.id) || escortOf.get(c.id);
     if (m && m !== c) {
-      if (range(c, m) > 1) { lineState.wanted.set(c.id, true); stepField(c, flowNow(m.x, m.y), false); }
+      // an escort passes through the ranks to its melee the way a creep reaches its slot (swapping with a mate that
+      // belongs further back or stands ahead of its own slot); a nurse walks round them
+      const byRank = escortOf.has(c.id) ? (o) => !patientOf.has(o.id) && !escortOf.has(o.id) && !front.includes(o) && (OFF[lineKey(o)] > OFF[lineKey(c)] || d(o) <= slot(o)) : undefined;
+      if (range(c, m) > 1) { lineState.wanted.set(c.id, true); stepField(c, flowNow(m.x, m.y), false, byRank); }
       continue;
     }
     const here = d(c);
-    // the line steps one cell ahead of its rearmost member, and only when every rank is at its slot
-    // the head's pace: one step in CREEP_EVERY ticks until CREEP_NEAR cells from us, then full
-    const creeping = L > CREEP_NEAR && world.tick % CREEP_EVERY !== 0;
-    // (while it creeps, a front member closes only a gap of two to the head: the distance is to OUR army, which moves too)
-    const goal = front.includes(c) ? Math.max(LINE_GOAL[lineKey(c)], creeping ? L + 1 : together ? L - 1 : L) : slot(c);
+    // the head's pace: one step in creepEvery ticks until creepNear cells from us, then full
+    const creeping = L > P.creepNear && world.tick % P.creepEvery !== 0;
+    // the front steps one cell past the head, and only when every rank is at its slot (while it creeps, a front member
+    // closes only a gap of two to the head: the distance is to OUR army, which moves too)
+    // (noWait: the front walks at its own pace and the ranks keep up as they can — Hardy's clump never paused)
+    const goal = front.includes(c) ? Math.max(goalOf(c), P.noWait || (together && !creeping) ? L - 1 : creeping ? L + 1 : L) : slot(c);
     // a mate gives way (the two swap cells) when it belongs further back than this one or stands ahead of its own slot
-    const givesWay = (o) => !patientOf.has(o.id) && (LINE_OFFSET[lineKey(o)] > LINE_OFFSET[lineKey(c)] || d(o) < slot(o));
-    if (here > goal) { lineState.wanted.set(c.id, true); stepField(c, D, false, givesWay, lineState.prev.get(c.id)); }
-    else if (here <= 1 && live(c, A) === 0 && c.role !== 'melee') stepField(c, D, true);
+    // (yieldAtSlot: also one AT its slot, and never a front member backwards — a clump lets its front through it)
+    const givesWay = (o) => !patientOf.has(o.id) && !escortOf.has(o.id) && !(P.yieldAtSlot && front.includes(o)) && (OFF[lineKey(o)] > OFF[lineKey(c)] || d(o) < slot(o) || (P.yieldAtSlot && d(o) <= slot(o)));
+    if (here > goal) { lineState.wanted.set(c.id, true); stepField(c, G, false, givesWay, lineState.prev.get(c.id)); }
+    else if (P.backOff && here <= 1 && live(c, A) === 0 && c.role !== 'melee') stepField(c, G, true);
   }
 }
+/** Steps to a fixed cell (the centre flag), kept for the match. */
+const stepsCache = new Map();
+function flowSteps(o) { const k = idx(o.x, o.y); let f = stepsCache.get(k); if (!f) { f = steps([o]); stepsCache.set(k, f); } return f; }
 // ---------- ghost: the recorded opponent of a replay ----------
 // Every creep of his takes, each tick, one step toward the cell the record has it on after this tick (a path step when
 // it fell two or more behind); a creep of ours on that cell refuses the step and the ghost catches up when it frees.
@@ -555,7 +638,8 @@ function enemyTick() {
   if (scenario === 'none') return;
   beginMoves();
   if (scenario === 'ghost') ghost(mine, ours);
-  else if (scenario === 'line') line(mine, ours);
+  else if (scenario === 'line') formation(mine, ours, LINE);
+  else if (scenario === 'chase') formation(mine, ours, CHASE);
   else {
     pullers(mine);
     if (scenario === 'rush') rush(mine, ours);
@@ -599,6 +683,30 @@ function entryTick(t, c0, c1) {
   const f0 = c0.filter((c) => c.role !== 'puller'), f1 = c1.filter((c) => c.role !== 'puller');
   if (entry.contact === null && f0.some((a) => f1.some((b) => range(a, b) <= 3))) entry.contact = t;
 }
+// what each role of each side DID in the 100 ticks from contact, counted from the intents as tools/pga-replay.py `fight`
+// counts a record's action log (a attack, r ranged, R mass, h heal beside, H heal from range), so a stand fight and a
+// live one can be set side by side: `tools/pga-replay.py fight <id> <contact> <contact+100>`
+const fightCount = [new Map(), new Map()];
+const hitCount = [new Map(), new Map()];   // side -> the role its single-target attacks and shots went to, first 50 ticks
+function fightTick(t) {
+  if (entry.contact === null || t < entry.contact || t > entry.contact + 100) return;
+  const roleOfId = (o) => o.id.replace(/^pg_player\d_/, '').replace(/_\d+$/, '');
+  for (const c of creeps()) {
+    const m = world.intents.get(c.id);
+    if (!m) continue;
+    if (t <= entry.contact + 50) for (const tg of [m.melee && m.melee.target, m.ranged && m.ranged.type === 'attack' && m.ranged.target]) {
+      if (tg && tg.kind === 'creep') hitCount[c.owner].set(roleOfId(tg), (hitCount[c.owner].get(roleOfId(tg)) || 0) + 1);
+    }
+    const key = c.id.replace(/^pg_player\d_/, '').replace(/_\d+$/, '');
+    const cnt = fightCount[c.owner].get(key) || {};
+    const add = (k) => { cnt[k] = (cnt[k] || 0) + 1; };
+    if (m.melee) add('a');
+    if (m.ranged) add(m.ranged.type === 'attack' ? 'r' : m.ranged.type === 'mass' ? 'R' : 'H');
+    if (m.heal) add('h');
+    fightCount[c.owner].set(key, cnt);
+  }
+}
+const fightLine = (p) => [...fightCount[p]].sort().map(([k, v]) => `${k} ${Object.entries(v).map(([a, n]) => `${a}=${n}`).join(' ')}`).join(', ') || '-';
 const lostAfter = (arr, t0, dd, i) => { const a = arr[Math.max(0, t0 - 1)] || arr[t0], b = arr[Math.min(t0 + dd, arr.length - 1)]; return a && b ? Math.round(a[i] - b[i]) : '?'; };
 const entryLine = (arr, c) => (c === null ? 'no contact' : `contact t=${c} hits lost ours/his +20 ${lostAfter(arr, c, 20, 0)}/${lostAfter(arr, c, 20, 1)} +50 ${lostAfter(arr, c, 50, 0)}/${lostAfter(arr, c, 50, 1)} +100 ${lostAfter(arr, c, 100, 0)}/${lostAfter(arr, c, 100, 1)}`);
 const side = (o) => (o === 0 ? '+' : o === 1 ? '-' : '0');
@@ -627,6 +735,7 @@ for (let t = 1; t <= ticks; t++) {
     if (mirrorTickErr) { mirrorErrors++; if (!firstMirrorError) firstMirrorError = { t, text: lines.slice(m2).slice(0, 12).join('\n') }; }
     sink = 'ours'; world.perspective = 0;
   } else enemyTick();
+  fightTick(t);
   step(Resource);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
   movedOurs += c0.filter((c) => c.moved === t).length;
@@ -653,6 +762,8 @@ const report = [
   `effects (strongest value @ ticks held): ours ${fxLine(0)} | enemy ${fxLine(1)}`,
   `hits loss taken: ours=${st.hitsLoss[0]} enemy=${st.hitsLoss[1]}; moves under a fatigue multiplier: ours=${st.fatigueMoves[0]} (+${st.fatigueExtra[0]} fatigue) enemy=${st.fatigueMoves[1]} (+${st.fatigueExtra[1]})`,
   `entry: ${entryLine(entry.hits, entry.contact)}`,
+  `fight from contact +100: ours ${fightLine(0)} | his ${fightLine(1)}`,
+  `targets of single attacks and shots, contact +50: ours ${[...hitCount[0]].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(' ') || '-'} | his ${[...hitCount[1]].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(' ') || '-'}`,
   ...(REPLAY ? [
     `record ${REPLAY.meta.gameId || ''}: ${rec.winner} won in ${rec.ticks} ticks, deaths ours=${rec.deaths[0]} his=${rec.deaths[1]}, alive at the end ${rec.end[0]}:${rec.end[1]}; we are ${START}`,
     `record entry: ${entryLine(rec.hits, rec.contact)}`,

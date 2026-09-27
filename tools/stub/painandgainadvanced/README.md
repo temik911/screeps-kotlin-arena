@@ -25,6 +25,7 @@ MAP=map-live2.txt START=p2 $NODE --import ./register.mjs run.mjs 5000 rush      
 TRACE=300-310 $NODE --import ./register.mjs run.mjs 400 farm                                # our cells/fatigue/energy per tick
 REPLAY=6ab91b62 $NODE --import ./register.mjs run.mjs 5000 line                             # stachu3478#5's model on a live match's map
 REPLAY=6ab91b62 $NODE --import ./register.mjs run.mjs 5000 ghost                            # his recorded track on the same map
+REPLAY=6ab9349f $NODE --import ./register.mjs run.mjs 5000 chase                            # Hardy#3's model on v17's lost match
 zsh regress.sh gate                                                                         # the gate, one line per scenario
 zsh regress.sh rival                                                                        # the stachu3478#5 set, never in the gate
 ```
@@ -34,7 +35,7 @@ Env: `MAP` (default `map-live1.txt`), `START=p1|p2` (the side the bot drives; th
 we played — `US=<name>`, default temik911; MAP and START are then ignored; looked up in `./replays/`, then in
 `~/ScreepsArena/replays/`, fetched by `tools/match-log.py replay <id>`), `LOGTAG`, `BOT=<bundle url>` (any build, e.g.
 an older commit's `build/js/packages/screeps-kotlin-arena-starter` copied aside), `NOCLOCK=1` (`getCpuTime()` answers 0
-— deterministic on any machine; two runs give byte-identical logs), `TRACE=t0-t1`, `LINETRACE=t0-t1` (the `line`
+— deterministic on any machine; two runs give byte-identical logs), `TRACE=t0-t1`, `LINETRACE=t0-t1` (the `line` or `chase`
 script's own state per tick: its head, contact, cohesion, each creep's distance and slot), `STATUS=n` (a `stub t=`
 line to stdout every n ticks; the log has one every 100).
 The first argument caps the ticks (at most 5000). Logs go to `out/` — the bot's console, the `stub t=` lines, a
@@ -42,7 +43,9 @@ The first argument caps the ticks (at most 5000). Logs go to `out/` — the bot'
 ticks a side held it, hits lost to `eff_hits_loss`, moves made under a fatigue multiplier and the fatigue it added)
 and `=== EVENTS ===` (captures, tower changes of hands, tower shots, deaths). Every run also prints `entry:` — the
 first tick a fighter of each side stands within three of the other's and the hits each side lost 20/50/100 ticks later
-— and with `REPLAY` the record's own outcome and `record entry:` beside it.
+—, `fight from contact +100:` — what each role of each side did, counted like `tools/pga-replay.py fight <id> <t0> <t1>`
+counts a record (a attack, r ranged, R mass, h heal beside, H heal from range) — and the roles each side's single
+attacks and shots went to in the first 50 ticks; with `REPLAY` the record's own outcome and `record entry:` beside it.
 
 ## Scenarios (the enemy)
 
@@ -65,6 +68,14 @@ first tick a fighter of each side stands within three of the other's and the hit
   out-damages one shot; healers walk to the most wounded mate and heal it adjacent, two for one that lost 50+ hits the
   tick before. `line+lag`: the same, but the healers stay three cells behind their rank and never walk to the wounded —
   his two LOST records had his heavy healers 7-11 behind a front being stripped.
+- `chase` — a model of **Hardy#3**, who routed v17 and v18 in 200-300 ticks (`run.mjs` has the numbers above
+  `CHASE`): his pullers stay home; the other fourteen walk as one clump at the heavy pace to the centre flag, send the
+  nearest light onto it from three cells and walk on toward our nearest fighter round the swamps, the heavy melee in
+  front with the lights beside them, heavy healers one rank and heavy ranged two behind, never waiting for the rear;
+  healers escort (heavy healers the nearest heavy melee, light healers the nearest melee) and heal what is hurt beside
+  them; five cells out the ranks collapse into a brawl — melee and healers at one, ranged at two, mass attack when it
+  out-damages one shot; with our army dead the clump goes for our pullers. The same machinery as `line` (`formation()`
+  with a profile), so a third opponent is a third profile.
 - `ghost` (needs `REPLAY`) — his recorded track: every creep of his steps each tick toward the cell the record has it on
   (a path step when it fell behind; a creep of ours on the cell refuses it), pays no fatigue (the record did), fires and
   heals by the `rush` rules, and stands where the record ends if it outlives it. The report adds how often his creeps
@@ -95,30 +106,56 @@ tower shots> | errors: N `. PASS = we won (enemy army destroyed, or our score ah
 lead, the time limit or the line's cap) and zero errors (a tick whose `loop()` printed a stack trace; a stub crash
 gives no done line and FAILs). `gate`/`land` run the `run` lines (each live map from its live side against none, rush,
 farm — 5000 ticks, ≈ 5 s serial on v3); `rival` runs only the `rival` lines — `line`, `line+lag` and `ghost` on six
-records of stachu3478#5's live matches plus `line` on the two gate maps (≈ 40 s; a line whose record is missing is
-skipped with a warning on stderr); any other tag runs all three kinds together with the `grind` lines (the other side
-of each map, `mirror`). The rival lines are never in the gate: they are the target, not a guard.
+records of stachu3478#5's live matches, `line` on the two gate maps, `chase` and `ghost` on three records of Hardy#3's
+(≈ 45 s; a line whose record is missing is skipped with a warning on stderr); any other tag runs all three kinds
+together with the `grind` lines (the other side of each map, `mirror`). The rival lines are never in the gate: they are the target, not a guard.
 Under `tools/land.sh` a landing that touches neither this bot's package, this folder, its arena folder nor anything
 shared (`types/`, the build, shared starter code) runs only the SMOKE lines cut to 300 ticks (≈ 0.5 s). `JOBS=n` runs
 lines in parallel (default 1). V8's heap is capped as in the basic stub (`STUB_NODE_FLAGS`).
 
-## How close `line` and `ghost` are to the live matches (27.09.2026)
+## The engine against the records (27.09.2026)
 
-Each version against the six records (one bundle per commit, built in a detached worktree and passed with `BOT=`,
-`NOCLOCK=1`). Live against him (the match store): v5 1-1, v6 1-3, v7 1-3, v9 2-2 — 5 wins of 13; per record 91898
-v5 lost, 91924 v6 lost, 919a7 v6 won, 91a90 v7 lost, 91b4b v9 won, 91b62 v9 lost.
+- **Combat.** Every recorded action of Hardy's match 6ab9349f (contact +70 ticks: attacks, shots, mass attacks, heals
+  beside and from range, with both sides' flag modifiers and parts dying front to back) run through the stand's
+  formulas gives the recorded hits in 536 cases of 542; the six others are the ticks our tower fired, which the check
+  left out. No melee counter-damage shows up in the records either.
+- **Flags change hands a tick after the step.** Our puller stood on the fatigue flag after tick 64 of 6ab9349f, the
+  flag and its tower changed owner in tick 65, our heavies still moved at ×1 fatigue in 65 and at ×2 from 66. The stand
+  took the flag in the tick of the step until this was measured — two ticks early, and every `ghost` run left our
+  recorded cells before contact. Now (`world.mjs` step 0) a `ghost` run with the version that played the record walks
+  our recorded cells tick for tick until 7-16 ticks AFTER contact: v6 on 91924 (contact 314, first off at 325), v9 on
+  91b4b (212 / 225) and 91b62 (209 / 223), v17 on 9349f (128 / 135), v18 on 93d04 (121 / 134).
 
-- `line`: our army won the fight 2 times of 6 for v5 and 0 of 6 for each of v6, v7, v9 and v11 — 2 of 30 against the
-  live 5 of 13: the model is his good fight, stronger than he was on average. The version that played a record
-  reproduces its live outcome on 4 of 6 — every loss, neither win (919a7, 91b4b). The losses come out in their live
-  shape: v6 on 91924 lost 20 206 hits to his 5 577 in the 100 ticks after contact against the record's 20 025 / 4 400;
-  v9 on 91b62 13 839 / 7 674 against 10 642 / 7 960. Contact comes at t=151-185 (records: 102-314).
-- `line+lag`: v6 won 1 fight of 6 and outlasted him on score in 1 more (alive 5:6); v9 won 1 and outlasted him in 2
-  (5:7, 4:7) — his weaker form, the one he played in the two records he lost.
-- `ghost`: with the version that played the record, our side walks its recorded cells tick for tick until 4-12 ticks
-  before contact (v6 on 91924: first off at t=297, contact 314; v9 on 91b4b at 208 / 212 and on 91b62 at 202 / 209)
-  — the stand's movement, fatigue, flags and effects are the live engine's up to the fight. After contact we win
-  nearly every exchange: his targets and heals are by rule, not his.
+## How close the rival models are to the live matches (27.09.2026, on the corrected engine)
+
+Each version against the records (one bundle per commit, built in a detached worktree and passed with `BOT=`,
+`NOCLOCK=1`).
+
+**stachu3478#5.** Live (the match store): v5 1-1, v6 1-3, v7 1-3, v9 2-2 — 5 wins of 13; per record 91898 v5 lost,
+91924 v6 lost, 919a7 v6 won, 91a90 v7 lost, 91b4b v9 won, 91b62 v9 lost.
+
+- `line`: our army won the fight 2 times of 30 for v5, v6, v7, v9 and v11 (v6 twice) against the live 5 of 13 — the
+  model is his good fight, stronger than he was on average. The version that played a record reproduces its live
+  outcome on 4 of 6 — every loss, neither win (919a7, 91b4b); v6 on 91924 lost 20 204 hits to his 10 200 in the 100
+  ticks after contact against the record's 20 025 / 4 400. Contact at t=155-185 (records: 102-314). v19 wins 5 of 6.
+- `line+lag`: v6 won 1 of 6 and outlasted him on score in 1 more, v9 won 4 and held one more to 7:7, v19 won 6.
+- `ghost`: see the engine section — the approach is the live one; after contact we win nearly every exchange, his
+  targets and heals being by rule, not his.
+
+**Hardy#3.** Live: v4 lost (916f5, 294 ticks), v17 lost (9349f, 298), v18 lost (93d04, 311) — three of three.
+(Hardy#1 is another bot: in 91564 it took the centre and SAT on it, and v3 won on score; v18 beat it too, 6ab93bca.
+`chase` is his #3.)
+
+- `chase` against the version that played the record: v17 on 9349f and v18 on 93d04 — centre taken at t=75 (live 75),
+  our FIGHT at t=116 (115), contact t=128 (128 and 121), our army destroyed at t=331 and 336 (298 and 311) with eight
+  of his left (nine and eight). Hits lost ours/his after contact: +20 3 704 / 4 978 (record 5 071 / 6 099 and
+  2 888 / 3 190), +50 9 800 / 8 822 (13 438 / 8 962 and 15 037 / 6 914), +100 19 200 / 9 877 (20 400 / 6 600 and
+  20 400 / 5 548). v17 and v18 play identically against it (v18's change — leave a fight that kills nobody for 300
+  ticks — never fires).
+- **v19 destroys it**: on 9349f, 93d04 and 916f5 his army is dead at t=333-359 with 14-15 of ours alive. v19's army
+  does not walk out to meet him — its FIGHT comes at t=136 instead of 116 — and the fight is under our tower, which it
+  can feed; the brawl his clump wins in the open it loses there.
+- `ghost`: our side walks its recorded cells until contact + 7-13, then the ghost loses the exchange.
 
 ## Not modelled / assumed
 

@@ -2,7 +2,8 @@
 # Stub regression for the Pain and Gain ADVANCED bot against THIS worktree's build (run.mjs imports ../../../build/js/...).
 # Usage: zsh tools/stub/painandgainadvanced/regress.sh [tag]      JOBS=<n> to run lines in parallel (default 1)
 #        tag `gate` (and `land`, used by tools/land.sh) runs the `run` lines only; tag `rival` runs the `rival` lines only
-#        (the stachu3478#5 set: `line` and `ghost` on the maps of his live matches); any other tag runs all three kinds;
+#        (the opponents who beat us: `line`/`line+lag` = stachu3478#5 and `chase` = Hardy#3, each with `ghost`, on the
+#        maps of their live matches); any other tag runs all three kinds;
 #        under tools/land.sh (STUB_LANDING_BASE set) a landing that cannot change this bot runs the SMOKE lines only.
 # One line per scenario: PASS/FAIL, the label <map>-<side>:<scenario>, the outcome, the final score, the alive counts, the
 # tick it ended and the tower shots (ours:theirs), then `| errors: N `. Logs go to ./out/ (gitignored).
@@ -138,15 +139,15 @@ grind map-live2.txt p2 mirror 5000
 # records), `line+lag` the same with its healers hanging back (his two lost records), `ghost` his recorded track with
 # fire and healing by rule. Each record is the map, the bodies and our side of one live match. Live against him (the
 # match store): v5 1-1, v6 1-3, v7 1-3, v9 2-2; per record: 91898 v5 lost, 91924 v6 lost, 919a7 v6 won, 91a90 v7 lost,
-# 91b4b v9 won, 91b62 v9 lost. Calibrated on 27.09.2026 with one bundle per commit of v5, v6, v7, v9 and v11, each on
-# all six records (README.md, "How close"):
-#   `line`     our army won 2 fights of 30 (v5 twice) against the live 5 of 13 — his good fight, stronger than his
-#              average; the version that played a record reproduces every live loss in its shape (v6 on 91924: hits lost
-#              ours/his +100 20206/5577 against the record's 20025/4400) and neither live win;
-#   `line+lag` v6 and v9 won 1 fight of 6 each and outlasted him on score in 1 and 2 more — his weaker form;
-#   `ghost`    our side walks its recorded cells tick for tick until 4-12 ticks before contact (v6 on 91924, v9 on
-#              91b4b and 91b62: the stand's engine is the live one up to the fight), then wins nearly every exchange —
-#              his fire and healing are not the record's, so a `ghost` line measures the approach, not the fight.
+# 91b4b v9 won, 91b62 v9 lost. Calibrated with one bundle per commit of v5, v6, v7, v9, v11 and v19, each on all six
+# records, on the corrected engine (README.md, "How close"):
+#   `line`     our army won 2 fights of 30 for v5-v11 (v6 twice) against the live 5 of 13 — his good fight, stronger than
+#              his average; the version that played a record reproduces every live loss (v6 on 91924: hits lost ours/his
+#              +100 20204/10200 against the record's 20025/4400) and neither live win; v19 wins 5 of 6;
+#   `line+lag` v6 won 1 of 6, v9 4, v19 6 — his weaker form;
+#   `ghost`    our side walks its recorded cells tick for tick until 7-16 ticks AFTER contact (v6 on 91924, v9 on 91b4b
+#              and 91b62, v17 and v18 on Hardy's records: the stand's engine is the live one up to the fight), then wins
+#              nearly every exchange — his fire and healing are not the record's: a `ghost` line measures the approach.
 # PASS here means we beat him (or outscored him with a remnant); a `line` line that FAILs is what these lines are for.
 for g in 6ab91898064dc919caaaabf4 6ab91924064dc991b9aaac0a 6ab919a7064dc90424aaac1e 6ab91a90064dc93f08aaac57 6ab91b4b064dc9cfb4aaac81 6ab91b62064dc93a33aaac88; do
   rival replay:$g - line 5000
@@ -155,6 +156,15 @@ for g in 6ab91898064dc919caaaabf4 6ab91924064dc991b9aaac0a 6ab919a7064dc90424aaa
 done
 rival map-live1.txt p1 line 5000
 rival map-live2.txt p2 line 5000
+# HARDY#3 (27.09.2026): the clump that takes the centre and chases our army to its fortress (run.mjs `chase`). Records:
+# 9349f v17 lost (298 ticks), 93d04 v18 lost (311), 916f5 v4 lost (294). On the corrected engine (flags change hands a
+# tick after the step) `chase` routs v17 and v18 on their own records — our army destroyed at t=331 and 336, eight of
+# his left — with the live timeline (centre t=75, our FIGHT t=116, contact t=128); v19 destroys it at t=333-359 with
+# 14-15 of ours alive: it waits under its tower (FIGHT t=136) instead of walking out to meet him
+for g in 6ab9349f22f112830c18f0b5 6ab93d0422f1120c3418f22c 6ab916f5064dc963c9aaabc0; do
+  rival replay:$g - chase 5000
+  rival replay:$g - ghost 5000
+done
 
 # a SMOKE label without a gate line would shrink the smoke silently: checked on every gate run, so its own landing catches it
 if [[ "$TAG" == land || "$TAG" == gate ]]; then
