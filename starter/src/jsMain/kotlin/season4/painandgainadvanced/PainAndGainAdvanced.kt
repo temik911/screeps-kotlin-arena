@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 5
+const val BOT_VERSION = 6
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -79,7 +79,7 @@ fun towerPower(power: Int, r: Int): Double {
     return power * (1 - TOWER_FALLOFF * f)
 }
 
-enum class Mode { MARCH, HOLD, FIGHT, RETREAT, SWEEP }
+enum class Mode { MARCH, HOLD, FIGHT, RETREAT, SWEEP, STAND }
 
 /**
  * v2 — the first bot that plays. Rules and layout were measured by the v1 probe (27.09.2026, `docs/pain-and-gain-advanced.md`):
@@ -340,7 +340,11 @@ object PainAndGainAdvanced {
             swept && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
             duel.ratio >= FIGHT_RATIO -> Mode.FIGHT
             mode == Mode.FIGHT && duel.ratio >= RETREAT_RATIO -> Mode.FIGHT
-            else -> Mode.RETREAT
+            duel.ratio < RETREAT_RATIO -> Mode.RETREAT
+            // between the two the group neither closes nor walks away: it stands where it is, formed, and the fight
+            // comes to it (contact makes it a fight). v5 retreated here from stachu3478#5's approach, swung between
+            // retreat, march and hold for forty ticks, and met his army strung out: 13 lost against 6
+            else -> Mode.STAND
         }
         val centre = flags.firstOrNull { it.effectType == EFF_CENTRE } ?: flags.minByOrNull { Grid.range(it.x, it.y, 49, 49) }!!
         val sweepFlag = if (swept) sweepTarget(cx, cy) else null
@@ -374,6 +378,7 @@ object PainAndGainAdvanced {
             }
             Mode.SWEEP -> if (restGroup.isNotEmpty()) { march(restGroup, objective.x, objective.y); capture(restGroup, objective) }
             Mode.HOLD -> hold(restGroup, objective.x, objective.y)
+            Mode.STAND -> stand(restGroup)
         }
         for (h in hunters) hunt(h)
     }
@@ -478,6 +483,29 @@ object PainAndGainAdvanced {
             if (f[u.cell] == 0) continue
             if (u !in pacers && f[u.cell] < front - ESCORT_LEAD) continue
             stepToward(u, f, if (u in pacers) 200 + f[u.cell] else f[u.cell])
+        }
+    }
+
+    /** Stand formed: nobody walks but a healer to a hurt mate within the group, a hurt creep to a healer, and a
+     *  ranged creep out of reach of his melee. */
+    private fun stand(army: List<Unit>) {
+        if (army.isEmpty()) return
+        val enemyMelee = theirs.filter { it.melee > 0 }
+        val healers = army.filter { it.heal > 0 }
+        for (u in army) {
+            val threat = enemyMelee.minOfOrNull { Grid.range(it.x, it.y, u.x, u.y) } ?: 99
+            when {
+                u.melee == 0 && threat <= 2 -> stepAway(u, enemyMelee, 30)
+                u.heal > 0 -> {
+                    val patient = army.filter { it !== u && it.deficit > 0 && Grid.range(it.x, it.y, u.x, u.y) > 1 }.maxByOrNull { it.deficit }
+                    if (patient != null && patient.deficit >= MEND_AT && Grid.range(patient.x, patient.y, u.x, u.y) <= 4)
+                        stepToward(u, Grid.fresh(intArrayOf(patient.cell)), 20, stopAt = 1)
+                }
+                u.deficit >= MEND_AT && healers.none { Grid.range(it.x, it.y, u.x, u.y) <= 1 } -> {
+                    val h = healers.minByOrNull { Grid.range(it.x, it.y, u.x, u.y) }
+                    if (h != null && Grid.range(h.x, h.y, u.x, u.y) <= 4) stepToward(u, Grid.fresh(intArrayOf(h.cell)), 15, stopAt = 1)
+                }
+            }
         }
     }
 
