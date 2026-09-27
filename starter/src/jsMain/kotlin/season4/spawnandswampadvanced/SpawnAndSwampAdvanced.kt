@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v13"
+    private const val BOT_VERSION = "v14"
 
     private const val LOG_EVERY = 50
 
@@ -120,6 +120,10 @@ object SpawnAndSwampAdvanced {
     /** Защита снимается, только когда угроз нет и на столько клеток дальше: без запаса стрелки соперника, кружащие
      *  у границы (けろびー, v4), переключали позу каждые два-три тика, и наши бегали за ними туда-обратно. */
     private const val THREAT_RELEASE = 5
+    /** Место работ (пролом сейфа, клетка второго спавна) безопасно, если его боевых крипов нет ближе стольких клеток:
+     *  дальность стрелка плюс путь, который он проходит, пока пробойщик ломает стену. */
+    private const val WORKSITE_SAFE = 12
+
     /** Волна держится: передние ждут отставших, если те отстали больше чем на столько клеток до цели… */
     private const val COHESION = 3
     /** …но только тех, кто может догнать (отстал не больше чем на четыре таких шага), и не дольше, чем такой
@@ -406,6 +410,9 @@ object SpawnAndSwampAdvanced {
 
     /** Заправщик сейфа без стройки: четыре CARRY носят по 200 из контейнера в спавн за два-три тика. */
     private fun fillerBody(): Array<BodyPartType> = arrayOf(CARRY, CARRY, CARRY, CARRY, MOVE)
+
+    private fun worksiteSafe(cells: List<Pos>): Boolean =
+        getObjectsByPrototype(Creep::class).none { c -> !c.my && isCombat(c) && cells.any { cheb(posOf(c), it) <= WORKSITE_SAFE } }
 
     private fun wallObject(v: Vault, all: Array<GameObject>): GameObject? =
         v.wall?.let { w -> all.firstOrNull { it is StructureWall && it.x == w.x && it.y == w.y } }
@@ -926,7 +933,8 @@ object SpawnAndSwampAdvanced {
             threat.isEmpty() && b === bases.first() && (vault == null || vault?.stage == "run")) {
             body = builderBody()
             if (energy < costOf(body)) return
-            val target = expansionTarget(spawn, getObjectsByPrototype(Source::class), getObjects()) ?: run {
+            val target = expansionTarget(spawn, getObjectsByPrototype(Source::class), getObjects())
+                ?.takeIf { worksiteSafe(listOf(it.spawnCell)) } ?: run {
                 return spawnFighter(t, spawn, energy, why = "army")
             }
             val r = spawn.spawnCreep(body)
@@ -953,6 +961,9 @@ object SpawnAndSwampAdvanced {
         // со строителем легли под ней): пока она стоит, сейф — не стройка, а цель для армии
         val near = listOfNotNull(v.wall, v.spawnCell)
         if (all.any { it is StructureTower && it.asDynamic().my == false && near.any { p -> cheb(posOf(it), p) <= 12 } }) return false
+        // место работ под его бойцами — не заказываем: v13 перекупал пробойщика M7A7 двадцать раз подряд, каждый шёл к
+        // стене один и ложился под тремя M4R3H1 けろびー; армия сперва расчищает, потом сейф
+        if (!worksiteSafe(listOfNotNull(v.outside, v.spawnCell))) return false
         if (v.stage == "breach" && !hasRole("breacher")) return order(t, spawn, energy, breacherBody(), "breacher")
         if (hasRole("vaultBuilder")) return false
         val wallLeft = wallObject(v, all)?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
