@@ -37,6 +37,7 @@ import screeps.api.TOWER_FALLOFF
 import screeps.api.TOWER_FALLOFF_RANGE
 import screeps.api.TOWER_OPTIMAL_RANGE
 import screeps.api.TOWER_POWER_ATTACK
+import screeps.api.TOWER_HITS
 import screeps.api.TOWER_RANGE
 import screeps.api.TOWER_ENERGY_COST
 import screeps.api.WORK
@@ -93,7 +94,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v5"
+    private const val BOT_VERSION = "v6"
 
     private const val LOG_EVERY = 50
 
@@ -111,8 +112,14 @@ object SpawnAndSwampAdvanced {
     /** Защита снимается, только когда угроз нет и на столько клеток дальше: без запаса стрелки соперника, кружащие
      *  у границы (けろびー, v4), переключали позу каждые два-три тика, и наши бегали за ними туда-обратно. */
     private const val THREAT_RELEASE = 5
-    /** Волна держится: передний ждёт, пока остальные не подойдут на столько клеток. */
+    /** Волна держится: передние ждут отставших, если те отстали больше чем на столько клеток до цели… */
     private const val COHESION = 3
+    /** …но только тех, кто может догнать (отстал не больше чем на четыре таких шага), и не дольше, чем такой
+     *  отставший идёт через полосу догона по болоту (5 тиков на клетку) в среднем наполовину: v5 ждал всех без
+     *  срока, отставший в тесноте не мог подойти ближе трёх клеток, и волна из одиннадцати простояла с 1405-го
+     *  тика до конца матча — ничья при 39 наших против 16. */
+    private const val CATCH_UP = COHESION * 4
+    private const val HOLD_LIMIT = CATCH_UP * 5 / 2
     /** Крип врага, до которого столько клеток от волны, — местная угроза для решения об отходе. */
     private const val LOCAL_RANGE = 10
 
@@ -143,6 +150,9 @@ object SpawnAndSwampAdvanced {
     private var myKnown: Map<String, String> = emptyMap()
     private var spawnUpAt = -1
     private var defending = false
+    private var holdTicks = 0
+    /** Чужие площадки башен: id → (тик, прогресс) при первой встрече — из них скорость его стройки. */
+    private val enemySiteSeen = HashMap<String, Pair<Int, Int>>()
 
     // ---------- мелочи ----------
     private fun idOf(o: GameObject): String = o.id.asDynamic().toString().unsafeCast<String>()
@@ -674,10 +684,34 @@ object SpawnAndSwampAdvanced {
      *  перезарядку и её хиты. */
     private fun towerPower(towers: List<StructureTower>): Double {
         val fed = towers.filter { energyOf(it) > 0 }
-        if (fed.isEmpty()) return 0.0
-        val dps = fed.size * towerShot(RANGED_RANGE + 1) / TOWER_COOLDOWN
-        val hits = fed.sumOf { it.hits ?: 0 }.toDouble()
+        return towerPowerOf(fed.size, fed.sumOf { it.hits ?: 0 }.toDouble())
+    }
+
+    private fun towerPowerOf(count: Int, hits: Double): Double {
+        if (count <= 0) return 0.0
+        val dps = count * towerShot(RANGED_RANGE + 1) / TOWER_COOLDOWN
         return kotlin.math.sqrt(dps * hits)
+    }
+
+    /** Сколько его площадок башен достроится к приходу нашей группы: скорость — по его же прогрессу с первой
+     *  встречи площадки (пока замера нет — считаем достроенной, если готова хотя бы наполовину), приход — путь
+     *  группы в тиках тела 1:1. */
+    private fun pendingTowers(t: Int, all: Array<GameObject>, group: List<Creep>): Int {
+        val towerCost = CONSTRUCTION_COST.asDynamic()["StructureTower"].unsafeCast<Int?>() ?: return 0
+        val sites = all.filter { it is ConstructionSite && it.asDynamic().my == false }.unsafeCast<List<ConstructionSite>>()
+            .filter { s -> (s.structure?.let { protoName(it) } == "StructureTower") || s.progressTotal == towerCost }
+        enemySiteSeen.keys.retainAll(sites.map { idOf(it) }.toSet())
+        val from = group.firstOrNull() ?: return sites.size
+        var n = 0
+        for (s in sites) {
+            val p = s.progress ?: 0
+            val total = s.progressTotal ?: towerCost
+            val seen = enemySiteSeen.getOrPut(idOf(s)) { t to p }
+            val dt = t - seen.first
+            val eta = if (dt >= 10 && p > seen.second) (total - p).toDouble() * dt / (p - seen.second) else if (p * 2 >= total) 0.0 else Double.MAX_VALUE
+            if (eta <= pathTicks(from, s)) n++
+        }
+        return n
     }
 
     // ---------- армия ----------
@@ -694,15 +728,18 @@ object SpawnAndSwampAdvanced {
         val home: Position = homeSpawns.minByOrNull { if (enemy == null) 0 else getRange(it, cell(enemy)) }
             ?: bases.firstOrNull()?.let { cell(it.spawnCell) } ?: return
         val enemyObjects = all.filter { it.asDynamic().my == false && it !is Creep && it !is ConstructionSite }
-        val enemyPower = power(enemyCombat) + towerPower(enemyTowers)
         val homeGroup = fighters.filter { idOf(it) !in wave }
+        val pending = pendingTowers(t, all, homeGroup)
+        val enemyPower = power(enemyCombat) + towerPower(enemyTowers) + towerPowerOf(pending, TOWER_HITS.toDouble() * pending)
         val lastCall = t > arenaInfo.ticksLimit - 600
 
-        // выход волны: сила дома больше всей армии и башен соперника
-        if (wave.isEmpty() && threats.isEmpty() && homeGroup.isNotEmpty() &&
+        // выход волны: сила дома больше всей армии и башен соперника (и тех его площадок башен, что достроятся к
+        // нашему подходу — v5 ушёл одним бойцом против одного M4R3, пока башня была площадкой, и лёг под ней).
+        // Уже ушедшая волна не держит дом: дом, который сам сильнее соперника, выходит следом
+        if (threats.isEmpty() && homeGroup.isNotEmpty() &&
             (power(homeGroup) >= enemyPower * PUSH_RATIO || lastCall) && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
             for (f in homeGroup) wave.add(idOf(f))
-            println("push t=$t wave=${wave.size} power=${power(homeGroup).toInt()} vs enemy=${enemyPower.toInt()} (army ${power(enemyCombat).toInt()} towers ${towerPower(enemyTowers).toInt()})${if (lastCall) " lastCall" else ""}")
+            println("push t=$t wave=${wave.size} power=${power(homeGroup).toInt()} vs enemy=${enemyPower.toInt()} (army ${power(enemyCombat).toInt()} towers ${towerPower(enemyTowers).toInt()} pending=$pending)${if (lastCall) " lastCall" else ""}")
         }
         val waveCreeps = fighters.filter { idOf(it) in wave }
         if (waveCreeps.isNotEmpty()) {
@@ -731,17 +768,23 @@ object SpawnAndSwampAdvanced {
         if (waveNow.isNotEmpty()) {
             val front = waveNow.minByOrNull { f -> nearestTargetRange(f, enemyCombat, enemyObjects, theirs) }!!
             val goal = pickGoal(front, enemyCombat, enemyObjects, theirs)
-            val laggard = waveNow.any { getRange(it, front) > COHESION }
-            for (f in waveNow) {
-                val acted = shoot(f, theirs, enemyObjects)
-                if (goal == null) continue
-                if (fleeMelee(f, enemyCombat)) continue
-                val range = getRange(f, goal)
-                if (f === front && laggard && !acted) continue
-                if (f !== front && getRange(f, front) > COHESION) { f.moveTo(front); continue }
+            if (goal != null) {
+                // все идут к цели; передние ждут отставших, которые могут догнать, и не дольше срока
+                val toGoal = waveNow.associateWith { getRange(it, goal) }
+                val frontD = toGoal.values.minOrNull() ?: 0
+                val catching = waveNow.any { (toGoal[it] ?: 0) - frontD in (COHESION + 1)..CATCH_UP }
+                holdTicks = if (catching) holdTicks + 1 else 0
+                val hold = catching && holdTicks <= HOLD_LIMIT
                 val keep = if (goal is Creep) RANGED_RANGE else RANGED_RANGE - 1
-                if (range > keep) f.moveTo(goal)
-            }
+                for (f in waveNow) {
+                    shoot(f, theirs, enemyObjects)
+                    if (fleeMelee(f, enemyCombat)) continue
+                    val d = toGoal[f] ?: 0
+                    val fighting = theirs.any { isCombat(it) && getRange(f, it) <= RANGED_RANGE + 1 }
+                    if (hold && d - frontD <= COHESION && !fighting) continue
+                    if (d > keep) f.moveTo(goal)
+                }
+            } else for (f in waveNow) shoot(f, theirs, enemyObjects)
         }
         // дом: угрозу бьём всей кучей, если на месте сильнее (с башнями) или она уже бьёт спавн или рабочего;
         // иначе держимся у спавна — туда ей придётся подойти на выстрел. За пределы домашней зоны не гонимся
