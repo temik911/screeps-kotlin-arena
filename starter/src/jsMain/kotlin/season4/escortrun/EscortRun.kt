@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v21"
+    private const val BOT_VERSION = "v22"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -536,7 +536,14 @@ object EscortRun {
                     }
                     saving(w, "flag guard ${Bodies.summary(body)} arrive=$arrive", Bodies.cost(body)); return
                 }
-            } else if (ours > KEEPER_MIN_LEAD && scoutsOn(w, KEEP) == 0 && guard == 0 && squatters.isEmpty() && w.enemies.none { onCell(it, myFlag) }) {
+            }
+            // страж не куплен (не успевает к эскорту) — хранитель всё равно нужен: их разведчик, «идущий к нам» у
+            // центра, часто идёт к СВОЕМУ флагу, а без хранителя наш флаг брал их поздний блокировщик (стенд
+            // rev+keep+blk при блокировщике на 51-м: страж на 231-м, поражение на 298-м)
+            if (ours > KEEPER_MIN_LEAD && scoutsOn(w, KEEP) == 0 && guard == 0 && squatters.isEmpty() && w.enemies.none { onCell(it, myFlag) }) {
+                // их маршрут раньше хранителя, если хранитель, купленный на 50 тиков позже, всё равно придёт раньше
+                // любого их разведчика: так бил v19 и v21 взломщик лиги (блокировщик на 51-м, хранитель на 101-м)
+                if (!needGuard && rival > keeperEta + Bodies.cost(MOVE) + 3 && chokeOrder(w, e)) return
                 val body = Bodies.moves(1)
                 if (e >= Bodies.cost(body)) { if (order(w, body, "keeper", "our flag is empty; keeperEta=$keeperEta rivalEta=$rival ours=$ours theirs=$theirs")) scoutQueue.addLast(KEEP); return }
                 saving(w, "keeper", Bodies.cost(body)); return
