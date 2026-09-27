@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 172
+    private const val BOT_VERSION = 173
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6381,6 +6381,8 @@ object SpawnAndSwamp {
     /** A visit ends when his nearest gun is this many ticks from its range of the target: the pair, a cell a tick on any
      *  ground, is out of his reach before he is in range (v172). */
     private const val RAID_CHIP_LEAVE = 4
+    /** In his last stand the raiders do not gather at home: each goes to the target and chips it (v173). */
+    private const val USE_RAID_NO_GATHER = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6535,8 +6537,13 @@ object SpawnAndSwamp {
             if (DEBUG_LOG) println("raid out t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
         }
         val buyUntil = raidBuyUntil()
-        val gathering = raidOrdered < RAID_SIZE && getTicks() <= buyUntil ||
-            ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= buyUntil + 60)
+        // …but not in his last stand (v173): with his builders dead a survivor walked 90 cells home to wait for its new mate
+        // — 180-600 ticks in four v172 draws with #50 — exactly while his guns stood 36-92 cells from his ramparted main;
+        // alone at 90 a tick it would have struck up to 18000 in the ~200 ticks the gathering took. The survivor stays at
+        // the target and chips it; the newborn walks there on its own
+        val lastStandRaid = USE_RAID_NO_GATHER && raidRebuyAt >= 0 && ctx.enemyCreeps.none { isHisBuilder(it) }
+        val gathering = !lastStandRaid && (raidOrdered < RAID_SIZE && getTicks() <= buyUntil ||
+            ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= buyUntil + 60))
         val guns = ctx.combatEnemies.filter { InfluenceMap.profileOf(it).ranged > 0.0 }
         val targets = ArrayList<GameObject>()
         ctx.enemySpawns.forEach { targets.add(it) }
@@ -6597,7 +6604,8 @@ object SpawnAndSwamp {
             if (!USE_RAID_FINISH) return@run kill < (guns.minOfOrNull { getRange(it, pos(target)) - RANGED_RANGE } ?: Int.MAX_VALUE)
             val field = flowTo(ctx, pos(target))
             val back = guns.minOfOrNull { (pathTicks(it, field, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) - RANGED_RANGE * plainPeriod(it).toInt()) } ?: Int.MAX_VALUE
-            val walk = raiders.maxOf { getRange(it, pos(target)) - 1 }
+            // (v173: while chipping, the walk of the nearest — a newborn 88 cells off must not bar the one standing there)
+            val walk = if (USE_RAID_NO_GATHER && chipping) raiders.minOf { getRange(it, pos(target)) - 1 } else raiders.maxOf { getRange(it, pos(target)) - 1 }
             if (chipping) {
                 val there = raiders.any { getRange(it, pos(target)) <= 1 }
                 return@run if (there) back > RAID_CHIP_LEAVE || finishing else walk + RAID_CHIP_MIN < back
