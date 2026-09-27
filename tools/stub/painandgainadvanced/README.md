@@ -80,6 +80,9 @@ attacks and shots went to in the first 50 ticks; with `REPLAY` the record's own 
 - `chase+sit` — the same clump takes the centre and holds it, turning on our fighters only when one comes within ten of
   the flag: a fighter who outscores a fortress (5 a tick to its 3) without ever walking to it. It is what the fatigue
   flag's score rule (v20) is measured on — the rule has to take the flag in time to win on the score.
+- `chase+sit+wide` — as `chase+sit`, and from t=150 (after the bot has read him as a fighter) his light melee stands on
+  the hits-loss flag nearer his clump: 9 a tick to the 8 a fortress can hold, and nobody comes. It is what v23's exit
+  from a fortress that loses on the score is measured on (v22: 16 of 26 lost on the score, v23: 6).
 - `ghost` (needs `REPLAY`) — his recorded track: every creep of his steps each tick toward the cell the record has it on
   (a path step when it fell behind; a creep of ours on the cell refuses it), pays no fatigue (the record did), fires and
   heals by the `rush` rules, and stands where the record ends if it outlives it. The report adds how often his creeps

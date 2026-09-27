@@ -173,6 +173,9 @@ done
 # chase+sit: the same clump holds the centre and never comes (5 a tick to the fortress's 3): v20 takes its fatigue flag
 # only when the score needs it (t≈2750) and wins 25 876 to 24 475; a fatigue rule that never fires loses this line
 rival replay:6ab9465b22f1123ac118f3f5 - chase+sit 5000
+# chase+sit+wide: his light melee also stands on the near L4 from t=150 — 9 a tick to the fortress's 8 and nobody comes;
+# v22 waited in its fortress and lost this on the score, v23 leaves it after 300 ticks with no fight and wins
+rival replay:6ab9465b22f1123ac118f3f5 - chase+sit+wide 5000
 
 # a SMOKE label without a gate line would shrink the smoke silently: checked on every gate run, so its own landing catches it
 if [[ "$TAG" == land || "$TAG" == gate ]]; then
