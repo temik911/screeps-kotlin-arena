@@ -155,6 +155,13 @@ def main():
                 if play.payload_size(c) != size:
                     size = play.push_zip(c, data)
                 r = play.start(c, arena["id"], code_id=code)
+                # other sessions play too, and the server caps the running games per user: "Running games limit
+                # exceeded" (27.09.2026, with Spawn and Swamp advanced in a series) — wait for a slot instead of giving up
+                for _ in range(30):
+                    if r.get("id") or "limit exceeded" not in str(r.get("err") or r.get("raw") or ""):
+                        break
+                    time.sleep(10)
+                    r = play.start(c, arena["id"], code_id=code)
                 if r["status"] not in (200, 201) or not r.get("id"):
                     print(f"{name} {i}/{a.count}: start failed ({r['status']} {r.get('err')}) {r.get('raw') or ''}", flush=True)
                     continue
