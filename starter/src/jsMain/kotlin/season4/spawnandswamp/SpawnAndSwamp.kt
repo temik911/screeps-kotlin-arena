@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 210
+    private const val BOT_VERSION = 211
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6691,6 +6691,8 @@ object SpawnAndSwamp {
     private const val USE_SPAWN_KNOWS_SAVING = true
     /** A marching melee does not turn home to a fight the garrison wins without it (v210). */
     private const val USE_WAVE_MELEE_STAYS = true
+    /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
+    private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
@@ -7712,7 +7714,13 @@ object SpawnAndSwamp {
             // …and in a fortified house the tower's shot is taken even when the spawn will not outlive a fighter (v141):
             // under the storm that was exactly when the tower stood empty (48-87 % of the ticks his army was in range)
             val fortTower = USE_FORT_HOME && fortHome && (ctx.myTowers.isNotEmpty() || spotRampart != null)
-            val mayTake = !fromPile && (lastSpawnOutlivesFighter || fortTower) && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1
+            // …and not while the fleet is short of its peak and no army of his is near (v211): v208 stopped the keeper's
+            // draw only in fortKeeperTurn, which runs once the tower stands; while the tower was a site this line took
+            // it all — against けろびー#50 (v210) the spawn bought nothing from 389 to 1574, at 5 or less in 59 of 91
+            // readings, while the fleet fell 5 -> 0 by 750 unreplaced and three last-stand windows passed with no raider
+            val houseCalm = ctx.combatEnemies.none { getRange(it, spawn) <= TOWER_FALLOFF_RANGE }
+            val mayTake = !fromPile && (lastSpawnOutlivesFighter || fortTower) && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1 &&
+                !(USE_SITE_KEEPER_SHORT_FLEET && fleetShortNow && houseCalm)
             val mayScoop = pile != null && free > 0 && getRange(b, pile.pos) <= 1
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else if (spotRampart != null) b.build(spotRampart) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
