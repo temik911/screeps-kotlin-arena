@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v23"
+    private const val BOT_VERSION = "v24"
 
     private const val LOG_EVERY = 50
 
@@ -1122,12 +1122,19 @@ object SpawnAndSwampAdvanced {
      *  спавна), разнесённые на путь; Ланчестер по сумме. */
     /** Кого он родит за `ticks`: рождения за окно (не больше 300 тиков с его первого спавна), разнесённые на срок,
      *  телами из того же окна по кругу. */
-    private fun projectedBirths(t: Int, ticks: Int): List<SimUnit> {
+    private fun projectedBirths(t: Int, ticks: Int, spawns: Int): List<SimUnit> {
         if (enemySpawnSeenAt < 0 || ticks <= 0) return emptyList()
         val window = minOf(300, t - enemySpawnSeenAt)
-        if (window <= 0) return emptyList()
-        val recent = enemyBirths.filter { it.first > t - window }
-        if (recent.isEmpty()) return emptyList()
+        val recent = if (window <= 0) emptyList() else enemyBirths.filter { it.first > t - window }
+        if (recent.isEmpty()) {
+            // рождений его бойцов ещё не видели, а спавны у него есть: каждый рожает полное тело раз в столько тиков,
+            // сколько насыщенный источник с восстановлением спавна копит на вместимость спавна (~91). v22 ушёл одним
+            // бойцом на 360-м против «силы 0» и потерял дом трём M4R3H1 けろびー#9 к 500-му
+            val period = SPAWN_ENERGY_CAPACITY / (SOURCE_ENERGY_REGEN + 1)
+            val k = kotlin.math.round(spawns.toDouble() * ticks / period).toInt()
+            val types = fighterBody(SPAWN_ENERGY_CAPACITY).map { it.asDynamic().unsafeCast<String>() }
+            return List(k) { SimUnit(types, types.size * 100) }
+        }
         val k = kotlin.math.round(recent.size.toDouble() * ticks / window).toInt()
         return List(k) { i -> val types = recent[i % recent.size].second; SimUnit(types, types.size * 100) }
     }
@@ -1270,7 +1277,7 @@ object SpawnAndSwampAdvanced {
         // его ближний спавн — тоже в прогоне: боец без урона с хитами спавна и рампарта над ним. Волна побеждает,
         // только снеся его под огнём башен, а не перебив защитников
         val nearSpawn = enemySpawnObjs.minByOrNull { pathTicks(home, it) }
-        val enemyAtArrival = enemyCombat.map { simOf(it) } + projectedBirths(t, arrival) +
+        val enemyAtArrival = enemyCombat.map { simOf(it) } + projectedBirths(t, arrival, enemySpawnObjs.size) +
             fedTowers.map { simTowerOf(it, all) } + List(pending) { simTower(TOWER_HITS) } + listOfNotNull(nearSpawn?.let { simSpawnOf(it, all) })
         armyCache = fighters.map { simOf(it) } to enemyAtArrival
         val lastCall = t > arenaInfo.ticksLimit - 600
@@ -1310,7 +1317,7 @@ object SpawnAndSwampAdvanced {
                 // армия — 40–48 потерянных крипов за ничью
                 val reach = maxOf(STRIKE_GUARD_RANGE, getRange(home, sp))
                 val guards = enemyCombat.filter { getRange(it, sp) <= reach }
-                val births = projectedBirths(t, toSp).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
+                val births = projectedBirths(t, toSp, enemySpawnObjs.size).let { b -> b.take((b.size + enemySpawnObjs.size - 1) / enemySpawnObjs.size) }
                 val towersNear = enemyTowers.filter { energyOf(it) > 0 && getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }
                 // и те его бойцы, что уже рядом с нашей группой: их видит прогон отхода, и без них удар и отход v22
                 // сменяли друг друга каждый тик (1568–1574)
