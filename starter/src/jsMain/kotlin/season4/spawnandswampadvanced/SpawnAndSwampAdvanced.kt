@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v31"
+    private const val BOT_VERSION = "v32"
 
     private const val LOG_EVERY = 50
 
@@ -859,8 +859,11 @@ object SpawnAndSwampAdvanced {
         // площадка в досягаемости и дому ничто не грозит: строим циклом дебюта (копка и стройка — одно действие)
         // башня раньше рампартов: рампарт над спавном его армия пробивает за ~40 тиков, и добытчики v15 отстраивали
         // его снова и снова, не дойдя до башни
-        val site = mySites.filter { getRange(w, it) <= 3 }
-            .sortedWith(compareBy<ConstructionSite> { if (isRampartSite(it)) 1 else 0 }.thenBy { getRange(w, it) }).firstOrNull()
+        // дом угрозу не держит — энергия в спавн (защитник), строим только рампарты (200 за 10000 — дешевле бойца);
+        // держит или угроз нет — башня раньше рампартов (v16). v30 проиграл けろびー к 900-му: площадка башни встала на
+        // 368-м от первого рейдера M3R3, 180 тиков вся добыча шла в неё, и спавн не родил ни одного защитника
+        val site = mySites.filter { getRange(w, it) <= 3 && (homeHolds || isRampartSite(it)) }
+            .sortedWith(compareBy<ConstructionSite> { if (isRampartSite(it) == homeHolds) 1 else 0 }.thenBy { getRange(w, it) }).firstOrNull()
         // на клетке площадки стоит крип — стройка препятствия не идёт; v6 так простоял 400 тиков: боец встал на
         // площадку башни, рабочий с полным запасом каждый тик «строил» впустую и не копал, спавн жил на +1 в тик
         val siteFree = site != null && (isRampartSite(site) || getObjectsByPrototype(Creep::class).none { it.x == site.x && it.y == site.y })
