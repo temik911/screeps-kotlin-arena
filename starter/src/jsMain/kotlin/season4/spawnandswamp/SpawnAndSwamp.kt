@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 211
+    private const val BOT_VERSION = 212
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4359,7 +4359,7 @@ object SpawnAndSwamp {
         // полноскоростные стрелки против ВСЕХ врагов рядом с угрозой, и по перевесу, и по цене боя
         // (см. fightCost). Гарнизон с бурильщиком против одного врага отправил двоих на троих M3R3
         // (матч 6: один стал турелью, второй погиб)
-        huntingThreat = threat != null && freeStrikers.isNotEmpty() && run {
+        huntingThreat = threat != null && freeStrikers.isNotEmpty() && (!USE_NO_FUTILE_CHASE || freeStrikers.any { gunCatches(it, threat) }) && run {
             // стая — те, кто рядом с угрозой, И те, кто дойдёт до неё раньше нас (по ИХ ходу вдоль поля к
             // ней): пятеро вышли на двоих (цена 265 при запасе 900), за 60 тиков подхода и сбора к угрозе
             // подошли ещё двое, у контакта стая из четырёх стоила 983, охота отменилась под огнём в болоте,
@@ -4503,6 +4503,7 @@ object SpawnAndSwamp {
             // walked 13-18 cells north after his retreating M5R3 — 30 ticks from his last spawn
             val siegeSpawn = enemySpawn
             val engage = if (localAggressive) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && !(marching && costsMoreThanSpawn(it, enemySpawn)) &&
+                (!USE_NO_FUTILE_CHASE || !hasRanged(creep) || gunCatches(creep, it)) &&
                 !(USE_SIEGE_MELEE && marching && siegeGoWin && siegeSpawn != null && getRange(it, siegeSpawn) > RANGED_RANGE && getRange(it, creep) > 2) }.minByOrNull { getRange(creep, it) } else null
             // при перевесе сближаемся до CLOSE_STANDOFF; без перевеса на врага не идём вовсе —
             // держим пост у спавна отрядом (по одному нас и били), кайт и бегство — в mustFlee
@@ -5773,6 +5774,15 @@ object SpawnAndSwamp {
         else hasMelee(target) || near || !canMove(target) || swampPeriod(target) > swampPeriod(unit) || !retreating(unit, target)
     }
 
+    /** A GUN CHASES ONLY WHAT IT CATCHES (v212), as the melee has since v94 (catchable): a target already in its reach,
+     *  standing or coming, slower than it on swamp, or unable to move. Against ●ω<♥♪#3/#4 (v210, a loss and a draw) our
+     *  M8R4 chased his pair and his train — each with its healer next to it — 45 cells and more: the target in reach
+     *  20-27 % of the chase's creep-ticks (his gun 66 %), his heal matching all our damage on his creeps, and 10 of our
+     *  11 guns lost in 702-1335 died after a chase; the fight's score counts everyone within four as firing, while in a
+     *  chase only the head fires */
+    private fun gunCatches(unit: Creep, target: Creep): Boolean =
+        getRange(unit, target) <= RANGED_RANGE || !canMove(target) || swampPeriod(target) > swampPeriod(unit) || !retreating(unit, target)
+
     /** Цель за прошлый тик увеличила дистанцию до нас: её прежняя клетка (enemyPrevCell) была ближе. */
     private fun retreating(unit: Creep, target: Creep): Boolean {
         val prev = enemyPrevCell[target.id] ?: return false
@@ -6693,6 +6703,8 @@ object SpawnAndSwamp {
     private const val USE_WAVE_MELEE_STAYS = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
+    /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
+    private const val USE_NO_FUTILE_CHASE = true
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
