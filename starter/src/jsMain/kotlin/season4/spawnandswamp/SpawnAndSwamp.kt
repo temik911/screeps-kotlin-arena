@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 202
+    private const val BOT_VERSION = 203
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4198,8 +4198,8 @@ object SpawnAndSwamp {
         // ones stood under ramparts by 1675. With the rampart over our spawn the house is 13000: what the threats at the
         // door take off it in the time the siege needs — and the walk back, when the target is not his last spawn — is
         // the question; his storms (8-12 guns, 500-1000 a tick) still fall inside it and still call the wave home
-        fun houseOutlasts(travel: Int, siegeTicks: Int, back: Int): Boolean {
-            if (!USE_HOUSE_OUTLASTS || homeThreats.isEmpty() || siegeTicks >= Int.MAX_VALUE / 4) return false
+        fun houseOutlasts(travel: Int, siegeTicks: Int, back: Int, force: Boolean = false): Boolean {
+            if ((!USE_HOUSE_OUTLASTS && !force) || homeThreats.isEmpty() || siegeTicks >= Int.MAX_VALUE / 4) return false
             val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
             if (threatDps <= 0.0) return true
             val arrive = if (spawnUnderFire) 0 else homeThreats.minOf { (arrivalById[it.id] ?: Int.MAX_VALUE / 4).coerceAtMost(SPAWN_ALARM_TICKS) }
@@ -4246,8 +4246,18 @@ object SpawnAndSwamp {
         else if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
         else flowNear(spawnFlow, mySpawn.x, mySpawn.y).let { if (it < 0) Int.MAX_VALUE / 4 else spawnFlow[it] }
         val reinforceTravel = if (staging.isNotEmpty()) startTravel else homeTravel
+        // A RECALL WEIGHS THE SIEGE LEFT, NOT ONLY THE WALK BACK (v203). With USE_HOUSE_OUTLASTS off since v169 (its A/B
+        // judged a bundle: the post's exit, the interceptors at the target and this) only recallSaves stood — "we get
+        // home before the house falls" — which holds the better the WEAKER the threat is. Against marlyman (97 games of
+        // his family since v195, three draws, each lost to it) 12 recalls, 9 of them off a siege the front was winning
+        // in 1-75 ticks, each costing 65-425 ticks, and after none did our spawn come under fire in the next 200: at 1652
+        // of one draw the army left (52,83) at 2200 hits with `win/5t`, at 995 of another (97,97) at 7030 with `win/13t`
+        // (it fell at 1446 instead of ~1021; his main then stood at 2832 at 2000). Finishing and walking back against
+        // walking back now differs by the front's walk and the siege left; the house loses at most that times the
+        // threats' damage. Here only the recall's side of v168 is back
         val goOutlasts = siegeGo.win && waveMembers.isNotEmpty() &&
-            houseOutlasts(frontTravel, siegeGo.ticks, waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) })
+            houseOutlasts(frontTravel, siegeGo.ticks, waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) },
+                force = USE_RECALL_OUTLASTS)
         val newPushing = when {
             enemySpawn == null -> false
             (spawnUnderFire || alarm && !(if (USE_STAGING_GUARDS && waveMembers.isNotEmpty()) stayHolds else guardHolds)) &&
@@ -4661,6 +4671,12 @@ object SpawnAndSwamp {
                 lagging
             }
 
+            // …HIS CREEPS' FIRE, since the towers that bound the hold are holdTowers (v203). damageAt adds every fed tower's
+            // fire, and v190's holding step still could not step into a tower's far reach that is not over its target:
+            // against marlyman#443 (v201) f30 stood 560 ticks at (28,58), at range 20 of his main's tower, its target (2,3)
+            // under no tower, while wave 1 held for it — 1650 fighter-ticks of waiting
+            fun holdFire(x: Int, y: Int): Double = if (!USE_HOLD_CREEP_FIRE) InfluenceMap.damageAt(x, y, combatEnemies)
+                else InfluenceMap.damageAt(x, y, combatEnemies) - InfluenceMap.towerSustainedAt(x, y)
             val holdTowers: List<TowerInfo> = if (!marching || !siegeHold) emptyList()
                 else if (USE_HOLD_TARGET_TOWERS && enemySpawn != null) coveringTowers(ctx, listOf(enemySpawn))
                 else ctx.enemyTowers.filter { it.fed }
@@ -4687,7 +4703,7 @@ object SpawnAndSwamp {
                 // (the edge held in combat froze the gate's tower+stream front before his stream: 574 -> 1321)
                 marching && siegeHold -> bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, breaching, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt)
                     ?.takeIf { s -> holdTowers.none { InfluenceMap.towerShot(getRange(it.pos, InfluenceMap.cell(s.x, s.y))) > 0.0 } &&
-                        (!USE_HOLD_FIRE_EDGE || inCombat || InfluenceMap.damageAt(s.x, s.y, combatEnemies) <= InfluenceMap.damageAt(creep.x, creep.y, combatEnemies)) }
+                        (!USE_HOLD_FIRE_EDGE || inCombat || holdFire(s.x, s.y) <= holdFire(creep.x, creep.y)) }
                 else -> bestSingleMove(creep, target, flow, standoff, localAggressive, inCombat, breaching, enemyCreeps, allies, meleeEnemies, blockedSet, enemyPositions, occupantAt)
             }
             if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
@@ -6634,6 +6650,10 @@ object SpawnAndSwamp {
     private const val USE_RAID_DIRECT_STRIKE = true
     /** A re-buy window that lapsed with no raider bought reopens the re-buy and the last stand (v202). */
     private const val USE_RAID_REOPEN = true
+    /** A recall off a winning siege waits while the house outlasts the siege left and the walk back (v203). */
+    private const val USE_RECALL_OUTLASTS = true
+    /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
+    private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
