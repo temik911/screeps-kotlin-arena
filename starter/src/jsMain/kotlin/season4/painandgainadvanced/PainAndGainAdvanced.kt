@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 15
+const val BOT_VERSION = 16
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -353,7 +353,20 @@ object PainAndGainAdvanced {
      *  in two tests of four — while our flags already lead him by 12 a tick: v12 plays him from a fortress. */
     private var fighter = false
     private var classified = false
+    private var confirmed = false
     private fun classify() {
+        // the second look: a farmer may walk out as one lump and spread his runners only later — kerobii#10 was one
+        // lump at t=45 (none of his more than ten from his centroid), six out at t=100, and v15 sat in its fortress while
+        // he took five flags; at t=100 a fighter still has at most two out of twelve and at most one flag (stachu3478#5
+        // 0/0, Hardy#1 2/1; kerobii#6 9-10/6, 76561198870429455 2/7)
+        if (classified && !confirmed && fighter && t >= CONFIRM_T) {
+            confirmed = true
+            val cx = theirs.sumOf { it.x } / maxOf(1, theirs.size); val cy = theirs.sumOf { it.y } / maxOf(1, theirs.size)
+            val out = theirs.count { Grid.range(it.x, it.y, cx, cy) > CONFIRM_R }
+            val hisFlags = flags.count { it.my == false }
+            if (out > FIGHTER_MAX_OUT || hisFlags > 1) { fighter = false; fortressId = null }
+            println("style t=$t: ${if (fighter) "fighter confirmed" else "farmer after all"} spread=$out his flags=$hisFlags")
+        }
         if (classified || t < CLASSIFY_T) return
         classified = true
         // read early, by how his army walks: a farmer's runners are out on their flags from the first ticks (kerobii's
@@ -752,6 +765,8 @@ object PainAndGainAdvanced {
     const val MEND_AT = 250
     const val SURVIVE_ARMED = 2
     const val CLASSIFY_T = 45
+    const val CONFIRM_T = 100
+    const val CONFIRM_R = 12
     const val SPREAD_R = 10
     const val FIGHTER_MAX_OUT = 2
     const val FIGHTER_MAX_RATE = 5
