@@ -91,7 +91,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v3"
+    private const val BOT_VERSION = "v4"
 
     private const val LOG_EVERY = 50
 
@@ -124,6 +124,9 @@ object SpawnAndSwampAdvanced {
     private val slotOf = HashMap<String, Pos>()
     /** Строитель второго спавна и его цель. */
     private var builderId: String? = null
+    /** Строитель заказан, но ещё не узнан: id объекта из `spawnCreep` в тик заказа не тот, что у крипа потом
+     *  (v3 «терял» строителя через тик после заказа), поэтому он узнаётся по телу среди наших рабочих без клетки. */
+    private var builderPending = false
     private var expansion: Base? = null
     private var expansionPlaced = false
     /** Волна: id бойцов, ушедших в атаку. Пусто — армия дома. */
@@ -366,6 +369,11 @@ object SpawnAndSwampAdvanced {
     ) {
         val workers = mine.filter { !it.spawning && liveParts(it, WORK) > 0 }
         slotOf.keys.retainAll(workers.map { idOf(it) }.toSet())
+        if (builderPending) {
+            val sig = bodyText(builderBody())
+            val b = mine.firstOrNull { bodyOf(it) == sig && idOf(it) !in slotOf }
+            if (b != null) { builderId = idOf(b); builderPending = false; println("builder t=$t is ${idOf(b)} at (${b.x},${b.y})") }
+        }
         if (builderId != null && mine.none { idOf(it) == builderId }) {
             println("builder lost t=$t")
             builderId = null
@@ -435,15 +443,20 @@ object SpawnAndSwampAdvanced {
         return if (r.incomplete) Int.MAX_VALUE / 4 else r.cost
     }
 
-    /** Цель второго спавна: «наш» источник — наш спавн доходит до него раньше, чем стартовая клетка соперника, — и
-     *  из таких ближайший по пути. */
+    /** Цель второго спавна: источник, до которого наш спавн доходит раньше соперника с наибольшим запасом (его
+     *  спавн, а пока его нет — стартовая клетка): строитель идёт один, и спорный источник (v3 выбрал центральный
+     *  с запасом в 10 тиков) — это строитель и площадка под его первой же волной. */
     private fun expansionTarget(from: Position, sources: Array<Source>, all: Array<GameObject>): Base? {
-        val enemy = enemyStart ?: return null
+        val enemySpawns = all.filter { it is StructureSpawn && it.asDynamic().my == false }
+        val enemyFrom: List<Position> = enemySpawns.ifEmpty { listOfNotNull(enemyStart?.let { cell(it) }) }
+        if (enemyFrom.isEmpty()) return null
         val taken = bases.map { it.sourceId }.toSet()
         val blocked = blockedCells(all)
-        val ranked = sources.filter { idOf(it) !in taken }.map { s -> Triple(s, pathTicks(from, s), pathTicks(cell(enemy), s)) }
+        val ranked = sources.filter { idOf(it) !in taken }.map { s -> Triple(s, pathTicks(from, s), enemyFrom.minOf { pathTicks(it, s) }) }
         println("expansion: candidates " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})us=${it.second}/them=${it.third}" })
-        for ((s, _, _) in ranked.filter { it.second < it.third }.sortedBy { it.second }) planBase(s, from, blocked)?.let { return it }
+        for ((s, _, _) in ranked.filter { it.second < it.third }.sortedWith(compareByDescending<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
+            planBase(s, from, blocked)?.let { return it }
+        }
         return null
     }
 
@@ -517,16 +530,18 @@ object SpawnAndSwampAdvanced {
         } else if (haveWork < needWork && freeSlots > 0) {
             body = workerBody(needWork - haveWork, energy)
             why = "work $haveWork/$needWork"
-        } else if (bases.size == 1 && expansion == null && builderId == null && fighters.isNotEmpty() && threat.isEmpty() && b === bases.first()) {
+        } else if (bases.size == 1 && expansion == null && builderId == null && !builderPending && fighters.isNotEmpty() &&
+            threat.isEmpty() && b === bases.first()) {
+            body = builderBody()
+            if (energy < costOf(body)) return
             val target = expansionTarget(spawn, getObjectsByPrototype(Source::class), getObjects()) ?: run {
                 return spawnFighter(t, spawn, energy, why = "army")
             }
-            body = builderBody()
-            if (energy < costOf(body)) return
             val r = spawn.spawnCreep(body)
             val c = r.`object`
             println("spawn t=$t ${bodyText(body)} cost=${costOf(body)} energy=$energy why=expansion to (${target.spawnCell.x},${target.spawnCell.y}) err=${r.error}")
-            if (c != null) { builderId = idOf(c); expansion = target; expansionPlaced = false }
+            if (r.error == null) { builderPending = true; expansion = target; expansionPlaced = false }
+            println("spawn object id=${c?.let { idOf(it) }}")
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
