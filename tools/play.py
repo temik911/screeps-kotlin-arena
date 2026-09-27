@@ -484,8 +484,22 @@ def outcome(s):
 
 def wait(c, gid, timeout=1800):
     deadline = time.time() + timeout
+    failures = 0
     while time.time() < deadline:
-        s = state(c, gid)
+        # the game plays on the server whatever its API answers for a minute: a poll that failed after JS_GET's own
+        # retries is one missed look, not a lost game. 27.09.2026 an A/B of spawn-and-swamp-advanced died here on an
+        # HTML page after five hands, while the server was refusing matches for several minutes — longer than the ~6 s
+        # JS_GET waits — and the game it was watching finished normally
+        try:
+            s = state(c, gid)
+            failures = 0
+        except RuntimeError as e:
+            failures += 1
+            if failures >= 30:
+                raise
+            print(f"wait: poll {failures} failed, retrying in 10 s: {str(e)[:120]}", file=sys.stderr)
+            time.sleep(10)
+            continue
         if s.get("status") == "finished":
             return s
         time.sleep(10)
