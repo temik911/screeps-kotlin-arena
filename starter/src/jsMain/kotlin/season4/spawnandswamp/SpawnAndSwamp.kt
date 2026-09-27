@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 196
+    private const val BOT_VERSION = 197
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3849,13 +3849,16 @@ object SpawnAndSwamp {
         // swamp 2-6 cells behind four M8R4: the front's siege read `lose/14t`, the wave held (siegeHold) and waited for
         // those very five anyway, 110 ticks 36-42 cells from his main, while the whole army's run in the body question
         // read `win/15t`; his next pile spawn stood at 1635, and it was a draw (his main took 40, 0 and 180 damage in three
-        // series' draws). Each member of the wave behind the front now joins the front's siege at its own walk's tick, as
-        // his defenders do since v124
+        // series' draws). Each member of the wave behind the front joins the front's siege at its own walk's tick, as his
+        // defenders do since v124 — in a verdict of its own, siegeGoWave, which only ends the hold (below): taken as the
+        // front's verdict itself, the gate's tower+stream front read a slow `win/88t` instead of `lose/3t`, the hold that
+        // calls the post (siegeJoin `win/1t`) never came, and the siege failed (503 -> 1274, tower+healball 518 -> 1288)
         val latecomers = if (!USE_WAVE_LATECOMERS || enemySpawn == null) emptyList() else
             waveMembers.filter { m -> waveFront.none { it.id == m.id } && liveMoves(m) > 0 }
         val lateJoins: Map<String, Int>? = if (latecomers.isEmpty()) null else latecomers.associate { m ->
             m.id to (travelTicksOf(listOf(m), assaultFlow, spawnFlow).coerceAtMost(arenaInfo.ticksLimit) - frontTravel).coerceAtLeast(1) }
-        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront + latecomers, frontAttrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas, joins = lateJoins) else SIEGE_LOSE
+        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, frontAttrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas) else SIEGE_LOSE
+        val siegeGoWave = if (enemySpawn != null && lateJoins != null) siegeOutcome(waveFront + latecomers, frontAttrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas, joins = lateJoins) else SIEGE_LOSE
         // the front fires the way its winning plan does (v83): past his shielded defenders and his towers, at the spawn
         stormDirect = siegeGo.win && siegeGo.direct
         siegeGoWin = siegeGo.win
@@ -4227,7 +4230,9 @@ object SpawnAndSwamp {
             else -> false
         }
         val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN
-        siegeHold = newPushing && !siegeGo.win && waveMembers.isNotEmpty() && !frontCovered && holdInTime
+        // (v196) the wave with its own latecomers wins, and the post would not end the siege sooner: nothing to hold for
+        val goWave = USE_WAVE_LATECOMERS && siegeGoWave.win && !(siegeJoin.win && siegeJoin.better(siegeGoWave))
+        siegeHold = newPushing && !siegeGo.win && !goWave && waveMembers.isNotEmpty() && !frontCovered && holdInTime
         if (DEBUG_LOG && (newPushing != pushing || getTicks() % (LOG_EVERY * 10) == 0)) {
             println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds/${guardHoldsSortie}(${arrivingHome.size}@$sortieTicks) home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
         }
@@ -6555,8 +6560,14 @@ object SpawnAndSwamp {
     /** A standing gun of his within a raider's flight range is prey too, not only one by the target (v193).
      *  OFF (v195) with USE_RAID_GUN_PREY, see there. */
     private const val USE_RAID_GUN_NEAR = false
-    /** The front's siege verdict counts the wave's members behind it, each joining at its own walk's tick (v196). */
-    private const val USE_WAVE_LATECOMERS = true
+    /** The wave's own verdict (front + members behind it, each joining at its walk's tick) ends the hold (v196).
+     *  OFF: the gate's tower+healball went 518 -> 1294. At t=360-400 the latecomer (one M12A5) was 48-60 ticks behind
+     *  four M8R4, the wave's run read `win/62t` while the front's read `lose/42t`, the hold ended and the front walked
+     *  in alone under his tower and healball for those 48 ticks — which the run survives and the stub does not (the
+     *  siege run is optimistic against heal: v185's first cut failed the same scenario). Waiting at the edge for the
+     *  latecomer and going together IS the hold; against marlyman#441 (v195) the hold's 110 ticks were a wait for f84
+     *  at the far edge of his tower, not for the swamp-bound melee — the cohesion's question, not the verdict's */
+    private const val USE_WAVE_LATECOMERS = false
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
