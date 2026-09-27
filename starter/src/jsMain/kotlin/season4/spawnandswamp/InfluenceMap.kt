@@ -465,6 +465,15 @@ object InfluenceMap {
         return out
     }
 
+    /** Only what cannot be walked through — his creeps' cells and the blocked ones, no fire (v202): for a walk whose
+     *  fire is already priced elsewhere (the raid's race). */
+    fun passCostMatrix(enemies: List<Creep>, blocked: List<Position>): CostMatrix {
+        val out = CostMatrix()
+        for (enemy in enemies) if (enemy.x in 0..FIELD_MAX && enemy.y in 0..FIELD_MAX) out.set(enemy.x, enemy.y, BLOCKED)
+        for (cell in blocked) if (cell.x in 0..FIELD_MAX && cell.y in 0..FIELD_MAX) out.set(cell.x, cell.y, BLOCKED)
+        return out
+    }
+
     /**
      * Обновляет стойку крипа с гистерезисом: переключение только при выходе за пороги,
      * между порогами стойка сохраняется — крип не «дрожит» на границе.

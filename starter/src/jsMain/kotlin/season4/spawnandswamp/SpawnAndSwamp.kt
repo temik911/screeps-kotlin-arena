@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 201
+    private const val BOT_VERSION = 202
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6630,6 +6630,10 @@ object SpawnAndSwamp {
     private const val USE_FLEET_FIRST = true
     /** A hauler with no live CARRY is not fleet; the fort's pile builder yields to a short fleet too (v201). */
     private const val USE_HULK_NOT_HAULER = true
+    /** A strike the race has taken is walked on a matrix of obstacles only, not round the fire (runRaiders, v202). */
+    private const val USE_RAID_DIRECT_STRIKE = true
+    /** A re-buy window that lapsed with no raider bought reopens the re-buy and the last stand (v202). */
+    private const val USE_RAID_REOPEN = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
@@ -6785,7 +6789,11 @@ object SpawnAndSwamp {
         // …and a survivor does not block it (v163): the re-buy tops the pair up to RAID_SIZE (see raidAlive)
         // (v174: a window that closed with the pair half-bought left raidOrdered at 1, and no re-buy ever fired again —
         // against kerobi#50 his main stood at 4810 for the last 660 ticks with nobody striking it)
-        val pairClosed = raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil())
+        // …nor one that closed with NONE bought (v202): after a re-buy whose window lapsed with no raider ordered,
+        // raidOrdered stayed 0 and neither the re-buy nor the last stand fired again — the raid was off to the end, in 5
+        // stored games with けろびー, all draws (851 ticks with no right to a raider in one, while the spawn spent 3000+)
+        val lapsed = USE_RAID_REOPEN && raidRebuyAt >= 0 && raidOrdered == 0 && getTicks() > raidBuyUntil()
+        val pairClosed = raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil()) || lapsed
         // …WITH ANY NUMBER OF HIS SPAWNS, WHILE THE CLOCK COVERS IT (v184). With three spawns of his or more the pair was
         // never re-bought for a builder, and a builder by any of his spawns was not "in the field": against けろびー#48 (the
         // 19-spawn draw) no raider lived after 699 while his builders raised spawn after spawn. More of his spawns is more
@@ -6809,7 +6817,7 @@ object SpawnAndSwamp {
         // end, his mobile army (9-14 armed) stood 20-24 cells from OUR spawn, 82-93 from his, only his stationary A3 by the
         // main, and nobody struck it: the pair was re-bought only for a new builder, and there was none. It is bought while
         // what is left of the match covers the pair's birth, its walk and the kill
-        if (USE_RAID_LAST && (raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil())) &&
+        if (USE_RAID_LAST && (raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil()) || lapsed) &&
             // …with any number of his spawns (v175): the clock below already sums them all. With three his count never let
             // the pair be re-bought — in v174 against kerobi his spawns at 3 and no builder of his meant 0 wins, a loss and
             // five draws, while his main stood free of his guns for 758-931 ticks in a row and his bare spawns for 604-1266
@@ -7038,6 +7046,13 @@ object SpawnAndSwamp {
         val go = if (strikeFits && !raidHome) target else if (raidHome) null else armedPrey ?: prey
         if (USE_RAID_TOUR) raidTargetId = go?.id ?: if (strikeFits) null else raidTargetId
         val opts = SearchPathOptions(costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)
+        // A STRIKE THE RACE HAS TAKEN IS WALKED STRAIGHT (v202). The danger matrix is priced for a hauler (a cell under an
+        // M3R3 weighs 180, ninety cells of detour; under an M5R5 the cap), and the pair of 3600 walked round the fire the
+        // race had already accepted: against けろびー (v200-v201) the pair reached his first field builder 22-83 ticks
+        // later than its shortest walk in the draws (half a tick in the wins), arriving with 3120-3600 of its 3600 hits,
+        // while the builder raised his second field spawn in those ticks — all five v200+ draws with him went so
+        val strikeOpts = if (USE_RAID_DIRECT_STRIKE && strikeFits && !raidHome && target != null)
+            SearchPathOptions(costMatrix = InfluenceMap.passCostMatrix(ctx.enemyCreeps, ctx.blocked), plainCost = 2, swampCost = 2) else opts
         // …WAITING BY THE TARGET, AWAY ONLY FROM A GUN THAT REACHES IT (v179): fleeing every gun within twelve cells kept the
         // pair 20-49 cells from his main in 88 % of the free ticks against kerobi — his M5R5 walk a ring 20-45 cells round
         // it — so the windows were as many as in the wins and the strikes half as many (57-82 ticks at the main against
@@ -7094,8 +7109,9 @@ object SpawnAndSwamp {
                     }
                     best
                 }
-                val step = if (freeNext != null) searchPath(r, SearchGoal(pos = freeNext, range = 0), opts).path.firstOrNull()
-                    else searchPath(r, SearchGoal(pos = goal, range = range), opts).path.firstOrNull()
+                val walkOpts = if (go != null && go.id == target?.id) strikeOpts else opts
+                val step = if (freeNext != null) searchPath(r, SearchGoal(pos = freeNext, range = 0), walkOpts).path.firstOrNull()
+                    else searchPath(r, SearchGoal(pos = goal, range = range), walkOpts).path.firstOrNull()
                 if (step != null) TrafficManager.request(r, step, HAULER_LOADED_PRIORITY)
             }
         }
