@@ -118,7 +118,7 @@ object PainAndGainAdvanced {
         }
     }
 
-    private fun own(my: Boolean?) = when (my) { true -> "o"; false -> "e"; null -> "n" }
+    private fun own(my: Boolean?) = if (my == true) "o" else if (my == false) "e" else "n"   // a neutral owner is `undefined`, which a `when` null branch does not catch
 
     private fun probe(mine: List<Creep>, theirs: List<Creep>, flags: List<ScoreFlag>, towers: List<StructureTower>, containers: List<StructureContainer>) {
         println("hello season4 pain-and-gain-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
