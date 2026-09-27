@@ -3,6 +3,13 @@ package season4.escortrunadvanced
 import kotlinx.js.JsPlainObject
 import screeps.api.ATTACK
 import screeps.api.BODYPART_HITS
+import screeps.api.BUILD_POWER
+import screeps.api.CONSTRUCTION_COST
+import screeps.api.EXTENSION_ENERGY_CAPACITY
+import screeps.api.TOWER_CAPACITY
+import screeps.api.TOWER_COOLDOWN
+import screeps.api.TOWER_POWER_ATTACK
+import screeps.api.TOWER_RANGE
 import screeps.api.BodyPartType
 import screeps.api.CARRY
 import screeps.api.CREEP_SPAWN_TIME
@@ -797,7 +804,9 @@ object EscortRunAdvanced {
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
         println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
-        println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS")
+        println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
+            "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
+            "TOWER_COOLDOWN=$TOWER_COOLDOWN BUILD_POWER=$BUILD_POWER COST=${JSON.stringify(CONSTRUCTION_COST)}")
         for (f in w.myFlags + w.enemyFlags) println("flag: ${at(f)} ${own(f.my)}")
         println("spawns: mine=${w.mySpawn?.let { at(it) }} e=${energy(w)} his=${w.enemySpawn?.let { at(it) }} source=${w.homeSource?.let { at(it) }}")
         for (c in w.escorts) println("escort: ${at(c)} ${Bodies.summaryOf(c)} hits=${c.hits} period=${Bodies.period(c, false)}/${Bodies.period(c, true)} id=${idOf(c)}")
