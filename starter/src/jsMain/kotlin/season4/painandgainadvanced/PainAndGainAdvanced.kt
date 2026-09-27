@@ -131,8 +131,10 @@ object PainAndGainAdvanced {
         if (theirs.size < lastTheir) theirDeaths += lastTheir - theirs.size
         lastOur = mine.size; lastTheir = theirs.size
 
-        pullers()
+        held.clear()
+        trackStuck()
         army()
+        pullers()
         towersAct()
         Traffic.resolve(mine.map { it.c })
 
@@ -140,6 +142,19 @@ object PainAndGainAdvanced {
     }
 
     private val towerCells = HashSet<Int>()
+    /** Cells of our creeps that stand still on purpose this tick (a marcher waiting for the rear, a flag keeper):
+     *  no one steps into them and the traffic does not push them — a waiting creep swapped BACK by the one behind
+     *  it moves the group nowhere, and v2's first march deadlocked exactly so, 14 creeps for 1000 ticks. */
+    private val held = HashSet<Int>()
+    private val lastCell = HashMap<String, Int>()
+    private val stillFor = HashMap<String, Int>()
+    private fun trackStuck() {
+        for (u in mine) {
+            stillFor[u.id] = if (lastCell[u.id] == u.cell) (stillFor[u.id] ?: 0) + 1 else 0
+            lastCell[u.id] = u.cell
+        }
+    }
+    private fun hold(u: Unit) { held.add(u.cell); Traffic.pin(u.c) }
     private fun blockTowers() { for (tw in towers) towerCells.add(Grid.idx(tw.x, tw.y)) }
 
     // ------------------------------------------------------------------ probe and status
@@ -211,7 +226,7 @@ object PainAndGainAdvanced {
             val tower = towers.firstOrNull { Grid.range(it.x, it.y, post.x, post.y) <= 1 }
             val box = containers.filter { Grid.range(it.x, it.y, post.x, post.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
             if (p.x == post.x && p.y == post.y) {
-                Traffic.pin(p.c)
+                hold(p)
                 val tE = tower?.store?.get(RESOURCE_ENERGY) ?: 0
                 if (tower != null && tower.my == true && tE < TOWER_CAPACITY && p.energy > 0) {
                     p.c.transfer(tower, RESOURCE_ENERGY)
@@ -287,10 +302,14 @@ object PainAndGainAdvanced {
      *  at the pace of its slowest (the heavies take two ticks a plain step), and the rear pushes through the waiting. */
     private fun march(army: List<Unit>, gx: Int, gy: Int) {
         val f = Grid.to(gx, gy)
-        val rear = army.maxOf { f[it.cell] }
-        for (u in army) {
-            if (f[u.cell] <= 1) continue
-            if (f[u.cell] < rear - MARCH_SLACK) continue
+        // a creep that has not moved for a while is not the pace of the group: it is stuck, and waiting for it is how a
+        // group stops for good
+        val pace = army.filter { (stillFor[it.id] ?: 0) < STUCK_TICKS }.ifEmpty { army }
+        val rear = pace.maxOf { f[it.cell] }
+        val waiting = army.filter { f[it.cell] <= 1 || f[it.cell] < rear - MARCH_SLACK }
+        for (u in waiting) hold(u)
+        for (u in army.sortedByDescending { f[it.cell] }) {
+            if (u in waiting) continue
             stepToward(u, f, f[u.cell])
         }
     }
@@ -302,7 +321,7 @@ object PainAndGainAdvanced {
             ?: army.minByOrNull { f[it.cell] }
         for (u in army) {
             if (u === keeper) {
-                if (u.x == gx && u.y == gy) Traffic.pin(u.c) else stepToward(u, f, 1000)
+                if (u.x == gx && u.y == gy) hold(u) else stepToward(u, f, 1000)
                 continue
             }
             if (Grid.range(u.x, u.y, gx, gy) <= 2) continue
@@ -398,7 +417,7 @@ object PainAndGainAdvanced {
             val nx = u.x + dxs[k]; val ny = u.y + dys[k]
             if (!Grid.inside(nx, ny) || Grid.wall(nx, ny)) continue
             val n = Grid.idx(nx, ny)
-            if (n in towerCells || occupiedByEnemy(n)) continue
+            if (n in towerCells || n in held || occupiedByEnemy(n)) continue
             val v = f[n]
             if (v < bestV) { bestV = v; best = n }
         }
@@ -411,7 +430,7 @@ object PainAndGainAdvanced {
             val nx = u.x + dxs[k]; val ny = u.y + dys[k]
             if (!Grid.inside(nx, ny) || Grid.wall(nx, ny)) continue
             val n = Grid.idx(nx, ny)
-            if (n in towerCells || occupiedByEnemy(n) || Grid.swamp(nx, ny)) continue
+            if (n in towerCells || n in held || occupiedByEnemy(n) || Grid.swamp(nx, ny)) continue
             val v = from.minOf { Grid.range(it.x, it.y, nx, ny) }
             if (v > bestV) { bestV = v; best = n }
         }
@@ -422,6 +441,7 @@ object PainAndGainAdvanced {
     const val ENGAGE_RANGE = 8
     const val FIGHT_RATIO = 1.1
     const val RETREAT_RATIO = 0.8
-    const val MARCH_SLACK = 3
+    const val MARCH_SLACK = 6
+    const val STUCK_TICKS = 6
     const val TOWER_MIN_DAMAGE = 200.0
 }
