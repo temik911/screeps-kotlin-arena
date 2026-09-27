@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 190
+    private const val BOT_VERSION = 191
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6500,8 +6500,12 @@ object SpawnAndSwamp {
     /** A marching wave does not wait for a mate that went after a creep of his on the way (runFighters' cohesion, v188). */
     private const val USE_ENGAGED_NOT_WAITED = true
     /** The raid's race: a walking target as fast as the pair is not struck, his gun fires from its reach off, and the
-     *  weakest raider must also walk out of his reach after the kill (raidOutlasts, v189). */
-    private const val USE_RAID_RACE_EXIT = true
+     *  weakest raider must also walk out of his reach after the kill (raidOutlasts, v189).
+     *  OFF (v191): A/B v188 / v189 against けろびー#50 (6+6) 6-0-0 / 5-0-1, and the pair's hits at t=600 — what split the
+     *  wins from the draws — 3310 on average against 2190. Refused a strike, the pair does not become safe: it waits by
+     *  the target, and his M5R5 are as fast on plain — in the v189 draw it waited 10 cells from a bare spawn (53,25) from
+     *  450 and his guns took r31 from 1800 to 658 in 20 ticks and killed it there. A stricter entry only moves the death */
+    private const val USE_RAID_RACE_EXIT = false
     /** A holding front keeps the edge of the towers over its target only, not of every fed tower of his (v190). */
     private const val USE_HOLD_TARGET_TOWERS = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
