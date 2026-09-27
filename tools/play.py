@@ -65,12 +65,19 @@ SLOT = "__code_" + uuid.uuid4().hex[:8]
 # Запрос со страницы клиента срывается сам по себе: седьмой fetch подряд бросает
 # `TypeError: Failed to fetch`, а тот же адрес в одиночку отвечает 200. Непойманный бросок отклоняет
 # весь промис, и команда падает целиком — поэтому каждый GET здесь идёт через один повтор.
+# …and a server error page is retried too (27.09.2026): three spawn-and-swamp series that evening died on a 5xx answered
+# with an HTML page — `Unexpected token '<'` when the caller read it as JSON — at games 18, 19 and 1, while the same
+# address answered the next minute. Up to four tries, waiting a little longer each time.
 JS_GET = """
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       const GET = async (url, init) => {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try { return await fetch(url, Object.assign({credentials: 'include'}, init || {})); }
-          catch (e) { if (attempt) throw e; await sleep(250); }
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            const r = await fetch(url, Object.assign({credentials: 'include'}, init || {}));
+            if (r.status >= 500 && attempt < 3) { await sleep(1000 * (attempt + 1)); continue; }
+            return r;
+          }
+          catch (e) { if (attempt >= 3) throw e; await sleep(250 * (attempt + 1)); }
         }
       };
 """
