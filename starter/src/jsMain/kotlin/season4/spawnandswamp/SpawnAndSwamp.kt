@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 173
+    private const val BOT_VERSION = 174
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -961,7 +961,10 @@ object SpawnAndSwamp {
             // …and only while it can still carry (v154): a keeper with its CARRY shot off stood at the post with carry=0
             // for 135 ticks against kerobi#36 (t=598-733), counted as the keeper, and none was bought in its place while
             // the spawn held 278 — 27 shots — and the house fell at 882
-            (!USE_KEEPER_CARRY_LAST || c.body.any { it.type == CARRY && it.hits > 0 }) }
+            (!USE_KEEPER_CARRY_LAST || c.body.any { it.type == CARRY && it.hits > 0 }) &&
+            // …and, while no tower of ours stands, with a live WORK (v174): against kerobi#48 his storm shot off all the
+            // keeper's WORK and the tower's site stood at 603/1250 for 226 ticks with no keeper bought in its place
+            (!USE_HOUSE_FIRST || c.body.any { it.type == WORK && it.hits > 0 } || getObjectsByPrototype(StructureTower::class).any { it.my == true && it.exists }) }
         val haulers = active.filter { c -> c.body.any { it.type == CARRY } && c.body.none { it.type == WORK } }
         val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } && !(USE_RAID && isRaider(c)) }
         // армия врага — И лекари: M4H2 без оружия считался «мягкой» целью, как хаулер, и бойцы шли за ним
@@ -2078,7 +2081,13 @@ object SpawnAndSwamp {
                 (ringSince[e.id]?.second ?: 0) > houseNow
         }
         val raidDps = raidAtDoor.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
-        val armNow = USE_ARM_AT_DOOR && (spawnUnderFire || raidAtDoor.isNotEmpty()) && deficit > 0.0
+        // …and only when the house loses the fight AT THE DOOR (v174): `deficit` is the army's, and in 11 of 12 games since
+        // v169 where a 1000 fighter was bought right after the fort's flag (t≈320-350) our house was already beating the
+        // raider at the door (464 or 452 against 84-134); the tower then stood at a median of 550 instead of 420, and both
+        // early falls of the house (kerobi#50 at 662, #48 at 876) were without it
+        val doorLost = !USE_HOUSE_FIRST || !fortHome || spawnUnderFire || raidAtDoor.isEmpty() ||
+            ourPowerOf(defenders, raidAtDoor) < enemyPowerOf(raidAtDoor, defenders) * DEFEND_MARGIN
+        val armNow = USE_ARM_AT_DOOR && (spawnUnderFire || raidAtDoor.isNotEmpty()) && deficit > 0.0 && doorLost
         // THE FORT IS PAID BEFORE ANYTHING ELSE BUT A GUN AT THE DOOR (v149). The v145 keeper-first rule held only while
         // no keeper lived: once it was born, the hauler and fighter turns spent the full spawn under a tower half-built.
         // In the four early losses to kerobi#23/#30 (storm at 587-709, house down at 704-882) an M8R4 was bought right
@@ -6383,6 +6392,9 @@ object SpawnAndSwamp {
     private const val RAID_CHIP_LEAVE = 4
     /** In his last stand the raiders do not gather at home: each goes to the target and chips it (v173). */
     private const val USE_RAID_NO_GATHER = true
+    /** Arm at the door only when the house loses there; a striking raider holds its cell; a keeper without WORK is none
+     *  while no tower stands; the raid's re-buys survive a closed window (v174). */
+    private const val USE_HOUSE_FIRST = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6459,7 +6471,10 @@ object SpawnAndSwamp {
         // 292-371 ticks later (754, 924) — 319 ticks before its first spawn stood in one game; the pair is re-bought for it
         // while he has at most two spawns and none of the old pair lives
         // …and a survivor does not block it (v163): the re-buy tops the pair up to RAID_SIZE (see raidAlive)
-        if (USE_RAID_BUILDERS_FIRST && raidOrdered >= RAID_SIZE && raidAlive(ctx) < RAID_SIZE && getTicks() <= RAID_REBUY_UNTIL &&
+        // (v174: a window that closed with the pair half-bought left raidOrdered at 1, and no re-buy ever fired again —
+        // against kerobi#50 his main stood at 4810 for the last 660 ticks with nobody striking it)
+        val pairClosed = raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil())
+        if (USE_RAID_BUILDERS_FIRST && pairClosed && raidAlive(ctx) < RAID_SIZE && getTicks() <= RAID_REBUY_UNTIL &&
             ctx.enemySpawns.size <= RAID_REBUY_SPAWNS && ctx.enemyCreeps.any { isHisBuilder(it) && ctx.enemySpawns.all { sp -> getRange(sp, it) >= RAID_FIELD_RANGE } }) {
             raidOrdered = if (USE_RAID_TOPUP) raidAlive(ctx) else 0
             raidRebuyAt = getTicks()
@@ -6471,7 +6486,8 @@ object SpawnAndSwamp {
         // end, his mobile army (9-14 armed) stood 20-24 cells from OUR spawn, 82-93 from his, only his stationary A3 by the
         // main, and nobody struck it: the pair was re-bought only for a new builder, and there was none. It is bought while
         // what is left of the match covers the pair's birth, its walk and the kill
-        if (USE_RAID_LAST && raidOrdered >= RAID_SIZE && raidAlive(ctx) < RAID_SIZE && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
+        if (USE_RAID_LAST && (raidOrdered >= RAID_SIZE || (USE_HOUSE_FIRST && raidOrdered > 0 && getTicks() > raidBuyUntil())) &&
+            raidAlive(ctx) < RAID_SIZE && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
             ctx.enemyCreeps.none { isHisBuilder(it) }) {
             // the walk ends NEXT to his spawn (v167): its own cell is blocked, the field there is -1, and v161-v166 read the
             // walk as "never" in every game — no `raid last` line in any log, the rule had never run
@@ -6650,7 +6666,13 @@ object SpawnAndSwamp {
             val range = if (go != null) 1 else if (hover) RAID_LURK_RANGE else if (!strikeFits) 0 else 2
             val waiting = !strikeFits && go == null
             val struck = go != null && getRange(r, goal) <= 1
-            if (struck) r.attack(go!!)
+            if (struck) {
+                r.attack(go!!)
+                // …and holds its cell (v174): with no move of its own it was pushed by its walking mate (the traffic manager
+                // pushes a creep that asked nothing when the pusher's priority is higher) — in 1799 of 2284 strike ticks
+                // with both raiders within two of the target only one struck, ~105 a tick instead of 180
+                if (USE_HOUSE_FIRST) TrafficManager.request(r, InfluenceMap.cell(r.x, r.y), HAULER_LOADED_PRIORITY + 1)
+            }
             else ctx.enemyCreeps.filter { getRange(it, r) <= 1 }.minWithOrNull(
                 compareByDescending<Creep> { isHisBuilder(it) }.thenBy { it.hits })?.let { r.attack(it) }
             // …A WAITING PAIR KEEPS AWAY FROM HIS GUNS (v162): in the v161 draws it waited in place in the field for his army
