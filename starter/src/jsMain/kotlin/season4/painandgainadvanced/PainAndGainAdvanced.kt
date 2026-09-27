@@ -313,8 +313,8 @@ object PainAndGainAdvanced {
 
     /**
      * Our fatigue flag is due when its fatigue can cost no fight — his army is broken or ours is gone (`settled`) — or
-     * when the score needs it: at the rates that stand the match ends lost, and the flag's 5 a tick (10 when it is his)
-     * from now to the end, less FATIGUE_MARGIN ticks, is no more than it takes to win. Taking it as late as still
+     * when the score needs it and it is enough: at the rates that stand the match ends lost, the flag's 5 a tick (10
+     * when it is his) to the end would win it, and the same less FATIGUE_MARGIN ticks no longer would. Taking it as late as still
      * wins keeps the fight that comes before at our own speed: on 11 record maps, both sides, against both rival
      * models, the flag taken only after his army broke lost 2 of 44 against 5 for v19 (taken at t≈60) and 4 for the
      * flag taken once the army held, and our hits lost 100 ticks after contact came to 266 000 against 303 000.
@@ -325,6 +325,10 @@ object PainAndGainAdvanced {
         val atEnd = (ourScore - theirScore) + (ourFx.rate - theirFx.rate) * left
         if (atEnd > 0) return false
         val gain = f.scorePerTick * (if (f.my == false) 2 else 1)
+        // a flag that cannot close the gap by the end wins nothing on the score and still slows the fight that has to
+        // be won: in the stub `line` took V5 and L4 by t=300 (9 a tick to our 3) and the flag, due at once, made our
+        // army fight at t=342 at half its speed — three records lost that won without it
+        if (gain * left <= -atEnd) return false
         return gain * (left - FATIGUE_MARGIN) <= -atEnd
     }
 
