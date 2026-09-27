@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 13
+const val BOT_VERSION = 14
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -307,7 +307,10 @@ object PainAndGainAdvanced {
                 if (dmg < TOWER_MIN_DAMAGE) continue
                 val kill = if (dmg >= e.hits) 3.0 else 1.0
                 val value = (e.melee * 30 + e.ranged * 10 + e.heal * 12 + 10).toDouble()
-                val s = kill * dmg * value / e.hits
+                // the group's focus first: a 1000-shot on top of the volley strips what his healing would undo if the two
+                // were spread over two creeps
+                val focus = if (e.id == Fire.focusId) TOWER_FOCUS_BONUS else 1.0
+                val s = kill * dmg * value / e.hits * focus
                 if (s > bestScore) { bestScore = s; best = e }
             }
             if (best != null) { tw.attack(best.c); continue }
@@ -761,4 +764,5 @@ object PainAndGainAdvanced {
     const val SWEEP_RATIO = 4.0
     const val HUNT_PAIR = 2
     const val TOWER_MIN_DAMAGE = 200.0
+    const val TOWER_FOCUS_BONUS = 3.0
 }
