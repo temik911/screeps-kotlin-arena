@@ -90,6 +90,32 @@ The scripted enemy moves by distance fields (terrain and structures, cached unti
 per tick; a creep with no live MOVE counts as a structure — without that the first crippled sieger in the one-cell pass
 at x=6 held every later wave behind it for four thousand ticks.
 
+**Personas** — the field's three strongest bots, each built from its stored replays (`tools/er-replay.py`; the ids and
+the measured-versus-invented split are in the comment above each persona in `run.mjs`). A persona plays alone (no `+`):
+its own economy (harvest out of his home source's store, so killing his harvesters cuts it), build order, army and
+escorts. None is tuned to lose — they are there to say where the bot stands against the live field.
+
+- `kerobii` — けろびー#11/#15: an `M1` tug pulls his MOVE-less `W4C1`/`C1`/`W5C1`/`C1` onto their cells, two extensions
+  (the stub's spawn gets their 200 as capacity: 1200 for `T3M8R5` at 1180); his `M10T40` (5,6) and `M5T40` (8,6) stand
+  OUTSIDE his ramparts; the army in the replay's order (`T3M8R5`, `T1M6A5`, `M1H1`, `M5H3`, …) holds a blob at (50,52)
+  and raids our home source at 520 / 900 / 1620; four `C1M1` carry his energy to a container (44,45) where the `W4C1`
+  raises towers (44,46) and (45,46); from 1160 an `A10M1` leads the `M10T40` down his corridor y=9, breaking it wall by
+  wall, the other two follow, each pulling an `M10` behind it, and all three are on his flags at ~1690 (live 1711-1716).
+  Mirrored (y -> 99 - y) as the bottom player.
+- `stachu1` — stachu3478#1: 2x `W3M1C1` + 2x `M1C1` at home, an `M3W3C1` outpost at (96,24) — **from either side** (all four
+  replays), so as the bottom player it stands at OUR flag (94,27) — with ramparts, a tower (~680) and a second spawn
+  (~960) whose `M4H3M1`/`M4R5M1`/`M7A6M1` hold round it; his escorts on the inner ring of his block all match; the home
+  army goes for our block as groups (the first healer+ranged pair, then each melee with the next pair), gnaws it and
+  falls back ~14 cells to heal.
+- `stachu3` — stachu3478#3: `M1A1` whenever affordable (~12.4 energy a tick), a swarm round his `M3T42`/`M5T40`; his
+  escorts walk to their flags from tick 1, the fast two wait ~10 cells short, and from ~620 the `M3T42` leads a tail of up
+  to 20 `M1A1` that it pulls (their MOVEs shed its fatigue); against an idle bot all three are on at 979 (live ~951).
+
+The personas step by the least (entry cost + field value) and search round creeps when a field step is taken
+(`pStep`/`pDetour` in `run.mjs`); the older scenarios' `fieldStep` takes the least field value alone, which ignores the
+cost of entering the next cell (a swamp cell beside a plain one can win) — left as it is, because the gate lines were
+measured with it.
+
 **Bot against bot**: `BOT2=<file url of a SEPARATE copy of a build's package>` — the enemy runs that bundle with its own
 module graph and view (`world.perspective`), its console goes to `out/run-…-bot2.enemy.log`; `ECON2` / `ECON2_FROM` /
 `ECON2_COST` give it an economy it does not play, as in the basic stub.
@@ -105,6 +131,9 @@ START=top $NODE --import ./register.mjs run.mjs 5000 siege+harvest     # we are 
 MAP=map-6ab92799.txt $NODE --import ./register.mjs run.mjs 5000 race
 GAME=~/ScreepsArena/games/6ab92172064dc9ae13aaad9c/game.json $NODE --import ./register.mjs run.mjs 5000 hunt
 TRACE=250-260 $NODE --import ./register.mjs run.mjs 260 race           # per-tick positions of every creep
+START=top $NODE --import ./register.mjs run.mjs 5000 kerobii          # a persona (kerobii, stachu1, stachu3), alone
+BOT=file:///tmp/idle.mjs $NODE --import ./register.mjs run.mjs 5000 stachu3  # idle.mjs: `export function loop() {}` —
+                                                                     # the persona's own timeline, to hold against its replay
 cp -R ../../../build/js/packages/screeps-kotlin-arena-starter /tmp/er-adv-b   # a separate copy for the second side
 BOT2=file:///tmp/er-adv-b/kotlin/screeps-kotlin-arena-starter/season4/escortrunadvanced/EscortRunAdvanced.export.mjs \
   $NODE --import ./register.mjs run.mjs 5000
@@ -132,8 +161,21 @@ this bot's package, this stub, its arena folder, `types/` or the build run the f
 Lines the current bot loses are `open`: run and printed as `OPEN` outside the `land`/`gate` tags, never in the gate. Each
 new version reruns the full suite (`zsh regress.sh <tag>`) and moves lines between the two.
 
-None at v11. The last two, `6ab9267a-{bottom,top}:blob+harvest`, were draws at 5000 under v9 (the home army's mode flipped
-SIEGE/HOLD every tick — the group's centre fell on the spawn where a field has no value, and walls round his creeps opened
-and shut the only gap; under v8 the home spawn also stood at 1000 energy with all eight cells round it held by our
-creeps). v10 fixed the flicker and the spawn's cells, v11's convoy delivers round the blob at ~885, and both lines are
-gate lines now.
+The personas, from both sides on 6ab9267a — open lines by design whatever they print (they measure the bot against the
+field, they do not gate it; added at v13, 27.09.2026). v13 in the stub:
+
+- `kerobii` — LOSS at 1677 (bottom) / 1695 (top): his three escorts on his flags. As live (v13 lost to けろびー#11 at 1713):
+  the early strike on his outside escorts (179/234) is called off when his first `T3M8R5` comes out, his raids take our
+  home economy, and no convoy starts.
+- `stachu1` — bottom: WIN at 1463 by delivery (convoy from 1088); top: LOSS at 1486, our `M3T42` killed at (87,28) by his
+  outpost's garrison beside our flag (94,27), our pioneer killed by his tower (94,25) at 848. Live v13 went the other way
+  on both sides — bottom lost at 2496 (6ab94091: his groups gnawed our block 575-1000 and lived), top drew at 5000
+  without starting a convoy (6ab940d7) — so his groups die at our block in the stub faster than live: the persona's
+  fall-back rule is invented, and this line is the first to doubt.
+- `stachu3` — WIN at 272 from both sides: his lone `M10T40` in the centre (live: v13 won at 300, 6ab943c2).
+
+Before v13: none at v11 — the last two, `6ab9267a-{bottom,top}:blob+harvest`, were draws at 5000 under v9 (the home army's
+mode flipped SIEGE/HOLD every tick — the group's centre fell on the spawn where a field has no value, and walls round his
+creeps opened and shut the only gap; under v8 the home spawn also stood at 1000 energy with all eight cells round it held
+by our creeps). v10 fixed the flicker and the spawn's cells, v11's convoy delivers round the blob at ~885, and both lines
+are gate lines now.

@@ -130,6 +130,15 @@ run  map-6ab92172.txt top    hunt
 # SIEGE/HOLD every tick and never left home); v10 stopped the flicker and v11's convoy delivers round the blob (~885)
 run  map-6ab9267a.txt bottom blob+harvest
 run  map-6ab9267a.txt top    blob+harvest
+# the field's three strongest bots as personas, each built from its replays (run.mjs, "the personas": what is measured,
+# what is invented): けろびー#11/#15, stachu3478#1, stachu3478#3. Open lines, never the gate — they say where the bot stands
+# against the live field; a persona is not tuned to be beaten (README, "Open findings", has v13's results)
+open map-6ab9267a.txt bottom kerobii
+open map-6ab9267a.txt top    kerobii
+open map-6ab9267a.txt bottom stachu1
+open map-6ab9267a.txt top    stachu1
+open map-6ab9267a.txt bottom stachu3
+open map-6ab9267a.txt top    stachu3
 
 # a SMOKE label without a gate line would shrink the smoke silently: checked on every gate run, so its own landing catches it
 if [[ "$TAG" == land || "$TAG" == gate ]] && (( ! SMOKE_ONLY )); then
