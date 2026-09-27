@@ -163,30 +163,10 @@ internal object RedTeam {
 
     // ---------- choke ----------
 
-    private var chokeTarget = -1
-    private var chokeAt = -1
-
+    /** Тот же блокировщик, что у основной логики (EscortRun.runChoke): взломщик отличается только тем, когда он куплен. */
     private fun choke(w: EscortRun.World, c: Creep) {
-        val esc = w.enemyEscort ?: return
-        val flow = w.enemyEscortFlow ?: return
-        val theirRoute = Chokes.route(flow, esc)
-        if (theirRoute.size < 3) { log(w, c, "choke", "their route ${theirRoute.size}"); return }
-        val ahead = theirRoute.toHashSet()
-        val stale = chokeTarget < 0 || chokeTarget !in ahead || w.now - chokeAt >= 5
-        if (stale) {
-            val ourRoute = w.escort?.let { e -> w.escortFlow?.let { Chokes.route(it, e).toHashSet() } } ?: HashSet()
-            val flag = w.enemyFlag
-            val pick = Chokes.best(theirRoute, esc.x * 100 + esc.y, { k -> getRange(c, pos(k / 100, k % 100)) * 6 / 5 + 3 },
-                { k -> k in ourRoute || (flag != null && k / 100 == flag.x && k % 100 == flag.y) }, 1)
-            val best = pick?.cell ?: -1
-            if (best != chokeTarget) println("red t=${w.now} choke: target ${if (pick == null) "none" else "(${best / 100},${best % 100}) pen=${pick.penalty} theirEta=${pick.theirEta}"}")
-            chokeTarget = best; chokeAt = w.now
-        }
-        if (chokeTarget < 0) { log(w, c, "choke", "no target"); return }
-        val tx = chokeTarget / 100; val ty = chokeTarget % 100
-        if (c.x == tx && c.y == ty) { log(w, c, "choke", "on ($tx,$ty)"); return }
-        EscortRun.stepRed(w, c, pos(tx, ty), 0)
-        log(w, c, "choke", "to ($tx,$ty)")
+        EscortRun.runChoke(w, c)
+        log(w, c, "choke", "")
     }
 
     private fun pos(x: Int, y: Int): Position = js("({})").unsafeCast<Position>().also { it.asDynamic().x = x; it.asDynamic().y = y }
