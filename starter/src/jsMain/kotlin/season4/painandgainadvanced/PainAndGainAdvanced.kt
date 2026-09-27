@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 16
+const val BOT_VERSION = 17
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -463,13 +463,35 @@ object PainAndGainAdvanced {
                 if (restGroup.count { Grid.range(it.x, it.y, objective.x, objective.y) <= ARRIVE_R + 2 } * 2 >= restGroup.size) capture(restGroup, objective)
             }
             Mode.SWEEP -> if (restGroup.isNotEmpty()) { march(restGroup, objective.x, objective.y); capture(restGroup, objective) }
-            Mode.HOLD -> hold(restGroup, objective.x, objective.y)
+            Mode.HOLD -> if (fortress != null && objective === fortress) {
+                val a = fortressAnchor(fortress, foes)
+                hold(restGroup, Grid.xOf(a), Grid.yOf(a))
+            } else hold(restGroup, objective.x, objective.y)
             Mode.STAND -> stand(restGroup)
         }
         for (h in hunters) hunt(h)
     }
 
     /** The fortress: our fed tower flag nearer our start that a puller of ours holds — the army stands round its tower. */
+    /** Where the army stands at the fortress: behind its tower as seen from him — three cells from the tower on the
+     *  side away from his army — so that his line, to reach ours, walks into three to five of the tower, where its
+     *  shot is 800-900 and not the 300-450 v16 fought under 12-15 cells out. */
+    private fun fortressAnchor(f: ScoreFlag, foes: List<Unit>): Int {
+        val tw = towers.firstOrNull { Grid.range(it.x, it.y, f.x, f.y) <= 1 } ?: return Grid.idx(f.x, f.y)
+        val rx = if (foes.isNotEmpty()) foes.sumOf { it.x } / foes.size else 49
+        val ry = if (foes.isNotEmpty()) foes.sumOf { it.y } / foes.size else 49
+        val dx = kotlin.math.sign((tw.x - rx).toDouble()).toInt()
+        val dy = kotlin.math.sign((tw.y - ry).toDouble()).toInt()
+        val tx = (tw.x + dx * ANCHOR_BEHIND).coerceIn(1, Grid.N - 2); val ty = (tw.y + dy * ANCHOR_BEHIND).coerceIn(1, Grid.N - 2)
+        var best = Grid.idx(f.x, f.y); var bestD = Int.MAX_VALUE
+        for (y in ty - 3..ty + 3) for (x in tx - 3..tx + 3) {
+            if (!Grid.inside(x, y) || Grid.wall(x, y) || Grid.idx(x, y) in towerCells) continue
+            val d = Grid.range(x, y, tx, ty) * 10 + Grid.range(x, y, tw.x, tw.y)
+            if (d < bestD) { bestD = d; best = Grid.idx(x, y) }
+        }
+        return best
+    }
+
     private fun fortressNear(cx: Int, cy: Int): Boolean = fortressFlag()?.let { Grid.range(it.x, it.y, cx, cy) <= FORTRESS_R } ?: true
 
     private fun fortressFlag(): ScoreFlag? {
@@ -772,6 +794,7 @@ object PainAndGainAdvanced {
     const val FIGHTER_MAX_RATE = 5
     const val FARMER_RATE = 12
     const val FORTRESS_R = 8
+    const val ANCHOR_BEHIND = 3
     const val ESCORT_LEAD = -1
     const val ARRIVE_R = 2
     const val STUCK_TICKS = 6
