@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v19r"
+    private const val BOT_VERSION = "v20"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -488,6 +488,9 @@ object EscortRun {
             }
         }
 
+        // 2'. наш маршрут (docs/escort-run-redteam.md): их крип на нашем пути впереди поезда — чистильщик
+        if (clearOrder(w, e)) return
+
         // гонка проиграна, только если их приход РАНЬШЕ нашего с запасом: ничьи по оценке на 51-м тике (наш 194-197,
         // их 196-210 во всей серии v11) на деле выигрывал наш поезд, а блокировщик, купленный первым «на всякий
         // случай», отдавал наш флаг их блокировщику (ricardo#5 трижды)
@@ -536,6 +539,11 @@ object EscortRun {
         //     (76561198870429455#31 и #34 — 101-й тик, M1 к нашему флагу). Второй M1 идёт туда, где обход дороже: на
         //     клетку подхода НАШЕГО эскорта (второй хранитель) или ИХ (блокировщик); свободный их флаг — всегда блок.
         //     Цена обхода — по полю маршрута с перекрытой клеткой подхода, из местности каждой карты.
+        // 3'. их маршрут: блокировщик на самое дорогое для их поезда место (один M1 после дебюта обыгрывал v19 четыре
+        //     из четырёх). После хранителя нашего флага: поставленный раньше него, он отдавал наш флаг их раннему
+        //     блокировщику (стенд match4:rev+keep+blk — поражение на 298-м вместо победы на 245-м)
+        if (chokeOrder(w, e)) return
+
         if (!raceLost) {
             val ourPen = detourPenalty(w.escort, w.escortFlow, w.myFlag, w.blocked, "ours")
             val theirPen = detourPenalty(w.enemyEscort, w.enemyEscortFlow, w.enemyFlag, w.blockedForEnemy, "theirs")
@@ -588,6 +596,63 @@ object EscortRun {
             }
         }
         return false
+    }
+
+    private var chokesOrdered = 0
+
+    private fun cellPos(k: Int): Position = InfluenceMap.cell(k / 100, k % 100)
+
+    /** Клетка рядом с флагом (или сам флаг): там работают хранители и блокировщики флага, не CHOKE. */
+    private fun nearFlag(k: Int, flag: Position?) = flag != null && maxOf(kotlin.math.abs(k / 100 - flag.x), kotlin.math.abs(k % 100 - flag.y)) <= 2
+
+    /** Лучшая клетка их маршрута для нашего M1, который сейчас в `from` (или родится у спавна после `wait` тиков). */
+    private fun chokePick(w: World, from: Position, wait: Int): Chokes.Pick? {
+        val esc = w.enemyEscort ?: return null
+        val flow = w.enemyEscortFlow ?: return null
+        val route = Chokes.route(flow, esc)
+        if (route.size < 3) return null
+        val ours = w.escort?.let { e -> w.escortFlow?.let { Chokes.route(it, e).toHashSet() } } ?: HashSet()
+        return Chokes.best(route, key(esc), { k -> wait + getRange(from, cellPos(k)) * 6 / 5 + 3 }, { k -> k in ours || nearFlag(k, w.enemyFlag) }, CHOKE_MIN_PENALTY)
+    }
+
+    private fun chokeOrder(w: World, e: Int): Boolean {
+        if (chokesOrdered >= MAX_CHOKES || scoutsOn(w, CHOKE) > 0) return false
+        val spawn = w.mySpawn ?: return false
+        val body = Bodies.moves(1)
+        val pick = chokePick(w, spawn, maxOf(0, Bodies.cost(body) - e) + 3) ?: return false
+        if (e >= Bodies.cost(body)) {
+            if (order(w, body, "choke", "their route (${pick.cell / 100},${pick.cell % 100}) costs them ${pick.penalty}, they reach it in ${pick.theirEta}")) { scoutQueue.addLast(CHOKE); chokesOrdered++ }
+            return true
+        }
+        saving(w, "choke", Bodies.cost(body)); return true
+    }
+
+    /** Чужие крипы на НАШЕМ маршруте впереди эскорта (кроме тех, что у нашего флага — это дело стража флага), по порядку пути. */
+    private fun routeBlockers(w: World): List<Pair<Creep, Int>> {
+        val esc = w.escort ?: return emptyList()
+        val flow = w.escortFlow ?: return emptyList()
+        val route = Chokes.route(flow, esc)
+        val idx = HashMap<Int, Int>()
+        route.forEachIndexed { i, k -> idx[k] = i }
+        val flag = w.myFlag
+        return w.enemies.filter { !isEscort(it) && (flag == null || dist(it, flag) > FLAG_GUARD_RANGE) }
+            .mapNotNull { c -> idx[key(c)]?.let { c to it } }.sortedBy { it.second }
+    }
+
+    private fun clearOrder(w: World, e: Int): Boolean {
+        if (fightersOn(w, CLEAR) > 0) return false
+        val esc = w.escort ?: return false
+        val flow = w.escortFlow ?: return false
+        val (b, i) = routeBlockers(w).firstOrNull() ?: return false
+        val route = Chokes.route(flow, esc)
+        val pen = Chokes.penalty(route, i, if (i == 0) key(esc) else route[i - 1])
+        if (pen < CLEAR_MIN_PENALTY) return false
+        val (body, arrive) = fastHunter(w, b, b.hits, e, listOf(b)) ?: return false
+        if (e >= Bodies.cost(body)) {
+            if (order(w, body, "clearer", "on our route ${Bodies.summaryOf(b)}@(${b.x},${b.y}) costs us $pen; arrive=$arrive")) fighterQueue.addLast(CLEAR)
+            return true
+        }
+        saving(w, "clearer ${Bodies.summary(body)}", Bodies.cost(body)); return true
     }
 
     /** Второй хранитель на клетку подхода нашего эскорта: если его ещё нет, хранитель флага есть, и он успевает раньше эскорта. */
@@ -647,6 +712,15 @@ object EscortRun {
     private const val BREAK = "break"
     private const val GUARD_FLAG = "flag"
     private const val ESCORT_GUARD = "escort"
+    /** Разведчик на узком месте ИХ маршрута (Chokes): встаёт туда, где обход дороже всего их поезду, и перебегает вперёд. */
+    private const val CHOKE = "choke"
+    /** Боец, снимающий чужих крипов с НАШЕГО маршрута впереди поезда (ответ на CHOKE соперника). */
+    private const val CLEAR = "clear"
+    /** Блокировщик покупается, если клетка стоит их поезду не меньше стольких тиков. */
+    private const val CHOKE_MIN_PENALTY = 8
+    private const val MAX_CHOKES = 2
+    /** Чистильщик покупается, если чужой крип на нашем маршруте стоит нам не меньше стольких тиков обхода. */
+    private const val CLEAR_MIN_PENALTY = 4
     /** Гонка считается проигранной, если их приход раньше нашего больше чем на столько тиков (ошибка оценки — пара
      *  тиков; ничья по оценке — не проигрыш). */
     private const val RACE_MARGIN = 2
@@ -800,6 +874,7 @@ object EscortRun {
         for (s in w.scouts) {
             if (s.spawning || Bodies.liveMoves(s) == 0) continue
             val mission = scoutMission[idOf(s)] ?: continue
+            if (mission == CHOKE) { runChoke(w, s); continue }
             if (mission == APPROACH) {
                 // второй хранитель: на клетке подхода нашего эскорта; эскорт, подойдя, сдвинет его (runTrain)
                 val a = approachCell(w.escort, w.escortFlow) ?: w.myFlag ?: continue
@@ -842,6 +917,35 @@ object EscortRun {
             val step = stepAround(w, s, flag, 1, 1, 50) ?: continue
             TrafficManager.request(s, step, SCOUT_PRIORITY)
         }
+    }
+
+    private val chokeTarget = HashMap<String, Int>()
+    private val chokeAt = HashMap<String, Int>()
+
+    /**
+     * Блокировщик на узком месте их маршрута: цель пересчитывается раз в пять тиков или когда их поезд её миновал;
+     * обошли — перебегает на следующую (M1 ходит клетку в тик, поезд — в два). Целей больше нет — становится обычным
+     * блокировщиком их флага.
+     */
+    private fun runChoke(w: World, s: Creep) {
+        val id = idOf(s)
+        val esc = w.enemyEscort
+        val flow = w.enemyEscortFlow
+        if (esc == null || flow == null) { scoutMission[id] = BLOCK; return }
+        val ahead = Chokes.route(flow, esc).toHashSet()
+        val cur = chokeTarget[id] ?: -1
+        if (cur < 0 || cur !in ahead || w.now - (chokeAt[id] ?: -99) >= 5) {
+            val pick = chokePick(w, s, 0)
+            val next = pick?.cell ?: -1
+            if (next != cur) println("choke t=${w.now}: $id ${if (pick == null) "no target -> block" else "target (${next / 100},${next % 100}) pen=${pick.penalty} theirEta=${pick.theirEta}"}")
+            chokeTarget[id] = next
+            chokeAt[id] = w.now
+        }
+        val t = chokeTarget[id] ?: -1
+        if (t < 0) { scoutMission[id] = BLOCK; return }
+        val goal = cellPos(t)
+        if (onCell(s, goal)) { pinned.add(id); return }
+        stepAround(w, s, goal, 0, 1, 5)?.let { TrafficManager.request(s, it, SCOUT_PRIORITY) }
     }
 
     /** Клетка подхода эскорта к его флагу: последняя клетка его маршрута по полю перед флагом (null — маршрута нет). */
@@ -1227,6 +1331,7 @@ object EscortRun {
             val melee = Bodies.has(f, ATTACK)
             var target: Creep? = null
             var standOn: Position? = null
+            var lead: Position? = null
             var why: String
             val threat = if (escort != null) w.enemyArmed.filter { dist(it, escort) <= THREAT_RANGE && dist(it, f) <= 20 }.minByOrNull { dist(it, f) } else null
             if (holding && role == ESCORT_GUARD && escort != null) {
@@ -1252,6 +1357,15 @@ object EscortRun {
                     // хранитель: на клетку флага, если там никого (эскорт, подойдя, сдвинет его — см. FINISH)
                     if (target == null && (escort == null || !onCell(escort, myFlag)) && w.occupant[key(myFlag)].let { it == null || it === f }) standOn = myFlag
                 }
+                role == CLEAR -> {
+                    // чистильщик: первый чужой крип на нашем пути; нет — идёт впереди поезда по его маршруту
+                    target = routeBlockers(w).firstOrNull()?.first
+                    why = if (target != null) "clear" else "lead"
+                    if (target == null && escort != null) {
+                        val r = w.escortFlow?.let { Chokes.route(it, escort) }
+                        lead = r?.getOrNull(minOf(6, r.size - 1))?.let { cellPos(it) }
+                    }
+                }
                 role == BREAK && enemyFlag != null -> {
                     target = w.enemies.firstOrNull { onCell(it, enemyFlag) } ?: w.enemies.filter { !isEscort(it) && dist(it, enemyFlag) <= 1 && Bodies.isArmed(it) }.minByOrNull { dist(it, f) }
                     why = if (target != null) "break" else "block"
@@ -1273,8 +1387,8 @@ object EscortRun {
                 if (keeperStepAside != id) pinned.add(id)
                 continue
             }
-            val goal: Position = target ?: standOn ?: escort ?: w.mySpawn ?: continue
-            val range = if (standOn != null && target == null) 0 else if (target == null) 2 else if (melee) 1 else RANGED_RANGE
+            val goal: Position = target ?: standOn ?: lead ?: escort ?: w.mySpawn ?: continue
+            val range = if (standOn != null && target == null) 0 else if (lead != null && target == null) 1 else if (target == null) 2 else if (melee) 1 else RANGED_RANGE
             if (dist(f, goal) <= range) continue
             val swampCost = maxOf(1, Bodies.period(Bodies.weight(f), Bodies.liveMoves(f), true))
             val step = stepAround(w, f, goal, range, swampCost, if (target != null) 1 else 5)

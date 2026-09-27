@@ -166,95 +166,20 @@ internal object RedTeam {
     private var chokeTarget = -1
     private var chokeAt = -1
 
-    private fun cost(k: Int) = if (DistanceMap.isSwamp(k / 100, k % 100)) 10 else 2
-
-    /** Клетки пути по полю от `from` (не включая) до цели — спуском по убыванию. */
-    private fun route(flow: IntArray, from: Position): List<Int> {
-        val out = ArrayList<Int>()
-        var cell = from.x * 100 + from.y
-        var guard = 0
-        while (flow[cell] > 0 && guard++ < 400) {
-            val cx = cell / 100; val cy = cell % 100
-            var best = -1
-            var bestD = flow[cell]
-            for (dx in -1..1) for (dy in -1..1) {
-                if (dx == 0 && dy == 0) continue
-                val x = cx + dx; val y = cy + dy
-                if (!DistanceMap.inBounds(x, y)) continue
-                val d = flow[x * 100 + y]
-                if (d in 0 until bestD) { bestD = d; best = x * 100 + y }
-            }
-            if (best < 0) break
-            out.add(best)
-            cell = best
-        }
-        return out
-    }
-
-    /**
-     * Цена обхода клетки route[i] поездом (равнина 2, болото 10): кратчайший путь в окне 11×11 от route[i-1] до одной из
-     * route[i+1..i+4] в обход route[i] против того же отрезка по маршруту. Нет обхода в окне — 60.
-     */
-    private fun penalty(route: List<Int>, i: Int, prev: Int): Int {
-        val c = route[i]
-        val cx = c / 100; val cy = c % 100
-        val r = 5
-        val dist = HashMap<Int, Int>()
-        val pq = ArrayList<Pair<Int, Int>>()
-        dist[prev] = 0; pq.add(0 to prev)
-        while (pq.isNotEmpty()) {
-            var bi = 0
-            for (j in pq.indices) if (pq[j].first < pq[bi].first) bi = j
-            val (d, k) = pq.removeAt(bi)
-            if (d > (dist[k] ?: Int.MAX_VALUE)) continue
-            val kx = k / 100; val ky = k % 100
-            for (dx in -1..1) for (dy in -1..1) {
-                if (dx == 0 && dy == 0) continue
-                val x = kx + dx; val y = ky + dy
-                if (kotlin.math.abs(x - cx) > r || kotlin.math.abs(y - cy) > r) continue
-                if (DistanceMap.isWall(x, y)) continue
-                val n = x * 100 + y
-                if (n == c) continue
-                val nd = d + cost(n)
-                if (nd < (dist[n] ?: Int.MAX_VALUE)) { dist[n] = nd; pq.add(nd to n) }
-            }
-        }
-        var best = 60
-        var along = cost(c)
-        for (k in 1..4) {
-            if (i + k >= route.size) break
-            along += cost(route[i + k])
-            val d = dist[route[i + k]] ?: continue
-            best = minOf(best, d - along)
-        }
-        return maxOf(0, best)
-    }
-
     private fun choke(w: EscortRun.World, c: Creep) {
         val esc = w.enemyEscort ?: return
         val flow = w.enemyEscortFlow ?: return
-        val theirRoute = route(flow, esc)
+        val theirRoute = Chokes.route(flow, esc)
         if (theirRoute.size < 3) { log(w, c, "choke", "their route ${theirRoute.size}"); return }
         val ahead = theirRoute.toHashSet()
         val stale = chokeTarget < 0 || chokeTarget !in ahead || w.now - chokeAt >= 5
         if (stale) {
-            val ourRoute = w.escort?.let { e -> w.escortFlow?.let { route(it, e).toHashSet() } } ?: HashSet()
+            val ourRoute = w.escort?.let { e -> w.escortFlow?.let { Chokes.route(it, e).toHashSet() } } ?: HashSet()
             val flag = w.enemyFlag
-            var best = -1; var bestPen = 0; var bestEta = 0
-            var theirEta = 0
-            var prev = esc.x * 100 + esc.y
-            for (i in theirRoute.indices) {
-                val k = theirRoute[i]
-                theirEta += cost(k)
-                val kx = k / 100; val ky = k % 100
-                val ourEta = getRange(c, pos(kx, ky)) * 6 / 5 + 3
-                if (i >= 1 && ourEta < theirEta && k !in ourRoute && !(flag != null && kx == flag.x && ky == flag.y)) {
-                    val p = penalty(theirRoute, i, prev)
-                    if (p > bestPen || (p == bestPen && p > 0 && theirEta < bestEta)) { best = k; bestPen = p; bestEta = theirEta }
-                }
-                prev = k
-            }
-            if (best != chokeTarget) println("red t=${w.now} choke: target ${if (best < 0) "none" else "(${best / 100},${best % 100}) pen=$bestPen theirEta=$bestEta"}")
+            val pick = Chokes.best(theirRoute, esc.x * 100 + esc.y, { k -> getRange(c, pos(k / 100, k % 100)) * 6 / 5 + 3 },
+                { k -> k in ourRoute || (flag != null && k / 100 == flag.x && k % 100 == flag.y) }, 1)
+            val best = pick?.cell ?: -1
+            if (best != chokeTarget) println("red t=${w.now} choke: target ${if (pick == null) "none" else "(${best / 100},${best % 100}) pen=${pick.penalty} theirEta=${pick.theirEta}"}")
             chokeTarget = best; chokeAt = w.now
         }
         if (chokeTarget < 0) { log(w, c, "choke", "no target"); return }
