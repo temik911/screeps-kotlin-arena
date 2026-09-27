@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 6
+const val BOT_VERSION = 7
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -486,29 +486,6 @@ object PainAndGainAdvanced {
         }
     }
 
-    /** Stand formed: nobody walks but a healer to a hurt mate within the group, a hurt creep to a healer, and a
-     *  ranged creep out of reach of his melee. */
-    private fun stand(army: List<Unit>) {
-        if (army.isEmpty()) return
-        val enemyMelee = theirs.filter { it.melee > 0 }
-        val healers = army.filter { it.heal > 0 }
-        for (u in army) {
-            val threat = enemyMelee.minOfOrNull { Grid.range(it.x, it.y, u.x, u.y) } ?: 99
-            when {
-                u.melee == 0 && threat <= 2 -> stepAway(u, enemyMelee, 30)
-                u.heal > 0 -> {
-                    val patient = army.filter { it !== u && it.deficit > 0 && Grid.range(it.x, it.y, u.x, u.y) > 1 }.maxByOrNull { it.deficit }
-                    if (patient != null && patient.deficit >= MEND_AT && Grid.range(patient.x, patient.y, u.x, u.y) <= 4)
-                        stepToward(u, Grid.fresh(intArrayOf(patient.cell)), 20, stopAt = 1)
-                }
-                u.deficit >= MEND_AT && healers.none { Grid.range(it.x, it.y, u.x, u.y) <= 1 } -> {
-                    val h = healers.minByOrNull { Grid.range(it.x, it.y, u.x, u.y) }
-                    if (h != null && Grid.range(h.x, h.y, u.x, u.y) <= 4) stepToward(u, Grid.fresh(intArrayOf(h.cell)), 15, stopAt = 1)
-                }
-            }
-        }
-    }
-
     private fun hold(army: List<Unit>, gx: Int, gy: Int) {
         if (army.isEmpty()) return
         val f = Grid.to(gx, gy)
@@ -535,39 +512,40 @@ object PainAndGainAdvanced {
         }
     }
 
-    /** In a fight: melee close on the nearest enemy, ranged stand at three from their target and out of the enemy's
-     *  melee reach, healers go to the most hurt of ours and keep out of the enemy's melee. */
+    /** In a fight: every creep takes the cell `Formation` scores best for its role — melee onto his line (a light one
+     *  only where a heavy of ours also reaches, or onto one standing alone), ranged at three and out of his melee,
+     *  healers beside the mate they heal on the side away from him. */
     private fun fight(army: List<Unit>) {
         if (army.isEmpty()) return
-        val toFoe = Grid.fresh(theirs.map { it.cell }.toIntArray())
-        val enemyMelee = theirs.filter { it.melee > 0 }
-        for (u in army) {
-            when (u.role) {
-                Role.MELEE -> {
-                    // a light melee closes only on what a heavy of ours also reaches, or on one standing alone: Hardy#1
-                    // took our four lights one by one at t=83..98, walking into his blob ahead of our heavies
-                    if (u.heavy || supported(u, army)) stepToward(u, toFoe, 50, stopAt = 1)
-                    else {
-                        val heavies = army.filter { it.heavy }.map { it.cell }
-                        if (heavies.isNotEmpty()) stepToward(u, Grid.fresh(heavies.toIntArray()), 40, stopAt = 1)
-                    }
-                }
-                Role.RANGED -> {
-                    val threat = enemyMelee.minOfOrNull { Grid.range(it.x, it.y, u.x, u.y) } ?: 99
-                    val nearest = theirs.minOfOrNull { Grid.range(it.x, it.y, u.x, u.y) } ?: 99
-                    if (threat <= 2) stepAway(u, enemyMelee, 30)
-                    else if (nearest > 3) stepToward(u, toFoe, 40, stopAt = 3)
-                }
-                Role.HEALER -> {
-                    val threat = enemyMelee.minOfOrNull { Grid.range(it.x, it.y, u.x, u.y) } ?: 99
-                    val patient = army.filter { it !== u && it.deficit > 0 }.maxByOrNull { it.deficit }
-                    if (threat <= 1) stepAway(u, enemyMelee, 30)
-                    else if (patient != null && Grid.range(patient.x, patient.y, u.x, u.y) > 1) stepToward(u, Grid.fresh(intArrayOf(patient.cell)), 20, stopAt = 1)
-                    else if (nearestAllyArmed(u, army) > 2) stepToward(u, Grid.fresh(army.filter { it.armed }.map { it.cell }.toIntArray()), 10, stopAt = 1)
-                }
-                Role.PULLER -> {}
+        place(army, engaged = true)
+    }
+
+    private fun place(army: List<Unit>, engaged: Boolean) {
+        val ctx = Formation.ctx(army, theirs) { n -> n in towerCells || n in held || occupiedByEnemy(n) }
+        val patients = army.filter { it.deficit > 0 }
+        val claimed = HashSet<String>()
+        // front first: the one nearest him decides first, so the ones behind see where the line will be
+        for (u in army.sortedBy { ctx.foe(it.cell) }) {
+            val role = if (u.melee > 0) Role.MELEE else if (u.ranged > 0) Role.RANGED else if (u.heal > 0) Role.HEALER else continue
+            if (role == Role.MELEE && !u.heavy && engaged && !supported(u, army)) {
+                // an unsupported light melee keeps to the heavies instead of walking onto his line alone
+                val heavies = army.filter { it.heavy }.map { it.cell }
+                if (heavies.isNotEmpty()) stepToward(u, Grid.fresh(heavies.toIntArray()), 40, stopAt = 1)
+                continue
             }
+            val patient = if (role == Role.HEALER) patients.filter { it.id !in claimed && it !== u }
+                .maxByOrNull { it.deficit.toDouble() - 30.0 * Grid.range(it.x, it.y, u.x, u.y) } else null
+            if (patient != null) claimed.add(patient.id)
+            val want = Formation.step(u, role, ctx, patient, engaged)
+            if (want != u.cell) Traffic.want(u.c, want, if (role == Role.MELEE) 60 else 30)
         }
+    }
+
+    /** Stand formed: nobody walks toward him or away from him but to take its place in the line — melee to the front,
+     *  ranged a cell behind it, healers two behind and beside the hurt. */
+    private fun stand(army: List<Unit>) {
+        if (army.isEmpty()) return
+        place(army, engaged = false)
     }
 
     private fun supported(u: Unit, army: List<Unit>): Boolean {
