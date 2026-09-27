@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v30"
+    private const val BOT_VERSION = "v31"
 
     private const val LOG_EVERY = 50
 
@@ -138,6 +138,9 @@ object SpawnAndSwampAdvanced {
     private const val DANGER_SCALE = 2
     /** Башня бьёт на 20 клеток с затуханием; опасна до десяти, где выстрел ещё больше половины. */
     private const val TOWER_DANGER_RANGE = 10
+
+    /** Конвой держится в стольких клетках от сопровождаемого: вокруг него, но не на его клетках работ. */
+    private const val ESCORT_RANGE = 3
 
     /** Место работ (пролом сейфа, клетка второго спавна) безопасно, если его боевых крипов нет ближе стольких клеток:
      *  дальность стрелка плюс путь, который он проходит, пока пробойщик ломает стену. */
@@ -1627,6 +1630,12 @@ object SpawnAndSwampAdvanced {
         siteWatch(t, all, mine)
         val blocked = blockedCells(all)
         val reserved = reservedCells(all)
+        // кого сопровождать: строитель расширения, пробойщик, строитель сейфа — пока он вне дома (дальше домашней зоны
+        // от всех наших спавнов)
+        val escort: Creep? = mine.filter { c ->
+            !c.spawning && (idOf(c) == builderId || roleOf[idOf(c)]?.let { it.startsWith("breacher:") || it.startsWith("vaultBuilder:") } == true) &&
+                homeSpawns.none { getRange(c, it) <= HOME_THREAT_RANGE }
+        }.minByOrNull { c -> homeSpawns.minOfOrNull { getRange(c, it) } ?: 0 }
         // допуск сбора растёт с толпой: квадрат со стороной 2r+1 вмещает всех вдвое с запасом (v9: 35 бойцов у точки с
         // допуском 2 — 25 клеток — забили клетки у спавна, и новорождённому некуда было выйти)
         val rallySpread = maxOf(2, kotlin.math.ceil(kotlin.math.sqrt(2.0 * homeGroup.size) / 2).toInt())
@@ -1663,6 +1672,11 @@ object SpawnAndSwampAdvanced {
                     val rally = rallyFor(mySpawn, reserved, blocked)
                     if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) go(f, cell(rally))
                 }
+            } else if (escort != null) {
+                // конвой: свободные бойцы идут со строителем или пробойщиком, ушедшим из дома, — угроза у него (рабочий)
+                // включает защиту, и она бьётся по прогону. v29 потерял семь строителей расширения подряд (≈6000 энергии)
+                // на пути к месту работ: проверка безопасности видела только тик заказа
+                if (getRange(f, escort) > ESCORT_RANGE) go(f, escort)
             } else {
                 // сбор — не у самого спавна, а в точке сбора: клетки у спавна, добытчиков, башни и площадок заняты
                 // делом (выход для рождения, копка, стройка), и боец на них ломает базу
