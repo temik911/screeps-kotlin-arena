@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 191
+    private const val BOT_VERSION = 192
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3866,11 +3866,26 @@ object SpawnAndSwamp {
             bodyAskedAt = getTicks()
             // с тем же маршем: тело выбирается по тому, чем кончится ВЕСЬ поход, а не только работа
             // под спавном, — иначе лекарь снова оценивается там, где он не нужен
+            // THE ANSWER DOES NOT CHOOSE ITS OWN CREW (v192). A melee at home whose MOVE does not outnumber its ATTACK (the
+            // post's M6A6) is a striker only while the answer is "melee", so the answer chose its own crew: with "melee"
+            // the M6A6 joined the crew and a healer finished the siege first (53 ticks against 56), the answer turned
+            // "healer", the M6A6 left the crew and the melee won again (56 against 125) — flipping each log tick. Against
+            // marlyman#441 all three buys (610, 650, 830) fell on a "healer" tick: three M10H2 stood home to 1252 and his
+            // main took 40 damage all match; against his #443 the same moment bought M12A5 at 617-674 and won. The melee
+            // whose going hangs on the answer are left out of every answer's crew, so the answer cannot choose itself.
+            // (Put into the melee answer's crew instead — the first cut of v192 — they are the breacher too, M:A 1:1, and
+            // the gate's tower+stream bought a melee guard against his stream at 250 instead of a gun: 503 -> 1245)
+            fun meleeByAnswer(c: Creep) = hasMelee(c) && !hasRanged(c) && !hasHeal(c) && c.id !in wave &&
+                !(armouredNow && c.body.count { p -> p.type == MOVE } > c.body.count { p -> p.type == ATTACK })
+            val crewBase = if (!USE_BODY_BY_ITS_CREW) siegeCrew else siegeCrew.filter { !meleeByAnswer(it) }.ifEmpty { siegeCrew }
+            val crewMelee = crewBase
             val crewTravel = travelTicksOf(siegeCrew, assaultFlow, spawnFlow)
-            fun run(extra: Array<BodyPartType>) =
-                siegeOutcome(siegeCrew, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = extra, approach = crewTravel, etas = defEtas)
+            val travelBase = if (!USE_BODY_BY_ITS_CREW) crewTravel else travelTicksOf(crewBase, assaultFlow, spawnFlow)
+            val travelMelee = if (!USE_BODY_BY_ITS_CREW) crewTravel else travelTicksOf(crewMelee, assaultFlow, spawnFlow)
+            fun run(extra: Array<BodyPartType>, crew: List<Creep> = crewBase, travelOf: Int = travelBase) =
+                siegeOutcome(crew, attrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extra = extra, approach = travelOf, etas = defEtas)
             val withRanged = run(fighterBody(SPAWN_ENERGY_CAPACITY))
-            val withMelee = if (armoured) run(guardBody(SPAWN_ENERGY_CAPACITY)) else SIEGE_LOSE
+            val withMelee = if (armoured) run(guardBody(SPAWN_ENERGY_CAPACITY), crewMelee, travelMelee) else SIEGE_LOSE
             // ЛЕКАРЬ спрашивается всегда, когда осада вообще считается. Он ничего не ломает, значит по
             // незащищённой цели прогон честно скажет «дольше» и его не возьмут; выиграть он может
             // только тем, ради чего и нужен, — тем, что волна доживает до конца работы
@@ -6508,6 +6523,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_RACE_EXIT = false
     /** A holding front keeps the edge of the towers over its target only, not of every fed tower of his (v190). */
     private const val USE_HOLD_TARGET_TOWERS = true
+    /** The siege body question leaves out of its crew the melee whose going hangs on its own answer (runFighters, v192). */
+    private const val USE_BODY_BY_ITS_CREW = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
