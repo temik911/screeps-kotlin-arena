@@ -143,10 +143,17 @@ internal object Bodies {
         if (them.isEmpty()) return Outcome(true, 0, usStart, 0, usStart, 0)
         if (us.isEmpty()) return Outcome(false, 0, 0, themStart, 0, themStart)
         for (t in 1..horizon) {
-            val ourDmg = us.sumOf { it.dps() }
-            val theirDmg = them.sumOf { it.dps() }
+            // a ranged unit facing MASS_CROWD or more melee of the other side fires rangedMassAttack: they come to it and
+            // stand beside it, and ten a part hits each of them — stachu3478#3 held the centre with dozens of M1A1 and
+            // v4's simulation, firing one target a tick, called every fight with them lost (6ab92899)
+            val ourMass = massShooters(us, them)
+            val theirMass = massShooters(them, us)
+            val ourDmg = us.sumOf { if (it in ourMass) it.count(MELEE_PART) * ATTACK_POWER else it.dps() }
+            val theirDmg = them.sumOf { if (it in theirMass) it.count(MELEE_PART) * ATTACK_POWER else it.dps() }
             val ourHeal = us.sumOf { it.heal() }
             val theirHeal = them.sumOf { it.heal() }
+            for (u in ourMass) mass(them, u.count(RANGED_ATTACK) * RANGED_ATTACK_POWER)
+            for (u in theirMass) mass(us, u.count(RANGED_ATTACK) * RANGED_ATTACK_POWER)
             spread(them, ourDmg)
             spread(us, theirDmg)
             us.removeAll { !it.alive() }
@@ -157,6 +164,21 @@ internal object Bodies {
             if (them.isEmpty()) return Outcome(true, t, us.sumOf { it.total() }, 0, usStart, themStart)
         }
         return Outcome(false, horizon, us.sumOf { it.total() }, them.sumOf { it.total() }, usStart, themStart)
+    }
+
+    private val MELEE_PART = ATTACK
+    /** How many melee of the other side must be alive for a ranged unit to count on a mass attack. */
+    private const val MASS_CROWD = 3
+
+    private fun massShooters(side: List<Unit>, other: List<Unit>): Set<Unit> {
+        val melee = other.count { it.alive() && it.count(ATTACK) > 0 }
+        if (melee < MASS_CROWD) return emptySet()
+        return side.filter { it.alive() && it.count(RANGED_ATTACK) > 0 }.toSet()
+    }
+
+    /** One mass attack: `perTarget` to each of the MASS_CROWD weakest living units of the side. */
+    private fun mass(side: List<Unit>, perTarget: Int) {
+        for (u in side.filter { it.alive() }.sortedBy { it.total() }.take(MASS_CROWD)) u.damage(perTarget)
     }
 
     private fun spread(side: List<Unit>, damage: Int) {

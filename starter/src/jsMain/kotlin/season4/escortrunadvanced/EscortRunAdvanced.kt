@@ -38,7 +38,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 5
+const val BOT_VERSION = 6
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -776,9 +776,12 @@ object EscortRunAdvanced {
         }
         if (Bodies.live(f, RANGED_ATTACK) > 0) {
             val inRange = w.enemies.filter { getRange(it, f) <= 3 }
-            val close = inRange.count { getRange(it, f) <= 1 && !onRampart(w, it, false) }
+            // a mass attack hits each creep in reach for 10 / 4 / 1 a part at range 1 / 2 / 3 (one under his rampart
+            // hits the rampart): it beats one shot of 10 once the sum is larger — a crowd of M1A1 round a ranged
+            val mass = inRange.filter { !onRampart(w, it, false) }.sumOf { when (getRange(it, f)) { 0, 1 -> 10; 2 -> 4; else -> 1 }.toInt() }
             val best = inRange.sortedWith(compareBy({ rank(it) }, { it.hits })).firstOrNull()
-            if (close >= 2) f.rangedMassAttack()
+            val targetFar = target != null && best != null && idOf(best) == modeTarget && getRange(best, f) > 1
+            if (mass > 10 && !targetFar) f.rangedMassAttack()
             else if (best != null) f.rangedAttack(best)
         }
         if (Bodies.live(f, HEAL) > 0) {
@@ -792,7 +795,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS")
         for (f in w.myFlags + w.enemyFlags) println("flag: ${at(f)} ${own(f.my)}")
