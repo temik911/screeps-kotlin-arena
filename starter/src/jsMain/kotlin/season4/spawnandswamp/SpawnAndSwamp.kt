@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 195
+    private const val BOT_VERSION = 196
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3289,10 +3289,10 @@ object SpawnAndSwamp {
      * tower scenarios now print `/direct` verdicts that win sooner, and every one of the 26 still ends on the same tick
      * as v73. The live fire follows the chosen plan (stormDirect).
      */
-    private fun siegeOutcome(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int = 0, extra: Array<BodyPartType>? = null, approach: Int = 0, etas: Map<String, Int>? = null, arrive: Int = approach): SiegeResult {
-        val ordered = siegeRun(wave, attrition, defenders, towers, spawn, rampartHits, ratio, flow, extraShots, extra, approach, direct = false, etas, arrive)
+    private fun siegeOutcome(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int = 0, extra: Array<BodyPartType>? = null, approach: Int = 0, etas: Map<String, Int>? = null, arrive: Int = approach, joins: Map<String, Int>? = null): SiegeResult {
+        val ordered = siegeRun(wave, attrition, defenders, towers, spawn, rampartHits, ratio, flow, extraShots, extra, approach, direct = false, etas, arrive, joins)
         if (towers.isEmpty() && defenders.none { shieldAt(it) > 0 }) return ordered
-        val direct = siegeRun(wave, attrition, defenders, towers, spawn, rampartHits, ratio, flow, extraShots, extra, approach, direct = true, etas, arrive)
+        val direct = siegeRun(wave, attrition, defenders, towers, spawn, rampartHits, ratio, flow, extraShots, extra, approach, direct = true, etas, arrive, joins)
         return if (direct.better(ordered)) direct else ordered
     }
 
@@ -3319,8 +3319,13 @@ object SpawnAndSwamp {
         return out
     }
 
-    private fun siegeRun(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int, extra: Array<BodyPartType>?, approach: Int, direct: Boolean, etas: Map<String, Int>? = null, arrive: Int = approach): SiegeResult {
+    private fun siegeRun(wave: List<Creep>, attrition: Double, defenders: List<Creep>, towers: List<TowerInfo>, spawn: StructureSpawn, rampartHits: Int, ratio: Double, flow: IntArray, extraShots: Int, extra: Array<BodyPartType>?, approach: Int, direct: Boolean, etas: Map<String, Int>? = null, arrive: Int = approach, joins: Map<String, Int>? = null): SiegeResult {
         if (wave.isEmpty()) return SIEGE_LOSE
+        // OUR LATECOMERS JOIN AT THEIR TICK, AS HIS DEFENDERS DO (v196, see joins in the front's verdict): a unit with a
+        // join tick above 0 walks the approach out of the fight — neither fired at nor firing — and enters the siege at it
+        val joinAt = IntArray(wave.size + 1) { i -> if (i < wave.size) (joins?.get(wave[i].id) ?: 0) else 0 }
+        var siegeTick = -1   // -1 while the wave walks in: only the ones there from the start (joinAt 0) are in the fight
+        fun joined(k: Int): Boolean = joinAt[k] <= maxOf(0, siegeTick)
         // extra — ещё не купленное тело: тем же прогоном спрашиваем, с каким из них осада кончится раньше
         val units = ArrayList(wave.map { c ->
             SimUnit(c.body.filter { it.hits > 0 }.map { it.type to it.hits }, meleeFactor(c, defenders, null))
@@ -3333,7 +3338,7 @@ object SpawnAndSwamp {
         val anyHeal = units.any { u -> u.types.any { it == HEAL } }
         fun mendWave(): Double {
             if (!anyHeal) return 0.0 // прогон без лекарей не платит за них ничего: он идёт каждый тик
-            val alive = units.filter { it.alive() }
+            val alive = units.filterIndexed { k, u -> u.alive() && joined(k) }
             val power = alive.sumOf { it.healPower() }
             if (power <= 0.0) return 0.0
             val v = alive.maxByOrNull { it.missing() } ?: return 0.0
@@ -3401,7 +3406,7 @@ object SpawnAndSwamp {
                 // башня бьёт самого ОПАСНОГО, а лекарь опасен: пока он жив, выстрел приходится отменять
                 // каждый тик. Без этого он в прогоне был бессмертен (dps=0 — значит никогда не цель) и
                 // получался дешевле любого стрелка по построению
-                val v = units.filter { it.alive() }.maxWithOrNull(compareBy({ it.dps() + it.healPower() }, { it.total() })) ?: return
+                val v = units.filterIndexed { k, u -> u.alive() && joined(k) }.maxWithOrNull(compareBy({ it.dps() + it.healPower() }, { it.total() })) ?: return
                 lost += v.hit(shot)
                 g.next = t + InfluenceMap.towerCooldown
             }
@@ -3433,7 +3438,7 @@ object SpawnAndSwamp {
                 // «никогда» (periodOn), и максимум по всей группе превращал подход в repeat на полмиллиарда:
                 // стенд tower+healball встал намертво на 480-м тике, как только в группу для вопроса о теле
                 // попала вся армия, а в ней — сбитый на ноги боец. Идти некому — осады нет
-                val period = wave.filter { liveMoves(it) > 0 }.maxOfOrNull { periodAt(it, cell / 100, cell % 100) }
+                val period = wave.filterIndexed { k, c -> liveMoves(c) > 0 && joinAt[k] <= 0 }.maxOfOrNull { periodAt(it, cell / 100, cell % 100) }
                     ?: return SIEGE_LOSE
                 repeat(period) {
                     fire(clock) { g -> InfluenceMap.towerShot(getRange(g.tower.pos, InfluenceMap.cell(cell / 100, cell % 100))) }
@@ -3449,13 +3454,14 @@ object SpawnAndSwamp {
         // на 150 больше расчётного)
         repeat(extraShots) {
             for (g in guns) {
-                val v = units.filter { it.alive() }.maxWithOrNull(compareBy({ it.dps() + it.healPower() }, { it.total() })) ?: break
+                val v = units.filterIndexed { k, u -> u.alive() && joined(k) }.maxWithOrNull(compareBy({ it.dps() + it.healPower() }, { it.total() })) ?: break
                 lost += v.hit(g.shot)
             }
         }
         var spawnHits = (spawn.hits ?: SPAWN_HITS) * ratio + rampartHits
         for (i in 0 until SIEGE_LIMIT) {
             val t = clock + i
+            siegeTick = i
             while (arriving.isNotEmpty() && arriving.first().first <= i) {
                 val d = arriving.removeFirst().second
                 if (defs.isEmpty()) { defHits = d.hits; defShield = d.shield }
@@ -3463,21 +3469,24 @@ object SpawnAndSwamp {
             }
             fire(t) { g -> g.shot }
             val defDps = defs.sumOf { it.dps } + skippedDps
+            // (v196: only the ones already there — see joinAt)
+            val there = units.filterIndexed { k, _ -> joined(k) }
             if (defDps > 0.0) {
-                val v = units.filter { it.alive() }.minByOrNull { it.total() }
+                val v = there.filter { it.alive() }.minByOrNull { it.total() }
                 if (v != null) lost += v.hit(defDps)
             }
             lost = maxOf(0.0, lost - mendWave())
-            val ourDps = units.sumOf { it.dps() }
-            if (ourDps <= 0.0) return SiegeResult(false, i, lost.toInt(), direct, spawnHits)
+            val ourDps = there.sumOf { it.dps() }
+            if (ourDps <= 0.0 && units.indices.none { k -> !joined(k) && units[k].alive() }) return SiegeResult(false, i, lost.toInt(), direct, spawnHits)
             if (defs.isNotEmpty()) {
                 if (defShield > 0.0) {
-                    defShield -= units.sumOf { it.creepDps() }
+                    defShield -= there.sumOf { it.creepDps() }
                     if (defShield < 0.0) { defHits += defShield; defShield = 0.0 }
                 } else {
-                    val net = units.sumOf { it.creepDps() } - defs.sumOf { it.heal } - skippedHeal
-                    if (net <= 0.0) return SiegeResult(false, i, lost.toInt(), direct, spawnHits)
-                    defHits -= net
+                    val net = there.sumOf { it.creepDps() } - defs.sumOf { it.heal } - skippedHeal
+                    if (net <= 0.0 && units.indices.none { k -> !joined(k) && units[k].alive() }) return SiegeResult(false, i, lost.toInt(), direct, spawnHits)
+                    if (net > 0.0) defHits -= net
+                    else continue
                 }
                 while (defHits <= 0.0 && defs.isNotEmpty()) {
                     val carry = -defHits
@@ -3834,7 +3843,19 @@ object SpawnAndSwamp {
             else streamUnits * unitCost + (interceptCost(waveFront, false) ?: 0.0)
         cpuMark("f.march")
         val siegeStart = if (enemySpawn != null) siegeOutcome(staging, attrition + unitCost, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = startTravel, etas = defEtas) else SIEGE_LOSE
-        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront, frontAttrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas) else SIEGE_LOSE
+        // THE WAVE'S VERDICT COUNTS ITS OWN LATECOMERS (v196). siegeGo ran on the front — the COHESION_GAP window of the
+        // flow holding the most members — and siegeJoin on the front with the post; the members of the departed wave a
+        // few cells behind the front were in neither. Against marlyman#441 (v195, t=1500) five M12A5 of the wave stood on
+        // swamp 2-6 cells behind four M8R4: the front's siege read `lose/14t`, the wave held (siegeHold) and waited for
+        // those very five anyway, 110 ticks 36-42 cells from his main, while the whole army's run in the body question
+        // read `win/15t`; his next pile spawn stood at 1635, and it was a draw (his main took 40, 0 and 180 damage in three
+        // series' draws). Each member of the wave behind the front now joins the front's siege at its own walk's tick, as
+        // his defenders do since v124
+        val latecomers = if (!USE_WAVE_LATECOMERS || enemySpawn == null) emptyList() else
+            waveMembers.filter { m -> waveFront.none { it.id == m.id } && liveMoves(m) > 0 }
+        val lateJoins: Map<String, Int>? = if (latecomers.isEmpty()) null else latecomers.associate { m ->
+            m.id to (travelTicksOf(listOf(m), assaultFlow, spawnFlow).coerceAtMost(arenaInfo.ticksLimit) - frontTravel).coerceAtLeast(1) }
+        val siegeGo = if (enemySpawn != null) siegeOutcome(waveFront + latecomers, frontAttrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart, PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas, joins = lateJoins) else SIEGE_LOSE
         // the front fires the way its winning plan does (v83): past his shielded defenders and his towers, at the spawn
         stormDirect = siegeGo.win && siegeGo.direct
         siegeGoWin = siegeGo.win
@@ -6534,6 +6555,8 @@ object SpawnAndSwamp {
     /** A standing gun of his within a raider's flight range is prey too, not only one by the target (v193).
      *  OFF (v195) with USE_RAID_GUN_PREY, see there. */
     private const val USE_RAID_GUN_NEAR = false
+    /** The front's siege verdict counts the wave's members behind it, each joining at its own walk's tick (v196). */
+    private const val USE_WAVE_LATECOMERS = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
     private const val USE_PILE_CONTAINER_RACE = true
     /** The pile builder drops a job with nothing left to build from even with its site standing (v194). */
