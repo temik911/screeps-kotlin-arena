@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 208
+    private const val BOT_VERSION = 209
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6672,7 +6672,12 @@ object SpawnAndSwamp {
     private const val USE_RAID_PATH_FIRE = false
     /** The raid races both walks to a bare target — the detour and the straight one, each with its length and its
      *  fire — and walks the one whose target falls first (v207). */
-    private const val USE_RAID_TWO_PLANS = true
+    private const val USE_RAID_TWO_PLANS = false
+    // OFF (v209): A/B v206 / v207 against けろびー#44 (6+6) 6-0-0 / 4-0-2, the v207 wins slower (1400-1700 against
+    // 600-1600). The third change to the raid's walk (v202 straight, v205 the straight walk's fire, v207 both walks with
+    // their real lengths) and the third that played worse: the race that takes the range for the walk and counts his
+    // fire from the arrival, with the walk round the fire on the danger matrix, is a matched pair — made "honest" on one
+    // side it only waits longer. Measured three times; the walk stays as it is
     /** The spawn's saving is known: the keeper's surplus is beyond it, the keeper does not build from the spawn while the
      *  fleet is short, and the fort's reserve does not hold the hauler's turn then (v208). */
     private const val USE_SPAWN_KNOWS_SAVING = true
