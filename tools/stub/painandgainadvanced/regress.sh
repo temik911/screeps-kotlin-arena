@@ -160,8 +160,10 @@ rival map-live2.txt p2 line 5000
 # 9349f v17 lost (298 ticks), 93d04 v18 lost (311), 916f5 v4 lost (294). On the corrected engine (flags change hands a
 # tick after the step) `chase` routs v17 and v18 on their own records — our army destroyed at t=331 and 336, eight of
 # his left — with the live timeline (centre t=75, our FIGHT t=116, contact t=128); v19 destroys it at t=333-359 with
-# 14-15 of ours alive: it waits under its tower (FIGHT t=136) instead of walking out to meet him
-for g in 6ab9349f22f112830c18f0b5 6ab93d0422f1120c3418f22c 6ab916f5064dc963c9aaabc0; do
+# 14-15 of ours alive: it waits under its tower (FIGHT t=136) instead of walking out to meet him. 9465b v19 lost (291):
+# our fatigue flag taken at t=61 halved the heavies' march, he caught its tail at the fortress pocket's mouth; `chase`
+# on it destroys v19 at t=338 and loses to v20 (the flag waits for the army to hold) at t=401, 13 of ours alive
+for g in 6ab9349f22f112830c18f0b5 6ab93d0422f1120c3418f22c 6ab916f5064dc963c9aaabc0 6ab9465b22f1123ac118f3f5; do
   rival replay:$g - chase 5000
   rival replay:$g - ghost 5000
 done

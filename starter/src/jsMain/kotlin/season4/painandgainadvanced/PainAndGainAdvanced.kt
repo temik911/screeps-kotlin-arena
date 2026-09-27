@@ -42,7 +42,7 @@ import screeps.api.structures.StructureTower
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 19
+const val BOT_VERSION = 20
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -283,6 +283,19 @@ object PainAndGainAdvanced {
                 continue
             }
             val box = containers.filter { Grid.range(it.x, it.y, post.x, post.y) <= 1 }.maxByOrNull { it.store[RESOURCE_ENERGY] ?: 0 }
+            // the fatigue flag doubles our own fatigue: it is stepped on only once the army has stood at its fortress.
+            // v19 took it at t=61 with the army still 10-15 cells out; the heavies' step went from 2 ticks to 4, the
+            // army arrived at t≈120 instead of ≈90, and Hardy#3 walking behind it caught its tail at the pocket's
+            // mouth, 13 lost for 7 by t=200. Until then the puller waits beside it, between the tower and the box
+            if (post.effectType == EFF_FATIGUE && post.my != true && !settled) {
+                val spot = besideFlag(post, tower, box)
+                if (p.cell == spot) {
+                    hold(p)
+                    if (box != null && Grid.range(p.x, p.y, box.x, box.y) <= 1 && (box.store[RESOURCE_ENERGY] ?: 0) > 0 && p.energy <= p.carry * CARRY_CAPACITY - 50)
+                        p.c.withdraw(box, RESOURCE_ENERGY)
+                } else stepToward(p, Grid.to(Grid.xOf(spot), Grid.yOf(spot), if (p.weight == 0) 1 else 5), 100)
+                continue
+            }
             if (p.x == post.x && p.y == post.y) {
                 hold(p)
                 val tE = tower?.store?.get(RESOURCE_ENERGY) ?: 0
@@ -295,6 +308,20 @@ object PainAndGainAdvanced {
                 stepToward(p, Grid.to(post.x, post.y, if (p.weight == 0) 1 else 5), 100)
             }
         }
+    }
+
+    /** A cell beside the flag that reaches both its tower and its box (off the flag), else any free one beside it. */
+    private fun besideFlag(post: ScoreFlag, tower: StructureTower?, box: StructureContainer?): Int {
+        var best = Grid.idx(post.x, post.y); var bestS = Int.MIN_VALUE
+        for (y in post.y - 1..post.y + 1) for (x in post.x - 1..post.x + 1) {
+            if ((x == post.x && y == post.y) || !Grid.inside(x, y) || Grid.wall(x, y)) continue
+            val i = Grid.idx(x, y)
+            if (i in towerCells || (box != null && box.x == x && box.y == y)) continue
+            val s = (if (tower != null && Grid.range(x, y, tower.x, tower.y) <= 1) 2 else 0) +
+                (if (box != null && Grid.range(x, y, box.x, box.y) <= 1) 2 else 0) - (if (Grid.swamp(x, y)) 1 else 0)
+            if (s > bestS) { bestS = s; best = i }
+        }
+        return best
     }
 
     private fun towersAct() {
@@ -347,6 +374,9 @@ object PainAndGainAdvanced {
 
     private val hunterOf = HashMap<String, String>()   // our hunter id -> enemy id
     private var surviving = false
+    /** The army has stood at its objective (or swept, or is gone): from then on its march no longer pays for our
+     *  fatigue flag. */
+    private var settled = false
     private var lastDeathT = 0
     /** A fight that kills nobody: 300 ticks in FIGHT without a death on either side. Against 76561198870429455#11 our
      *  two heavy ranged and his two heavy healers faced each other in a corner from t≈500 to t=4500 — neither side's
@@ -420,7 +450,7 @@ object PainAndGainAdvanced {
         val army = all.filter { it.id !in garrisonOf }
         // garrisons fire and heal whether or not a group is left: with the group dead and only garrisons standing, the
         // stand's rush lost five of them to our own hits-loss flags, unhealed, from t=954 to t=1453
-        if (army.isEmpty()) { fire(all); return }
+        if (army.isEmpty()) { settled = true; fire(all); return }
         val group = mainGroup(army)
         val cx = group.sumOf { it.x } / group.size; val cy = group.sumOf { it.y } / group.size
         val foes = theirs.filter { it.armed || it.heal > 0 }
@@ -493,6 +523,7 @@ object PainAndGainAdvanced {
         }
         if (next != mode) { mode = next; modeSince = t; println("mode t=$t: $mode duel=${duel.ratio.asDynamic().toFixed(2)} whole=${whole.ratio.asDynamic().toFixed(2)} near=${near.size} group=${group.size}/${army.size} obj=${objective.x},${objective.y}") }
 
+        if (mode == Mode.HOLD || mode == Mode.SWEEP) settled = true
         fire(all)
         // hunters: in a sweep, light armed creeps go in pairs after the enemy's survivors — a lone runner sits on a flag
         // or walks between them, and an `h4m4` heals itself 48 a tick, more than one `r4m4` does to it
