@@ -50,7 +50,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 20
+const val BOT_VERSION = 21
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -398,7 +398,7 @@ object EscortRunAdvanced {
         var pullerFor: String? = null
         // under a raid the army cannot beat, the economy's creeps are not made: they step out into his fire. The stand's
         // kerobii persona made ten C2M1 in a row at 600-707, each shot as it left the spawn (v18, kerobii top)
-        val raided = homeG.mode == "defend" && !armyAdequate(w)
+        val raided = raided(w)
         val order: Array<BodyPartType> = when {
             raided && w.fighters.isNotEmpty() -> nextFighter(w)
             w.harvesters.isEmpty() -> HARVESTER_FIRST
@@ -512,7 +512,7 @@ object EscortRunAdvanced {
         // a raid the army cannot beat: the haulers wait it out on our ramparts, where nothing hurts them — the stand's
         // kerobii persona's raid of four T3M8R5 and a healer killed every hauler between the source and the spawn and
         // the economy stood at zero for 600 ticks (v18/v19, kerobii top)
-        val raid = homeG.mode == "defend" && !armyAdequate(w)
+        val raid = raided(w)
         val shelters = if (raid) basesRamparts(w, spawn).filter { k -> k != key(spawn) && k !in innerCells(w) &&
             (w.occupant[k] == null || w.occupant[k]?.my == true && idOf(w.occupant[k]!!) !in escortIds) }.toMutableList() else ArrayList()
         for (c in w.haulers) {
@@ -613,6 +613,13 @@ object EscortRunAdvanced {
         for (r in route) if (r !in exts) list.add("rampart" to r)
         works = list
         println("works: " + list.joinToString(" ") { "${it.first}${at(cellOf(it.second))}" })
+    }
+
+    /** A raid the economy keeps out of: his fighters by our base while home defends with an army that does not beat
+     *  them, or while home's army is away on an operation (v21 lets an operation go on under a raid). */
+    private fun raided(w: World): Boolean {
+        if (threatsTo(w, homeG, w.mySpawn).isEmpty()) return false
+        return homeG.mode != "defend" || !armyAdequate(w)
     }
 
     private var adequateAt = -1
@@ -774,6 +781,9 @@ object EscortRunAdvanced {
         }
         outpost = best
         println("outpost: " + (best?.let { "source ${at(cellOf(it.source))} spawn ${at(cellOf(it.spawnCell))} slots ${it.slots.joinToString(" ") { s -> at(cellOf(s)) }}" } ?: "none"))
+        // the sources' stock at the start: the replay does not carry it, and a stock above the regen is energy only as
+        // many WORK as drain it early can take
+        println("sources: " + getObjectsByPrototype(Source::class).filter { it.exists }.joinToString(" ") { "${at(it)}=${it.energy}/${it.energyCapacity}" })
     }
 
     private fun rampartAt(k: Int) = getObjectsByPrototype(StructureRampart::class).any { it.exists && it.my == true && key(it) == k }
@@ -1450,18 +1460,78 @@ object EscortRunAdvanced {
      * (6ab94164, 6ab941fb). The one win came through the pass, open at 725 (6ab94124).
      */
     private fun breachFirst(w: World, group: List<Creep>, from: Position, target: Creep): Boolean {
-        val path = breachPath ?: return false
-        if (!breachLeft(w)) return false
+        val eta = breachEta(w, group, from, target) ?: return false
+        return eta < pathCells(w, from, target).size
+    }
+
+    /** Ticks for the group to finish the pass and walk through it to `target` — null when there is no pass left to
+     *  break. Inside a one-cell pass one melee reaches the wall and two ranged behind it. */
+    private fun breachEta(w: World, group: List<Creep>, from: Position, target: Creep): Int? {
+        val path = breachPath ?: return null
+        if (!breachLeft(w)) return null
         val left = path.filter { w.walls.containsKey(it) }
-        if (left.isEmpty()) return false
-        // inside a one-cell pass one melee reaches the wall and two ranged behind it
+        if (left.isEmpty()) return null
         val dps = maxOf(1, (group.maxOfOrNull { Bodies.meleeDps(it) } ?: 0) +
             group.filter { Bodies.isRanged(it) }.map { Bodies.rangedDps(it) }.sortedDescending().take(2).sum())
         val work = left.sumOf { w.walls[it]?.hits ?: 0 } / dps
         val through = DistanceMap.flowFieldOpen(target, left.toSet(), ARMY_SWAMP_COST)
-        val start = anchor(through, from) ?: return false
-        val round = pathCells(w, from, target).size
-        return work + through[key(start)] < round
+        val start = anchor(through, from) ?: return null
+        return work + through[key(start)]
+    }
+
+    /**
+     * The soonest his fighters could kill one of our escorts if every one of them went for it now — the other side of a
+     * race to one kill. Each fighter of his fires from its arrival (its range less its reach: three for the ranged part,
+     * one for the melee part); an escort on an inner rampart is reached by fire into that rampart and then into it, or by
+     * breaking the weakest rampart beside it first (then melee reaches it too); his towers fire from now. Our defenders,
+     * his healing of himself and our repairs are left out, so this is the soonest, not the likely. v19 against けろびー#13
+     * (6ab953c7) called off strikes at 406, 664 and 1012 because a raider of his passed twelve cells from our spawn, while
+     * in 900 ticks of raids no rampart of ours fell below 7015 and his delivery ended the match at 1621.
+     */
+    private fun hisKillEta(w: World): Int {
+        val hits = HashMap<Int, Int>()
+        for (r in getObjectsByPrototype(StructureRampart::class)) if (r.exists && r.my == true) hits[key(r)] = r.hits ?: 0
+        val towers = hisTowers()
+        val structures = w.blocked.mapTo(HashSet()) { key(it) }
+        var best = Int.MAX_VALUE
+        for (e in w.escorts) {
+            val own = hits[key(e)] ?: 0
+            val neighbours = DIRECTIONS.map { (dx, dy) -> (e.x + dx) * 100 + (e.y + dy) }
+                .filter { DistanceMap.inBounds(it / 100, it % 100) && !DistanceMap.isTerrainWall(it / 100, it % 100) }
+            val open = neighbours.any { it !in hits && it !in structures }
+            fun pairs(meleeToo: Boolean): List<Pair<Int, Int>> {
+                val out = ArrayList<Pair<Int, Int>>()
+                for (en in w.enemyArmed) {
+                    val r = getRange(en, e)
+                    if (Bodies.rangedDps(en) > 0) out.add(maxOf(0, r - 3) to Bodies.rangedDps(en))
+                    if (meleeToo && Bodies.meleeDps(en) > 0) out.add(maxOf(0, r - 1) to Bodies.meleeDps(en))
+                }
+                val tw = towerDpsAt(towers, e)
+                if (tw > 0) out.add(0 to tw)
+                return out
+            }
+            best = minOf(best, killTime(own + e.hits, pairs(open)))
+            val weakest = neighbours.mapNotNull { hits[it] }.minOrNull()
+            if (!open && weakest != null) best = minOf(best, killTime(weakest + own + e.hits, pairs(true)))
+        }
+        return best
+    }
+
+    /** Ticks until `need` damage is done by sources firing `dps` from their arrival tick (arrival to dps). */
+    private fun killTime(need: Int, sources: List<Pair<Int, Int>>): Int {
+        var t = 0
+        var done = 0L
+        var rate = 0L
+        for ((a, dps) in sources.sortedBy { it.first }) {
+            if (a > t) {
+                if (rate > 0 && done + rate * (a - t) >= need) return t + ((need - done + rate - 1) / rate).toInt()
+                done += rate * (a - t)
+                t = a
+            }
+            rate += dps
+        }
+        if (rate <= 0) return Int.MAX_VALUE
+        return t + ((need - done + rate - 1) / rate).toInt().coerceAtLeast(0)
     }
 
     /** His towers — they shoot 1000 at range 1, 50 less a cell, once a TOWER_COOLDOWN. */
@@ -1475,7 +1545,8 @@ object EscortRunAdvanced {
 
     /** An operation weighed: can the group kill the target, and in which order it fires — "race" (the escort first, the
      *  arena ends with it) or "clear" (his fighters first, then the escort). */
-    internal class OpEval(val ok: Boolean, val plan: String, val margin: Double, val desc: String) {
+    /** `eta` — ticks from now to the kill by the chosen plan (the way plus the fight). */
+    internal class OpEval(val ok: Boolean, val plan: String, val margin: Double, val desc: String, val eta: Int = 0) {
         override fun toString() = desc
     }
 
@@ -1530,8 +1601,8 @@ object EscortRunAdvanced {
         val desc = "race=$race clear=$clear way=${if (flow === opFlow(w, target)) "round" else "plain"} eta=$eta inWay=${inWay.size} join=${joiners.count { it.second <= done }} spawn=${spawnUnits.size}"
         lastOpWhy = desc
         return when {
-            race.done && race.margin() >= RACE_MARGIN -> OpEval(true, "race", race.margin(), desc)
-            clear.weWin && clear.margin() >= need -> OpEval(true, "clear", clear.margin(), desc)
+            race.done && race.margin() >= RACE_MARGIN -> OpEval(true, "race", race.margin(), desc, eta + race.ticks)
+            clear.weWin && clear.margin() >= need -> OpEval(true, "clear", clear.margin(), desc, eta + clear.ticks + done)
             else -> OpEval(false, "", 0.0, desc)
         }
     }
@@ -1564,38 +1635,56 @@ object EscortRunAdvanced {
         var mode: String
         var modeTarget: String? = null
         var plan = ""
-        if (threats.isNotEmpty()) {
+        if (threats.isNotEmpty() && g.attackedAt < 0) g.attackedAt = w.now
+        // his fighters by our base do not call an operation off by being there: it is a race to one kill, and the
+        // operation goes on while our kill comes before the soonest kill of ours his whole army could make (hisKillEta);
+        // with nothing of his by our base there is nothing to race
+        val hisKill = if (threats.isNotEmpty()) hisKillEta(w) else Int.MAX_VALUE
+        fun beats(eta: Int) = threats.isEmpty() || eta * (1 + RACE_MARGIN) < hisKill
+        // strike: an escort of his outside his ramparts that the group kills before it dies
+        // of several, the one nearest to our group: any kill wins, so the soonest one
+        var picked: Pair<Creep, OpEval>? = null
+        var breachFor = Int.MAX_VALUE
+        for (e in w.enemyEscorts.filter { !onRampart(w, it, false) }) {
+            if (from == null) break
+            if (prev != "strike" && breachFirst(w, group, from, e)) {
+                // the pass first: its walls, the way through it and the kill
+                val dps = maxOf(1, group.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) })
+                breachEta(w, group, from, e)?.let { breachFor = minOf(breachFor, it + (e.hits + (w.enemyRamparts[key(e)]?.hits ?: 0)) / dps) }
+                continue
+            }
+            val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
+            val ev = opEval(w, group, from, e, need)
+            if (ev.ok && beats(ev.eta) && (picked == null || getRange(e, from) < getRange(picked.first, from))) picked = e to ev
+        }
+        val siegeNeed = if (prev == "siege") KEEP_MARGIN else SIEGE_MARGIN
+        val siegeTarget = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits } ?: w.enemyEscorts.minByOrNull { it.hits }
+        val siegeEv = if (from != null && siegeTarget != null && group.size >= SIEGE_MIN_FIGHTERS) opEval(w, group, from, siegeTarget, siegeNeed) else null
+        lastSiegeWhy = "${siegeTarget?.let { at(it) }} $siegeEv need=$siegeNeed"
+        val wasDefending = prev == "defend"
+        if (picked != null) {
+            mode = "strike"; modeTarget = idOf(picked.first); plan = picked.second.plan
+            if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} plan=$plan ${picked.second} kill=${picked.second.eta} hisKill=${if (threats.isEmpty()) "-" else hisKill.toString()} group=${group.size}/${fighters.size}")
+        } else if (siegeEv != null && siegeTarget != null && siegeEv.ok && threats.isNotEmpty() && beats(siegeEv.eta)) {
+            mode = "siege"
+            modeTarget = idOf(siegeTarget); plan = siegeEv.plan
+            if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} plan=$plan $siegeEv kill=${siegeEv.eta} hisKill=$hisKill group=${group.size}/${fighters.size}")
+        } else if (threats.isNotEmpty() && !(breachFor < Int.MAX_VALUE && beats(breachFor))) {
             mode = "defend"
-            if (g.attackedAt < 0) g.attackedAt = w.now
+        } else if (threats.isNotEmpty()) {
+            // the pass is broken on under his raid: its crew kills sooner than his raid could
+            mode = "hold"
+            if (wasDefending || prev != mode) println("army ${g.name} t=${w.now}: BREACH ON under a raid pass+kill=$breachFor hisKill=$hisKill threats=${threats.size}")
+        } else if (convoyOn && g === homeG) {
+            // the home army walks with the convoy
+            mode = "convoy"
+            if (prev != mode) println("army ${g.name} t=${w.now}: CONVOY guard=${fighters.size}")
+        } else if (siegeEv != null && siegeTarget != null && siegeEv.ok) {
+            mode = "siege"
+            modeTarget = idOf(siegeTarget); plan = siegeEv.plan
+            if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} plan=$plan $siegeEv group=${group.size}/${fighters.size}")
         } else {
-            // strike: an escort of his outside his ramparts that the group kills before it dies
-            // of several, the one nearest to our group: any kill wins, so the soonest one
-            var picked: Pair<Creep, OpEval>? = null
-            for (e in w.enemyEscorts.filter { !onRampart(w, it, false) }) {
-                if (from == null) break
-                if (prev != "strike" && breachFirst(w, group, from, e)) continue
-                val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
-                val ev = opEval(w, group, from, e, need)
-                if (ev.ok && (picked == null || getRange(e, from) < getRange(picked.first, from))) picked = e to ev
-            }
-            val siegeNeed = if (prev == "siege") KEEP_MARGIN else SIEGE_MARGIN
-            val siegeTarget = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits } ?: w.enemyEscorts.minByOrNull { it.hits }
-            val siegeEv = if (from != null && siegeTarget != null && group.size >= SIEGE_MIN_FIGHTERS) opEval(w, group, from, siegeTarget, siegeNeed) else null
-            lastSiegeWhy = "${siegeTarget?.let { at(it) }} $siegeEv need=$siegeNeed"
-            if (picked != null) {
-                mode = "strike"; modeTarget = idOf(picked.first); plan = picked.second.plan
-                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} plan=$plan ${picked.second} group=${group.size}/${fighters.size}")
-            } else if (convoyOn && g === homeG) {
-                // the home army walks with the convoy
-                mode = "convoy"
-                if (prev != mode) println("army ${g.name} t=${w.now}: CONVOY guard=${fighters.size}")
-            } else if (siegeEv != null && siegeTarget != null && siegeEv.ok) {
-                mode = "siege"
-                modeTarget = idOf(siegeTarget); plan = siegeEv.plan
-                if (prev != mode || prevTarget != modeTarget) println("army ${g.name} t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} plan=$plan $siegeEv group=${group.size}/${fighters.size}")
-            } else {
-                mode = "hold"
-            }
+            mode = "hold"
         }
         g.plan = plan.ifEmpty { g.plan }
         // an operation is dropped only after DROP_AFTER lost ticks in a row, and only while its target lives
@@ -1821,7 +1910,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=cluster$CLUSTER_RADIUS breach=auto mass=sum works=spots,ext$EXTENSIONS,tower,route towers=priced passFirst sally=group$SALLY_LINK armyFirst=$ADEQUATE_MARGIN spawnGuard=$SPAWN_GUARD_RANGE raidNoEcon shelter raceUnderRaid outpost=farSource opWay=price$DANGER_COST danger=$DANGER_RADIUS drop=$DROP_AFTER joiners=notice$NOTICE_TICKS breach=ifTarget defend=ramparts convoy=p$CONVOY_PERIOD,half,reinf$PRODUCTION_WINDOW corridor=ifHeld op=race$RACE_MARGIN,clear join=$JOIN_SLACK fast=p1 staging=$STAGING_RANGE/$GROUP_SPREAD body=interleaved pioneerRetry=$PIONEER_RETRY homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS " +
             "EXTENSION_ENERGY_CAPACITY=$EXTENSION_ENERGY_CAPACITY TOWER_POWER_ATTACK=$TOWER_POWER_ATTACK TOWER_RANGE=$TOWER_RANGE TOWER_CAPACITY=$TOWER_CAPACITY " +
