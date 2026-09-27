@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 182
+    private const val BOT_VERSION = 183
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6448,6 +6448,8 @@ object SpawnAndSwamp {
     private const val USE_TICK_PRICE = true
     /** A mate sent after his builder is not waited for by its marching wave (runFighters' cohesion, v182). */
     private const val USE_HUNTER_NOT_WAITED = true
+    /** The raid enters a strike on a bare target only when the pair outlasts the kill under his guns (raidOutlasts, v183). */
+    private const val USE_RAID_RACE = true
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
@@ -6516,6 +6518,54 @@ object SpawnAndSwamp {
         if (dps <= 0.0) return false
         val left = (held.hits ?: SPAWN_HITS) + ramparts.filter { it.my == false && it.x == held.x && it.y == held.y }.sumOf { it.hits ?: 0 }
         return left / dps < at.minOf { getRange(it, intruder) }
+    }
+
+    private var raceFieldTick = -1
+    private val raceFields = HashMap<Int, IntArray>()
+
+    /** The field to a creep of his, for this tick only: a walking builder is a new cell every tick, and the persistent
+     *  flowCache would keep a field per cell it ever stood on. */
+    private fun raceField(ctx: Ctx, p: Position): IntArray {
+        if (raceFieldTick != getTicks()) { raceFields.clear(); raceFieldTick = getTicks() }
+        return raceFields.getOrPut(p.x * 100 + p.y) { DistanceMap.flowFieldTo(p, ctx.blocked) }
+    }
+
+    /**
+     * THE PAIR OUTLASTS THE KILL (v183). A bare target — his builder, a spawn with no rampart — was struck whatever stood
+     * by it, and against けろびー#48 the first pair died on one before his third builder came (500-535): at 432 on the
+     * bare (57,21) under his M3R3 and M5R5 (both dead by 482, the spawn left at 1110), at 438 the lead alone on a builder
+     * under 230 a tick; the builder then worked 350-450 ticks with no raider alive and the match was a draw, while in the
+     * wins no gun of his came near a struck bare target and the pair lost nothing. A strike is entered when the pair's
+     * damage takes the target's `left` hits before his guns — each from the tick it walks within its reach of the target,
+     * over the ground at its own pace — take the weakest raider's hits; the pair is worth its next builders.
+     */
+    private fun raidOutlasts(ctx: Ctx, raiders: List<Creep>, target: Position, left: Int, field: IntArray): Boolean {
+        val strikes = raiders.map { r -> (getRange(r, target) - 1).coerceAtLeast(0) to r.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER }
+            .filter { it.second > 0 }
+        if (strikes.isEmpty()) return false
+        val weakest = raiders.minOf { it.hits }
+        val first = strikes.minOf { it.first }
+        val fire = ArrayList<Pair<Int, Double>>()
+        for (e in ctx.combatEnemies) {
+            val p = InfluenceMap.profileOf(e)
+            val dmg = p.ranged + p.melee
+            if (dmg <= 0.0) continue
+            val reach = if (p.ranged > 0.0) RANGED_RANGE else 1
+            val at = if (e.body.none { it.type == MOVE && it.hits > 0 }) { if (getRange(e, target) <= reach + 1) 0 else continue }
+                else (pathTicks(e, field, e.x * 100 + e.y).coerceAtMost(Int.MAX_VALUE / 4) - reach * plainPeriod(e)).coerceAtLeast(0)
+            fire.add(at to dmg)
+        }
+        // the race ends by the tick the slowest raider alone would have taken it
+        val horizon = strikes.maxOf { it.first } + left / strikes.minOf { it.second } + 1
+        var dealt = 0
+        var taken = 0.0
+        for (t in 1..horizon) {
+            for ((a, d) in strikes) if (t > a) dealt += d
+            if (dealt >= left) return true
+            if (t > first) for ((a, d) in fire) if (t > a) taken += d
+            if (taken >= weakest) return false
+        }
+        return false
     }
 
     private fun raidWanted(ctx: Ctx): Boolean {
@@ -6642,8 +6692,12 @@ object SpawnAndSwamp {
         // (800, five ticks for the pair) costs the pair 400-650 of its hits, a bare spawn (17 ticks) 1400-2200 — and v157
         // held a spawn while both builders stood 7-10 cells off (e42c: the pair died on the spawn). Re-picked every tick,
         // a standing builder before a walking one
+        // (v183: a builder the pair outlasts before one it does not — see raidOutlasts)
+        val outlasted = HashMap<String, Boolean>()
+        fun outlasts(c: Creep): Boolean = outlasted.getOrPut(c.id) { raidOutlasts(ctx, raiders, c, c.hits, raceField(ctx, c)) }
         val builderTarget = if (!USE_RAID_BUILDERS_FIRST || raidHome || gathering) null else
             ctx.enemyCreeps.filter { c -> isHisBuilder(c) && open.any { it.id == c.id } }.minWithOrNull(compareBy<Creep> { c ->
+                if (USE_RAID_RACE && !outlasts(c)) 1 else 0 }.thenBy { c ->
                 val prev = enemyPrevCell[c.id]; if (prev != null && prev == c.x * 100 + c.y) 0 else 1 }.thenBy { getRange(lead, it) })
         // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17) — and
         // taken when it is all that is left, since the win is his last spawn
@@ -6668,7 +6722,16 @@ object SpawnAndSwamp {
         // ticks of it — no longer finished once begun (at 1206 a pair that began with his guns 5-16 cells off was held
         // there and died); `finishing` still holds it on a spawn that falls before it does
         val chipping = USE_RAID_CHIP && target != null && target.id in spawnIds && ctx.enemyCreeps.none { isHisBuilder(it) }
-        val strikeFits = target == null || target.id !in spawnIds || !USE_RAID_LAST || (!chipping && raiders.any { getRange(it, pos(target)) <= 1 }) || run {
+        // a bare target not yet reached is struck only when the pair outlasts the kill (v183, raidOutlasts); a strike begun
+        // is left to `finishing` and the retreat as before
+        val raced = USE_RAID_RACE && target != null && raiders.none { getRange(it, pos(target)) <= 1 } &&
+            (target.id !in spawnIds || rampartOn(ctx, pos(target)) <= 0)
+        val strikeFits = if (raced) run {
+            val t: GameObject = target!!
+            val builder = ctx.enemyCreeps.firstOrNull { it.id == t.id }
+            if (builder != null) outlasts(builder)
+            else raidOutlasts(ctx, raiders, pos(t), ctx.enemySpawns.firstOrNull { it.id == t.id }?.hits ?: SPAWN_HITS, flowTo(ctx, pos(t)))
+        } else target == null || target.id !in spawnIds || !USE_RAID_LAST || (!chipping && raiders.any { getRange(it, pos(target)) <= 1 }) || run {
             val shield = rampartOn(ctx, pos(target))
             if (shield <= 0) return@run true
             val dps = raiders.sumOf { r -> r.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
