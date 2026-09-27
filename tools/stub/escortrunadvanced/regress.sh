@@ -126,10 +126,10 @@ run  map-6ab9255d.txt bottom none
 run  map-6ab9255d.txt bottom race
 run  map-6ab92172.txt top    none
 run  map-6ab92172.txt top    hunt
-# open: what v9 draws at 5000 — README.md, "Open findings". blob+harvest from both sides: nobody dies on either side; from
-# t≈1909 (bottom) the home army's mode flips SIEGE -> HOLD -> SIEGE every tick (1045 pairs; top 1658) and never leaves home
-open map-6ab9267a.txt bottom blob+harvest
-open map-6ab9267a.txt top    blob+harvest
+# the centre held by a growing blob and the enemy's income at +11: v9 drew these at 5000 (the home army's mode flipped
+# SIEGE/HOLD every tick and never left home); v10 stopped the flicker and v11's convoy delivers round the blob (~885)
+run  map-6ab9267a.txt bottom blob+harvest
+run  map-6ab9267a.txt top    blob+harvest
 
 # a SMOKE label without a gate line would shrink the smoke silently: checked on every gate run, so its own landing catches it
 if [[ "$TAG" == land || "$TAG" == gate ]] && (( ! SMOKE_ONLY )); then

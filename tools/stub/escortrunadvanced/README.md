@@ -129,12 +129,11 @@ this bot's package, this stub, its arena folder, `types/` or the build run the f
 
 ## Open findings
 
-Lines the current bot loses are `open`: run and printed as `OPEN` outside the `land`/`gate` tags, never in the gate. The
-split below is v9's (27.09.2026); each new version reruns the full suite (`zsh regress.sh <tag>`) and moves lines between
-the two — so far the `+harvest` lines are the ones that move (v7 drew siege+harvest on 6ab92799, v8 and v9 win it).
+Lines the current bot loses are `open`: run and printed as `OPEN` outside the `land`/`gate` tags, never in the gate. Each
+new version reruns the full suite (`zsh regress.sh <tag>`) and moves lines between the two.
 
-- `6ab9267a-bottom:blob+harvest`, `6ab9267a-top:blob+harvest` — nobody dies on either side in 5000 ticks while his blob
-  of M5R5 grows in the centre (55 by the end). From t=1909 (bottom) the home army's mode flips every tick — `SIEGE
-  M3T42(7,8) … sim=win/1t … group=16/16` on one tick, `HOLD (was siege)` on the next, 1045 times (top: 1658) — so the
-  army never leaves home. Under v8 the same lines had no operation line at all, and the home spawn stood at 1000 energy
-  with all eight cells round it held by our creeps.
+None at v11. The last two, `6ab9267a-{bottom,top}:blob+harvest`, were draws at 5000 under v9 (the home army's mode flipped
+SIEGE/HOLD every tick — the group's centre fell on the spawn where a field has no value, and walls round his creeps opened
+and shut the only gap; under v8 the home spawn also stood at 1000 energy with all eight cells round it held by our
+creeps). v10 fixed the flicker and the spawn's cells, v11's convoy delivers round the blob at ~885, and both lines are
+gate lines now.
