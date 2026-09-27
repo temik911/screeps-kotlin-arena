@@ -123,6 +123,9 @@ object EscortRunAdvanced {
     private val HARVESTER_FIRST = Bodies.body(WORK to 3, MOVE to 1)
     private val HARVESTER_NEXT = Bodies.body(WORK to 2, MOVE to 1)
     private val HAULER = Bodies.body(CARRY to 2, MOVE to 1)
+    /** The wall breaker: as much ATTACK as one spawn holds with MOVE enough for two ticks a plain cell. */
+    private const val BREAKER_ATTACK = 9
+    private val BREAKER = Bodies.body(MOVE to 5, ATTACK to BREAKER_ATTACK)
 
     // ---------- state between ticks ----------
     private val escortIds = HashSet<String>()
@@ -160,6 +163,7 @@ object EscortRunAdvanced {
         val haulers: List<Creep>,
         val enemyArmed: List<Creep>,
         val piles: List<Resource>,
+        val walls: HashMap<Int, StructureWall>,
     )
 
     fun tick() {
@@ -167,6 +171,7 @@ object EscortRunAdvanced {
         stillCells = w.escorts.map { cell(it.x, it.y) }
         if (w.now == 1) probe(w)
         if (w.now in 2..5) printMap((w.now - 2) * 25)
+        if (w.now == 1) chooseBreach(w)
         runSpawn(w)
         runEscorts(w)
         runEconomy(w)
@@ -216,6 +221,7 @@ object EscortRunAdvanced {
             haulers = mine.filter { idOf(it) !in escortIds && Bodies.isHauler(it) },
             enemyArmed = enemies.filter { idOf(it) !in escortIds && Bodies.isArmed(it) },
             piles = getObjectsByPrototype(Resource::class).filter { it.exists && it.resourceType == RESOURCE_ENERGY },
+            walls = HashMap<Int, StructureWall>().also { m -> for (x in walls) m[key(x)] = x },
         )
     }
 
@@ -261,6 +267,8 @@ object EscortRunAdvanced {
             raceOn -> MELEE
             works < WORK_TARGET -> HARVESTER_NEXT
             w.haulers.size < HAULERS -> HAULER
+            // inside a one-cell pass one melee reaches the wall, so the wall falls at the pace of the strongest one
+            breachLeft(w) && w.fighters.size >= 2 && w.mine.none { Bodies.live(it, ATTACK) >= BREAKER_ATTACK } -> BREAKER
             else -> nextFighter(w)
         }
         if (energy(w) < Bodies.cost(order)) return
@@ -357,17 +365,23 @@ object EscortRunAdvanced {
             val free = c.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
             // pick up whatever lies within reach, every tick
             w.piles.firstOrNull { getRange(it, c) <= 1 && free > 0 }?.let { c.pickup(it) }
+            var trace: String
             if (free > 0 && carried < 50 * Bodies.live(c, CARRY) / 2 + 1 || carried == 0) {
                 val pile = w.piles.filter { getRange(it, src) <= 2 }.maxByOrNull { it.amount }
                 val goal: Position = pile ?: spots.firstOrNull()?.let { cellOf(it) } ?: continue
+                trace = "load->${at(goal)}${pile?.let { "p${it.amount}" } ?: ""}"
                 if (getRange(c, goal) > 1) {
                     val f = flowTo("pile", goal, Bodies.swampCost(c))
-                    DistanceMap.flowStep(f, c.x, c.y, 1, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(c, it, HAULER_PRIORITY) }
+                    val st = DistanceMap.flowStep(f, c.x, c.y, 1, w.occupant.keys, w.enemyAt)
+                    trace += " f=${f[key(c)]} step=${st?.let { at(it) }}"
+                    st?.let { TrafficManager.request(c, it, HAULER_PRIORITY) }
                 }
             } else {
-                if (getRange(c, spawn) <= 1) c.transfer(spawn, RESOURCE_ENERGY)
-                else dock(w, c, spawn)
+                trace = "unload"
+                if (getRange(c, spawn) <= 1) trace += " rc=${c.transfer(spawn, RESOURCE_ENERGY)}"
+                else trace += " dock=" + dock(w, c, spawn)
             }
+            if (w.now % LOG_EVERY == 0) println("haul t=${w.now} ${idOf(c)}${at(c)} c=$carried free=$free fat=${c.fatigue} $trace")
         }
     }
 
@@ -376,15 +390,157 @@ object EscortRunAdvanced {
      * escorts hold three of them for the whole match, and a field that only knows the spawn sends the hauler into the
      * back of an escort (it then asks for that cell forever — the escort is not a mover and never yields).
      */
-    private fun dock(w: World, c: Creep, spawn: StructureSpawn) {
+    private fun dock(w: World, c: Creep, spawn: StructureSpawn): String {
         val still = w.escorts.map { cell(it.x, it.y) }
         val free = DIRECTIONS.map { (dx, dy) -> cell(spawn.x + dx, spawn.y + dy) }
             .filter { !DistanceMap.isWall(it.x, it.y) && (w.occupant[key(it)]?.let { o -> idOf(o) == idOf(c) || idOf(o) !in escortIds } ?: true) }
-        if (free.isEmpty()) return
-        val k = "dock:" + free.joinToString(",") { key(it).toString() }
+        if (free.isEmpty()) return "nofree"
+        val k = "dock:" + free.joinToString(",") { key(it).toString() } + ":" + Bodies.swampCost(c)
         val now = getTicks()
         val f = flowCache[k]?.takeIf { flowTick[k] == now } ?: DistanceMap.flowFieldToAny(free, still, Bodies.swampCost(c)).also { flowCache[k] = it; flowTick[k] = now }
-        DistanceMap.flowStep(f, c.x, c.y, 0, w.occupant.keys, w.enemyAt)?.let { TrafficManager.request(c, it, HAULER_PRIORITY) }
+        val st = DistanceMap.flowStep(f, c.x, c.y, 0, w.occupant.keys, w.enemyAt)
+        st?.let { TrafficManager.request(c, it, HAULER_PRIORITY) }
+        return "${free.size} f=${f[key(c)]} step=${st?.let { at(it) }}"
+    }
+
+    // ==================== the breach ====================
+
+    /** The wall cells to break, in the order our path meets them (null — nothing worth breaking). */
+    private var breachPath: List<Int>? = null
+    private var breachWalls: Set<Int> = emptySet()
+    private var breachOpenedAt = -1
+
+    private fun cheb(a: Int, b: Int) = maxOf(kotlin.math.abs(a / 100 - b / 100), kotlin.math.abs(a % 100 - b % 100))
+
+    /** 8-connected groups of wall structures: each group is one "pass" of the map. */
+    private fun wallComponents(walls: Collection<Int>): List<Set<Int>> {
+        val left = walls.toHashSet()
+        val out = ArrayList<Set<Int>>()
+        while (left.isNotEmpty()) {
+            val seed = left.first()
+            val comp = HashSet<Int>()
+            val stack = ArrayDeque<Int>().apply { add(seed) }
+            left.remove(seed)
+            while (stack.isNotEmpty()) {
+                val c = stack.removeLast()
+                comp.add(c)
+                for ((dx, dy) in DIRECTIONS) {
+                    val n = (c / 100 + dx) * 100 + (c % 100 + dy)
+                    if (left.remove(n)) stack.add(n)
+                }
+            }
+            out.add(comp)
+        }
+        return out
+    }
+
+    /** The cell beside `p` a flow field reaches first — a spawn's own cell is a structure and has no distance. */
+    private fun startNear(f: IntArray, p: Position): Int? =
+        DIRECTIONS.map { (dx, dy) -> (p.x + dx) * 100 + (p.y + dy) }
+            .filter { DistanceMap.inBounds(it / 100, it % 100) && f[it] >= 0 }.minByOrNull { f[it] }
+
+    private fun descend(f: IntArray, from: Int): List<Int> {
+        val out = ArrayList<Int>()
+        var c = from
+        for (i in 0 until 400) {
+            out.add(c)
+            if (f[c] <= 0) break
+            var best = -1; var bestD = f[c]
+            for ((dx, dy) in DIRECTIONS) {
+                val nx = c / 100 + dx; val ny = c % 100 + dy
+                if (!DistanceMap.inBounds(nx, ny)) continue
+                val d = f[nx * 100 + ny]
+                if (d in 0 until bestD) { bestD = d; best = nx * 100 + ny }
+            }
+            if (best < 0) break
+            c = best
+        }
+        return out
+    }
+
+    /**
+     * Which wall to break, computed from the map: the group of walls whose removal opens a way from our spawn to his that
+     * does NOT run along today's way (through the centre). A second road to his base is what beats a player who holds
+     * the centre — けろびー#11 sat there with five T3M8R5, three healers and two towers while his escorts waited outside
+     * his ramparts, forty cells from his army (6ab9267a). On this layout it is the left-edge pass (x=6, ten walls of
+     * 5000); the corridors to the flags do not change the way between the bases at all and are never picked.
+     */
+    private fun chooseBreach(w: World) {
+        val my = w.mySpawn ?: return
+        val his = w.enemySpawn ?: return
+        val base = DistanceMap.flowFieldTo(his, emptyList(), ARMY_SWAMP_COST)
+        val s0 = startNear(base, my)
+        val basePath = s0?.let { descend(base, it) } ?: emptyList()
+        val len0 = s0?.let { base[it] } ?: Int.MAX_VALUE
+        var best: Triple<Set<Int>, List<Int>, Int>? = null
+        for (comp in wallComponents(w.walls.keys)) {
+            val f = DistanceMap.flowFieldOpen(his, comp, ARMY_SWAMP_COST)
+            val s = startNear(f, my) ?: continue
+            val path = descend(f, s)
+            if (path.none { it in comp }) continue
+            val far = path.filter { getRange(cellOf(it), my) > 12 && getRange(cellOf(it), his) > 12 }
+            if (far.isEmpty()) continue
+            val overlap = far.count { c -> basePath.any { cheb(c, it) <= 4 } }.toDouble() / far.size
+            println("breach? ${comp.size} walls from ${at(cellOf(comp.first()))}: way ${f[s]} vs $len0, overlap ${(overlap * 100).toInt()}%")
+            if (overlap > 0.35 || f[s] > len0 * 13 / 10) continue
+            if (best == null || f[s] < best.third) best = Triple(comp, path, f[s])
+        }
+        best?.let { (comp, path, len) ->
+            breachWalls = comp
+            breachPath = path.filter { it in comp }
+            println("breach: ${comp.size} walls, first ${breachPath?.firstOrNull()?.let { at(cellOf(it)) }}, way $len vs $len0")
+        }
+    }
+
+    private fun breachLeft(w: World) = breachPath?.any { w.walls.containsKey(it) } == true
+
+    /** The wall to hit now: the first one of the chosen group still standing along our way. */
+    private fun breachTarget(w: World): StructureWall? {
+        val path = breachPath ?: return null
+        val k = path.firstOrNull { w.walls.containsKey(it) }
+        if (k == null) {
+            if (breachOpenedAt < 0) { breachOpenedAt = w.now; println("breach t=${w.now}: OPEN") }
+            return null
+        }
+        return w.walls[k]
+    }
+
+    /**
+     * Idle fighters break the wall: melee on the cells beside it (the strongest first — inside the pass there is room for
+     * one), ranged within three of it; the rest wait five cells off. Only cells on OUR side count: the far side of a
+     * standing wall is not reachable, and a flow toward the wall itself would route through it.
+     */
+    private fun runBreach(w: World, idle: List<Creep>): Set<String> {
+        val wall = breachTarget(w) ?: return emptySet()
+        val spawn = w.mySpawn ?: return emptySet()
+        val side = flowTo("homeside", spawn, ARMY_SWAMP_COST)
+        fun ours(k: Int) = DistanceMap.inBounds(k / 100, k % 100) && side[k] >= 0 && !w.walls.containsKey(k)
+        val meleeSlots = DIRECTIONS.map { (dx, dy) -> (wall.x + dx) * 100 + (wall.y + dy) }.filter { ours(it) }
+        val rangedSlots = ArrayList<Int>()
+        for (dx in -3..3) for (dy in -3..3) {
+            val k = (wall.x + dx) * 100 + (wall.y + dy)
+            if (k !in meleeSlots && ours(k)) rangedSlots.add(k)
+        }
+        val taken = HashSet<Int>()
+        val used = HashSet<String>()
+        fun assign(f: Creep, slots: List<Int>) {
+            // a slot is free unless handed out this tick or held by his creep or by our escort (ours move aside)
+            val free = slots.filter { k -> k !in taken && w.occupant[k]?.let { o -> o.my && idOf(o) !in escortIds } ?: true }
+            val slot = free.minByOrNull { getRange(cellOf(it), f) }
+            used.add(idOf(f))
+            if (slot == null) { if (getRange(f, wall) > 5) step(w, f, wall, 5); return }
+            taken.add(slot)
+            if (key(f) != slot) step(w, f, cellOf(slot), 0)
+        }
+        for (f in idle.filter { Bodies.live(it, ATTACK) > 0 }.sortedByDescending { Bodies.live(it, ATTACK) }) assign(f, meleeSlots)
+        for (f in idle.filter { Bodies.live(it, ATTACK) == 0 && Bodies.live(it, RANGED_ATTACK) > 0 }) assign(f, rangedSlots)
+        for (f in idle) {
+            if (idOf(f) !in used) continue
+            if (Bodies.live(f, ATTACK) > 0 && getRange(f, wall) <= 1 && w.enemies.none { getRange(it, f) <= 1 }) f.attack(wall)
+            else if (Bodies.live(f, RANGED_ATTACK) > 0 && getRange(f, wall) <= 3 && w.enemies.none { getRange(it, f) <= 3 }) f.rangedAttack(wall)
+        }
+        if (w.now % LOG_EVERY == 0) println("breach t=${w.now}: wall ${at(wall)} h${wall.hits} left=${breachPath?.count { w.walls.containsKey(it) }} crew=${used.size}")
+        return used
     }
 
     // ==================== the army: what to do ====================
@@ -441,6 +597,28 @@ object EscortRunAdvanced {
         DistanceMap.inBounds(x, y) && !DistanceMap.isWall(x, y) && !w.enemyRamparts.containsKey(x * 100 + y)
     }
 
+    /**
+     * The kill is done before the rest of his army comes: our group's way there (the army's flow — it walks at its rear's
+     * pace) plus the damage still between us and the dead escort (its hits, its rampart's, and the rampart beside it for
+     * one no melee reaches) over our firepower, against the nearest fighter of his that is not already in the simulated
+     * fight. A strike through the left-edge pass meets no one on the way, and his blob in the centre is what arrives.
+     */
+    private fun beatsReinforcements(w: World, fighters: List<Creep>, from: Position, target: Creep): Boolean {
+        val inWay = inTheWay(w, from, target).mapTo(HashSet()) { idOf(it) }
+        val others = w.enemyArmed.filter { idOf(it) !in inWay }
+        if (others.isEmpty()) return true
+        val all = Bodies.fight(units(fighters), units(w.enemyArmed))
+        if (all.weWin && all.margin() >= KEEP_MARGIN) return true
+        val flow = flowTo("army", target, ARMY_SWAMP_COST)
+        val eta = fighters.mapNotNull { f -> flow[key(f)].takeIf { it >= 0 } }.maxOrNull() ?: return false
+        val dps = fighters.sumOf { Bodies.meleeDps(it) + Bodies.rangedDps(it) }
+        if (dps == 0) return false
+        var need = target.hits + (w.enemyRamparts[key(target)]?.hits ?: 0)
+        if (!meleeReachable(w, target)) need += breachCell(w, target)?.let { w.enemyRamparts[key(it)]?.hits } ?: 0
+        val theirs = others.minOf { getRange(it, target) }
+        return eta + need / dps < theirs
+    }
+
     private fun decideArmy(w: World) {
         val fighters = w.fighters.filter { !it.spawning }
         val prev = mode
@@ -458,20 +636,20 @@ object EscortRunAdvanced {
                 if (from == null) break
                 val sim = Bodies.fight(ours, units(inTheWay(w, from, e)))
                 val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
-                if (sim.weWin && sim.margin() >= need && (picked == null || getRange(e, from) < getRange(picked.first, from)))
+                if (sim.weWin && sim.margin() >= need && beatsReinforcements(w, fighters, from, e) &&
+                    (picked == null || getRange(e, from) < getRange(picked.first, from)))
                     picked = e to sim
             }
-            val all = Bodies.fight(ours, units(w.enemyArmed))
             val siegeNeed = if (prev == "siege") KEEP_MARGIN else SIEGE_MARGIN
+            val siegeTarget = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits } ?: w.enemyEscorts.minByOrNull { it.hits }
+            val siegeSim = if (from != null && siegeTarget != null && fighters.size >= SIEGE_MIN_FIGHTERS) Bodies.fight(ours, units(inTheWay(w, from, siegeTarget))) else null
             if (picked != null) {
                 mode = "strike"; modeTarget = idOf(picked.first)
                 if (prev != mode || prevTarget != modeTarget) println("army t=${w.now}: STRIKE ${Bodies.summaryOf(picked.first)}${at(picked.first)} h${picked.first.hits} sim=${picked.second} fighters=${fighters.size}")
-            } else if (fighters.size >= SIEGE_MIN_FIGHTERS && all.weWin && all.margin() >= siegeNeed && w.enemyEscorts.isNotEmpty()) {
+            } else if (siegeSim != null && siegeSim.weWin && siegeSim.margin() >= siegeNeed && beatsReinforcements(w, fighters, from!!, siegeTarget!!)) {
                 mode = "siege"
-                val target = w.enemyEscorts.filter { meleeReachable(w, it) }.minByOrNull { it.hits }
-                    ?: w.enemyEscorts.minByOrNull { it.hits }
-                modeTarget = target?.let { idOf(it) }
-                if (prev != mode || prevTarget != modeTarget) println("army t=${w.now}: SIEGE ${target?.let { "${Bodies.summaryOf(it)}${at(it)} h${it.hits}" }} sim=$all fighters=${fighters.size}")
+                modeTarget = idOf(siegeTarget)
+                if (prev != mode || prevTarget != modeTarget) println("army t=${w.now}: SIEGE ${Bodies.summaryOf(siegeTarget)}${at(siegeTarget)} h${siegeTarget.hits} sim=$siegeSim fighters=${fighters.size}")
             } else {
                 mode = "hold"; modeTarget = null
             }
@@ -516,9 +694,10 @@ object EscortRunAdvanced {
                 }
             }
         }
+        for (f in fighters) act(w, f, target)
+        val breaching = if (mode == "hold") runBreach(w, fighters) else emptySet()
         for (f in fighters) {
-            act(w, f, target)
-            if (idOf(f) in waiting) continue
+            if (idOf(f) in waiting || idOf(f) in breaching) continue
             val focus: Position? = when (mode) {
                 "defend" -> threats.minByOrNull { getRange(it, f) }
                 "strike", "siege" -> target

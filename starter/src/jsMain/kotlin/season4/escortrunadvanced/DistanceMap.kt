@@ -96,6 +96,16 @@ object DistanceMap {
         return dial(target.x, target.y, block, maxOf(1, swampCost), maxDist)
     }
 
+    /** Поле до цели, в котором клетки `open` проходимы, даже если на них стоит структура — «что, если снести эту
+     *  стену»: так выбирается, какую компоненту стен ломать (EscortRunAdvanced.chooseBreach). */
+    fun flowFieldOpen(target: Position, open: Set<Int>, swampCost: Int): IntArray {
+        ensureStaticBlocked()
+        val block = staticBlocked!!.copyOf()
+        for (k in open) { val x = k / FIELD; val y = k % FIELD; if (inBounds(x, y) && !terrainWalls!![index(x, y)]) block[index(x, y)] = false }
+        if (inBounds(target.x, target.y)) block[index(target.x, target.y)] = false
+        return dial(target.x, target.y, block, maxOf(1, swampCost), Int.MAX_VALUE)
+    }
+
     /** Поле до НЕСКОЛЬКИХ целей сразу (ближайшая из них). */
     fun flowFieldToAny(targets: List<Position>, extraBlocked: List<Position>, swampCost: Int, maxDist: Int = Int.MAX_VALUE): IntArray {
         ensureStaticBlocked()
