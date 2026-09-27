@@ -115,7 +115,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 176
+    private const val BOT_VERSION = 177
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6406,8 +6406,11 @@ object SpawnAndSwamp {
     /** The last-stand pair is re-bought with any number of his spawns; a raider walks to a free cell next to its target
      *  (v175). */
     private const val USE_RAID_ALL_SPAWNS = true
-    /** The march's price counts our melee's damage, as his is counted (fightCost from the two march prices, v176). */
-    private const val USE_MARCH_MELEE = true
+    /** The march's price counts our melee's damage, as his is counted (fightCost from the two march prices, v176).
+     *  OFF — measured live 27.09.2026: A/B against marlyman#443 (6+6) v175 6-0-0 / v176 2-0-4, against kerobi#49 (4+4)
+     *  3-0-1 / 3-0-1. A cheaper march sends the wave out before it is whole; the model said three draws would convert,
+     *  the games turned four wins into draws. v177 plays v175's game. */
+    private const val USE_MARCH_MELEE = false
     /** His M5A1 walks a cell a tick and strikes at one; five cells are the median 6-15 ticks of warning measured before
      *  the first strike (v170). */
     private const val HAULER_FLEE_RANGE = 5
