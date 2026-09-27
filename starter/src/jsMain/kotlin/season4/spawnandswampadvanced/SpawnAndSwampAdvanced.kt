@@ -96,7 +96,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v24"
+    private const val BOT_VERSION = "v25"
 
     private const val LOG_EVERY = 50
 
@@ -172,6 +172,12 @@ object SpawnAndSwampAdvanced {
     private var attackedOnce = false
     /** Дом держит нынешние угрозы: их нет, или прогон дома (бойцы и кормленые башни) против них выигран. */
     private var homeHolds = true
+
+    /** Прибор калибровки прогона: что он обещал на выходе волны (удара) и что вышло к её концу. Решения прогона
+     *  держатся на запасе `PUSH_KEEP`, который пока назван, а не измерен; этот прибор его меряет. */
+    private class Calib(val kind: String, val t0: Int, val ours: Set<String>, val theirs: Set<String>,
+                        val ours0: Int, val theirs0: Int, val predKeep: Double, val predWin: Boolean)
+    private var calib: Calib? = null
     /** Рождения его боевых крипов: тик, урон+лечение, хиты — из них его производство к нашему подходу. */
     private val enemyBirths = ArrayList<Pair<Int, List<String>>>()
     private val enemyCombatSeen = HashSet<String>()
@@ -1139,6 +1145,23 @@ object SpawnAndSwampAdvanced {
         return List(k) { i -> val types = recent[i % recent.size].second; SimUnit(types, types.size * 100) }
     }
 
+    private fun calibStart(t: Int, kind: String, ours: List<Creep>, theirs: List<Creep>, r: SimResult) {
+        calibEnd(t, "superseded", emptyMap())
+        calib = Calib(kind, t, ours.map { idOf(it) }.toSet(), theirs.map { idOf(it) }.toSet(),
+            ours.sumOf { it.hits }, theirs.sumOf { it.hits }, r.keep, r.win)
+    }
+
+    private fun calibEnd(t: Int, why: String, byId: Map<String, GameObject>) {
+        val c = calib ?: return
+        calib = null
+        val ourAlive = c.ours.mapNotNull { byId[it] as? Creep }
+        val theirAlive = c.theirs.mapNotNull { byId[it] as? Creep }
+        val keep = ourAlive.sumOf { it.hits }.toDouble() / c.ours0.coerceAtLeast(1)
+        val theirKeep = theirAlive.sumOf { it.hits }.toDouble() / c.theirs0.coerceAtLeast(1)
+        println("calib ${c.kind} t=${c.t0}..$t $why pred keep=${(c.predKeep * 100).toInt()}% win=${c.predWin} " +
+            "actual keep=${(keep * 100).toInt()}% ours ${ourAlive.size}/${c.ours.size} theirs ${theirAlive.size}/${c.theirs.size} theirKeep=${(theirKeep * 100).toInt()}%")
+    }
+
     // ---------- прогон боя ----------
 
     /** Боец в прогоне: типы частей спереди назад и хиты общим числом — движок держит части «сзади наперёд» (часть i
@@ -1260,6 +1283,7 @@ object SpawnAndSwampAdvanced {
     ) {
         val fighters = mine.filter { !it.spawning && isCombat(it) && idOf(it) !in roleOf }
         wave.retainAll(fighters.map { idOf(it) }.toSet())
+        calib?.let { c -> if (wave.isEmpty()) calibEnd(t, "wiped", byId) else if (t - c.t0 >= SIM_LIMIT) calibEnd(t, "timeout", byId) }
         val homeSpawns = homeSpawnObjects(byId)
         // сбор — у спавна, ближайшего к сопернику: туда сходятся бойцы всех баз
         val enemy = enemyStart
@@ -1293,15 +1317,18 @@ object SpawnAndSwampAdvanced {
             if (!r.win) {
                 println("recall t=$t wave=${wave.size} home=${homeGroup.size} vs threats=${threats.size} sim=${r.left}/${r.theirLeft}")
                 wave.clear()
+                calibEnd(t, "recall", byId)
             }
         }
 
         // выход волны: прогон всего дома против его армии к нашему приходу (с тем, что он родит по дороге) и его
         // кормленых башен — и тех площадок башен, что достроятся к подходу (v5 лёг под достроившейся). Уже ушедшая волна
         // не держит дом: дом, который сам по прогону побеждает, выходит следом
-        if (threats.isEmpty() && homeGroup.isNotEmpty() && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
+        // последний призыв не ждёт тишины дома: v22 досидел ничью, потому что его харассеры держали угрозу до 5000-го
+        if ((threats.isEmpty() || lastCall) && homeGroup.isNotEmpty() && (enemyObjects.isNotEmpty() || theirs.isNotEmpty())) {
             val r = simulate(homeGroup.map { simOf(it) }, enemyAtArrival)
             if ((r.win && r.keep >= PUSH_KEEP) || lastCall) {
+                calibStart(t, "push", homeGroup, enemyCombat, r)
                 for (f in homeGroup) wave.add(idOf(f))
                 println("push t=$t wave=${wave.size} home=${homeGroup.size} vs ${enemyAtArrival.size} (army ${enemyCombat.size} towers ${fedTowers.size}+$pending arrival=$arrival) " +
                     "sim keep=${(r.keep * 100).toInt()}% ticks=${r.ticks}${if (lastCall) " lastCall" else ""}")
@@ -1326,6 +1353,7 @@ object SpawnAndSwampAdvanced {
                 val local = (guards + nearUs).map { simOf(it) } + births + towersNear.map { simTowerOf(it, all) } + simSpawnOf(sp, all)
                 val rs = simulate(homeGroup.map { simOf(it) }, local)
                 if (rs.win && rs.keep >= PUSH_KEEP) {
+                    calibStart(t, "strike", homeGroup, guards + nearUs, rs)
                     for (f in homeGroup) wave.add(idOf(f))
                     println("strike t=$t wave=${wave.size} at spawn (${sp.x},${sp.y}) guards=${guards.size} births=${births.size} towers=${towersNear.size} " +
                         "arrival=$toSp sim keep=${(rs.keep * 100).toInt()}% (whole army: ${(r.keep * 100).toInt()}% win=${r.win})")
@@ -1343,6 +1371,7 @@ object SpawnAndSwampAdvanced {
                 if (!r.win) {
                     println("retreat t=$t wave=${waveCreeps.size} vs local=${local.size}+${localTowers.size}tw sim=${r.left}/${r.theirLeft} ticks=${r.ticks}")
                     wave.clear()
+                    calibEnd(t, "retreat", byId)
                 }
             }
         }
