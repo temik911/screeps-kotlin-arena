@@ -38,7 +38,7 @@ import screeps.api.structures.StructureWall
 import sourcemaps.runWithSourceMapSupport
 
 /** The bot's version, printed in the greeting — the only thing that ties a match log back to a commit. */
-const val BOT_VERSION = 3
+const val BOT_VERSION = 4
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
@@ -101,6 +101,16 @@ object EscortRunAdvanced {
     private const val SIEGE_MIN_FIGHTERS = 4
     /** Once started, a strike or siege is kept while the simulation still wins at all. */
     private const val KEEP_MARGIN = 0.05
+    /** His fighter this close to our way to the target joins the fight we simulate. */
+    private const val PATH_RADIUS = 6
+    /** The army's bodies are M5X5 — five MOVE on five weights: a swamp cell costs five plain ones. */
+    private const val ARMY_SWAMP_COST = 5
+    /** On the way to a target, a fighter this many cells of the way ahead of the group's rear waits for it. */
+    private const val GROUP_SLACK = 2
+    /** A fighter this far behind the group's head is a straggler (born after the start): it walks on its own. */
+    private const val STRAGGLER = 25
+    /** An enemy fighter this close means contact: everybody fights, nobody waits. */
+    private const val CONTACT_RANGE = 5
 
     private const val FIGHTER_PRIORITY = 30
     private const val HAULER_PRIORITY = 20
@@ -389,6 +399,42 @@ object EscortRunAdvanced {
     /** His fighters that stand by this escort of his (they will be in the fight). */
     private fun guardsOf(w: World, e: Creep) = w.enemyArmed.filter { getRange(it, e) <= ESCORT_GUARD_RADIUS }
 
+    /** The cells our group walks from `from` to `target`, down the army's flow field (at most 250). */
+    private fun pathCells(from: Position, target: Position): List<Int> {
+        val f = flowTo("army", target, ARMY_SWAMP_COST)
+        val out = ArrayList<Int>()
+        var x = from.x; var y = from.y
+        if (!DistanceMap.inBounds(x, y) || f[x * 100 + y] < 0) return out
+        for (i in 0 until 250) {
+            out.add(x * 100 + y)
+            val here = f[x * 100 + y]
+            if (here <= 0) break
+            var best = -1; var bestD = here
+            for ((dx, dy) in DIRECTIONS) {
+                val nx = x + dx; val ny = y + dy
+                if (!DistanceMap.inBounds(nx, ny)) continue
+                val d = f[nx * 100 + ny]
+                if (d in 0 until bestD) { bestD = d; best = nx * 100 + ny }
+            }
+            if (best < 0) break
+            x = best / 100; y = best % 100
+        }
+        return out
+    }
+
+    /**
+     * Everything of his that will be in the fight if our group goes from `from` to `target`: the fighters by the target
+     * and every fighter within PATH_RADIUS of the way there. v3 weighed a strike against the escort's guards alone, and
+     * sent twenty M5A5 one by one to an escort of けろびー#11 standing outside his ramparts — through his blob of five
+     * T3M8R5 and three healers holding the centre (6ab9267a).
+     */
+    private fun inTheWay(w: World, from: Position, target: Creep): List<Creep> {
+        val path = pathCells(from, target)
+        return w.enemyArmed.filter { e ->
+            getRange(e, target) <= ESCORT_GUARD_RADIUS || path.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= PATH_RADIUS }
+        }
+    }
+
     /** The one of his escorts a melee can reach: on a cell with a neighbour we can stand on. */
     private fun meleeReachable(w: World, e: Creep): Boolean = DIRECTIONS.any { (dx, dy) ->
         val x = e.x + dx; val y = e.y + dy
@@ -410,7 +456,7 @@ object EscortRunAdvanced {
             val from: Position? = if (fighters.isEmpty()) null else cell(fighters.sumOf { it.x } / fighters.size, fighters.sumOf { it.y } / fighters.size)
             for (e in w.enemyEscorts.filter { !onRampart(w, it, false) }) {
                 if (from == null) break
-                val sim = Bodies.fight(ours, units(guardsOf(w, e)))
+                val sim = Bodies.fight(ours, units(inTheWay(w, from, e)))
                 val need = if (prev == "strike" && prevTarget == idOf(e)) KEEP_MARGIN else STRIKE_MARGIN
                 if (sim.weWin && sim.margin() >= need && (picked == null || getRange(e, from) < getRange(picked.first, from)))
                     picked = e to sim
@@ -454,8 +500,25 @@ object EscortRunAdvanced {
         val threats = homeThreats(w)
         val rally = rallyCells(w)
         var rallyIdx = 0
+        // the group walks as one: the fighters of its core (not stragglers) wait for the core's rear, unless in contact
+        // — v3's fighters went into a fight in the order they were born
+        val waiting = HashSet<String>()
+        if ((mode == "strike" || mode == "siege") && target != null) {
+            val flow = flowTo("army", target, ARMY_SWAMP_COST)
+            val dist = fighters.associateWith { flow[key(it)] }.filterValues { it >= 0 }
+            val head = dist.values.minOrNull()
+            if (head != null) {
+                val core = dist.filterValues { it - head <= STRAGGLER }
+                val rear = core.values.maxOrNull() ?: head
+                for ((f, d) in core) {
+                    val contact = w.enemyArmed.any { getRange(it, f) <= CONTACT_RANGE }
+                    if (!contact && d < rear - GROUP_SLACK) waiting.add(idOf(f))
+                }
+            }
+        }
         for (f in fighters) {
             act(w, f, target)
+            if (idOf(f) in waiting) continue
             val focus: Position? = when (mode) {
                 "defend" -> threats.minByOrNull { getRange(it, f) }
                 "strike", "siege" -> target
@@ -540,7 +603,7 @@ object EscortRunAdvanced {
     private fun probe(w: World) {
         println("hello season4 escort-run-advanced v$BOT_VERSION: ${arenaInfo.season} - ${arenaInfo.name} level=${arenaInfo.level} " +
             "ticksLimit=${arenaInfo.ticksLimit} cpu=${arenaInfo.cpuTimeLimit}/${arenaInfo.cpuTimeLimitFirstTick} t=${w.now}")
-        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
+        println("tuning: fortress escortCell=nearest still=walls race=fighterFirst strikeSim=path group=$GROUP_SLACK homeRadius=$HOME_RADIUS strike=$STRIKE_MARGIN siege=$SIEGE_MARGIN/$SIEGE_MIN_FIGHTERS work=$WORK_TARGET haulers=$HAULERS " +
             "melee=${Bodies.summary(MELEE)} ranged=${Bodies.summary(RANGED)}")
         println("consts: SPAWN_ENERGY_CAPACITY=$SPAWN_ENERGY_CAPACITY SOURCE_ENERGY_REGEN=$SOURCE_ENERGY_REGEN CREEP_SPAWN_TIME=$CREEP_SPAWN_TIME BODYPART_HITS=$BODYPART_HITS")
         for (f in w.myFlags + w.enemyFlags) println("flag: ${at(f)} ${own(f.my)}")
