@@ -63,7 +63,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v24"
+    private const val BOT_VERSION = "v25"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -572,6 +572,15 @@ object EscortRun {
         // 3'. их маршрут: блокировщик на самое дорогое для их поезда место (один M1 после дебюта обыгрывал v19 четыре
         //     из четырёх). После хранителя нашего флага: поставленный раньше него, он отдавал наш флаг их раннему
         //     блокировщику (стенд match4:rev+keep+blk — поражение на 298-м вместо победы на 245-м)
+        // 3''. их флаг без хранителя — туда наш M1 раньше блокировщика маршрута: офлайн-лига на одном коде дала цикл —
+        //      хранитель первым бьёт «M1 на наш флаг» (85 %), тот бьёт «два блокировщика маршрута» (100 %), а они бьют
+        //      хранителя первым (71 %). Тот, кто оба M1 послал на наш путь, свой флаг не держит, и M1 на его флаг решает
+        //      матч. Куда пошёл их разведчик, видно только после развилки у центра — до FLAG_CALL_DEADLINE ждём
+        when (theirFlagUnguarded(w)) {
+            true -> if (!raceLost && theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
+            null -> if (w.now < FLAG_CALL_DEADLINE && scoutsOn(w, BLOCK) == 0) { saving(w, "their flag call", Bodies.cost(MOVE)); return }
+            false -> {}
+        }
         if (chokeOrder(w, e)) return
 
         if (!raceLost) {
@@ -629,6 +638,28 @@ object EscortRun {
     }
 
     private var chokesOrdered = 0
+    /** До какого тика ждать, пока станет ясно, держат ли они свой флаг (разведчик, рождённый на 51-м, проходит
+     *  развилку у центра к ~110-120-му). */
+    private const val FLAG_CALL_DEADLINE = 131
+
+    /**
+     * Их флаг без хранителя: на флаге и рядом их нет, и ни один их разведчик (кроме стоящих на нашем пути) к нему не
+     * идёт. null — пока неясно: есть разведчик, чей путь ещё не разошёлся к одному из флагов.
+     */
+    private fun theirFlagUnguarded(w: World): Boolean? {
+        val flag = w.enemyFlag ?: return false
+        if (w.enemies.any { !isEscort(it) && dist(it, flag) <= 1 }) return false
+        if (scoutsOn(w, BLOCK) > 0) return false
+        var unknown = false
+        for (s in w.enemyScouts) {
+            if (idOf(s) in harassers) continue
+            when (scoutHeading(idOf(s))) {
+                "THEIRS" -> return false
+                "" -> unknown = true
+            }
+        }
+        return if (unknown) null else true
+    }
 
     private fun cellPos(k: Int): Position = InfluenceMap.cell(k / 100, k % 100)
 
