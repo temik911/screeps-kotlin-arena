@@ -45,7 +45,7 @@ identical refs must give identical payloads), and each side's hand is the arena'
 (`tools/stub/<arena>/regress.sh`, clock off); the two reports and, where the arena has a `logdiff.py`, the two log sets
 must not differ. That is the self-test: an A/B of a ref against itself that shows a difference is measuring the machinery.
 """
-import argparse, importlib.util, base64, io, json, os, sys, time, uuid, zipfile
+import argparse, importlib.util, base64, io, json, os, posixpath, re, sys, time, uuid, zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from arena_cdp import CDP
@@ -132,6 +132,42 @@ def pick(c, wanted):
 
 
 # ---------------------------------------------------------------- code payload
+IMPORT_RE = re.compile(r"""(?:\bfrom\s*|\bimport\s*\(?\s*)['"]([^'"]+)['"]""")
+
+
+def prune_to_imports(data):
+    """The payload cut to what the arena's main.mjs can reach through its imports (plus every package.json).
+
+    The server refuses a payload whose UNPACKED size is over 10 MB ("Code size exceed maximum of 10MB", measured
+    28.09.2026 on Escort Run: 2.66 MB zipped, 10.02 MB unpacked), and the starter package carries the compiled code of
+    EVERY arena — Pain and Gain alone 2.8 MB, Spawn and Swamp 1.4 MB. One arena's bot imports its own package, the
+    stdlib, the source-map support and the runtime's `game/*` / `arena/*` modules (which are not in the payload), so
+    the closure of its imports is all it needs. An import that names a file the payload does not have is left alone:
+    it is the runtime's."""
+    src = zipfile.ZipFile(io.BytesIO(data))
+    files = {i.filename: i for i in src.infolist() if not i.is_dir()}
+    keep, todo = set(), ["main.mjs"]
+    while todo:
+        name = todo.pop()
+        if name in keep or name not in files:
+            continue
+        keep.add(name)
+        if not name.endswith((".mjs", ".js")):
+            continue
+        base = posixpath.dirname(name)
+        for spec in IMPORT_RE.findall(src.read(name).decode("utf-8", "replace")):
+            if spec.startswith("."):
+                todo.append(posixpath.normpath(posixpath.join(base, spec)))
+            else:
+                todo.append("node_modules/" + spec)
+    keep |= {n for n in files if n.endswith("package.json")}
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for n in sorted(keep):
+            z.writestr(files[n], src.read(n))
+    return out.getvalue(), len(keep)
+
+
 def build_zip(folder):
     buf, n = io.BytesIO(), 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
@@ -151,7 +187,7 @@ def build_zip(folder):
     data = buf.getvalue()
     if not any(i.filename == "main.mjs" for i in zipfile.ZipFile(io.BytesIO(data)).infolist()):
         raise SystemExit(f"{folder} has no main.mjs — the client folder is not wired to a build")
-    return data, n
+    return prune_to_imports(data)
 
 
 def build_zip_from(folder, starter):
@@ -184,7 +220,7 @@ def build_zip_from(folder, starter):
     names = [i.filename for i in zipfile.ZipFile(io.BytesIO(data)).infolist()]
     if "main.mjs" not in names or not any(x.startswith(pkg + "/") for x in names):
         raise SystemExit(f"payload from {folder} + {starter} has no main.mjs or no starter package — is the worktree built?")
-    return data, n
+    return prune_to_imports(data)
 
 
 def payload_digest(data, worktree):
