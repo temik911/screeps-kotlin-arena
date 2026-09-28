@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 235
+    private const val BOT_VERSION = 236
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4992,6 +4992,8 @@ object SpawnAndSwamp {
     private var forecastTerrain: IntArray? = null
     /** Our main spawn's and his main spawn's cells at the start: the forecast's two points (v222). */
     private var forecastUs = -1
+    /** The share of his armed power the forecast brings to our door within TOWER_FORECAST_H, this tick (v236). */
+    private var forecastHomeShare = 0.0
     private var forecastThem = -1
 
     private fun forecastTerrainAt(cell: Int): Int {
@@ -5299,6 +5301,7 @@ object SpawnAndSwamp {
         }
         forecastTrail.keys.retainAll(alive)
         forecastFree.keys.retainAll(alive)
+        if (USE_TOWER_FORECAST && forecastUs >= 0) forecastHomeShare = armyForecast(ctx, forecastUs, FORECAST_D, TOWER_FORECAST_H).share
         if (DEBUG_LOG && now % 10 == 0) {
             fun f(p: Int, h: Int): String = if (p < 0) "-" else armyForecast(ctx, p, FORECAST_D, h).let { "${if (it.any) 1 else 0}/${(it.share * 100).toInt() / 100.0}" }
             println("forecast t=$now us${FORECAST_D}@200=${f(forecastUs, 200)} them${FORECAST_D}@75=${f(forecastThem, 75)} them${FORECAST_D}@150=${f(forecastThem, 150)}")
@@ -6672,9 +6675,25 @@ object SpawnAndSwamp {
      *  бойцу — скидка на смертность (survivalOfFighters): купленный боец гибнет, поставленная башня стоит.
      *  Цена башни — вместе со смотрителем: без него площадку некому строить, а готовая башня молчит. */
     private fun towerWorth(defenders: List<Creep>, threats: List<Creep>, flow: Double, left: Int = -1, trace: StringBuilder? = null): Boolean {
-        val share = homeShare()
+        // THE TOWER IS PRICED BY THE FIGHT THAT IS COMING, AND BY ITS VOLLEY (v236). The share was the past only — ticks
+        // with his gun in the tower's reach over the last 300 — and against ●ω<♥♪#2 (v231-v234, 0-24 in test hands) it
+        // read 6 % at 400 and 73 % at 600: the site went down at 574-741 and was finished at 972-1289, after our army was
+        // dead (median 925), while his heal of 96 a tick (M10H2 + 2×M5H3 at his melee) was never below our steady damage
+        // — we did 12985, he healed 14720, deaths 18:0 (median). A shot of 900-1000 within range 3 kills his M5H3 (800 +
+        // at most 60 of heal a tick) outright: in the one draw (v231) the tower stood at 966 and killed 8 with 18 shots,
+        // in a loss to #3 5 with 5. The share is now the larger of the measure and the forecast's share of his armed power
+        // at our door within TOWER_FORECAST_H (M2a75, 0.3 % of arrivals missed); and a healer the volley at the tower's
+        // ring kills in one shot (shot >= its hits + the heal on it a tick) does not heal against the tower
+        val share = if (USE_TOWER_FORECAST) maxOf(homeShare(), forecastHomeShare) else homeShare()
         if (share <= 0.0 || threats.isEmpty()) return false
         val heal = threats.sumOf { InfluenceMap.profileOf(it).heal }
+        val volley = InfluenceMap.towerShot(TOWER_RING + 1)
+        val lethal = if (!USE_TOWER_FORECAST) emptyList() else threats.filter { c ->
+            val healOn = threats.sumOf { e -> val hp = e.body.count { it.type == HEAL && it.hits > 0 }; val r = getRange(e, c)
+                if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0 }
+            InfluenceMap.profileOf(c).heal > 0.0 && volley >= c.hits + healOn
+        }
+        val healVsTower = heal - lethal.sumOf { InfluenceMap.profileOf(it).heal }
         val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats)
         val hits = defenders.sumOf { weightedHits(it, threats, null) }
         val base = lanchester(dps, heal, hits.toInt())
@@ -6684,7 +6703,7 @@ object SpawnAndSwamp {
         // надо именно их. Вложенное уже потрачено и выбор больше не определяет
         val towerPrice = (if (left >= 0) left else buildCost("StructureTower")) +
             (if (left >= 0) 0 else builderBody(builderWork(flow)).sumOf { cost(it) })
-        val withTower = lanchester(dps + towerDps * share, heal, (hits + TOWER_HITS * share).toInt())
+        val withTower = lanchester(dps + towerDps * share, healVsTower, (hits + TOWER_HITS * share).toInt())
         val body = fighterBody(SPAWN_ENERGY_CAPACITY)
         val bodyDps = (body.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER + body.count { it == ATTACK } * ATTACK_POWER).toDouble()
         val fighterPrice = body.sumOf { cost(it) }
@@ -6693,7 +6712,7 @@ object SpawnAndSwamp {
         val withFighter = lanchester(dps + bodyDps, heal, (hits + body.size * 100).toInt())
         val gainTower = (withTower - base) / towerPrice
         val gainFighter = (withFighter - base) * survival / fighterPrice
-        trace?.append(" share=${(share * 100).toInt()}% surv=${(survival * 100).toInt()}% base=${base.toInt()} " +
+        trace?.append(" share=${(share * 100).toInt()}%${if (USE_TOWER_FORECAST) "(fc${(forecastHomeShare * 100).toInt()}% lethal=${lethal.size})" else ""} surv=${(survival * 100).toInt()}% base=${base.toInt()} " +
             "tower=${withTower.toInt()}/$towerPrice=${(gainTower * 1000).toInt()} fighter=${withFighter.toInt()}/$fighterPrice=${(gainFighter * 1000).toInt()}")
         // прибавка должна быть ПОЛОЖИТЕЛЬНОЙ: при выбитых бойцах и лечении врага выше урона одиночки
         // обе прибавки — ноль, и ничья «0 >= 0» покупала башню там, где покупать нечего вовсе
@@ -7317,6 +7336,10 @@ object SpawnAndSwamp {
     private const val USE_MARCH_MELEE_SHARE = true
     /** A bare spawn of his fits the raid by raidKillTick's race and the one that falls first is taken (v235). */
     private const val USE_RAID_FIT_BY_RACE = true
+    /** The tower's worth takes the forecast's share of his army at our door and his healers its volley kills (v236). */
+    private const val USE_TOWER_FORECAST = true
+    /** The forecast's horizon for the tower's share: the stand's H = 200 (0.3 % of arrivals missed with the wave out). */
+    private const val TOWER_FORECAST_H = 200
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
