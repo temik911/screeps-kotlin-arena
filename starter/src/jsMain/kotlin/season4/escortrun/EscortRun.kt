@@ -14,6 +14,7 @@ import screeps.api.RANGED_ATTACK
 import screeps.api.RESOURCE_ENERGY
 import screeps.api.SPAWN_ENERGY_CAPACITY
 import screeps.api.Source
+import screeps.api.TOUGH
 import screeps.api.WORK
 import screeps.api.arenaInfo
 import screeps.api.get
@@ -946,6 +947,29 @@ object EscortRun {
     }
 
     /**
+     * Победитель, который ПОСЛЕ боя ещё ходит: TOUGH спереди (гибнет первым), MOVE, ATTACK; самое дешёвое тело, которое
+     * выигрывает дуэль и сохраняет хоть один MOVE, при MOVE не меньше трети остального (три тика на клетку по равнине —
+     * быстрее их одинокого эскорта). M4A4 против M4A3 ricardo#23 выигрывал, но терял все MOVE (они спереди) и стоял, пока
+     * их эскорт проходил мимо к флагу; T8M4A3 стоит столько же.
+     */
+    private fun fieldWinner(threats: List<Creep>, helpers: List<Creep>, cap: Int): Array<BodyPartType>? {
+        var best: Array<BodyPartType>? = null
+        var bestCost = Int.MAX_VALUE
+        for (a in 1..8) for (t in 0..12) {
+            val m = maxOf(1, (a + t + 2) / 3)
+            val body = Array(t) { TOUGH } + Array(m) { MOVE } + Array(a) { ATTACK }
+            val cost = Bodies.cost(body)
+            if (cost > cap || cost >= bestCost || body.size > 50) continue
+            val merged = helpers.flatMap { c -> c.body.map { it.type } } + body.toList()
+            val hits = helpers.flatMap { c -> c.body.map { it.hits } } + body.map { 100 }
+            val unit = Bodies.Unit(merged.toTypedArray(), hits.toIntArray())
+            if (Bodies.duel(unit, threats.map { Bodies.unitOf(it) }) < 0 || unit.count(MOVE) < 1) continue
+            best = body; bestCost = cost
+        }
+        return best
+    }
+
+    /**
      * Охотник с самым РАННИМ приходом к цели: ожидание энергии (1 в тик) + роды + путь по полю с ценой болота из его
      * тела + добивание цели. Мили M_m A_a: MOVE спереди. Тяжёлый дольше копится, лёгкий дольше идёт по болоту (M1A1 —
      * пять тиков на клетку болота) и дольше бьёт; решает сумма, а не цена. Против вооружённых целей тело обязано ещё и
@@ -1482,8 +1506,11 @@ object EscortRun {
         val camp = if (killPath) liveThreats.filter { heavy(it) }.ifEmpty { campers(w) } else campers(w)
         val strong = camp.isNotEmpty() && Bodies.duel(Bodies.unitOf(cheapUnit), camp.map { Bodies.unitOf(it) }) < 0
         if (strong && !wins(armedOurs, camp)) {
-            // победитель — первым: M1 на их флаг идёт через то же горлышко, где стоит засада, и гиб там каждые 50 тиков
-            val winner = cheapestWinner(camp, armedOurs, SPAWN_ENERGY_CAPACITY)
+            // на пути убийства сперва M1 на их флаг: их эскорт идёт один, и наш M1, купленный сразу, проходит центр
+            // задолго до их пары; купленный после победителя, он шёл за их эскортом по узкому пути и опаздывал
+            // (ricardo#23, 28.09.2026). Против засады в горлышке — наоборот, победитель первым: M1 гиб у неё каждые 50
+            if (killPath && theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
+            val winner = fieldWinner(camp, armedOurs, SPAWN_ENERGY_CAPACITY) ?: cheapestWinner(camp, armedOurs, SPAWN_ENERGY_CAPACITY)
             if (winner != null && !fighterQueue.contains(ESCORT_GUARD)) {
                 if (e >= Bodies.cost(winner)) { if (order(w, winner, "defender", "field winner vs ${camp.joinToString(" ") { Bodies.summaryOf(it) }}")) fighterQueue.addLast(ESCORT_GUARD); return }
                 saving(w, "field winner ${Bodies.summary(winner)}", Bodies.cost(winner)); return
