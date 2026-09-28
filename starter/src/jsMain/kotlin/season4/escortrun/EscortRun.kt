@@ -446,9 +446,11 @@ object EscortRun {
      */
     private fun econOrder(w: World, e: Int): Boolean {
         val mine = w.mine.filter { !isEscort(it) }
+        // после первого тягача (200 на 1-м тике) остаётся ~300: носильщик 100 и добытчик на остальное (W2, 4 в тик)
+        val works = (e - Bodies.cost(CARRY) - Bodies.cost(MOVE)).coerceIn(2 * Bodies.cost(WORK), 3 * Bodies.cost(WORK)) / Bodies.cost(WORK)
         val steps = listOf(
-            Triple(mine.none { Bodies.has(it, WORK) && !Bodies.has(it, CARRY) }, arrayOf<BodyPartType>(WORK, WORK, WORK), "miner"),
-            Triple(mine.none { Bodies.isHauler(it) }, arrayOf<BodyPartType>(CARRY, MOVE), "hauler"))
+            Triple(mine.none { Bodies.isHauler(it) }, arrayOf<BodyPartType>(CARRY, MOVE), "hauler"),
+            Triple(mine.none { Bodies.has(it, WORK) && !Bodies.has(it, CARRY) }, Array<BodyPartType>(works) { WORK }, "miner"))
         for ((missing, body, role) in steps) {
             if (!missing) continue
             if (e >= Bodies.cost(body)) { order(w, body, role, "economy opening"); return true }
@@ -558,8 +560,9 @@ object EscortRun {
         // 0. дебют решается на 2-м тике (docs/escort-run-econ.md): на 1-м их первый крип не виден. Их первый — тягач —
         //    гонка, дебют M4+M6; иначе их эскорт идёт сам, запас гонки ~200 тиков, и он идёт в экономику: у всех, кто
         //    нас ещё бьёт (ricardo M4A3, Suruks W3, stachu W3M1C1), так, а при доходе 1 в тик бойцов к нужному тику нет
-        if (econ == null) {
-            if (w.now < 2) return
+        // Первый тягач дебюта покупается на 1-м тике в любом случае: ожидание решения стоило гонщикам тика в каждой игре
+        // (лига v37: зеркало main 10-16-4 против 14-14-2); решение — на 2-м, вместо второго тягача
+        if (econ == null && w.now >= 2) {
             val first = (w.enemyPending + w.enemies).filter { !isEscort(it) }
             // Экономика окупается, когда их первая трата — ТЯЖЁЛЫЙ боец и ничего из одних MOVE: их доход остаётся 1 в тик,
             // угроза одна и уже на поле, их эскорт идёт пешком (запас гонки ~200), и наш доход успевает купить её
