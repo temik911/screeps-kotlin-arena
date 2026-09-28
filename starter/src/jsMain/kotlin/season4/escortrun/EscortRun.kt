@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v35"
+    private const val BOT_VERSION = "v36"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -155,10 +155,12 @@ object EscortRun {
         val blocked: List<Position>,
         val blockedForEnemy: List<Position>,
         val myRamparts: List<Position>,
-        val escortFlow: IntArray?,
+        var escortFlow: IntArray?,
         val enemyEscortFlow: IntArray?,
         /** Поле нашего эскорта БЕЗ чужих крипов: по нему видно, кто из них стоит на нашем пути (routeBlockers). */
         val escortFlowRaw: IntArray?,
+        /** Стены поля эскорта сверх сооружений: стоящие разведчики на пути и клетки ударов их вооружённых. */
+        val escortWalls: List<Position>,
         /** Сооружение, закрывшее наш флаг (их рампарт или стена на клетке флага, или все проходимые соседи флага под
          *  сооружениями — тогда ближнее к эскорту); null — флаг открыт. */
         val flagBlocker: GameObject?,
@@ -183,6 +185,7 @@ object EscortRun {
         if (openingPlan == null) { planOpening(w); aimSpawn(w) }
         trackEnemyScouts(w)
         assignScouts(w)
+        decideGuardWait(w)
         decideHold(w)
         runSpawn(w)
         runTrain(w)
@@ -298,7 +301,7 @@ object EscortRun {
             enemyArmed = enemies.filter { Bodies.isArmed(it) },
             enemyScouts = enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
             occupant = occupant, enemyAt = enemyAt, blocked = blocked, blockedForEnemy = blockedForEnemy, myRamparts = ramparts.filter { it.my == true },
-            escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow, escortFlowRaw = escortFlowRaw,
+            escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow, escortFlowRaw = escortFlowRaw, escortWalls = walls2,
             flagBlocker = flagBlockerOf(myFlag, escort, walls, ramparts),
             flagSite = myFlag?.let { f -> getObjectsByPrototype(ConstructionSite::class).firstOrNull { it.exists && it.my == false && getRange(it, f) <= 1 } },
         )
@@ -428,6 +431,58 @@ object EscortRun {
         val flow = w.escortFlow ?: return Int.MAX_VALUE / 4
         if (onCell(escort, w.myFlag)) return 0
         return routeTicks(escort, flow, ourTrainMoves(w))
+    }
+
+    /** Поезд пережидает телохранителя (decideGuardWait): стоит, пока путь не отойдёт от него на GUARD_RING. */
+    private var guardWait = false
+    private var guardWaited = 0
+
+    /**
+     * Переждать телохранителя. Тяжёлый вооружённый быстрее поезда, которого наши бойцы не бьют (M4A3 ricardo #22–#25),
+     * бросается на поезд, подошедший на 5 клеток, догоняет у нашего флага и убивает (40 % игр, три четверти из них
+     * проиграны). Обойти его в развилке не даёт геометрия: выход на северо-восток закрыт стенками (50–54, 40–44), и путь
+     * идёт через (51–54, 45–46), куда к ~165-му приходит их пара; их пеший эскорт ползёт по болоту 20 тиков на клетку и
+     * проходит развилку к ~280–300-му. Запас гонки против пешего эскорта — ~200 тиков, и он оплачивает ожидание: поезд
+     * стоит, пока путь по полю со стенами на GUARD_RING клеток вокруг такого врага (бросок с 5 + хвост поезда 2 + клетка на
+     * его шаг) не найдётся, — но не дольше, чем (их приход − наш приход − RACE_ERR). Кончился запас — идём, как v35.
+     */
+    private fun decideGuardWait(w: World) {
+        val was = guardWait
+        guardWait = false
+        val escort = w.escort ?: return
+        val flag = w.myFlag ?: return
+        val base = w.escortFlow ?: return
+        val spawn = w.mySpawn ?: return
+        if (getRange(escort, spawn) <= 3 || onCell(escort, flag) || base[key(escort)] < 0) return
+        val moves = ourTrainMoves(w)
+        val trainPeriod = Bodies.period(Bodies.weight(escort), moves, false)
+        val guardsOurs = w.fighters.filter { Bodies.isArmed(it) }
+        val danger = w.enemyArmed.filter { e ->
+            !isEscort(e) && heavy(e) && dist(e, escort) > BERTH_ENGAGED &&
+                Bodies.period(Bodies.weight(e), Bodies.liveMoves(e), false) < trainPeriod
+        }
+        if (danger.isEmpty() || (guardsOurs.isNotEmpty() && wins(guardsOurs, danger))) return
+        val ours = routeTicks(escort, base, moves)
+        val theirs = theirArrival(w)
+        if (theirs >= Int.MAX_VALUE / 8 || theirs - ours - RACE_ERR <= 0) {
+            if (was) println("guard t=${w.now}: the race margin is spent after $guardWaited ticks of waiting — going")
+            return
+        }
+        val cells = ArrayList<Position>()
+        for (e in danger) for (dx in -GUARD_RING..GUARD_RING) for (dy in -GUARD_RING..GUARD_RING) {
+            val x = e.x + dx; val y = e.y + dy
+            if (DistanceMap.inBounds(x, y)) cells.add(InfluenceMap.cell(x, y))
+        }
+        val tag = danger.map { key(it) }.sorted().joinToString(",") + "|" + w.escortWalls.map { key(it) }.sorted().joinToString(",")
+        val f = flowTo("guardRing:$tag", flag, w.blocked + w.escortWalls + cells, 5, ttl = 1)
+        if (f[key(escort)] >= 0) {
+            // путь в стороне есть — по нему (объезд оплачен тем же запасом)
+            if (routeTicks(escort, f, moves) - ours <= theirs - ours - RACE_ERR) { w.escortFlow = f; if (was) println("guard t=${w.now}: the way past ${danger.joinToString(" ") { Bodies.summaryOf(it) }} is clear after $guardWaited ticks") }
+            return
+        }
+        guardWait = true
+        guardWaited++
+        if (!was) println("guard t=${w.now}: WAIT — ${danger.joinToString(" ") { "${idOf(it)} ${Bodies.summaryOf(it)}@(${it.x},${it.y}) d=${dist(it, escort)}" }} blocks every way at $GUARD_RING; margin ${theirs - ours - RACE_ERR}")
     }
 
     /** Тягачи врага: его тела из одних MOVE в трёх клетках от его эскорта (они и держат его скорость). */
@@ -928,6 +983,9 @@ object EscortRun {
     /** Гонка считается проигранной, если их приход раньше нашего больше чем на столько тиков (ошибка оценки — пара
      *  тиков; ничья по оценке — не проигрыш). */
     private const val RACE_MARGIN = 2
+    /** Кольцо вокруг телохранителя, которое поезд не пересекает, пока ждать оплачено гонкой (decideGuardWait). */
+    private const val GUARD_RING = 8
+    private const val BERTH_ENGAGED = 4
     /** Ошибка оценки гонки: наш приход на 51-м тике оценивался в 194–195 при живых ~250 (28.09.2026, серия v30). */
     private const val RACE_ERR = 60
     /** Хранитель не нужен, если эскорт придёт раньше, чем он дойдёт (путь M1 до флага от спавна ~100 клеток). */
@@ -1291,7 +1349,7 @@ object EscortRun {
         // все клетки ближе к флагу заняты врагом (их блокировщик стоит на клетке подхода, пока наш хранитель на
         // флаге; стенд rev+keep+blk: эскорт простоял в двух клетках от флага до их финиша) — обход по полю, где враги
         // вблизи эскорта непроходимы
-        val next = escortStep(w, escort, flow, preferSpawn) ?: run {
+        val next = if (guardWait) null else escortStep(w, escort, flow, preferSpawn) ?: run {
             val near = w.enemies.filter { dist(it, escort) <= 6 }
             if (near.isEmpty() || flow[key(escort)] <= 0) null
             else escortStep(w, escort, flowTo("escortDetour", flag, w.blocked + near, 5, ttl = 1), false)
