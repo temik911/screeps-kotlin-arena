@@ -595,7 +595,9 @@ object EscortRun {
         val fieldArmed = w.enemyArmed.filter { !isEscort(it) && !bodyguard(w, it) && !onOurFlag(w, it) && (w.enemySpawn == null || dist(it, w.enemySpawn) > CAMP_BASE_RANGE) }
         if (fieldArmed.isNotEmpty() && !wins(w.fighters.filter { Bodies.isArmed(it) }, fieldArmed) && !fighterQueue.contains(ESCORT_GUARD)) {
             val body = fieldWinner(fieldArmed, w.fighters.filter { Bodies.isArmed(it) }, SPAWN_ENERGY_CAPACITY)
-            if (body != null && Bodies.cost(body) <= EARLY_WINNER_BUDGET) {
+            // и только тот, кто родится до нашего финиша: T1M2A1 против стрелка Suruks копился со 130-го по 240-й и
+            // родился бы к ~290-му, а спавн тем временем не купил хранителя, который удержал бы флаг (v35, 6abac619)
+            if (body != null && Bodies.cost(body) <= EARLY_WINNER_BUDGET && Bodies.cost(body) - e < ourArrival(w)) {
                 if (e >= Bodies.cost(body)) { if (order(w, body, "defender", "field threat ${fieldArmed.joinToString(" ") { Bodies.summaryOf(it) + "@(" + it.x + "," + it.y + ")" }}")) fighterQueue.addLast(ESCORT_GUARD); return }
                 saving(w, "field defender ${Bodies.summary(body)}", Bodies.cost(body)); return
             }
@@ -805,6 +807,12 @@ object EscortRun {
         val spawn = w.mySpawn ?: return false
         val body = Bodies.moves(1)
         val pick = chokePick(w, spawn, maxOf(0, Bodies.cost(body) - e) + 3) ?: return false
+        // задержка их поезда нужна, пока гонка не решена: пробка на 12–60 тиков не меняет исхода, когда их эскорт и без
+        // неё приходит позже нашего с запасом больше её цены и ошибки оценки (наш приход на 51-м тике оценивался в
+        // 194–195 при живых ~250). Против пешего эскорта (Suruks, ricardo: наш запас ~216) эти 50 — лишний хранитель флага
+        val ours = ourArrival(w)
+        val theirs = theirArrival(w)
+        if (theirs < Int.MAX_VALUE / 8 && theirs - ours > pick.penalty + RACE_ERR) return false
         if (e >= Bodies.cost(body)) {
             if (order(w, body, "choke", "their route (${pick.cell / 100},${pick.cell % 100}) costs them ${pick.penalty}, they reach it in ${pick.theirEta}")) { scoutQueue.addLast(CHOKE); chokesOrdered++ }
             return true
@@ -920,6 +928,8 @@ object EscortRun {
     /** Гонка считается проигранной, если их приход раньше нашего больше чем на столько тиков (ошибка оценки — пара
      *  тиков; ничья по оценке — не проигрыш). */
     private const val RACE_MARGIN = 2
+    /** Ошибка оценки гонки: наш приход на 51-м тике оценивался в 194–195 при живых ~250 (28.09.2026, серия v30). */
+    private const val RACE_ERR = 60
     /** Хранитель не нужен, если эскорт придёт раньше, чем он дойдёт (путь M1 до флага от спавна ~100 клеток). */
     private const val KEEPER_MIN_LEAD = 20
     /** Страж флага на опережение покупается, только если приходит не позже эскорта плюс столько тиков. */
