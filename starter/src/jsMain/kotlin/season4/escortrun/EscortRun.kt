@@ -1398,7 +1398,9 @@ object EscortRun {
         val homeD = home[key(escort)]
         if (homeD < 0) { holding = false; return }
         val homeTicks = homeD * 2
-        val contact = threats.minOf { e -> dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0) }
+        // по угрозам И засадам: телохранитель из угроз исключён, но на пути убийства держит — пустой minOf ронял тик до
+        // спавна, и за весь матч не покупалось ничего (тестовые против ricardo#23, 28.09.2026)
+        val contact = (threats + camp).minOfOrNull { e -> dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0) } ?: (Int.MAX_VALUE / 4)
         // уже держимся — держимся, пока угроза есть (гистерезис); иначе — только если успеваем домой до встречи
         // засада держит всегда: стоит она неподвижно, и эскорт, уже вышедший, возвращается к рампартам (до неё далеко)
         val hold = holding || homeTicks < contact || camp.isNotEmpty()
