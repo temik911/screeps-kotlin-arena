@@ -274,7 +274,9 @@ object EscortRun {
         // телохранитель» в широком центре, а не проходит вплотную (ricardo#23)
         val danger = ArrayList<Position>()
         if (escort != null && mySpawn != null && getRange(escort, mySpawn) > 3) for (e in enemies) {
-            if (isEscort(e) || !Bodies.isArmed(e)) continue
+            // уже в бою (враг в четырёх клетках) — клетки не ставим: стенами вокруг себя эскорт замирал и стоял под ударами
+            // до смерти (けろびー#32: 118 тиков на одной клетке)
+            if (isEscort(e) || !Bodies.isArmed(e) || getRange(e, escort) <= 4) continue
             val r = if (Bodies.live(e, RANGED_ATTACK) > 0) 4 else 2
             for (dx in -r..r) for (dy in -r..r) {
                 val x = e.x + dx; val y = e.y + dy
@@ -531,6 +533,22 @@ object EscortRun {
         //    120-го и R5M5 со 177-го догоняли медленный поезд: 1 из 7 при v16 и 0 из 2 при v17, где M6 ждал до 56-го.
         //    Убрано: против stachu держит дом, см. decideHold.)
         val plan = openingPlan
+        // лёгкий вооружённый враг уже в поле к покупке второго тягача, а тягачей у них нет (экономист: их эскорт дома) —
+        // вместо тягача победитель его дуэли: он идёт с поездом и снимает перехватчика у центра (けろびー#32: M1A1 с 4-го
+        // тика ждал в центре; тягач за 300 — это 250 тиков до защитника, и поезд терял тягачей и эскорт). Тяжёлого
+        // (M4A3 ricardo#23) на наличные не победить — там полный поезд проходит центр раньше их пары
+        if (plan != null && openingIdx in 1 until plan.size && escort != null && !earlyDefender) {
+            val light = (w.enemyArmed + w.enemyPending.filter { Bodies.wasArmed(it) }).filter { !isEscort(it) && !heavy(it) }
+            val theirPullers = enemyPullers(w).isNotEmpty() || w.enemyPending.any { Bodies.isPuller(it, PULLER_MIN_MOVE) }
+            if (light.isNotEmpty() && !theirPullers) {
+                val body = fieldWinner(light, emptyList(), SPAWN_ENERGY_CAPACITY)
+                if (body != null && Bodies.cost(body) <= e + 30) {
+                    earlyDefender = true
+                    openingIdx = plan.size
+                    println("spawn t=${w.now}: EARLY DEFENDER ${Bodies.summary(body)} instead of the rest of the opening — light ${light.joinToString(" ") { Bodies.summaryOf(it) }}, no puller of theirs")
+                }
+            }
+        }
         if (plan != null && openingIdx < plan.size && escort != null) {
             val body = Bodies.moves(plan[openingIdx])
             if (e >= Bodies.cost(body)) {
@@ -714,6 +732,8 @@ object EscortRun {
     private var chokesOrdered = 0
     /** Путь убийства (см. runSpawn): наш боец убивает их тяжёлого и их одинокий эскорт. */
     private var killPath = false
+    /** Вместо второго тягача куплен (или копится) победитель лёгкого перехватчика (см. runSpawn). */
+    private var earlyDefender = false
     /** Жребий развилки «их флаг свободен»: null — ещё не тянули (см. 3'' в runSpawn). */
     private var flagFirst: Boolean? = null
     /** Доля матчей, где при свободном их флаге M1 идёт туда раньше блокировщика маршрута: минимакс по офлайн-матрице
