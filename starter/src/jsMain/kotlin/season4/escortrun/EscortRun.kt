@@ -1477,7 +1477,9 @@ object EscortRun {
         val theirEsc = w.enemyEscort
         val guarding = { e: Creep -> theirEsc != null && dist(e, theirEsc) <= 3 }
         for (e in w.enemyArmed) {
-            if (isEscort(e) || idOf(e) in campMarks || stillFor(e, w.now) < CAMP_STILL || !away(e) || guarding(e) || !heavy(e)) continue
+            // и лёгкий тоже: M1A1 けろびー#32 ждёт в центре с 50-го, к рампартам не идёт, и поезд, прошедший мимо, терял
+            // тягачей, а эскорт — по 30 в тик до смерти в 26 клетках от флага (v29 0-6)
+            if (isEscort(e) || idOf(e) in campMarks || stillFor(e, w.now) < CAMP_STILL || !away(e) || guarding(e)) continue
             if (route.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= 3 }) {
                 campMarks.add(idOf(e)); println("hold t=${w.now}: CAMPER ${idOf(e)} ${Bodies.summaryOf(e)}@(${e.x},${e.y}) on our route")
             }
