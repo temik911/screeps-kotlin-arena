@@ -1995,7 +1995,7 @@ object EscortRun {
                 if (to != null && towed.fatigue == 0 && h.fatigue == 0) {
                     // буксируемый без MOVE ходит только формой move(крип): направление движок отвергает (нет MOVE),
                     // а форма «за тянущим» проверок не делает (game/creeps.js)
-                    val rp = h.pull(towed); val rm = h.move(dirTo(h, to)); val rt = towed.asDynamic().move(h)
+                    val rp = h.pull(towed); val rm = h.move(dirTo(h, to)); val rt = towed.move(dirTo(towed, h))
                     pinned.add(idOf(h))
                     if (DEBUG_LOG && w.now < 120) println("tow t=${w.now}: hauler (${h.x},${h.y}) -> (${to.x},${to.y}) pull=$rp move=$rm miner (${towed.x},${towed.y}) move=$rt")
                 }
