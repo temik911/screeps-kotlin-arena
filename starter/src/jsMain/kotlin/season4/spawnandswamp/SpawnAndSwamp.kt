@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 215
+    private const val BOT_VERSION = 216
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6751,6 +6751,11 @@ object SpawnAndSwamp {
     /** The house's fight counts his creeps that walk to the threat while our garrison is out — there, the fight and back
      *  (runFighters, v215). */
     private const val USE_HOME_FIGHT_JOINERS = true
+    /** A waiting raider with a live mate farther than RAID_PAIR_RANGE walks to it, so the pair waits and enters together
+     *  (runRaiders, v216). */
+    private const val USE_RAID_MEET = true
+    /** Two cells both next to one target are at most this far apart: the pair is together within it (v216). */
+    private const val RAID_PAIR_RANGE = 2
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
@@ -7234,18 +7239,29 @@ object SpawnAndSwamp {
         // 151-157); the pair walks any ground a cell a tick, his M5R5 a swamp cell in five, and a gun is dangerous only
         // once within its range of three and a few steps
         val lurkFlee = if (USE_RAID_CLOSE_LURK) RAID_LURK_FLEE else RAID_LURK_RANGE
+        // THE PAIR WAITS TOGETHER (v216). With his builders dead the raid is visits to his ramparted spawn, and a raider with
+        // nothing to strike waited at the target on its own: against けろびー#48/#50 (v214 draws) the two live raiders stood
+        // within six cells of each other in 11 and 5 of the 634 and 435 ticks both lived, by one spawn in 0 (48, 17 and 68
+        // ticks in the three wins over the same bots, where a pair took the 13000 of his main each time), and the one
+        // waiting alone was driven off by his guns to the map's edge and killed — (4,4), (1,11), (10,10), (40,10) — seven
+        // ticks before its mate reached the door in one draw (the two struck 11980 of the 13000 a hundred ticks apart). A
+        // waiting raider with a live mate out of reach walks to it — two cells, both next to one target — and the pair then
+        // waits and enters together; a strike that fits is walked as before, alone or not, and its walk is not touched
+        val waitingNow = !strikeFits && !raidHome && raiders.size >= 2
         for (r in raiders) {
             // waiting for his guns to go, the pair holds where it stands rather than walking home and back
             // …and, since v167, near its target at the lurk range: waiting at our house it was 82 cells from the strike
             val hover = USE_RAID_FINISH && target != null && !strikeFits && !raidHome
-            val goal: Position = if (go != null) pos(go) else if (hover) pos(target!!) else if (!strikeFits) r else ctx.mySpawn
+            val mate = if (USE_RAID_MEET && waitingNow && go == null) raiders.filter { it.id != r.id }.minByOrNull { getRange(it, r) } else null
+            val meet = mate != null && getRange(r, mate) > RAID_PAIR_RANGE
+            val goal: Position = if (meet) mate!! else if (go != null) pos(go) else if (hover) pos(target!!) else if (!strikeFits) r else ctx.mySpawn
             // …AT THE DOOR WHILE IT CHIPS (v198): from the lurk range (12 cells) the walk alone was 21+ ticks against his
             // gun's walk back of 15-19, so the visit's entry (walk + RAID_CHIP_MIN < back) almost never opened — in five
             // v195 draws with けろびー the raiders struck his main in 3 % of their ticks against 12 % in the wins, and
             // 28 of the 30 real visits of ten games lost the raider no hits. At the door the walk is none, and the flight
             // from a gun within RAID_LURK_FLEE still stands
             val waitRange = if (USE_RAID_DOOR_WAIT && chipping) 1 else RAID_LURK_RANGE
-            val range = if (go != null) 1 else if (hover) waitRange else if (!strikeFits) 0 else 2
+            val range = if (meet) 1 else if (go != null) 1 else if (hover) waitRange else if (!strikeFits) 0 else 2
             val waiting = !strikeFits && go == null
             val struck = go != null && getRange(r, goal) <= 1
             if (struck) {
@@ -7291,7 +7307,8 @@ object SpawnAndSwamp {
             }
         }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-            println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering " +
+            val apart = if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else ""
+            println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
                 "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"}${if (strikeFits) "" else " wait"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
         }
     }
