@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v44"
+    private const val BOT_VERSION = "v45"
 
     private const val LOG_EVERY = 50
 
@@ -214,6 +214,14 @@ object SpawnAndSwampAdvanced {
      *  место небезопасно. Оператор 27.09.2026: второй «точно такой же закуток был прямо около нашего дополнительного
      *  спавна и полностью свободен», а бот видел только свой. */
     private val vaults = ArrayList<Vault>()
+    /** Путь от первой базы к спавну сейфа — сколько дому идти на помощь, если печать сейфа ломают. */
+    private val vaultReturn = HashMap<Int, Int>()
+    /** Хиты клеток печати на прошлом тике: падение за тик — урон, который по ней идёт. */
+    private val sealPrev = HashMap<Pos, Int>()
+    private var openAt = -1
+    private var openCache: Set<Int> = emptySet()
+    /** Кто заказывает для сейфа: номер сейфа → (число баз на момент расчёта, id ближайшего по пути спавна базы). */
+    private val vaultFrom = HashMap<Int, Pair<Int, String>>()
     private var holdTicks = 0
     /** Цель удара: волна идёт к ЭТОМУ спавну, отвечая по дороге только тем, кто рядом, — прогон выбрал его среди всех. */
     private var strikeTargetId: String? = null
@@ -699,7 +707,7 @@ object SpawnAndSwampAdvanced {
                 if (spawnUpAt < 0) {
                     spawnUpAt = t
                     val starter = mine.firstOrNull { !it.spawning && liveParts(it, WORK) > 0 && slotOf[idOf(it)]?.let { s -> b.slots.contains(s) } == true }
-                    val plan = if (starter == null) null else expansionTarget(sp, sources, all)
+                    val plan = if (starter == null) null else expansionTarget(listOf(sp), sources, all)
                     if (starter != null && plan != null) {
                         founderId = idOf(starter); founderPlan = plan
                         println("founder plan t=$t ${bodyOf(starter)} -> (${plan.spawnCell.x},${plan.spawnCell.y})")
@@ -963,13 +971,21 @@ object SpawnAndSwampAdvanced {
     /** Цель второго спавна: источник, до которого наш спавн доходит раньше соперника с наибольшим запасом (его
      *  спавн, а пока его нет — стартовая клетка): строитель идёт один, и спорный источник (v3 выбрал центральный
      *  с запасом в 10 тиков) — это строитель и площадка под его первой же волной. */
-    private fun expansionTarget(from: Position, sources: Array<Source>, all: Array<GameObject>): Base? {
+    private fun expansionTarget(froms: List<GameObject>, sources: Array<Source>, all: Array<GameObject>): Base? {
         val enemySpawns = all.filter { it is StructureSpawn && it.asDynamic().my == false }
         val enemyFrom: List<Position> = enemySpawns.ifEmpty { listOfNotNull(enemyStart?.let { cell(it) }) }
         if (enemyFrom.isEmpty()) return null
         val taken = bases.map { it.sourceId }.toSet()
         val blocked = blockedCells(all)
-        val ranked = sources.filter { idOf(it) !in taken }.map { s -> Triple(s, pathTicks(from, s), enemyFrom.minOf { pathTicks(it, s) }) }
+        if (froms.isEmpty()) return null
+        // «наш» путь — от ближайшей по пути нашей базы: v43 слал строителей к (50,79) из (3,32) — 95 тиков по его
+        // маршруту, пятеро легли, — при второй базе (32,96) в 36 тиках от цели
+        val nearest = HashMap<String, GameObject>()
+        val ranked = sources.filter { idOf(it) !in taken }.map { s ->
+            val (from, d) = froms.map { it to pathTicks(it, s) }.minByOrNull { it.second }!!
+            nearest[idOf(s)] = from
+            Triple(s, d, enemyFrom.minOf { pathTicks(it, s) })
+        }
         println("expansion: candidates " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})us=${it.second}/them=${it.third}" })
         // кандидат — любой свободный источник (без его спавна или площадки рядом), кроме глубоко его (к нему он вдвое
         // ближе нас); первым — самый спорный: тот, до которого ему ближе всего, — его он заберёт раньше, а спокойный
@@ -983,7 +999,8 @@ object SpawnAndSwampAdvanced {
         // stachu3478#15 дал 2 из 4 против 4 из 4 у v29 — у него к 1500-му было 3–4 источника против наших двух
         val free = ranked.filter { (s, us, them) -> us * 4 <= them * 5 && hisStuff.none { getRange(it, s) <= INTRUDER_SOURCE_RANGE + 1 } }
         for ((s, _, _) in free.sortedWith(compareByDescending<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
-            planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) }?.let { return it }
+            val from = nearest[idOf(s)]!!
+            planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) }?.let { expansionFrom = idOf(from); return it }
         }
         return null
     }
@@ -1054,10 +1071,58 @@ object SpawnAndSwampAdvanced {
         }.sumOf { liveParts(it, WORK) }
 
     /** Угрозы дому: боевые враги у наших спавнов или у наших рабочих (с запасом `extra` — для снятия защиты). */
-    private fun homeThreats(enemyCombat: List<Creep>, homeSpawns: List<GameObject>, workers: List<Creep>, extra: Int): List<Creep> =
-        enemyCombat.filter { e ->
-            homeSpawns.any { getRange(e, it) <= HOME_THREAT_RANGE + extra } || workers.any { getRange(e, it) <= WORKER_THREAT_RANGE + extra }
+    private fun homeThreats(enemyCombat: List<Creep>, homeSpawns: List<GameObject>, workers: List<Creep>, extra: Int): List<Creep> {
+        val open = openVaults(enemyCombat)
+        return enemyCombat.filter { e ->
+            homeSpawns.any { getRange(e, it) <= HOME_THREAT_RANGE + extra && reaches(e, it, open) } ||
+                workers.any { getRange(e, it) <= WORKER_THREAT_RANGE + extra && reaches(e, it, open) }
         }
+    }
+
+    /** Угроза — тот, кто может навредить, а не тот, кто рядом: спавн сейфа стоит в глубине кармана (дальше выстрела от
+     *  любой внешней клетки) за стенами и нашим рампартом в проломе, и крип снаружи запечатанного кармана до него и до
+     *  заправщика внутри не достаёт. v43 с けろびー#12 73 % времени после 1000-го считал «угрозой» его M4R3H1 у стен
+     *  сейфа: весь дом уходил в защитники, волна не выходила ни разу, 62 из 69 рождений — «threat», ничья. */
+    private fun reaches(e: Creep, target: GameObject, open: Set<Int>): Boolean {
+        val p = posOf(target)
+        val v = vaults.firstOrNull { p in it.interior } ?: return true
+        return v.index in open || posOf(e) in v.interior
+    }
+
+    /** Сейфы, чья печать открыта или откроется раньше, чем дом успеет вернуться: клетка стены кармана без стены и без
+     *  нашего рампарта — открыта; под огнём — хиты печати на урон, который она теряет в тик (замер, а не возможный
+     *  урон: его M4R3H1 у стен сейфа v43 за 3900 тиков сняли с рампарта пролома 2674), против пути от первой базы. */
+    private fun openVaults(enemyCombat: List<Creep>): Set<Int> {
+        val t = getTicks()
+        if (openAt == t) return openCache
+        val out = HashSet<Int>()
+        val structures = getObjects()
+        val sealHits = HashMap<Pos, Int>()
+        for (o in structures) {
+            if (o is StructureWall || (o is StructureRampart && o.asDynamic().my == true)) {
+                val q = posOf(o)
+                sealHits[q] = (sealHits[q] ?: 0) + (o.asDynamic().hits?.unsafeCast<Int>() ?: 0)
+            }
+        }
+        for (v in vaults) {
+            if (!v.sealed || v.spawnId == null) { out.add(v.index); continue }
+            val back = vaultReturn.getOrPut(v.index) {
+                bases.firstOrNull()?.let { b -> pathTicks(cell(b.spawnCell), cell(v.spawnCell)) } ?: 0
+            }
+            for ((w, _) in v.breaches) {
+                val hits = sealHits[w] ?: 0
+                if (hits <= 0) { out.add(v.index); break }
+                val dps = (sealPrev[w] ?: hits) - hits
+                if (dps > 0 && hits / dps < back) { out.add(v.index); break }
+            }
+        }
+        sealPrev.clear()
+        sealPrev.putAll(sealHits)
+        openAt = t
+        openCache = out
+        return out
+    }
+
 
     // ---------- башня ----------
 
@@ -1224,7 +1289,7 @@ object SpawnAndSwampAdvanced {
         // v36 строил сначала второй спавн), а источник подождёт
         } else if (homeHolds && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
-        } else if (b === bases.first() && homeHolds && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
+        } else if (homeHolds && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
@@ -1242,14 +1307,18 @@ object SpawnAndSwampAdvanced {
      */
     private var expansionPlanAt = -1000
     private var expansionPlan: Base? = null
+    /** Спавн базы, ближайшей к цели расширения по пути: строителя рожает он. */
+    private var expansionFrom: String? = null
 
     private fun expansionOrder(t: Int, spawn: StructureSpawn, energy: Int): Boolean {
         if (expansion != null || builderId != null || builderPending) return false
         if (t - expansionPlanAt >= LOG_EVERY) {
             expansionPlanAt = t
-            expansionPlan = expansionTarget(spawn, getObjectsByPrototype(Source::class), getObjects())
+            val froms = bases.mapNotNull { b -> b.spawnId?.let { id -> getObjects().firstOrNull { idOf(it) == id } } }
+            expansionPlan = expansionTarget(froms, getObjectsByPrototype(Source::class), getObjects())
         }
         val target = expansionPlan ?: return false
+        if (expansionFrom != idOf(spawn)) return false
         if (!worksiteSafe(listOf(target.spawnCell))) return false
         val body = builderBody()
         if (energy < costOf(body)) return true
@@ -1272,8 +1341,12 @@ object SpawnAndSwampAdvanced {
         }
         for (v in candidates) {
             // заказывает база, ближайшая к сейфу: второй карман — у нашего дополнительного спавна
-            val nearestBase = bases.mapNotNull { b -> b.spawnId?.let { id -> getObjects().firstOrNull { idOf(it) == id } } }
-                .minByOrNull { getRange(it, cell(v.spawnCell)) } ?: continue
+            // ближайшая — по пути, а не по прямой: для левого кармана прямая выбирала спавн сейфа (55,67) — 36 клеток
+            // против 38 у (3,32), а путь идёт через другую половину карты
+            val baseSpawns = bases.mapNotNull { b -> b.spawnId?.let { id -> getObjects().firstOrNull { idOf(it) == id } } }
+            val cached = vaultFrom[v.index]?.takeIf { it.first == baseSpawns.size }?.second
+            val fromId = cached ?: baseSpawns.minByOrNull { pathTicks(it, cell(v.spawnCell)) }?.let { idOf(it) }?.also { vaultFrom[v.index] = baseSpawns.size to it }
+            val nearestBase = baseSpawns.firstOrNull { idOf(it) == fromId } ?: continue
             if (nearestBase.x != spawn.x || nearestBase.y != spawn.y) { if (started != null) return false; continue }
             chooseBreach(v, spawn)
             // его башня у сейфа (けろびー ставил передовую базу с башней в девяти клетках от нашего пролома, и пробойщик
