@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 233
+    private const val BOT_VERSION = 234
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -3181,7 +3181,16 @@ object SpawnAndSwamp {
         // M5A1 and M3A3 — while shooters with healers are not reached by it, and counting it there sent the stub's waves
         // into `tower+healball` (518 -> 1277)
         val meleePack = enemies.isNotEmpty() && enemies.all { InfluenceMap.profileOf(it).ranged <= 0.0 }
-        val ourDps = if (withMelee && USE_MARCH_MELEE && meleePack) ours.sumOf { effectiveDps(it, enemies, null) } else ours.sumOf { InfluenceMap.profileOf(it).ranged }
+        // …OUR MELEE BY THE SHARE OF HIS DAMAGE THAT COMES TO IT (v234). "A pack with no gun" was all or nothing, and one
+        // RANGED part in it switched our whole melee off the price: against marlyman#443 (v231 draw) nine melee and one
+        // M4R2 of his priced the march by our shooting alone, 4700-7100 at 1100-1300 against 1700-2350 with our two M12A5
+        // (300 a tick of our ~450), and the army sat in DEFEND 995-2000 while his spawns stood with no guard; against
+        // ●ω<♥♪#2 one RANGED part on his M6A6 made the price 59718 at 1500 against ~1000-1400. His melee must stand next
+        // to ours to deal its damage, so ours meets it: our melee counts at the share of his damage his melee deals
+        // (meleeShare of the pack) — his healball (no melee) keeps it at 0, as v176b measured
+        val ourDps = if (withMelee && USE_MARCH_MELEE && meleePack) ours.sumOf { effectiveDps(it, enemies, null) }
+            else if (withMelee && USE_MARCH_MELEE_SHARE) meleeShare(enemies).let { share -> ours.sumOf { val q = InfluenceMap.profileOf(it); q.ranged + q.melee * share } }
+            else ours.sumOf { InfluenceMap.profileOf(it).ranged }
         if (ourDps <= 0.0) return Double.MAX_VALUE
         // порядок целей — как у нашего фокуса (healAndShoot): лекари первыми, затем по хитам; лечение
         // живых вычитается из нашего урона — без этого пара M8R4 «брала» стаю из двух M3R3 и M4H2 за
@@ -7304,6 +7313,8 @@ object SpawnAndSwamp {
      *  fewer fighters (5-6 against 5-9 a hand): a positive deficit sent the spawn to wait for the full body. More of the
      *  same bodies is not what his train loses to */
     private const val USE_BUY_BY_RACE = false
+    /** The march's price counts our melee at the share of the pack's damage its melee deals (fightCost, v234). */
+    private const val USE_MARCH_MELEE_SHARE = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
