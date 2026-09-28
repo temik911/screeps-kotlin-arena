@@ -565,6 +565,18 @@ object EscortRun {
         // 2''. наш флаг закрыт сооружением — пролом: мили на всю наличную энергию, затем ещё, пока пролом стоит
         if (breachOrder(w, e)) return
 
+        // 2°. вооружённый враг в поле (не телохранитель, не у своей базы), которого наши бойцы не бьют, а победитель дуэли
+        //     недорог, — победитель раньше хранителя и блокировщиков: перехватчик けろびー#32 (M1A1 в центре с 50-го) бил
+        //     тягачей и 166 тиков эскорт, а защитник копился за хранителем и разведчиками до 361-го (v28 и v29 0-6)
+        val fieldArmed = w.enemyArmed.filter { !isEscort(it) && !bodyguard(w, it) && (w.enemySpawn == null || dist(it, w.enemySpawn) > CAMP_BASE_RANGE) }
+        if (fieldArmed.isNotEmpty() && !wins(w.fighters.filter { Bodies.isArmed(it) }, fieldArmed) && !fighterQueue.contains(ESCORT_GUARD)) {
+            val body = fieldWinner(fieldArmed, w.fighters.filter { Bodies.isArmed(it) }, SPAWN_ENERGY_CAPACITY)
+            if (body != null && Bodies.cost(body) <= EARLY_WINNER_BUDGET) {
+                if (e >= Bodies.cost(body)) { if (order(w, body, "defender", "field threat ${fieldArmed.joinToString(" ") { Bodies.summaryOf(it) + "@(" + it.x + "," + it.y + ")" }}")) fighterQueue.addLast(ESCORT_GUARD); return }
+                saving(w, "field defender ${Bodies.summary(body)}", Bodies.cost(body)); return
+            }
+        }
+
         // гонка проиграна, только если их приход РАНЬШЕ нашего с запасом: ничьи по оценке на 51-м тике (наш 194-197,
         // их 196-210 во всей серии v11) на деле выигрывал наш поезд, а блокировщик, купленный первым «на всякий
         // случай», отдавал наш флаг их блокировщику (ricardo#5 трижды)
@@ -1416,7 +1428,9 @@ object EscortRun {
         // путь убийства: их тяжёлый держит дом, пока жив и наши бойцы его не побеждают, — телохранитель он или нет
         // (иначе держание снималось на 38-м, и 300 энергии победителя уходили в четырёх M1)
         val killHeavies = if (killPath) w.enemyArmed.filter { !isEscort(it) && heavy(it) } else emptyList()
-        val camp = (campers(w) + killHeavies.filter { !wins(w.fighters.filter { f -> Bodies.isArmed(f) }, killHeavies) }).distinct()
+        // держит дом только ТЯЖЁЛАЯ засада; лёгкую (M1A1 けろびー#32) бьёт боец, купленный раньше разведчиков, а поезд идёт:
+        // держание до её смерти на ~345-м отдавало время их экономике (R3M5, M5H3, T3M8R5 к ~450-му)
+        val camp = (campers(w).filter { heavy(it) } + killHeavies.filter { !wins(w.fighters.filter { f -> Bodies.isArmed(f) }, killHeavies) }).distinct()
         val decisive = if (camp.isNotEmpty()) camp else if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
         if (decisive.isEmpty() || (camp.isEmpty() && wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive }))) {
             if (holding) { released = true; println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}") }
@@ -1463,6 +1477,8 @@ object EscortRun {
     private const val HEAVY_COST = 260
     /** Победитель дуэли в поле сохраняет не меньше стольких процентов хитов. */
     private const val FIELD_MARGIN_PCT = 35
+    /** Победитель вооружённого врага в поле покупается раньше разведчиков, если стоит не больше этого. */
+    private const val EARLY_WINNER_BUDGET = 400
     /** Тяжёлый ближе стольких клеток к нашему спавну — он идёт на базу, и его бьёт боец с рампарта. */
     private const val HEAVY_NEAR_BASE = 25
 
@@ -1719,7 +1735,9 @@ object EscortRun {
                     val escortGuards = if (theirEsc != null) w.enemyArmed.filter { !isEscort(it) && dist(it, theirEsc) <= 8 } else emptyList()
                     val chaseEscort = theirEsc != null && theirArrival(w) + RACE_MARGIN < ourArrival(w) &&
                         (escortGuards.isEmpty() || wins(w.fighters.filter { Bodies.isArmed(it) }, escortGuards))
-                    target = squatter ?: (if (chaseEscort) escortGuards.minByOrNull { dist(it, f) } ?: theirEsc else null)
+                    // засада на нашем пути, которую наши бойцы бьют, — цель раньше их эскорта
+                    val ambush = campers(w).filter { wins(w.fighters.filter { g -> Bodies.isArmed(g) }, listOf(it)) }.minByOrNull { dist(it, f) }
+                    target = squatter ?: ambush ?: (if (chaseEscort) escortGuards.minByOrNull { dist(it, f) } ?: theirEsc else null)
                         ?: (enemyPullers(w) + listOfNotNull(w.enemyEscort)).filter { dist(it, f) <= 12 }.minByOrNull { it.hits }
                     why = if (squatter != null) "clear" else if (target != null) "harass" else "follow"
                 }
