@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v31"
+    private const val BOT_VERSION = "v32"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -73,13 +73,6 @@ object EscortRun {
     /** Сколько MOVE тягачей покупает дебют: вместе с десятью MOVE эскорта это период 2 на равнине (80 / 40). */
     private const val OPENING_MOVES = 10
     private const val MAX_CHAIN = 3
-    /** Щит (эскорт хвостом, runShieldTrain): догоняющий ближе REAR_RANGE включает, дальше REAR_KEEP — снимает; у флага
-     *  (REAR_DISSOLVE клеток) щита нет; тягачам до своих клеток не дольше SHIELD_FORM тиков стояния эскорта. */
-    private const val REAR_RANGE = 8
-    private const val REAR_KEEP = 12
-    private const val REAR_DISSOLVE = 1
-    private const val SHIELD_FORM = 3
-    private const val SHIELD_JOIN = 4
 
     // ---------- бой ----------
     private const val RANGED_RANGE = 3
@@ -162,10 +155,12 @@ object EscortRun {
         val blocked: List<Position>,
         val blockedForEnemy: List<Position>,
         val myRamparts: List<Position>,
-        val escortFlow: IntArray?,
+        var escortFlow: IntArray?,
         val enemyEscortFlow: IntArray?,
         /** Поле нашего эскорта БЕЗ чужих крипов: по нему видно, кто из них стоит на нашем пути (routeBlockers). */
         val escortFlowRaw: IntArray?,
+        /** Стены поля эскорта сверх сооружений: стоящие разведчики на пути и клетки ударов их вооружённых. */
+        val escortWalls: List<Position>,
         /** Сооружение, закрывшее наш флаг (их рампарт или стена на клетке флага, или все проходимые соседи флага под
          *  сооружениями — тогда ближнее к эскорту); null — флаг открыт. */
         val flagBlocker: GameObject?,
@@ -190,6 +185,7 @@ object EscortRun {
         if (openingPlan == null) { planOpening(w); aimSpawn(w) }
         trackEnemyScouts(w)
         assignScouts(w)
+        applyBerth(w)
         decideHold(w)
         runSpawn(w)
         runTrain(w)
@@ -305,7 +301,7 @@ object EscortRun {
             enemyArmed = enemies.filter { Bodies.isArmed(it) },
             enemyScouts = enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) },
             occupant = occupant, enemyAt = enemyAt, blocked = blocked, blockedForEnemy = blockedForEnemy, myRamparts = ramparts.filter { it.my == true },
-            escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow, escortFlowRaw = escortFlowRaw,
+            escortFlow = escortFlow, enemyEscortFlow = enemyEscortFlow, escortFlowRaw = escortFlowRaw, escortWalls = walls2,
             flagBlocker = flagBlockerOf(myFlag, escort, walls, ramparts),
             flagSite = myFlag?.let { f -> getObjectsByPrototype(ConstructionSite::class).firstOrNull { it.exists && it.my == false && getRange(it, f) <= 1 } },
         )
@@ -435,6 +431,60 @@ object EscortRun {
         val flow = w.escortFlow ?: return Int.MAX_VALUE / 4
         if (onCell(escort, w.myFlag)) return 0
         return routeTicks(escort, flow, ourTrainMoves(w))
+    }
+
+    /** Радиус обхода быстрых вооружённых в этом тике (0 — поле прежнее), для журнала и гистерезиса. */
+    private var berthR = 0
+
+    /**
+     * Вооружённого, что быстрее поезда, не обогнать: бросится — догонит (период 1 против 2) и съест тягачей — он их и
+     * ищет: живой ricardo обходил эскорт, шедший хвостом, чтобы встать рядом с тягачом (v31, 6abab492: M6 на 222-м, M4 на
+     * 232-м). Бросается он на то, что подошло близко: телохранитель ricardo#23/#25 кидался за поездом в тех играх, где наш
+     * поезд проходил в 5 клетках от него, и ни разу, где держался в 6–8 (15 игр v30, 28.09.2026; все три поражения v30 от
+     * ricardo — такие броски). Как далеко он смотрит — дело его кода, поэтому поезд обходит таких так широко, как
+     * позволяет запас гонки: наибольший радиус до BERTH_MAX, чей объезд не дороже (их приход − наш приход − RACE_MARGIN)
+     * тиков. Нет запаса или пути — поле прежнее (удары в 2/4 клетки). Враг уже в бою (в BERTH_ENGAGED от эскорта) обхода
+     * не получает: стенами вокруг себя эскорт замирал (けろびー#32).
+     */
+    private fun applyBerth(w: World) {
+        val last = berthR
+        berthR = 0
+        val escort = w.escort ?: return
+        val flag = w.myFlag ?: return
+        val base = w.escortFlow ?: return
+        val spawn = w.mySpawn ?: return
+        if (getRange(escort, spawn) <= 3 || onCell(escort, flag) || base[key(escort)] < 0) return
+        val moves = ourTrainMoves(w)
+        val trainPeriod = Bodies.period(Bodies.weight(escort), moves, false)
+        val fast = w.enemyArmed.filter { e ->
+            !isEscort(e) && dist(e, escort) > BERTH_ENGAGED && Bodies.period(Bodies.weight(e), Bodies.liveMoves(e), false) < trainPeriod
+        }
+        if (fast.isEmpty()) return
+        val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 6 }
+        if (guards.isNotEmpty() && wins(guards, fast)) return
+        val ours = routeTicks(escort, base, moves)
+        val budget = theirArrival(w) - ours - RACE_MARGIN
+        if (budget <= 0) return
+        val tag = fast.map { key(it) }.sorted().joinToString(",") + "|" + w.escortWalls.map { key(it) }.sorted().joinToString(",")
+        // прошлый радиус первым: поле, меняющееся от тика к тику, качало эскорт по болоту
+        val order = (listOf(last).filter { it > 0 } + (BERTH_MAX downTo 3)).distinct()
+        for (r in order) {
+            val cells = ArrayList<Position>()
+            // клетки у самого эскорта — тоже стены: иначе он шагал на кромку кольца каждым шагом (стенд, guard на 8)
+            for (e in fast) for (dx in -r..r) for (dy in -r..r) {
+                val x = e.x + dx; val y = e.y + dy
+                if (DistanceMap.inBounds(x, y)) cells.add(InfluenceMap.cell(x, y))
+            }
+            val f = flowTo("berth$r:$tag", flag, w.blocked + w.escortWalls + cells, 5, ttl = 1)
+            if (f[key(escort)] < 0) continue
+            val detour = routeTicks(escort, f, moves) - ours
+            if (detour > budget) continue
+            if (r != last) println("berth t=${w.now}: r=$r around ${fast.joinToString(" ") { "${idOf(it)} ${Bodies.summaryOf(it)}@(${it.x},${it.y})" }} detour=$detour budget=$budget")
+            berthR = r
+            w.escortFlow = f
+            return
+        }
+        if (last > 0) println("berth t=${w.now}: none fits (budget=$budget)")
     }
 
     /** Тягачи врага: его тела из одних MOVE в трёх клетках от его эскорта (они и держат его скорость). */
@@ -920,6 +970,9 @@ object EscortRun {
     /** Гонка считается проигранной, если их приход раньше нашего больше чем на столько тиков (ошибка оценки — пара
      *  тиков; ничья по оценке — не проигрыш). */
     private const val RACE_MARGIN = 2
+    /** Обход быстрого вооружённого (applyBerth): наибольший радиус и расстояние «уже в бою». */
+    private const val BERTH_MAX = 8
+    private const val BERTH_ENGAGED = 4
     /** Хранитель не нужен, если эскорт придёт раньше, чем он дойдёт (путь M1 до флага от спавна ~100 клеток). */
     private const val KEEPER_MIN_LEAD = 20
     /** Страж флага на опережение покупается, только если приходит не позже эскорта плюс столько тиков. */
@@ -1233,17 +1286,6 @@ object EscortRun {
             expectFatigue = -1
         }
         if (onCell(escort, flag)) return
-        // быстрый вооружённый враг сзади — эскорт идёт хвостом (runShieldTrain); держится, пока враг в REAR_KEEP
-        if (!holding && !waiting) {
-            val threat = rearThreat(w, escort, flag, if (shieldOn) REAR_KEEP else REAR_RANGE)
-            if (threat != null && runShieldTrain(w, escort, flow, flag, threat)) {
-                if (!shieldOn) println("train t=${w.now}: SHIELD — ${idOf(threat)} ${Bodies.summaryOf(threat)} closing from behind at ${dist(threat, escort)}, the escort goes last")
-                shieldOn = true
-                return
-            }
-            if (shieldOn) println("train t=${w.now}: shield off")
-            shieldOn = false
-        }
 
         // цепь: вплотную друг за другом, порядок прошлого тика сохраняется
         val free = w.pullers.filter { !it.spawning && Bodies.liveMoves(it) > 0 }.toMutableList()
@@ -1354,113 +1396,6 @@ object EscortRun {
             if (next != null && step.x == next.x && step.y == next.y) continue
             TrafficManager.request(p, step, PULLER_PRIORITY)
         }
-    }
-
-    /** Поезд идёт эскортом в хвосте (см. rearThreat). */
-    private var shieldOn = false
-
-    /**
-     * Враг, от которого эскорт идёт ХВОСТОМ: вооружённый, быстрее поезда по равнине, сзади (дальше от нашего флага, чем
-     * эскорт) и ближе `range`; наши бойцы у эскорта его не побеждают. Догоняющий бьёт соседа, а сзади у обратного поезда
-     * тягачи: M4A3 ricardo#23/#25 бросал свой эскорт, когда наш задний тягач проходил в 5 клетках (6 из 15 игр v30),
-     * догонял поезд (период 1 против 2) на равнине перед нашим флагом и за ~20 тиков убивал M6 и M4; эскорт полз один и
-     * гиб в 2–3 клетках от флага (6abaac66, 6abaae9e, 6abaaf41). Решает арифметика тел: эскорт m1t4×10 теряет один MOVE
-     * на 500 урона, тягач M6 — шесть на 600; удар сзади должен приходиться в эскорт, а тягачи — тянуть спереди. Вплотную
-     * к флагу (REAR_DISSOLVE) щит снимается: финиш — обменом с хранителем, как всегда.
-     */
-    private fun rearThreat(w: World, escort: Creep, flag: Position, range: Int): Creep? {
-        if (dist(escort, flag) <= REAR_DISSOLVE) return null
-        val trainPeriod = Bodies.period(Bodies.weight(escort), ourTrainMoves(w), false)
-        val cands = w.enemyArmed.filter { e ->
-            !isEscort(e) && !e.spawning && dist(e, escort) <= range && dist(e, flag) > dist(escort, flag) &&
-                Bodies.period(Bodies.weight(e), Bodies.liveMoves(e), false) < trainPeriod
-        }
-        if (cands.isEmpty()) return null
-        val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 6 }
-        if (guards.isNotEmpty() && wins(guards, cands)) return null
-        return cands.minByOrNull { dist(it, escort) }
-    }
-
-    /**
-     * Прямой поезд: тягачи на клетках впереди по полю эскорта (slots[0] — его следующий шаг, дальше — шаг от шага),
-     * голова тянет следующего, последний тянет эскорта; эскорт — хвост. Период тот же (усталость цепи гасят все MOVE
-     * цепи, `_add-fatigue.js`). Перестройка — только там, где тягачам до своих клеток не дальше SHIELD_FORM тиков: в узком
-     * центре обогнать эскорт некуда, тягачи менялись местами друг с другом, а эскорт стоял (стенд, guard: 24 тика стояния
-     * и погибший тягач — хуже, чем без щита). false — строить не из чего или негде: работает обратный поезд.
-     */
-    private fun runShieldTrain(w: World, escort: Creep, flow: IntArray, flag: Position, threat: Creep): Boolean {
-        val pullers = w.pullers.filter { !it.spawning && Bodies.liveMoves(it) > 0 && dist(it, escort) <= SHIELD_JOIN }
-        if (pullers.isEmpty()) return false
-        val slots = ArrayList<Position>()
-        var cur: Position = escort
-        while (slots.size < minOf(pullers.size, MAX_CHAIN)) {
-            val nxt = escortStep(w, cur, flow, false) ?: break
-            if (flow[key(nxt)] <= 0 || onCell(nxt, flag)) break
-            slots.add(nxt); cur = nxt
-        }
-        if (slots.isEmpty()) return false
-        val n = slots.size
-        // голове — ближайший к её клетке, и так к хвосту; стоящий на своей клетке её не отдаёт
-        val free = pullers.toMutableList()
-        val chain = arrayOfNulls<Creep>(n)
-        for (i in n - 1 downTo 0) {
-            val p = free.firstOrNull { onCell(it, slots[i]) } ?: free.minByOrNull { dist(it, slots[i]) } ?: break
-            chain[i] = p; free.remove(p)
-        }
-        if (chain.any { it == null }) return false
-        val c = chain.map { it!! }
-        val inPlace = c.indices.all { onCell(c[it], slots[it]) }
-        if (!inPlace) {
-            // сборка: тягачи — на клетки впереди, мимо эскорта; эскорт ждёт. Негде обогнать — щита нет.
-            val steps = HashMap<Creep, Position>()
-            var eta = 0
-            for (i in c.indices) {
-                val p = c[i]
-                if (onCell(p, slots[i])) continue
-                val f = flowTo("slot", slots[i], w.blocked + escort, 1, ttl = 1)
-                val d = f[key(p)]
-                if (d < 0) return false
-                eta = maxOf(eta, d)
-                val step = DistanceMap.flowStep(f, p.x, p.y, 0, w.occupant.keys - key(p), w.enemyAt) ?: return false
-                steps[p] = step
-            }
-            if (eta > SHIELD_FORM) return false
-            lastChain = emptyList()
-            expectFatigue = -1
-            yieldCells = slots.map { key(it) }.toSet()
-            pinned.add(idOf(escort))
-            for (p in c) if (onCell(p, slots[c.indexOf(p)])) pinned.add(idOf(p))
-            for ((p, step) in steps) TrafficManager.request(p, step, PULLER_PRIORITY)
-            println("train t=${w.now}: shield forming eta=$eta — ${c.joinToString(" ") { "${idOf(it)}(${it.x},${it.y})" }} -> ${slots.joinToString(" ") { "(${it.x},${it.y})" }}")
-            return true
-        }
-        lastChain = emptyList()
-        expectFatigue = -1
-        yieldCells = slots.map { key(it) }.toSet()
-        pinned.add(idOf(escort))
-        for (p in c) pinned.add(idOf(p))
-        // связки каждый тик: голова тянет следующего, последний — эскорта
-        for (i in n - 1 downTo 1) c[i].pull(c[i - 1])
-        c[0].pull(escort)
-        val head = c[n - 1]
-        val rested = escort.fatigue == 0 && c.all { it.fatigue == 0 }
-        // перед флагом голова уходит вбок и тянет цепь за собой (буксируемый шагает в клетку тягача, куда бы тот ни
-        // шёл): так эскорт доходит до клетки у флага в сцепке. Снятый за три клетки щит оставлял тягачей в кармане между
-        // эскортом и флагом, и эскорт под ударами пробирался последние две клетки 25 тиков (стенд, guard на 8)
-        val next = escortStep(w, head, flow, false)
-        val ahead = next != null && !onCell(next, flag) && flow[key(next)] > 0
-        val headTo = if (ahead) next else asideCell(w, head, setOf(key(flag), key(escort)) + slots.map { key(it) } + c.map { key(it) })
-        if (headTo != null && rested) {
-            val occ = w.occupant[key(headTo)]
-            if (occ == null || (occ.my && idOf(occ) !in pinned)) {
-                if (occ != null) yieldCells = yieldCells + key(headTo)
-                head.move(dirTo(head, headTo))
-                for (i in n - 1 downTo 1) c[i - 1].move(dirTo(c[i - 1], c[i]))
-                escort.move(dirTo(escort, c[0]))
-            }
-        }
-        if (DEBUG_LOG && w.now % 10 == 0) println("train t=${w.now}: shield rolls — escort (${escort.x},${escort.y}) f=${escort.fatigue} head ${idOf(head)}(${head.x},${head.y}) f=${head.fatigue} threat ${idOf(threat)} at ${dist(threat, escort)}")
-        return true
     }
 
     /** Каждый тягач цепи шагает в клетку переднего (буксируемый обязан шагнуть ИМЕННО туда, иначе связка рвётся). */
