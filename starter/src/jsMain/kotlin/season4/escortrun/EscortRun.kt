@@ -1381,7 +1381,7 @@ object EscortRun {
         // вровень с их парой (0-6). Новорождённый рядом со своим эскортом — тоже не «неясный»: это телохранитель в
         // становлении; рашер ricardo#8 рождается вдали от своего эскорта и держит, как прежде
         val theirEscH = w.enemyEscort
-        val unknown = { e: Creep -> !e.spawning && (closing[idOf(e)]?.size ?: 0) < 11 && !(theirEscH != null && dist(e, theirEscH) <= 3) }
+        val unknown = { e: Creep -> !e.spawning && (closing[idOf(e)]?.size ?: 0) < 11 && !(theirEscH != null && dist(e, theirEscH) <= NEWBORN_AT_ESCORT) }
         // держась, отпускаем только того, кто отошёл вдвое дальше: иначе перехватчик stachu, стоявший в центре в 45-60
         // клетках, то держал, то отпускал эскорт каждые несколько тиков, и тот ходил туда-сюда у дома (6ab84583)
         val radius = if (holding) 2 * HOLD_RADIUS else HOLD_RADIUS
@@ -1441,6 +1441,9 @@ object EscortRun {
         return !e.spawning && dist(e, esc) <= 3 && dist(esc, sp) > 6 && (guardTicks[idOf(e)] ?: 0) >= GUARD_TICKS
     }
     private val guardTicks = HashMap<String, Int>()
+    /** Новорождённый не ближе стольких клеток к своему эскорту — не «неясный» (M4A3 ricardo#23 рождается на 22-м в 3-6
+     *  клетках от ушедшего вперёд эскорта; рашер ricardo#8 — на 41-м, когда его эскорт уже в ~10). */
+    private const val NEWBORN_AT_ESCORT = 6
     private const val GUARD_TICKS = 15
 
     /** Тяжёлый — вооружённый враг, для победы над которым в поле нужно тело дороже HEAVY_COST (M4A3 ricardo#23 — да,
