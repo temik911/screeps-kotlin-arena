@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v41"
+    private const val BOT_VERSION = "v42"
 
     private const val LOG_EVERY = 50
 
@@ -185,10 +185,6 @@ object SpawnAndSwampAdvanced {
      *  тиков раньше: けろびー#15 так ставит второй спавн к 683–733-му, v37 ставил к 1117–2129-му и сыграл с ним три ничьи
      *  из четырёх при его 22 энергии в тик на армию против наших 10. */
     private var founderId: String? = null
-    /** Миссии, чей посланный погиб, не доделав: цель ("exp:<id источника>", "vault:<номер>") → где он погиб. */
-    private val missionLost = HashMap<String, Pos>()
-    /** Где последний раз стоял посланный на миссию (строитель расширения, пробойщик, строитель сейфа). */
-    private val lastPos = HashMap<String, Pos>()
     private var founderPlan: Base? = null
     /** Волна: id бойцов, ушедших в атаку. Пусто — армия дома. */
     private val wave = HashSet<String>()
@@ -554,21 +550,6 @@ object SpawnAndSwampAdvanced {
     /** Заправщик сейфа без стройки: четыре CARRY носят по 200 из контейнера в спавн за два-три тика. */
     private fun fillerBody(): Array<BodyPartType> = arrayOf(CARRY, CARRY, CARRY, CARRY, MOVE)
 
-    /** Миссия, чей посланный уже погиб, идёт снова, только когда у места работ и у места гибели нет его бойцов — или
-     *  свободные бойцы дома по прогону их бьют (они и пойдут конвоем). v38 перекупил строителя к спорному источнику
-     *  тринадцать раз за ничью (11050 энергии, двенадцать погибли по дороге или у площадки), v37 — пробойщика к
-     *  дальнему карману пять раз: заказ смотрел только на место работ в тик заказа. */
-    private fun missionClear(key: String, site: Pos): Boolean {
-        val lost = missionLost[key] ?: return true
-        val creeps = getObjectsByPrototype(Creep::class)
-        val foes = creeps.filter { c -> !c.my && isCombat(c) && (cheb(posOf(c), site) <= 2 * LOCAL_RANGE || cheb(posOf(c), lost) <= LOCAL_RANGE) }
-        if (foes.isEmpty()) return true
-        val escort = creeps.filter { it.my && !it.spawning && isCombat(it) && idOf(it) !in wave && idOf(it) !in roleOf }
-        if (escort.isEmpty()) return false
-        val r = simulate(escort.map { simOf(it) }, foes.map { simOf(it) })
-        return r.win && r.keep >= PUSH_KEEP
-    }
-
     private fun worksiteSafe(cells: List<Pos>): Boolean =
         getObjectsByPrototype(Creep::class).none { c -> !c.my && isCombat(c) && cells.any { cheb(posOf(c), it) <= WORKSITE_SAFE } }
 
@@ -578,16 +559,7 @@ object SpawnAndSwampAdvanced {
     }
 
     private fun resolveRoles(t: Int, mine: List<Creep>) {
-        val alive = mine.map { idOf(it) }.toSet()
-        for ((id, role) in roleOf) {
-            if (id in alive) continue
-            val v = vaults.getOrNull(role.substringAfter(':', "").toIntOrNull() ?: -1) ?: continue
-            // пробойщик не доделал, пока стена цела; строитель — пока спавн сейфа не встал
-            val unfinished = (role.startsWith("breacher:") && v.stage == "breach") || (role.startsWith("vaultBuilder:") && v.stage != "run")
-            val at = lastPos[id]
-            if (unfinished && at != null) { missionLost["vault:${v.index}"] = at; println("mission lost t=$t $role at (${at.x},${at.y})") }
-        }
-        roleOf.keys.retainAll(alive)
+        roleOf.keys.retainAll(mine.map { idOf(it) }.toSet())
         val it = pendingRoles.iterator()
         while (it.hasNext()) {
             val (role, sig) = it.next()
@@ -716,8 +688,6 @@ object SpawnAndSwampAdvanced {
             }
         }
         resolveRoles(t, mine)
-        lastPos.keys.retainAll(mine.map { idOf(it) }.toSet() + listOfNotNull(builderId))
-        for (c in mine) if (!c.spawning && (idOf(c) == builderId || idOf(c) in roleOf)) lastPos[idOf(c)] = posOf(c)
 
         // база узнаёт свой спавн, когда он достроен
         for (b in bases) if (b.spawnId == null) {
@@ -864,10 +834,7 @@ object SpawnAndSwampAdvanced {
             if (b != null) { builderId = idOf(b); builderPending = false; println("builder t=$t is ${idOf(b)} at (${b.x},${b.y})") }
         }
         if (builderId != null && mine.none { idOf(it) == builderId }) {
-            val at = lastPos[builderId!!]
-            val exp0 = expansion
-            if (exp0 != null && at != null) missionLost["exp:${exp0.sourceId}"] = at
-            println("builder lost t=$t at ${at?.let { "(${it.x},${it.y})" }}")
+            println("builder lost t=$t")
             builderId = null
             expansion = null
             expansionPlaced = false
@@ -1011,7 +978,7 @@ object SpawnAndSwampAdvanced {
         // stachu3478#15 дал 2 из 4 против 4 из 4 у v29 — у него к 1500-му было 3–4 источника против наших двух
         val free = ranked.filter { (s, us, them) -> us * 4 <= them * 5 && hisStuff.none { getRange(it, s) <= INTRUDER_SOURCE_RANGE + 1 } }
         for ((s, _, _) in free.sortedWith(compareByDescending<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })) {
-            planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) && missionClear("exp:${it.sourceId}", it.spawnCell) }?.let { return it }
+            planBase(s, from, blocked)?.takeIf { worksiteSafe(listOf(it.spawnCell)) }?.let { return it }
         }
         return null
     }
@@ -1274,7 +1241,6 @@ object SpawnAndSwampAdvanced {
         }
         val target = expansionPlan ?: return false
         if (!worksiteSafe(listOf(target.spawnCell))) return false
-        if (!missionClear("exp:${target.sourceId}", target.spawnCell)) return false
         val body = builderBody()
         if (energy < costOf(body)) return true
         val r = spawn.spawnCreep(body)
@@ -1307,7 +1273,6 @@ object SpawnAndSwampAdvanced {
             // место работ под его бойцами — не заказываем: v13 перекупал пробойщика M7A7 двадцать раз подряд, каждый шёл к
             // стене один и ложился под тремя M4R3H1 けろびー; армия сперва расчищает, потом сейф
             if (!worksiteSafe(listOfNotNull(v.outside, v.spawnCell))) continue
-            if (!missionClear("vault:${v.index}", v.outside ?: v.spawnCell)) continue
             if (v.stage == "breach" && !hasRole(v.breacherRole)) return order(t, spawn, energy, breacherBody(), v.breacherRole)
             if (hasRole(v.builderRole)) return false
             val wallLeft = wallObject(v, all)?.asDynamic()?.hits?.unsafeCast<Int>() ?: 0
