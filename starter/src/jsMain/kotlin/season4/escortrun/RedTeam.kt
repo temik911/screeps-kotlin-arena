@@ -35,8 +35,8 @@ import screeps.api.structures.StructureRampart
  *  - `rush` — то же, но ДО дебюта и вместо него (экономика без гонки, как けろびー#29, у которого эскорт весь матч дома);
  *  - `icpt` — перехватчик stachu3478 при СВОЕЙ гонке: M1A1 после дебюта идёт к их поезду и бьёт тягачей (без них
  *    эскорт — 4 тика на клетку), потом эскорт (стендовая строка match4:icpt открыта с v12);
- *  - `camp` — ricardo18informatica2020#23 (обыграл v28 0-6, 28.09.2026): M4A3 на первом тике ждёт в горлышке центра на
- *    пути их поезда и бьёт всё, что подходит на три клетки; тягачей и разведчиков нет, наш эскорт идёт сам;
+ *  - `camp` — ricardo18informatica2020#23 (обыграл v28 0-6, 28.09.2026): M4A3 на первом тике — телохранитель своего
+ *    эскорта (идёт рядом, бьёт подошедших на четыре клетки от эскорта); тягачей и разведчиков нет, наш эскорт идёт сам;
  *  - `kk` — убийца хранителя: M1A1 после дебюта идёт к их флагу, бьёт стоящих на нём и рядом и сам встаёт на флаг
  *    вооружённым захватчиком;
  *  - `army` — после остальных приёмов, раз за разом: стрелок M5R5 охотится на их эскорт, по дороге бьёт тягачей
@@ -209,28 +209,16 @@ internal object RedTeam {
         log(w, c, "icpt", "on ${Bodies.summaryOf(goal)}@(${goal.x},${goal.y})")
     }
 
-    private var campEscorting = false
-
     private fun camp(w: EscortRun.World, c: Creep) {
+        // телохранитель (ricardo#23, реплеи 28.09.2026): с рождения идёт рядом со своим эскортом, бьёт вплотную и
+        // отходит от эскорта не дальше четырёх клеток за тем, кто подошёл
         val near = w.enemies.filter { getRange(c, it) <= 1 }
         (near.firstOrNull { Bodies.isArmed(it) } ?: near.minByOrNull { it.hits })?.let { c.attack(it) }
-        val prey = w.enemies.filter { getRange(c, it) <= 3 }.minByOrNull { getRange(c, it) }
+        val own = w.escort ?: return
+        val prey = w.enemies.filter { getRange(own, it) <= 4 }.minByOrNull { getRange(c, it) }
         if (prey != null) { if (getRange(c, prey) > 1) EscortRun.stepRed(w, c, prey, 1); log(w, c, "camp", "on ${Bodies.summaryOf(prey)}"); return }
-        // свой эскорт дошёл до засады — дальше охрана рядом с ним (так ricardo#23: M4A3 стоял в центре до ~235-го, потом
-        // шёл со своим эскортом до флага и снял там наш блокировщик)
-        val own = w.escort
-        if (own != null && (campEscorting || getRange(c, own) <= 4)) {
-            campEscorting = true
-            if (getRange(c, own) > 2) EscortRun.stepRed(w, c, own, 2)
-            log(w, c, "camp", "guarding own escort")
-            return
-        }
-        // стоянка: клетка ИХ маршрута, ближайшая к центру карты
-        val esc = w.enemyEscort ?: return
-        val flow = w.enemyEscortFlow ?: return
-        val spot = Chokes.route(flow, esc).minByOrNull { k -> maxOf(kotlin.math.abs(k / 100 - 50), kotlin.math.abs(k % 100 - 50)) } ?: return
-        if (c.x * 100 + c.y != spot) EscortRun.stepRed(w, c, pos(spot / 100, spot % 100), 0)
-        log(w, c, "camp", "at (${spot / 100},${spot % 100})")
+        if (getRange(c, own) > 1) EscortRun.stepRed(w, c, own, 1)
+        log(w, c, "camp", "guarding own escort")
     }
 
     private fun keeperKiller(w: EscortRun.World, c: Creep) {

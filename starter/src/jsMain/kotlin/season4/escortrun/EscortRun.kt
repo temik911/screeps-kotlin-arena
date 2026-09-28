@@ -252,6 +252,11 @@ object EscortRun {
         // стоящих: их M1, идущий к нашему флагу нашим же путём, «стеной» гонял поезд в обход, и приход вырос на 46
         // тиков за один тик (лига, v22 против v20)
         for (c in enemies) { val k = key(c); val was = enemyStill[idOf(c)]; if (was == null || was.first != k) enemyStill[idOf(c)] = k to now }
+        // сколько тиков подряд их вооружённый держится при своём эскорте (телохранитель — подолгу, см. bodyguard)
+        val theirEscNow = enemies.firstOrNull { isEscort(it) }
+        for (c in enemies) if (!isEscort(c) && Bodies.isArmed(c)) {
+            guardTicks[idOf(c)] = if (theirEscNow != null && getRange(c, theirEscNow) <= 3) (guardTicks[idOf(c)] ?: 0) + 1 else 0
+        }
         enemyStill.keys.retainAll(enemies.mapTo(HashSet()) { idOf(it) })
         val stops = if (escort != null && escortFlowRaw != null) {
             // и на СЛЕДУЮЩЕЙ клетке тоже: без неё стена пропадала, когда эскорт подходил вплотную, поле возвращалось к
@@ -264,8 +269,21 @@ object EscortRun {
                 // встал в коридоре перед эскортом, и тот простоял до 2000-го тика (стенд camp)
                 active.filter { !isEscort(it) && Bodies.liveMoves(it) == 0 && key(it) in ahead }
         } else emptyList()
-        val escortFlow = if (stops.isEmpty() || myFlag == null) escortFlowRaw
-            else flowTo("escort:" + stops.map { key(it) }.sorted().joinToString(","), myFlag, blocked + stops, 5)
+        // и клетки, где бьют их вооружённые (мили — две клетки, стрелок — четыре): поезд обходит пару «эскорт +
+        // телохранитель» в широком центре, а не проходит вплотную (ricardo#23)
+        val danger = ArrayList<Position>()
+        if (escort != null && mySpawn != null && getRange(escort, mySpawn) > 3) for (e in enemies) {
+            if (isEscort(e) || !Bodies.isArmed(e)) continue
+            val r = if (Bodies.live(e, RANGED_ATTACK) > 0) 4 else 2
+            for (dx in -r..r) for (dy in -r..r) {
+                val x = e.x + dx; val y = e.y + dy
+                if (!DistanceMap.inBounds(x, y) || getRange(escort, InfluenceMap.cell(x, y)) <= 1) continue
+                danger.add(InfluenceMap.cell(x, y))
+            }
+        }
+        val walls2 = stops + danger
+        val escortFlow = if (walls2.isEmpty() || myFlag == null) escortFlowRaw
+            else flowTo("escort:" + walls2.map { key(it) }.sorted().joinToString(","), myFlag, blocked + walls2, 5)
         val enemyEscortFlow = if (enemyEscort != null && enemyFlag != null) flowTo("enemyEscort", enemyFlag, blockedForEnemy, 5) else null
         return World(
             now, mySpawn, enemySpawn, escort, enemyEscort, myFlag, enemyFlag, homeSource, mine, active, enemies,
@@ -516,11 +534,11 @@ object EscortRun {
         // это триста тиков до бойца, который его побеждает (ricardo#23: M4A3 в центре, потом при своём эскорте; v28 0-6).
         // Пошёл к базе (ricardo#8) — дебют продолжается: его бьёт боец с рампарта, а гонке нужен полный поезд
         if (plan != null && openingIdx in 1 until plan.size && escort != null && w.mySpawn != null) {
-            val heavies = (w.enemyArmed + w.enemyPending.filter { Bodies.wasArmed(it) }).filter { !isEscort(it) && heavy(it) }
-            val nearBase = heavies.any { !it.spawning && dist(it, w.mySpawn) <= HEAVY_NEAR_BASE }
-            if (heavies.isNotEmpty() && !nearBase && w.fighters.none { Bodies.isArmed(it) }) {
+            val heavies = w.enemyArmed.filter { !isEscort(it) && heavy(it) && !bodyguard(w, it) }
+            val nearBase = heavies.any { dist(it, w.mySpawn) <= HEAVY_NEAR_BASE }
+            if (heavies.isNotEmpty() && !nearBase) {
                 if (!openingPaused) { openingPaused = true; println("spawn t=${w.now}: opening paused at ${openingIdx}/${plan.size} — heavy ${heavies.joinToString(" ") { Bodies.summaryOf(it) }} away from our base") }
-            } else if (openingPaused) { openingPaused = false; println("spawn t=${w.now}: opening resumed — ${if (nearBase) "heavy at our base" else "no heavy left"}") }
+            } else if (openingPaused) { openingPaused = false; println("spawn t=${w.now}: opening resumed — ${if (nearBase) "heavy at our base" else "no heavy away from us"}") }
         }
         if (plan != null && openingIdx < plan.size && escort != null && !openingPaused) {
             val body = Bodies.moves(plan[openingIdx])
@@ -1320,9 +1338,12 @@ object EscortRun {
         val armed = w.enemyArmed.filter { !isEscort(it) } + w.enemyPending.filter { Bodies.wasArmed(it) }
         val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 6 }
         val ours = ourArrival(w)
+        // телохранитель — рождённый вооружённый в трёх клетках от своего эскорта: он идёт с ним, к нам не идёт, и дом
+        // от него не спасает (ricardo18informatica2020#23: M4A3 при своём эскорте с 75-го тика; v28 держал дом до 175-го
+        // и выпустил поезд ровно к их паре в центре — 0-6)
         val threats = armed.filter { e ->
             val eta = dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0)
-            eta < ours
+            eta < ours && !bodyguard(w, e)
         }
         // держимся против того, кто БЛИЗКО (живые в HOLD_RADIUS) или ещё рождается; дальние — не повод сидеть дома:
         // экономика stachu3478 рождает бойца за бойцом, и «наша охрана бьёт всех» не наступало никогда — эскорт
@@ -1383,6 +1404,17 @@ object EscortRun {
     /** Помеченные засады: однажды вставший у нашего пути остаётся засадой до смерти — он отходит к подошедшим крипам
      *  и возвращается, и признак «стоит» мигал, снимая держание (стенд camp: пять выходов и возвратов за 200 тиков). */
     private val campMarks = HashSet<String>()
+    /** Телохранитель: рождённый вооружённый в трёх клетках от их эскорта, УЖЕ ушедшего от их спавна дальше шести клеток —
+     *  у самого спавна рядом с эскортом стоит любой новорождённый, и рашер ricardo#8 читался телохранителем (стенд rush8). */
+    private fun bodyguard(w: World, e: Creep): Boolean {
+        val esc = w.enemyEscort ?: return false
+        val sp = w.enemySpawn ?: return false
+        // и подолгу: рашер ricardo#8 по пути к нам проходит мимо своего эскорта и на эти тики читался телохранителем
+        return !e.spawning && dist(e, esc) <= 3 && dist(esc, sp) > 6 && (guardTicks[idOf(e)] ?: 0) >= GUARD_TICKS
+    }
+    private val guardTicks = HashMap<String, Int>()
+    private const val GUARD_TICKS = 15
+
     /** Тяжёлый — вооружённый враг, для победы над которым в поле нужно тело дороже HEAVY_COST (M4A3 ricardo#23 — да,
      *  M1A1 stachu — нет: его бьёт дешёвый боец с рампарта, и засадой он не считается). */
     private fun heavy(e: Creep): Boolean {
