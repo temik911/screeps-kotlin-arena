@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v52"
+    private const val BOT_VERSION = "v53"
 
     private const val LOG_EVERY = 50
 
@@ -671,14 +671,21 @@ object SpawnAndSwampAdvanced {
         val tower = all.firstOrNull { it is StructureTower && it.asDynamic().my == true && v.towerCell?.let { tc -> it.x == tc.x && it.y == tc.y } == true } as? StructureTower
         val sink: Structure? = when {
             tower != null && (tower.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 -> tower
-            spawn != null && (spawn.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 -> spawn
+            spawn != null && (spawn.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 && full.isNotEmpty() -> spawn
             else -> null
         }
         if (e > 0 && sink != null) {
             if (getRange(c, sink) <= 1) c.transfer(sink, RESOURCE_ENERGY) else go(c, sink)
             return
         }
-        val src = full.minByOrNull { getRange(c, it) } ?: return
+        // сейф выпит — башню кормит спавн сейфа, пока его бойцы в её досягаемости: v51–v52 после 1221–2347-го держали
+        // башню сейфа пустой 2398 тиков из 2400, заправщик стоял без дела, а его бойцы стояли в 10 клетках от неё
+        // 375–2183 тика за ничью. Прирост спавна 1 в тик — ровно выстрел на перезарядку (50–80 урона в тик из башни за
+        // стеной 10000), а тот же прирост в бойцах окупается, только если боец живёт 1000–1600 тиков
+        val foesNear = tower != null && getObjectsByPrototype(Creep::class).any { !it.my && isCombat(it) && getRange(it, tower) <= TOWER_RANGE }
+        val src: Structure = full.minByOrNull { getRange(c, it) }
+            ?: spawn?.takeIf { foesNear && energyOf(it) > 0 && (tower?.store?.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }
+            ?: return
         if (free > 0) { if (getRange(c, src) <= 1) c.withdraw(src, RESOURCE_ENERGY) else go(c, src) }
     }
 
@@ -1999,6 +2006,13 @@ object SpawnAndSwampAdvanced {
         // допуск сбора растёт с толпой: квадрат со стороной 2r+1 вмещает всех вдвое с запасом (v9: 35 бойцов у точки с
         // допуском 2 — 25 клеток — забили клетки у спавна, и новорождённому некуда было выйти)
         val rallySpread = maxOf(2, kotlin.math.ceil(kotlin.math.sqrt(2.0 * homeGroup.size) / 2).toInt())
+        // конвой — только когда он по прогону бьёт его бойцов у сопровождаемого: бой без огня наших башен против его
+        // шара v51–v52 проигрывали 39 из 48 раз (263 тыс. наших потерь против 112 тыс. его), и охрана строителей стоила
+        // 9–19 тыс. энергии за ничью; нет перевеса — бойцы остаются дома под башнями, строитель идёт один
+        val escortOk = escort != null && run {
+            val foes = enemyCombat.filter { getRange(it, escort) <= LOCAL_RANGE }.map { simOf(it) }
+            foes.isEmpty() || simulate(homeGroup.filter { idOf(it) !in wave }.map { simOf(it) }, foes).let { it.win && it.keep >= PUSH_KEEP }
+        }
         for (f in homeGroup) {
             if (idOf(f) in wave) continue
             shoot(f, theirs, enemyObjects)
@@ -2032,7 +2046,7 @@ object SpawnAndSwampAdvanced {
                     val rally = rallyFor(mySpawn, reserved, blocked)
                     if (Pos(f.x, f.y) in reserved || getRange(f, cell(rally)) > rallySpread) go(f, cell(rally))
                 }
-            } else if (escort != null) {
+            } else if (escort != null && escortOk) {
                 // конвой: свободные бойцы идут со строителем или пробойщиком, ушедшим из дома, — угроза у него (рабочий)
                 // включает защиту, и она бьётся по прогону. v29 потерял семь строителей расширения подряд (≈6000 энергии)
                 // на пути к месту работ: проверка безопасности видела только тик заказа
