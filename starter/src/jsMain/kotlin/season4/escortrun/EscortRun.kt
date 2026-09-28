@@ -1385,7 +1385,10 @@ object EscortRun {
         // засада: стоящий на нашем пути (или в трёх клетках от него) вооружённый, которого наши бойцы в поле не
         // побеждают, — держит всегда: к эскорту он не идёт (радиус и «идёт к нам» его не видят), а выпущенный поезд идёт
         // прямо на него (ricardo#23: M4A3 в горлышке центра, v28 0-6 на сервере, 0-40 в стенде)
-        val camp = campers(w)
+        // путь убийства: их тяжёлый держит дом, пока жив и наши бойцы его не побеждают, — телохранитель он или нет
+        // (иначе держание снималось на 38-м, и 300 энергии победителя уходили в четырёх M1)
+        val killHeavies = if (killPath) w.enemyArmed.filter { !isEscort(it) && heavy(it) } else emptyList()
+        val camp = (campers(w) + killHeavies.filter { !wins(w.fighters.filter { f -> Bodies.isArmed(f) }, killHeavies) }).distinct()
         val decisive = if (camp.isNotEmpty()) camp else if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
         if (decisive.isEmpty() || wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive })) {
             if (holding) { released = true; println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}") }
