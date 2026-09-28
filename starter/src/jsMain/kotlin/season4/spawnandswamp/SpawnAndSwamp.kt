@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 240
+    private const val BOT_VERSION = 241
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -480,8 +480,11 @@ object SpawnAndSwamp {
     private var haulerPeak = 0
     private var haulerCargoLost = 0
     private val haulerCargo = HashMap<String, Int>()
-    /** Hauler deaths and the fleet's size per tick over the production window: its mean life (haulerPaysBack, v122). */
-    private val haulerDeaths = ArrayDeque<Int>()
+    /** Hauler deaths and the fleet's size per tick over the production window: its mean life (haulerPaysBack, v122);
+     *  each death with the ids of his creeps and towers that could have dealt it (v241). */
+    private val haulerDeaths = ArrayDeque<Pair<Int, Set<String>>>()
+    /** Each hauler's cell (x·100+y) on the last tick it was seen: where it died (v241). */
+    private val haulerLastCell = HashMap<String, Int>()
     private val haulerCount = ArrayDeque<Pair<Int, Int>>()
 
     /**
@@ -495,13 +498,25 @@ object SpawnAndSwamp {
      */
     private fun haulerPaysBack(ctx: Ctx, price: Int): Boolean {
         if (!USE_HAULER_PAYBACK || haulerDeaths.isEmpty() || ctx.haulers.isEmpty()) return true
+        // …a death whose killers are all dead predicts none (v241): the mean life measures the killing going on, and
+        // against けろびー#50 (v239 draw) his M5A1 killed five of our six haulers at 387-550 and died under our tower at 591;
+        // the window still read lives of 75-300 against a price of 500 until 880, no hauler was bought for 290 ticks with
+        // no other hauler dying until 1806, delivery ran at 1.4 a tick and the raid had no raider from 692 to 1576.
+        // A death nobody near could have dealt stays counted
+        val deaths = if (!USE_HAULER_KILLER_GONE) haulerDeaths.size else {
+            val alive = HashSet<String>()
+            ctx.enemyCreeps.forEach { alive.add(it.id) }
+            ctx.enemyTowers.forEach { t -> t.obj?.let { alive.add(it.id) } }
+            haulerDeaths.count { (_, killers) -> killers.isEmpty() || killers.any { it in alive } }
+        }
+        if (deaths == 0) return true
         val haulerTicks = haulerCount.sumOf { it.second }
         if (haulerTicks <= 0) return true
         val rate = delivered.sumOf { it.second }.toDouble() / haulerTicks
-        val life = haulerTicks.toDouble() / haulerDeaths.size
+        val life = haulerTicks.toDouble() / deaths
         val remaining = (arenaInfo.ticksLimit - getTicks()).toDouble()
         val brings = rate * minOf(life, remaining)
-        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("hauler payback t=${getTicks()}: life=${life.toInt()} rate=${(rate * 100).toInt() / 100.0} brings=${brings.toInt()} price=$price deaths=${haulerDeaths.size}")
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("hauler payback t=${getTicks()}: life=${life.toInt()} rate=${(rate * 100).toInt() / 100.0} brings=${brings.toInt()} price=$price deaths=$deaths/${haulerDeaths.size}")
         return brings >= price
     }
 
@@ -512,16 +527,32 @@ object SpawnAndSwamp {
         val now = getTicks()
         haulerCount.addLast(now to ctx.haulers.size)
         while (haulerCount.isNotEmpty() && haulerCount.first().first < now - PRODUCTION_WINDOW) haulerCount.removeFirst()
-        while (haulerDeaths.isNotEmpty() && haulerDeaths.first() < now - PRODUCTION_WINDOW) haulerDeaths.removeFirst()
+        while (haulerDeaths.isNotEmpty() && haulerDeaths.first().first < now - PRODUCTION_WINDOW) haulerDeaths.removeFirst()
         for (id in gone) {
             haulersLost++
-            haulerDeaths.addLast(now)
+            // who could have dealt it: his guns within their reach of where it last stood, one step allowed, and his towers
+            val cell = haulerLastCell.remove(id)
+            val killers = HashSet<String>()
+            if (cell != null) {
+                val hx = cell / 100; val hy = cell % 100
+                for (e in ctx.combatEnemies) {
+                    val r = maxOf(kotlin.math.abs(e.x - hx), kotlin.math.abs(e.y - hy))
+                    val p = InfluenceMap.profileOf(e)
+                    if (p.ranged > 0.0 && r <= RANGED_RANGE + 1 || p.melee > 0.0 && r <= 2) killers.add(e.id)
+                }
+                for (t in ctx.enemyTowers) {
+                    val r = maxOf(kotlin.math.abs(t.pos.x - hx), kotlin.math.abs(t.pos.y - hy))
+                    if (r <= InfluenceMap.towerFalloffRange.toInt()) t.obj?.let { killers.add(it.id) }
+                }
+            }
+            haulerDeaths.addLast(now to killers)
             haulerCargoLost += haulerCargo.remove(id) ?: 0
             knownHaulers.remove(id)
         }
         for (h in ctx.haulers) {
             knownHaulers.add(h.id)
             haulerCargo[h.id] = h.store[RESOURCE_ENERGY] ?: 0
+            haulerLastCell[h.id] = h.x * 100 + h.y
         }
     }
 
@@ -6971,6 +7002,8 @@ object SpawnAndSwamp {
     private const val USE_HUNT_REACH = true
     /** A hauler is bought only if it delivers its price within the fleet's measured life (haulerPaysBack, v122). */
     private const val USE_HAULER_PAYBACK = true
+    /** A hauler's death counts in its fleet's mean life only while one of those who could have dealt it lives (v241). */
+    private const val USE_HAULER_KILLER_GONE = true
     /** A builder is hunted only if it is slower than the gun on plain too, or bound to its site (builderHunt, v122). */
     private const val USE_HUNT_BOUND = true
     /** A defender of his spawn enters the siege at the tick its own walk brings it there (defenderEtas, v124). */
