@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 239
+    private const val BOT_VERSION = 240
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7107,6 +7107,8 @@ object SpawnAndSwamp {
     private var raidHorizon = Int.MAX_VALUE / 4
     /** Ticks the raid took a bare spawn before his builder (v227, journal). */
     private var raidSpawnFirst = 0
+    /** Ticks a raider below its retreat share stayed to finish a builder (finishingBuilder, v240). */
+    private var raidFinishedBuilder = 0
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
     private var raidStayed = 0
     /** Ticks a hunted waiting raider entered the visit by its race instead of fleeing (v231, journal). */
@@ -7331,6 +7333,8 @@ object SpawnAndSwamp {
     /** A bare spawn of his goes before his builder when the spawn, the walk to the builder and the builder all fall before
      *  the builder's own spawn stands (runRaiders, v227). */
     private const val USE_RAID_SPAWN_FIRST = true
+    /** A raider below its retreat share stays next to a builder of his that falls before it does (finishingBuilder, v240). */
+    private const val USE_RAID_FINISH_BUILDER = true
     /** A free gun hunts a builder only when his worth (the spawns he will still raise; one that cannot walk, his spawn
      *  sites within reach) pays the sortie there and back, and the house holds without it against those the forecast
      *  brings to it within the sortie (builderHunt, v228). */
@@ -7634,6 +7638,27 @@ object SpawnAndSwamp {
     }
 
     /**
+     * …and a builder of his that counts, the same way (v240): the retreat is there to keep the raider alive, and one next
+     * to a builder that falls — under the heal on it — before the raider does gets both the builder and then the walk
+     * home. Against けろびー#50 (v239 draw) a lone raider struck his builder 800 -> 80 and at 997 went home at 580/1800
+     * (below 0.35 of it) one strike short of the kill; it died seven ticks later three cells off, and the builder healed
+     * and raised the two spawns that stood at 2000
+     */
+    private fun finishingBuilder(ctx: Ctx, raiders: List<Creep>, hits: Int): Boolean {
+        if (!USE_RAID_FINISH_BUILDER) return false
+        val incoming = raiders.sumOf { InfluenceMap.damageAt(it.x, it.y, ctx.combatEnemies) }
+        val lives = if (incoming <= 0.0) Double.MAX_VALUE else hits / incoming
+        return ctx.enemyCreeps.any { c ->
+            isHisBuilder(c) && builderCounts(ctx, c) && raiders.any { getRange(it, c) <= 1 } && run {
+                val dps = raiders.filter { getRange(it, c) <= 1 }.sumOf { a -> a.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
+                val heal = ctx.enemyCreeps.sumOf { e -> val hp = e.body.count { it.type == HEAL && it.hits > 0 }; val r = getRange(e, c)
+                    if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0 }
+                dps > heal && builderWork(ctx, c) / (dps - heal) < lives
+            }
+        }
+    }
+
+    /**
      * The raid (v155): the pair waits at home until both are out, then walks to his main spawn and strikes it, then the
      * nearest spawn or spawn site of his (a strike on a site takes it), passing by a target that already has two of his
      * guns within three cells of it; a creep of his next to a raider with no target in reach takes the strike. Below
@@ -7654,11 +7679,14 @@ object SpawnAndSwamp {
         val max = raiders.sumOf { it.hitsMax }
         // …unless it is finishing a spawn that falls before it does (v167): against kerobi#50 the pair left a bare spawn at
         // 2340/3000 — four ticks of it — with ~11 ticks to live, died on the way home, and his count went to 4
-        val finishing = USE_RAID_FINISH && raiders.any { r -> ctx.enemySpawns.any { sp -> getRange(r, sp) <= 1 && run {
+        val finishingSpawn = USE_RAID_FINISH && raiders.any { r -> ctx.enemySpawns.any { sp -> getRange(r, sp) <= 1 && run {
             val dps = raiders.filter { getRange(it, sp) <= 1 }.sumOf { a -> a.body.count { it.type == ATTACK && it.hits > 0 } } * ATTACK_POWER.toDouble()
             val incoming = raiders.sumOf { InfluenceMap.damageAt(it.x, it.y, ctx.combatEnemies) }
             dps > 0.0 && ((sp.hits ?: SPAWN_HITS) + rampartOn(ctx, sp)) / dps < (if (incoming <= 0.0) Double.MAX_VALUE else hits / incoming)
         } } }
+        val finishingB = finishingBuilder(ctx, raiders, hits)
+        val finishing = finishingSpawn || finishingB
+        if (!raidHome && hits < RAID_RETREAT_SHARE * max && finishingB && !finishingSpawn) raidFinishedBuilder++
         if (!raidHome && hits < RAID_RETREAT_SHARE * max && !finishing) {
             raidHome = true
             raidTargetId = null
@@ -8029,6 +8057,7 @@ object SpawnAndSwamp {
             val apart = (if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else "") +
                 (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "") +
                 (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "") +
+                (if (USE_RAID_FINISH_BUILDER) " finishB=$raidFinishedBuilder" else "") +
                 (if (USE_RAID_STAY_AT_DOOR) " stayed=$raidStayed" else "") +
                 (if (USE_RAID_HUNTED_ENTER) " entered=$raidEntered" else "")
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
