@@ -13,6 +13,12 @@ swapped; the fixed layout (spawns, ramparts, the 48 corridor walls, sources, con
 
     tools/er-offline.py --b escort-run-v19 -n 40            # this worktree (A) against the v19 tag (B), 40 maps x 2 sides
     tools/er-offline.py --a HEAD~3 --b HEAD --persona-a choke -n 20
+    tools/er-offline.py --b escort-run-v28 --pin runs/maps-0928.txt -n 15   # the same maps every run
+
+The maps are the N most RECENT distinct terrains of the store, so the set drifts as matches are played: v30's numbers
+from the morning of 28.09.2026 and v34's from the evening differed by six hands on one persona, and on the same maps
+by one. Two builds are compared only on one set — run them back to back, or `--pin FILE` (written on the first run,
+read on every later one).
 """
 import argparse, glob, json, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -109,6 +115,7 @@ def main():
     ap.add_argument("-j", type=int, default=6, help="parallel stub runs")
     ap.add_argument("--keep", action="store_true", help="keep temporary worktrees")
     ap.add_argument("--losses", action="store_true", help="list A's lost and drawn hands")
+    ap.add_argument("--pin", metavar="FILE", help="map list: read from FILE if it exists, else write the chosen maps there")
     a = ap.parse_args()
 
     scratch = tempfile.mkdtemp(prefix="er-offline-")
@@ -117,7 +124,14 @@ def main():
         ua, da, wa = side_bundle(a.a, "A", scratch, a.keep)
         ub, db, wb = side_bundle(a.b, "B", scratch, a.keep)
         cleanup += [w for w in (wa, wb) if w]
-        ms = maps(a.n)
+        if a.pin and os.path.exists(a.pin):
+            ms = [l.strip() for l in open(a.pin, encoding="utf-8") if l.strip()]
+        else:
+            ms = maps(a.n)
+            if a.pin:
+                os.makedirs(os.path.dirname(os.path.abspath(a.pin)), exist_ok=True)
+                with open(a.pin, "w", encoding="utf-8") as f:
+                    f.write("\n".join(ms) + "\n")
         print(f"offline: A = {da} persona={a.persona_a} | B = {db} persona={a.persona_b}{f' econ={a.econ_b}' if a.econ_b else ''} | {len(ms)} maps x 2 sides", flush=True)
         jobs = [(g, s, ua, ub, a.persona_a, a.persona_b, a.econ_b) for g in ms for s in (False, True)]
         with ThreadPoolExecutor(max_workers=a.j) as ex:
