@@ -529,7 +529,13 @@ def cmd_economy(args):
     for s in (0, 1):
         for t, _, cost in spawn_queue(doc, s):
             charged[s][t] = charged[s].get(t, 0) + cost
-    flow = {s: [] for s in (0, 1)}       # (tick, energy entering the spawn that tick, regen included)
+    # ONE ROW PER SIDE AND TICK, NOT PER SPAWN (28.09.2026). A creep's charge used to be added to the first spawn of
+    # its side listed that tick: born at another spawn, it read as a delivery into the first while the real payer's
+    # minus was clipped to 0 below — against けろびー with three spawns (6aba5a32…) his "delivered 26680" was 18698 by
+    # the conservation of energy, 43 % over. Now the side's spawn deltas of a tick are summed, its charges added once,
+    # and the regeneration taken off per spawn row; only the side's sum is clipped
+    flow = {s: [] for s in (0, 1)}       # (tick, energy entering that side's spawns that tick, regen taken off)
+    deltas = {s: {} for s in (0, 1)}     # tick -> [energy change of each of that side's spawns that moved]
     took = {s: 0.0 for s in (0, 1)}      # energy withdrawn from the piles by that side
     contested = decayed = 0.0
     for k, start, now, acts, raw, tick in frames(doc):
@@ -539,7 +545,7 @@ def cmd_economy(args):
                 continue
             prev, energy[sid] = energy.get(sid, 0), e
             if o['kind'] == 'spawn':
-                flow[o['side']].append((k, e - prev + charged[o['side']].pop(k, 0)))
+                deltas[o['side']].setdefault(k, []).append(e - prev)
             elif o['kind'] == 'container' and e < prev:
                 drop = prev - e
                 # a withdraw reaches one cell, so whoever stood next to the pile that tick took it; a pile
@@ -551,11 +557,24 @@ def cmd_economy(args):
                     contested += drop
                 else:
                     decayed += drop
-    regen = {s: statistics.median([f for _, f in flow[s]]) if flow[s] else 0 for s in (0, 1)}
+    # the regeneration of one spawn a tick: the median change of a spawn row on a tick with no charge (most are quiet)
+    regen = {s: statistics.median([d for k, ds in deltas[s].items() if k not in charged[s] for d in ds] or [0])
+             for s in (0, 1)}
+    withdrawn = {s: 0.0 for s in (0, 1)}  # taken out of that side's spawns (a keeper feeding a tower, a builder)
+    regen_total = {s: 0.0 for s in (0, 1)}
+    for s in (0, 1):
+        for k in sorted(set(deltas[s]) | set(charged[s])):
+            ds = deltas[s].get(k, [])
+            r = regen[s] * len(ds)
+            regen_total[s] += r
+            f = sum(ds) + charged[s].get(k, 0) - r
+            if f < 0:
+                withdrawn[s] += -f
+            flow[s].append((k, f))
     print(f"whole match, {meta['ticks']} ticks; the map hands out 80 energy per tick (two 2000 piles every 50)\n")
     for s in (0, 1):
         tag = 'OURS ' if s == us else 'ENEMY'
-        delivered = sum(max(0.0, f - regen[s]) for _, f in flow[s])
+        delivered = sum(max(0.0, f) for _, f in flow[s])
         creeps = spawn_queue(doc, s)
         structs = [b for b in built(doc) if b[2] == s]
         struct_cost = sum(BUILD_COST.get(b[1], 0) for b in structs)
@@ -567,9 +586,16 @@ def cmd_economy(args):
         print(f"{tag} {names[s]}: picked up {took[s]:.0f} from the piles, delivered {delivered:.0f} to "
               f"{n_spawns} spawn(s) ({delivered / span:.1f}/tick over the match), never arrived "
               f"{max(0.0, took[s] - delivered):.0f}")
-        print(f"      spent {sum(c for _, _, c in creeps)} on {len(creeps)} creeps and {struct_cost} on "
+        spent = sum(c for _, _, c in creeps)
+        side_spawns = [o['id'] for o in doc['objects'] if o['kind'] == 'spawn' and o['side'] == s]
+        holding = sum(energy.get(i, 0) for i in side_spawns)
+        print(f"      spent {spent} on {len(creeps)} creeps and {struct_cost} on "
               f"{len(structs)} structures ({', '.join(sorted({b[1] for b in structs})) or 'none'}); "
-              f"ends holding {energy.get(spawn_id.get(s), 0):.0f}, spawn regenerates {regen[s]:.0f}/tick")
+              f"ends holding {holding:.0f} in its spawns, a spawn regenerates {regen[s]:.0f}/tick")
+        # what its own creeps took OUT of its spawns (a keeper feeding a tower, a builder): energy taken out and brought
+        # back is in both columns, so "delivered" above can exceed what was picked up from the piles (our keeper against
+        # ●ω<♥♪ in 6aba5bb4…: 25916 delivered of 10350 picked up, 16844 taken out)
+        print(f"      taken out of its spawns {withdrawn[s]:.0f}; regenerated {regen_total[s]:.0f}")
     starting_ids = set(initial_spawns(doc).values())
     per = {}
     for k, start, now, acts, raw, tick in frames(doc):
@@ -598,7 +624,7 @@ def cmd_economy(args):
     for k in range(args.step, meta['ticks'] + 1, args.step):
         for s in (0, 1):
             while idx[s] < len(flow[s]) and flow[s][idx[s]][0] <= k:
-                run[s] += max(0.0, flow[s][idx[s]][1] - regen[s])
+                run[s] += max(0.0, flow[s][idx[s]][1])
                 idx[s] += 1
         print(f"{k:>6} {run[0]:>16.0f} {run[1]:>16.0f}")
     print("\nwhoever's curve is above buys more army for the same body prices — that is the whole race.")
