@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v35"
+    private const val BOT_VERSION = "v37"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -430,6 +430,33 @@ object EscortRun {
         return routeTicks(escort, flow, ourTrainMoves(w))
     }
 
+    /** Экономический дебют (null — ещё не решён, решается на 2-м тике). */
+    private var econ: Boolean? = null
+
+    /** Доход в тик: спавн сам +1, и добытчики у источника — по 2 с каждой WORK. */
+    private fun income(w: World): Int {
+        val src = w.homeSource ?: return 1
+        return 1 + w.mine.filter { !isEscort(it) && !it.spawning && dist(it, src) <= 1 }.sumOf { 2 * Bodies.live(it, WORK) }
+    }
+
+    /**
+     * Экономический дебют (docs/escort-run-econ.md): добытчик W3 без MOVE и CARRY (добыча на пол), носильщик C1M1 —
+     * подтягивает его к домашнему источнику и возит упавшую энергию на спавн. 400 из стартовых 500; тягачи — с дохода
+     * (п. 2°°), доход ~6 в тик (Suruks#2: +302 за тики 50–100). Тягач меньше PULLER_MIN_MOVE считался бы разведчиком.
+     */
+    private fun econOrder(w: World, e: Int): Boolean {
+        val mine = w.mine.filter { !isEscort(it) }
+        val steps = listOf(
+            Triple(mine.none { Bodies.has(it, WORK) && !Bodies.has(it, CARRY) }, arrayOf<BodyPartType>(WORK, WORK, WORK), "miner"),
+            Triple(mine.none { Bodies.isHauler(it) }, arrayOf<BodyPartType>(CARRY, MOVE), "hauler"))
+        for ((missing, body, role) in steps) {
+            if (!missing) continue
+            if (e >= Bodies.cost(body)) { order(w, body, role, "economy opening"); return true }
+            saving(w, "economy $role", Bodies.cost(body)); return true
+        }
+        return false
+    }
+
     /** Тягачи врага: его тела из одних MOVE в трёх клетках от его эскорта (они и держат его скорость). */
     private fun enemyPullers(w: World): List<Creep> {
         val e = w.enemyEscort ?: return emptyList()
@@ -528,6 +555,21 @@ object EscortRun {
         val escort = w.escort
         if (RedTeam.spawn(w, e, late = false)) return
 
+        // 0. дебют решается на 2-м тике (docs/escort-run-econ.md): на 1-м их первый крип не виден. Их первый — тягач —
+        //    гонка, дебют M4+M6; иначе их эскорт идёт сам, запас гонки ~200 тиков, и он идёт в экономику: у всех, кто
+        //    нас ещё бьёт (ricardo M4A3, Suruks W3, stachu W3M1C1), так, а при доходе 1 в тик бойцов к нужному тику нет
+        if (econ == null) {
+            if (w.now < 2) return
+            val first = (w.enemyPending + w.enemies).filter { !isEscort(it) }
+            // любой их крип из одних MOVE — гонка: хранитель M1 первым заказом ставят и гонщики (76561198870429455,
+            // ShuP1, けろびー, therevilo2018 — по нашим логам), тягачей они покупают следом; пешим эскорт бывает у тех,
+            // чей первый крип — добытчик, носильщик или боец (Suruks W3, stachu W3M1C1, ricardo M4A3)
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) }
+            println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
+            if (econ == true) openingIdx = openingPlan?.size ?: 0
+        }
+        if (econ == true && econOrder(w, e)) return
+
         // 1. дебют: тягачи по прогону. (v16-v17 меняли против «экономиста» второго тягача на охрану поезда: stachu3478
         //    это било в трёх из пяти, но けろびー — тоже экономист по первому заказу, без раннего бойца, — его M5A1 со
         //    120-го и R5M5 со 177-го догоняли медленный поезд: 1 из 7 при v16 и 0 из 2 при v17, где M6 ждал до 56-го.
@@ -592,14 +634,27 @@ object EscortRun {
         // 2°. вооружённый враг в поле (не телохранитель, не у своей базы), которого наши бойцы не бьют, а победитель дуэли
         //     недорог, — победитель раньше хранителя и блокировщиков: перехватчик けろびー#32 (M1A1 в центре с 50-го) бил
         //     тягачей и 166 тиков эскорт, а защитник копился за хранителем и разведчиками до 361-го (v28 и v29 0-6)
-        val fieldArmed = w.enemyArmed.filter { !isEscort(it) && !bodyguard(w, it) && !onOurFlag(w, it) && (w.enemySpawn == null || dist(it, w.enemySpawn) > CAMP_BASE_RANGE) }
+        // в экономике — и телохранитель: его бросок на поезд (ricardo) и есть то, против чего копится доход
+        val fieldArmed = w.enemyArmed.filter { !isEscort(it) && (econ == true || !bodyguard(w, it)) && !onOurFlag(w, it) && (w.enemySpawn == null || dist(it, w.enemySpawn) > CAMP_BASE_RANGE) }
         if (fieldArmed.isNotEmpty() && !wins(w.fighters.filter { Bodies.isArmed(it) }, fieldArmed) && !fighterQueue.contains(ESCORT_GUARD)) {
             val body = fieldWinner(fieldArmed, w.fighters.filter { Bodies.isArmed(it) }, SPAWN_ENERGY_CAPACITY)
             // и только тот, кто родится до нашего финиша: T1M2A1 против стрелка Suruks копился со 130-го по 240-й и
             // родился бы к ~290-му, а спавн тем временем не купил хранителя, который удержал бы флаг (v35, 6abac619)
-            if (body != null && Bodies.cost(body) <= EARLY_WINNER_BUDGET && Bodies.cost(body) - e < ourArrival(w)) {
+            val budgetCap = if (econ == true) SPAWN_ENERGY_CAPACITY else EARLY_WINNER_BUDGET
+            if (body != null && Bodies.cost(body) <= budgetCap && Bodies.cost(body) - e < ourArrival(w) * income(w)) {
                 if (e >= Bodies.cost(body)) { if (order(w, body, "defender", "field threat ${fieldArmed.joinToString(" ") { Bodies.summaryOf(it) + "@(" + it.x + "," + it.y + ")" }}")) fighterQueue.addLast(ESCORT_GUARD); return }
                 saving(w, "field defender ${Bodies.summary(body)}", Bodies.cost(body)); return
+            }
+        }
+
+        // 2°°. экономика: тягачи с дохода, пока у поезда меньше OPENING_MOVES MOVE (дебют дал один M2)
+        if (econ == true && escort != null) {
+            val have = w.mine.filter { !isEscort(it) && Bodies.isPuller(it, PULLER_MIN_MOVE) }.sumOf { it.body.count { p -> p.type == MOVE } }
+            if (have < OPENING_MOVES) {
+                // не меньше PULLER_MIN_MOVE: M1 считался разведчиком, в поезд не вставал, и правило покупало его снова и снова
+                val body = Bodies.moves(maxOf(PULLER_MIN_MOVE, minOf(OPENING_MOVES - have, e / Bodies.cost(MOVE))))
+                if (e >= Bodies.cost(body)) { order(w, body, "puller", "economy: the train has $have MOVE of $OPENING_MOVES"); return }
+                saving(w, "train puller", Bodies.cost(body)); return
             }
         }
 
@@ -995,7 +1050,9 @@ object EscortRun {
         // снимать (T2M1A1 — 15 тиков на клетку болота против 5 у M1A1 — полсотни тиков стоял в четырёх клетках от
         // перехватчика, пока тот бил эскорт; けろびー#32, 28.09.2026)
         val catchUp = threats.minOfOrNull { c -> Bodies.period(c.body.count { it.type != MOVE && it.type != CARRY }, Bodies.live(c, MOVE), true) } ?: Int.MAX_VALUE
-        for (a in 1..8) for (t in 0..12) for (m in maxOf(1, (a + t + 2) / 3)..(a + t)) {
+        // MOVE — до двойного числа прочих частей: не медленнее M4A3 по болоту (у него 4 MOVE на 3 части, 4 тика на
+        // клетку) значит MOVE ≥ 1,25 прочих, и при «не больше прочих» такого тела перебор не находил вовсе (v37, стенд camp)
+        for (a in 1..8) for (t in 0..12) for (m in maxOf(1, (a + t + 2) / 3)..minOf(2 * (a + t), 50 - a - t)) {
             val body = Array(t) { TOUGH } + Array(m) { MOVE } + Array(a) { ATTACK }
             val cost = Bodies.cost(body)
             if (cost > cap || cost >= bestCost || body.size > 50) continue
@@ -1919,8 +1976,38 @@ object EscortRun {
     private fun runWorkers(w: World) {
         val spawn = w.mySpawn ?: return
         val source = w.homeSource ?: return
+        val miners = w.workers.filter { Bodies.has(it, WORK) && !Bodies.has(it, CARRY) && !it.spawning }
+        val haulers = w.workers.filter { Bodies.isHauler(it) && !it.spawning }
+        // добытчик без MOVE: у источника — добывает на пол; нет — ждёт буксира
+        for (m in miners) { pinned.add(idOf(m)); if (dist(m, source) <= 1) m.harvest(source) }
+        val towed = miners.firstOrNull { dist(it, source) > 1 }
+        for ((i, h) in haulers.withIndex()) {
+            if (i == 0 && towed != null) {
+                // буксир: носильщик тянет добытчика к источнику; стоя у источника, отходит вбок и втягивает его на свою клетку
+                if (dist(h, towed) > 1) { stepTo(w, h, towed, 1); continue }
+                val to = if (dist(h, source) <= 1) asideCell(w, h, setOf(key(towed), key(source)))
+                    else stepAround(w, h, source, 1, 1, 1)
+                if (to != null && towed.fatigue == 0 && h.fatigue == 0) {
+                    // буксируемый без MOVE ходит только формой move(крип): направление движок отвергает (нет MOVE),
+                    // а форма «за тянущим» проверок не делает (game/creeps.js)
+                    h.pull(towed); h.move(dirTo(h, to)); towed.asDynamic().move(h)
+                    pinned.add(idOf(h))
+                }
+                continue
+            }
+            val carrying = h.store[RESOURCE_ENERGY] ?: 0
+            val capacity = h.store.getCapacity(RESOURCE_ENERGY) ?: 0
+            val pile = getObjectsByPrototype(screeps.api.Resource::class)
+                .filter { it.exists && it.resourceType == RESOURCE_ENERGY && dist(it, source) <= 2 }.maxByOrNull { it.amount }
+            if (carrying < capacity && pile != null) {
+                if (dist(h, pile) <= 1) h.pickup(pile) else stepTo(w, h, pile, 1)
+            } else if (carrying > 0) {
+                if (dist(h, spawn) <= 1) h.transfer(spawn, RESOURCE_ENERGY) else stepTo(w, h, spawn, 1)
+            } else if (dist(h, source) > 2) stepTo(w, h, source, 2)
+        }
+        // самодобытчики (MCWW): добывают и носят сами
         for (h in w.workers) {
-            if (h.spawning) continue
+            if (h.spawning || h in miners || h in haulers) continue
             val carrying = h.store[RESOURCE_ENERGY] ?: 0
             val capacity = h.store.getCapacity(RESOURCE_ENERGY) ?: 0
             val nearSource = dist(h, source) <= 1

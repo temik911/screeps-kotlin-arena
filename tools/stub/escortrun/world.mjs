@@ -206,8 +206,15 @@ export function process(ResourceClass) {
     if (m.harvest) {
       const s = m.harvest.target;
       if (s && s.exists && range(c, s) <= 1) {
-        const amount = Math.min(s.energy, c.store.free(), live(c, 'work') * 2);
-        if (amount > 0) { s.energy -= amount; c.store.energy += amount; }
+        // the engine takes WORK x 2 from the source whatever the store holds; what does not fit falls on the creep's
+        // square (drop mining: a W3 without CARRY harvests to the floor, Suruks#2 6abac3fb)
+        const amount = Math.min(s.energy, live(c, 'work') * 2);
+        if (amount > 0) {
+          s.energy -= amount;
+          const kept = Math.min(amount, c.store.free());
+          c.store.energy += kept;
+          if (amount > kept) dropEnergy(c.x, c.y, amount - kept, ResourceClass);
+        }
       }
     }
     if (m.drop) {
