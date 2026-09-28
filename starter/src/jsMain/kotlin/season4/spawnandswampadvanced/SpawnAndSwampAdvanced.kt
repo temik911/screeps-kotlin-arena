@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v53"
+    private const val BOT_VERSION = "v54"
 
     private const val LOG_EVERY = 50
 
@@ -1014,6 +1014,16 @@ object SpawnAndSwampAdvanced {
             .filter { it.my == true && getRange(w, it) <= 1 && (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }
             .minByOrNull { energyOf(it) } ?: spawn
         val spawnFree = sink.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
+        // все спавны рядом полны, а у источника есть свободная клетка базы, смежная со спавном с местом, — туда: иначе
+        // добытчик стоит, а близнец не получает ничего
+        if (spawnFree <= 0) {
+            val base = bases.firstOrNull { b -> slotOf[idOf(w)]?.let { b.slots.contains(it) } == true }
+            val roomy = getObjectsByPrototype(StructureSpawn::class).filter { it.my == true && (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }
+            val held = slotOf.values.toSet()
+            val occupied = getObjectsByPrototype(Creep::class).map { posOf(it) }.toSet()
+            val better = base?.slots?.firstOrNull { c -> c !in held && c !in occupied && roomy.any { cheb(posOf(it), c) <= 1 } }
+            if (better != null) { slotOf[idOf(w)] = better; println("harvester t=$t moves to (${better.x},${better.y}) by a spawn with room") }
+        }
         val canDeliver = e > 0 && spawnFree > 0 && getRange(w, sink) <= 1
         // копка исполняется раньше сдачи: место под неё — от запаса начала тика
         if (src.energy > 0 && getRange(w, src) <= 1 && cap - e >= h) {
@@ -1487,7 +1497,13 @@ object SpawnAndSwampAdvanced {
     private fun spawnFighter(t: Int, spawn: StructureSpawn, energy: Int, why: String) {
         val pool = poolOf(spawn)
         val poolEnergy = pool.sumOf { energyOf(it) }
-        val poolCap = pool.sumOf { it.store.getCapacity(RESOURCE_ENERGY) ?: SPAWN_ENERGY_CAPACITY }
+        // потолок тела — только спавны пула, в которые кто-то сдаёт (добытчик рядом) или сам заказчик: близнец, до
+        // которого не дотягивается ни один добытчик, копит лишь +1 в тик. v46–v53 ждали двойного тела за 2000, основной
+        // спавн стоял полным, добытчику некуда было сдавать, и источник копался 9–63 % времени (против けろびー#19 —
+        // 15–33 тыс. энергии за игру, 30–50 % всей нашей добычи)
+        val feeders = getObjectsByPrototype(Creep::class).filter { it.my && !it.spawning && liveParts(it, WORK) > 0 }
+        val fed = pool.filter { sp -> idOf(sp) == idOf(spawn) || feeders.any { getRange(it, sp) <= 1 } }
+        val poolCap = fed.sumOf { it.store.getCapacity(RESOURCE_ENERGY) ?: SPAWN_ENERGY_CAPACITY }
         // под угрозой — тело одного спавна: защитник нужен сейчас, а не через 180 тиков накопления на двойное
         val cap = if (why == "threat") minOf(poolCap, SPAWN_ENERGY_CAPACITY) else poolCap
         val full = chooseFighter(cap)
