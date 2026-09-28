@@ -1985,8 +1985,13 @@ object EscortRun {
             if (i == 0 && towed != null) {
                 // буксир: носильщик тянет добытчика к источнику; стоя у источника, отходит вбок и втягивает его на свою клетку
                 if (dist(h, towed) > 1) { stepTo(w, h, towed, 1); continue }
+                // шаг буксира — только на СВОБОДНУЮ клетку: занятую (эскорт у спавна, живой тест против stachu#10)
+                // движок не даёт, тянущий стоит, и буксируемый с ним — двадцать тиков pull=0 move=0 на месте
+                val toSrc = flowTo("toSource", source, w.blocked, 1)
                 val to = if (dist(h, source) <= 1) asideCell(w, h, setOf(key(towed), key(source)))
-                    else stepAround(w, h, source, 1, 1, 1)
+                    else DIRECTIONS.map { (dx, dy) -> h.x + dx to h.y + dy }
+                        .filter { (x, y) -> DistanceMap.inBounds(x, y) && !DistanceMap.isWall(x, y) && !w.occupant.containsKey(x * 100 + y) && toSrc[x * 100 + y] in 0 until toSrc[key(h)] }
+                        .minByOrNull { (x, y) -> toSrc[x * 100 + y] }?.let { (x, y) -> InfluenceMap.cell(x, y) }
                 if (to != null && towed.fatigue == 0 && h.fatigue == 0) {
                     // буксируемый без MOVE ходит только формой move(крип): направление движок отвергает (нет MOVE),
                     // а форма «за тянущим» проверок не делает (game/creeps.js)
