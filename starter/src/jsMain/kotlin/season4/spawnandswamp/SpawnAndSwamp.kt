@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 229
+    private const val BOT_VERSION = 230
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4217,8 +4217,48 @@ object SpawnAndSwamp {
         // а единица размена — цена одного нашего тела
         val decided = ourLost >= (homeAll.minOfOrNull { it.hitsMax } ?: Int.MAX_VALUE)
         val exchangeOk = !decided || (predicted < Double.MAX_VALUE && ourLost <= predicted * theirLost * DEFEND_MARGIN)
+        // THE SORTIE IS A RACE TO A KILL, NOT A PRODUCT OF DAMAGE AND HITS (v230). homeOurs/homeTheirs is √((dps − his
+        // heal)·hits), as if our damage piled up; his damage on us does (we have no healer at home), but ours short of a
+        // kill is wiped by his heal, and on plain at equal pace it is he who picks when to be in contact. Against
+        // ●ω<♥♪#2 (v229 loss) the house read fight:wins 1150/476 at 370 against his M6A6 and M10H2 on the one-cell plain
+        // strip at x=1 (swamp at x=2-8): 0.64 of our three guns in range on average, our melee never struck, we did 1840
+        // and he healed 1560; at 556-594 fight:wins 659/626 again, 1068 -> 666 on his M6A6 and back to 1200 by 588 — over
+        // the match we did 12070, he healed 13096, deaths 17:0, eight of our fighters among them. The house leaves its
+        // post only when it kills one of his sooner than he kills one of ours: for each of his creeps c, the ranged damage
+        // of our ready guns that fit within range 3 of it (free cells), our melee only where c must stand by our spawn or is
+        // slower than that melee on both grounds, less the heal on c (12 per HEAL next to it, 4 at range 2-3) — his hits
+        // over the rest; against our weakest's hits over all his damage. At the gates and under fire the house fights as
+        // before
+        val killRace: Pair<Double, Double>? = if (!USE_HOME_KILL_RACE || homeThreats.isEmpty() || homeReady.isEmpty()) null else {
+            val inf = Double.MAX_VALUE
+            val gunRanged = homeReady.map { InfluenceMap.profileOf(it).ranged }.filter { it > 0.0 }.sortedDescending()
+            val tUs = fightPack.minOfOrNull { c ->
+                val heal = combatEnemies.sumOf { e ->
+                    val hp = e.body.count { it.type == HEAL && it.hits > 0 }
+                    val r = getRange(e, c)
+                    if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0
+                }
+                var cells = 0
+                for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
+                    if (dx == 0 && dy == 0) continue
+                    val x = c.x + dx; val y = c.y + dy
+                    if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                    if (getTerrainAt(InfluenceMap.cell(x, y)) != TERRAIN_WALL) cells++
+                }
+                val ranged = gunRanged.take(cells).sum()
+                val pinned = getRange(c, mySpawn) <= 1
+                val melee = homeReady.filter { g -> InfluenceMap.profileOf(g).melee > 0.0 &&
+                    (pinned || (plainPeriod(c) > plainPeriod(g) && swampPeriod(c) > swampPeriod(g))) }.sumOf { InfluenceMap.profileOf(it).melee }
+                val net = ranged + melee - heal
+                if (net <= 0.0) inf else c.hits / net
+            } ?: inf
+            val hisDps = fightPack.sumOf { val q = InfluenceMap.profileOf(it); q.ranged + q.melee }
+            val tHim = if (hisDps <= 0.0) inf else homeReady.minOf { it.hits } / hisDps
+            tUs to tHim
+        }
         val homeWins = homeThreats.isNotEmpty() &&
-            homeOurs >= homeTheirs * (if (homeFight) PUSH_RELEASE_RATIO else DEFEND_MARGIN)
+            homeOurs >= homeTheirs * (if (homeFight) PUSH_RELEASE_RATIO else DEFEND_MARGIN) &&
+            (killRace == null || killRace.first < killRace.second)
         // «у ворот» — ВНУТРИ поста, а не в семи клетках: шар из двух M3R3 и двух M4H2 ходил в 6-8 клетках
         // от спавна, и на каждом заходе рывок «всем составом» делал один свежий боец (прочие — остовы без
         // RANGED); враг отходил на клетку, бой отменялся, боец оставался в шаре — девять подряд (матч 13).
@@ -4231,7 +4271,8 @@ object SpawnAndSwamp {
         // в журнал — с причиной и счётом: «fight:gates(790/759)» читается без пересчёта
         homeMode = if (homeThreats.isEmpty()) "-" else (if (homeFight) "fight:" + (if (spawnUnderFire) "fire" else if (homeAtGates) "gates" else "wins") else "hold") +
             "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}]${if (homeJoiners.isEmpty()) "" else "+j${homeJoiners.size}"}" +
-            "x${ourLost.toInt()}/${theirLost.toInt()}~${(predicted * 100).toInt()}w$exchangeWindow${if (exchangeOk) "" else "!"})"
+            "x${ourLost.toInt()}/${theirLost.toInt()}~${(predicted * 100).toInt()}w$exchangeWindow${if (exchangeOk) "" else "!"}" +
+            (if (killRace == null) "" else " k=${if (killRace.first >= Double.MAX_VALUE) "inf" else killRace.first.toInt().toString()}/${if (killRace.second >= Double.MAX_VALUE) "inf" else killRace.second.toInt().toString()}") + ")"
         // ДОМ НА ВРЕМЯ ВЫЛАЗКИ. Пока волна ходит — ход группы плюс осада по её же симуляции — до нашего
         // спавна успевают дойти те приближающиеся, у кого подход меньше этого срока. Держать их должен
         // гарнизон, то есть те, кто ОСТАНЕТСЯ (homeGuard уже без staging), а не только тот, кто нужен
@@ -7230,6 +7271,9 @@ object SpawnAndSwamp {
     private const val USE_HUNT_FREE_WORTH = true
     /** A raider chipping at his door leaves only when every gun coming is slower than it on plain (v229). */
     private const val USE_RAID_STAY_AT_DOOR = true
+    /** The house leaves its post for his creeps only when it kills one of them sooner than he kills one of ours (the
+     *  kill race: our damage that fits round him and reaches him, less the heal on him; v230). */
+    private const val USE_HOME_KILL_RACE = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
