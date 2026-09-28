@@ -1119,6 +1119,14 @@ object EscortRun {
             if (w.flagBlocker != null && (mission == KEEP || mission == APPROACH)) { mission = BLOCK; scoutMission[idOf(s)] = BLOCK }
             if (mission == CHOKE) { runChoke(w, s); continue }
             if (mission == APPROACH) {
+                // флаг опустел под вооружённым врагом (хранителя выбили) — встаёт на него сам: клетку держит тот, кто
+                // на ней, а их стрелок у флага займёт её в следующий тик (Suruks#2)
+                val f0 = w.myFlag
+                if (f0 != null && dist(s, f0) <= 1 && w.occupant[key(f0)] == null && w.enemyArmed.any { dist(it, f0) <= 3 }) {
+                    s.move(dirTo(s, f0)); pinned.add(idOf(s)); scoutMission[idOf(s)] = KEEP
+                    println("scout t=${w.now}: ${idOf(s)} approach keeper steps onto the emptied flag")
+                    continue
+                }
                 // второй хранитель: на клетке подхода нашего эскорта; эскорт, подойдя, сдвинет его (runTrain)
                 val a = approachCell(w.escort, w.escortFlow) ?: w.myFlag ?: continue
                 if (onCell(s, a)) { if (keeperStepAside != idOf(s)) pinned.add(idOf(s)); continue }
@@ -1524,6 +1532,7 @@ object EscortRun {
         }
         if (heading.isEmpty()) return false
         var need = 0
+        var dps = 0
         var firstEta = Int.MAX_VALUE
         for (x in heading) {
             // приход — по полю с ценой болота из его тела: по прямой стрелок Suruks выходил к флагу на ~206-м вместо
@@ -1535,16 +1544,22 @@ object EscortRun {
             val eta = w.now + steps * plain
             val gap = w.now + ours - eta + 1
             if (gap <= 0) continue
-            need += gap * (30 * Bodies.live(x, ATTACK) + 10 * Bodies.live(x, RANGED_ATTACK))
+            val d = 30 * Bodies.live(x, ATTACK) + 10 * Bodies.live(x, RANGED_ATTACK)
+            need += gap * d
+            dps += d
             firstEta = minOf(firstEta, eta)
         }
         if (DEBUG_LOG && w.now % 10 == 0) println("holdflag t=${w.now}: heading ${heading.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, flag) }} need=$need firstEta=$firstEta ours=${w.now + ours}")
         if (need <= 0) return false
-        val have = w.scouts.filter { scoutMission[idOf(it)] == KEEP }.sumOf { it.hits } + 100 * scoutQueue.count { it == KEEP }
+        // хранитель подхода стоит вплотную и встаёт на опустевший флаг (runScouts) — его хиты тоже держат клетку
+        val holders = setOf(KEEP, APPROACH)
+        val have = w.scouts.filter { scoutMission[idOf(it)] in holders }.sumOf { it.hits } + 100 * scoutQueue.count { it in holders }
         if (have >= need) return false
         val body = Bodies.moves(1)
         val arrive = w.now + maxOf(0, Bodies.cost(body) - e) + Bodies.spawnTicks(body) + scoutEta(w, flag)
-        if (arrive >= firstEta) return false
+        // успеть надо не к его приходу, а к падению клетки: стоящие хранители держат её have/dps тиков (M2R2 Suruks:
+        // хранитель и хранитель подхода — ещё 10 тиков после 236-го, а новый M1 от 140-го поспевал к 242-му)
+        if (arrive >= firstEta + have / maxOf(1, dps)) return false
         if (e >= Bodies.cost(body)) {
             if (order(w, body, "keeper", "hold the flag: ${heading.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, flag) }} first at ~$firstEta, ours at ~${w.now + ours}; keeper hits $have of $need")) scoutQueue.addLast(KEEP)
             return true
