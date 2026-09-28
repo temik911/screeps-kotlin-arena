@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 237
+    private const val BOT_VERSION = 238
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6696,7 +6696,12 @@ object SpawnAndSwamp {
                 if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0 }
             InfluenceMap.profileOf(c).heal > 0.0 && volley >= c.hits + healOn
         }
-        val share = if (USE_TOWER_FORECAST && lethal.isNotEmpty()) maxOf(homeShare(), forecastHomeShare) else homeShare()
+        // …and not while the raid's pair is being bought (v238): against けろびー#50 (v237, 5-0-3 against v235's 8-0-0) the
+        // raid's signal came at 186-188 in every hand and the forecast's tower went down at 250-260, 100 ticks before the
+        // fort's own at 360, taking its 1250 out of the pair's window; against ●ω<♥♪#2 there is no raid signal at all.
+        // Once the pair is ordered, or with no signal, the forecast's share stands
+        val raidBuying = USE_TOWER_AFTER_RAID && raidSignal && raidOrdered < RAID_SIZE
+        val share = if (USE_TOWER_FORECAST && lethal.isNotEmpty() && !raidBuying) maxOf(homeShare(), forecastHomeShare) else homeShare()
         if (share <= 0.0) return false
         val healVsTower = heal - lethal.sumOf { InfluenceMap.profileOf(it).heal }
         val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats)
@@ -7345,6 +7350,8 @@ object SpawnAndSwamp {
     private const val USE_TOWER_FORECAST = true
     /** The forecast's horizon for the tower's share: the stand's H = 200 (0.3 % of arrivals missed with the wave out). */
     private const val TOWER_FORECAST_H = 200
+    /** The tower's forecast share waits while the raid's pair is being bought (v238). */
+    private const val USE_TOWER_AFTER_RAID = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
