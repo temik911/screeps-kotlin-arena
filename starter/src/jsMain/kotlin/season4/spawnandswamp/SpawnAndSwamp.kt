@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 214
+    private const val BOT_VERSION = 215
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4115,6 +4115,7 @@ object SpawnAndSwamp {
         // жизни нашего строя под их уроном, посчитанное из их урона и наших хитов, и путь каждого
         // считается его собственным телом по болоту (pathTicks)
         val homeAnchor = homeThreats.minByOrNull { ctx.enemyApproach[it.x * 100 + it.y] }
+        var homeJoiners: List<Creep> = emptyList()
         val homeReady = if (homeAnchor == null) homeAll else {
             // окно — время жизни ВСЕГО строя под их огнём, а не до первой смерти: бой идёт, пока есть
             // кому стрелять, и подкрепление, успевшее к середине, в нём участвует. По короткому окну
@@ -4130,6 +4131,22 @@ object SpawnAndSwamp {
             // fight if it arrives within the line's life of the first arrival.
             val walks = homeAll.associate { it.id to pathTicks(it, toThreat, it.x * 100 + it.y) }
             val first = walks.values.filter { it < Int.MAX_VALUE / 4 }.minOrNull() ?: 0
+            // THE FIGHT IS AGAINST WHOEVER GETS THERE WHILE WE ARE OUT (v215). The pack is his creeps within a fight's reach
+            // of the threats; his army walking in from further off was not in it. Against Ranamar#6 (v214, lost at 1766)
+            // the house read fight:wins 1265/400 at t=790 against M5R1×2 and A1M1 at our haulers 30-40 cells south, all
+            // seven guns went out of the tower's reach, while his M15A3 and M10R2 came in from the west 40 cells off; on the
+            // way back his M15A3 caught both M8R4 and the M4R1 (878-987) for one M5R1 and the A1M1 of his, the fleet went
+            // 5->0 and the house fell with no income. Out is the walk there, the fight and the walk back: the fight ends
+            // when one side is dead — our line under the pack's fire (fightTicks) or the pack under our net fire; whoever
+            // of his walks to the threat inside that, by his own body over the terrain, is in the count
+            if (USE_HOME_FIGHT_JOINERS) {
+                val ourNetOut = homeAll.sumOf { effectiveDps(it, homePack, null) } - homePack.sumOf { InfluenceMap.profileOf(it).heal }
+                val packLife = if (ourNetOut <= 0.0) Int.MAX_VALUE / 4 else (homePack.sumOf { it.hits } / ourNetOut).toInt()
+                val out = 2L * first + minOf(fightTicks, packLife).coerceAtLeast(RANGED_RANGE)
+                homeJoiners = combatEnemies.filter { e ->
+                    homePack.none { it.id == e.id } && pathTicks(e, toThreat, e.x * 100 + e.y).toLong() <= out
+                }
+            }
             homeAll.filter { f ->
                 // ДОСТАЁТ ИЛИ ДОГОНИТ. Стрелок, который не достаёт до ближайшего из стаи и не может её
                 // догнать (она уходит и не медленнее его — см. catchable, замер по прошлому тику), в этом
@@ -4145,8 +4162,9 @@ object SpawnAndSwamp {
         }
         // с гистерезисом, как охота: начатый бой продолжаем при 0.9 — иначе первые потери переключали
         // «дерёмся» в «пост», и отряд разворачивался под огнём
-        val homeOurs = ourPowerOf(homeReady, homePack)
-        val homeTheirs = enemyPowerOf(homePack, homeReady)
+        val fightPack = if (homeJoiners.isEmpty()) homePack else homePack + homeJoiners
+        val homeOurs = ourPowerOf(homeReady, fightPack)
+        val homeTheirs = enemyPowerOf(fightPack, homeReady)
         // РАЗМЕН — ПРИБОР, НЕ ВЕТО (замерено и отвергнуто 06.09.2026). Модель предсказывает размен:
         // его урон, делённый на наш чистый (за вычетом его лечения); measureExchange говорит, сколько
         // уходит на самом деле, и в проигранных матчах расходились они вдесятеро. Вето по этому
@@ -4185,7 +4203,7 @@ object SpawnAndSwamp {
         homeWinsNow = homeWins
         // в журнал — с причиной и счётом: «fight:gates(790/759)» читается без пересчёта
         homeMode = if (homeThreats.isEmpty()) "-" else (if (homeFight) "fight:" + (if (spawnUnderFire) "fire" else if (homeAtGates) "gates" else "wins") else "hold") +
-            "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}]" +
+            "(${homeOurs.toInt()}/${homeTheirs.toInt()}[${homeReady.size}/${homeAll.size}]${if (homeJoiners.isEmpty()) "" else "+j${homeJoiners.size}"}" +
             "x${ourLost.toInt()}/${theirLost.toInt()}~${(predicted * 100).toInt()}w$exchangeWindow${if (exchangeOk) "" else "!"})"
         // ДОМ НА ВРЕМЯ ВЫЛАЗКИ. Пока волна ходит — ход группы плюс осада по её же симуляции — до нашего
         // спавна успевают дойти те приближающиеся, у кого подход меньше этого срока. Держать их должен
@@ -6730,6 +6748,9 @@ object SpawnAndSwamp {
     /** The hold is in time while the wave's own members behind the front arrive and the siege with them ends before
      *  the clock (v213). */
     private const val USE_HOLD_WAITS_WAVE = true
+    /** The house's fight counts his creeps that walk to the threat while our garrison is out — there, the fight and back
+     *  (runFighters, v215). */
+    private const val USE_HOME_FIGHT_JOINERS = true
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
     private const val USE_HOLD_CREEP_FIRE = true
     /** The pile builder races his carriers at the container instead of the haulers' race home (v194). */
