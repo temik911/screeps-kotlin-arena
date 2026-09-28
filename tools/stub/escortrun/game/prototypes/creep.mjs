@@ -38,7 +38,12 @@ export class Creep extends GameObject {
       if (!d) return -10;
       intent(this, 'move', { dir: d }); return 0;
     }
-    if (this.fatigue > 0) return -11; if (!this.body.some((p) => p.type === 'move' && p.hits > 0)) return -12; if (!(dir >= 1 && dir <= 8)) return -10; intent(this, 'move', { dir }); return 0; }
+    // …but a creep already taken in tow this tick (someone's pull(this) came first) is not refused: live 28.09.2026 a W3
+    // without MOVE, pulled by its C1M1, answered move(direction) 0 and followed every third tick, while move(creepObject)
+    // answered 0 and never moved (v37 tow logs, 6abad699 against 6abad564)
+    const towed = [...world.intents.values()].some((m) => m.pull && m.pull.target === this);
+    if (!towed) { if (this.fatigue > 0) return -11; if (!this.body.some((p) => p.type === 'move' && p.hits > 0)) return -12; }
+    if (!(dir >= 1 && dir <= 8)) return -10; intent(this, 'move', { dir }); return 0; }
   moveTo(target, opts) { if (this.fatigue > 0) return -11; if (!this.body.some((p) => p.type === 'move' && p.hits > 0)) return -12; const r = searchPath(this, target, opts); const s = r.path[0]; if (!s) return -2; return this.move(getDirection(s.x - this.x, s.y - this.y)); }
   attack(target) { intent(this, 'melee', { target }); return 0; }
   rangedAttack(target) { intent(this, 'ranged', { type: 'attack', target }); return 0; }

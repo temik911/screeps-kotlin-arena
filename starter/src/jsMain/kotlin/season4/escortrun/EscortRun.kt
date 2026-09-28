@@ -1993,8 +1993,9 @@ object EscortRun {
                         .filter { (x, y) -> DistanceMap.inBounds(x, y) && !DistanceMap.isWall(x, y) && !w.occupant.containsKey(x * 100 + y) && toSrc[x * 100 + y] in 0 until toSrc[key(h)] }
                         .minByOrNull { (x, y) -> toSrc[x * 100 + y] }?.let { (x, y) -> InfluenceMap.cell(x, y) }
                 if (to != null && towed.fatigue == 0 && h.fatigue == 0) {
-                    // буксируемый без MOVE ходит только формой move(крип): направление движок отвергает (нет MOVE),
-                    // а форма «за тянущим» проверок не делает (game/creeps.js)
+                    // буксируемый без MOVE ходит формой move(направление) ПОСЛЕ pull: живьём она ответила 0 и добытчик
+                    // шёл за носильщиком раз в третий тик, а форма move(крип) отвечала 0 и не двигала вовсе (как втягивание
+                    // эскорта в v11) — 28.09.2026, 6abad699 против 6abad564
                     val rp = h.pull(towed); val rm = h.move(dirTo(h, to)); val rt = towed.move(dirTo(towed, h))
                     pinned.add(idOf(h))
                     if (DEBUG_LOG && w.now < 120) println("tow t=${w.now}: hauler (${h.x},${h.y}) -> (${to.x},${to.y}) pull=$rp move=$rm miner (${towed.x},${towed.y}) move=$rt")
