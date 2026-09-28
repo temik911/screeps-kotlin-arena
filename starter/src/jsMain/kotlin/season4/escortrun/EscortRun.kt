@@ -561,10 +561,13 @@ object EscortRun {
         if (econ == null) {
             if (w.now < 2) return
             val first = (w.enemyPending + w.enemies).filter { !isEscort(it) }
-            // любой их крип из одних MOVE — гонка: хранитель M1 первым заказом ставят и гонщики (76561198870429455,
-            // ShuP1, けろびー, therevilo2018 — по нашим логам), тягачей они покупают следом; пешим эскорт бывает у тех,
-            // чей первый крип — добытчик, носильщик или боец (Suruks W3, stachu W3M1C1, ricardo M4A3)
-            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) }
+            // Экономика окупается, когда их первая трата — ТЯЖЁЛЫЙ боец и ничего из одних MOVE: их доход остаётся 1 в тик,
+            // угроза одна и уже на поле, их эскорт идёт пешком (запас гонки ~200), и наш доход успевает купить её
+            // победителя. Первая трата — экономика (W3 Suruks, W3M1C1 stachu): их армия придёт позже, быстрый поезд
+            // проходит центр раньше неё (A/B против stachu#10: гонка 5-3, экономика 4-4 — наш медленный поезд пришёл к их
+            // M1A1 и M3A3). Лёгкий первый боец (M1A1 けろびー#32) — гонка с ранним защитником вместо второго тягача (v29).
+            // Любой их крип из одних MOVE — гонка: хранителя M1 первым ставят и гонщики (76561198870429455, ShuP1, けろびー)
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.wasArmed(it) && heavy(it) }
             println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
             if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
