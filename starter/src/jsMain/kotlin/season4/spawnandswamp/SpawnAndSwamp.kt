@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 223
+    private const val BOT_VERSION = 224
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7173,8 +7173,13 @@ object SpawnAndSwamp {
     private const val FORECAST_BACK = 20
     /** "At the door": the Chebyshev radius round the point the forecast is asked about. */
     private const val FORECAST_D = 5
-    /** The raid's visit and kill are entered and held by the forecast's horizon at the target (v223). */
-    private const val USE_RAID_FORECAST = true
+    /** The raid's visit and kill are entered and held by the forecast's horizon at the target (v223).
+     *  OFF (v224) — measured live 28.09.2026: A/B against けろびー#50 (8+8 test hands) v219 8-0-0 / v223 5-0-3, raid
+     *  damage into his spawns and ramparts 156510 / 132390, two raiders on one spawn 599 / 354 ticks. The horizon at the
+     *  door is looser than his nearest gun's walk back (reach / 0.75 against reach), and it says nothing of the walk:
+     *  raiders 70-80 cells off went for his main whenever walk + 10 fitted it, through his army, and the waiting cell was
+     *  in use in 3-15 journal lines a game. v224 keeps the waiting cell alone to measure it */
+    private const val USE_RAID_FORECAST = false
     /** A raid waiting on a spawn of his waits at the nearest cell his guns do not reach within RAID_WAIT_H (v223). */
     private const val USE_RAID_SAFE_WAIT = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
