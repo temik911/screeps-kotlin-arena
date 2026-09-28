@@ -953,7 +953,10 @@ object EscortRun {
             // после боя — не медленнее трёх тиков на клетку равнины: мёртвые части тоже весят (движок считает вес по
             // типам частей), и T7M3A2, выигравший дуэль с одним живым MOVE, полз по 9 тиков на клетку, пока их эскорт
             // проходил мимо (ricardo#23, 28.09.2026)
+            val before = unit.total()
             if (Bodies.duel(unit, threats.map { Bodies.unitOf(it) }) < 0) continue
+            // с запасом: T2M1A1 «выигрывал» у M1A1 на волосок, и живьём оба гибли (けろびー#32)
+            if (unit.total() * 100 < before * FIELD_MARGIN_PCT) continue
             if (unit.count(MOVE) * 3 < merged.count { it != MOVE && it != CARRY }) continue
             best = body; bestCost = cost
         }
@@ -1415,7 +1418,7 @@ object EscortRun {
         val killHeavies = if (killPath) w.enemyArmed.filter { !isEscort(it) && heavy(it) } else emptyList()
         val camp = (campers(w) + killHeavies.filter { !wins(w.fighters.filter { f -> Bodies.isArmed(f) }, killHeavies) }).distinct()
         val decisive = if (camp.isNotEmpty()) camp else if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
-        if (decisive.isEmpty() || wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive })) {
+        if (decisive.isEmpty() || (camp.isEmpty() && wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive }))) {
             if (holding) { released = true; println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}") }
             holding = false; holdThreats = emptyList(); return
         }
@@ -1458,6 +1461,8 @@ object EscortRun {
         return Bodies.cost(body) > HEAVY_COST
     }
     private const val HEAVY_COST = 260
+    /** Победитель дуэли в поле сохраняет не меньше стольких процентов хитов. */
+    private const val FIELD_MARGIN_PCT = 35
     /** Тяжёлый ближе стольких клеток к нашему спавну — он идёт на базу, и его бьёт боец с рампарта. */
     private const val HEAVY_NEAR_BASE = 25
 
@@ -1488,7 +1493,8 @@ object EscortRun {
         // держит, пока СЕЙЧАС в пяти клетках от оставшегося пути: M4A3 ricardo#23 к ~235-му уходит охранять свой эскорт
         // его маршрутом, и полный поезд, вышедший тогда, финиширует к ~420-му — раньше их пешего (~460)
         val cs = w.enemyArmed.filter { e -> idOf(e) in campMarks && away(e) && !guarding(e) && route.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= 5 } }
-        if (cs.isEmpty() || wins(w.fighters.filter { Bodies.isArmed(it) }, cs)) return emptyList()
+        // держит, пока жива и на пути, — побеждают ли её наши бойцы, решает покупка и охота, но не выпуск поезда: выпущенный
+        // вслед бойцу поезд шёл прямо на засаду (けろびー#32: T2M1A1 и M1A1 убили друг друга, тягачи погибли там же)
         return cs
     }
 
