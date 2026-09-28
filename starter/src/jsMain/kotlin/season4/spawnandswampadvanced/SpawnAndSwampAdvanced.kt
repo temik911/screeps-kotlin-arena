@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v45"
+    private const val BOT_VERSION = "v46"
 
     private const val LOG_EVERY = 50
 
@@ -197,6 +197,8 @@ object SpawnAndSwampAdvanced {
     private var attackedOnce = false
     /** Дом держит нынешние угрозы: их нет, или прогон дома (бойцы и кормленые башни) против них выигран. */
     private var homeHolds = true
+    /** Угроза бьёт: кто-то из угроз в досягаемости нашего спавна или рабочего (как `striking` у отзыва волны). */
+    private var threatStrikes = false
 
     /** Прибор калибровки прогона: что он обещал на выходе волны (удара) и что вышло к её концу. Решения прогона
      *  держатся на запасе `PUSH_KEEP`, который пока назван, а не измерен; этот прибор его меряет. */
@@ -554,7 +556,9 @@ object SpawnAndSwampAdvanced {
      *  четыре CARRY — чтобы потом, заправщиком, носить в спавн по 200; ноги — ход пустого 1:1. */
     private fun vaultBuilderBody(): Array<BodyPartType> {
         val work = (SOURCE_ENERGY_REGEN + HARVEST_POWER - 1) / HARVEST_POWER
-        return (List(work) { WORK } + List(4) { CARRY } + List(work) { MOVE }).toTypedArray()
+        // WORK в хвосте: части гибнут спереди назад, и 850 урона v45 сняли все пять WORK головы — калека держал роль сейфа
+        // 1293 тика; при ногах и переносках спереди те же 850 урона не трогают ни одного WORK
+        return (List(work) { MOVE } + List(4) { CARRY } + List(work) { WORK }).toTypedArray()
     }
 
     /** Заправщик сейфа без стройки: четыре CARRY носят по 200 из контейнера в спавн за два-три тика. */
@@ -599,6 +603,10 @@ object SpawnAndSwampAdvanced {
             if (c.spawning) continue
             val role = roleOf[idOf(c)] ?: continue
             val v = vaults.getOrNull(role.substringAfter(':', "").toIntOrNull() ?: -1) ?: continue
+            // роль без рабочих частей свободна: следующий заказ сейфа идёт новым телом
+            val spent = (role.startsWith("breacher:") && liveParts(c, ATTACK) == 0) ||
+                (role.startsWith("vaultBuilder:") && v.stage != "run" && liveParts(c, WORK) == 0)
+            if (spent) { roleOf.remove(idOf(c)); println("role t=$t $role spent ${bodyOf(c)}"); continue }
             when {
                 role.startsWith("breacher:") -> {
                     val wo = wallObject(v, all)
@@ -745,6 +753,7 @@ object SpawnAndSwampAdvanced {
         defending = if (defending) wide.isNotEmpty() else near.isNotEmpty()
         if (defending) attackedOnce = true
         val threats = if (defending) wide else emptyList()
+        threatStrikes = threats.any { e -> homeSpawns.any { getRange(e, it) <= RANGED_RANGE + 1 } || workersAll.any { getRange(e, it) <= RANGED_RANGE + 1 } }
         homeHolds = threats.isEmpty() || run {
             val towersNow = all.filter { it is StructureTower && it.asDynamic().my == true && energyOf(it) > 0 }.unsafeCast<List<StructureTower>>()
             val ours = mine.filter { !it.spawning && isCombat(it) && idOf(it) !in wave && idOf(it) !in roleOf }.map { simOf(it) } +
@@ -1275,7 +1284,11 @@ object SpawnAndSwampAdvanced {
         val threat = threats
         val body: Array<BodyPartType>
         val why: String
-        if (threat.isNotEmpty() && power(fighters) < power(threat) * PUSH_RATIO) {
+        // боец «по угрозе» — только против угрозы, которая бьёт; стоящая поодаль армия ждёт, а спавн тем временем берёт
+        // сейф и источники (их места работ проверяют свою безопасность сами). v45 против stachu3478#17 рожал «по угрозе»
+        // 40–76 бойцов после 1000-го в каждой не-победе (в победах 3–4), угроза била спавн или рабочего лишь 21–58 %
+        // времени обороны, сейф не взят ни разу — 2 источника против его 4
+        if (threat.isNotEmpty() && threatStrikes && power(fighters) < power(threat) * PUSH_RATIO) {
             // только полное тело: v4 рожал под угрозой M2R2 по одному, и все они погибли поодиночке (basic измерил
             // то же: тринадцать тел по 300 проиграли трём M5R5 на равной энергии)
             return spawnFighter(t, spawn, energy, why = "threat")
@@ -1287,9 +1300,9 @@ object SpawnAndSwampAdvanced {
         // постоянно, и после второго спавна на 862-м мы не расширились ни разу
         // сейф раньше расширения: его 10000 заберёт тот, кто вскроет первым (stachu3478 вынес наш карман к ~1000-му, пока
         // v36 строил сначала второй спавн), а источник подождёт
-        } else if (homeHolds && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
+        } else if ((homeHolds || !threatStrikes) && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
-        } else if (homeHolds && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
+        } else if ((homeHolds || !threatStrikes) && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
