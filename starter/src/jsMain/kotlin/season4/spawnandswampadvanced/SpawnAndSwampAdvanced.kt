@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v48"
+    private const val BOT_VERSION = "v49"
 
     private const val LOG_EVERY = 50
 
@@ -199,6 +199,8 @@ object SpawnAndSwampAdvanced {
     private var homeHolds = true
     /** Угроза бьёт: кто-то из угроз в досягаемости нашего спавна или рабочего (как `striking` у отзыва волны). */
     private var threatStrikes = false
+    /** У него были носильщики — крипы с CARRY и MOVE без WORK и без оружия: только они могут вынести наш сейф. */
+    private var haulersSeen = false
 
     /** Прибор калибровки прогона: что он обещал на выходе волны (удара) и что вышло к её концу. Решения прогона
      *  держатся на запасе `PUSH_KEEP`, который пока назван, а не измерен; этот прибор его меряет. */
@@ -753,6 +755,10 @@ object SpawnAndSwampAdvanced {
         defending = if (defending) wide.isNotEmpty() else near.isNotEmpty()
         if (defending) attackedOnce = true
         val threats = if (defending) wide else emptyList()
+        if (!haulersSeen && theirs.any { c -> liveParts(c, CARRY) > 0 && liveParts(c, MOVE) > 0 && liveParts(c, WORK) == 0 && !isCombat(c) }) {
+            haulersSeen = true
+            println("haulers seen t=$t")
+        }
         threatStrikes = threats.any { e -> homeSpawns.any { getRange(e, it) <= RANGED_RANGE + 1 } || workersAll.any { getRange(e, it) <= RANGED_RANGE + 1 } }
         homeHolds = threats.isEmpty() || run {
             val towersNow = all.filter { it is StructureTower && it.asDynamic().my == true && energyOf(it) > 0 }.unsafeCast<List<StructureTower>>()
@@ -1062,12 +1068,7 @@ object SpawnAndSwampAdvanced {
         val pair = (BODYPART_COST[MOVE] ?: 50) + (BODYPART_COST[RANGED_ATTACK] ?: 150)
         val k = minOf(MAX_CREEP_SIZE / 2, energy / pair)
         val out = ArrayList<BodyPartType>()
-        // ноги впереди, стволы в хвосте: части гибнут спереди назад, и чередование M1R1 теряло ствол на каждые 200 урона —
-        // 30 000 урона за жизнь тела под огнём против 40 000 у M5R5 со стволами в хвосте (на выстрелах игр со stachu3478
-        // +20–27 % урона). Цена — раненый первым теряет ход, а не выстрел; v47 (не отходить от своей базы) и прежние
-        // замеры сказали, что гибнут они не на бегу, а в бою
-        repeat(k) { out.add(MOVE) }
-        repeat(k) { out.add(RANGED_ATTACK) }
+        repeat(k) { out.add(MOVE); out.add(RANGED_ATTACK) }
         return out.toTypedArray()
     }
 
@@ -1303,11 +1304,15 @@ object SpawnAndSwampAdvanced {
         // расширение и сейф — и под угрозой, если дом её держит (место работ проверяет свою безопасность само): v22
         // проиграл stachu3478 при двух источниках против его пяти — его харассеры у нашей базы держали «угрозу»
         // постоянно, и после второго спавна на 862-м мы не расширились ни разу
-        // сейф раньше расширения: его 10000 заберёт тот, кто вскроет первым (stachu3478 вынес наш карман к ~1000-му, пока
-        // v36 строил сначала второй спавн), а источник подождёт
-        } else if ((homeHolds || !threatStrikes) && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
+        // сейф раньше расширения — только когда у него есть чем вынести сейф (носильщики: stachu3478#15 вынес наш карман
+        // к ~1000-му, пока v36 строил второй спавн). Иначе первым — источник: кто возьмёт третий, тот и выиграл гонку;
+        // против stachu3478#17 (носильщиков нет, стены сейфа он только расстреливает) v46 ставил третий спавн к
+        // 1100–1700-му во всех победах и не ставил вовсе ни в одной из не-побед, а у него третий встаёт к ~1043-му
+        } else if (haulersSeen && (homeHolds || !threatStrikes) && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
         } else if ((homeHolds || !threatStrikes) && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
+            return
+        } else if (!haulersSeen && (homeHolds || !threatStrikes) && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
