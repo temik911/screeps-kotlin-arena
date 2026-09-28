@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v43"
+    private const val BOT_VERSION = "v44"
 
     private const val LOG_EVERY = 50
 
@@ -217,6 +217,8 @@ object SpawnAndSwampAdvanced {
     private var holdTicks = 0
     /** Цель удара: волна идёт к ЭТОМУ спавну, отвечая по дороге только тем, кто рядом, — прогон выбрал его среди всех. */
     private var strikeTargetId: String? = null
+    /** Его спавн, который бойцы в досягаемости снесут раньше, чем их перебьют рядом стоящие (прогон с огнём по нему). */
+    private var finish: GameObject? = null
     /** Урон его башен по пути к его спавну: id спавна → (тик замера, урон). Путь меняется медленно — раз в 25 тиков. */
     private val routeDamage = HashMap<String, Pair<Int, Int>>()
     /** Чужие площадки башен: id → (тик, прогресс) при первой встрече — из них скорость его стройки. */
@@ -1355,6 +1357,19 @@ object SpawnAndSwampAdvanced {
 
     private fun healOf(c: Creep) = liveParts(c, HEAL) * HEAL_POWER
 
+    /** Сколько урона и лечения в тик снимает единица нашего урона: выход крипа, делённый на урон, который гасит его
+     *  последнюю рабочую часть (части гибнут спереди назад: у тела с оружием в хвосте выход живёт до смерти). «Лекари
+     *  первыми» v39 били танков stachu3478 `t5m8r2h1` — 32 выхода на 1600 хитов и самолечение, 0,020 на единицу, — пока
+     *  его M5R5 давал 0,056 и стрелял (в ничьей: 1980 выстрелов по танкам, 403 по M5R5). */
+    private fun outputRate(types: List<String>, hits: Int, output: Int): Double {
+        if (output <= 0) return 0.0
+        val j = types.indexOfLast { it == "ranged_attack" || it == "attack" || it == "heal" }
+        if (j < 0) return 0.0
+        return output.toDouble() / maxOf(1, hits - 100 * (types.size - 1 - j))
+    }
+
+    private fun rateOf(c: Creep) = outputRate(typesOf(c), c.hits, dpsOf(c) + healOf(c))
+
     /** Сила группы по Ланчестеру: √(Σ(урон+лечение) × Σхиты) — линейна по числу одинаковых бойцов. */
     private fun power(group: List<Creep>): Double {
         val out = group.sumOf { dpsOf(it) + healOf(it) }.toDouble()
@@ -1496,6 +1511,25 @@ object SpawnAndSwampAdvanced {
     /** Бой по тикам: обе стороны бьют одновременно всем уроном в одну цель (лекарей первыми, потом самого битого,
      *  башни последними; перебор урона уходит в следующую), лечение возвращает хиты самым битым. Лечение считается
      *  вплотную (12 за часть) для обеих сторон: строй лекарей у раненого — их и наша задача. */
+    /** Снесём ли постройку с `preyHits` хитами, стреляя только по ней, пока нас бьют `theirs`: тик сноса или null. */
+    private fun finishTicks(ours: List<SimUnit>, theirs: List<SimUnit>, preyHits: Int): Int? {
+        val a = ours.map { it.copy() }.toMutableList()
+        var prey = preyHits
+        val db = theirs.sumOf { it.dps() }
+        var t = 0
+        while (a.isNotEmpty() && t < SIM_LIMIT) {
+            t++
+            prey -= a.sumOf { it.dps() }
+            if (prey <= 0) return t
+            var left = db
+            for (u in a.sortedBy { it.hits }) { if (left <= 0) break; val take = minOf(left, u.hits); u.hits -= take; left -= take }
+            a.removeAll { it.hits <= 0 }
+            var heal = a.sumOf { it.heal() }
+            for (u in a.filter { it.hits < it.maxHits }.sortedByDescending { it.maxHits - it.hits }) { if (heal <= 0) break; val add = minOf(heal, u.maxHits - u.hits); u.hits += add; heal -= add }
+        }
+        return null
+    }
+
     private fun simulate(ours: List<SimUnit>, theirs: List<SimUnit>, limit: Int = SIM_LIMIT): SimResult {
         val a = ours.map { it.copy() }.toMutableList()
         val b = theirs.map { it.copy() }.toMutableList()
@@ -1503,7 +1537,8 @@ object SpawnAndSwampAdvanced {
         var t = 0
         fun strike(side: MutableList<SimUnit>, dmg: Int) {
             var left = dmg
-            val order = side.sortedWith(compareBy<SimUnit> { if (it.tower) 2 else if (it.heal() > 0) 0 else 1 }.thenBy { it.hits })
+            val order = side.sortedWith(compareBy<SimUnit> { if (it.tower) 1 else 0 }
+                .thenByDescending { outputRate(it.types, it.hits, it.dps() + it.heal()) }.thenBy { it.hits })
             for (u in order) {
                 if (left <= 0) break
                 val take = minOf(left, u.hits)
@@ -1704,6 +1739,21 @@ object SpawnAndSwampAdvanced {
                 }
             }
         }
+        // добивание: v39 отошёл от последнего спавна stachu3478#14 при 350 хитах (4 тика огня) — прогон отхода видел
+        // 58 тиков своей жизни и не видел спавна; потом волна прошла в 4 клетках от него на 150 хитах за танком — ничья
+        finish = null
+        var finishTicks = Int.MAX_VALUE
+        for (sp in enemySpawnObjs) {
+            val shooters = fighters.filter { f -> (liveParts(f, RANGED_ATTACK) > 0 && getRange(f, sp) <= RANGED_RANGE) || (liveParts(f, ATTACK) > 0 && getRange(f, sp) <= 1) }
+            val dps = shooters.sumOf { dpsOf(it) }
+            if (dps <= 0) continue
+            val preyHits = simSpawnOf(sp, all).hits
+            val foes = enemyCombat.filter { getRange(it, sp) <= LOCAL_RANGE }.map { simOf(it) } +
+                fedTowers.filter { getRange(it, sp) <= TOWER_FALLOFF_RANGE / 2 }.map { simTowerOf(it, all) }
+            val ticks = finishTicks(shooters.map { simOf(it) }, foes, preyHits) ?: continue
+            if (ticks < finishTicks) { finishTicks = ticks; finish = sp }
+        }
+        finish?.let { if (t % 10 == 0) println("finish t=$t spawn (${it.x},${it.y}) ticks=$finishTicks") }
         val waveCreeps = fighters.filter { idOf(it) in wave }
         if (waveCreeps.isNotEmpty() && !lastCall) {
             // отход: на месте волна по прогону проигрывает тем, кто рядом, и башням, что её достают
@@ -1712,7 +1762,7 @@ object SpawnAndSwampAdvanced {
             val localTowers = fedTowers.filter { getRange(it, center) <= TOWER_FALLOFF_RANGE / 2 }
             if (local.isNotEmpty() || localTowers.isNotEmpty()) {
                 val r = simulate(waveCreeps.map { simOf(it) }, local.map { simOf(it) } + localTowers.map { simTowerOf(it, all) })
-                if (!r.win) {
+                if (!r.win && finish == null) {
                     println("retreat t=$t wave=${waveCreeps.size} vs local=${local.size}+${localTowers.size}tw sim=${r.left}/${r.theirLeft} ticks=${r.ticks}")
                     wave.clear()
                     calibEnd(t, "retreat", byId)
@@ -1963,6 +2013,10 @@ object SpawnAndSwampAdvanced {
     /** Стрельба: по крипам в досягаемости (сперва боевые, самые битые), иначе по постройкам; массовая — когда она
      *  бьёт сильнее одиночной. Возвращает, стрелял ли. */
     private fun shoot(f: Creep, theirsAll: List<Creep>, enemyObjects: List<GameObject>): Boolean {
+        // добивание: его спавн, который бойцы рядом снесут раньше, чем их перебьют, — первым
+        val fin = finish
+        if (fin != null && liveParts(f, RANGED_ATTACK) > 0 && getRange(f, fin) <= RANGED_RANGE) { f.rangedAttack(fin); return true }
+        if (fin != null && liveParts(f, ATTACK) > 0 && getRange(f, fin) <= 1) { f.attack(fin); return true }
         // рождающийся крип неуязвим, пока не выйдет со спавна: выстрел в него пропадает (оператор 27.09.2026)
         val theirs = theirsAll.filter { !it.spawning }
         // мили (пробойщик после пролома): вплотную — крип, иначе постройка
@@ -1978,7 +2032,7 @@ object SpawnAndSwampAdvanced {
         val mass = inRange.sumOf { when (getRange(f, it)) { 0, 1 -> 10; 2 -> 4; else -> 1 } }
         if (!healers && mass > 10) { f.rangedMassAttack(); return true }
         // порядок целей — как в прогоне: лекари первыми, затем самые битые боевые, затем остальные
-        val target = inRange.sortedWith(compareBy<Creep> { if (healOf(it) > 0) 0 else if (isCombat(it)) 1 else 2 }.thenBy { it.hits }).firstOrNull()
+        val target = inRange.sortedWith(compareBy<Creep> { if (isCombat(it)) 0 else 1 }.thenByDescending { rateOf(it) }.thenBy { it.hits }).firstOrNull()
         if (target != null) { f.rangedAttack(target); return true }
         val st = enemyObjects.filter { it is Structure && getRange(f, it) <= RANGED_RANGE }
             .sortedWith(compareBy<GameObject> { if (it is StructureTower) 0 else if (it is StructureRampart) 1 else if (it is StructureSpawn) 2 else 3 })
