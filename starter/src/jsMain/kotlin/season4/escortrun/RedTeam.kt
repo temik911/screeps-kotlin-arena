@@ -35,6 +35,8 @@ import screeps.api.structures.StructureRampart
  *  - `rush` — то же, но ДО дебюта и вместо него (экономика без гонки, как けろびー#29, у которого эскорт весь матч дома);
  *  - `icpt` — перехватчик stachu3478 при СВОЕЙ гонке: M1A1 после дебюта идёт к их поезду и бьёт тягачей (без них
  *    эскорт — 4 тика на клетку), потом эскорт (стендовая строка match4:icpt открыта с v12);
+ *  - `camp` — ricardo18informatica2020#23 (обыграл v28 0-6, 28.09.2026): M4A3 на первом тике ждёт в горлышке центра на
+ *    пути их поезда и бьёт всё, что подходит на три клетки; тягачей и разведчиков нет, наш эскорт идёт сам;
  *  - `kk` — убийца хранителя: M1A1 после дебюта идёт к их флагу, бьёт стоящих на нём и рядом и сам встаёт на флаг
  *    вооружённым захватчиком;
  *  - `army` — после остальных приёмов, раз за разом: стрелок M5R5 охотится на их эскорт, по дороге бьёт тягачей
@@ -45,7 +47,7 @@ import screeps.api.structures.StructureRampart
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
+    private val ORDER = listOf("camp", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
     private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
@@ -82,13 +84,17 @@ internal object RedTeam {
         // армия: стрелок M5R5 (1000) — достаёт эскорт с трёх клеток, 50 урона в тик; повторяется, пока идёт матч
         "army", "rush" -> Array(5) { MOVE } + Array(5) { screeps.api.RANGED_ATTACK }
         "icpt", "kk" -> arrayOf(MOVE, screeps.api.ATTACK)
+        "camp" -> arrayOf(MOVE, MOVE, MOVE, MOVE, screeps.api.ATTACK, screeps.api.ATTACK, screeps.api.ATTACK)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
 
     /** true — спавн занят приёмом в этот тик (заказал или копит на него): основная логика ждёт. [late] — после дебюта. */
     fun spawn(w: EscortRun.World, energy: Int, late: Boolean): Boolean {
-        if (tricks.isEmpty() || pendingBody != null) return false
+        if (tricks.isEmpty()) return false
+        // camp (ricardo18informatica2020#23): один M4A3 и больше НИЧЕГО — ни тягачей, ни разведчиков, спавн копит
+        if ("camp" in tricks && "camp" in ordered) return true
+        if (pendingBody != null) return false
         for (t in ORDER) {
             // при затычке гонки нет — поздние приёмы идут до дебюта, иначе они ждали тягачей до 200-го тика
             val isLate = t in LATE && "plug" !in tricks
@@ -117,6 +123,7 @@ internal object RedTeam {
                 "chase" -> chase(w, c)
                 "army", "rush" -> army(w, c)
                 "icpt" -> icpt(w, c)
+                "camp" -> camp(w, c)
                 "kk" -> keeperKiller(w, c)
             }
         }
@@ -200,6 +207,19 @@ internal object RedTeam {
         val goal: Creep = pullers.minByOrNull { getRange(c, it) } ?: esc
         if (getRange(c, goal) > 1) EscortRun.stepRed(w, c, goal, 1)
         log(w, c, "icpt", "on ${Bodies.summaryOf(goal)}@(${goal.x},${goal.y})")
+    }
+
+    private fun camp(w: EscortRun.World, c: Creep) {
+        val near = w.enemies.filter { getRange(c, it) <= 1 }
+        (near.firstOrNull { Bodies.isArmed(it) } ?: near.minByOrNull { it.hits })?.let { c.attack(it) }
+        val prey = w.enemies.filter { getRange(c, it) <= 3 }.minByOrNull { getRange(c, it) }
+        if (prey != null) { if (getRange(c, prey) > 1) EscortRun.stepRed(w, c, prey, 1); log(w, c, "camp", "on ${Bodies.summaryOf(prey)}"); return }
+        // стоянка: клетка ИХ маршрута, ближайшая к центру карты
+        val esc = w.enemyEscort ?: return
+        val flow = w.enemyEscortFlow ?: return
+        val spot = Chokes.route(flow, esc).minByOrNull { k -> maxOf(kotlin.math.abs(k / 100 - 50), kotlin.math.abs(k % 100 - 50)) } ?: return
+        if (c.x * 100 + c.y != spot) EscortRun.stepRed(w, c, pos(spot / 100, spot % 100), 0)
+        log(w, c, "camp", "at (${spot / 100},${spot % 100})")
     }
 
     private fun keeperKiller(w: EscortRun.World, c: Creep) {

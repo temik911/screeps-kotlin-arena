@@ -64,7 +64,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v28"
+    private const val BOT_VERSION = "v29"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -259,7 +259,10 @@ object EscortRun {
             // поле звало назад — эскорт качался по 400 усталости за шаг и стоял у блокировщика 50-100 тиков
             // (офлайн-лига, v24 против раннего блокировщика: 16 поражений из 80)
             val ahead = Chokes.route(escortFlowRaw, escort).toHashSet()
-            enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) && isStill(it, now) && key(it) in ahead && (myFlag == null || getRange(it, myFlag) > FLAG_GUARD_RANGE) }
+            enemies.filter { !isEscort(it) && Bodies.isScout(it, PULLER_MIN_MOVE) && isStill(it, now) && key(it) in ahead && (myFlag == null || getRange(it, myFlag) > FLAG_GUARD_RANGE) } +
+                // и НАШ крип без живых MOVE: уступить клетку он не может — боец M4A4, потерявший в бою передние MOVE,
+                // встал в коридоре перед эскортом, и тот простоял до 2000-го тика (стенд camp)
+                active.filter { !isEscort(it) && Bodies.liveMoves(it) == 0 && key(it) in ahead }
         } else emptyList()
         val escortFlow = if (stops.isEmpty() || myFlag == null) escortFlowRaw
             else flowTo("escort:" + stops.map { key(it) }.sorted().joinToString(","), myFlag, blocked + stops, 5)
@@ -506,6 +509,12 @@ object EscortRun {
         //    120-го и R5M5 со 177-го догоняли медленный поезд: 1 из 7 при v16 и 0 из 2 при v17, где M6 ждал до 56-го.
         //    Убрано: против stachu держит дом, см. decideHold.)
         val plan = openingPlan
+        // сильная угроза видна до конца дебюта — остаток дебюта не покупается: 300 энергии второго тягача — это триста
+        // тиков до бойца, который её побеждает (M4A4 против M4A3 ricardo#23), а медленнее поезд без него — на ~90 тиков
+        if (plan != null && openingIdx in 1 until plan.size && strongThreats(w).isNotEmpty() && w.fighters.none { Bodies.isArmed(it) }) {
+            println("spawn t=${w.now}: opening stopped at ${openingIdx}/${plan.size} — strong threat ${strongThreats(w).joinToString(" ") { Bodies.summaryOf(it) }}")
+            openingIdx = plan.size
+        }
         if (plan != null && openingIdx < plan.size && escort != null) {
             val body = Bodies.moves(plan[openingIdx])
             if (e >= Bodies.cost(body)) {
@@ -1339,8 +1348,17 @@ object EscortRun {
         // выйти позже чем сейчас (стенд econ+icpt: перехватчик не подошёл к рампартам, и эскорт просидел дома до их
         // финиша на 473-м, хотя выход на 200-м приходил к 422-му)
         val theirs = theirArrival(w)
-        val lastCall = holding && theirs < Int.MAX_VALUE / 8 && theirs <= ours + HOLD_LAST_CALL
-        val decisive = if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
+        // «последний звонок» — только если наши бойцы побеждают живую угрозу в поле: ricardo18informatica2020#23 ставит
+        // M4A3 в горлышко центра и ждёт, и выпущенный поезд шёл прямо на него (v28 0-6 тестовыми). Не побеждаем — дом
+        // держит, их одинокий эскорт держит наш блокировщик на их флаге (holdSpawn), а победитель копится
+        val liveArmed = decisive0.filter { !it.spawning }
+        val lastCall = holding && theirs < Int.MAX_VALUE / 8 && theirs <= ours + HOLD_LAST_CALL &&
+            (liveArmed.isEmpty() || wins(w.fighters.filter { Bodies.isArmed(it) }, liveArmed))
+        // засада: стоящий на нашем пути (или в трёх клетках от него) вооружённый, которого наши бойцы в поле не
+        // побеждают, — держит всегда: к эскорту он не идёт (радиус и «идёт к нам» его не видят), а выпущенный поезд идёт
+        // прямо на него (ricardo#23: M4A3 в горлышке центра, v28 0-6 на сервере, 0-40 в стенде)
+        val camp = campers(w)
+        val decisive = if (camp.isNotEmpty()) camp else if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
         if (decisive.isEmpty() || wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive })) {
             if (holding) { released = true; println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}") }
             holding = false; holdThreats = emptyList(); return
@@ -1351,10 +1369,39 @@ object EscortRun {
         val homeTicks = homeD * 2
         val contact = threats.minOf { e -> dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0) }
         // уже держимся — держимся, пока угроза есть (гистерезис); иначе — только если успеваем домой до встречи
-        val hold = holding || homeTicks < contact
+        // засада держит всегда: стоит она неподвижно, и эскорт, уже вышедший, возвращается к рампартам (до неё далеко)
+        val hold = holding || homeTicks < contact || camp.isNotEmpty()
         if (hold && !holding) { holdSince = w.now; println("hold t=${w.now}: HOME — threats ${threats.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, escort) + (if (it.spawning) "(spawning)" else "") }} guards=${guards.size} homeTicks=$homeTicks contact=$contact ours=$ours") }
         holding = hold
-        holdThreats = threats
+        holdThreats = (threats + camp).distinct()
+    }
+
+    /** Помеченные засады: однажды вставший у нашего пути остаётся засадой до смерти — он отходит к подошедшим крипам
+     *  и возвращается, и признак «стоит» мигал, снимая держание (стенд camp: пять выходов и возвратов за 200 тиков). */
+    private val campMarks = HashSet<String>()
+
+    /** Засада: живые вооружённые, вставшие в трёх клетках от оставшегося пути эскорта, которых наши бойцы не побеждают. */
+    private fun campers(w: World): List<Creep> {
+        val esc = w.escort ?: return emptyList()
+        val flow = w.escortFlowRaw ?: return emptyList()
+        val route = Chokes.route(flow, esc)
+        for (e in w.enemyArmed) {
+            if (isEscort(e) || idOf(e) in campMarks || !isStill(e, w.now)) continue
+            if (route.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= 3 }) {
+                campMarks.add(idOf(e)); println("hold t=${w.now}: CAMPER ${idOf(e)} ${Bodies.summaryOf(e)}@(${e.x},${e.y}) on our route")
+            }
+        }
+        campMarks.retainAll(w.enemyArmed.mapTo(HashSet()) { idOf(it) })
+        val cs = w.enemyArmed.filter { idOf(it) in campMarks }
+        if (cs.isEmpty() || wins(w.fighters.filter { Bodies.isArmed(it) }, cs)) return emptyList()
+        return cs
+    }
+
+    /** Сильная угроза — вооружённый враг (живой или рождающийся), которого дешёвый боец M1A1 в поле не побеждает. */
+    private fun strongThreats(w: World): List<Creep> {
+        val cheap = meleeBody(Bodies.cost(MOVE) + Bodies.cost(ATTACK))!!
+        val armed = w.enemyArmed.filter { !isEscort(it) } + w.enemyPending.filter { Bodies.wasArmed(it) }
+        return armed.filter { Bodies.duel(Bodies.unitOf(cheap), listOf(Bodies.unitOf(it))) < 0 }
     }
 
     /**
@@ -1365,6 +1412,22 @@ object EscortRun {
      */
     private fun holdSpawn(w: World, e: Int, ours: Int, theirs: Int) {
         val escort = w.escort ?: return
+        // сильная угроза — та, которую дешёвый боец в поле не побеждает (M4A3 ricardo#23 в центре не подходит к нашим
+        // рампартам, и M1A1 на рампарте против него бесполезен): сперва M1 на их флаг — их эскорт идёт один и без него
+        // финиширует, пока мы держимся, — затем самое дешёвое тело, выигрывающее у них дуэль в поле
+        val liveThreats = holdThreats.filter { !it.spawning }.ifEmpty { holdThreats }
+        val cheapUnit = meleeBody(Bodies.cost(MOVE) + Bodies.cost(ATTACK))!!
+        val armedOurs = w.fighters.filter { Bodies.isArmed(it) }
+        val strong = liveThreats.isNotEmpty() && Bodies.duel(Bodies.unitOf(cheapUnit), liveThreats.map { Bodies.unitOf(it) }) < 0
+        if (strong && !wins(armedOurs, liveThreats)) {
+            // победитель — первым: M1 на их флаг идёт через то же горлышко, где стоит засада, и гиб там каждые 50 тиков
+            val winner = cheapestWinner(liveThreats, armedOurs, SPAWN_ENERGY_CAPACITY)
+            if (winner != null && !fighterQueue.contains(ESCORT_GUARD)) {
+                if (e >= Bodies.cost(winner)) { if (order(w, winner, "defender", "field winner vs ${liveThreats.joinToString(" ") { Bodies.summaryOf(it) }}")) fighterQueue.addLast(ESCORT_GUARD); return }
+                saving(w, "field winner ${Bodies.summary(winner)}", Bodies.cost(winner)); return
+            }
+            if (theirFlagOrder(w, e, ours, theirs, blockerOnly = true)) return
+        }
         // боец дома — прежде флагов, если бойца ещё нет: перехватчик stachu3478 приходил к нашим рампартам на ~175-м
         // тике и ждал там; боец за 130, купленный третьим (после блокировщика и хранителя), появлялся на 231-м, эскорт
         // выходил к 250-му и не успевал к их пешему финишу (~410; 6ab84583, 6ab845fd). Первым он встречает перехватчика
@@ -1487,6 +1550,22 @@ object EscortRun {
                     continue
                 }
             }
+            // дома, но наши бойцы вместе побеждают угрозу — идут на неё, а не ждут на рампарте того, кто к рампартам не
+            // придёт (M4A3 ricardo#23 стоит в центре)
+            val homeHunt = holding && role == ESCORT_GUARD && escort != null && holdThreats.any { !it.spawning } &&
+                wins(w.fighters.filter { Bodies.isArmed(it) }, holdThreats.filter { !it.spawning })
+            if (homeHunt) {
+                val prey = holdThreats.filter { !it.spawning && it.exists }.minByOrNull { dist(it, f) }
+                if (prey != null) {
+                    attackBest(f, w, prey)
+                    if (Bodies.liveMoves(f) > 0 && dist(f, prey) > 1) {
+                        val swampCost = maxOf(1, Bodies.period(Bodies.weight(f), Bodies.liveMoves(f), true))
+                        stepAround(w, f, prey, 1, swampCost, 1)?.let { TrafficManager.request(f, it, FIGHTER_PRIORITY) }
+                    }
+                    if (DEBUG_LOG && w.now % LOG_EVERY == 0) println("fighter t=${w.now}: $id ${Bodies.summaryOf(f)} (${f.x},${f.y}) hunt ${Bodies.summaryOf(prey)} (${prey.x},${prey.y})")
+                    continue
+                }
+            }
             if (holding && role == ESCORT_GUARD && escort != null) {
                 // дома: бьём всё, что достаём, и стоим на рампарте у эскорта — с рампарта урон приходится не в нас
                 attackBest(f, w, w.enemies.filter { dist(it, f) <= (if (melee) 1 else RANGED_RANGE) }.minByOrNull { it.hits })
@@ -1531,7 +1610,11 @@ object EscortRun {
                     // match4:rev+keep+blk)
                     val squatter = if (myFlag != null && escort != null && dist(escort, myFlag) <= 12)
                         w.enemies.filter { dist(it, myFlag) <= FLAG_GUARD_RANGE }.minByOrNull { dist(it, f) } else null
-                    target = squatter ?: (enemyPullers(w) + listOfNotNull(w.enemyEscort)).filter { dist(it, f) <= 12 }.minByOrNull { it.hits }
+                    // вооружённых врагов нет, а гонку они выигрывают — их эскорт и есть цель, где бы он ни был (убитый эскорт —
+                    // победа; ricardo#23 ведёт его один)
+                    val chaseEscort = w.enemyArmed.isEmpty() && w.enemyEscort != null && theirArrival(w) + RACE_MARGIN < ourArrival(w)
+                    target = squatter ?: (if (chaseEscort) w.enemyEscort else null)
+                        ?: (enemyPullers(w) + listOfNotNull(w.enemyEscort)).filter { dist(it, f) <= 12 }.minByOrNull { it.hits }
                     why = if (squatter != null) "clear" else if (target != null) "harass" else "follow"
                 }
             }
