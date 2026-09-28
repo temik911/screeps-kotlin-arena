@@ -457,8 +457,11 @@ object EscortRun {
         val moves = ourTrainMoves(w)
         val trainPeriod = Bodies.period(Bodies.weight(escort), moves, false)
         val guardsOurs = w.fighters.filter { Bodies.isArmed(it) }
+        // только пока он при своём эскорте: отошедший уже бросился, и стоящий поезд он догонял на месте (стенд, guard:
+        // «WAIT … d=5» на 184-м — 0-30)
+        val theirEsc = w.enemyEscort ?: return
         val danger = w.enemyArmed.filter { e ->
-            !isEscort(e) && heavy(e) && dist(e, escort) > BERTH_ENGAGED &&
+            !isEscort(e) && heavy(e) && dist(e, escort) > BERTH_ENGAGED && dist(e, theirEsc) <= 3 &&
                 Bodies.period(Bodies.weight(e), Bodies.liveMoves(e), false) < trainPeriod
         }
         if (danger.isEmpty() || (guardsOurs.isNotEmpty() && wins(guardsOurs, danger))) return
