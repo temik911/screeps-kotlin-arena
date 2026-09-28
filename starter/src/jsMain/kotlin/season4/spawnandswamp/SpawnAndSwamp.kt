@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 228
+    private const val BOT_VERSION = 229
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7002,6 +7002,8 @@ object SpawnAndSwamp {
     private var raidHorizon = Int.MAX_VALUE / 4
     /** Ticks the raid took a bare spawn before his builder (v227, journal). */
     private var raidSpawnFirst = 0
+    /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
+    private var raidStayed = 0
     /** The raid hunts his builders while any lives, is re-bought for his new builder while he has at most two spawns,
      *  and his last stand frees the spawn for guns; an immobile creep of his is no interceptor (v158). */
     private const val USE_RAID_BUILDERS_FIRST = true
@@ -7226,6 +7228,8 @@ object SpawnAndSwamp {
      *  sites within reach) pays the sortie there and back, and the house holds without it against those the forecast
      *  brings to it within the sortie (builderHunt, v228). */
     private const val USE_HUNT_FREE_WORTH = true
+    /** A raider chipping at his door leaves only when every gun coming is slower than it on plain (v229). */
+    private const val USE_RAID_STAY_AT_DOOR = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
@@ -7699,6 +7703,21 @@ object SpawnAndSwamp {
             val until = if (USE_RAID_FORECAST) forecastHorizon(ctx, pos(target).x * 100 + pos(target).y, FORECAST_D, damageOnly = true).also { raidHorizon = it } else back
             if (chipping) {
                 val there = raiders.any { getRange(it, pos(target)) <= 1 }
+                // A RAIDER AT THE DOOR LEAVES ONLY WHEN LEAVING PUTS DISTANCE BETWEEN IT AND HIS GUNS (v229). The visit ended
+                // whenever his nearest gun came within RAID_CHIP_LEAVE ticks of its range, whatever the raider's hits: his
+                // rampart is never repaired and his spawn never healed — every strike stays — and his M5R5/M3R3 walk a plain
+                // cell a tick like our M15A3, so the flight gains no distance. Against けろびー#48 (v227 draw) three raiders
+                // left his main at 1500-1800 of 1800 and never struck it again (two died), and the main ended at 3640 —
+                // 41 strikes; over 67 replays against けろびー (v214-v227) 67 of 90 leaves from his main were followed by no
+                // strike on it at all and 65 of those raiders died. A raider stays while the guns coming are not slower than
+                // it on plain; it leaves (the rule of v172) only when every one of them is — then its saved hits have a future
+                if (there && USE_RAID_STAY_AT_DOOR && !(until > RAID_CHIP_LEAVE || finishing)) {
+                    val coming = guns.filter { (pathTicks(it, field, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) - RANGED_RANGE * plainPeriod(it)) <= RAID_CHIP_LEAVE }
+                    val ours = raiders.maxOf { plainPeriod(it) }
+                    val outrun = coming.isNotEmpty() && coming.all { plainPeriod(it) > ours }
+                    if (!outrun) raidStayed++
+                    return@run !outrun
+                }
                 return@run if (there) until > RAID_CHIP_LEAVE || finishing else walk + RAID_CHIP_MIN < until
             }
             walk + kill < until
@@ -7839,7 +7858,8 @@ object SpawnAndSwamp {
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
             val apart = (if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else "") +
                 (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "") +
-                (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "")
+                (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "") +
+                (if (USE_RAID_STAY_AT_DOOR) " stayed=$raidStayed" else "")
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
                 "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"}${if (strikeFits) "" else " wait"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
         }
