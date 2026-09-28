@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v30"
+    private const val BOT_VERSION = "v34"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -566,7 +566,9 @@ object EscortRun {
 
         // 2. оборона поезда: боевые враги у эскорта сильнее наших бойцов рядом с ним
         if (escort != null) {
-            val threats = w.enemyArmed.filter { dist(it, escort) <= THREAT_RANGE || approaching(w, it, escort) }
+            // захватчик нашего флага — дело стража флага (п. 3, тело под захватчиков): здесь он копил 600 на M3R3 против
+            // стрелка на флаге, и страж не покупался вовсе (стенд rsq, Suruks#2)
+            val threats = w.enemyArmed.filter { !onOurFlag(w, it) && (dist(it, escort) <= THREAT_RANGE || approaching(w, it, escort)) }
             if (threats.isNotEmpty()) {
                 val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= THREAT_RANGE + 5 }
                 if (!wins(guards, threats)) {
@@ -586,7 +588,7 @@ object EscortRun {
         // 2°. вооружённый враг в поле (не телохранитель, не у своей базы), которого наши бойцы не бьют, а победитель дуэли
         //     недорог, — победитель раньше хранителя и блокировщиков: перехватчик けろびー#32 (M1A1 в центре с 50-го) бил
         //     тягачей и 166 тиков эскорт, а защитник копился за хранителем и разведчиками до 361-го (v28 и v29 0-6)
-        val fieldArmed = w.enemyArmed.filter { !isEscort(it) && !bodyguard(w, it) && (w.enemySpawn == null || dist(it, w.enemySpawn) > CAMP_BASE_RANGE) }
+        val fieldArmed = w.enemyArmed.filter { !isEscort(it) && !bodyguard(w, it) && !onOurFlag(w, it) && (w.enemySpawn == null || dist(it, w.enemySpawn) > CAMP_BASE_RANGE) }
         if (fieldArmed.isNotEmpty() && !wins(w.fighters.filter { Bodies.isArmed(it) }, fieldArmed) && !fighterQueue.contains(ESCORT_GUARD)) {
             val body = fieldWinner(fieldArmed, w.fighters.filter { Bodies.isArmed(it) }, SPAWN_ENERGY_CAPACITY)
             if (body != null && Bodies.cost(body) <= EARLY_WINNER_BUDGET) {
@@ -1400,7 +1402,7 @@ object EscortRun {
         // и выпустил поезд ровно к их паре в центре — 0-6)
         val threats = armed.filter { e ->
             val eta = dist(e, escort) + (if (e.spawning) 3 * e.body.size else 0)
-            eta < ours && !bodyguard(w, e)
+            eta < ours && !bodyguard(w, e) && !onOurFlag(w, e)
         }
         // держимся против того, кто БЛИЗКО (живые в HOLD_RADIUS) или ещё рождается; дальние — не повод сидеть дома:
         // экономика stachu3478 рождает бойца за бойцом, и «наша охрана бьёт всех» не наступало никогда — эскорт
@@ -1475,6 +1477,14 @@ object EscortRun {
         holdThreats = (threats + camp).distinct()
     }
 
+    /**
+     * Захватчик нашего флага — на клетке или вплотную (FLAG_GUARD_RANGE). Дом от него не спасает и засадой он не
+     * считается: к эскорту он не идёт, он закрывает цель, и снять его — дело стража флага (runSpawn, п. 3) и бойцов
+     * (цель squatter). Suruks#2 (6abac117): стрелок M2R2 сел на наш флаг, когда эскорт был в трёх тиках от финиша, и
+     * держание засады развернуло эскорт домой — на эти деньги покупались M1A1 и хранители «пока держимся», стража не было.
+     */
+    private fun onOurFlag(w: World, e: Creep): Boolean = w.myFlag?.let { dist(e, it) <= FLAG_GUARD_RANGE } ?: false
+
     /** Помеченные засады: однажды вставший у нашего пути остаётся засадой до смерти — он отходит к подошедшим крипам
      *  и возвращается, и признак «стоит» мигал, снимая держание (стенд camp: пять выходов и возвратов за 200 тиков). */
     private val campMarks = HashSet<String>()
@@ -1524,7 +1534,7 @@ object EscortRun {
         for (e in w.enemyArmed) {
             // и лёгкий тоже: M1A1 けろびー#32 ждёт в центре с 50-го, к рампартам не идёт, и поезд, прошедший мимо, терял
             // тягачей, а эскорт — по 30 в тик до смерти в 26 клетках от флага (v29 0-6)
-            if (isEscort(e) || idOf(e) in campMarks || stillFor(e, w.now) < CAMP_STILL || !away(e) || guarding(e)) continue
+            if (isEscort(e) || idOf(e) in campMarks || stillFor(e, w.now) < CAMP_STILL || !away(e) || guarding(e) || onOurFlag(w, e)) continue
             if (route.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= 3 }) {
                 campMarks.add(idOf(e)); println("hold t=${w.now}: CAMPER ${idOf(e)} ${Bodies.summaryOf(e)}@(${e.x},${e.y}) on our route")
             }
@@ -1532,7 +1542,7 @@ object EscortRun {
         campMarks.retainAll(w.enemyArmed.mapTo(HashSet()) { idOf(it) })
         // держит, пока СЕЙЧАС в пяти клетках от оставшегося пути: M4A3 ricardo#23 к ~235-му уходит охранять свой эскорт
         // его маршрутом, и полный поезд, вышедший тогда, финиширует к ~420-му — раньше их пешего (~460)
-        val cs = w.enemyArmed.filter { e -> idOf(e) in campMarks && away(e) && !guarding(e) && route.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= 5 } }
+        val cs = w.enemyArmed.filter { e -> idOf(e) in campMarks && away(e) && !guarding(e) && !onOurFlag(w, e) && route.any { k -> maxOf(kotlin.math.abs(k / 100 - e.x), kotlin.math.abs(k % 100 - e.y)) <= 5 } }
         // держит, пока жива и на пути, — побеждают ли её наши бойцы, решает покупка и охота, но не выпуск поезда: выпущенный
         // вслед бойцу поезд шёл прямо на засаду (けろびー#32: T2M1A1 и M1A1 убили друг друга, тягачи погибли там же)
         return cs

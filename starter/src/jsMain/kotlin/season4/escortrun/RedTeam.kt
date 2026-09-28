@@ -44,6 +44,9 @@ import screeps.api.structures.StructureRampart
  *    разведчиков M1 он подпускал и на 1–2 клетки. В стенде их эскорт приходит к развилке на пару тиков позже живого,
  *    поезд проходит на 2–3 клетки дальше, и с 5 броска не бывает вовсе (с 7 — 2 руки из 30); LUNGE_RANGE 8 — худший
  *    случай, бросок в каждой руке;
+ *  - `rsq` — Suruks#2 (обыграл v30 в подтверждающей серии, 28.09.2026, 6abac117): стрелок M2R2 после дебюта идёт к ИХ
+ *    флагу, стреляет по всем в трёх клетках (хранитель — первым) и садится на флаг; их эскорт в трёх тиках от финиша
+ *    упирается в занятую клетку;
  *  - `kk` — убийца хранителя: M1A1 после дебюта идёт к их флагу, бьёт стоящих на нём и рядом и сам встаёт на флаг
  *    вооружённым захватчиком;
  *  - `army` — после остальных приёмов, раз за разом: стрелок M5R5 охотится на их эскорт, по дороге бьёт тягачей
@@ -54,9 +57,9 @@ import screeps.api.structures.StructureRampart
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("camp", "guard", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
+    private val ORDER = listOf("camp", "guard", "rsq", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
-    private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
+    private val LATE = setOf("rsq", "icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
     private const val BUILD_RANGE = 3
 
@@ -91,6 +94,7 @@ internal object RedTeam {
         // армия: стрелок M5R5 (1000) — достаёт эскорт с трёх клеток, 50 урона в тик; повторяется, пока идёт матч
         "army", "rush" -> Array(5) { MOVE } + Array(5) { screeps.api.RANGED_ATTACK }
         "icpt", "kk" -> arrayOf(MOVE, screeps.api.ATTACK)
+        "rsq" -> arrayOf(MOVE, MOVE, screeps.api.RANGED_ATTACK, screeps.api.RANGED_ATTACK)
         "camp", "guard" -> arrayOf(MOVE, MOVE, MOVE, MOVE, screeps.api.ATTACK, screeps.api.ATTACK, screeps.api.ATTACK)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
@@ -133,6 +137,7 @@ internal object RedTeam {
                 "camp" -> camp(w, c)
                 "guard" -> guard(w, c)
                 "kk" -> keeperKiller(w, c)
+                "rsq" -> rangedSquatter(w, c)
             }
         }
     }
@@ -251,6 +256,17 @@ internal object RedTeam {
             return
         }
         camp(w, c)
+    }
+
+    private fun rangedSquatter(w: EscortRun.World, c: Creep) {
+        val flag = w.enemyFlag ?: return
+        val near = w.enemies.filter { getRange(c, it) <= 3 }
+        val onFlag = near.firstOrNull { it.x == flag.x && it.y == flag.y }
+        (onFlag ?: near.minByOrNull { it.hits })?.let { c.rangedAttack(it) }
+        if (c.x == flag.x && c.y == flag.y) { log(w, c, "rsq", "on flag"); return }
+        val occupied = w.occupant[flag.x * 100 + flag.y]
+        EscortRun.stepRed(w, c, flag, if (occupied == null) 0 else 1)
+        log(w, c, "rsq", "to flag")
     }
 
     private fun keeperKiller(w: EscortRun.World, c: Creep) {
