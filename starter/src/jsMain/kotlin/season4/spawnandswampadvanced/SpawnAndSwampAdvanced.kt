@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v50"
+    private const val BOT_VERSION = "v46"
 
     private const val LOG_EVERY = 50
 
@@ -870,17 +870,9 @@ object SpawnAndSwampAdvanced {
                 val stay = mine.filter { c ->
                     idOf(c) != fid && !c.spawning && idOf(c) !in roleOf && liveParts(c, WORK) > 0 && cheb(posOf(c), b1.spawnCell) <= 2
                 }.sumOf { liveParts(it, WORK) }
-                // основатель ждёт нашего бойца, только если его бойцы успевают к месту новой базы раньше, чем основатель
-                // дойдёт и встанет под свой первый рампарт (копка 200 и стройка 200 его WORK). v42 уходил на 302-м без
-                // оглядки, и рейдер M3R3 убивал его у первого рампарта; v43–v46 ждали бойца при ЛЮБОМ его бойце на карте —
-                // уход на ~486-м, второй спавн к ~797-му, а stachu3478#17 к 645-му уже сидел у центрального источника, и
-                // третьего спавна у нас не было ни в одной не-победе против него. Замену на первой базе теперь держит крыша
-                val work = maxOf(1, liveParts(founder, WORK))
-                val rampartCost = CONSTRUCTION_COST.asDynamic()["StructureRampart"].unsafeCast<Int>()
-                val roofTicks = pathTicks(posOf(founder).let { cell(it) }, cell(plan.spawnCell)) +
-                    rampartCost / (HARVEST_POWER * work) + rampartCost / (BUILD_POWER * work)
-                val raiders = enemyCombat.filter { getRange(it, cell(plan.spawnCell)) <= roofTicks }
-                val covered = raiders.isEmpty() || mine.any { isCombat(it) && !it.spawning }
+                // пока на карте есть его бойцы, основатель уходит только при нашем бойце дома: v42 уходил на 302-м, и
+                // рейдер M3R3 убивал его у первого рампарта или замену на открытой клетке первой базы
+                val covered = enemyCombat.isEmpty() || mine.any { isCombat(it) && !it.spawning }
                 if (stay >= needWork && covered && worksiteSafe(listOf(plan.spawnCell))) {
                     builderId = fid; expansion = plan; expansionPlaced = false
                     slotOf.remove(fid); founderId = null; founderPlan = null
