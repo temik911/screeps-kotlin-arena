@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 222
+    private const val BOT_VERSION = 223
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5057,6 +5057,161 @@ object SpawnAndSwamp {
         return ArmyForecast(out.isNotEmpty(), if (total > 0.0) out.sumOf { power(it) } / total else 0.0, out)
     }
 
+    /** His armed movers with a weapon (no healers) or all of them, the ones being born included (v222/v223). */
+    private fun forecastRows(ctx: Ctx, damageOnly: Boolean): List<Creep> =
+        (ctx.combatEnemies + ctx.pendingEnemies).distinctBy { it.id }.filter { c ->
+            liveMoves(c) > 0 && (!damageOnly || InfluenceMap.profileOf(c).let { it.ranged + it.melee > 0.0 }) }
+
+    private fun forecastBorn(ctx: Ctx, c: Creep): Int =
+        if (c.spawning == true) (ctx.enemySpawns.firstOrNull { it.x == c.x && it.y == c.y }?.spawning?.remainingTime ?: 0) else 0
+
+    /**
+     * THE FORECAST'S HORIZON AT A POINT (v223): the first tick his armed movers are announced within [d] of [p] —
+     * armyForecast(H).any is exactly "horizon <= H". A creep is announced at H >= reach / ALPHA, or at H >= max(eta,
+     * reach) when its approach brings it (see armyForecast). One already within [d] is there now (0), one being born
+     * there comes at its birth's end — the stand leaves both out of "arrivals", a decision may not
+     */
+    private fun forecastHorizon(ctx: Ctx, p: Int, d: Int, damageOnly: Boolean, alpha: Double = FORECAST_ALPHA): Int {
+        val never = Int.MAX_VALUE / 4
+        val now = getTicks()
+        val px = p / 100; val py = p % 100
+        var best = never
+        for (c in forecastRows(ctx, damageOnly)) {
+            val born = forecastBorn(ctx, c)
+            if (maxOf(kotlin.math.abs(c.x - px), kotlin.math.abs(c.y - py)) <= d) { best = minOf(best, born); continue }
+            val w = bodyWeight(c); val m = liveMoves(c)
+            val here = forecastField(p, d, periodOn(w, m, 2), periodOn(w, m, 10))[c.x * 100 + c.y]
+            if (here >= never) continue
+            val reach = here + born
+            var at = ceil(reach / alpha).toInt()
+            val free = now - (forecastFree[c.id] ?: now)
+            if (c.spawning == true || free < FORECAST_BACK / 2) at = minOf(at, reach) else {
+                val back = if (free >= FORECAST_BACK) FORECAST_BACK else FORECAST_BACK / 2
+                val then = forecastTrail[c.id]?.firstOrNull { it.first == now - back }?.second
+                val field = forecastField(p, d, periodOn(w, m, 2), periodOn(w, m, 10))
+                val was = if (then == null) never else field[then]
+                if (was < never) { val v = (was - here).toDouble() / back; if (v > 0.0) at = minOf(at, maxOf((reach / v).toInt(), reach)) }
+            }
+            best = minOf(best, at)
+        }
+        return best
+    }
+
+    /** Forward time fields of his guns (from a cell, by the body's two periods, up to a limit), min-filtered over the
+     *  forecast's ball: cell -> the earliest tick a gun standing at the key cell is within FORECAST_D of it (v223). */
+    private val gunFields = LinkedHashMap<String, IntArray>()
+    private var gunFieldTick = -1
+    private var gunFieldsNew = 0
+
+    private fun gunBallField(cell: Int, pp: Int, ps: Int, limit: Int): IntArray? {
+        val key = "$cell/$pp/$ps/$limit"
+        gunFields.remove(key)?.let { gunFields[key] = it; return it }
+        if (gunFieldTick != getTicks()) { gunFieldTick = getTicks(); gunFieldsNew = 0 }
+        if (gunFieldsNew >= RAID_WAIT_FIELDS) return null
+        gunFieldsNew++
+        val never = Int.MAX_VALUE / 4
+        val dist = IntArray(10000) { never }
+        var heap = LongArray(512)
+        var n = 0
+        fun push(v: Long) {
+            if (n == heap.size) heap = heap.copyOf(n * 2)
+            var i = n++
+            heap[i] = v
+            while (i > 0) { val up = (i - 1) / 2; if (heap[up] <= heap[i]) break; val t = heap[up]; heap[up] = heap[i]; heap[i] = t; i = up }
+        }
+        fun pop(): Long {
+            val top = heap[0]
+            heap[0] = heap[--n]
+            var i = 0
+            while (true) {
+                val l = 2 * i + 1; val r = l + 1; var m = i
+                if (l < n && heap[l] < heap[m]) m = l
+                if (r < n && heap[r] < heap[m]) m = r
+                if (m == i) break
+                val t = heap[m]; heap[m] = heap[i]; heap[i] = t; i = m
+            }
+            return top
+        }
+        dist[cell] = 0
+        push(cell.toLong())
+        while (n > 0) {
+            val v = pop()
+            val c = (v and 0x3FFF).toInt()
+            val t = (v shr 14).toInt()
+            if (t > dist[c]) continue
+            val cx = c / 100; val cy = c % 100
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = cx + dx; val ny = cy + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val j = nx * 100 + ny
+                val terr = forecastTerrainAt(j)
+                if (terr == 2) continue
+                // stepping INTO j costs j's period
+                val nt = t + if (terr == 1) ps else pp
+                if (nt > limit || nt >= dist[j]) continue
+                dist[j] = nt
+                push((nt.toLong() shl 14) or j.toLong())
+            }
+        }
+        // the ball: a gun is "at" X once within FORECAST_D of it — the min over the (2D+1)² square, rows then columns
+        val d = FORECAST_D
+        val rows = IntArray(10000) { never }
+        for (x in 0..99) for (y in 0..99) {
+            var m = never
+            for (k in maxOf(0, y - d)..minOf(99, y + d)) m = minOf(m, dist[x * 100 + k])
+            rows[x * 100 + y] = m
+        }
+        val out = IntArray(10000) { never }
+        for (x in 0..99) for (y in 0..99) {
+            var m = never
+            for (k in maxOf(0, x - d)..minOf(99, x + d)) m = minOf(m, rows[k * 100 + y])
+            out[x * 100 + y] = m
+        }
+        gunFields[key] = out
+        while (gunFields.size > RAID_WAIT_CACHE) gunFields.remove(gunFields.keys.first())
+        return out
+    }
+
+    /**
+     * WHERE THE RAID WAITS (v223): the cell nearest the target's door that none of his guns reaches within
+     * RAID_WAIT_H — his body's forward walk to within FORECAST_D of it, or a Chebyshev bound (never above the walk) for
+     * a gun whose field is not in this tick's budget. The waiting raiders died where his army went: 128 of 138 raiders
+     * that died after his main was ramparted, in 31 draws with けろびー (v195-v219), had not struck the spawn in their last
+     * 20 ticks, 68 never had; the cell they waited in was announced at H = 50 in 123 of 124 deaths, their gun within
+     * five cells ~95 of the last 100 ticks, and their flight from a gun within RAID_LURK_FLEE took them to the corners of
+     * his pocket — (2,7), (4,4), (1,11), (92,5), (98,98); over all waiting ticks the cell was announced in 79 %, the walk to
+     * the door 52 (median). Measured on those replays, the nearest unannounced cell at H = 50 is found in 99 % of ticks,
+     * 3 cells from the door at the median, and his army came to it within 25 ticks in 0.0 % (at the door: 22 %).
+     * RAID_WAIT_H is the knob of the same kind as FORECAST_ALPHA; pure reach at H is stricter than M2a75 at H
+     */
+    private fun raidWaitCell(ctx: Ctx, target: Position): Position? {
+        val never = Int.MAX_VALUE / 4
+        val h = RAID_WAIT_H
+        val tx = target.x; val ty = target.y
+        val blocked = ctx.blocked.mapTo(HashSet()) { it.x * 100 + it.y }
+        class Gun(val x: Int, val y: Int, val pp: Int, val born: Int, val field: IntArray?)
+        val guns = forecastRows(ctx, damageOnly = true).mapNotNull { c ->
+            val w = bodyWeight(c); val m = liveMoves(c)
+            val pp = periodOn(w, m, 2)
+            // a gun farther from the whole search square than it walks in H cannot announce any cell of it
+            if ((maxOf(kotlin.math.abs(c.x - tx), kotlin.math.abs(c.y - ty)) - RAID_WAIT_RING - FORECAST_D) * pp > h) null
+            else Gun(c.x, c.y, pp, forecastBorn(ctx, c), gunBallField(c.x * 100 + c.y, pp, periodOn(w, m, 10), h))
+        }
+        fun safe(x: Int, y: Int): Boolean = guns.all { g ->
+            val reach = if (g.field != null) g.field[x * 100 + y] else maxOf(0, maxOf(kotlin.math.abs(g.x - x), kotlin.math.abs(g.y - y)) - FORECAST_D) * g.pp
+            reach >= never || reach + g.born > h
+        }
+        for (r in 1..RAID_WAIT_RING) for (x in tx - r..tx + r) for (y in ty - r..ty + r) {
+            if (maxOf(kotlin.math.abs(x - tx), kotlin.math.abs(y - ty)) != r) continue
+            if (x < 0 || y < 0 || x > 99 || y > 99) continue
+            val c = x * 100 + y
+            if (forecastTerrainAt(c) == 2 || c in blocked) continue
+            if (safe(x, y)) return InfluenceMap.cell(x, y)
+        }
+        return null
+    }
+
     /** Keeps his creeps' trails and prints the forecast's journal line every ten ticks (v222; read back by the stand's
      *  LOG model: the port is scored by the same stand as the model was). */
     private fun noteArmyForecast(ctx: Ctx) {
@@ -6815,6 +6970,9 @@ object SpawnAndSwamp {
     /** The raid strikes his builders and spawns (not sites), holds its target, and goes out again when healed (v157). */
     private const val USE_RAID_TOUR = true
     private var raidTargetId: String? = null
+    /** The raid's waiting cell and the forecast's horizon at its target this tick, for the journal (v223). */
+    private var raidWaitAt: Position? = null
+    private var raidHorizon = Int.MAX_VALUE / 4
     /** The raid hunts his builders while any lives, is re-bought for his new builder while he has at most two spawns,
      *  and his last stand frees the spawn for guns; an immobile creep of his is no interceptor (v158). */
     private const val USE_RAID_BUILDERS_FIRST = true
@@ -7015,6 +7173,18 @@ object SpawnAndSwamp {
     private const val FORECAST_BACK = 20
     /** "At the door": the Chebyshev radius round the point the forecast is asked about. */
     private const val FORECAST_D = 5
+    /** The raid's visit and kill are entered and held by the forecast's horizon at the target (v223). */
+    private const val USE_RAID_FORECAST = true
+    /** A raid waiting on a spawn of his waits at the nearest cell his guns do not reach within RAID_WAIT_H (v223). */
+    private const val USE_RAID_SAFE_WAIT = true
+    /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
+     *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
+    private const val RAID_WAIT_H = 50
+    /** How far round the target the waiting cell is searched: past the waiting horizon a cell is no nearer than home. */
+    private const val RAID_WAIT_RING = RAID_WAIT_H
+    /** New gun fields a tick (CPU), and the fields kept (memory, 40 KB each). */
+    private const val RAID_WAIT_FIELDS = 5
+    private const val RAID_WAIT_CACHE = 40
     /** Two cells both next to one target are at most this far apart: the pair is together within it (v216). */
     private const val RAID_PAIR_RANGE = 2
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
@@ -7432,11 +7602,14 @@ object SpawnAndSwamp {
             val back = guns.minOfOrNull { (pathTicks(it, field, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) - RANGED_RANGE * plainPeriod(it).toInt()) } ?: Int.MAX_VALUE
             // (v173: while chipping, the walk of the nearest — a newborn 88 cells off must not bar the one standing there)
             val walk = if (USE_RAID_NO_GATHER && chipping) raiders.minOf { getRange(it, pos(target)) - 1 } else raiders.maxOf { getRange(it, pos(target)) - 1 }
+            // (v223) the visit's entry and stay, and the whole kill, by the forecast's horizon at the target (his guns only)
+            // instead of his nearest mobile gun's walk back: a gun standing, walking sideways or turning back is in it
+            val until = if (USE_RAID_FORECAST) forecastHorizon(ctx, pos(target).x * 100 + pos(target).y, FORECAST_D, damageOnly = true).also { raidHorizon = it } else back
             if (chipping) {
                 val there = raiders.any { getRange(it, pos(target)) <= 1 }
-                return@run if (there) back > RAID_CHIP_LEAVE || finishing else walk + RAID_CHIP_MIN < back
+                return@run if (there) until > RAID_CHIP_LEAVE || finishing else walk + RAID_CHIP_MIN < until
             }
-            walk + kill < back
+            walk + kill < until
         }
         // …AND WHILE IT WAITS IT TAKES HIS UNARMED (v166). Against kerobi#49 the raid froze his count at one spawn — his
         // ramparted main — from 600-900 to the end in 4 of 4 games, and waited the rest of the match because his army
@@ -7509,20 +7682,24 @@ object SpawnAndSwamp {
         // waiting raider with a live mate out of reach walks to it — two cells, both next to one target — and the pair then
         // waits and enters together; a strike that fits is walked as before, alone or not, and its walk is not touched
         val waitingNow = !strikeFits && !raidHome && raiders.size >= 2
+        // (v223) a raid waiting on a spawn of his waits at the nearest cell his guns do not reach within RAID_WAIT_H
+        val waitCell: Position? = if (USE_RAID_SAFE_WAIT && target != null && target.id in spawnIds && !strikeFits && !raidHome && go == null)
+            raidWaitCell(ctx, pos(target)) else null
+        raidWaitAt = waitCell
         for (r in raiders) {
             // waiting for his guns to go, the pair holds where it stands rather than walking home and back
             // …and, since v167, near its target at the lurk range: waiting at our house it was 82 cells from the strike
             val hover = USE_RAID_FINISH && target != null && !strikeFits && !raidHome
             val mate = if (USE_RAID_MEET && waitingNow && go == null) raiders.filter { it.id != r.id }.minByOrNull { getRange(it, r) } else null
             val meet = mate != null && getRange(r, mate) > RAID_PAIR_RANGE
-            val goal: Position = if (meet) mate!! else if (go != null) pos(go) else if (hover) pos(target!!) else if (!strikeFits) r else ctx.mySpawn
+            val goal: Position = if (meet) mate!! else if (go != null) pos(go) else if (waitCell != null) waitCell else if (hover) pos(target!!) else if (!strikeFits) r else ctx.mySpawn
             // …AT THE DOOR WHILE IT CHIPS (v198): from the lurk range (12 cells) the walk alone was 21+ ticks against his
             // gun's walk back of 15-19, so the visit's entry (walk + RAID_CHIP_MIN < back) almost never opened — in five
             // v195 draws with けろびー the raiders struck his main in 3 % of their ticks against 12 % in the wins, and
             // 28 of the 30 real visits of ten games lost the raider no hits. At the door the walk is none, and the flight
             // from a gun within RAID_LURK_FLEE still stands
             val waitRange = if (USE_RAID_DOOR_WAIT && chipping) 1 else RAID_LURK_RANGE
-            val range = if (meet) 1 else if (go != null) 1 else if (hover) waitRange else if (!strikeFits) 0 else 2
+            val range = if (meet) 1 else if (go != null) 1 else if (waitCell != null) 0 else if (hover) waitRange else if (!strikeFits) 0 else 2
             val waiting = !strikeFits && go == null
             val struck = go != null && getRange(r, goal) <= 1
             if (struck) {
@@ -7537,7 +7714,7 @@ object SpawnAndSwamp {
             // …A WAITING PAIR KEEPS AWAY FROM HIS GUNS (v162): in the v161 draws it waited in place in the field for his army
             // to leave his ramparted main (t=490-770), was found there and went home at 460/1800 and 1254/3600; it now
             // walks off to RAID_LURK_RANGE from his nearest mobile armed creep and waits there
-            val hunters = if (USE_RAID_LURK && armedPrey == null && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
+            val hunters = if (USE_RAID_LURK && armedPrey == null && waitCell == null && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
                 e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
                     getRange(e, r) < lurkFlee } else emptyList()
             if (hunters.isNotEmpty() && canMove(r)) {
@@ -7568,7 +7745,8 @@ object SpawnAndSwamp {
             }
         }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
-            val apart = if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else ""
+            val apart = (if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else "") +
+                (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "")
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
                 "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"}${if (strikeFits) "" else " wait"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
         }
