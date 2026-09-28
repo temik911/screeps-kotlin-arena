@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 219
+    private const val BOT_VERSION = 220
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -371,6 +371,8 @@ object SpawnAndSwamp {
 
     /** Волна в поле, а осада по фронту не сходится: волна держит кромку башни и ждёт подкрепления (см. newPushing). */
     private var siegeHold = false
+    /** The house's spare guns the hold calls to the wave this tick (v220, see callCrew in runFighters). */
+    private var holdCall: List<Creep> = emptyList()
     private var lastPushReason = ""
 
     /**
@@ -4359,12 +4361,39 @@ object SpawnAndSwamp {
             val together = siegeOutcome(waveFront + waveBehind, frontAttrition, siegeDefenders, siegeTowers, enemySpawn!!, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, etas = defEtas, arrive = arrive)
             together.win && remaining > budget(arrive, together) + LATE_MARGIN
         }
-        val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN || waveInTime
+        // THE HOLD CALLS THE HOUSE'S SPARE GUNS (v220). The hold waited for the post (siegeJoin) and the wave's own
+        // stragglers (v213) only; the guns at home were never asked. Against marlyman#441 (16 test hands, v214/v218) his
+        // main's tower, fed off his spawn's regeneration, took one of our bodies every ~20 ticks however many came, so a
+        // storm's damage grows as N(N+1)/2 — three M12A5 together 150·20·6 = 18000 of the 13000, the same three one after
+        // another 9000 — and in the draws the rampart fell with 1-3 of ours at the spawn (5-11 in the wins) while 2-4 stood
+        // at home: the whole crew's siege read `win/16t`-`win/28t` in four of them. A gun at home at full speed is spare
+        // when the house holds without it — against his creeps at our door and those arriving while the wave is out, by
+        // the same count as the sortie's guard; the spare, the post and the stragglers join the front's siege at their
+        // own walk's tick, and if that siege wins before the clock they are called to the wave and the hold is in time
+        val callCrew: List<Creep> = if (!USE_HOLD_CALLS_HOME || enemySpawn == null || waveMembers.isEmpty() || waveFront.isEmpty() ||
+            siegeGo.win || fortGarrison || homeFight) emptyList() else run {
+            val cands = homeGuard.filter { liveMoves(it) > 0 && fullSpeed(it) && hasWeapon(it) }
+                .sortedByDescending { val p = InfluenceMap.profileOf(it); (p.ranged + p.melee) * it.hits }
+            if (cands.isEmpty()) return@run emptyList()
+            val against = (homePack + arrivingHome).distinctBy { it.id }
+            val keep = homeGuard.filter { g -> cands.none { it.id == g.id } }.toMutableList()
+            val pool = cands.toMutableList()
+            fun holds() = against.isEmpty() || fortHolds || ourPowerOf(keep, against) >= enemyPowerOf(against, keep) * DEFEND_MARGIN
+            while (!holds() && pool.isNotEmpty()) keep.add(pool.removeAt(0))
+            if (!holds()) emptyList() else pool
+        }
+        val callJoins: Map<String, Int> = (callCrew + staging + waveBehind).associate { m ->
+            m.id to (travelTicksOf(listOf(m), assaultFlow, spawnFlow).coerceAtMost(arenaInfo.ticksLimit) - frontTravel).coerceAtLeast(1) }
+        val siegeCall = if (callCrew.isEmpty()) SIEGE_LOSE else siegeOutcome(waveFront + waveBehind + staging + callCrew, frontAttrition, siegeDefenders,
+            siegeTowers, enemySpawn!!, spawnRampart, PUSH_RATIO, assaultFlow, extraShots = 1, approach = frontTravel, etas = defEtas, joins = callJoins)
+        val callInTime = siegeCall.win && remaining > budget(frontTravel + (callJoins.values.maxOrNull() ?: 0), siegeCall) + LATE_MARGIN
+        val holdInTime = remaining > budget(reinforceTravel, siegeJoin) + LATE_MARGIN || waveInTime || callInTime
         // (v196) the wave with its own latecomers wins, and the post would not end the siege sooner: nothing to hold for
         val goWave = USE_WAVE_LATECOMERS && siegeGoWave.win && !(siegeJoin.win && siegeJoin.better(siegeGoWave))
         siegeHold = newPushing && !siegeGo.win && !goWave && waveMembers.isNotEmpty() && !frontCovered && holdInTime
+        holdCall = if (siegeHold && callInTime) callCrew else emptyList()
         if (DEBUG_LOG && (newPushing != pushing || getTicks() % (LOG_EVERY * 10) == 0)) {
-            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds/${guardHoldsSortie}(${arrivingHome.size}@$sortieTicks) home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
+            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin call=${if (callCrew.isEmpty()) "-" else "$siegeCall[${callCrew.size}]"} hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds/${guardHoldsSortie}(${arrivingHome.size}@$sortieTicks) home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
         }
         pushing = newPushing
         lastPushReason = when {
@@ -4402,6 +4431,12 @@ object SpawnAndSwamp {
                 waveCounter++
                 staging.forEach { wave[it.id] = waveCounter }
                 if (DEBUG_LOG) println("wave $waveCounter departs: ${staging.size} fighters t=${getTicks()}")
+            }
+            // (v220) the hold's call: the house's spare guns and the post go to the wave together
+            if (holdCall.isNotEmpty()) {
+                waveCounter++
+                (holdCall + staging).forEach { wave[it.id] = waveCounter }
+                if (DEBUG_LOG) println("wave $waveCounter called: ${holdCall.size} from home, ${staging.size} from the post t=${getTicks()}")
             }
         }
 
@@ -6818,6 +6853,9 @@ object SpawnAndSwamp {
     /** A body with no live MOVE walks nowhere (pathTicks), and the hold's reinforcement walk is that of the fighters at
      *  full speed, or a newborn's (v219). */
     private const val USE_REINFORCE_MOVERS = true
+    /** The hold calls the house's spare guns at full speed to the wave when the siege with them, each joining at its
+     *  own walk's tick, wins before the clock; the house keeps what holds it (v220). */
+    private const val USE_HOLD_CALLS_HOME = true
     /** Two cells both next to one target are at most this far apart: the pair is together within it (v216). */
     private const val RAID_PAIR_RANGE = 2
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
