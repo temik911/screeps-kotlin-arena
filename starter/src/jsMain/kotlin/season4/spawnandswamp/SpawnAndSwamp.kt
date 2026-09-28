@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 220
+    private const val BOT_VERSION = 221
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6854,8 +6854,12 @@ object SpawnAndSwamp {
      *  full speed, or a newborn's (v219). */
     private const val USE_REINFORCE_MOVERS = true
     /** The hold calls the house's spare guns at full speed to the wave when the siege with them, each joining at its
-     *  own walk's tick, wins before the clock; the house keeps what holds it (v220). */
-    private const val USE_HOLD_CALLS_HOME = true
+     *  own walk's tick, wins before the clock; the house keeps what holds it (v220).
+     *  OFF (v221) — measured live 28.09.2026: A/B against marlyman#441 (8+8 test hands) v219 6-0-2 / v220 4-1-3. The
+     *  house's keep was counted against his creeps at the door and those arriving NOW: in the loss the call at 1254 took
+     *  the house's last spare gun with nothing arriving, his army came at 1500 (4-7 arriving, guard 0 of 1) while the
+     *  wave of 11 stood in the field, and our spawn fell at 1900; the draws were not fewer (3 against 2) */
+    private const val USE_HOLD_CALLS_HOME = false
     /** Two cells both next to one target are at most this far apart: the pair is together within it (v216). */
     private const val RAID_PAIR_RANGE = 2
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
