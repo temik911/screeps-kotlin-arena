@@ -37,6 +37,13 @@ import screeps.api.structures.StructureRampart
  *    эскорт — 4 тика на клетку), потом эскорт (стендовая строка match4:icpt открыта с v12);
  *  - `camp` — ricardo18informatica2020#23 (обыграл v28 0-6, 28.09.2026): M4A3 на первом тике — телохранитель своего
  *    эскорта (идёт рядом, бьёт подошедших на четыре клетки от эскорта); тягачей и разведчиков нет, наш эскорт идёт сам;
+ *  - `guard` — тот же телохранитель, что `camp`, но с броском (реплеи ricardo#23/#25, 28.09.2026: 6abaac66, 6abaae9e,
+ *    6abaaf41): когда их поезд (эскорт или тягач) подходит к нему на LUNGE_RANGE, M4A3 бросает свой эскорт и гонится
+ *    за поездом до конца, бьёт соседа с наименьшими хитами — сзади обратного поезда это тягачи. По 15 играм v30 он
+ *    бросался в шести — везде поезд подходил на 5 (в одной на 6); где поезд держался в 6–8, броска не было, а наших
+ *    разведчиков M1 он подпускал и на 1–2 клетки. В стенде их эскорт приходит к развилке на пару тиков позже живого,
+ *    поезд проходит на 2–3 клетки дальше, и с 5 броска не бывает вовсе (с 7 — 2 руки из 30); LUNGE_RANGE 8 — худший
+ *    случай, бросок в каждой руке;
  *  - `kk` — убийца хранителя: M1A1 после дебюта идёт к их флагу, бьёт стоящих на нём и рядом и сам встаёт на флаг
  *    вооружённым захватчиком;
  *  - `army` — после остальных приёмов, раз за разом: стрелок M5R5 охотится на их эскорт, по дороге бьёт тягачей
@@ -47,7 +54,7 @@ import screeps.api.structures.StructureRampart
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("camp", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
+    private val ORDER = listOf("camp", "guard", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
     private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
@@ -84,7 +91,7 @@ internal object RedTeam {
         // армия: стрелок M5R5 (1000) — достаёт эскорт с трёх клеток, 50 урона в тик; повторяется, пока идёт матч
         "army", "rush" -> Array(5) { MOVE } + Array(5) { screeps.api.RANGED_ATTACK }
         "icpt", "kk" -> arrayOf(MOVE, screeps.api.ATTACK)
-        "camp" -> arrayOf(MOVE, MOVE, MOVE, MOVE, screeps.api.ATTACK, screeps.api.ATTACK, screeps.api.ATTACK)
+        "camp", "guard" -> arrayOf(MOVE, MOVE, MOVE, MOVE, screeps.api.ATTACK, screeps.api.ATTACK, screeps.api.ATTACK)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
@@ -93,7 +100,7 @@ internal object RedTeam {
     fun spawn(w: EscortRun.World, energy: Int, late: Boolean): Boolean {
         if (tricks.isEmpty()) return false
         // camp (ricardo18informatica2020#23): один M4A3 и больше НИЧЕГО — ни тягачей, ни разведчиков, спавн копит
-        if ("camp" in tricks && "camp" in ordered) return true
+        if (("camp" in tricks && "camp" in ordered) || ("guard" in tricks && "guard" in ordered)) return true
         if (pendingBody != null) return false
         for (t in ORDER) {
             // при затычке гонки нет — поздние приёмы идут до дебюта, иначе они ждали тягачей до 200-го тика
@@ -124,6 +131,7 @@ internal object RedTeam {
                 "army", "rush" -> army(w, c)
                 "icpt" -> icpt(w, c)
                 "camp" -> camp(w, c)
+                "guard" -> guard(w, c)
                 "kk" -> keeperKiller(w, c)
             }
         }
@@ -219,6 +227,25 @@ internal object RedTeam {
         if (prey != null) { if (getRange(c, prey) > 1) EscortRun.stepRed(w, c, prey, 1); log(w, c, "camp", "on ${Bodies.summaryOf(prey)}"); return }
         if (getRange(c, own) > 1) EscortRun.stepRed(w, c, own, 1)
         log(w, c, "camp", "guarding own escort")
+    }
+
+    private const val LUNGE_RANGE = 8
+    private var lunged = false
+
+    private fun guard(w: EscortRun.World, c: Creep) {
+        w.enemies.filter { getRange(c, it) <= 1 }.minByOrNull { it.hits }?.let { c.attack(it) }
+        val theirs = w.enemyEscort
+        val close = w.enemies.filter { it === theirs || Bodies.isPuller(it, 3) }.minByOrNull { getRange(c, it) }
+        if (!lunged && theirs != null && close != null && getRange(c, close) <= LUNGE_RANGE) {
+            lunged = true
+            println("red t=${w.now} guard: LUNGE — ${Bodies.summaryOf(close)} at ${getRange(c, close)}, their escort at ${getRange(c, theirs)}")
+        }
+        if (lunged && theirs != null) {
+            if (getRange(c, theirs) > 1) EscortRun.stepRed(w, c, theirs, 1)
+            log(w, c, "guard", "chasing escort h=${theirs.hits}")
+            return
+        }
+        camp(w, c)
     }
 
     private fun keeperKiller(w: EscortRun.World, c: Creep) {
