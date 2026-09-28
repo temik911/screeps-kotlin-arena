@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 216
+    private const val BOT_VERSION = 217
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5462,9 +5462,19 @@ object SpawnAndSwamp {
                 // asked what leaving costs the spawn being shot: against marlyman#313 (v131 loss) his spawn stood bare at 660
                 // hits with no armed creep of his near, and f31, in range of it, was sent 43 cells after his builder; f27 alone
                 // took it to 340 and died to the tower, and the spawn stood at 340 to the end of the match
-                if (USE_HUNT_KEEPS_SIEGE && target != null && getRange(c, target) <= RANGED_RANGE && getRange(c, b) > RANGED_RANGE) {
-                    val work = (target.hits ?: SPAWN_HITS) + shieldAt(target)
-                    val fire = marchers.filter { getRange(it, target) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged }
+                // …THE SIEGE IS ITS WHOLE CREW, MELEE AND ALL (v217). Only a gun within its range of the target counted, and
+                // the siege's fire was the ranged of those alone: against marlyman#443 (v214 draw) f30, an M8R4 at 1200/1200
+                // five to seven cells from his main, was sent at 1020 after a builder 35 cells off — his rampart fell at 1054
+                // with two of ours at the spawn, the spawn stopped at 540 and stood bare 219 ticks; f30 never shot it (14 ticks
+                // of its fire). And in range it would not have been kept: 12816 of work over 80 of ranged is 160 ticks, while
+                // with the two melee there it was ~27. The crew is every marcher within the fight's reach of the target, each
+                // with its ranged and its melee — a spawn does not kite
+                val inSiege = target != null && getRange(c, b) > RANGED_RANGE &&
+                    getRange(c, target) <= (if (USE_HUNT_SIEGE_CREW) ENGAGE_RANGE else RANGED_RANGE)
+                if (USE_HUNT_KEEPS_SIEGE && inSiege) {
+                    val work = (target!!.hits ?: SPAWN_HITS) + shieldAt(target)
+                    val fire = if (USE_HUNT_SIEGE_CREW) marchers.filter { getRange(it, target) <= ENGAGE_RANGE }.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+                        else marchers.filter { getRange(it, target) <= RANGED_RANGE }.sumOf { InfluenceMap.profileOf(it).ranged }
                     if (fire > 0.0 && work / fire < detour) continue
                 }
                 if (detour < worth) cands.add(c to eta)
@@ -6754,6 +6764,9 @@ object SpawnAndSwamp {
     /** A waiting raider with a live mate farther than RAID_PAIR_RANGE walks to it, so the pair waits and enters together
      *  (runRaiders, v216). */
     private const val USE_RAID_MEET = true
+    /** A gun within ENGAGE_RANGE of the siege's target stays off the builder hunt while the crew's fire — ranged and
+     *  melee — ends the siege sooner than its detour (builderHunt, v217). */
+    private const val USE_HUNT_SIEGE_CREW = true
     /** Two cells both next to one target are at most this far apart: the pair is together within it (v216). */
     private const val RAID_PAIR_RANGE = 2
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
