@@ -530,17 +530,20 @@ object EscortRun {
         //    120-го и R5M5 со 177-го догоняли медленный поезд: 1 из 7 при v16 и 0 из 2 при v17, где M6 ждал до 56-го.
         //    Убрано: против stachu держит дом, см. decideHold.)
         val plan = openingPlan
-        // тяжёлый враг виден до конца дебюта и к нашей базе не идёт — остаток дебюта ждёт: 300 энергии второго тягача —
-        // это триста тиков до бойца, который его побеждает (ricardo#23: M4A3 в центре, потом при своём эскорте; v28 0-6).
-        // Пошёл к базе (ricardo#8) — дебют продолжается: его бьёт боец с рампарта, а гонке нужен полный поезд
-        if (plan != null && openingIdx in 1 until plan.size && escort != null && w.mySpawn != null) {
-            val heavies = w.enemyArmed.filter { !isEscort(it) && heavy(it) && !bodyguard(w, it) }
-            val nearBase = heavies.any { dist(it, w.mySpawn) <= HEAVY_NEAR_BASE }
-            if (heavies.isNotEmpty() && !nearBase) {
-                if (!openingPaused) { openingPaused = true; println("spawn t=${w.now}: opening paused at ${openingIdx}/${plan.size} — heavy ${heavies.joinToString(" ") { Bodies.summaryOf(it) }} away from our base") }
-            } else if (openingPaused) { openingPaused = false; println("spawn t=${w.now}: opening resumed — ${if (nearBase) "heavy at our base" else "no heavy away from us"}") }
+        // ПУТЬ УБИЙСТВА. Соперник отдал дебют тяжёлому бойцу вместо тягачей (ricardo#8 — рашер на базу, ricardo#23 —
+        // телохранитель, который бросается на поезд в центре; v28 0-6): его эскорт идёт один и медленно, а наш полный
+        // поезд всё равно встречает бойца. Тогда второй тягач не покупается — его 300 идут в бойца, выигрывающего дуэль
+        // (M4A4), тот убивает их тяжёлого, потом их одинокий эскорт; наш эскорт ждёт на рампартах
+        if (plan != null && openingIdx in 1 until plan.size && escort != null && !killPath) {
+            val heavies = (w.enemyArmed + w.enemyPending.filter { Bodies.wasArmed(it) }).filter { !isEscort(it) && heavy(it) }
+            val theirPullers = enemyPullers(w).isNotEmpty() || w.enemyPending.any { Bodies.isPuller(it, PULLER_MIN_MOVE) }
+            if (heavies.isNotEmpty() && !theirPullers) {
+                killPath = true
+                openingIdx = plan.size
+                println("spawn t=${w.now}: KILL PATH — heavy ${heavies.joinToString(" ") { Bodies.summaryOf(it) }} and no puller of theirs; opening stops")
+            }
         }
-        if (plan != null && openingIdx < plan.size && escort != null && !openingPaused) {
+        if (plan != null && openingIdx < plan.size && escort != null) {
             val body = Bodies.moves(plan[openingIdx])
             if (e >= Bodies.cost(body)) {
                 if (order(w, body, "puller", "opening ${openingIdx + 1}/${plan.size} plan=M${plan.joinToString("+M")}")) openingIdx++
@@ -709,8 +712,8 @@ object EscortRun {
     }
 
     private var chokesOrdered = 0
-    /** Дебют ждёт: тяжёлый враг вдали (см. runSpawn). */
-    private var openingPaused = false
+    /** Путь убийства (см. runSpawn): наш боец убивает их тяжёлого и их одинокий эскорт. */
+    private var killPath = false
     /** Жребий развилки «их флаг свободен»: null — ещё не тянули (см. 3'' в runSpawn). */
     private var flagFirst: Boolean? = null
     /** Доля матчей, где при свободном их флаге M1 идёт туда раньше блокировщика маршрута: минимакс по офлайн-матрице
@@ -1471,7 +1474,7 @@ object EscortRun {
         val armedOurs = w.fighters.filter { Bodies.isArmed(it) }
         // только против засады: к рампартам она не подходит; кто подходит (ricardo#8, перехватчик stachu), того бьёт
         // дешёвый боец с рампарта, и полный поезд потом выигрывает гонку (стенд rush8, econ+icpt)
-        val camp = campers(w)
+        val camp = if (killPath) liveThreats.filter { heavy(it) }.ifEmpty { campers(w) } else campers(w)
         val strong = camp.isNotEmpty() && Bodies.duel(Bodies.unitOf(cheapUnit), camp.map { Bodies.unitOf(it) }) < 0
         if (strong && !wins(armedOurs, camp)) {
             // победитель — первым: M1 на их флаг идёт через то же горлышко, где стоит засада, и гиб там каждые 50 тиков
