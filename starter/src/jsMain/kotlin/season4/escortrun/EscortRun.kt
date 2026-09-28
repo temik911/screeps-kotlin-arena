@@ -1347,6 +1347,8 @@ object EscortRun {
     /** Охотники, бившие наш ЭСКОРТ: от них не уводят (им нужен эскорт, и без тягачей он погибнет быстрее). */
     private val escortHunters = HashSet<String>()
     private var escortHitsLast = -1
+    /** Приманка → расстояние до охотника в начале прошлого тика и его клетка тогда (сближается ли он с ней). */
+    private val baitLast = HashMap<String, Pair<Int, Int>>()
 
     /**
      * Тягачи, уводящие охотника от эскорта. Живой ricardo#23/#25 после броска охотится именно на ТЯГАЧЕЙ: семь тиков
@@ -1356,11 +1358,12 @@ object EscortRun {
      * которому бьёт вооружённый, догоняющий поезд (быстрее поезда по равнине), которого наши рядом не побеждают, выходит из
      * цепи и уводит его прочь от эскорта; эскорт идёт сам (4 тика на
      * клетку равнины) или с оставшимися; приманка водит охотника, пока тот жив.
-     * Тягач не убегает, а держится ПРИМАНКОЙ — на удар дальше досягаемости охотника (мили — 2–3 клетки): ушедшего на 5–6
-     * ricardo бросал и бил эскорт (v33, 6abab9f4). По равнине скорости равны, и расстояние, взятое в начале тика, охотник
-     * не сокращает; по болоту тягач вчетверо быстрее. Охотник, ударивший эскорт, когда приманка была рядом, охотится на
-     * эскорт: от него не уводят, уведённые возвращаются в цепь (стенд hunt+harvest: стрелок M5R5 бил эскорт, тягачи ушли,
-     * и эскорт погиб один — v30 там выигрывал).
+     * Тягач не убегает, а держится ПРИМАНКОЙ — на клетку дальше досягаемости охотника к началу его тика (мили — 2): ушедших
+     * на 4–6 клеток ricardo бросал и бил эскорт (v33, 6abab9f4, 6ababb3d). Сближается охотник с приманкой — она отходит на
+     * 3 от его клетки (он шагнёт, станет 2); не сближается — встаёт на 2. По равнине скорости равны, по болоту тягач
+     * вчетверо быстрее. Охотник, ударивший эскорт, когда приманка стояла на досягаемости + 1 (или приманки не было),
+     * охотится на эскорт: от него не уводят, уведённые возвращаются в цепь (стенд hunt+harvest: стрелок M5R5 бил эскорт,
+     * тягачи ушли, и эскорт погиб один — v30 там выигрывал).
      */
     private fun decoys(w: World, escort: Creep): Set<String> {
         val trainPeriod = Bodies.period(Bodies.weight(escort), ourTrainMoves(w), false)
@@ -1371,7 +1374,7 @@ object EscortRun {
         if (escortHitsLast >= 0 && escort.hits < escortHitsLast) {
             // эскорт он выбрал сам, если приманки не было или она была рядом; ушедшая далеко — наша вина, не его выбор
             for (h in hunters) if (dist(h, escort) <= reach(h) &&
-                luring.filterValues { it == idOf(h) }.keys.let { lures -> lures.isEmpty() || lures.any { id -> pullerPos[id]?.let { dist(it, h) <= reach(h) + 2 } ?: false } } &&
+                luring.filterValues { it == idOf(h) }.keys.let { lures -> lures.isEmpty() || lures.any { id -> (baitLast[id]?.first ?: 99) <= reach(h) + 1 } } &&
                 escortHunters.add(idOf(h))) {
                 val back = luring.filterValues { it == idOf(h) }.keys
                 luring.keys.removeAll(back)
@@ -1386,7 +1389,8 @@ object EscortRun {
             pullerHits[id] = p.hits
             if (p.spawning || Bodies.liveMoves(p) == 0) continue
             if (id !in luring && was != null && p.hits < was) {
-                val h = hunters.filter { dist(it, p) <= reach(it) && idOf(it) !in escortHunters }.minByOrNull { dist(it, p) }
+                // бил он в прошлом тике, с тех пор оба шагнули: досягаемость + 1
+                val h = hunters.filter { dist(it, p) <= reach(it) + 1 && idOf(it) !in escortHunters }.minByOrNull { dist(it, p) }
                 val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, p) <= 6 }
                 if (h != null && (guards.isEmpty() || !wins(guards, listOf(h)))) {
                     luring[id] = idOf(h)
@@ -1397,9 +1401,15 @@ object EscortRun {
             if (luring.containsKey(id) && hunter == null) { luring.remove(id); continue }
             if (hunter == null) continue
             out.add(id)
-            // приманка: в начале следующего тика — дальше досягаемости, но в полосе [reach+1, reach+2] от охотника, чтобы
-            // он гнался; в полосе — дальше от эскорта (уводим); полосы нет (угол) — просто дальше от охотника
+            // приманка: к началу следующего тика — ровно на клетку дальше досягаемости; при равных — дальше от эскорта
             val bait = reach(hunter) + 1
+            val dNow = dist(hunter, p)
+            val prev = baitLast[id]
+            val closing = prev != null && prev.second != key(hunter) && dNow < prev.first
+            baitLast[id] = dNow to key(hunter)
+            // на досягаемости + 1 и ближе — всегда шаг прочь (стоящую на 2 он настигал, и её били через тик: по равнине
+            // от равного не уйти); дальше — ждать на 2, пока он не пошёл к ней
+            val want = if (dNow <= bait || closing) bait + 1 else bait
             var best: Position? = null
             var bestScore = Int.MIN_VALUE
             for ((dx, dy) in DIRECTIONS + listOf(0 to 0)) {
@@ -1409,13 +1419,18 @@ object EscortRun {
                 if (w.blocked.any { it.x == x && it.y == y }) continue
                 val c = InfluenceMap.cell(x, y)
                 val d = getRange(hunter, c)
-                val inBand = d in (bait + 1)..(bait + 2) || (d == bait && dist(hunter, p) > bait)
-                val score = (if (inBand) 10_000 else 0) + minOf(d, bait + 2) * 100 + minOf(getRange(escort, c), 20) * 3 + (if (DistanceMap.isSwamp(x, y)) 1 else 0)
+                // ближе нужного — под удар (штраф сильнее), дальше — бросит
+                val miss = if (d < want) (want - d) * 3 else d - want
+                // вплотную — рвать по болоту: там он вчетверо медленнее, а тягач нет
+                val swamp = if (DistanceMap.isSwamp(x, y)) (if (dNow <= reach(hunter)) 2000 else 1) else 0
+                val score = -miss * 1000 + swamp + minOf(getRange(escort, c), 20) * 3
                 if (score > bestScore) { bestScore = score; best = c }
             }
+            if (DEBUG_LOG && w.now % 5 == 0) println("bait t=${w.now}: $id (${p.x},${p.y}) d=$dNow closing=$closing want=$want -> ${best?.let { "(${it.x},${it.y}) d=${getRange(hunter, it)}" }} hunter (${hunter.x},${hunter.y})")
             if (best != null && (best.x != p.x || best.y != p.y)) TrafficManager.request(p, best, PULLER_PRIORITY)
         }
         luring.keys.retainAll(w.pullers.mapTo(HashSet()) { idOf(it) })
+        baitLast.keys.retainAll(luring.keys)
         return out
     }
 

@@ -230,7 +230,7 @@ internal object RedTeam {
     }
 
     private const val LUNGE_RANGE = 8
-    private const val PREY_RANGE = 4
+    private const val PREY_RANGE = 3
     private var lunged = false
 
     private fun guard(w: EscortRun.World, c: Creep) {
@@ -243,8 +243,8 @@ internal object RedTeam {
         }
         if (lunged && theirs != null) {
             // охотник на тягачей (реплей v31 6abab492: семь тиков стоял вплотную к эскорту и не бил его, бил только
-            // тягачей; v33 6abab9f4: тягачи ушли на 5–6 клеток — и он ударил эскорт): цель — ближний их тягач в
-            // PREY_RANGE, иначе эскорт
+            // тягачей; v33 6abab9f4 и 6ababb3d: тягачи ушли на 4–6 клеток — и он бил эскорт): цель — ближний их тягач
+            // в PREY_RANGE, иначе эскорт
             val prey = w.enemies.filter { it !== theirs && Bodies.isPuller(it, 3) && getRange(c, it) <= PREY_RANGE }.minByOrNull { getRange(c, it) } ?: theirs
             if (getRange(c, prey) <= 1) c.attack(prey) else EscortRun.stepRed(w, c, prey, 1)
             log(w, c, "guard", "hunting ${Bodies.summaryOf(prey)} at ${getRange(c, prey)}, escort h=${theirs.hits}")
