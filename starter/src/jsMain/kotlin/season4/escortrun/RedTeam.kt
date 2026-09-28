@@ -39,7 +39,7 @@ import screeps.api.structures.StructureRampart
  *    эскорта (идёт рядом, бьёт подошедших на четыре клетки от эскорта); тягачей и разведчиков нет, наш эскорт идёт сам;
  *  - `guard` — тот же телохранитель, что `camp`, но с броском (реплеи ricardo#23/#25, 28.09.2026: 6abaac66, 6abaae9e,
  *    6abaaf41): когда их поезд (эскорт или тягач) подходит к нему на LUNGE_RANGE, M4A3 бросает свой эскорт и гонится
- *    за поездом до конца, бьёт соседа с наименьшими хитами — сзади обратного поезда это тягачи. По 15 играм v30 он
+ *    за поездом до конца, охотясь на ТЯГАЧЕЙ (ближний тягач — цель, эскорт — когда тягачей нет). По 15 играм v30 он
  *    бросался в шести — везде поезд подходил на 5 (в одной на 6); где поезд держался в 6–8, броска не было, а наших
  *    разведчиков M1 он подпускал и на 1–2 клетки. В стенде их эскорт приходит к развилке на пару тиков позже живого,
  *    поезд проходит на 2–3 клетки дальше, и с 5 броска не бывает вовсе (с 7 — 2 руки из 30); LUNGE_RANGE 8 — худший
@@ -233,16 +233,19 @@ internal object RedTeam {
     private var lunged = false
 
     private fun guard(w: EscortRun.World, c: Creep) {
-        w.enemies.filter { getRange(c, it) <= 1 }.minByOrNull { it.hits }?.let { c.attack(it) }
         val theirs = w.enemyEscort
+        if (!lunged) w.enemies.filter { getRange(c, it) <= 1 }.minByOrNull { it.hits }?.let { c.attack(it) }
         val close = w.enemies.filter { it === theirs || Bodies.isPuller(it, 3) }.minByOrNull { getRange(c, it) }
         if (!lunged && theirs != null && close != null && getRange(c, close) <= LUNGE_RANGE) {
             lunged = true
             println("red t=${w.now} guard: LUNGE — ${Bodies.summaryOf(close)} at ${getRange(c, close)}, their escort at ${getRange(c, theirs)}")
         }
         if (lunged && theirs != null) {
-            if (getRange(c, theirs) > 1) EscortRun.stepRed(w, c, theirs, 1)
-            log(w, c, "guard", "chasing escort h=${theirs.hits}")
+            // охотник на тягачей (реплей v31 6abab492: семь тиков стоял вплотную к эскорту и не бил его, бил только
+            // тягачей; эскорт — лишь когда тягачей не осталось): цель — ближний их тягач, эскорт — последним
+            val prey = w.enemies.filter { it !== theirs && Bodies.isPuller(it, 3) }.minByOrNull { getRange(c, it) } ?: theirs
+            if (getRange(c, prey) <= 1) c.attack(prey) else EscortRun.stepRed(w, c, prey, 1)
+            log(w, c, "guard", "hunting ${Bodies.summaryOf(prey)} at ${getRange(c, prey)}, escort h=${theirs.hits}")
             return
         }
         camp(w, c)
