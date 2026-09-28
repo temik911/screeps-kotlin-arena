@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 224
+    private const val BOT_VERSION = 225
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7180,8 +7180,13 @@ object SpawnAndSwamp {
      *  raiders 70-80 cells off went for his main whenever walk + 10 fitted it, through his army, and the waiting cell was
      *  in use in 3-15 journal lines a game. v224 keeps the waiting cell alone to measure it */
     private const val USE_RAID_FORECAST = false
-    /** A raid waiting on a spawn of his waits at the nearest cell his guns do not reach within RAID_WAIT_H (v223). */
-    private const val USE_RAID_SAFE_WAIT = true
+    /** A raid waiting on a spawn of his waits at the nearest cell his guns do not reach within RAID_WAIT_H (v223).
+     *  OFF (v225) — measured live 28.09.2026: A/B against けろびー#50 (8+8 test hands) v219 7-0-1 / v224 (this alone)
+     *  7-0-1, and its own instrument the wrong way: raiders that never struck a spawn 5 / 13, raiders bought 31 / 39,
+     *  damage into his spawns and ramparts 139770 / 139410, two on one spawn 315 / 270 ticks. The replay estimate (full
+     *  kills in windows 0.13 -> 3.45 a draw) walked his recorded army, which does not answer our raiders: live, the cell
+     *  his guns "do not reach within 50" moved every tick and the raiders died on the way to it as before */
+    private const val USE_RAID_SAFE_WAIT = false
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
