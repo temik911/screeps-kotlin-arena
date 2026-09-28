@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v42"
+    private const val BOT_VERSION = "v43"
 
     private const val LOG_EVERY = 50
 
@@ -851,7 +851,10 @@ object SpawnAndSwampAdvanced {
                 val stay = mine.filter { c ->
                     idOf(c) != fid && !c.spawning && idOf(c) !in roleOf && liveParts(c, WORK) > 0 && cheb(posOf(c), b1.spawnCell) <= 2
                 }.sumOf { liveParts(it, WORK) }
-                if (stay >= needWork && worksiteSafe(listOf(plan.spawnCell))) {
+                // пока на карте есть его бойцы, основатель уходит только при нашем бойце дома: v42 уходил на 302-м, и
+                // рейдер M3R3 убивал его у первого рампарта или замену на открытой клетке первой базы
+                val covered = enemyCombat.isEmpty() || mine.any { isCombat(it) && !it.spawning }
+                if (stay >= needWork && covered && worksiteSafe(listOf(plan.spawnCell))) {
                     builderId = fid; expansion = plan; expansionPlaced = false
                     slotOf.remove(fid); founderId = null; founderPlan = null
                     println("founder t=$t ${bodyOf(founder)} leaves for (${plan.spawnCell.x},${plan.spawnCell.y})")
@@ -1103,13 +1106,18 @@ object SpawnAndSwampAdvanced {
      *  работают, урон идёт в рампарт): ставятся, когда у дома есть боец или его уже атаковали, по одному. Рейдеры
      *  けろびー (M3R3, 30 в тик) убивали незащищённых добытчиков за 13–33 тика; сквозь рампарт им нужно 330. */
     private fun planRamparts(t: Int, b: Base, mine: List<Creep>, all: Array<GameObject>) {
-        if (mine.none { isCombat(it) } && !attackedOnce) return
+        // крыша — с того тика, как у него есть спавн: его первый рейдер приходит к ~364-му (M3R3 けろびー#2/#7 с 282-го,
+        // по одному в ~67 тиков), а v42 начинал рампарты только с первым своим бойцом — замена W5 на базе, откуда ушёл
+        // основатель, гибла на открытой клетке, спавн без дохода копил на бойца до конца игры (два поражения fame 28.09)
+        if (mine.none { isCombat(it) } && !attackedOnce && enemySpawnSeenAt < 0) return
         val occupied = b.slots.filter { s -> mine.any { it.x == s.x && it.y == s.y && idOf(it) in slotOf } }
         // сторожевые: клетки-выходы спавна под рампартом, по одной на каждого бойца дома и ещё одна — боец на своём
         // рампарте неуязвим, пока тот цел (двум M4R3H1 на 10000 нужно ~170 тиков), и рождается спавн прямо на них
         val homeFighters = mine.count { isCombat(it) && idOf(it) !in wave && idOf(it) !in roleOf }
         val guards = guardCells(b, all).take(homeFighters + 1)
-        val want = listOf(b.spawnCell) + guards + occupied
+        // сперва клетки добытчиков — доход базы: добытчик на своём рампарте копает и сдаёт под огнём, и спавн рожает
+        // бойца; потом спавн, потом сторожевые
+        val want = occupied + b.spawnCell + guards
         val have = all.filter { (it is StructureRampart || it is ConstructionSite && isRampartSite(it)) && it.asDynamic().my == true }
             .map { posOf(it) }.toSet()
         if (all.any { it is ConstructionSite && it.asDynamic().my == true && isRampartSite(it) && cheb(posOf(it), b.spawnCell) <= 2 }) return
