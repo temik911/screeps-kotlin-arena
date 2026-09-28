@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 241
+    private const val BOT_VERSION = 242
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7368,6 +7368,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_SPAWN_FIRST = true
     /** A raider below its retreat share stays next to a builder of his that falls before it does (finishingBuilder, v240). */
     private const val USE_RAID_FINISH_BUILDER = true
+    /** A bare spawn goes before his builder only while the builder has a spawn site of his within reach (v242). */
+    private const val USE_RAID_FIRST_BOUND = true
     /** A free gun hunts a builder only when his worth (the spawns he will still raise; one that cannot walk, his spawn
      *  sites within reach) pays the sortie there and back, and the house holds without it against those the forecast
      *  brings to it within the sortie (builderHunt, v228). */
@@ -7823,6 +7825,14 @@ object SpawnAndSwamp {
             val b = builderTarget
             val work = b.body.count { it.type == WORK && it.hits > 0 } * BUILD_POWER
             val site = enemySitesNow.filter { (st, _) -> (st.progressTotal ?: 0) == buildCost("StructureSpawn") && getRange(st, b) <= 3 }.minOfOrNull { it.second }
+            // …and only while his builder is bound to a site (v242): "spawn, then builder" finds him where he stands only if
+            // he stays there, and he stays only while he builds — a builder with no site near walks, as fast as the pair on
+            // the plain, and a spawn does not. Against けろびー#50 (v239 draw) at 484 the pair stood by his builder (≤ 2
+            // cells) as he finished (62,83); the order took the spawn (the deadline of a whole spawn, 100 ticks, against
+            // 25-43), one raider struck it alone for 33 ticks, the builder walked to his guns at (74,77), the pair caught him
+            // at 540-550 at 260/800 and died there at 561/570 — he lived to 1838 and raised eight spawns. The evidence of
+            // v227 was a builder at his site (100/1000; the one that finished (60,58)); a walking one goes first
+            if (USE_RAID_FIRST_BOUND && site == null) return@run null
             val deadline = site ?: if (work > 0) buildCost("StructureSpawn") / work else Int.MAX_VALUE / 4
             open.filter { it.id in spawnIds && rampartOn(ctx, pos(it)) == 0 }.map { sp ->
                 val walk = raiders.maxOf { getRange(it, pos(sp)) - 1 }.coerceAtLeast(0)
