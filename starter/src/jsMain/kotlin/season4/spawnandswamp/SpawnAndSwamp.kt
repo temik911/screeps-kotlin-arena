@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 226
+    private const val BOT_VERSION = 227
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6974,6 +6974,8 @@ object SpawnAndSwamp {
     /** The raid's waiting cell and the forecast's horizon at its target this tick, for the journal (v223). */
     private var raidWaitAt: Position? = null
     private var raidHorizon = Int.MAX_VALUE / 4
+    /** Ticks the raid took a bare spawn before his builder (v227, journal). */
+    private var raidSpawnFirst = 0
     /** The raid hunts his builders while any lives, is re-bought for his new builder while he has at most two spawns,
      *  and his last stand frees the spawn for guns; an immobile creep of his is no interceptor (v158). */
     private const val USE_RAID_BUILDERS_FIRST = true
@@ -7191,6 +7193,9 @@ object SpawnAndSwamp {
     /** A builder of his costs his body and the rampart he stands on, and is the raid's target only while that is not more
      *  than the spawns he will still raise; one that is not a target does not stop the chipping of his spawns (v226). */
     private const val USE_RAID_BUILDER_WORK = true
+    /** A bare spawn of his goes before his builder when the spawn, the walk to the builder and the builder all fall before
+     *  the builder's own spawn stands (runRaiders, v227). */
+    private const val USE_RAID_SPAWN_FIRST = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
@@ -7563,8 +7568,32 @@ object SpawnAndSwamp {
                 .minWithOrNull(compareBy<Pair<GameObject, Int>> { rampartOn(ctx, pos(it.first)) > 0 }.thenBy { getRange(lead, pos(it.first)) })?.first
         // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17) — and
         // taken when it is all that is left, since the win is his last spawn
+        // A BARE SPAWN ON THE WAY BEFORE THE BUILDER WHEN BOTH STILL FALL IN TIME (v227). "His builders first" was
+        // unconditional, and the first pair walked past his fresh bare field spawn with none of his guns within 12 cells
+        // to chase a builder: against けろびー#48 (v225 draw) at 395-404 the pair stood next to (29,67), killed builder 1,
+        // left for builder 2 42 cells off (site 100/1000) and never came back — the spawn lived 1098 ticks; against #49 it
+        // walked 10-14 cells past the bare (51,80) (lived 995) while his second field spawn (60,58) was finished two ticks
+        // before a raider got there. A bare spawn is 3000 / (6 ATTACK × 30) = 17 ticks for the pair; his builder's spawn
+        // stands no sooner than its site's work left (a walking one: a whole spawn, 1000 / his WORK × BUILD_POWER). When the
+        // walk to the spawn, its kill, the walk from it to the builder and the builder's own work (v226) end before that,
+        // the order "spawn, then builder" takes both and sooner; otherwise the builder goes first as before
+        val spawnFirst: GameObject? = if (!USE_RAID_SPAWN_FIRST || builderTarget == null || raidDps <= 0.0) null else run {
+            val b = builderTarget
+            val work = b.body.count { it.type == WORK && it.hits > 0 } * BUILD_POWER
+            val site = enemySitesNow.filter { (st, _) -> (st.progressTotal ?: 0) == buildCost("StructureSpawn") && getRange(st, b) <= 3 }.minOfOrNull { it.second }
+            val deadline = site ?: if (work > 0) buildCost("StructureSpawn") / work else Int.MAX_VALUE / 4
+            open.filter { it.id in spawnIds && rampartOn(ctx, pos(it)) == 0 }.map { sp ->
+                val walk = raiders.maxOf { getRange(it, pos(sp)) - 1 }.coerceAtLeast(0)
+                val kill = ceil((ctx.enemySpawns.firstOrNull { it.id == sp.id }?.hits ?: SPAWN_HITS) / raidDps).toInt()
+                sp to walk + kill + getRange(pos(sp), b) + ceil(builderWork(ctx, b) / raidDps).toInt()
+            }.filter { (sp, t) -> t < deadline &&
+                raidOutlasts(ctx, raiders, pos(sp), ctx.enemySpawns.firstOrNull { it.id == sp.id }?.hits ?: SPAWN_HITS, flowTo(ctx, pos(sp))) }
+                .minByOrNull { it.second }?.first
+        }
+        if (spawnFirst != null) raidSpawnFirst++
         val target: GameObject? = when {
             raidHome || gathering -> null
+            spawnFirst != null -> spawnFirst
             builderTarget != null -> builderTarget
             fitSpawn != null && (held == null || (held.id != fitSpawn.id && strikeMargin(held) <= 0)) -> fitSpawn
             held != null -> held
@@ -7779,7 +7808,8 @@ object SpawnAndSwamp {
         }
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
             val apart = (if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else "") +
-                (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "")
+                (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "") +
+                (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "")
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
                 "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"}${if (strikeFits) "" else " wait"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
         }
