@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v46"
+    private const val BOT_VERSION = "v51"
 
     private const val LOG_EVERY = 50
 
@@ -804,12 +804,27 @@ object SpawnAndSwampAdvanced {
     private fun openingPlan(w: Creep, sources: Array<Source>, all: Array<GameObject>) {
         val blocked = blockedCells(all)
         val enemy = enemyStart
+        // дом — не просто ближний источник, а тот, откуда раньше встанет вторая база: приход к нему плюс путь основателя
+        // до цели, которую бот выберет сам (порядок `expansionTarget`: наибольший запас по пути перед соперником). v46
+        // при равном приходе (37 = 37 на 21 карте из 22) брал угол дальше от соперника по прямой — это не покупало ничего
+        // (его первый боец приходил даже раньше), а основатель шёл оттуда 65 тиков во второй угол, центральный источник
+        // оставался ему: против stachu3478#17 дом в другом углу дал 9–0–3, этот — 7–6–8 (34 игры)
+        val them = HashMap<String, Int>()
+        if (enemy != null) for (s in sources) them[idOf(s)] = pathTicks(cell(enemy), s)
+        fun secondTicks(home: Source): Int {
+            if (enemy == null) return 0
+            val cand = sources.filter { it !== home }.map { o -> Triple(o, pathTicks(home, o), them[idOf(o)] ?: Int.MAX_VALUE / 4) }
+                .filter { (_, us, th) -> us * 4 <= th * 5 }
+                .sortedWith(compareByDescending<Triple<Source, Int, Int>> { it.third - it.second }.thenBy { it.second })
+            return cand.firstOrNull()?.second ?: Int.MAX_VALUE / 4
+        }
         val ranked = sources.map { s ->
             val ticks = ticksTo(w, s, 1)
             val far = if (enemy == null) 0 else getRange(cell(enemy), s)
-            Triple(s, ticks, far)
-        }.sortedWith(compareBy<Triple<Source, Int, Int>> { it.second }.thenByDescending { it.third })
-        println("opening: sources by arrival " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})t=${it.second}" })
+            Triple(s, ticks, far) to ticks + secondTicks(s)
+        }.sortedWith(compareBy<Pair<Triple<Source, Int, Int>, Int>> { it.second }.thenBy { it.first.second }.thenByDescending { it.first.third })
+            .map { it.first }
+        println("opening: sources by second base " + ranked.joinToString(" ") { "(${it.first.x},${it.first.y})t=${it.second}+${secondTicks(it.first)}" })
         for ((src, ticks, _) in ranked) {
             val base = planBase(src, w, blocked) ?: continue
             val r = createConstructionSite(base.spawnCell.x, base.spawnCell.y, StructureSpawn::class.js)
