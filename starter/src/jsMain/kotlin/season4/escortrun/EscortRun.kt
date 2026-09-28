@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v33"
+    private const val BOT_VERSION = "v30"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -73,7 +73,6 @@ object EscortRun {
     /** Сколько MOVE тягачей покупает дебют: вместе с десятью MOVE эскорта это период 2 на равнине (80 / 40). */
     private const val OPENING_MOVES = 10
     private const val MAX_CHAIN = 3
-
 
     // ---------- бой ----------
     private const val RANGED_RANGE = 3
@@ -1228,10 +1227,8 @@ object EscortRun {
         }
         if (onCell(escort, flag)) return
 
-        // тягач под ударом охотника уводит его прочь (см. decoys), в цепь не встаёт
-        val decoys = decoys(w, escort)
         // цепь: вплотную друг за другом, порядок прошлого тика сохраняется
-        val free = w.pullers.filter { !it.spawning && Bodies.liveMoves(it) > 0 && idOf(it) !in decoys }.toMutableList()
+        val free = w.pullers.filter { !it.spawning && Bodies.liveMoves(it) > 0 }.toMutableList()
         free.sortBy { val i = lastChain.indexOf(idOf(it)); if (i < 0) 100 else i }
         val chain = ArrayList<Creep>()
         var cur: Creep = escort
@@ -1339,99 +1336,6 @@ object EscortRun {
             if (next != null && step.x == next.x && step.y == next.y) continue
             TrafficManager.request(p, step, PULLER_PRIORITY)
         }
-    }
-
-    /** Тягач → охотник, от которого он уводит (см. decoys). */
-    private val luring = HashMap<String, String>()
-    private val pullerHits = HashMap<String, Int>()
-    /** Охотники, бившие наш ЭСКОРТ: от них не уводят (им нужен эскорт, и без тягачей он погибнет быстрее). */
-    private val escortHunters = HashSet<String>()
-    private var escortHitsLast = -1
-    /** Приманка → расстояние до охотника в начале прошлого тика и его клетка тогда (сближается ли он с ней). */
-    private val baitLast = HashMap<String, Pair<Int, Int>>()
-
-    /**
-     * Тягачи, уводящие охотника от эскорта. Живой ricardo#23/#25 после броска охотится именно на ТЯГАЧЕЙ: семь тиков
-     * стоял вплотную к нашему эскорту и не бил его, бил только тягачей, эскорт — когда их не осталось (v31, 6abab492);
-     * без тягачей эскорт полз и гиб в 2–3 клетках от флага (6abaac66, 6abaae9e, 6abaaf41). Тягач из одних MOVE весит ноль:
-     * клетка в тик и по равнине, и по болоту, а M4A3 — 1 и 4; догнать уходящего тягача он не может. Поэтому тягач, по
-     * которому бьёт вооружённый, догоняющий поезд (быстрее поезда по равнине), которого наши рядом не побеждают, выходит из
-     * цепи и уводит его прочь от эскорта; эскорт идёт сам (4 тика на
-     * клетку равнины) или с оставшимися; приманка водит охотника, пока тот жив.
-     * Тягач не убегает, а держится ПРИМАНКОЙ — на клетку дальше досягаемости охотника к началу его тика (мили — 2): ушедших
-     * на 4–6 клеток ricardo бросал и бил эскорт (v33, 6abab9f4, 6ababb3d). Сближается охотник с приманкой — она отходит на
-     * 3 от его клетки (он шагнёт, станет 2); не сближается — встаёт на 2. По равнине скорости равны, по болоту тягач
-     * вчетверо быстрее. Охотник, ударивший эскорт, когда приманка стояла на досягаемости + 1 (или приманки не было),
-     * охотится на эскорт: от него не уводят, уведённые возвращаются в цепь (стенд hunt+harvest: стрелок M5R5 бил эскорт,
-     * тягачи ушли, и эскорт погиб один — v30 там выигрывал).
-     */
-    private fun decoys(w: World, escort: Creep): Set<String> {
-        val trainPeriod = Bodies.period(Bodies.weight(escort), ourTrainMoves(w), false)
-        val reach = { e: Creep -> if (Bodies.live(e, RANGED_ATTACK) > 0) 3 else 1 }
-        val hunters = w.enemyArmed.filter { e -> !isEscort(e) && Bodies.period(Bodies.weight(e), Bodies.liveMoves(e), false) < trainPeriod }
-        val byId = w.enemies.associateBy { idOf(it) }
-        val pullerPos = w.pullers.associateBy { idOf(it) }
-        if (escortHitsLast >= 0 && escort.hits < escortHitsLast) {
-            // эскорт он выбрал сам, если приманки не было или она была рядом; ушедшая далеко — наша вина, не его выбор
-            for (h in hunters) if (dist(h, escort) <= reach(h) &&
-                luring.filterValues { it == idOf(h) }.keys.let { lures -> lures.isEmpty() || lures.any { id -> (baitLast[id]?.first ?: 99) <= reach(h) + 1 } } &&
-                escortHunters.add(idOf(h))) {
-                val back = luring.filterValues { it == idOf(h) }.keys
-                luring.keys.removeAll(back)
-                println("train t=${w.now}: ${idOf(h)} ${Bodies.summaryOf(h)} hits the escort — no decoys from it${if (back.isNotEmpty()) ", ${back.joinToString(",")} back to the chain" else ""}")
-            }
-        }
-        escortHitsLast = escort.hits
-        val out = HashSet<String>()
-        for (p in w.pullers) {
-            val id = idOf(p)
-            val was = pullerHits[id]
-            pullerHits[id] = p.hits
-            if (p.spawning || Bodies.liveMoves(p) == 0) continue
-            if (id !in luring && was != null && p.hits < was) {
-                // бил он в прошлом тике, с тех пор оба шагнули: досягаемость + 1
-                val h = hunters.filter { dist(it, p) <= reach(it) + 1 && idOf(it) !in escortHunters }.minByOrNull { dist(it, p) }
-                val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, p) <= 6 }
-                if (h != null && (guards.isEmpty() || !wins(guards, listOf(h)))) {
-                    luring[id] = idOf(h)
-                    println("train t=${w.now}: DECOY $id ${Bodies.summaryOf(p)} h=${p.hits} leads ${idOf(h)} ${Bodies.summaryOf(h)} away")
-                }
-            }
-            val hunter = luring[id]?.let { byId[it] }
-            if (luring.containsKey(id) && hunter == null) { luring.remove(id); continue }
-            if (hunter == null) continue
-            out.add(id)
-            // приманка: к началу следующего тика — ровно на клетку дальше досягаемости; при равных — дальше от эскорта
-            val bait = reach(hunter) + 1
-            val dNow = dist(hunter, p)
-            val prev = baitLast[id]
-            val closing = prev != null && prev.second != key(hunter) && dNow < prev.first
-            baitLast[id] = dNow to key(hunter)
-            // на досягаемости + 1 и ближе — всегда шаг прочь (стоящую на 2 он настигал, и её били через тик: по равнине
-            // от равного не уйти); дальше — ждать на 2, пока он не пошёл к ней
-            val want = if (dNow <= bait || closing) bait + 1 else bait
-            var best: Position? = null
-            var bestScore = Int.MIN_VALUE
-            for ((dx, dy) in DIRECTIONS + listOf(0 to 0)) {
-                val x = p.x + dx; val y = p.y + dy
-                if (!DistanceMap.inBounds(x, y) || DistanceMap.isWall(x, y)) continue
-                if ((dx != 0 || dy != 0) && w.occupant.containsKey(x * 100 + y)) continue
-                if (w.blocked.any { it.x == x && it.y == y }) continue
-                val c = InfluenceMap.cell(x, y)
-                val d = getRange(hunter, c)
-                // ближе нужного — под удар (штраф сильнее), дальше — бросит
-                val miss = if (d < want) (want - d) * 3 else d - want
-                // вплотную — рвать по болоту: там он вчетверо медленнее, а тягач нет
-                val swamp = if (DistanceMap.isSwamp(x, y)) (if (dNow <= reach(hunter)) 2000 else 1) else 0
-                val score = -miss * 1000 + swamp + minOf(getRange(escort, c), 20) * 3
-                if (score > bestScore) { bestScore = score; best = c }
-            }
-            if (DEBUG_LOG && w.now % 5 == 0) println("bait t=${w.now}: $id (${p.x},${p.y}) d=$dNow closing=$closing want=$want -> ${best?.let { "(${it.x},${it.y}) d=${getRange(hunter, it)}" }} hunter (${hunter.x},${hunter.y})")
-            if (best != null && (best.x != p.x || best.y != p.y)) TrafficManager.request(p, best, PULLER_PRIORITY)
-        }
-        luring.keys.retainAll(w.pullers.mapTo(HashSet()) { idOf(it) })
-        baitLast.keys.retainAll(luring.keys)
-        return out
     }
 
     /** Каждый тягач цепи шагает в клетку переднего (буксируемый обязан шагнуть ИМЕННО туда, иначе связка рвётся). */
