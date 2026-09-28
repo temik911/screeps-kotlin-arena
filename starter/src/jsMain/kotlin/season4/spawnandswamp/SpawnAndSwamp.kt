@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 231
+    private const val BOT_VERSION = 232
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2038,8 +2038,17 @@ object SpawnAndSwamp {
         val fullCost = fullBody.sumOf { cost(it) }
         // …and a gun faster than every melee of ours is answered by our guns alone (v101): the classes are not pooled,
         // or a melee that never lands a swing covers the kiters shooting the spawn
-        val deficit = if (USE_HOME_BOUND) maxOf(enemyPower * DEFEND_MARGIN - ourPower, kiteDeficit(defenders, threats))
+        // THE SPAWN BUYS BY THE KILL RACE TOO (v232). The deficit was his power over ours by √((damage − heal)·hits), and
+        // against his heal it read us the stronger: against ●ω<♥♪#2 (v231, 0-8 in test hands) the house stood at four
+        // guns from 400 while "our=921/518 deficit=-299" bought haulers #7-#9 at a full spawn, his army grew from 7 to 13,
+        // and at 700 the fight at the gates read k=5/1 and was lost; over the v229 loss to him we dealt 12070 and he
+        // healed 13096. Where our defenders lose the kill race to his creeps bound for our house (they kill none of his
+        // before he kills one of ours), the house is short whatever the product says: the deficit is at least what its
+        // own terms ask to close, and the fighter comes before the fleet
+        val raceLost = USE_BUY_BY_RACE && threats.isNotEmpty() && killRace(defenders, threats, ctx.combatEnemies, spawn).let { (us, him) -> us >= him }
+        val deficit0 = if (USE_HOME_BOUND) maxOf(enemyPower * DEFEND_MARGIN - ourPower, kiteDeficit(defenders, threats))
             else enemyPower * DEFEND_MARGIN - ourPower
+        val deficit = if (raceLost) maxOf(deficit0, enemyPower * DEFEND_MARGIN, 1.0) else deficit0
         val breach = breachPlan(ctx)
         // СКОЛЬКО ЖИВЁТ СПАВН при нынешнем входящем уроне: 3000 хитов, делённые на выстрелы в тик.
         // Это часы для обоих правил ожидания ниже. «Придёт враг» (enemyArrival) на них не отвечает: враг,
@@ -4229,33 +4238,8 @@ object SpawnAndSwamp {
         // slower than that melee on both grounds, less the heal on c (12 per HEAL next to it, 4 at range 2-3) — his hits
         // over the rest; against our weakest's hits over all his damage. At the gates and under fire the house fights as
         // before
-        val killRace: Pair<Double, Double>? = if (!USE_HOME_KILL_RACE || homeThreats.isEmpty() || homeReady.isEmpty()) null else {
-            val inf = Double.MAX_VALUE
-            val gunRanged = homeReady.map { InfluenceMap.profileOf(it).ranged }.filter { it > 0.0 }.sortedDescending()
-            val tUs = fightPack.minOfOrNull { c ->
-                val heal = combatEnemies.sumOf { e ->
-                    val hp = e.body.count { it.type == HEAL && it.hits > 0 }
-                    val r = getRange(e, c)
-                    if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0
-                }
-                var cells = 0
-                for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
-                    if (dx == 0 && dy == 0) continue
-                    val x = c.x + dx; val y = c.y + dy
-                    if (x < 0 || y < 0 || x > 99 || y > 99) continue
-                    if (getTerrainAt(InfluenceMap.cell(x, y)) != TERRAIN_WALL) cells++
-                }
-                val ranged = gunRanged.take(cells).sum()
-                val pinned = getRange(c, mySpawn) <= 1
-                val melee = homeReady.filter { g -> InfluenceMap.profileOf(g).melee > 0.0 &&
-                    (pinned || (plainPeriod(c) > plainPeriod(g) && swampPeriod(c) > swampPeriod(g))) }.sumOf { InfluenceMap.profileOf(it).melee }
-                val net = ranged + melee - heal
-                if (net <= 0.0) inf else c.hits / net
-            } ?: inf
-            val hisDps = fightPack.sumOf { val q = InfluenceMap.profileOf(it); q.ranged + q.melee }
-            val tHim = if (hisDps <= 0.0) inf else homeReady.minOf { it.hits } / hisDps
-            tUs to tHim
-        }
+        val killRace: Pair<Double, Double>? = if (!USE_HOME_KILL_RACE || homeThreats.isEmpty() || homeReady.isEmpty()) null
+            else killRace(homeReady, fightPack, combatEnemies, mySpawn)
         val homeWins = homeThreats.isNotEmpty() &&
             homeOurs >= homeTheirs * (if (homeFight) PUSH_RELEASE_RATIO else DEFEND_MARGIN) &&
             (killRace == null || killRace.first < killRace.second)
@@ -5063,6 +5047,42 @@ object SpawnAndSwamp {
             }
         }
         dist
+    }
+
+    /**
+     * THE KILL RACE (v230, a function since v232): (the ticks our [ours] take to kill the first of [theirs], the ticks his
+     * take to kill the weakest of ours). For each of his creeps c: the ranged damage of our guns that fit within range 3 of
+     * it (free cells), our melee only where c must stand by [spawn] or is slower than that melee on both grounds, less the
+     * heal on c from [allEnemies] (12 per HEAL next to it, 4 at range 2-3) — his hits over the rest; his whole damage on
+     * our weakest's hits. Double.MAX_VALUE where a side cannot kill at all
+     */
+    private fun killRace(ours: List<Creep>, theirs: List<Creep>, allEnemies: List<Creep>, spawn: Position): Pair<Double, Double> {
+        val inf = Double.MAX_VALUE
+        if (ours.isEmpty() || theirs.isEmpty()) return inf to inf
+        val gunRanged = ours.map { InfluenceMap.profileOf(it).ranged }.filter { it > 0.0 }.sortedDescending()
+        val tUs = theirs.minOfOrNull { c ->
+            val heal = allEnemies.sumOf { e ->
+                val hp = e.body.count { it.type == HEAL && it.hits > 0 }
+                val r = getRange(e, c)
+                if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0
+            }
+            var cells = 0
+            for (dx in -RANGED_RANGE..RANGED_RANGE) for (dy in -RANGED_RANGE..RANGED_RANGE) {
+                if (dx == 0 && dy == 0) continue
+                val x = c.x + dx; val y = c.y + dy
+                if (x < 0 || y < 0 || x > 99 || y > 99) continue
+                if (getTerrainAt(InfluenceMap.cell(x, y)) != TERRAIN_WALL) cells++
+            }
+            val ranged = gunRanged.take(cells).sum()
+            val pinned = getRange(c, spawn) <= 1
+            val melee = ours.filter { g -> InfluenceMap.profileOf(g).melee > 0.0 &&
+                (pinned || (plainPeriod(c) > plainPeriod(g) && swampPeriod(c) > swampPeriod(g))) }.sumOf { InfluenceMap.profileOf(it).melee }
+            val net = ranged + melee - heal
+            if (net <= 0.0) inf else c.hits / net
+        } ?: inf
+        val hisDps = theirs.sumOf { val q = InfluenceMap.profileOf(it); q.ranged + q.melee }
+        val tHim = if (hisDps <= 0.0) inf else ours.minOf { it.hits } / hisDps
+        return tUs to tHim
     }
 
     /** The forecast at [p] (x·100+y) for radius [d] and horizon [h]: who of his armed movers outside the ball is
@@ -7279,6 +7299,8 @@ object SpawnAndSwamp {
     /** A waiting raider hunted by a gun not slower than it on plain enters the visit when the race on its own path gives
      *  it RAID_CHIP_MIN strikes, instead of fleeing (v231). */
     private const val USE_RAID_HUNTED_ENTER = true
+    /** The spawn's deficit is positive while our defenders lose the kill race to his creeps bound for our house (v232). */
+    private const val USE_BUY_BY_RACE = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
