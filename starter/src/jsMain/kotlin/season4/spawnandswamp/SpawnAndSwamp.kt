@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 225
+    private const val BOT_VERSION = 226
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5812,7 +5812,7 @@ object SpawnAndSwamp {
                 if (USE_HUNT_BOUND) { if (plainPeriod(b) > plainPeriod(c) && swampPeriod(b) >= swampPeriod(c)) return true }
                 else if (swampPeriod(b) >= swampPeriod(c)) return true
                 val dps = huntDps(c) - heal
-                return dps > 0.0 && eta + b.hits / dps < bound
+                return dps > 0.0 && eta + (if (USE_RAID_BUILDER_WORK) rampartOn(ctx, b) / huntDps(c) else 0.0) + b.hits / dps < bound
             }
             val cands = ArrayList<Pair<Creep, Int>>()
             for (c in free) {
@@ -5829,7 +5829,8 @@ object SpawnAndSwamp {
                 val direct = targetField[c.x * 100 + c.y]
                 if (eta >= Int.MAX_VALUE / 4 || back < 0 || direct < 0) continue
                 val dps = huntDps(c)
-                val kill = if (dps - heal > 0.0) b.hits / (dps - heal) else Double.MAX_VALUE
+                // (v226) and his rampart under the builder first, at our whole damage: the engine takes every strike there
+                val kill = if (dps - heal > 0.0) (if (USE_RAID_BUILDER_WORK) rampartOn(ctx, b) / dps else 0.0) + b.hits / (dps - heal) else Double.MAX_VALUE
                 val detour = eta + kill + back - direct
                 val worth = futureSpawns * (if (dps > 0.0) SPAWN_HITS / dps else Double.MAX_VALUE)
                 // A GUN IN THE SIEGE OF ITS TARGET STAYS WHILE THE SIEGE ENDS SOONER THAN ITS DETOUR (v132). The worth never
@@ -7187,6 +7188,9 @@ object SpawnAndSwamp {
      *  kills in windows 0.13 -> 3.45 a draw) walked his recorded army, which does not answer our raiders: live, the cell
      *  his guns "do not reach within 50" moved every tick and the raiders died on the way to it as before */
     private const val USE_RAID_SAFE_WAIT = false
+    /** A builder of his costs his body and the rampart he stands on, and is the raid's target only while that is not more
+     *  than the spawns he will still raise; one that is not a target does not stop the chipping of his spawns (v226). */
+    private const val USE_RAID_BUILDER_WORK = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
@@ -7237,6 +7241,25 @@ object SpawnAndSwamp {
     /** A target's rampart hits: his rampart on its cell (v156). */
     private fun rampartOn(ctx: Ctx, p: Position): Int =
         ctx.ramparts.filter { it.my == false && it.x == p.x && it.y == p.y }.sumOf { it.hits ?: 0 }
+
+    /**
+     * A BUILDER OF HIS IS WORTH THE SPAWNS HE WILL STILL RAISE, AND COSTS HIS BODY AND THE RAMPART HE STANDS ON (v226). The
+     * engine gives a creep standing on its own rampart's cell no damage until the rampart is gone — every strike on it is
+     * the rampart's — and the raid priced "his builders first" by the body alone (v158's "800, five ticks for the pair"):
+     * against stachu3478#17 (v225 draw) the pair killed his field builder at 477 and then struck his c1w2 standing on a
+     * rampart by his main for 57 ticks (583-639) — 10000 of the rampart and his 300 — half of all we put into his ramparts
+     * that match (19860), under which nothing stood; his main ended at 3140 (rampart 140), 13 ticks of our siege. The worth
+     * is the builderHunt model: his spawns still to come at his pace between spawn sites, each 3000 of our work
+     */
+    private fun builderWork(ctx: Ctx, c: Creep): Int = c.hits + (if (USE_RAID_BUILDER_WORK) rampartOn(ctx, c) else 0)
+    private fun builderCounts(ctx: Ctx, c: Creep): Boolean {
+        if (!USE_RAID_BUILDER_WORK) return true
+        val remaining = arenaInfo.ticksLimit - getTicks()
+        val ticks = spawnSiteStarts.distinct()
+        val pace = if (ticks.size >= 2) (ticks.last() - ticks.first()).toDouble() / (ticks.size - 1) else remaining.toDouble()
+        val futureSpawns = maxOf(1.0, remaining / maxOf(1.0, pace))
+        return builderWork(ctx, c) <= futureSpawns * SPAWN_HITS
+    }
 
     /** Raiders alive, the spawning ones included; without USE_RAID_TOPUP a survivor counts as the whole pair, as in
      *  v158-v162, whose re-buy waited for none to live (v163). */
@@ -7414,7 +7437,7 @@ object SpawnAndSwamp {
             // the pair be re-bought — in v174 against kerobi his spawns at 3 and no builder of his meant 0 wins, a loss and
             // five draws, while his main stood free of his guns for 758-931 ticks in a row and his bare spawns for 604-1266
             raidAlive(ctx) < RAID_SIZE && (if (USE_RAID_ALL_SPAWNS) ctx.enemySpawns.isNotEmpty() else ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS) &&
-            ctx.enemyCreeps.none { isHisBuilder(it) }) {
+            ctx.enemyCreeps.none { isHisBuilder(it) && builderCounts(ctx, it) }) {
             // the walk ends NEXT to his spawn (v167): its own cell is blocked, the field there is -1, and v161-v166 read the
             // walk as "never" in every game — no `raid last` line in any log, the rule had never run
             val walk = ctx.enemySpawns.maxOf { sp -> if (USE_RAID_FINISH) stepsNextTo(ctx, sp) else ctx.stepsToSpawn[sp.x * 100 + sp.y].let { if (it < 0) Int.MAX_VALUE / 4 else it } }
@@ -7486,7 +7509,7 @@ object SpawnAndSwamp {
         // …and after ANY re-buy (v178): with his builder alive the survivor still went home — 210-280 ticks in three draws
         // with kerobi#48/#49 while the builder stood 8-32 cells off (once 2 cells at 350/800) and then raised 1-3 spawns;
         // in the wins the gathering took 20-120 ticks and the builder died anyway. It stays and strikes the builder
-        val lastStandRaid = USE_RAID_NO_GATHER && raidRebuyAt >= 0 && (USE_RAID_NEVER_GATHER || ctx.enemyCreeps.none { isHisBuilder(it) })
+        val lastStandRaid = USE_RAID_NO_GATHER && raidRebuyAt >= 0 && (USE_RAID_NEVER_GATHER || ctx.enemyCreeps.none { isHisBuilder(it) && builderCounts(ctx, it) })
         val gathering = !lastStandRaid && (raidOrdered < RAID_SIZE && getTicks() <= buyUntil ||
             ctx.myCreeps.any { isRaider(it) && it.spawning } || (raiders.size < RAID_SIZE && getTicks() <= buyUntil + 60))
         val guns = ctx.combatEnemies.filter { InfluenceMap.profileOf(it).ranged > 0.0 }
@@ -7514,9 +7537,9 @@ object SpawnAndSwamp {
         // a standing builder before a walking one
         // (v183: a builder the pair outlasts before one it does not — see raidOutlasts)
         val outlasted = HashMap<String, Boolean>()
-        fun outlasts(c: Creep): Boolean = outlasted.getOrPut(c.id) { raidOutlasts(ctx, raiders, c, c.hits, raceField(ctx, c)) }
+        fun outlasts(c: Creep): Boolean = outlasted.getOrPut(c.id) { raidOutlasts(ctx, raiders, c, builderWork(ctx, c), raceField(ctx, c)) }
         val builderTarget = if (!USE_RAID_BUILDERS_FIRST || raidHome || gathering) null else
-            ctx.enemyCreeps.filter { c -> isHisBuilder(c) && open.any { it.id == c.id } }.minWithOrNull(compareBy<Creep> { c ->
+            ctx.enemyCreeps.filter { c -> isHisBuilder(c) && builderCounts(ctx, c) && open.any { it.id == c.id } }.minWithOrNull(compareBy<Creep> { c ->
                 if (USE_RAID_RACE && !outlasts(c)) 1 else 0 }.thenBy { c ->
                 val prev = enemyPrevCell[c.id]; if (prev != null && prev == c.x * 100 + c.y) 0 else 1 }.thenBy { getRange(lead, it) })
         // THE SPAWN WHERE A STRIKE FITS NOW (v198). The order — his bare main, then bare before ramparted, the held one
@@ -7561,7 +7584,7 @@ object SpawnAndSwamp {
         // RAID_CHIP_MIN ticks of strikes fit before his guns are back, and left when they come within RAID_CHIP_LEAVE
         // ticks of it — no longer finished once begun (at 1206 a pair that began with his guns 5-16 cells off was held
         // there and died); `finishing` still holds it on a spawn that falls before it does
-        val chipping = USE_RAID_CHIP && target != null && target.id in spawnIds && ctx.enemyCreeps.none { isHisBuilder(it) }
+        val chipping = USE_RAID_CHIP && target != null && target.id in spawnIds && ctx.enemyCreeps.none { isHisBuilder(it) && builderCounts(ctx, it) }
         // a bare target not yet reached is struck only when the pair outlasts the kill (v183, raidOutlasts); a strike begun
         // is left to `finishing` and the retreat as before
         val raced = USE_RAID_RACE && target != null && raiders.none { getRange(it, pos(target)) <= 1 } &&
@@ -7597,7 +7620,7 @@ object SpawnAndSwamp {
         val strikeFits = if (twoPlans != null) twoPlans >= 0 else if (raced) run {
             val t: GameObject = target!!
             val builder = ctx.enemyCreeps.firstOrNull { it.id == t.id }
-            if (builder != null) (if (walkFire != null) raidOutlasts(ctx, raiders, builder, builder.hits, raceField(ctx, builder), pathFire = walkFire) else outlasts(builder))
+            if (builder != null) (if (walkFire != null) raidOutlasts(ctx, raiders, builder, builderWork(ctx, builder), raceField(ctx, builder), pathFire = walkFire) else outlasts(builder))
             else raidOutlasts(ctx, raiders, pos(t), ctx.enemySpawns.firstOrNull { it.id == t.id }?.hits ?: SPAWN_HITS, flowTo(ctx, pos(t)), pathFire = walkFire)
         } else target == null || target.id !in spawnIds || !USE_RAID_LAST || (!chipping && raiders.any { getRange(it, pos(target)) <= 1 }) || run {
             val shield = rampartOn(ctx, pos(target))
