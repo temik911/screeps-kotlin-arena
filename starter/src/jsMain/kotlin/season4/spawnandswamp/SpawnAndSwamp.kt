@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 230
+    private const val BOT_VERSION = 231
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7045,6 +7045,8 @@ object SpawnAndSwamp {
     private var raidSpawnFirst = 0
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
     private var raidStayed = 0
+    /** Ticks a hunted waiting raider entered the visit by its race instead of fleeing (v231, journal). */
+    private var raidEntered = 0
     /** The raid hunts his builders while any lives, is re-bought for his new builder while he has at most two spawns,
      *  and his last stand frees the spawn for guns; an immobile creep of his is no interceptor (v158). */
     private const val USE_RAID_BUILDERS_FIRST = true
@@ -7274,6 +7276,9 @@ object SpawnAndSwamp {
     /** The house leaves its post for his creeps only when it kills one of them sooner than he kills one of ours (the
      *  kill race: our damage that fits round him and reaches him, less the heal on him; v230). */
     private const val USE_HOME_KILL_RACE = true
+    /** A waiting raider hunted by a gun not slower than it on plain enters the visit when the race on its own path gives
+     *  it RAID_CHIP_MIN strikes, instead of fleeing (v231). */
+    private const val USE_RAID_HUNTED_ENTER = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
@@ -7854,11 +7859,34 @@ object SpawnAndSwamp {
             // 28 of the 30 real visits of ten games lost the raider no hits. At the door the walk is none, and the flight
             // from a gun within RAID_LURK_FLEE still stands
             val waitRange = if (USE_RAID_DOOR_WAIT && chipping) 1 else RAID_LURK_RANGE
-            val range = if (meet) 1 else if (go != null) 1 else if (waitCell != null) 0 else if (hover) waitRange else if (!strikeFits) 0 else 2
-            val waiting = !strikeFits && go == null
-            val struck = go != null && getRange(r, goal) <= 1
+            // A HUNTED RAIDER ENTERS WHEN THE VISIT'S RACE GIVES IT ITS STRIKES (v231). A waiting raider fled any gun of his
+            // within RAID_LURK_FLEE; a gun not slower than it on plain gains that flight nothing (v229), and the flight
+            // ended at the map's edge: against けろびー#48 (v229 draw) four raiders after the one that struck lived 1234
+            // ticks together and never struck his main, which stood with no gun of his within ten cells 834 ticks of the
+            // last stand (a raider at the door 37 of them) — one standing M5R5 held one raider at five to six cells for 140
+            // ticks; over 86 replays against けろびー, 18 of 20 hunted waits within 2-20 of the door in draws were never
+            // followed by a strike on the main. Hunted by a gun it cannot outrun, the raider runs the visit's race instead —
+            // its walk to the door on the path it would take with the fire along it, then his guns each from its own walk
+            // into range — and enters when it lands RAID_CHIP_MIN strikes before its hits are gone; otherwise it waits as
+            // before. The strike's walk is not touched
+            val enter = USE_RAID_HUNTED_ENTER && go == null && !raidHome && target != null && target.id in spawnIds && canMove(r) && run {
+                val near = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } &&
+                    InfluenceMap.profileOf(e).let { q -> q.ranged + q.melee > 0.0 } && getRange(e, r) < lurkFlee }
+                near.isNotEmpty() && near.all { plainPeriod(it) <= plainPeriod(r) } && run {
+                    val tp = pos(target)
+                    val dps = r.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER
+                    val path = searchPath(r, SearchGoal(pos = tp, range = 1), opts).path
+                    dps > 0 && raidKillTick(ctx, listOf(r), tp, RAID_CHIP_MIN * dps, flowTo(ctx, tp),
+                        pathFire = if (path.isEmpty()) null else fireAlong(ctx, path), walk = path.size) >= 0
+                }
+            }
+            if (enter) raidEntered++
+            val goal2: Position = if (enter) pos(target!!) else goal
+            val range = if (enter) 1 else if (meet) 1 else if (go != null) 1 else if (waitCell != null) 0 else if (hover) waitRange else if (!strikeFits) 0 else 2
+            val waiting = !strikeFits && go == null && !enter
+            val struck = (go != null || enter) && getRange(r, goal2) <= 1
             if (struck) {
-                r.attack(go!!)
+                r.attack(go ?: target!!)
                 // …and holds its cell (v174): with no move of its own it was pushed by its walking mate (the traffic manager
                 // pushes a creep that asked nothing when the pusher's priority is higher) — in 1799 of 2284 strike ticks
                 // with both raiders within two of the target only one struck, ~105 a tick instead of 180
@@ -7869,23 +7897,23 @@ object SpawnAndSwamp {
             // …A WAITING PAIR KEEPS AWAY FROM HIS GUNS (v162): in the v161 draws it waited in place in the field for his army
             // to leave his ramparted main (t=490-770), was found there and went home at 460/1800 and 1254/3600; it now
             // walks off to RAID_LURK_RANGE from his nearest mobile armed creep and waits there
-            val hunters = if (USE_RAID_LURK && armedPrey == null && waitCell == null && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
+            val hunters = if (USE_RAID_LURK && armedPrey == null && waitCell == null && !enter && (waiting || (go != null && go.id !in spawnIds && !strikeFits))) ctx.combatEnemies.filter { e ->
                 e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { p -> p.ranged + p.melee > 0.0 } &&
                     getRange(e, r) < lurkFlee } else emptyList()
             if (hunters.isNotEmpty() && canMove(r)) {
                 val away = searchPath(r, hunters.map { SearchGoal(pos = InfluenceMap.cell(it.x, it.y), range = lurkFlee) }.toTypedArray(),
                     SearchPathOptions(flee = true, costMatrix = ctx.dangerMatrix, plainCost = 2, swampCost = 2)).path.firstOrNull()
                 if (away != null) TrafficManager.request(r, away, HAULER_LOADED_PRIORITY)
-            } else if (getRange(r, goal) > range && canMove(r)) {
+            } else if (getRange(r, goal2) > range && canMove(r)) {
                 // …to a FREE cell next to the target (v175): the path ignores our creeps, its first step led into the cell the
                 // striking mate holds since v174, and the second raider stood at range 2 beside seven free cells (223 raider-
                 // ticks, ~20000 of damage in v174's games against kerobi)
-                val freeNext: Position? = if (!USE_RAID_ALL_SPAWNS || go == null || range != 1) null else run {
+                val freeNext: Position? = if (!USE_RAID_ALL_SPAWNS || (go == null && !enter) || range != 1) null else run {
                     val taken = ctx.myCreeps.filter { it.id != r.id }.mapTo(HashSet()) { it.x * 100 + it.y }
                     var best: Position? = null
                     for (dx in -1..1) for (dy in -1..1) {
-                        val x = goal.x + dx
-                        val y = goal.y + dy
+                        val x = goal2.x + dx
+                        val y = goal2.y + dy
                         if ((dx == 0 && dy == 0) || x < 0 || y < 0 || x > 99 || y > 99 || (x * 100 + y) in taken) continue
                         val cell = InfluenceMap.cell(x, y)
                         if (getTerrainAt(cell) == TERRAIN_WALL || ctx.blocked.any { it.x == x && it.y == y }) continue
@@ -7895,7 +7923,7 @@ object SpawnAndSwamp {
                 }
                 val walkOpts = if (go != null && go.id == target?.id) strikeOpts else opts
                 val step = if (freeNext != null) searchPath(r, SearchGoal(pos = freeNext, range = 0), walkOpts).path.firstOrNull()
-                    else searchPath(r, SearchGoal(pos = goal, range = range), walkOpts).path.firstOrNull()
+                    else searchPath(r, SearchGoal(pos = goal2, range = range), walkOpts).path.firstOrNull()
                 if (step != null) TrafficManager.request(r, step, HAULER_LOADED_PRIORITY)
             }
         }
@@ -7903,7 +7931,8 @@ object SpawnAndSwamp {
             val apart = (if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else "") +
                 (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "") +
                 (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "") +
-                (if (USE_RAID_STAY_AT_DOOR) " stayed=$raidStayed" else "")
+                (if (USE_RAID_STAY_AT_DOOR) " stayed=$raidStayed" else "") +
+                (if (USE_RAID_HUNTED_ENTER) " entered=$raidEntered" else "")
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
                 "target=${target?.let { val q = pos(it); "(${q.x},${q.y})${if (it.id == hisMainId) "main" else ""}" } ?: "-"}${if (strikeFits) "" else " wait"} his spawns=${ctx.enemySpawns.size} sites=${targets.size - ctx.enemySpawns.size}")
         }
