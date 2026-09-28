@@ -963,7 +963,11 @@ object EscortRun {
             val merged = helpers.flatMap { c -> c.body.map { it.type } } + body.toList()
             val hits = helpers.flatMap { c -> c.body.map { it.hits } } + body.map { 100 }
             val unit = Bodies.Unit(merged.toTypedArray(), hits.toIntArray())
-            if (Bodies.duel(unit, threats.map { Bodies.unitOf(it) }) < 0 || unit.count(MOVE) < 1) continue
+            // после боя — не медленнее трёх тиков на клетку равнины: мёртвые части тоже весят (движок считает вес по
+            // типам частей), и T7M3A2, выигравший дуэль с одним живым MOVE, полз по 9 тиков на клетку, пока их эскорт
+            // проходил мимо (ricardo#23, 28.09.2026)
+            if (Bodies.duel(unit, threats.map { Bodies.unitOf(it) }) < 0) continue
+            if (unit.count(MOVE) * 3 < merged.count { it != MOVE && it != CARRY }) continue
             best = body; bestCost = cost
         }
         return best
