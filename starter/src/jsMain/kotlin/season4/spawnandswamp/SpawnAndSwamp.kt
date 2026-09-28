@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 218
+    private const val BOT_VERSION = 219
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4292,10 +4292,16 @@ object SpawnAndSwamp {
         // подкрепления — от поста, а если поста нет, от спавна: следующий боец родится там
         // от дома до фронта — тоже по маршруту подхода, телом самого медленного из живых бойцов
         // (новорождённый будет такой же); бойцов нет — по прежнему полю
-        val homeTravel = if (assaultFlow.isNotEmpty() && fighters.isNotEmpty())
+        // THE REINFORCEMENT IS WHO CAN WALK IT (v219). The slowest living fighter set the reinforcement's walk, and a legless
+        // turret or a cripple of two MOVE is never a reinforcement: against marlyman#441 (v214/v218 test hands) the hold
+        // turned "late" 800 and 500 ticks before the clock (f28 M0 at 190/1200, f76 an M12A5 down to two MOVE), and the
+        // front — 7 of 9, 3 of 6, 4 of 8, with 4, 4 and 2 at home — walked into the siege its own verdict lost: four of
+        // eight draws against him went so, none of eight wins. Those at full speed walk it; none — a newborn, as before
+        val walkers = if (USE_REINFORCE_MOVERS) fighters.filter { liveMoves(it) > 0 && fullSpeed(it) } else fighters
+        val homeTravel = if (assaultFlow.isNotEmpty() && walkers.isNotEmpty())
             flowNear(assaultFlow, mySpawn.x, mySpawn.y).let { cell ->
                 if (cell < 0) Int.MAX_VALUE / 4
-                else fighters.maxOf { pathTicks(it, assaultFlow, cell) }.let { if (it >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 4 else it }
+                else walkers.maxOf { pathTicks(it, assaultFlow, cell) }.let { if (it >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 4 else it }
             }
         else if (spawnFlow.isEmpty()) Int.MAX_VALUE / 4
         else flowNear(spawnFlow, mySpawn.x, mySpawn.y).let { if (it < 0) Int.MAX_VALUE / 4 else spawnFlow[it] }
@@ -5771,6 +5777,10 @@ object SpawnAndSwamp {
         // this walk runs for every fighter and every enemy several times a tick, up to 400 cells each)
         val weight = bodyWeight(creep)
         val moves = liveMoves(creep)
+        // A BODY WITH NO LIVE MOVE WALKS NOWHERE (v219). Its period is Int.MAX_VALUE / 4 a cell, and five cells of it
+        // overflowed the sum into a negative walk — "there already": our legless turret (M0 of 1200, 190 hits left) made
+        // the hold's reinforcement walk read "never" or garbage and the hold "late" 500-800 ticks before the clock
+        if (USE_REINFORCE_MOVERS && moves <= 0) return if (flow[cell] == 0) 0 else Int.MAX_VALUE / 2
         val onPlain = periodOn(weight, moves, 2)
         val onSwamp = periodOn(weight, moves, 10)
         while (flow[cell] > 0 && steps < 400) {
@@ -6805,6 +6815,9 @@ object SpawnAndSwamp {
     /** A pack we cannot out-damage is priced by its fire over the march and the siege, and a siege neither plan wins is
      *  run a third time past all his defenders, at the spawn from the first tick; the live fire follows it (v218). */
     private const val USE_SIEGE_PAST = true
+    /** A body with no live MOVE walks nowhere (pathTicks), and the hold's reinforcement walk is that of the fighters at
+     *  full speed, or a newborn's (v219). */
+    private const val USE_REINFORCE_MOVERS = true
     /** Two cells both next to one target are at most this far apart: the pair is together within it (v216). */
     private const val RAID_PAIR_RANGE = 2
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
