@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v34"
+    private const val BOT_VERSION = "v35"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -573,7 +573,11 @@ object EscortRun {
                 val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= THREAT_RANGE + 5 }
                 if (!wins(guards, threats)) {
                     val body = cheapestWinner(threats, guards, SPAWN_ENERGY_CAPACITY)
-                    if (body != null) {
+                    // копить на защитника, который родится после нашего финиша, — запереть спавн ни за что: M3R3 за 600
+                    // против стрелка копился со 150-го (энергия 1 в тик), и ни хранитель, ни страж флага не покупались
+                    // (стенд rsq). Не успевает — спавн идёт дальше по очереди
+                    val ready = ourArrival(w).let { ours -> body != null && Bodies.cost(body) - e < ours }
+                    if (body != null && ready) {
                         if (e >= Bodies.cost(body)) { if (order(w, body, "defender", "threats ${threats.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, escort) }} guards=${guards.size}")) fighterQueue.addLast(ESCORT_GUARD); return }
                         saving(w, "defender ${Bodies.summary(body)}", Bodies.cost(body)); return
                     }
@@ -644,6 +648,7 @@ object EscortRun {
                 if (e >= Bodies.cost(body)) { if (order(w, body, "keeper", "our flag is empty; keeperEta=$keeperEta rivalEta=$rival ours=$ours theirs=$theirs")) scoutQueue.addLast(KEEP); return }
                 saving(w, "keeper", Bodies.cost(body)); return
             }
+            if (holdKeepers(w, e, ours)) return
         }
 
         // 4'. клетки подхода. Их M1, ждущий у нашего флага, пока наш хранитель на клетке, встаёт ровно на клетку
@@ -1484,6 +1489,58 @@ object EscortRun {
      * держание засады развернуло эскорт домой — на эти деньги покупались M1A1 и хранители «пока держимся», стража не было.
      */
     private fun onOurFlag(w: World, e: Creep): Boolean = w.myFlag?.let { dist(e, it) <= FLAG_GUARD_RANGE } ?: false
+
+    /** Дистанции вооружённых врагов до нашего флага за последние тики (кто к нему идёт). */
+    private val toFlag = HashMap<String, ArrayDeque<Int>>()
+
+    /**
+     * Удержание флага. Вооружённый враг, идущий к нашему флагу и успевающий туда раньше эскорта, выбивает хранителя M1
+     * (100 хитов) за 100/урон тиков и садится на клетку; эскорт упирается в неё. Suruks#2: стрелок M2R2 рождался на
+     * 107–109-м и был на флаге к 238–243-му, эскорт подходил к 248–252-му — во всех пяти таких играх поражение, во всех,
+     * где стрелок опаздывал, победа (A/B v30/v34, 28.09.2026). Клетку держит сумма хитов хранителей у флага: нужно
+     * (наш приход − его приход + 1) × его урон в тик. Не хватает — ещё хранитель M1, если он успевает к флагу раньше врага
+     * (опоздавший на занятую клетку не встанет); второй ждёт вплотную и встаёт, как только клетка освободится (runScouts).
+     */
+    private fun holdKeepers(w: World, e: Int, ours: Int): Boolean {
+        val flag = w.myFlag ?: return false
+        for (x in w.enemyArmed) if (!isEscort(x)) {
+            val h = toFlag.getOrPut(idOf(x)) { ArrayDeque() }
+            h.addLast(dist(x, flag)); while (h.size > 11) h.removeFirst()
+        }
+        toFlag.keys.retainAll(w.enemyArmed.mapTo(HashSet()) { idOf(it) })
+        if (ours >= Int.MAX_VALUE / 8) return false
+        val heading = w.enemyArmed.filter { x ->
+            !isEscort(x) && !bodyguard(w, x) && !onCell(x, flag) && toFlag[idOf(x)]?.let { h -> h.size >= 11 && h.first() - h.last() >= 5 } == true
+        }
+        if (heading.isEmpty()) return false
+        var need = 0
+        var firstEta = Int.MAX_VALUE
+        for (x in heading) {
+            // приход — по полю с ценой болота из его тела: по прямой стрелок Suruks выходил к флагу на ~206-м вместо
+            // живых 238–243-х, и хранитель, успевавший к ~211-му, считался опоздавшим
+            val plain = Bodies.period(Bodies.weight(x), Bodies.liveMoves(x), false)
+            val swamp = Bodies.period(Bodies.weight(x), Bodies.liveMoves(x), true)
+            val f = flowTo("toFlag", flag, w.blocked, maxOf(1, swamp / maxOf(1, plain)))
+            val steps = f[key(x)].let { if (it >= 0) it else dist(x, flag) }
+            val eta = w.now + steps * plain
+            val gap = w.now + ours - eta + 1
+            if (gap <= 0) continue
+            need += gap * (30 * Bodies.live(x, ATTACK) + 10 * Bodies.live(x, RANGED_ATTACK))
+            firstEta = minOf(firstEta, eta)
+        }
+        if (DEBUG_LOG && w.now % 10 == 0) println("holdflag t=${w.now}: heading ${heading.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, flag) }} need=$need firstEta=$firstEta ours=${w.now + ours}")
+        if (need <= 0) return false
+        val have = w.scouts.filter { scoutMission[idOf(it)] == KEEP }.sumOf { it.hits } + 100 * scoutQueue.count { it == KEEP }
+        if (have >= need) return false
+        val body = Bodies.moves(1)
+        val arrive = w.now + maxOf(0, Bodies.cost(body) - e) + Bodies.spawnTicks(body) + scoutEta(w, flag)
+        if (arrive >= firstEta) return false
+        if (e >= Bodies.cost(body)) {
+            if (order(w, body, "keeper", "hold the flag: ${heading.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, flag) }} first at ~$firstEta, ours at ~${w.now + ours}; keeper hits $have of $need")) scoutQueue.addLast(KEEP)
+            return true
+        }
+        saving(w, "hold keeper", Bodies.cost(body)); return true
+    }
 
     /** Помеченные засады: однажды вставший у нашего пути остаётся засадой до смерти — он отходит к подошедшим крипам
      *  и возвращается, и признак «стоит» мигал, снимая держание (стенд camp: пять выходов и возвратов за 200 тиков). */

@@ -46,7 +46,8 @@ import screeps.api.structures.StructureRampart
  *    случай, бросок в каждой руке;
  *  - `rsq` — Suruks#2 (обыграл v30 в подтверждающей серии, 28.09.2026, 6abac117): стрелок M2R2 после дебюта идёт к ИХ
  *    флагу, стреляет по всем в трёх клетках (хранитель — первым) и садится на флаг; их эскорт в трёх тиках от финиша
- *    упирается в занятую клетку;
+ *    упирается в занятую клетку. Как у Suruks: ни тягачей, ни разведчиков (эскорт идёт сам), стрелок — на RSQ_AT-м тике
+ *    (живьём 107–109-й, на флаге к 238–256-му);
  *  - `kk` — убийца хранителя: M1A1 после дебюта идёт к их флагу, бьёт стоящих на нём и рядом и сам встаёт на флаг
  *    вооружённым захватчиком;
  *  - `army` — после остальных приёмов, раз за разом: стрелок M5R5 охотится на их эскорт, по дороге бьёт тягачей
@@ -59,8 +60,9 @@ internal object RedTeam {
 
     private val ORDER = listOf("camp", "guard", "rsq", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
-    private val LATE = setOf("rsq", "icpt", "kk", "choke", "blk", "chase", "army")
+    private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
+    private const val RSQ_AT = 107
     private const val BUILD_RANGE = 3
 
     private var tricks: Set<String> = emptySet()
@@ -104,7 +106,8 @@ internal object RedTeam {
     fun spawn(w: EscortRun.World, energy: Int, late: Boolean): Boolean {
         if (tricks.isEmpty()) return false
         // camp (ricardo18informatica2020#23): один M4A3 и больше НИЧЕГО — ни тягачей, ни разведчиков, спавн копит
-        if (("camp" in tricks && "camp" in ordered) || ("guard" in tricks && "guard" in ordered)) return true
+        if (("camp" in tricks && "camp" in ordered) || ("guard" in tricks && "guard" in ordered) || ("rsq" in tricks && "rsq" in ordered)) return true
+        if ("rsq" in tricks && w.now < RSQ_AT) return true
         if (pendingBody != null) return false
         for (t in ORDER) {
             // при затычке гонки нет — поздние приёмы идут до дебюта, иначе они ждали тягачей до 200-го тика
