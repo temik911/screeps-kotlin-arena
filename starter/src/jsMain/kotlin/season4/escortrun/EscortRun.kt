@@ -1381,7 +1381,12 @@ object EscortRun {
         // вровень с их парой (0-6). Новорождённый рядом со своим эскортом — тоже не «неясный»: это телохранитель в
         // становлении; рашер ricardo#8 рождается вдали от своего эскорта и держит, как прежде
         val theirEscH = w.enemyEscort
-        val unknown = { e: Creep -> !e.spawning && (closing[idOf(e)]?.size ?: 0) < 11 && !(theirEscH != null && dist(e, theirEscH) <= NEWBORN_AT_ESCORT) }
+        // …но только тяжёлый: рождающийся перехватчик stachu (M1A1) держит, как в v28 — держание с его рождения ставит
+        // спавн копить на бойца дома раньше хранителя (стенд econ+icpt: без этого боец опоздал, и поезд погиб)
+        val unknown = { e: Creep ->
+            if (e.spawning) !heavy(e)
+            else (closing[idOf(e)]?.size ?: 0) < 11 && !(theirEscH != null && dist(e, theirEscH) <= NEWBORN_AT_ESCORT)
+        }
         // держась, отпускаем только того, кто отошёл вдвое дальше: иначе перехватчик stachu, стоявший в центре в 45-60
         // клетках, то держал, то отпускал эскорт каждые несколько тиков, и тот ходил туда-сюда у дома (6ab84583)
         val radius = if (holding) 2 * HOLD_RADIUS else HOLD_RADIUS
