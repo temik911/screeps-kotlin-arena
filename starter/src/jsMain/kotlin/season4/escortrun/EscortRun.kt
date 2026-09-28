@@ -1345,6 +1345,9 @@ object EscortRun {
     /** Тягач → охотник, от которого он уводит (см. decoys). */
     private val luring = HashMap<String, String>()
     private val pullerHits = HashMap<String, Int>()
+    /** Охотники, бившие наш ЭСКОРТ: от них не уводят (им нужен эскорт, и без тягачей он погибнет быстрее). */
+    private val escortHunters = HashSet<String>()
+    private var escortHitsLast = -1
 
     /**
      * Тягачи, уводящие охотника от эскорта. Живой ricardo#23/#25 после броска охотится именно на ТЯГАЧЕЙ: семь тиков
@@ -1354,11 +1357,22 @@ object EscortRun {
      * которому бьёт вооружённый, догоняющий поезд (быстрее поезда по равнине), которого наши рядом не побеждают, выходит из
      * цепи и уводит его — дальше от него, по болоту, прочь от эскорта, — пока тот в LURE_RANGE; эскорт идёт сам (4 тика на
      * клетку равнины) или с оставшимися. Отстал охотник — тягач возвращается к хвосту; погонится снова — снова уведёт.
+     * Охотник, ударивший сам эскорт, охотится на эскорт: от него тягачей не уводят, а уведённые возвращаются в цепь
+     * (стенд hunt+harvest: стрелок M5R5 задел тягачей мимоходом, они ушли, и эскорт погиб один — v30 там выигрывал).
      */
     private fun decoys(w: World, escort: Creep): Set<String> {
         val trainPeriod = Bodies.period(Bodies.weight(escort), ourTrainMoves(w), false)
+        val reach = { e: Creep -> if (Bodies.live(e, RANGED_ATTACK) > 0) 3 else 1 }
         val hunters = w.enemyArmed.filter { e -> !isEscort(e) && Bodies.period(Bodies.weight(e), Bodies.liveMoves(e), false) < trainPeriod }
         val byId = w.enemies.associateBy { idOf(it) }
+        if (escortHitsLast >= 0 && escort.hits < escortHitsLast) {
+            for (h in hunters) if (dist(h, escort) <= reach(h) && escortHunters.add(idOf(h))) {
+                val back = luring.filterValues { it == idOf(h) }.keys
+                luring.keys.removeAll(back)
+                println("train t=${w.now}: ${idOf(h)} ${Bodies.summaryOf(h)} hits the escort — no decoys from it${if (back.isNotEmpty()) ", ${back.joinToString(",")} back to the chain" else ""}")
+            }
+        }
+        escortHitsLast = escort.hits
         val out = HashSet<String>()
         for (p in w.pullers) {
             val id = idOf(p)
@@ -1366,8 +1380,7 @@ object EscortRun {
             pullerHits[id] = p.hits
             if (p.spawning || Bodies.liveMoves(p) == 0) continue
             if (id !in luring && was != null && p.hits < was) {
-                val reach = { e: Creep -> if (Bodies.live(e, RANGED_ATTACK) > 0) 3 else 1 }
-                val h = hunters.filter { dist(it, p) <= reach(it) }.minByOrNull { dist(it, p) }
+                val h = hunters.filter { dist(it, p) <= reach(it) && idOf(it) !in escortHunters }.minByOrNull { dist(it, p) }
                 val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, p) <= 6 }
                 if (h != null && (guards.isEmpty() || !wins(guards, listOf(h)))) {
                     luring[id] = idOf(h)
