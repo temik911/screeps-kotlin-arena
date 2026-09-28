@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v46"
+    private const val BOT_VERSION = "v47"
 
     private const val LOG_EVERY = 50
 
@@ -1901,14 +1901,28 @@ object SpawnAndSwampAdvanced {
         val target = threats.minByOrNull { e -> homeSpawns.minOfOrNull { getRange(e, it) } ?: 0 }
         val anchor: Position = target?.let { tg -> homeSpawns.minByOrNull { getRange(tg, it) } } ?: home
         var engage = false
+        val engaged = HashSet<String>()
         if (target != null) {
             // бьём угрозу, только если прогон дома (с нашими кормлеными башнями, что её достают) против неё побеждает.
             // v11 бил и проигранную, если она «била спавн» — а спавн сейфа за стеной недосягаем, и бойцы из обоих
             // спавнов по одному шли в толпу из 36 у входа в сейф. Предела погони нет: угроза по определению в домашней
             // зоне (v9: зазор между пределом погони и снятием защиты держал защиту вечно)
-            val local = threats.filter { getRange(it, target) <= LOCAL_RANGE }
-            val ours = homeGroup.map { simOf(it) } + myTowers.filter { tw -> energyOf(tw) > 0 && getRange(tw, target) <= TOWER_RANGE }.map { simTowerOf(it, all) }
-            engage = simulate(ours, local.map { simOf(it) }).win
+            // …и в прогоне только те, кто успеет: бой решается за r.ticks, боец дальше этого приходит, когда решать уже
+            // нечего. v45 считал весь дом, вплоть до бойцов в 60+ клетках, и они шли к бою по одному — 21–28 бойцов за
+            // игру гибли, когда рядом не было ни одного нашего (против stachu3478#17 и けろびー#16)
+            val local = threats.filter { getRange(it, target) <= LOCAL_RANGE }.map { simOf(it) }
+            val towersIn = myTowers.filter { tw -> energyOf(tw) > 0 && getRange(tw, target) <= TOWER_RANGE }.map { simTowerOf(it, all) }
+            var group = homeGroup.filter { getRange(it, target) <= LOCAL_RANGE }
+            var r = simulate(group.map { simOf(it) } + towersIn, local)
+            for (i in 0 until 3) {
+                val reach = maxOf(LOCAL_RANGE, r.ticks)
+                val next = homeGroup.filter { getRange(it, target) <= reach }
+                if (next.size == group.size) break
+                group = next
+                r = simulate(group.map { simOf(it) } + towersIn, local)
+            }
+            engage = r.win && group.isNotEmpty()
+            if (engage) group.forEach { engaged.add(idOf(it)) }
         }
         // нарушители: его строитель или площадка спавна/башни на нашей территории — у наших спавнов или у «наших»
         // источников (к ним ближе наш спавн, чем его). Для угроз они невидимы (не боевые), и v17 спокойно смотрел, как
@@ -1958,7 +1972,7 @@ object SpawnAndSwampAdvanced {
                 continue
             }
             val onRampart = myRampartAt(Pos(f.x, f.y), all)
-            if (engage && target != null) {
+            if (engage && target != null && idOf(f) in engaged) {
                 if (getRange(f, target) > RANGED_RANGE) f.moveTo(target)
             } else if (target != null && onRampart && theirs.any { isCombat(it) && getRange(f, it) <= RANGED_RANGE + 2 }) {
                 // на своём рампарте у боя — стоим: он принимает урон, а мы стреляем
