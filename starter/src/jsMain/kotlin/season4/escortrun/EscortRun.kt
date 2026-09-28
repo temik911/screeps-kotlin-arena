@@ -974,11 +974,15 @@ object EscortRun {
     private fun fieldWinner(threats: List<Creep>, helpers: List<Creep>, cap: Int): Array<BodyPartType>? {
         var best: Array<BodyPartType>? = null
         var bestCost = Int.MAX_VALUE
-        for (a in 1..8) for (t in 0..12) {
-            val m = maxOf(1, (a + t + 2) / 3)
+        // победитель, который не догоняет, не дерётся: по болоту центра он не медленнее самого быстрого из тех, кого идёт
+        // снимать (T2M1A1 — 15 тиков на клетку болота против 5 у M1A1 — полсотни тиков стоял в четырёх клетках от
+        // перехватчика, пока тот бил эскорт; けろびー#32, 28.09.2026)
+        val catchUp = threats.minOfOrNull { c -> Bodies.period(c.body.count { it.type != MOVE && it.type != CARRY }, Bodies.live(c, MOVE), true) } ?: Int.MAX_VALUE
+        for (a in 1..8) for (t in 0..12) for (m in maxOf(1, (a + t + 2) / 3)..(a + t)) {
             val body = Array(t) { TOUGH } + Array(m) { MOVE } + Array(a) { ATTACK }
             val cost = Bodies.cost(body)
             if (cost > cap || cost >= bestCost || body.size > 50) continue
+            if (Bodies.period(a + t, m, true) > catchUp) continue
             val merged = helpers.flatMap { c -> c.body.map { it.type } } + body.toList()
             val hits = helpers.flatMap { c -> c.body.map { it.hits } } + body.map { 100 }
             val unit = Bodies.Unit(merged.toTypedArray(), hits.toIntArray())
