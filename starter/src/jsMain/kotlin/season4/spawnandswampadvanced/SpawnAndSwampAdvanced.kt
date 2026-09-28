@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v51"
+    private const val BOT_VERSION = "v52"
 
     private const val LOG_EVERY = 50
 
@@ -186,6 +186,7 @@ object SpawnAndSwampAdvanced {
      *  из четырёх при его 22 энергии в тик на армию против наших 10. */
     private var founderId: String? = null
     private var founderPlan: Base? = null
+    private var founderPlanAt = -1000
     /** Волна: id бойцов, ушедших в атаку. Пусто — армия дома. */
     private val wave = HashSet<String>()
     private var lastPosture = ""
@@ -724,15 +725,38 @@ object SpawnAndSwampAdvanced {
                 println("spawn up t=$t at (${sp.x},${sp.y}) e=${energyOf(sp)}")
             }
         }
+        // павшая база выбывает: ни её спавна, ни близнеца, ни нашей площадки спавна на её клетке. v46–v51 держали её в
+        // `bases` навсегда, и её источник — ближайший наш, в 19–25 тиках пути — пропадал из кандидатов расширения: 5451
+        // тик, 40 % всего свободного и безопасного времени, во всех четырёх не-победах с けろびー и ни в одной из побед
+        val fallen = bases.filter { b ->
+            b.spawnId != null && byId[b.spawnId!!] == null && (b.twinId == null || byId[b.twinId!!] == null) &&
+                sites.none { it.my == true && it.x == b.spawnCell.x && it.y == b.spawnCell.y }
+        }
+        for (b in fallen) {
+            bases.remove(b)
+            slotOf.entries.removeAll { it.value in b.slots }
+            println("base fallen t=$t at (${b.spawnCell.x},${b.spawnCell.y})")
+        }
         val exp = expansion
         if (exp != null && exp.spawnId == null) {
             val sp = mySpawns.firstOrNull { it.x == exp.spawnCell.x && it.y == exp.spawnCell.y }
             if (sp != null) {
                 exp.spawnId = idOf(sp)
                 bases.add(exp)
+                val builder = builderId
                 expansion = null
                 builderId = null
                 println("expansion spawn up t=$t at (${sp.x},${sp.y})")
+                // строитель идёт дальше, как основатель: новый спавн рожает ему замену, и он уходит к следующему источнику
+                // — без заказа строителя за 850 и без очереди спавна. Так けろびー#19 одним стартовым рабочим ставит спавн
+                // каждые 467–620 тиков (230, 723, 1190, 1810), а наш заказ третьей базы ждал 365–669 тиков после второй
+                if (builder != null && mine.any { idOf(it) == builder }) {
+                    val next = expansionTarget(listOf(sp), sources, all)
+                    if (next != null) {
+                        founderId = builder; founderPlan = next; founderPlanAt = t
+                        println("founder plan t=$t goes on -> (${next.spawnCell.x},${next.spawnCell.y})")
+                    }
+                }
             }
         }
 
@@ -875,10 +899,12 @@ object SpawnAndSwampAdvanced {
         }
         // основатель уходит, когда замена вышла из спавна и одна насыщает источник первой базы
         val fid = founderId
-        val plan = founderPlan
+        var plan = founderPlan
         if (fid != null && plan != null && builderId == null && expansion == null && !builderPending) {
             val founder = mine.firstOrNull { idOf(it) == fid }
-            val b1 = bases.firstOrNull()
+            // база, на которой стоит основатель (первая — для стартового, новая — для идущего дальше)
+            val b1 = founder?.let { f -> bases.firstOrNull { b -> slotOf[fid]?.let { b.slots.contains(it) } == true }
+                ?: bases.minByOrNull { cheb(posOf(f), it.spawnCell) } }
             if (founder == null || b1 == null) { founderId = null; founderPlan = null }
             else {
                 val needWork = (SOURCE_ENERGY_REGEN + HARVEST_POWER - 1) / HARVEST_POWER
@@ -888,7 +914,15 @@ object SpawnAndSwampAdvanced {
                 // пока на карте есть его бойцы, основатель уходит только при нашем бойце дома: v42 уходил на 302-м, и
                 // рейдер M3R3 убивал его у первого рампарта или замену на открытой клетке первой базы
                 val covered = enemyCombat.isEmpty() || mine.any { isCombat(it) && !it.spawning }
-                if (stay >= needWork && covered && worksiteSafe(listOf(plan.spawnCell))) {
+                // цель устаревает, пока он ждёт замену: раз в полсотни тиков — заново, от его базы
+                val fromSpawn = b1.spawnId?.let { id -> mySpawnsById(id) }
+                if (stay >= needWork && covered && t - founderPlanAt >= LOG_EVERY && fromSpawn != null) {
+                    founderPlanAt = t
+                    plan = expansionTarget(listOf(fromSpawn), sources, all)
+                    founderPlan = plan
+                    if (plan == null) { founderId = null }
+                }
+                if (plan != null && stay >= needWork && covered && worksiteSafe(listOf(plan.spawnCell))) {
                     builderId = fid; expansion = plan; expansionPlaced = false
                     slotOf.remove(fid); founderId = null; founderPlan = null
                     println("founder t=$t ${bodyOf(founder)} leaves for (${plan.spawnCell.x},${plan.spawnCell.y})")
@@ -1349,7 +1383,9 @@ object SpawnAndSwampAdvanced {
         if (expansionFrom != idOf(spawn)) return false
         if (!worksiteSafe(listOf(target.spawnCell))) return false
         val body = builderBody()
-        if (energy < costOf(body)) return true
+        // спавн рожает из запаса всех спавнов рядом: с близнецом добытчики делят сдачу, и 850 в одном спавне — это ~1700
+        // пула (v46 ждал вдвое дольше)
+        if (poolOf(spawn).sumOf { energyOf(it) } < costOf(body)) return true
         val r = spawn.spawnCreep(body)
         println("spawn t=$t ${bodyText(body)} cost=${costOf(body)} energy=$energy why=expansion to (${target.spawnCell.x},${target.spawnCell.y}) err=${r.error}")
         if (r.error == null) { builderPending = true; expansion = target; expansionPlaced = false; expansionPlan = null; expansionPlanAt = -1000 }
@@ -1399,7 +1435,7 @@ object SpawnAndSwampAdvanced {
     }
 
     private fun order(t: Int, spawn: StructureSpawn, energy: Int, body: Array<BodyPartType>, role: String): Boolean {
-        if (energy < costOf(body)) return true
+        if (poolOf(spawn).sumOf { energyOf(it) } < costOf(body)) return true
         val r = spawn.spawnCreep(body)
         println("spawn t=$t ${bodyText(body)} cost=${costOf(body)} energy=$energy why=$role err=${r.error}")
         if (r.error == null) pendingRoles.add(role to bodyText(body))
@@ -1435,6 +1471,9 @@ object SpawnAndSwampAdvanced {
 
     /** Спавны, чей запас берёт `spawnCreep` этого спавна: наши в `POOL_RANGE` (basic замерил: в 3 клетках
      *  считается, в 25 — нет; 20 из документации не проверено). */
+    private fun mySpawnsById(id: String): StructureSpawn? =
+        getObjectsByPrototype(StructureSpawn::class).firstOrNull { it.my == true && idOf(it) == id }
+
     private fun poolOf(spawn: StructureSpawn): List<StructureSpawn> =
         getObjectsByPrototype(StructureSpawn::class).filter { it.my == true && getRange(it, spawn) <= POOL_RANGE }
 
