@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 234
+    private const val BOT_VERSION = 235
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7315,6 +7315,8 @@ object SpawnAndSwamp {
     private const val USE_BUY_BY_RACE = false
     /** The march's price counts our melee at the share of the pack's damage its melee deals (fightCost, v234). */
     private const val USE_MARCH_MELEE_SHARE = true
+    /** A bare spawn of his fits the raid by raidKillTick's race and the one that falls first is taken (v235). */
+    private const val USE_RAID_FIT_BY_RACE = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
@@ -7682,8 +7684,25 @@ object SpawnAndSwamp {
                 else ceil((ctx.enemySpawns.firstOrNull { it.id == t.id }?.hits ?: SPAWN_HITS) / raidDps.coerceAtLeast(1.0)).toInt()
             return back - walk - need
         }
-        val fitSpawn: GameObject? = if (!USE_RAID_FIT_TARGET || raidHome || gathering || raidDps <= 0.0) null else
-            open.filter { it.id in spawnIds }.map { it to strikeMargin(it) }.filter { it.second > 0 }
+        // A BARE SPAWN FITS BY THE RACE THAT DECIDES ITS STRIKE (v235). Its fit was the margin of his nearest mobile gun's
+        // walk back over our walk and the whole kill, and one gun near weighed as much as his army: against けろびー#49
+        // (v231 draw) at 1546 the pair stood 5-6 cells from his bare (52,71) with one M5R5 ~12 ticks off and his other
+        // twelve 55-95 ticks off, walking at our house; the margin said "does not fit", the far (64,92) "fits", the pair
+        // walked 23 cells to it, and by 1590-1600 three to seven of his guns stood at (52,71) — it lived 1254 ticks
+        // unstruck, his last spawn. The strike itself is taken by raidKillTick (v183: the pair kills it before his guns,
+        // each from its own walk, take the weakest raider), and there the pair ended (52,71) by ~23 ticks for ~700 of its
+        // 1250. A bare spawn fits when the race says so and the one that falls first is taken; a ramparted one — visits —
+        // keeps the margin
+        val raceTick = HashMap<String, Int>()
+        fun bareKill(t: GameObject): Int = raceTick.getOrPut(t.id) {
+            raidKillTick(ctx, raiders, pos(t), ctx.enemySpawns.firstOrNull { it.id == t.id }?.hits ?: SPAWN_HITS, flowTo(ctx, pos(t)))
+        }
+        fun spawnFits(t: GameObject): Boolean = if (USE_RAID_FIT_BY_RACE && rampartOn(ctx, pos(t)) <= 0) bareKill(t) >= 0 else strikeMargin(t) > 0
+        val fitSpawn: GameObject? = if (!USE_RAID_FIT_TARGET || raidHome || gathering || raidDps <= 0.0) null
+            else if (USE_RAID_FIT_BY_RACE) open.filter { it.id in spawnIds && spawnFits(it) }
+                .minWithOrNull(compareBy<GameObject> { rampartOn(ctx, pos(it)) > 0 }
+                    .thenBy { if (rampartOn(ctx, pos(it)) <= 0) bareKill(it) else getRange(lead, pos(it)) })
+            else open.filter { it.id in spawnIds }.map { it to strikeMargin(it) }.filter { it.second > 0 }
                 .minWithOrNull(compareBy<Pair<GameObject, Int>> { rampartOn(ctx, pos(it.first)) > 0 }.thenBy { getRange(lead, pos(it.first)) })?.first
         // his main first while it is bare; a ramparted target last (13000 for the pair is 73 ticks, a bare one 17) — and
         // taken when it is all that is left, since the win is his last spawn
@@ -7714,7 +7733,7 @@ object SpawnAndSwamp {
             raidHome || gathering -> null
             spawnFirst != null -> spawnFirst
             builderTarget != null -> builderTarget
-            fitSpawn != null && (held == null || (held.id != fitSpawn.id && strikeMargin(held) <= 0)) -> fitSpawn
+            fitSpawn != null && (held == null || (held.id != fitSpawn.id && !(if (USE_RAID_FIT_BY_RACE && held.id in spawnIds) spawnFits(held) else strikeMargin(held) > 0))) -> fitSpawn
             held != null -> held
             main != null && main in open && rampartOn(ctx, main) == 0 -> main
             else -> open.filter { t -> t.id in spawnIds || !USE_RAID_BUILDERS_FIRST }.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
