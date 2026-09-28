@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v49"
+    private const val BOT_VERSION = "v50"
 
     private const val LOG_EVERY = 50
 
@@ -199,8 +199,6 @@ object SpawnAndSwampAdvanced {
     private var homeHolds = true
     /** Угроза бьёт: кто-то из угроз в досягаемости нашего спавна или рабочего (как `striking` у отзыва волны). */
     private var threatStrikes = false
-    /** У него были носильщики — крипы с CARRY и MOVE без WORK и без оружия: только они могут вынести наш сейф. */
-    private var haulersSeen = false
 
     /** Прибор калибровки прогона: что он обещал на выходе волны (удара) и что вышло к её концу. Решения прогона
      *  держатся на запасе `PUSH_KEEP`, который пока назван, а не измерен; этот прибор его меряет. */
@@ -755,10 +753,6 @@ object SpawnAndSwampAdvanced {
         defending = if (defending) wide.isNotEmpty() else near.isNotEmpty()
         if (defending) attackedOnce = true
         val threats = if (defending) wide else emptyList()
-        if (!haulersSeen && theirs.any { c -> liveParts(c, CARRY) > 0 && liveParts(c, MOVE) > 0 && liveParts(c, WORK) == 0 && !isCombat(c) }) {
-            haulersSeen = true
-            println("haulers seen t=$t")
-        }
         threatStrikes = threats.any { e -> homeSpawns.any { getRange(e, it) <= RANGED_RANGE + 1 } || workersAll.any { getRange(e, it) <= RANGED_RANGE + 1 } }
         homeHolds = threats.isEmpty() || run {
             val towersNow = all.filter { it is StructureTower && it.asDynamic().my == true && energyOf(it) > 0 }.unsafeCast<List<StructureTower>>()
@@ -876,9 +870,17 @@ object SpawnAndSwampAdvanced {
                 val stay = mine.filter { c ->
                     idOf(c) != fid && !c.spawning && idOf(c) !in roleOf && liveParts(c, WORK) > 0 && cheb(posOf(c), b1.spawnCell) <= 2
                 }.sumOf { liveParts(it, WORK) }
-                // пока на карте есть его бойцы, основатель уходит только при нашем бойце дома: v42 уходил на 302-м, и
-                // рейдер M3R3 убивал его у первого рампарта или замену на открытой клетке первой базы
-                val covered = enemyCombat.isEmpty() || mine.any { isCombat(it) && !it.spawning }
+                // основатель ждёт нашего бойца, только если его бойцы успевают к месту новой базы раньше, чем основатель
+                // дойдёт и встанет под свой первый рампарт (копка 200 и стройка 200 его WORK). v42 уходил на 302-м без
+                // оглядки, и рейдер M3R3 убивал его у первого рампарта; v43–v46 ждали бойца при ЛЮБОМ его бойце на карте —
+                // уход на ~486-м, второй спавн к ~797-му, а stachu3478#17 к 645-му уже сидел у центрального источника, и
+                // третьего спавна у нас не было ни в одной не-победе против него. Замену на первой базе теперь держит крыша
+                val work = maxOf(1, liveParts(founder, WORK))
+                val rampartCost = CONSTRUCTION_COST.asDynamic()["StructureRampart"].unsafeCast<Int>()
+                val roofTicks = pathTicks(posOf(founder).let { cell(it) }, cell(plan.spawnCell)) +
+                    rampartCost / (HARVEST_POWER * work) + rampartCost / (BUILD_POWER * work)
+                val raiders = enemyCombat.filter { getRange(it, cell(plan.spawnCell)) <= roofTicks }
+                val covered = raiders.isEmpty() || mine.any { isCombat(it) && !it.spawning }
                 if (stay >= needWork && covered && worksiteSafe(listOf(plan.spawnCell))) {
                     builderId = fid; expansion = plan; expansionPlaced = false
                     slotOf.remove(fid); founderId = null; founderPlan = null
@@ -1304,15 +1306,11 @@ object SpawnAndSwampAdvanced {
         // расширение и сейф — и под угрозой, если дом её держит (место работ проверяет свою безопасность само): v22
         // проиграл stachu3478 при двух источниках против его пяти — его харассеры у нашей базы держали «угрозу»
         // постоянно, и после второго спавна на 862-м мы не расширились ни разу
-        // сейф раньше расширения — только когда у него есть чем вынести сейф (носильщики: stachu3478#15 вынес наш карман
-        // к ~1000-му, пока v36 строил второй спавн). Иначе первым — источник: кто возьмёт третий, тот и выиграл гонку;
-        // против stachu3478#17 (носильщиков нет, стены сейфа он только расстреливает) v46 ставил третий спавн к
-        // 1100–1700-му во всех победах и не ставил вовсе ни в одной из не-побед, а у него третий встаёт к ~1043-му
-        } else if (haulersSeen && (homeHolds || !threatStrikes) && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
+        // сейф раньше расширения: его 10000 заберёт тот, кто вскроет первым (stachu3478 вынес наш карман к ~1000-му, пока
+        // v36 строил сначала второй спавн), а источник подождёт
+        } else if ((homeHolds || !threatStrikes) && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
         } else if ((homeHolds || !threatStrikes) && fighters.isNotEmpty() && expansionOrder(t, spawn, energy)) {
-            return
-        } else if (!haulersSeen && (homeHolds || !threatStrikes) && fighters.isNotEmpty() && vaultOrder(t, spawn, energy)) {
             return
         } else {
             return spawnFighter(t, spawn, energy, why = "army")
