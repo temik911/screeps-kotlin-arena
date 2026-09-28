@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 221
+    private const val BOT_VERSION = 222
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1212,6 +1212,7 @@ object SpawnAndSwamp {
         // для решений спавна враг — «скоро»: с теми, кто ещё рождается у его спавна
         val threatsSoon = combatEnemies + enemyPending
         val enemyArrival = enemyArrivalTicks(ctx)
+        if (USE_ARMY_FORECAST) noteArmyForecast(ctx)
         // THE SPAWN ANSWERS THE FIGHT THAT WILL BE AT OUR HOUSE (v101): those walking at us, those already in the alarm
         // ring and those being born. His home guard is not in it — every Ranamar bot keeps an M1A1 at his spawn, eighty
         // cells off, and it made our breacher a full defender against his two kiting M5R1 at our spawn (deficit -147 in
@@ -4933,6 +4934,152 @@ object SpawnAndSwamp {
         return Birth(0, enemyBirths.sumOf { it.power } / n, enemyBirths.sumOf { it.hits } / n, enemyBirths.sumOf { it.dps } / n, enemyBirths.sumOf { it.melee } / n)
     }
 
+    // ==================== прогноз его армии (v222) ====================
+
+    /**
+     * WHERE HIS ARMY WILL BE (v222) — the forecast the operator asked for before any call, recall or strike window is
+     * built on it (28.09.2026). Measured first on 118 played matches (scratchpad an/forecast/eval.py, 56 thousand
+     * "his creep × tick" samples, the truth read off the replay): a creep of his is announced at a point P within H
+     * ticks when its body can reach P's ball within ALPHA·H whatever it intends, or when its approach over the last 20
+     * ticks brings it there within H. Our house, wave out, H = 200: 0.3 % of arrivals missed, against 11.5 % for
+     * enemyArrivalTicks (the closing rate alone misses those standing, walking sideways and turning back near the
+     * house); his main, his army away, H = 75 / 150: 0.1 % / 0 % of the windows called safe had it back, against 2.1 % /
+     * 3.8 %. A learned model and "which goal is it walking to" were worse and broke on an unseen opponent. The reach is
+     * his body's time field to the ball (Dijkstra over the terrain, entering a cell costs his period there, walls only);
+     * ALPHA is the measured reliability knob: 0.5 misses 2 %, 0.75 misses 0.3 %, 1.0 (pure reach) none
+     */
+    private class ArmyForecast(val any: Boolean, val share: Double, val announced: List<Creep>)
+
+    /** His creeps' cells by tick over the last FORECAST_BACK ticks, and the tick each could first move (v222). */
+    private val forecastTrail = HashMap<String, ArrayDeque<Pair<Int, Int>>>()
+    private val forecastFree = HashMap<String, Int>()
+    /** Body time fields to a ball, by P, D and the body's two periods: the terrain only, so they hold for the match. */
+    private val forecastFields = HashMap<String, IntArray>()
+    private var forecastTerrain: IntArray? = null
+    /** Our main spawn's and his main spawn's cells at the start: the forecast's two points (v222). */
+    private var forecastUs = -1
+    private var forecastThem = -1
+
+    private fun forecastTerrainAt(cell: Int): Int {
+        val t = forecastTerrain ?: IntArray(10000) { i ->
+            val x = i / 100; val y = i % 100
+            when (getTerrainAt(InfluenceMap.cell(x, y))) { TERRAIN_WALL -> 2; TERRAIN_SWAMP -> 1; else -> 0 }
+        }.also { forecastTerrain = it }
+        return t[cell]
+    }
+
+    /** Ticks for a body of plain period [pp] and swamp period [ps] to enter the ball of Chebyshev radius [d] round
+     *  [p] (x·100+y), from every cell; Int.MAX_VALUE / 4 where it cannot. */
+    private fun forecastField(p: Int, d: Int, pp: Int, ps: Int): IntArray = forecastFields.getOrPut("$p/$d/$pp/$ps") {
+        val never = Int.MAX_VALUE / 4
+        val dist = IntArray(10000) { never }
+        // a binary heap of (ticks << 14 | cell)
+        var heap = LongArray(1024)
+        var n = 0
+        fun push(v: Long) {
+            if (n == heap.size) heap = heap.copyOf(n * 2)
+            var i = n++
+            heap[i] = v
+            while (i > 0) { val up = (i - 1) / 2; if (heap[up] <= heap[i]) break; val t = heap[up]; heap[up] = heap[i]; heap[i] = t; i = up }
+        }
+        fun pop(): Long {
+            val top = heap[0]
+            heap[0] = heap[--n]
+            var i = 0
+            while (true) {
+                val l = 2 * i + 1; val r = l + 1; var m = i
+                if (l < n && heap[l] < heap[m]) m = l
+                if (r < n && heap[r] < heap[m]) m = r
+                if (m == i) break
+                val t = heap[m]; heap[m] = heap[i]; heap[i] = t; i = m
+            }
+            return top
+        }
+        val px = p / 100; val py = p % 100
+        for (x in px - d..px + d) for (y in py - d..py + d) {
+            if (x < 0 || y < 0 || x > 99 || y > 99 || (x == px && y == py)) continue
+            val c = x * 100 + y
+            if (forecastTerrainAt(c) == 2) continue
+            dist[c] = 0
+            push(c.toLong())
+        }
+        while (n > 0) {
+            val v = pop()
+            val c = (v and 0x3FFF).toInt()
+            val t = (v shr 14).toInt()
+            if (t > dist[c]) continue
+            // a creep on a neighbour steps INTO c: the cost is c's period
+            val nt = t + if (forecastTerrainAt(c) == 1) ps else pp
+            val cx = c / 100; val cy = c % 100
+            for (dx in -1..1) for (dy in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = cx + dx; val ny = cy + dy
+                if (nx < 0 || ny < 0 || nx > 99 || ny > 99) continue
+                val j = nx * 100 + ny
+                if (forecastTerrainAt(j) == 2 || nt >= dist[j]) continue
+                dist[j] = nt
+                push((nt.toLong() shl 14) or j.toLong())
+            }
+        }
+        dist
+    }
+
+    /** The forecast at [p] (x·100+y) for radius [d] and horizon [h]: who of his armed movers outside the ball is
+     *  announced, and their share of his whole armed power (damage and heal of live parts). */
+    private fun armyForecast(ctx: Ctx, p: Int, d: Int, h: Int, alpha: Double = FORECAST_ALPHA): ArmyForecast {
+        val never = Int.MAX_VALUE / 4
+        val now = getTicks()
+        val px = p / 100; val py = p % 100
+        val rows = (ctx.combatEnemies + ctx.pendingEnemies).distinctBy { it.id }.filter { liveMoves(it) > 0 }
+        fun power(c: Creep) = InfluenceMap.profileOf(c).let { it.melee + it.ranged + it.heal }
+        val total = rows.sumOf { power(it) }
+        val out = ArrayList<Creep>()
+        for (c in rows) {
+            if (maxOf(kotlin.math.abs(c.x - px), kotlin.math.abs(c.y - py)) <= d) continue
+            val w = bodyWeight(c); val m = liveMoves(c)
+            val field = forecastField(p, d, periodOn(w, m, 2), periodOn(w, m, 10))
+            val here = field[c.x * 100 + c.y]
+            if (here >= never) continue
+            val born = if (c.spawning == true) (ctx.enemySpawns.firstOrNull { it.x == c.x && it.y == c.y }?.spawning?.remainingTime ?: 0) else 0
+            val reach = here + born
+            if (reach <= alpha * h) { out.add(c); continue }
+            if (reach > h) continue
+            // its approach over the last 20 ticks (10 for a young one), along the same field; free for under 10 — straight at us
+            val free = now - (forecastFree[c.id] ?: now)
+            val eta = if (c.spawning == true || free < FORECAST_BACK / 2) reach else {
+                val back = if (free >= FORECAST_BACK) FORECAST_BACK else FORECAST_BACK / 2
+                val then = forecastTrail[c.id]?.firstOrNull { it.first == now - back }?.second
+                val was = if (then == null) never else field[then]
+                if (was >= never) never else { val v = (was - here).toDouble() / back; if (v > 0.0) (reach / v).toInt() else never }
+            }
+            if (eta <= h) out.add(c)
+        }
+        return ArmyForecast(out.isNotEmpty(), if (total > 0.0) out.sumOf { power(it) } / total else 0.0, out)
+    }
+
+    /** Keeps his creeps' trails and prints the forecast's journal line every ten ticks (v222; read back by the stand's
+     *  LOG model: the port is scored by the same stand as the model was). */
+    private fun noteArmyForecast(ctx: Ctx) {
+        val now = getTicks()
+        if (forecastUs < 0) forecastUs = ctx.mySpawn.x * 100 + ctx.mySpawn.y
+        if (forecastThem < 0) ctx.enemySpawns.firstOrNull { it.id == hisMainId }?.let { forecastThem = it.x * 100 + it.y }
+        val alive = HashSet<String>()
+        for (c in ctx.enemyCreeps) {
+            alive.add(c.id)
+            if (c.spawning == true) continue
+            forecastFree.getOrPut(c.id) { now }
+            val trail = forecastTrail.getOrPut(c.id) { ArrayDeque() }
+            trail.addLast(now to (c.x * 100 + c.y))
+            while (trail.isNotEmpty() && trail.first().first < now - FORECAST_BACK) trail.removeFirst()
+        }
+        forecastTrail.keys.retainAll(alive)
+        forecastFree.keys.retainAll(alive)
+        if (DEBUG_LOG && now % 10 == 0) {
+            fun f(p: Int, h: Int): String = if (p < 0) "-" else armyForecast(ctx, p, FORECAST_D, h).let { "${if (it.any) 1 else 0}/${(it.share * 100).toInt() / 100.0}" }
+            println("forecast t=$now us${FORECAST_D}@200=${f(forecastUs, 200)} them${FORECAST_D}@75=${f(forecastThem, 75)} them${FORECAST_D}@150=${f(forecastThem, 150)}")
+        }
+    }
+
     /**
      * Через сколько тиков ближайший боевой враг ДОЙДЁТ до нашего спавна — по наблюдаемому темпу
      * сближения за APPROACH_WINDOW, а не по расстоянию: сторож на выходе из базы в 45 тиках пути
@@ -6860,6 +7007,14 @@ object SpawnAndSwamp {
      *  the house's last spare gun with nothing arriving, his army came at 1500 (4-7 arriving, guard 0 of 1) while the
      *  wave of 11 stood in the field, and our spawn fell at 1900; the draws were not fewer (3 against 2) */
     private const val USE_HOLD_CALLS_HOME = false
+    /** His army's forecast (armyForecast, v222): reach within FORECAST_ALPHA·H or an approach arriving within H. */
+    private const val USE_ARMY_FORECAST = true
+    /** The forecast's reliability knob, measured on 118 matches: 0.5 misses 2 % of arrivals, 0.75 misses 0.3 %, 1.0 none. */
+    private const val FORECAST_ALPHA = 0.75
+    /** The approach window of the forecast (ticks), as enemyArrivalTicks' APPROACH_WINDOW. */
+    private const val FORECAST_BACK = 20
+    /** "At the door": the Chebyshev radius round the point the forecast is asked about. */
+    private const val FORECAST_D = 5
     /** Two cells both next to one target are at most this far apart: the pair is together within it (v216). */
     private const val RAID_PAIR_RANGE = 2
     /** The holding step's fire edge counts his creeps' fire; the towers are holdTowers' (v203). */
