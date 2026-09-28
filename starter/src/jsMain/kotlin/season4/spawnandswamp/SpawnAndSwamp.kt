@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 227
+    private const val BOT_VERSION = 228
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5787,7 +5787,9 @@ object SpawnAndSwamp {
         // …and his builders are hunted by guns the house does not need once the fort stands (v147): 127 of his 161 spawn
         // sites in those draws stood bare, 39-55 cells from our spawn, and 0 of 47 of his builders died in four of five
         val fortOn = fortStands(ctx)
-        fun houseHolds(): Boolean = homePack.isEmpty() || fortOn || ourPowerOf(home, homePack) >= enemyPowerOf(homePack, home) * DEFEND_MARGIN
+        // (v228) the house is weighed against those at the door AND those the forecast brings to it while the hunt is out
+        var houseAgainst: List<Creep> = homePack
+        fun houseHolds(): Boolean = houseAgainst.isEmpty() || fortOn || ourPowerOf(home, houseAgainst) >= enemyPowerOf(houseAgainst, home) * DEFEND_MARGIN
         for (b in builders.sortedBy { it.hits }) {
             // not under his fed tower: a builder of his rampart at home is his house's, and the siege prices that
             if (coveringTowers(ctx, listOf(b)).isNotEmpty()) continue
@@ -5814,13 +5816,37 @@ object SpawnAndSwamp {
                 val dps = huntDps(c) - heal
                 return dps > 0.0 && eta + (if (USE_RAID_BUILDER_WORK) rampartOn(ctx, b) / huntDps(c) else 0.0) + b.hits / dps < bound
             }
+            // A FREE GUN GOES FOR A BUILDER ONLY WHEN HE IS WORTH THE WHOLE SORTIE AND THE HOUSE HOLDS WITHOUT IT (v228). Only
+            // the marchers weighed the detour against his worth; a free gun went whenever it "reached" him, and a builder
+            // without MOVE is reached by construction. Against stachu3478#2 (v227 loss) his c1w2 with no MOVE stood on its own
+            // rampart by his main from 158 to the end, building ramparts and an extension and no spawn site all match, and
+            // the hunt sent f39 at 370 (walk 233) and f35/f37 at 480 across the map: two M8R4 died in the field at 486 and
+            // 576 without coming within 53 cells of it, and the house met his ball of 2×M4R5M1 and 2×T1M4H3M1 with three guns
+            // instead of five — the rampart fell at 925, the spawn at 956; the forecast wrote us5@200 = 1/0.46-0.53 through
+            // the sortie. The sortie is the walk there, his rampart at our whole damage and his body at our damage less his
+            // heal, and the walk back; the worth is the spawns he will still raise — a builder that cannot walk raises only
+            // the spawn sites within his reach; the house must hold against those at the door and those the forecast brings
+            // to it within the sortie
+            val mobile = liveMoves(b) > 0
+            val bWorth = if (!USE_HUNT_FREE_WORTH || mobile) futureSpawns
+                else enemySitesNow.count { (st, _) -> (st.progressTotal ?: 0) == buildCost("StructureSpawn") && getRange(st, b) <= 3 }.toDouble()
             val cands = ArrayList<Pair<Creep, Int>>()
+            var sortieMax = 0
             for (c in free) {
                 if (c.id in out) continue
                 val eta = pathTicks(c, field, c.x * 100 + c.y)
                 if (eta >= Int.MAX_VALUE / 4 || !reaches(c, eta)) continue
+                if (USE_HUNT_FREE_WORTH) {
+                    val dps = huntDps(c)
+                    if (dps - heal <= 0.0) continue
+                    val sortie = 2.0 * eta + rampartOn(ctx, b) / dps + b.hits / (dps - heal)
+                    if (sortie >= bWorth * SPAWN_HITS / dps) continue
+                    sortieMax = maxOf(sortieMax, sortie.toInt())
+                }
                 cands.add(c to eta)
             }
+            houseAgainst = if (!USE_HUNT_FREE_WORTH || !USE_ARMY_FORECAST || forecastUs < 0 || sortieMax <= 0) homePack
+                else (homePack + armyForecast(ctx, forecastUs, FORECAST_D, sortieMax).announced).distinctBy { it.id }
             for (c in marchers) {
                 if (c.id in out || targetField == null) continue
                 val eta = pathTicks(c, field, c.x * 100 + c.y)
@@ -5832,7 +5858,7 @@ object SpawnAndSwamp {
                 // (v226) and his rampart under the builder first, at our whole damage: the engine takes every strike there
                 val kill = if (dps - heal > 0.0) (if (USE_RAID_BUILDER_WORK) rampartOn(ctx, b) / dps else 0.0) + b.hits / (dps - heal) else Double.MAX_VALUE
                 val detour = eta + kill + back - direct
-                val worth = futureSpawns * (if (dps > 0.0) SPAWN_HITS / dps else Double.MAX_VALUE)
+                val worth = bWorth * (if (dps > 0.0) SPAWN_HITS / dps else Double.MAX_VALUE)
                 // A GUN IN THE SIEGE OF ITS TARGET STAYS WHILE THE SIEGE ENDS SOONER THAN ITS DETOUR (v132). The worth never
                 // asked what leaving costs the spawn being shot: against marlyman#313 (v131 loss) his spawn stood bare at 660
                 // hits with no armed creep of his near, and f31, in range of it, was sent 43 cells after his builder; f27 alone
@@ -7196,6 +7222,10 @@ object SpawnAndSwamp {
     /** A bare spawn of his goes before his builder when the spawn, the walk to the builder and the builder all fall before
      *  the builder's own spawn stands (runRaiders, v227). */
     private const val USE_RAID_SPAWN_FIRST = true
+    /** A free gun hunts a builder only when his worth (the spawns he will still raise; one that cannot walk, his spawn
+     *  sites within reach) pays the sortie there and back, and the house holds without it against those the forecast
+     *  brings to it within the sortie (builderHunt, v228). */
+    private const val USE_HUNT_FREE_WORTH = true
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
