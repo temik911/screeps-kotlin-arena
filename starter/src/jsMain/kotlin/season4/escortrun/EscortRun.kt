@@ -432,6 +432,8 @@ object EscortRun {
 
     /** Экономический дебют (null — ещё не решён, решается на 2-м тике). */
     private var econ: Boolean? = null
+    /** Эскорт ждёт дома победителя их тяжёлого (decideHold, экономика). */
+    private var econWait = false
 
     /** Доход в тик: спавн сам +1, и добытчики у источника — по 2 с каждой WORK. */
     private fun income(w: World): Int {
@@ -1480,6 +1482,19 @@ object EscortRun {
         val escort = w.escort
         val spawn = w.mySpawn
         if (escort == null || spawn == null || w.myRamparts.isEmpty() || onCell(escort, w.myFlag)) { holding = false; return }
+        // экономика: победителя их тяжёлого у нас нет — эскорт ждёт его дома, пока ожидание оплачено запасом гонки (их
+        // эскорт пеший), и выходит вместе с ним. Без этого поезд входил в развилку раньше победителя, купленного на доход
+        // W2 к 169-му, и телохранитель бросался на 171-м (стенд guard, v37: эскорт дошёл с 50 хитами)
+        econWait = false
+        if (econ == true) {
+            val heavies = w.enemyArmed.filter { !isEscort(it) && heavy(it) }
+            val ourArmed = w.fighters.filter { Bodies.isArmed(it) && !it.spawning }
+            if (heavies.isNotEmpty() && !wins(ourArmed, heavies) && theirArrival(w) - ourArrival(w) - RACE_ERR > 0) {
+                if (!holding) { holdSince = w.now; println("hold t=${w.now}: HOME for the winner — ${heavies.joinToString(" ") { Bodies.summaryOf(it) }}, margin ${theirArrival(w) - ourArrival(w)}") }
+                holding = true; holdThreats = heavies; econWait = true
+                return
+            }
+        }
         val armed = w.enemyArmed.filter { !isEscort(it) } + w.enemyPending.filter { Bodies.wasArmed(it) }
         val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 6 }
         val ours = ourArrival(w)
@@ -1702,6 +1717,15 @@ object EscortRun {
      */
     private fun holdSpawn(w: World, e: Int, ours: Int, theirs: Int) {
         val escort = w.escort ?: return
+        if (econWait) {
+            val armedOurs = w.fighters.filter { Bodies.isArmed(it) }
+            val winner = fieldWinner(holdThreats, armedOurs, SPAWN_ENERGY_CAPACITY) ?: cheapestWinner(holdThreats, armedOurs, SPAWN_ENERGY_CAPACITY)
+            if (winner != null && !fighterQueue.contains(ESCORT_GUARD)) {
+                if (e >= Bodies.cost(winner)) { if (order(w, winner, "defender", "economy: the winner the train waits for vs ${holdThreats.joinToString(" ") { Bodies.summaryOf(it) }}")) fighterQueue.addLast(ESCORT_GUARD); return }
+                saving(w, "the winner ${Bodies.summary(winner)}", Bodies.cost(winner)); return
+            }
+            return
+        }
         // сильная угроза — та, которую дешёвый боец в поле не побеждает (M4A3 ricardo#23 в центре не подходит к нашим
         // рампартам, и M1A1 на рампарте против него бесполезен): сперва M1 на их флаг — их эскорт идёт один и без него
         // финиширует, пока мы держимся, — затем самое дешёвое тело, выигрывающее у них дуэль в поле
