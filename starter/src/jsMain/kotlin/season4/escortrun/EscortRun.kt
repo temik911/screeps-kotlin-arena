@@ -531,19 +531,6 @@ object EscortRun {
         //    120-го и R5M5 со 177-го догоняли медленный поезд: 1 из 7 при v16 и 0 из 2 при v17, где M6 ждал до 56-го.
         //    Убрано: против stachu держит дом, см. decideHold.)
         val plan = openingPlan
-        // ПУТЬ УБИЙСТВА. Соперник отдал дебют тяжёлому бойцу вместо тягачей (ricardo#8 — рашер на базу, ricardo#23 —
-        // телохранитель, который бросается на поезд в центре; v28 0-6): его эскорт идёт один и медленно, а наш полный
-        // поезд всё равно встречает бойца. Тогда второй тягач не покупается — его 300 идут в бойца, выигрывающего дуэль
-        // (M4A4), тот убивает их тяжёлого, потом их одинокий эскорт; наш эскорт ждёт на рампартах
-        if (plan != null && openingIdx in 1 until plan.size && escort != null && !killPath) {
-            val heavies = (w.enemyArmed + w.enemyPending.filter { Bodies.wasArmed(it) }).filter { !isEscort(it) && heavy(it) }
-            val theirPullers = enemyPullers(w).isNotEmpty() || w.enemyPending.any { Bodies.isPuller(it, PULLER_MIN_MOVE) }
-            if (heavies.isNotEmpty() && !theirPullers) {
-                killPath = true
-                openingIdx = plan.size
-                println("spawn t=${w.now}: KILL PATH — heavy ${heavies.joinToString(" ") { Bodies.summaryOf(it) }} and no puller of theirs; opening stops")
-            }
-        }
         if (plan != null && openingIdx < plan.size && escort != null) {
             val body = Bodies.moves(plan[openingIdx])
             if (e >= Bodies.cost(body)) {
@@ -1389,7 +1376,12 @@ object EscortRun {
         closing.keys.retainAll { id -> threats.any { idOf(it) == id } }
         val coming = { e: Creep -> closing[idOf(e)]?.let { h -> h.size >= 11 && h.first().second - h.last().second >= 5 } == true }
         // намерение дальнего ещё не видно (рождается или меньше десяти тиков истории) — он тоже держит
-        val unknown = { e: Creep -> e.spawning || (closing[idOf(e)]?.size ?: 0) < 11 }
+        // рождающийся дом не держит: в первые сорок тиков эскорт и так у спавна (тянет рождающихся тягачей), а держание
+        // до рождения M4A3 ricardo#23 и прояснения, что это телохранитель, стоило поезду 35 тиков — и он пришёл в центр
+        // вровень с их парой (0-6). Новорождённый рядом со своим эскортом — тоже не «неясный»: это телохранитель в
+        // становлении; рашер ricardo#8 рождается вдали от своего эскорта и держит, как прежде
+        val theirEscH = w.enemyEscort
+        val unknown = { e: Creep -> !e.spawning && (closing[idOf(e)]?.size ?: 0) < 11 && !(theirEscH != null && dist(e, theirEscH) <= 3) }
         // держась, отпускаем только того, кто отошёл вдвое дальше: иначе перехватчик stachu, стоявший в центре в 45-60
         // клетках, то держал, то отпускал эскорт каждые несколько тиков, и тот ходил туда-сюда у дома (6ab84583)
         val radius = if (holding) 2 * HOLD_RADIUS else HOLD_RADIUS
