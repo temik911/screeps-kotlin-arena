@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v54"
+    private const val BOT_VERSION = "v55"
 
     private const val LOG_EVERY = 50
 
@@ -209,6 +209,9 @@ object SpawnAndSwampAdvanced {
     /** Рождения его боевых крипов: тик, урон+лечение, хиты — из них его производство к нашему подходу. */
     private val enemyBirths = ArrayList<Pair<Int, List<String>>>()
     private val enemyCombatSeen = HashSet<String>()
+    /** Его строители (WORK + MOVE + CARRY) и родил ли он такого сам: стартовый — не рождён, и если других нет, он один. */
+    private val enemyBuilderIds = HashSet<String>()
+    private var enemyBuilderBred = false
     private var enemySpawnSeenAt = -1
     /** Роли крипов вне экономики баз и армии: пробойщик, строитель сейфа. Заказанный крип узнаётся по телу. */
     private val roleOf = HashMap<String, String>()
@@ -770,6 +773,8 @@ object SpawnAndSwampAdvanced {
         val enemyCombat = theirs.filter { isCombat(it) }
         buildDanger(enemyCombat, all.filter { it is StructureTower && it.asDynamic().my == false }.unsafeCast<List<StructureTower>>())
         for (e in enemyCombat) if (enemyCombatSeen.add(idOf(e))) enemyBirths.add(t to typesOf(e))
+        for (c in theirs) if (!isCombat(c) && liveParts(c, WORK) > 0 && liveParts(c, MOVE) > 0 && liveParts(c, CARRY) > 0 &&
+            enemyBuilderIds.add(idOf(c)) && t > 1) enemyBuilderBred = true
         if (enemySpawnSeenAt < 0 && all.any { it is StructureSpawn && it.asDynamic().my == false }) enemySpawnSeenAt = t
         for (b in bases) {
             val sp = b.spawnId?.let { byId[it] } as? StructureSpawn ?: continue
@@ -1993,12 +1998,25 @@ object SpawnAndSwampAdvanced {
         // прогон против его бойцов рядом с нарушителем выиграл с запасом
         val hunters = HashSet<String>()
         var intruder: GameObject? = null
-        if (threats.isEmpty() && homeGroup.isNotEmpty()) {
-            intruder = intruders(all, theirs, homeSpawns).minByOrNull { i -> homeGroup.minOf { getRange(it, i) } }
+        val huntPool = homeGroup.filter { it !in defenders }
+        if (huntPool.isNotEmpty()) {
+            if (threats.isEmpty()) intruder = intruders(all, theirs, homeSpawns).minByOrNull { i -> homeGroup.minOf { getRange(it, i) } }
+            // его единственный строитель — где угодно на карте, пока дом держит угрозу по прогону и есть свободные
+            // источники, которые он ещё займёт: все спавны けろびー#19 ставит один стартовый M5W4C1 (строителя он не
+            // рожает ни разу), по ~460 тиков без охраны на каждой новой базе; без него у него две базы вместо четырёх —
+            // 77 тыс. энергии, 46 % его дохода, против двух наших бойцов
+            if (intruder == null && homeHolds && !enemyBuilderBred) {
+                val hisSites = all.filter { it.asDynamic().my == false && (it is StructureSpawn || it is ConstructionSite) }
+                val freeSources = all.filter { it is Source }.count { s ->
+                    hisSites.none { getRange(it, s) <= INTRUDER_SOURCE_RANGE + 1 } && bases.none { b -> b.sourceId == idOf(s) }
+                }
+                if (freeSources > 0) intruder = theirs.filter { idOf(it) in enemyBuilderIds && !it.spawning }
+                    .minByOrNull { b -> huntPool.minOf { getRange(it, b) } }
+            }
             val it0 = intruder
             if (it0 != null) {
                 // как и у удара: против всех его бойцов, что дойдут до нарушителя не позже нашего ближнего охотника
-                val sorted = homeGroup.sortedBy { getRange(it, it0) }
+                val sorted = huntPool.sortedBy { getRange(it, it0) }
                 val reach = maxOf(LOCAL_RANGE, getRange(sorted.first(), it0))
                 val guards = enemyCombat.filter { getRange(it, it0) <= reach }.map { simOf(it) }
                 for (k in 1..sorted.size) {
