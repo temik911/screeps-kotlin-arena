@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 242
+    private const val BOT_VERSION = 243
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2621,10 +2621,18 @@ object SpawnAndSwamp {
         // died at t=767 and was never replaced while the spawn saved 416 -> 718 for a fighter, and the tower went quiet
         // …at the home spawn only (v159): against marlyman#443 a keeper born at the pile spawn (65,27) at 885 reached the
         // tower's site at 1134, and the fort's reserve held the energy all that while
-        if (ctx.builders.isEmpty() && homeSpawnTurn && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) &&
+        // …and the tower's keeper joins a smaller one wherever the house is, not in a fort only (v243): the tower is priced
+        // with the keeper of its own body (towerWorth: 1250 + builderBody, ~5 WORK) and was built by the one-WORK keeper
+        // of the home rampart — 250 ticks at 5 a tick, `ready=267-300` logged at the site, against the 200 of the forecast
+        // it was bought for. Against ●ω<♥♪#2 (v237/v239, 16 hands) his four stood at our door at 589-677 in every one;
+        // in all 8 hands we did not lose the tower was ready at 691-726 with the keeper alive, in 6 of the 8 losses his
+        // melee killed the keeper at 660-752 with the site at 80-88 %
+        val towerKeeperShort = USE_TOWER_KEEPER_ANYWHERE && keeperShort && ctx.myTowers.isEmpty()
+        if ((ctx.builders.isEmpty() || towerKeeperShort) && homeSpawnTurn && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) &&
             !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty() && !(USE_FORT_KEEPER_FIRST && fortHome && ctx.myTowers.isNotEmpty()))) {
             // ТЕЛО ПОД РАБОТУ, А НЕ ПОД ЛЮБУЮ. Работа выбирается тем же правилом, что и в runBuilders
-            val forJob = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
+            val forJob = if (towerKeeperShort) siteJobs.filter { it.kind == "StructureTower" && it.inTime }.minByOrNull { it.left }
+                else siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
             val builder = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
             val builderCost = builder.sumOf { cost(it) }
             if (energy < builderCost) {
@@ -2635,9 +2643,9 @@ object SpawnAndSwamp {
                 return reach("kSave")
             }
             val r = spawn.spawnCreep(builder)
-            reach(if (r.error == null) "kBuy" else "err")
-            if (r.error == null) spentBuild += builderCost
-            if (DEBUG_LOG) println("spawn: builder work=${builder.count { it == WORK }} cost=$builderCost energy=$energy err=${r.error}")
+            reach(if (r.error == null) (if (towerKeeperShort) "kTower" else "kBuy") else "err")
+            if (r.error == null) { spentBuild += builderCost; if (towerKeeperShort) keeperOrderedAt = getTicks() }
+            if (DEBUG_LOG) println("spawn: builder work=${builder.count { it == WORK }} cost=$builderCost energy=$energy${if (towerKeeperShort) " (tower's, joins a smaller one)" else ""} err=${r.error}")
             return
         }
 
@@ -7370,6 +7378,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_FINISH_BUILDER = true
     /** A bare spawn goes before his builder only while the builder has a spawn site of his within reach (v242). */
     private const val USE_RAID_FIRST_BOUND = true
+    /** A keeper with less WORK than the tower's body is joined by the tower's keeper wherever the house is (v243). */
+    private const val USE_TOWER_KEEPER_ANYWHERE = true
     /** A free gun hunts a builder only when his worth (the spawns he will still raise; one that cannot walk, his spawn
      *  sites within reach) pays the sortie there and back, and the house holds without it against those the forecast
      *  brings to it within the sortie (builderHunt, v228). */
