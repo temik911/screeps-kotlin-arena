@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 236
+    private const val BOT_VERSION = 237
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6684,8 +6684,11 @@ object SpawnAndSwamp {
         // in a loss to #3 5 with 5. The share is now the larger of the measure and the forecast's share of his armed power
         // at our door within TOWER_FORECAST_H (M2a75, 0.3 % of arrivals missed); and a healer the volley at the tower's
         // ring kills in one shot (shot >= its hits + the heal on it a tick) does not heal against the tower
-        val share = if (USE_TOWER_FORECAST) maxOf(homeShare(), forecastHomeShare) else homeShare()
-        if (share <= 0.0 || threats.isEmpty()) return false
+        // …the forecast's share only where the volley has healers to kill: a tower is a fighter's damage spread over
+        // cooldowns everywhere else, and the worth below weighs defence only — with the forecast's share for every coming
+        // army the gate's streams and rushes bought the tower early and won 150-500 ticks later (stream17 581 -> 1078,
+        // swarm 455 -> 875, enemy 475 -> 719, tower+pairs 534 -> 881)
+        if (threats.isEmpty()) return false
         val heal = threats.sumOf { InfluenceMap.profileOf(it).heal }
         val volley = InfluenceMap.towerShot(TOWER_RING + 1)
         val lethal = if (!USE_TOWER_FORECAST) emptyList() else threats.filter { c ->
@@ -6693,6 +6696,8 @@ object SpawnAndSwamp {
                 if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0 }
             InfluenceMap.profileOf(c).heal > 0.0 && volley >= c.hits + healOn
         }
+        val share = if (USE_TOWER_FORECAST && lethal.isNotEmpty()) maxOf(homeShare(), forecastHomeShare) else homeShare()
+        if (share <= 0.0) return false
         val healVsTower = heal - lethal.sumOf { InfluenceMap.profileOf(it).heal }
         val dps = defenders.sumOf { effectiveDps(it, threats, null) } + ourTowerDps(threats)
         val hits = defenders.sumOf { weightedHits(it, threats, null) }
