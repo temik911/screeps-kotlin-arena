@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 232
+    private const val BOT_VERSION = 233
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7299,8 +7299,11 @@ object SpawnAndSwamp {
     /** A waiting raider hunted by a gun not slower than it on plain enters the visit when the race on its own path gives
      *  it RAID_CHIP_MIN strikes, instead of fleeing (v231). */
     private const val USE_RAID_HUNTED_ENTER = true
-    /** The spawn's deficit is positive while our defenders lose the kill race to his creeps bound for our house (v232). */
-    private const val USE_BUY_BY_RACE = true
+    /** The spawn's deficit is positive while our defenders lose the kill race to his creeps bound for our house (v232).
+     *  OFF (v233) — measured live 29.09.2026: A/B against ●ω<♥♪#2 (8+8 test hands) v231 0-8 / v232 0-8, and it bought
+     *  fewer fighters (5-6 against 5-9 a hand): a positive deficit sent the spawn to wait for the full body. More of the
+     *  same bodies is not what his train loses to */
+    private const val USE_BUY_BY_RACE = false
     /** The waiting cell's horizon: the forecast stand's H = 50 (announced at 44 % at the best ring-12 cell, 0.0 % came in
      *  25 ticks to the chosen cell) — a knob of FORECAST_ALPHA's kind. */
     private const val RAID_WAIT_H = 50
