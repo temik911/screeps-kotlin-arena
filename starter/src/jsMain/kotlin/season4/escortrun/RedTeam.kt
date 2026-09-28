@@ -209,11 +209,22 @@ internal object RedTeam {
         log(w, c, "icpt", "on ${Bodies.summaryOf(goal)}@(${goal.x},${goal.y})")
     }
 
+    private var campEscorting = false
+
     private fun camp(w: EscortRun.World, c: Creep) {
         val near = w.enemies.filter { getRange(c, it) <= 1 }
         (near.firstOrNull { Bodies.isArmed(it) } ?: near.minByOrNull { it.hits })?.let { c.attack(it) }
         val prey = w.enemies.filter { getRange(c, it) <= 3 }.minByOrNull { getRange(c, it) }
         if (prey != null) { if (getRange(c, prey) > 1) EscortRun.stepRed(w, c, prey, 1); log(w, c, "camp", "on ${Bodies.summaryOf(prey)}"); return }
+        // свой эскорт дошёл до засады — дальше охрана рядом с ним (так ricardo#23: M4A3 стоял в центре до ~235-го, потом
+        // шёл со своим эскортом до флага и снял там наш блокировщик)
+        val own = w.escort
+        if (own != null && (campEscorting || getRange(c, own) <= 4)) {
+            campEscorting = true
+            if (getRange(c, own) > 2) EscortRun.stepRed(w, c, own, 2)
+            log(w, c, "camp", "guarding own escort")
+            return
+        }
         // стоянка: клетка ИХ маршрута, ближайшая к центру карты
         val esc = w.enemyEscort ?: return
         val flow = w.enemyEscortFlow ?: return
