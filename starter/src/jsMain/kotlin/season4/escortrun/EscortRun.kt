@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v37"
+    private const val BOT_VERSION = "v38"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -1485,15 +1485,21 @@ object EscortRun {
         // экономика: победителя их тяжёлого у нас нет — эскорт ждёт его дома, пока ожидание оплачено запасом гонки (их
         // эскорт пеший), и выходит вместе с ним. Без этого поезд входил в развилку раньше победителя, купленного на доход
         // W2 к 169-му, и телохранитель бросался на 171-м (стенд guard, v37: эскорт дошёл с 50 хитами)
+        // Ждать победителя — только против ТЕЛОХРАНИТЕЛЯ (тяжёлый при своём эскорте бросается на поезд в развилке); тяжёлого,
+        // идущего к нашей базе (рашер ricardo#7: M4A3 к нашим рампартам к ~110-му), встречает обычное держание — боец с
+        // рампарта, на который экономика даёт деньги быстрее. И конец этого ожидания — не «отпуск»: пометка released
+        // запрещала потом держать дом из-за идущего к нам рашера, и эскорт вышел ему навстречу (6abb805d)
+        val econHeld = econWait
         econWait = false
         if (econ == true) {
-            val heavies = w.enemyArmed.filter { !isEscort(it) && heavy(it) }
+            val heavies = w.enemyArmed.filter { !isEscort(it) && heavy(it) && bodyguard(w, it) }
             val ourArmed = w.fighters.filter { Bodies.isArmed(it) && !it.spawning }
             if (heavies.isNotEmpty() && !wins(ourArmed, heavies) && theirArrival(w) - ourArrival(w) - RACE_ERR > 0) {
                 if (!holding) { holdSince = w.now; println("hold t=${w.now}: HOME for the winner — ${heavies.joinToString(" ") { Bodies.summaryOf(it) }}, margin ${theirArrival(w) - ourArrival(w)}") }
                 holding = true; holdThreats = heavies; econWait = true
                 return
             }
+            if (econHeld) { holding = false; println("hold t=${w.now}: the wait for the winner is over") }
         }
         val armed = w.enemyArmed.filter { !isEscort(it) } + w.enemyPending.filter { Bodies.wasArmed(it) }
         val guards = w.fighters.filter { Bodies.isArmed(it) && dist(it, escort) <= 6 }
