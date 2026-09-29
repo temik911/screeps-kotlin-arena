@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 248
+    private const val BOT_VERSION = 249
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7242,6 +7242,8 @@ object SpawnAndSwamp {
     private var raidSpawnFirst = 0
     /** Ticks a raider below its retreat share stayed to finish a builder (finishingBuilder, v240). */
     private var raidFinishedBuilder = 0
+    /** Ticks a raider below its retreat share stayed because the guns reaching it are not slower (v249). */
+    private var raidHeldOn = 0
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
     private var raidStayed = 0
     /** Ticks a hunted waiting raider entered the visit by its race instead of fleeing (v231, journal). */
@@ -7412,6 +7414,8 @@ object SpawnAndSwamp {
     /** The pair's first raider goes before the fort's keeper too while the tower begun after the pair stands before the
      *  forecast brings his guns to our door (v248). */
     private const val USE_RAID_PAIR_BEFORE_KEEPER = true
+    /** A raider below its retreat share goes home only when the guns reaching it are all slower on plain (v249). */
+    private const val USE_RAID_RETREAT_ESCAPES = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
@@ -7833,7 +7837,22 @@ object SpawnAndSwamp {
         val finishingB = finishingBuilder(ctx, raiders, hits)
         val finishing = finishingSpawn || finishingB
         if (!raidHome && hits < RAID_RETREAT_SHARE * max && finishingB && !finishingSpawn) raidFinishedBuilder++
-        if (!raidHome && hits < RAID_RETREAT_SHARE * max && !finishing) {
+        // …and only when going home gets it away from those who reach it (v249). The retreat keeps the raider's hits for
+        // our tower to heal (v157), and it keeps them only if it gets there: his M5R5/M3R3 walk a plain cell a tick like
+        // our M15A3, so under guns that are not slower the flight gains no distance and ends the strikes — the rule of the
+        // door (v229) for the retreat itself. Against けろびー#48 (v248 draw) r91 left his main's door at 600/1800 with two
+        // M5R5 two cells off and died by 1460 without another strike (the main ended 13 strikes short), and in the v239
+        // loss r32 left the builder at 540 and died the same way. Those in reach are his guns within one step of their
+        // range; none in reach (his tower's fire, or nothing) — the retreat stands as before
+        val escapes = !USE_RAID_RETREAT_ESCAPES || run {
+            val ours = raiders.maxOf { plainPeriod(it) }
+            val reach = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } &&
+                InfluenceMap.profileOf(e).let { pr -> (pr.ranged > 0.0 && raiders.any { getRange(it, e) <= RANGED_RANGE + 1 }) ||
+                    (pr.melee > 0.0 && raiders.any { getRange(it, e) <= 2 }) } }
+            reach.all { plainPeriod(it) > ours }
+        }
+        if (!raidHome && hits < RAID_RETREAT_SHARE * max && !finishing && !escapes) raidHeldOn++
+        if (!raidHome && hits < RAID_RETREAT_SHARE * max && !finishing && escapes) {
             raidHome = true
             raidTargetId = null
             if (DEBUG_LOG) println("raid home t=${getTicks()}: hits=$hits/$max his spawns=${ctx.enemySpawns.size}")
@@ -8212,6 +8231,7 @@ object SpawnAndSwamp {
                 (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "") +
                 (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "") +
                 (if (USE_RAID_FINISH_BUILDER) " finishB=$raidFinishedBuilder" else "") +
+                (if (USE_RAID_RETREAT_ESCAPES) " heldOn=$raidHeldOn" else "") +
                 (if (USE_RAID_STAY_AT_DOOR) " stayed=$raidStayed" else "") +
                 (if (USE_RAID_HUNTED_ENTER) " entered=$raidEntered" else "")
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
