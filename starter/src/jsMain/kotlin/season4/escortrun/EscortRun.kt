@@ -1599,7 +1599,11 @@ object EscortRun {
         if (econ == true) {
             val heavies = w.enemyArmed.filter { !isEscort(it) && heavy(it) && bodyguard(w, it) }
             val ourArmed = w.fighters.filter { Bodies.isArmed(it) && !it.spawning }
-            if (heavies.isNotEmpty() && !wins(ourArmed, heavies) && theirArrival(w) - ourArrival(w) - RACE_ERR > 0) {
+            // поезд ещё не собран (приход «никогда») — уйти всё равно нельзя, и ожидание ничего не стоит: без этого запас
+            // гонки выходил отрицательным, держание снималось, и эскорт шёл навстречу M4A3 ricardo#8 (v45, 6abbc3.. 5609ad)
+            val oursNow = ourArrival(w)
+            val margin = if (oursNow >= Int.MAX_VALUE / 8) Int.MAX_VALUE / 8 else theirArrival(w) - oursNow - RACE_ERR
+            if (heavies.isNotEmpty() && !wins(ourArmed, heavies) && margin > 0) {
                 if (!holding) { holdSince = w.now; println("hold t=${w.now}: HOME for the winner — ${heavies.joinToString(" ") { Bodies.summaryOf(it) }}, margin ${theirArrival(w) - ourArrival(w)}") }
                 holding = true; holdThreats = heavies; econWait = true
                 return
