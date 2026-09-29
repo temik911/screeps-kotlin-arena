@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 266
+    private const val BOT_VERSION = 267
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7784,6 +7784,8 @@ object SpawnAndSwamp {
     /** The warden is bought and saved for only while it reaches the killers before their names lapse, with the fewest
      *  guns that answer them (v266). */
     private const val USE_WARDEN_IN_TIME = true
+    /** …and the keeper spares the saving only while its site also stands before his guns reach our door (v267). */
+    private const val USE_KEEPER_SPARES_STORM = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
@@ -9124,10 +9126,17 @@ object SpawnAndSwamp {
         // 1140-1590 — and the second raider came 188-925 ticks after the first died (4-118 in the twelve wins) while his
         // field builder raised spawn after spawn. A site fed from the spawn gets its energy after the saving is paid, at
         // the steady income; while it still stands before its own deadline so, the keeper leaves the spawn to the body
+        // …and before his guns reach our door (v267): a home site's deadline is the spawn's life under fire, else the end of
+        // the match — while nobody strikes the spawn it reads the end of the match, though the tower was placed for the
+        // fight his forecast army brings (against ●ω<♥♪#2, v263 loss, `ready=246/1550` at 450 and his five at our door at
+        // 610-690). The site waits for the saving only if it still stands before the forecast horizon at our door
+        val stormIn = if (!USE_KEEPER_SPARES_STORM || forecastUs < 0) Int.MAX_VALUE / 4
+            else forecastHorizon(ctx, forecastUs, FORECAST_D, damageOnly = true)
         val savingHolds = USE_KEEPER_SPARES_SAVING && spawnSavePrice > 0 && spawnSaveId == spawn.id && job != null && site != null &&
             job.fromSpawn && run {
                 val steady = realisedIncome().let { if (it < 0.0) regenRate() else it + regenRate() }
-                job.ready + energyArrivalTicks(ctx, maxOf(0, spawnSavePrice - (spawn.store[RESOURCE_ENERGY] ?: 0)), steady) < job.deadline
+                job.ready + energyArrivalTicks(ctx, maxOf(0, spawnSavePrice - (spawn.store[RESOURCE_ENERGY] ?: 0)), steady) <
+                    minOf(job.deadline, stormIn.toDouble())
             }
         for (b in ctx.builders) {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
