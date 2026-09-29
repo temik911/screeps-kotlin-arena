@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 244
+    private const val BOT_VERSION = 245
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2666,11 +2666,18 @@ object SpawnAndSwamp {
         // it was bought for. Against ●ω<♥♪#2 (v237/v239, 16 hands) his four stood at our door at 589-677 in every one;
         // in all 8 hands we did not lose the tower was ready at 691-726 with the keeper alive, in 6 of the 8 losses his
         // melee killed the keeper at 660-752 with the site at 80-88 %
-        val towerKeeperShort = USE_TOWER_KEEPER_ANYWHERE && keeperShort && ctx.myTowers.isEmpty()
+        // …for a tower whose site stands (v245): the tower's job is listed before the tower is decided, and v244 bought
+        // the W6 keeper (800) at 251-260 in every hand against marlyman#434 with no tower site in the match at all — the
+        // wins came 400-500 ticks later and one hand was a draw
+        val towerJobPlaced = siteJobs.filter { it.kind == "StructureTower" && it.inTime && it.site != null }.minByOrNull { it.left }
+        val towerKeeperShort = USE_TOWER_KEEPER_ANYWHERE && ctx.myTowers.isEmpty() && ctx.builders.size == 1 &&
+            keeperOrderedAt != getTicks() && towerJobPlaced != null &&
+            ctx.builders[0].body.count { it.type == WORK && it.hits > 0 } <
+                keeperBody(ctx, towerJobPlaced.site?.let { InfluenceMap.cell(it.x, it.y) }, towerJobPlaced.left, flow).count { it == WORK }
         if ((ctx.builders.isEmpty() || towerKeeperShort) && homeSpawnTurn && (siteJobs.any { it.site != null && it.inTime } || ctx.myTowers.isNotEmpty() || (USE_FORT_RAMPART_FIRST && fortHome)) &&
             !(USE_RAID_STATE && armNow && raidAtDoor.isNotEmpty() && !(USE_FORT_KEEPER_FIRST && fortHome && ctx.myTowers.isNotEmpty()))) {
             // ТЕЛО ПОД РАБОТУ, А НЕ ПОД ЛЮБУЮ. Работа выбирается тем же правилом, что и в runBuilders
-            val forJob = if (towerKeeperShort) siteJobs.filter { it.kind == "StructureTower" && it.inTime }.minByOrNull { it.left }
+            val forJob = if (towerKeeperShort) towerJobPlaced
                 else siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
             val builder = keeperBody(ctx, forJob?.site?.let { InfluenceMap.cell(it.x, it.y) }, forJob?.left ?: 0, flow)
             val builderCost = builder.sumOf { cost(it) }
