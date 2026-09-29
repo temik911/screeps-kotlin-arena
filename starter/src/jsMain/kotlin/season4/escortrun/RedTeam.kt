@@ -67,6 +67,8 @@ internal object RedTeam {
     private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
     private const val RSQ_AT = 107
+    private val RSQ_ECO = listOf(arrayOf<BodyPartType>(CARRY, MOVE), arrayOf<BodyPartType>(WORK, WORK, WORK))
+    private var rsqEco = 0
     private const val BUILD_RANGE = 3
 
     private var tricks: Set<String> = emptySet()
@@ -111,7 +113,16 @@ internal object RedTeam {
         if (tricks.isEmpty()) return false
         // camp (ricardo18informatica2020#23): один M4A3 и больше НИЧЕГО — ни тягачей, ни разведчиков, спавн копит
         if (listOf("camp", "guard", "rush7", "rsq").any { it in tricks && it in ordered }) return true
-        if ("rsq" in tricks && w.now < RSQ_AT) return true
+        if ("rsq" in tricks && w.now < RSQ_AT) {
+            // Suruks#2 открывается экономикой — C1M1 и W3 первой тратой (живой лог: «their first C1M1 W3»); тела только для
+            // вида, доход даёт ECON2 стенда. Без них наш дебют против этой личности решался по пустой первой трате
+            val next = RSQ_ECO.getOrNull(rsqEco) ?: return true
+            if (pendingBody != null) return true
+            if (energy >= Bodies.cost(next) && EscortRun.order(w, next, "red:rsq-eco", "persona ${describe()}")) {
+                rsqEco++; pendingBody = Bodies.summary(next); pendingTrick = "rsq-eco"
+            }
+            return true
+        }
         if (pendingBody != null) return false
         for (t in ORDER) {
             // при затычке гонки нет — поздние приёмы идут до дебюта, иначе они ждали тягачей до 200-го тика

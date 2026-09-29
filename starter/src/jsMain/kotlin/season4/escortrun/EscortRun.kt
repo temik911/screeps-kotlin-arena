@@ -572,7 +572,12 @@ object EscortRun {
             // проходит центр раньше неё (A/B против stachu#10: гонка 5-3, экономика 4-4 — наш медленный поезд пришёл к их
             // M1A1 и M3A3). Лёгкий первый боец (M1A1 けろびー#32) — гонка с ранним защитником вместо второго тягача (v29).
             // Любой их крип из одних MOVE — гонка: хранителя M1 первым ставят и гонщики (76561198870429455, ShuP1, けろびー)
-            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.wasArmed(it) && heavy(it) }
+            // …и первая трата — экономика (W/C): их эскорт идёт пешком, запас гонки ~150 тиков, а быстрый поезд на все 500
+            // оставляет доход 1 в тик — ни держателя флага крепче M1, ни бойца. Стрелок Suruks#2 (W3 C1M1 первой тратой)
+            // брал наш флаг в 19–16 руках из 30 стенда (личность rsq), экономика — 30-0 убийством их эскорта. Против
+            // stachu3478#10 v37 это правило снимала (4-4 против 5-3): поезд без бойца гиб в центре, что закрыла v40
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } &&
+                (first.any { Bodies.wasArmed(it) && heavy(it) } || first.any { Bodies.isWorker(it) || Bodies.isHauler(it) })
             println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
             if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
