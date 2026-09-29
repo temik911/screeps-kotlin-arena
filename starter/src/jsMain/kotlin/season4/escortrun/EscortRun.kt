@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v43"
+    private const val BOT_VERSION = "v44"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -277,6 +277,10 @@ object EscortRun {
             // уже в бою (враг в четырёх клетках) — клетки не ставим: стенами вокруг себя эскорт замирал и стоял под ударами
             // до смерти (けろびー#32: 118 тиков на одной клетке)
             if (isEscort(e) || !Bodies.isArmed(e) || getRange(e, escort) <= 4) continue
+            // и не у нашего флага: к нему обхода нет по определению, а ждать — отдать клетку наверняка. Стрелок Suruks#2
+            // стоял у флага, его квадрат накрывал клетку флага, поле не доводило, и эскорт замер в семи клетках, пока он
+            // добивал хранителей (стенд rsq, 237–252-й)
+            if (myFlag != null && getRange(e, myFlag) <= FLAG_NO_DANGER) continue
             val r = if (Bodies.live(e, RANGED_ATTACK) > 0) 4 else 2
             for (dx in -r..r) for (dy in -r..r) {
                 val x = e.x + dx; val y = e.y + dy
@@ -584,8 +588,10 @@ object EscortRun {
             // лёгкий вооружённый первым (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке) экономики не даёт: живой A/B
             // v40 3-0-1 против экономики v42 1-0-3; стенд wall — экономика 15-15 против гонки 1-0-29, в рейтинге −225 против
             // −203 (ничья −7, поражение −15): поражение гонкой хуже ничьей стоя
-            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } &&
-                (first.any { Bodies.wasArmed(it) && heavy(it) } || first.any { Bodies.isWorker(it) || Bodies.isHauler(it) })
+            // экономика — только против тяжёлого первым: против экономиста (W/C первой тратой) живой A/B v40 8-0 против
+            // экономики 3-5 (stachu3478#6, 29.09.2026: медленный поезд встречал их армию у нашего флага), против лёгкого
+            // вооружённого — v40 3-0-1 против 1-0-3 (therevilo2018#3)
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.wasArmed(it) && heavy(it) }
             println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
             if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
@@ -1181,7 +1187,7 @@ object EscortRun {
         // теряет все хиты, не покупается вовсе: T2M2 шёл через стену стрелков therevilo2018#3 в центре и гиб, флаг снова
         // был «пуст», и за матч их купили восемнадцать (живой A/B v42, 6abb9fb5)
         val alive = { b: Array<BodyPartType> -> holderHits(b) - pathExposure(w, flag, b) }
-        if (econ != true) return SCOUT_BODY.takeIf { alive(it) > 0 }
+        if (!theirEscortWalks(w)) return SCOUT_BODY.takeIf { alive(it) > 0 }
         return HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) <= deadline && alive(it) > 0 }.maxByOrNull { alive(it) }
             ?: SCOUT_BODY.takeIf { alive(it) > 0 }
     }
@@ -1780,9 +1786,18 @@ object EscortRun {
         }
         toFlag.keys.retainAll(w.enemyArmed.mapTo(HashSet()) { idOf(it) })
         if (ours >= Int.MAX_VALUE / 8) return false
+        // их эскорт идёт пешком (тягачей у них нет): гонку им не выиграть, и их вооружённый пришёл остановить наш эскорт
+        // или флаг — пока намерение не видно (меньше 11 тиков истории), он угроза флагу. Стрелок Suruks#2 рождался на
+        // 107-м, «идущим к флагу» читался к ~130-му, и держатель, купленный тогда, опаздывал и шёл у него за спиной
+        // (6abb9463); купленный сразу — вставал на флаг к ~200-му, раньше стрелка (~243-й)
+        val walks = theirEscortWalks(w)
+        // и рождающийся тоже: стрелок рождается 107–119-й, и к концу его рождения 50 энергии уже уходили в блокировщика
+        // их флага (стенд rsq, 111-й), а держателю не хватало
         val heading = w.enemyArmed.filter { x ->
-            !isEscort(x) && !bodyguard(w, x) && !onCell(x, flag) && toFlag[idOf(x)]?.let { h -> h.size >= 11 && h.first() - h.last() >= 5 } == true
-        }
+            !isEscort(x) && !bodyguard(w, x) && !onCell(x, flag) && toFlag[idOf(x)]?.let { h ->
+                (h.size >= 11 && h.first() - h.last() >= 5) || (walks && h.size < 11)
+            } == true
+        } + (if (walks) w.enemyPending.filter { !isEscort(it) && Bodies.wasArmed(it) } else emptyList())
         if (heading.isEmpty()) return false
         var need = 0
         var dps = 0
@@ -1829,6 +1844,14 @@ object EscortRun {
         }
         saving(w, "hold keeper", Bodies.cost(body)); return true
     }
+
+    /** Вооружённые в стольких клетках от нашего флага клеток опасности не ставят (стрелок достаёт на три, плюс подход). */
+    private const val FLAG_NO_DANGER = 6
+
+    /** Их эскорт идёт пешком: тягачей у них нет ни живых, ни рождающихся. */
+    private fun theirEscortWalks(w: World): Boolean =
+        w.enemyEscort != null && enemyPullers(w).isEmpty() && w.enemyPending.none { Bodies.isPuller(it, PULLER_MIN_MOVE) } &&
+            w.enemies.none { !isEscort(it) && Bodies.isPuller(it, PULLER_MIN_MOVE) }
 
     /** Держатель, догоняющий идущего к флагу стрелка на том же пути, проходит под его огнём столько тиков (окно в три
      *  клетки с обеих сторон и сама клетка). */
