@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v55"
+    private const val BOT_VERSION = "v56"
 
     private const val LOG_EVERY = 50
 
@@ -231,6 +231,9 @@ object SpawnAndSwampAdvanced {
     private var holdTicks = 0
     /** Цель удара: волна идёт к ЭТОМУ спавну, отвечая по дороге только тем, кто рядом, — прогон выбрал его среди всех. */
     private var strikeTargetId: String? = null
+    /** Срок последнего призыва и когда он считан: обход его спавнов с их сносом и бой с его армией, не меньше 600. */
+    private var lastCallWindow = 600
+    private var lastCallWindowAt = -1000
     /** Его спавн, который бойцы в досягаемости снесут раньше, чем их перебьют рядом стоящие (прогон с огнём по нему). */
     private var finish: GameObject? = null
     /** Урон его башен по пути к его спавну: id спавна → (тик замера, урон). Путь меняется медленно — раз в 25 тиков. */
@@ -1798,7 +1801,30 @@ object SpawnAndSwampAdvanced {
         val enemyAtArrival = enemyCombat.map { simOf(it) } + projectedBirths(t, arrival, enemySpawnObjs.size) +
             fedTowers.map { simTowerOf(it, all) } + List(pending) { simTower(TOWER_HITS) } + listOfNotNull(nearSpawn?.let { simSpawnOf(it, all) })
         armyCache = fighters.map { simOf(it) } to enemyAtArrival
-        val lastCall = t > arenaInfo.ticksLimit - 600
+        // последний призыв начинается тогда, когда до конца остаётся ровно столько, сколько нужно обойти его спавны
+        // (жадно, от точки сбора к ближнему и дальше), снести каждый (хиты с рампартом на урон нашей армии) и выиграть
+        // бой с его армией. v53 против けろびー#19: 19 бойцов вышли на 4401-м, перебили 65 из 65 его боевых, снесли три
+        // спавна за 588 тиков — и на четвёртую базу времени не осталось, ничья
+        if (t > arenaInfo.ticksLimit - 2500 && t - lastCallWindowAt >= 100 && enemySpawnObjs.isNotEmpty()) {
+            lastCallWindowAt = t
+            val dps = fighters.sumOf { dpsOf(it) }.coerceAtLeast(1)
+            var from: Position = home
+            val left = enemySpawnObjs.toMutableList()
+            var tour = 0
+            while (left.isNotEmpty()) {
+                val next = left.minByOrNull { pathTicks(from, it) }!!
+                tour += pathTicks(from, next) + simSpawnOf(next, all).hits / dps
+                from = next
+                left.remove(next)
+            }
+            // призыв снимает отход и защиту дома: окно длиннее прежних 600 — только при выигранном бою с его армией,
+            // иначе длинный призыв лишь отдаёт ему наши базы
+            val fightSim = simulate(fighters.map { simOf(it) }, enemyCombat.map { simOf(it) })
+            val fight = fightSim.ticks
+            lastCallWindow = if (fightSim.win) maxOf(600, tour + fight) else 600
+            println("lastcall window t=$t ${lastCallWindow} (tour $tour fight $fight spawns ${enemySpawnObjs.size})")
+        }
+        val lastCall = t > arenaInfo.ticksLimit - lastCallWindow
         val myTowers = all.filter { it is StructureTower && it.asDynamic().my == true }.unsafeCast<List<StructureTower>>()
         // дом под угрозой, которую он сам (с башнями) по прогону не держит, — волна возвращается: v10 ушёл волной, а
         // поток его M3R3 перебил добытчиков, которых спавн рожал заново каждые 13 тиков
@@ -2189,6 +2215,10 @@ object SpawnAndSwampAdvanced {
      *  иначе ближайший крип. */
     private fun pickGoal(f: Creep, enemyCombat: List<Creep>, enemyObjects: List<GameObject>, theirs: List<Creep>): GameObject? {
         enemyCombat.filter { !it.spawning && getRange(f, it) <= LOCAL_RANGE }.minByOrNull { getRange(f, it) }?.let { return it }
+        // его единственный строитель рядом — дороже постройки: удар v53 на 1284-м прошёл в семи клетках от основателя
+        // けろびー#19 к спавну, и основатель прожил ещё 1250 тиков
+        if (!enemyBuilderBred) theirs.filter { idOf(it) in enemyBuilderIds && !it.spawning && getRange(f, it) <= LOCAL_RANGE }
+            .minByOrNull { getRange(f, it) }?.let { return it }
         val structures = enemyObjects.filter { it is Structure }
         structures.filter { it is StructureTower }.minByOrNull { getRange(f, it) }?.let { tw ->
             val sp = structures.filter { it is StructureSpawn }.minByOrNull { getRange(f, it) }
