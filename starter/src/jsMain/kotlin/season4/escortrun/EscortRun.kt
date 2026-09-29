@@ -285,17 +285,11 @@ object EscortRun {
             }
         }
         val walls2 = stops + danger
-        val withDanger = if (walls2.isEmpty() || myFlag == null) escortFlowRaw
+        // клетки опасности остаются стенами и тогда, когда отрезают флаг целиком: проход сквозь растущую стену стрелков
+        // (therevilo2018#3) по расчёту на нынешних стрелках пробовался (v43 кандидат) — стена прирастает, пока поезд ползёт
+        // по болоту центра, и стенд wall дал 10-20 против 1-0-29 стоя; в рейтинге −300 против −203
+        val escortFlow = if (walls2.isEmpty() || myFlag == null) escortFlowRaw
             else flowTo("escort:" + walls2.map { key(it) }.sorted().joinToString(","), myFlag, blocked + walls2, 5)
-        // клетки опасности ведут в обход, только пока обход есть: стрелки therevilo2018#3 встали поперёк развилки центра,
-        // их квадраты закрыли флаг целиком, поле не доводило до него, и поезд простоял у (27,72) до 2000-го (ничья,
-        // 6abb9f19). Без обхода идти ли сквозь огонь — решает держание (лёгкую засаду бьёт боец, а поезд идёт)
-        // …но сквозь огонь — только если проход по расчёту успешен: иначе стоять в ничью правильнее, чем идти в поражение
-        // (стенд wall: сквозь стену без проверки 10-20 против 1-0-29 стоя — в рейтинге −300 против −200)
-        val cut = withDanger != null && escort != null && withDanger[key(escort)] < 0 && danger.isNotEmpty() && myFlag != null
-        val escortFlow = if (cut && escortFlowRaw != null && passesUnderFire(escort!!, escortFlowRaw, mine, enemies))
-            (if (stops.isEmpty()) escortFlowRaw else flowTo("escort:" + stops.map { key(it) }.sorted().joinToString(","), myFlag!!, blocked + stops, 5))
-            else withDanger
         val enemyEscortFlow = if (enemyEscort != null && enemyFlag != null) flowTo("enemyEscort", enemyFlag, blockedForEnemy, 5) else null
         return World(
             now, mySpawn, enemySpawn, escort, enemyEscort, myFlag, enemyFlag, homeSource, mine, active, enemies,
@@ -587,7 +581,11 @@ object EscortRun {
             // stachu3478#10 v37 это правило снимала (4-4 против 5-3): поезд без бойца гиб в центре, что закрыла v40
             // лёгкий вооружённый первым (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке центра) экономики не даёт:
             // живой A/B v40 3-0-1 против экономики 1-0-3 (v42 отвергнута, 29.09.2026)
-            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) }
+            // лёгкий вооружённый первым (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке) экономики не даёт: живой A/B
+            // v40 3-0-1 против экономики v42 1-0-3; стенд wall — экономика 15-15 против гонки 1-0-29, в рейтинге −225 против
+            // −203 (ничья −7, поражение −15): поражение гонкой хуже ничьей стоя
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } &&
+                (first.any { Bodies.wasArmed(it) && heavy(it) } || first.any { Bodies.isWorker(it) || Bodies.isHauler(it) })
             println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
             if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
@@ -1831,43 +1829,6 @@ object EscortRun {
         }
         saving(w, "hold keeper", Bodies.cost(body)); return true
     }
-
-    /**
-     * Проход поезда сквозь огонь стоящих у пути: по клеткам пути — их урон в тик (мили вплотную, стрелок в трёх) × тики
-     * поезда на клетке (с болотом). Урон сперва берут тягачи (стрелок бьёт слабейшего), и поезд теряет их MOVE по мере
-     * урона; что сверх — эскорту, и тот теряет по MOVE на каждые 500. Проход успешен, если эскорт доходит, потеряв меньше
-     * PASS_ESCORT_PCT своих хитов.
-     */
-    private fun passesUnderFire(escort: Creep, flow: IntArray, mine: List<Creep>, enemies: List<Creep>): Boolean {
-        val armed = enemies.filter { !isEscort(it) && Bodies.isArmed(it) }
-        if (armed.isEmpty()) return true
-        val chain = mine.filter { !isEscort(it) && Bodies.isPureMove(it) && getRange(it, escort) <= 3 }
-        val pullInit = chain.sumOf { it.hits }
-        var pullHits = pullInit
-        val pullMoves = chain.sumOf { Bodies.liveMoves(it) }
-        val escMoves = Bodies.liveMoves(escort)
-        val wgt = Bodies.weight(escort)
-        var escDmg = 0
-        for (k in Chokes.route(flow, escort)) {
-            val x = k / 100; val y = k % 100
-            val moves = maxOf(0, escMoves - escDmg / 500) + (if (pullInit > 0) pullMoves * pullHits / pullInit else 0)
-            val per = Bodies.period(wgt, moves, DistanceMap.isSwamp(x, y))
-            if (per >= Int.MAX_VALUE / 8) return false
-            var dps = 0
-            for (e in armed) {
-                val r = maxOf(kotlin.math.abs(e.x - x), kotlin.math.abs(e.y - y))
-                if (r <= 1) dps += 30 * Bodies.live(e, ATTACK)
-                if (r <= 3) dps += 10 * Bodies.live(e, RANGED_ATTACK)
-            }
-            var d = dps * per
-            val take = minOf(d, pullHits)
-            pullHits -= take; d -= take
-            escDmg += d
-            if (escDmg * 100 >= escort.hits * PASS_ESCORT_PCT) return false
-        }
-        return true
-    }
-    private const val PASS_ESCORT_PCT = 75
 
     /** Держатель, догоняющий идущего к флагу стрелка на том же пути, проходит под его огнём столько тиков (окно в три
      *  клетки с обеих сторон и сама клетка). */
