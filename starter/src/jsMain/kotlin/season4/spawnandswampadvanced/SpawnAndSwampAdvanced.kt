@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v58"
+    private const val BOT_VERSION = "v60"
 
     private const val LOG_EVERY = 50
 
@@ -937,7 +937,10 @@ object SpawnAndSwampAdvanced {
                     founderPlan = plan
                     if (plan == null) { founderId = null }
                 }
-                if (plan != null && stay >= needWork && covered && worksiteSafe(listOf(plan.spawnCell))) {
+                // основатель уходит с поднятой базы, когда там стоит башня: база без башни к приходу его армии падала 21 из
+                // 22, с башней устояла 20 из 24; у первой базы её роль играет наш боец дома (covered)
+                val towered = b1 === bases.first() || all.any { it is StructureTower && it.asDynamic().my == true && b1.towerCell?.let { c -> it.x == c.x && it.y == c.y } == true }
+                if (plan != null && stay >= needWork && covered && towered && worksiteSafe(listOf(plan.spawnCell))) {
                     builderId = fid; expansion = plan; expansionPlaced = false
                     slotOf.remove(fid); founderId = null; founderPlan = null
                     println("founder t=$t ${bodyOf(founder)} leaves for (${plan.spawnCell.x},${plan.spawnCell.y})")
@@ -1221,12 +1224,12 @@ object SpawnAndSwampAdvanced {
     private fun planTower(t: Int, b: Base, spawn: StructureSpawn, mine: List<Creep>, all: Array<GameObject>) {
         if (towerAt(b, all) != null) return
         if (b.towerCell != null) { println("tower at (${b.towerCell}) gone t=$t"); b.towerCell = null }
-        if (mine.none { isCombat(it) }) return
-        // башня — после сейфа, если дом ещё не трогали. v16 ставил её сразу после первого бойца: 1250 из добычи на
-        // 330–460-м тике — ровно когда приходят первые M4R3H1 けろびー, и спавн без притока проиграл дважды к 500-му.
-        // Ранний дом держат сторожевые рампарты (planRamparts), башня — ответ на нападение
-        val v = vaults.firstOrNull()
-        if (v != null && v.stage != "run" && !attackedOnce) return
+        // макросхема (docs/spawn-and-swamp-advanced-macro-plan.md): башня первой базы — как только на карте есть его боец
+        // (клетки добытчиков с v43 под рампартами, рейдер их не достаёт), поднятой базы — сразу, как встал спавн
+        val firstBase = b === bases.first()
+        // v9–v58 ждали сейфа или первого нападения: v16 ставил башню сразу после первого бойца, 1250 из добычи на
+        // 330–460-м уходили, пока первые M4R3H1 けろびー били открытого добытчика, — с v43 он под рампартом
+        if (firstBase && enemyCombatSeen.isEmpty() && !attackedOnce) return
         val blocked = blockedCells(all)
         fun exits(extra: Pos): Int {
             var n = 0
@@ -1493,6 +1496,14 @@ object SpawnAndSwampAdvanced {
         val healer = healerBody(cap)
         val (ours, theirs) = armyCache ?: return ranger
         if (theirs.isEmpty()) return ranger
+        // доля лекарей — не меньше, чем у него (по его боевым с лечением): в поле его огонь размазан (1,4 цели за тик),
+        // и лечение держит строй, которого прогон, сводящий урон в одну цель, не видит
+        val hisArmy = theirs.filter { !it.tower && (it.dps() > 0 || it.heal() > 0) }
+        if (hisArmy.isNotEmpty() && ours.isNotEmpty()) {
+            val hisShare = hisArmy.count { it.heal() > 0 }.toDouble() / hisArmy.size
+            val ourShare = ours.count { it.heal() > 0 }.toDouble() / ours.size
+            if (ourShare < hisShare) return healer
+        }
         val r = simulate(ours + SimUnit(ranger.map { it.asDynamic().unsafeCast<String>() }, ranger.size * 100), theirs)
         val h = simulate(ours + SimUnit(healer.map { it.asDynamic().unsafeCast<String>() }, healer.size * 100), theirs)
         val score = { x: SimResult -> (if (x.win) 1_000_000 else 0) + x.left - x.theirLeft }
