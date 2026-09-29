@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 259
+    private const val BOT_VERSION = 260
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4433,7 +4433,16 @@ object SpawnAndSwamp {
                 val arrive = if (spawnUnderFire && getRange(e, mySpawn) <= reach) 0 else {
                     val steps = ctx.stepsToSpawn[e.x * 100 + e.y]
                     if (steps < 0) return@mapNotNull null
-                    (maxOf(0, steps - reach) * plainPeriod(e)).toInt()
+                    val soonest = (maxOf(0, steps - reach) * plainPeriod(e)).toInt()
+                    // …and only a threat that is coming (v260): one that does not close on our house by its observed
+                    // pace (enemyArrivalTicks: `never`) is not in the clock — the clock is asked again every tick, and the
+                    // one that turns is in it the tick it turns. Against marlyman#441 (v259 draw) five M5A1 hunting our
+                    // haulers by the piles held the army home 267 ticks (1224-1491, `sim=win/122t`, six staged) — the
+                    // house lost nothing in 1200-1699; in the v250-v255 draws with him ten recalls for the same, the
+                    // house losing at most 1425 all match. The clock read each of them as walking straight at the spawn
+                    val observed = arrivalById[e.id] ?: (Int.MAX_VALUE / 2)
+                    if (USE_HOUSE_CLOCK_COMING && observed >= Int.MAX_VALUE / 4) return@mapNotNull null
+                    if (USE_HOUSE_CLOCK_COMING) maxOf(soonest, observed) else soonest
                 }
                 T(e, dps, arrive, e.hits.toDouble())
             }
@@ -7583,6 +7592,8 @@ object SpawnAndSwamp {
      *  kill first (houseFallsAt, v256): the clock of houseOutlasts, recallSaves and homeFallsIn. */
     private const val USE_HOUSE_CLOCK = true
     private const val USE_HOUSE_CLOCK_TOWER = true
+    /** The house clock counts only the threats closing on our house by their observed pace (v260). */
+    private const val USE_HOUSE_CLOCK_COMING = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
