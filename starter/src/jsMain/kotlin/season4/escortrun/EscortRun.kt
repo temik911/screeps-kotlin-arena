@@ -584,8 +584,7 @@ object EscortRun {
             // stachu3478#10 v37 это правило снимала (4-4 против 5-3): поезд без бойца гиб в центре, что закрыла v40
             // лёгкий вооружённый первым (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке центра) экономики не даёт:
             // живой A/B v40 3-0-1 против экономики 1-0-3 (v42 отвергнута, 29.09.2026)
-            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } &&
-                (first.any { Bodies.wasArmed(it) && heavy(it) } || first.any { Bodies.isWorker(it) || Bodies.isHauler(it) })
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) }
             println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
             if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
