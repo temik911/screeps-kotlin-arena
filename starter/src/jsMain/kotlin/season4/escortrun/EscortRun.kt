@@ -1482,6 +1482,11 @@ object EscortRun {
         val escort = w.escort
         val spawn = w.mySpawn
         if (escort == null || spawn == null || w.myRamparts.isEmpty() || onCell(escort, w.myFlag)) { holding = false; return }
+        for (x in w.enemyArmed) if (!x.spawning) {
+            val tr = trail.getOrPut(idOf(x)) { ArrayDeque() }
+            tr.addLast(key(x)); while (tr.size > 11) tr.removeFirst()
+        }
+        trail.keys.retainAll(w.enemyArmed.mapTo(HashSet()) { idOf(it) })
         // экономика: победителя их тяжёлого у нас нет — эскорт ждёт его дома, пока ожидание оплачено запасом гонки (их
         // эскорт пеший), и выходит вместе с ним. Без этого поезд входил в развилку раньше победителя, купленного на доход
         // W2 к 169-му, и телохранитель бросался на 171-м (стенд guard, v37: эскорт дошёл с 50 хитами)
@@ -1563,12 +1568,14 @@ object EscortRun {
         val killHeavies = if (killPath) w.enemyArmed.filter { !isEscort(it) && heavy(it) } else emptyList()
         // держит дом только ТЯЖЁЛАЯ засада; лёгкую (M1A1 けろびー#32) бьёт боец, купленный раньше разведчиков, а поезд идёт:
         // держание до её смерти на ~345-м отдавало время их экономике (R3M5, M5H3, T3M8R5 к ~450-му)
-        // охотники держат дом, как засада, и последний срок гонки их не отменяет: выйти — значит отдать эскорт (ricardo#7,
-        // 6abb805d: M4A3 ждал в развилке, v37 и v38 выпускали поезд по сроку гонки, эскорт гиб на ~200-м под ударами)
-        huntersNow = if (dist(escort, spawn) <= CAMP_BASE_RANGE) hunters(w, escort) else emptyList()
-        if (huntersNow.isNotEmpty() && w.now % 25 == 0) println("hold t=${w.now}: HUNTERS ${huntersNow.joinToString(" ") { Bodies.summaryOf(it) + "@(" + it.x + "," + it.y + ")" }} — leaving now loses the escort")
-        val camp = (campers(w).filter { heavy(it) } + killHeavies.filter { !wins(w.fighters.filter { f -> Bodies.isArmed(f) }, killHeavies) } + huntersNow).distinct()
-        val decisive = if (camp.isNotEmpty()) camp else if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
+        huntersNow = hunters(w, escort)
+        if (huntersNow.isNotEmpty() && (!holding || w.now % 25 == 0)) println("hold t=${w.now}: HUNTERS ${huntersNow.joinToString(" ") { Bodies.summaryOf(it) + "@(" + it.x + "," + it.y + ")" }} — going on loses the escort")
+        val camp = (campers(w).filter { heavy(it) } + killHeavies.filter { !wins(w.fighters.filter { f -> Bodies.isArmed(f) }, killHeavies) }).distinct()
+        // охотник держит и после первого выхода, и в последний срок гонки: идти дальше при нём — отдать эскорт (ricardo#7,
+        // 6abb805d: пошёл на наш эскорт, когда тот вышел по сроку гонки, эскорт погиб на 192-м в 13 клетках от дома). Но
+        // держание от него НАЧИНАЕТСЯ, только если эскорт успевает домой до встречи (ниже: homeTicks < contact)
+        val decisive = if (camp.isNotEmpty()) camp else if (huntersNow.isNotEmpty()) (huntersNow + decisive0).distinct()
+            else if ((ranged && fire * ours < escort.hits) || lastCall) emptyList() else decisive0
         if (decisive.isEmpty() || (camp.isEmpty() && wins(guards, decisive.filter { !it.spawning }.ifEmpty { decisive }))) {
             if (holding) { released = true; println("hold t=${w.now}: released after ${w.now - holdSince} ticks — threats=${threats.size} guards=${guards.size}") }
             holding = false; holdThreats = emptyList(); return
@@ -1590,17 +1597,18 @@ object EscortRun {
 
     /** Охотники этого тика (decideHold): их победителя покупает holdSpawn, как против засады. */
     private var huntersNow: List<Creep> = emptyList()
-    /** Однажды ушедшие вперёд своего эскорта больше чем на HUNTER_AHEAD (цена пути их эскорта) — свободные до смерти. */
-    private val hunterMarks = HashSet<String>()
-    private const val HUNTER_AHEAD = 10
+    /** Клетки вооружённых врагов за последние одиннадцать тиков (кто идёт к нашему эскорту своим ходом). */
+    private val trail = HashMap<String, ArrayDeque<Int>>()
+    /** Охотник своим ходом за десять тиков приблизился к нынешней клетке эскорта хотя бы на столько. */
+    private const val HUNT_CLOSING = 5
 
     /**
-     * Охотники — тяжёлые вооружённые, которых наши бойцы вместе не бьют и которые, выйди эскорт СЕЙЧАС, догоняют поезд на его
-     * пути (приходят к клетке пути не позже поезда и ходят не медленнее его) и за оставшийся путь бьют больше хитов
-     * эскорта. Выход при них — не гонка, а потеря эскорта: против пешего эскорта соперника без тягачей и охраны матч
-     * выигрывают тогда эскорт на рампарте и бойцы (их одинокий эскорт убивают к ~370–410-му, стенд ambush). Телохранитель
-     * исключён — он ходит со своим эскортом, и его держит ожидание победителя (econWait). Расстояние — по прямой, без
-     * стен и болота: оценка в пользу охотника.
+     * Охотники — тяжёлые вооружённые, которые своим ходом идут на наш эскорт, которых наши бойцы вместе не бьют и которые,
+     * иди эскорт дальше, догоняют поезд на его пути (приходят к клетке пути не позже поезда и ходят не медленнее его) и за
+     * оставшийся путь бьют больше хитов эскорта. Идти дальше при нём — не гонка, а потеря эскорта: против пешего эскорта
+     * соперника без тягачей и охраны матч выигрывают тогда эскорт у рампартов и бойцы (стенд rush7: рашер гибнет у дома,
+     * их одинокий эскорт убит к ~400-му). Телохранитель исключён — он ходит со своим эскортом, и его держит ожидание
+     * победителя (econWait). Перехват — по прямой, без стен и болота: оценка в пользу охотника.
      */
     private fun hunters(w: World, escort: Creep): List<Creep> {
         val flow = w.escortFlowRaw ?: return emptyList()
@@ -1615,15 +1623,18 @@ object EscortRun {
             // лёгкого (M1A1 перехватчика stachu) бьёт дешёвый боец, купленный по дороге (ранний защитник v29–v30), — выход
             // при нём не смертелен; держание от него стоило гонки (гейт match1:econ+icpt: их финиш на 473-м, наш на 587-м)
             if (isEscort(x) || x.spawning || bodyguard(w, x) || onOurFlag(w, x) || !heavy(x)) continue
-            // свободный — однажды ушедший ВПЕРЁД своего эскорта по его пути: ricardo#7 обогнал свой эскорт на 25-м и ждал в
-            // развилке в сорока клетках перед ним. Охрана идёт при эскорте или догоняет его сзади (M3A3 stachu рождается
-            // на ~170-м позади своего эскорта, гейт match4:econ+icpt): она за нашим поездом не пойдёт
-            if (idOf(x) !in hunterMarks) {
-                val te = w.enemyEscort
-                val ef = w.enemyEscortFlow
-                if (te == null || ef == null || ef[key(x)] < 0 || ef[key(te)] < 0 || ef[key(x)] + HUNTER_AHEAD >= ef[key(te)]) continue
-                hunterMarks.add(idOf(x))
-            }
+            // намерение — только по его СОБСТВЕННОМУ ходу: за десять тиков его путь до нынешней клетки эскорта сократился.
+            // Кто «мог бы» перехватить — это почти любой тяжёлый, а идут на эскорт не все: M4A3 ricardo#22 шёл через центр
+            // на НАШ ФЛАГ, и держание от «мог бы» просидело дома до 332-го, пока их T3M3 не сел на флаг (ничья, 6abb87e1);
+            // M3A3 stachu догоняет свой эскорт (гейт econ+icpt). Путь — с ценой болота: рашер ricardo#7 шёл к нам через
+            // болотистый центр клетку в четыре тика (6abb805d, 60–87-й), по прямой это полклетки за тик, и держание
+            // снималось как будто он стоит
+            val tr = trail[idOf(x)] ?: continue
+            if (tr.size < 11) continue
+            val toEsc = flowTo("toEscort", escort, w.blocked, 5)
+            val was = toEsc[tr.first()]
+            val nowD = toEsc[key(x)]
+            if (was < 0 || nowD < 0 || was - nowD < HUNT_CLOSING) continue
             val xPer = Bodies.period(Bodies.weight(x), Bodies.liveMoves(x), false)
             val dps = 30 * Bodies.live(x, ATTACK) + 10 * Bodies.live(x, RANGED_ATTACK)
             if (dps == 0 || xPer > per) continue
@@ -1634,7 +1645,6 @@ object EscortRun {
             damage += (route.size - meet) * per * dps
             found.add(x)
         }
-        hunterMarks.retainAll(w.enemyArmed.mapTo(HashSet()) { idOf(it) })
         if (damage < escort.hits || wins(ourArmed, found)) return emptyList()
         return found
     }
@@ -1795,8 +1805,7 @@ object EscortRun {
         val armedOurs = w.fighters.filter { Bodies.isArmed(it) }
         // только против засады: к рампартам она не подходит; кто подходит (ricardo#8, перехватчик stachu), того бьёт
         // дешёвый боец с рампарта, и полный поезд потом выигрывает гонку (стенд rush8, econ+icpt)
-        // охотник у наших рампартов — не засада: его бьёт дешёвый боец с рампарта (стенд ambush, v37: два M1A1 убили M4A3
-        // у рампартов); вдали — победитель в поле
+        // охотник вдали — победитель в поле, как против засады; у наших рампартов его бьёт дешёвый боец с рампарта
         val farHunters = huntersNow.filter { w.mySpawn == null || dist(it, w.mySpawn) > CAMP_BASE_RANGE }
         val camp = ((if (killPath) liveThreats.filter { heavy(it) }.ifEmpty { campers(w) } else campers(w)) + farHunters).distinct()
         val strong = camp.isNotEmpty() && Bodies.duel(Bodies.unitOf(cheapUnit), camp.map { Bodies.unitOf(it) }) < 0

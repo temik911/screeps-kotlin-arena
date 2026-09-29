@@ -44,11 +44,10 @@ import screeps.api.structures.StructureRampart
  *    разведчиков M1 он подпускал и на 1–2 клетки. В стенде их эскорт приходит к развилке на пару тиков позже живого,
  *    поезд проходит на 2–3 клетки дальше, и с 5 броска не бывает вовсе (с 7 — 2 руки из 30); LUNGE_RANGE 8 — худший
  *    случай, бросок в каждой руке;
- *  - `ambush` — рашер ricardo18informatica2020#7 (обыграл v37 в охоте 29.09.2026, 6abb805d): M4A3 на первом тике идёт к
- *    клетке их пути, ближайшей к центру карты (живьём стоял в развилке у (48–51, 45–54) с 60-го по 85-й), и ждёт; как
- *    только их эскорт отошёл от своего спавна дальше AMBUSH_LEFT, идёт на эскорт и бьёт только его (тягачей рядом не
- *    трогал). Их эскорт ушёл из дома на ~75-м, встреча на ~115-м, эскорт погиб на 192-м — поезд шёл дальше под ударами.
- *    Ни тягачей, ни разведчиков: наш эскорт идёт сам;
+ *  - `rush7` — рашер ricardo18informatica2020#7 (обыграл v37 в охоте 29.09.2026, 6abb805d): M4A3 на первом тике и
+ *    больше ничего (наш эскорт идёт сам); с рождения идёт прямо на их эскорт — обгоняя свой, через болотистый центр
+ *    (живьём там клетка в четыре тика, 60–87-й), — и бьёт только эскорт (тягач M4 рядом не тронут). Их эскорт вышел
+ *    из дома на ~75-м, встреча на ~118-м, эскорт погиб на 192-м — поезд шёл дальше под ударами;
  *  - `rsq` — Suruks#2 (обыграл v30 в подтверждающей серии, 28.09.2026, 6abac117): стрелок M2R2 после дебюта идёт к ИХ
  *    флагу, стреляет по всем в трёх клетках (хранитель — первым) и садится на флаг; их эскорт в трёх тиках от финиша
  *    упирается в занятую клетку. Как у Suruks: ни тягачей, ни разведчиков (эскорт идёт сам), стрелок — на RSQ_AT-м тике
@@ -63,7 +62,7 @@ import screeps.api.structures.StructureRampart
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("camp", "guard", "ambush", "rsq", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
+    private val ORDER = listOf("camp", "guard", "rush7", "rsq", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
     private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
@@ -102,7 +101,7 @@ internal object RedTeam {
         "army", "rush" -> Array(5) { MOVE } + Array(5) { screeps.api.RANGED_ATTACK }
         "icpt", "kk" -> arrayOf(MOVE, screeps.api.ATTACK)
         "rsq" -> arrayOf(MOVE, MOVE, screeps.api.RANGED_ATTACK, screeps.api.RANGED_ATTACK)
-        "camp", "guard", "ambush" -> arrayOf(MOVE, MOVE, MOVE, MOVE, screeps.api.ATTACK, screeps.api.ATTACK, screeps.api.ATTACK)
+        "camp", "guard", "rush7" -> arrayOf(MOVE, MOVE, MOVE, MOVE, screeps.api.ATTACK, screeps.api.ATTACK, screeps.api.ATTACK)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
     }
@@ -111,7 +110,7 @@ internal object RedTeam {
     fun spawn(w: EscortRun.World, energy: Int, late: Boolean): Boolean {
         if (tricks.isEmpty()) return false
         // camp (ricardo18informatica2020#23): один M4A3 и больше НИЧЕГО — ни тягачей, ни разведчиков, спавн копит
-        if (listOf("camp", "guard", "ambush", "rsq").any { it in tricks && it in ordered }) return true
+        if (listOf("camp", "guard", "rush7", "rsq").any { it in tricks && it in ordered }) return true
         if ("rsq" in tricks && w.now < RSQ_AT) return true
         if (pendingBody != null) return false
         for (t in ORDER) {
@@ -144,7 +143,7 @@ internal object RedTeam {
                 "icpt" -> icpt(w, c)
                 "camp" -> camp(w, c)
                 "guard" -> guard(w, c)
-                "ambush" -> ambush(w, c)
+                "rush7" -> rush7(w, c)
                 "kk" -> keeperKiller(w, c)
                 "rsq" -> rangedSquatter(w, c)
             }
@@ -267,38 +266,10 @@ internal object RedTeam {
         camp(w, c)
     }
 
-    /** Их эскорт отошёл от своего спавна дальше стольких клеток — засада идёт на него (ricardo#7 тронулся, когда наш
-     *  эскорт был в 4–5 от спавна). */
-    private const val AMBUSH_LEFT = 4
-    private var ambushAt = -1
-    private var ambushGo = false
-
-    private fun ambush(w: EscortRun.World, c: Creep) {
+    private fun rush7(w: EscortRun.World, c: Creep) {
         val theirs = w.enemyEscort ?: return
-        val sp = w.enemySpawn ?: return
-        // трогается из точки ожидания (живьём — стоял в развилке с 60-го по 85-й), а не по дороге к ней
-        val placed = ambushAt >= 0 && maxOf(kotlin.math.abs(c.x - ambushAt / 100), kotlin.math.abs(c.y - ambushAt % 100)) <= 2
-        if (!ambushGo && placed && getRange(theirs, sp) > AMBUSH_LEFT) {
-            ambushGo = true
-            println("red t=${w.now} ambush: GO — their escort ${getRange(theirs, sp)} from its spawn, ${getRange(c, theirs)} from me")
-        }
-        if (ambushGo) {
-            if (getRange(c, theirs) <= 1) c.attack(theirs) else EscortRun.stepRed(w, c, theirs, 1, avoidOwn = true)
-            log(w, c, "ambush", "hunting their escort at ${getRange(c, theirs)}, h=${theirs.hits}")
-            return
-        }
-        w.enemies.filter { getRange(c, it) <= 1 }.minByOrNull { it.hits }?.let { c.attack(it) }
-        if (ambushAt < 0) {
-            // клетка их пути, ближайшая к центру карты — считается один раз, пока их эскорт дома
-            val flow = w.enemyEscortFlow ?: return
-            val route = Chokes.route(flow, theirs)
-            if (route.isEmpty()) return
-            ambushAt = route.minByOrNull { maxOf(kotlin.math.abs(it / 100 - 50), kotlin.math.abs(it % 100 - 50)) } ?: return
-            println("red t=${w.now} ambush: wait at (${ambushAt / 100},${ambushAt % 100})")
-        }
-        val a = ambushAt
-        if (c.x != a / 100 || c.y != a % 100) EscortRun.stepRed(w, c, pos(a / 100, a % 100), 0, avoidOwn = true)
-        log(w, c, "ambush", "waiting")
+        if (getRange(c, theirs) <= 1) c.attack(theirs) else EscortRun.stepRed(w, c, theirs, 1, avoidOwn = true)
+        log(w, c, "rush7", "to their escort at ${getRange(c, theirs)}, h=${theirs.hits}")
     }
 
     private fun rangedSquatter(w: EscortRun.World, c: Creep) {
