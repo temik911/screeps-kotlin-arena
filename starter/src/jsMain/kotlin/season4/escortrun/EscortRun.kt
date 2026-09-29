@@ -439,6 +439,10 @@ object EscortRun {
 
     /** Экономический дебют (null — ещё не решён, решается на 2-м тике). */
     private var econ: Boolean? = null
+    /** Где их эскорт стоял при первом взгляде (идёт ли он пешком, решает, ждать ли их первой траты). */
+    private var theirEscStart = -1
+    /** Тик второго тягача дебюта: до него ожидание их первой траты ничего не стоит. */
+    private const val ECON_WALK_CHECK = 13
     /** Дольше этого решение о дебюте первую трату соперника не ждёт (ricardo#8 рождал M4A3 с ~20-го). */
     private const val ECON_DECIDE_BY = 40
     /** Их первая трата — экономика (W/C, без тягачей); решается вместе с econ. */
@@ -585,7 +589,14 @@ object EscortRun {
             // Первой траты ещё нет — решение ждёт её, но не дольше ECON_DECIDE_BY: гонщик покупает тягачей с первого тика,
             // а пустая первая трата значит, что их эскорт идёт пешком и запас гонки есть. ricardo18informatica2020#8 копил
             // до ~20-го на M4A3, решение на 13-м выбирало гонку, и его тяжёлый встречал поезд в развилке (живьём 5-3 и 6-2)
-            if (first.isNotEmpty() || w.now >= ECON_DECIDE_BY) {
+            // ждать — только если их эскорт уже идёт пешком (ушёл от места старта без тягачей): эскорт гонщика стоит у спавна
+            // и ждёт тягачей, и ожидание до 40-го задерживало наш дебют на 13–14 тиков (гейт: none/race/melee 243 → 257,
+            // rush+harvest и hunt+harvest проиграны)
+            val theirEsc = w.enemyEscort
+            if (theirEsc != null && theirEscStart < 0) theirEscStart = key(theirEsc)
+            val walking = theirEsc != null && theirEscStart >= 0 && dist(theirEsc, cellPos(theirEscStart)) >= 2
+            // до второго тягача дебюта (13-й) ждать ничего не стоит; после — только за идущим пешком эскортом
+            if (first.isNotEmpty() || (w.now >= ECON_WALK_CHECK && !walking) || w.now >= ECON_DECIDE_BY) {
                 econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.wasArmed(it) && heavy(it) }
                 theirEcoFirst = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.isWorker(it) || Bodies.isHauler(it) }
                 println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
