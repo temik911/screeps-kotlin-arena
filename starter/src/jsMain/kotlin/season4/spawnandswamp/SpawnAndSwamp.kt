@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 250
+    private const val BOT_VERSION = 251
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6933,14 +6933,35 @@ object SpawnAndSwamp {
             }
             done.add(target.id)
         }
+        // A VOLLEY THAT KILLS NOBODY GOES WHERE IT KILLS SOONEST WHAT HURTS MOST (v251). Past the kill test the target was
+        // his most dangerous creep in reach, whatever the shot did to it: against ●ω<♥♪#5 (v250 loss) 36 of our tower's
+        // 43 shots at 651-1051 went into his melee bait (M6A6, M7A6R1) or a kiter 11-19 cells off — 100-500 a shot,
+        // with 60 a tick of heal on the melee, 600 over a cooldown — while his R5M5, M5H3 and M10H2 stood 5-9 cells off
+        // where a shot is 700-800 (15 750 dealt of 27 450 in reach); his M6A6 struck three times all match, and we lost
+        // 18 creeps to his 2. A shot is worth the threat it takes off — his damage and his heal, which undoes ours one
+        // for one — at the rate it kills: the volley over the cooldown plus our guns on it, less the heal on it, over
+        // its hits; one his heal undoes within the cooldown takes nothing off
+        fun ourFireOn(e: Creep): Double = ctx.fighters.sumOf { f ->
+            val r = getRange(f, e)
+            (if (r <= RANGED_RANGE) f.body.count { it.type == RANGED_ATTACK && it.hits > 0 } * RANGED_ATTACK_POWER else 0) +
+                (if (r <= 1) f.body.count { it.type == ATTACK && it.hits > 0 } * ATTACK_POWER else 0)
+        }.toDouble()
+        fun worth(e: Creep): Double {
+            val net = volley(e) / InfluenceMap.towerCooldown + ourFireOn(e) - healOn(e)
+            if (net <= 0.0) return 0.0
+            return (effectiveDps(e, ctx.fighters, homeSpawnPos) + InfluenceMap.profileOf(e).heal) * net / maxOf(e.hits, 1)
+        }
         while (ready.isNotEmpty()) {
             val armed = ctx.combatEnemies.filter { e -> e.id !in done && ready.any { shot(it, e) > 0.0 } }
             val target = armed.minWithOrNull(
                 compareByDescending<Creep> { kills(it) }
+                    .thenByDescending { if (USE_TOWER_AIM) worth(it) else 0.0 }
                     .thenByDescending { effectiveDps(it, ctx.fighters, homeSpawnPos) }
                     .thenBy { e -> ready.minOf { getRange(it, e) } }) ?: break
+            if (USE_TOWER_AIM && !kills(target)) towerAimed++
             fire(target, "armed")
         }
+        if (DEBUG_LOG && USE_TOWER_AIM && getTicks() % LOG_EVERY == 0 && towerAimed > 0) println("tower aim t=${getTicks()}: aimed=$towerAimed")
         if (ready.isEmpty() || !USE_TOWER_SOFT) {
             for (t in ready) ctx.active.filter { it.hits < it.hitsMax && shot(t, it) > 0.0 }.minByOrNull { it.hits * 100 / maxOf(it.hitsMax, 1) }?.let { t.heal(it) }
             return
@@ -7246,6 +7267,8 @@ object SpawnAndSwamp {
     private var raidHeldOn = 0
     /** Raider-ticks with the strike accepted, off the target, that closed no distance to it (v250, an instrument). */
     private var raidStall = 0
+    /** Volleys that killed nobody, aimed by threat at the rate they kill (v251). */
+    private var towerAimed = 0
     private val raidPrevRange = HashMap<String, Int>()
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
     private var raidStayed = 0
@@ -7419,6 +7442,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_PAIR_BEFORE_KEEPER = true
     /** A raider below its retreat share goes home only when the guns reaching it are all slower on plain (v249). */
     private const val USE_RAID_RETREAT_ESCAPES = true
+    /** A volley that kills nobody goes to the creep whose threat (damage and heal) it takes off soonest (v251). */
+    private const val USE_TOWER_AIM = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
