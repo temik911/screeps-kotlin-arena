@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 253
+    private const val BOT_VERSION = 254
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4472,10 +4472,30 @@ object SpawnAndSwamp {
         val goOutlasts = siegeGo.win && waveMembers.isNotEmpty() &&
             houseOutlasts(frontTravel, siegeGo.ticks, waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) },
                 force = USE_RECALL_OUTLASTS)
+        // …AND BY THE WHOLE WAVE, NOT ITS FRONT ALONE (v254). goOutlasts asked the front's siege only, and a post that left
+        // by the verdict of the front with it (siegeJoin) is in no verdict until it reaches the front: against marlyman#441
+        // (v252 draw) the post left at 1045 on `join=win/34t/direct`, and at 1050 two M5A1 (60 a tick against a house of
+        // 12970 — ~216 ticks) called the wave home on the front's `lose/50t`; the walk home led past his main's tower and
+        // his guns, and four died; in another #441 draw six M12A5 30 cells from his last spawn went home at 1463 for one
+        // M5A1 (30 a tick) on a front of 3 of 7 — the posture flipped 31 times at 1668-1733 as the post's own leaving
+        // emptied `stayHolds`. The whole wave — each member behind the front joining the siege at its own walk's tick, the
+        // machinery of v196 — is asked here only whether a recall saves anything: it keeps no hold off and sends nobody
+        // (the v196/v197 lesson: a new "win" that releases a front is dangerous while the run is optimistic against heal);
+        // a recall is skipped when that siege wins and the house outlasts the front's walk, the siege and the walk back
+        val recallLate = if (!USE_RECALL_WAVE || enemySpawn == null || waveFront.isEmpty() || siegeGo.win) emptyList() else
+            waveMembers.filter { m -> waveFront.none { it.id == m.id } && liveMoves(m) > 0 }
+        val waveOutlasts = recallLate.isNotEmpty() && enemySpawn != null && run {
+            val joins = recallLate.associate { m ->
+                m.id to (travelTicksOf(listOf(m), assaultFlow, spawnFlow).coerceAtMost(arenaInfo.ticksLimit) - frontTravel).coerceAtLeast(1) }
+            val whole = siegeOutcome(waveFront + recallLate, frontAttrition, siegeDefenders, siegeTowers, enemySpawn, spawnRampart,
+                PUSH_RELEASE_RATIO, assaultFlow, approach = frontTravel, etas = defEtas, joins = joins)
+            whole.win && houseOutlasts(frontTravel, whole.ticks,
+                waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) }, force = true)
+        }
         val newPushing = when {
             enemySpawn == null -> false
             (spawnUnderFire || alarm && !(if (USE_STAGING_GUARDS && waveMembers.isNotEmpty()) stayHolds else guardHolds)) &&
-                !pushWinsRace(ctx, ourHalfCombat, siegeGo) && recallSaves && !goOutlasts -> false
+                !pushWinsRace(ctx, ourHalfCombat, siegeGo) && recallSaves && !goOutlasts && !waveOutlasts.also { if (it && alarm) recallWaveKept++ } -> false
             // последний звонок — тоже только с выигрышной осадой: армия, положенная под башню в конце,
             // не приносит ничьей, а дома она её держит
             // THE LAST CALL WEIGHS THE HOUSE, NOT THE ARMIES (v102): a house he cannot take in what is left cannot be
@@ -4545,7 +4565,7 @@ object SpawnAndSwamp {
         siegeHold = newPushing && !siegeGo.win && !goWave && waveMembers.isNotEmpty() && !frontCovered && holdInTime
         holdCall = if (siegeHold && callInTime) callCrew else emptyList()
         if (DEBUG_LOG && (newPushing != pushing || getTicks() % (LOG_EVERY * 10) == 0)) {
-            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin call=${if (callCrew.isEmpty()) "-" else "$siegeCall[${callCrew.size}]"} hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds/${guardHoldsSortie}(${arrivingHome.size}@$sortieTicks) home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm")
+            println("posture: ${if (newPushing) "PUSH" else "DEFEND"} t=${getTicks()} our=${ourOffense.toInt()} hits=$waveHits attrition=${attrition.toInt()}+${unitCost.toInt()} after=${waveAfter.toInt()} enemy=${enemyPower.toInt()} massing=${massingPower.toInt()} pack=${maxPack.toInt()} production=${(production * 100).toInt()}/100t stream=${(streamUnits * 10).toInt() / 10.0} travel=$travel siege=$siege sim=$siegeStart/$siegeGo join=$siegeJoin call=${if (callCrew.isEmpty()) "-" else "$siegeCall[${callCrew.size}]"} hold=$siegeHold(${if (holdInTime) "inTime" else "late"}) need=${if (goNeed >= never) "-" else goNeed.toString()}/$remaining risk=$homeAtRisk front=${waveFront.size}/${waveMembers.size} towers=${siegeTowers.size} staging=${staging.size} guardHolds=$guardHolds/${guardHoldsSortie}(${arrivingHome.size}@$sortieTicks) home=$homeMode spawnFire=$spawnUnderFire guardNeeded=$guardNeeded raidPeak=${raidPeak.toInt()} lastCall=$lastCall alarm=$alarm${if (USE_RECALL_WAVE) " waveKept=$recallWaveKept" else ""}")
         }
         pushing = newPushing
         lastPushReason = when {
@@ -7271,6 +7291,8 @@ object SpawnAndSwamp {
     private var towerAimed = 0
     /** Ticks the door of the held spawn kept it against a fitting spawn elsewhere (v253). */
     private var raidDoorKept = 0
+    /** Ticks a recall was skipped because the whole wave's siege wins and the house outlasts it (v254). */
+    private var recallWaveKept = 0
     private val raidPrevRange = HashMap<String, Int>()
     private val raidPrevTarget = HashMap<String, String>()
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
@@ -7449,6 +7471,9 @@ object SpawnAndSwamp {
     private const val USE_TOWER_AIM = true
     /** A raider at the door of its held spawn keeps it against a fitting spawn while the door's rule holds it (v253). */
     private const val USE_RAID_DOOR_KEEPS = true
+    /** A recall is skipped when the whole wave's siege (its members behind the front joining as they arrive) wins and the
+     *  house outlasts it — asked only by the recall, never to release a hold (v254). */
+    private const val USE_RECALL_WAVE = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
