@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v42"
+    private const val BOT_VERSION = "v43"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -285,8 +285,14 @@ object EscortRun {
             }
         }
         val walls2 = stops + danger
-        val escortFlow = if (walls2.isEmpty() || myFlag == null) escortFlowRaw
+        val withDanger = if (walls2.isEmpty() || myFlag == null) escortFlowRaw
             else flowTo("escort:" + walls2.map { key(it) }.sorted().joinToString(","), myFlag, blocked + walls2, 5)
+        // клетки опасности ведут в обход, только пока обход есть: стрелки therevilo2018#3 встали поперёк развилки центра,
+        // их квадраты закрыли флаг целиком, поле не доводило до него, и поезд простоял у (27,72) до 2000-го (ничья,
+        // 6abb9f19). Без обхода идти ли сквозь огонь — решает держание (лёгкую засаду бьёт боец, а поезд идёт)
+        val escortFlow = if (withDanger != null && escort != null && withDanger[key(escort)] < 0 && danger.isNotEmpty() && myFlag != null)
+            (if (stops.isEmpty()) escortFlowRaw else flowTo("escort:" + stops.map { key(it) }.sorted().joinToString(","), myFlag, blocked + stops, 5))
+            else withDanger
         val enemyEscortFlow = if (enemyEscort != null && enemyFlag != null) flowTo("enemyEscort", enemyFlag, blockedForEnemy, 5) else null
         return World(
             now, mySpawn, enemySpawn, escort, enemyEscort, myFlag, enemyFlag, homeSource, mine, active, enemies,
@@ -576,10 +582,10 @@ object EscortRun {
             // оставляет доход 1 в тик — ни держателя флага крепче M1, ни бойца. Стрелок Suruks#2 (W3 C1M1 первой тратой)
             // брал наш флаг в 19–16 руках из 30 стенда (личность rsq), экономика — 30-0 убийством их эскорта. Против
             // stachu3478#10 v37 это правило снимала (4-4 против 5-3): поезд без бойца гиб в центре, что закрыла v40
-            // …и лёгкий вооружённый первым тоже (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке центра к ~600-му;
-            // гонка на все 500 с доходом 1 в тик покупала по одному M1A1, стена убивала каждого, поезд без пути простоял до
-            // 2000-го, ничья, 6abb9f19). Любая первая трата без тягачей — их эскорт идёт пешком, запас гонки есть
-            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) }
+            // лёгкий вооружённый первым (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке центра) экономики не даёт:
+            // живой A/B v40 3-0-1 против экономики 1-0-3 (v42 отвергнута, 29.09.2026)
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } &&
+                (first.any { Bodies.wasArmed(it) && heavy(it) } || first.any { Bodies.isWorker(it) || Bodies.isHauler(it) })
             println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
             if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
@@ -718,8 +724,10 @@ object EscortRun {
                 // тик, у центра читался идущим к своему флагу и сел на наш к ~190-му, до нашего хранителя (6ab8fcb0)
                 // тело — самое крепкое из успевающих раньше их разведчика и не позже чем за KEEPER_MIN_LEAD до эскорта
                 val body = holderBody(w, myFlag, minOf(rival - 1, w.now + ours - KEEPER_MIN_LEAD))
-                if (e >= Bodies.cost(body)) { if (order(w, body, "keeper", "our flag is empty; keeperEta=${scoutEta(w, myFlag, body)} rivalEta=$rival ours=$ours theirs=$theirs")) scoutQueue.addLast(KEEP); return }
-                saving(w, "keeper", Bodies.cost(body)); return
+                if (body != null) {
+                    if (e >= Bodies.cost(body)) { if (order(w, body, "keeper", "our flag is empty; keeperEta=${scoutEta(w, myFlag, body)} rivalEta=$rival ours=$ours theirs=$theirs")) scoutQueue.addLast(KEEP); return }
+                    saving(w, "keeper", Bodies.cost(body)); return
+                }
             }
             if (holdKeepers(w, e, ours)) return
         }
@@ -907,6 +915,9 @@ object EscortRun {
             .mapNotNull { c -> idx[key(c)]?.let { c to it } }.sortedBy { it.second }
     }
 
+    /** Вооружённые в стольких клетках от стрелка на пути бьют чистильщика вместе с ним (стрелок достаёт на три). */
+    private const val CLEAR_SUPPORT = 4
+
     private fun clearOrder(w: World, e: Int): Boolean {
         val esc = w.escort ?: return false
         val flow = w.escortFlowRaw ?: return false
@@ -920,7 +931,10 @@ object EscortRun {
         harassers.retainAll(w.enemies.mapTo(HashSet()) { idOf(it) })
         if (fightersOn(w, CLEAR) > 0) return false
         val b = w.enemies.filter { idOf(it) in harassers }.minByOrNull { dist(it, esc) } ?: return false
-        val (body, arrive) = fastHunter(w, b, b.hits, e, listOf(b)) ?: return false
+        // победитель всей группы у стрелка, а не его одного: стена R1M1 therevilo2018#3 в развилке убивала чистильщиков
+        // M1A1 по одному, их покупали каждые ~66 тиков до конца матча (6abb9fb5)
+        val group = w.enemyArmed.filter { !isEscort(it) && dist(it, b) <= CLEAR_SUPPORT }.ifEmpty { listOf(b) }
+        val (body, arrive) = fastHunter(w, b, b.hits, e, group) ?: return false
         if (e >= Bodies.cost(body)) {
             if (order(w, body, "clearer", "harasser ${Bodies.summaryOf(b)}@(${b.x},${b.y}); arrive=$arrive")) fighterQueue.addLast(CLEAR)
             return true
@@ -935,6 +949,8 @@ object EscortRun {
         val eta = scoutEta(w, a)
         if (eta >= ours) return false
         val body = Bodies.moves(1)
+        // не доживёт до клетки (стрелки у пути) — не покупается: см. holderBody
+        if (holderHits(body) <= pathExposure(w, a, body)) return false
         if (e >= Bodies.cost(body)) { if (order(w, body, "approach-keeper", "our approach (${a.x},${a.y}) detour costs us $ourPen vs them $theirPen; eta=$eta ours=$ours")) scoutQueue.addLast(APPROACH); return true }
         saving(w, "approach keeper", Bodies.cost(body)); return true
     }
@@ -1158,12 +1174,49 @@ object EscortRun {
      * хранитель M1 держал флаг против M2R2 Suruks#2 пять тиков, эскорт встал вплотную на 248-м, стрелок шагнул на клетку
      * на 249-м (6abb9463). Никто не успевает — самый быстрый (M1).
      */
-    private fun holderBody(w: World, flag: Position, deadline: Int): Array<BodyPartType> {
+    private fun holderBody(w: World, flag: Position, deadline: Int): Array<BodyPartType>? {
         // против гонщика (тягачи первой тратой) угроза флагу — его разведчики, и клетку берёт пришедший первым: M1 (гейт
         // rev+keep+blk — T1M1 шёл к флагу на ~30 тиков дольше, их блокировщик садился раньше, поражение на 266/292-м);
-        // против экономиста и тяжёлого бойца угроза — вооружённые, и клетку держат хиты
-        if (econ != true) return SCOUT_BODY
-        return HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) <= deadline }.maxByOrNull { holderHits(it) } ?: SCOUT_BODY
+        // против экономиста и тяжёлого бойца угроза — вооружённые, и клетку держат хиты. Держатель, который по пути
+        // теряет все хиты, не покупается вовсе: T2M2 шёл через стену стрелков therevilo2018#3 в центре и гиб, флаг снова
+        // был «пуст», и за матч их купили восемнадцать (живой A/B v42, 6abb9fb5)
+        val alive = { b: Array<BodyPartType> -> holderHits(b) - pathExposure(w, flag, b) }
+        if (econ != true) return SCOUT_BODY.takeIf { alive(it) > 0 }
+        return HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) <= deadline && alive(it) > 0 }.maxByOrNull { alive(it) }
+            ?: SCOUT_BODY.takeIf { alive(it) > 0 }
+    }
+
+    /**
+     * Урон, который крип с телом [body] наберёт по пути от спавна к [target] от вооружённых врагов, стоящих сейчас у этого
+     * пути: на каждой клетке — их урон в тик (мили вплотную, стрелок в трёх) × тики крипа на клетке. Стена стоящих
+     * стрелков считается верно; идущие — по нынешнему месту.
+     */
+    private fun pathExposure(w: World, target: Position, body: Array<BodyPartType>): Int {
+        val spawn = w.mySpawn ?: return 0
+        val armed = w.enemyArmed.filter { !isEscort(it) }
+        if (armed.isEmpty()) return 0
+        val (plain, swampRatio) = scoutPace(body)
+        val f = flowTo("scout:${target.x},${target.y}", target, w.blocked, swampRatio)
+        var start = -1
+        for ((dx, dy) in DIRECTIONS) {
+            val x = spawn.x + dx; val y = spawn.y + dy
+            if (!DistanceMap.inBounds(x, y)) continue
+            val d = f[x * 100 + y]
+            if (d >= 0 && (start < 0 || d < f[start])) start = x * 100 + y
+        }
+        if (start < 0) return 0
+        var dmg = 0
+        for (k in listOf(start) + Chokes.route(f, cellPos(start))) {
+            val x = k / 100; val y = k % 100
+            var dps = 0
+            for (e in armed) {
+                val r = maxOf(kotlin.math.abs(e.x - x), kotlin.math.abs(e.y - y))
+                if (r <= 1) dps += 30 * Bodies.live(e, ATTACK)
+                if (r <= 3) dps += 10 * Bodies.live(e, RANGED_ATTACK)
+            }
+            dmg += dps * (if (DistanceMap.isSwamp(x, y)) plain * swampRatio else plain)
+        }
+        return dmg
     }
 
     /** Когда наш уже идущий хранитель встанет на наш флаг (или бесконечность, если его нет). */
@@ -1768,8 +1821,8 @@ object EscortRun {
         // хранитель и хранитель подхода — ещё 10 тиков после 236-го, а новый M1 от 140-го поспевал к 242-му); из успевающих
         // тел — дающее больше всех хитов, доживших до клетки
         val fall = firstEta + have / maxOf(1, dps)
-        val body = HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) < fall && effective(holderHits(it), spawnAt) > 0 }
-            .maxByOrNull { effective(holderHits(it), spawnAt) } ?: return false
+        val kept = { b: Array<BodyPartType> -> effective(holderHits(b) - pathExposure(w, flag, b), spawnAt) }
+        val body = HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) < fall && kept(it) > 0 }.maxByOrNull { kept(it) } ?: return false
         if (e >= Bodies.cost(body)) {
             if (order(w, body, "keeper", "hold the flag: ${heading.joinToString(" ") { Bodies.summaryOf(it) + "@" + dist(it, flag) }} first at ~$firstEta, ours at ~${w.now + ours}; keeper hits $have of $need")) scoutQueue.addLast(KEEP)
             return true

@@ -48,6 +48,10 @@ import screeps.api.structures.StructureRampart
  *    больше ничего (наш эскорт идёт сам); с рождения идёт прямо на их эскорт — обгоняя свой, через болотистый центр
  *    (живьём там клетка в четыре тика, 60–87-й), — и бьёт только эскорт (тягач M4 рядом не тронут). Их эскорт вышел
  *    из дома на ~75-м, встреча на ~118-м, эскорт погиб на 192-м — поезд шёл дальше под ударами;
+ *  - `wall` — therevilo2018#3 (ничья с v40 29.09.2026, 6abb9f19): R1M1 первой тратой и дальше R1M1 раз за разом (на
+ *    доход ECON2 стенда); каждый встаёт на свободную клетку ИХ пути, ближайшую к центру, стоит и стреляет по слабейшему в
+ *    трёх клетках. Живьём к ~600-му пять–девять R1M1 стояли поперёк развилки (52,45)…(48,50), наш поезд без пути стоял
+ *    до 2000-го. Ни тягачей, ни разведчиков: их эскорт идёт сам;
  *  - `rsq` — Suruks#2 (обыграл v30 в подтверждающей серии, 28.09.2026, 6abac117): стрелок M2R2 после дебюта идёт к ИХ
  *    флагу, стреляет по всем в трёх клетках (хранитель — первым) и садится на флаг; их эскорт в трёх тиках от финиша
  *    упирается в занятую клетку. Как у Suruks: ни тягачей, ни разведчиков (эскорт идёт сам), стрелок — на RSQ_AT-м тике
@@ -62,7 +66,7 @@ import screeps.api.structures.StructureRampart
  */
 internal object RedTeam {
 
-    private val ORDER = listOf("camp", "guard", "rush7", "rsq", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
+    private val ORDER = listOf("camp", "guard", "rush7", "wall", "rsq", "rush", "squat", "plug", "icpt", "kk", "choke", "blk", "chase", "army")
     /** Приёмы, заказываемые после дебюта основной логики (остальные — раньше него). */
     private val LATE = setOf("icpt", "kk", "choke", "blk", "chase", "army")
     private const val RAMPART_COST = 200
@@ -103,6 +107,7 @@ internal object RedTeam {
         "army", "rush" -> Array(5) { MOVE } + Array(5) { screeps.api.RANGED_ATTACK }
         "icpt", "kk" -> arrayOf(MOVE, screeps.api.ATTACK)
         "rsq" -> arrayOf(MOVE, MOVE, screeps.api.RANGED_ATTACK, screeps.api.RANGED_ATTACK)
+        "wall" -> arrayOf(screeps.api.RANGED_ATTACK, MOVE)
         "camp", "guard", "rush7" -> arrayOf(MOVE, MOVE, MOVE, MOVE, screeps.api.ATTACK, screeps.api.ATTACK, screeps.api.ATTACK)
         "plug" -> arrayOf(WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE)
         else -> emptyArray()
@@ -113,6 +118,14 @@ internal object RedTeam {
         if (tricks.isEmpty()) return false
         // camp (ricardo18informatica2020#23): один M4A3 и больше НИЧЕГО — ни тягачей, ни разведчиков, спавн копит
         if (listOf("camp", "guard", "rush7", "rsq").any { it in tricks && it in ordered }) return true
+        if ("wall" in tricks) {
+            if (pendingBody != null) return true
+            val body = bodyOf("wall")
+            if (energy >= Bodies.cost(body) && EscortRun.order(w, body, "red:wall", "persona ${describe()}")) {
+                pendingBody = Bodies.summary(body); pendingTrick = "wall"
+            }
+            return true
+        }
         if ("rsq" in tricks && w.now < RSQ_AT) {
             // Suruks#2 открывается экономикой — C1M1 и W3 первой тратой (живой лог: «their first C1M1 W3»); тела только для
             // вида, доход даёт ECON2 стенда. Без них наш дебют против этой личности решался по пустой первой трате
@@ -155,6 +168,7 @@ internal object RedTeam {
                 "camp" -> camp(w, c)
                 "guard" -> guard(w, c)
                 "rush7" -> rush7(w, c)
+                "wall" -> wall(w, c)
                 "kk" -> keeperKiller(w, c)
                 "rsq" -> rangedSquatter(w, c)
             }
@@ -275,6 +289,25 @@ internal object RedTeam {
             return
         }
         camp(w, c)
+    }
+
+    private val wallCells = HashMap<String, Int>()
+
+    private fun wall(w: EscortRun.World, c: Creep) {
+        w.enemies.filter { getRange(c, it) <= 3 }.minByOrNull { it.hits }?.let { c.rangedAttack(it) }
+        val id = idOf(c)
+        if (id !in wallCells) {
+            val flow = w.enemyEscortFlow ?: return
+            val theirs = w.enemyEscort ?: return
+            val taken = wallCells.values.toHashSet()
+            val cell = Chokes.route(flow, theirs).filter { it !in taken }
+                .minByOrNull { maxOf(kotlin.math.abs(it / 100 - 50), kotlin.math.abs(it % 100 - 50)) } ?: return
+            wallCells[id] = cell
+            println("red t=${w.now} wall: ${Bodies.summaryOf(c)} takes (${cell / 100},${cell % 100})")
+        }
+        val k = wallCells[id] ?: return
+        if (c.x != k / 100 || c.y != k % 100) EscortRun.stepRed(w, c, pos(k / 100, k % 100), 0, avoidOwn = true)
+        log(w, c, "wall", "at (${k / 100},${k % 100})")
     }
 
     private fun rush7(w: EscortRun.World, c: Creep) {
