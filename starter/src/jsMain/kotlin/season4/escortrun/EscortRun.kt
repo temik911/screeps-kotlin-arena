@@ -1629,12 +1629,20 @@ object EscortRun {
             // M3A3 stachu догоняет свой эскорт (гейт econ+icpt). Путь — с ценой болота: рашер ricardo#7 шёл к нам через
             // болотистый центр клетку в четыре тика (6abb805d, 60–87-й), по прямой это полклетки за тик, и держание
             // снималось как будто он стоит
+            // И не к своему флагу: у центра пути сходятся, и к центру идут все — M3A3 stachu со своим эскортом сокращал путь
+            // до нашего так же (гейт econ+icpt: эскорт вернулся домой с 24 тиков пути и потерял 60). Охотник, сближаясь с
+            // нами, к своему флагу не продвигается: рашер ricardo#7 после центра повернул к нашей базе
             val tr = trail[idOf(x)] ?: continue
             if (tr.size < 11) continue
             val toEsc = flowTo("toEscort", escort, w.blocked, 5)
             val was = toEsc[tr.first()]
             val nowD = toEsc[key(x)]
             if (was < 0 || nowD < 0 || was - nowD < HUNT_CLOSING) continue
+            val theirFlag = w.enemyFlag
+            if (theirFlag != null) {
+                val toFlag = flowTo("toTheirFlag", theirFlag, w.blocked, 5)
+                if (toFlag[tr.first()] >= 0 && toFlag[key(x)] >= 0 && toFlag[key(x)] < toFlag[tr.first()]) continue
+            }
             val xPer = Bodies.period(Bodies.weight(x), Bodies.liveMoves(x), false)
             val dps = 30 * Bodies.live(x, ATTACK) + 10 * Bodies.live(x, RANGED_ATTACK)
             if (dps == 0 || xPer > per) continue
