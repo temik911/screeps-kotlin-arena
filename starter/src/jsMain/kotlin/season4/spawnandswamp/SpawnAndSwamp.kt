@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 260
+    private const val BOT_VERSION = 261
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2682,7 +2682,10 @@ object SpawnAndSwamp {
         // THE RAID TAKES THE FIRST TWO FIGHTER SLOTS (v155, see USE_RAID): two M15A3 instead of the M8R4 pair of ~218/254
         if (USE_RAID && !armNow && raidWanted(ctx)) {
             val price = RAID_BODY.sumOf { cost(it) }
-            if (energy < price) return reach("rSave")
+            // (v261) the first raider's saving is a saving too (v208): the keeper's surplus is what lies above it. Against
+            // けろびー#48 (v259 draw) the spawn saved for the raider at 1-3 a tick while the keeper took everything above 500
+            // into a second tower it never finished (1190/1250) — another raider's worth
+            if (energy < price) { if (USE_RAID_SAVE_PRICED) spawnSavePrice = maxOf(spawnSavePrice, price); return reach("rSave") }
             val r = spawn.spawnCreep(RAID_BODY)
             reach(if (r.error == null) "rBuy" else "err")
             if (r.error == null) { raidOrdered++; raidOrderedAt = getTicks(); spentFighters += price }
@@ -7594,6 +7597,8 @@ object SpawnAndSwamp {
     private const val USE_HOUSE_CLOCK_TOWER = true
     /** The house clock counts only the threats closing on our house by their observed pace (v260). */
     private const val USE_HOUSE_CLOCK_COMING = true
+    /** The first raider's saving sets the spawn's saving price, as the second's does (v261). */
+    private const val USE_RAID_SAVE_PRICED = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
