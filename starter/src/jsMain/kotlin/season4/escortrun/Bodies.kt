@@ -71,6 +71,16 @@ internal object Bodies {
 
     fun isScout(c: Creep, minMove: Int): Boolean = isPureMove(c) && c.body.size < minMove
 
+    /** Держатель клетки — тело из TOUGH и MOVE (хиты за энергию: T1M1 — 200 за 60, M1 — 100 за 50). Только для НАШИХ
+     *  крипов: у нас такого тела нет ни у кого, кроме держателей (эскорт исключается отдельно). */
+    fun isHolder(c: Creep): Boolean = c.body.isNotEmpty() && c.body.all { it.type == MOVE || it.type == TOUGH } &&
+        c.body.any { it.type == TOUGH } && c.body.any { it.type == MOVE }
+
+    /** TOUGH впереди: урон идёт с первой части, и MOVE живут до конца. */
+    fun holder(k: Int): Array<BodyPartType> = Array<BodyPartType>(k) { TOUGH } + Array<BodyPartType>(k) { MOVE }
+
+    fun weightOf(body: Array<BodyPartType>): Int = body.count { it != MOVE && it != CARRY }
+
     fun isArmed(c: Creep): Boolean = c.body.any { (it.type == ATTACK || it.type == RANGED_ATTACK) && it.hits > 0 }
 
     fun wasArmed(c: Creep): Boolean = c.body.any { it.type == ATTACK || it.type == RANGED_ATTACK }

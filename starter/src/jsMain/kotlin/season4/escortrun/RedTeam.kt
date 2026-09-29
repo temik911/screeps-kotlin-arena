@@ -279,7 +279,7 @@ internal object RedTeam {
         (onFlag ?: near.minByOrNull { it.hits })?.let { c.rangedAttack(it) }
         if (c.x == flag.x && c.y == flag.y) { log(w, c, "rsq", "on flag"); return }
         val occupied = w.occupant[flag.x * 100 + flag.y]
-        EscortRun.stepRed(w, c, flag, if (occupied == null) 0 else 1)
+        EscortRun.stepRed(w, c, flag, if (occupied == null) 0 else 1, avoidEnemies = true)
         log(w, c, "rsq", "to flag")
     }
 
