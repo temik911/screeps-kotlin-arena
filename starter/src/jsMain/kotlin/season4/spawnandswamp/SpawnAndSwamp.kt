@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 258
+    private const val BOT_VERSION = 259
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2318,8 +2318,17 @@ object SpawnAndSwamp {
             // Ranamar's M15A3 walk the same hundred-odd ticks — the keeper (15 ticks to spawn) and the build (40) fit in it
             // (v171: one that can walk — kerobi's stationary A3 at his home ordered it at t=123, and the one-WORK keeper's
             // 300 was missing when his fort flag rose late)
-            if (USE_HOME_RAMPART && ctx.haulers.size >= 2 && ctx.combatEnemies.any { e -> e.body.count { it.type == ATTACK && it.hits > 0 } >= HOME_RAMPART_ATTACK &&
-                    (!USE_RAID_THRIFT || e.body.any { it.type == MOVE && it.hits > 0 }) } &&
+            // …by his melee's SUM, not one body's, and at once when our spawn has taken a blow (v259): a structure falls to
+            // ATTACK however it is split between bodies, and a spawn is never repaired. Against Darth Rick#6 (v257 loss)
+            // all 43 of his creeps carried one ATTACK each — six M2A1 at our door struck 180 a tick, Death000's M10A6 of
+            // v164 split six ways — and the rampart of 200 for 10000 was never placed: the spawn went 3000 -> 2580 at
+            // 205-236, 2580 -> 570 at 607-625 and fell at 839 with 1000 in it at 340-380
+            val hisMelee = ctx.combatEnemies.filter { e -> !USE_RAID_THRIFT || e.body.any { it.type == MOVE && it.hits > 0 } }
+                .sumOf { e -> e.body.count { it.type == ATTACK && it.hits > 0 } }
+            val calledByMelee = if (USE_HOME_RAMPART_SUM) hisMelee >= HOME_RAMPART_ATTACK || (ctx.mySpawn.hits ?: SPAWN_HITS) < SPAWN_HITS
+                else ctx.combatEnemies.any { e -> e.body.count { it.type == ATTACK && it.hits > 0 } >= HOME_RAMPART_ATTACK &&
+                    (!USE_RAID_THRIFT || e.body.any { it.type == MOVE && it.hits > 0 }) }
+            if (USE_HOME_RAMPART && ctx.haulers.size >= 2 && calledByMelee &&
                 ctx.mySites.none { it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y } &&
                 ctx.ramparts.none { it.my == true && it.x == ctx.mySpawn.x && it.y == ctx.mySpawn.y }) {
                 val r = createConstructionSite(ctx.mySpawn.x, ctx.mySpawn.y, StructureRampart::class.js)
@@ -7703,6 +7712,10 @@ object SpawnAndSwamp {
     /** A creep of his with this many live ATTACK parts calls the home rampart: 90 a tick on a structure, a bare spawn in
      *  33 swings (v164b). */
     private const val HOME_RAMPART_ATTACK = 3
+    /** The home rampart is called by the sum of his mobile ATTACK, and by our spawn having taken a blow (v259). */
+    private const val USE_HOME_RAMPART_SUM = true
+    /** A loaded keeper a few steps from an empty tower goes to feed it under fire instead of running (v259). */
+    private const val USE_KEEPER_FEEDS_UNDER_FIRE = true
     /** His M5R5 walks a plain cell a tick and shoots at 3: twelve cells are nine ticks of his walk before his first shot,
      *  and the pair, a cell a tick on any ground, keeps the distance on swamp where he is five times slower (v162). */
     private const val RAID_LURK_RANGE = 12
@@ -8952,6 +8965,13 @@ object SpawnAndSwamp {
             if (post != null && carrying > 0 && canAct.not()) fortRampartSite(ctx, post)?.let { rs -> if (getRange(b, rs) <= BUILD_RANGE) b.build(rs) }
             val step = when {
                 post != null -> if (b.x != post.x || b.y != post.y) pathStep(b, post, 0, ctx.dangerMatrix) else null
+                // (v259) a loaded keeper a few steps from an empty tower feeds it under fire: the flight changes no fire —
+                // his gun keeps pace — and the tower's shot takes the gun off. Against 76561198870429455#13 (v257 draw) the
+                // tower stood empty 1485 ticks while keepers with 50-100 each stood two cells from it (`goal=(92,47)feed
+                // fire=20 step=stay`, the flight having nowhere to go by the spawn), eight died loaded, and one R2M2 of
+                // 400 hits — a single shot at range 1 — took the rampart and the spawn to 30
+                USE_KEEPER_FEEDS_UNDER_FIRE && incoming > 0.0 && tower != null && goal === tower && carrying > 0 &&
+                    (tower.store[RESOURCE_ENERGY] ?: 0) < TOWER_ENERGY_COST && getRange(b, tower) in 2..(BUILD_RANGE) -> pathStep(b, tower, 1, ctx.dangerMatrix)
                 incoming > 0.0 -> fleeStep(b, ctx.combatEnemies, ctx.dangerMatrix) ?: pathStep(b, spawn, 1, ctx.dangerMatrix)
                 goal == null -> if (getRange(b, spawn) > PARK_RANGE) pathStep(b, spawn, PARK_RANGE, ctx.dangerMatrix) else null
                 // пустой идёт за энергией ТУДА, ГДЕ ОНА ДЛЯ ЭТОЙ ПЛОЩАДКИ: к спавну или к куче
