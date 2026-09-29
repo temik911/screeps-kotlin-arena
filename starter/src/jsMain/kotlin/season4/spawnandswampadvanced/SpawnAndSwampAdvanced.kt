@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v59"
+    private const val BOT_VERSION = "v58"
 
     private const val LOG_EVERY = 50
 
@@ -1493,15 +1493,6 @@ object SpawnAndSwampAdvanced {
         val healer = healerBody(cap)
         val (ours, theirs) = armyCache ?: return ranger
         if (theirs.isEmpty()) return ranger
-        // доля лекарей — не меньше, чем у него: прогон сводит его урон в одну цель, и лечение на ней тонет, а в бою его
-        // огонь размазан (1,4 цели за тик), и лекари держат строй. Против шара けろびー (M5R5 : M4H2 ≈ 5 : 3) наши
-        // чистые стрелки проигрывали бои в поле 39 из 48 — лекарей в армии не было ни одного
-        val hisArmy = theirs.filter { !it.tower && (it.dps() > 0 || it.heal() > 0) }
-        if (hisArmy.isNotEmpty() && ours.isNotEmpty()) {
-            val hisShare = hisArmy.count { it.heal() > 0 }.toDouble() / hisArmy.size
-            val ourShare = ours.count { it.heal() > 0 }.toDouble() / ours.size
-            if (ourShare < hisShare) return healer
-        }
         val r = simulate(ours + SimUnit(ranger.map { it.asDynamic().unsafeCast<String>() }, ranger.size * 100), theirs)
         val h = simulate(ours + SimUnit(healer.map { it.asDynamic().unsafeCast<String>() }, healer.size * 100), theirs)
         val score = { x: SimResult -> (if (x.win) 1_000_000 else 0) + x.left - x.theirLeft }
