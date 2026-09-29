@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 252
+    private const val BOT_VERSION = 253
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7269,6 +7269,8 @@ object SpawnAndSwamp {
     private var raidStall = 0
     /** Volleys that killed nobody, aimed by threat at the rate they kill (v251). */
     private var towerAimed = 0
+    /** Ticks the door of the held spawn kept it against a fitting spawn elsewhere (v253). */
+    private var raidDoorKept = 0
     private val raidPrevRange = HashMap<String, Int>()
     private val raidPrevTarget = HashMap<String, String>()
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
@@ -7445,6 +7447,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_RETREAT_ESCAPES = true
     /** A volley that kills nobody goes to the creep whose threat (damage and heal) it takes off soonest (v251). */
     private const val USE_TOWER_AIM = true
+    /** A raider at the door of its held spawn keeps it against a fitting spawn while the door's rule holds it (v253). */
+    private const val USE_RAID_DOOR_KEEPS = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
@@ -8002,11 +8006,28 @@ object SpawnAndSwamp {
                 .minByOrNull { it.second }?.first
         }
         if (spawnFirst != null) raidSpawnFirst++
+        // A RAIDER AT THE DOOR OF THE SPAWN IT HOLDS KEEPS IT BY THE DOOR'S OWN RULE (v253). The held target gave way to a
+        // fitting spawn whenever its margin — RAID_CHIP_MIN strikes before his nearest gun is back — ran out, and the door
+        // rule (v229: stay while the guns coming are not slower) and the finish (v167) are asked only of the target
+        // already chosen, so they never saw the switch. Against けろびー#49 (v252 draw) the last pair struck his main's
+        // door 1523-1597 (96 strikes, rampart 10000 -> 1360, 4360 left: 24 ticks of the pair) and on 1598 walked to his
+        // bare (82,88) with his guns 13 cells off; the main stood to 2000 at 1360 + 3000 — the same in a v238 hand (2620 +
+        // 3000). Leaving the door walks away under the same guns the margin counted; it is taken only when they are all
+        // slower, as at the door itself
+        val doorKeeps = USE_RAID_DOOR_KEEPS && held != null && held.id in spawnIds && raiders.any { getRange(it, pos(held)) <= 1 } && run {
+            if (finishingSpawn) return@run true
+            val mobile = ctx.combatEnemies.filter { e -> e.body.any { it.type == MOVE && it.hits > 0 } && InfluenceMap.profileOf(e).let { pr -> pr.ranged + pr.melee > 0.0 } }
+            val field = flowTo(ctx, pos(held))
+            val coming = mobile.filter { (pathTicks(it, field, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) - RANGED_RANGE * plainPeriod(it)) <= RAID_CHIP_LEAVE }
+            val ours = raiders.maxOf { plainPeriod(it) }
+            !(coming.isNotEmpty() && coming.all { plainPeriod(it) > ours })
+        }
+        if (doorKeeps && fitSpawn != null && held != null && fitSpawn.id != held.id) raidDoorKept++
         val target: GameObject? = when {
             raidHome || gathering -> null
             spawnFirst != null -> spawnFirst
             builderTarget != null -> builderTarget
-            fitSpawn != null && (held == null || (held.id != fitSpawn.id && !(if (USE_RAID_FIT_BY_RACE && held.id in spawnIds) spawnFits(held) else strikeMargin(held) > 0))) -> fitSpawn
+            fitSpawn != null && !doorKeeps && (held == null || (held.id != fitSpawn.id && !(if (USE_RAID_FIT_BY_RACE && held.id in spawnIds) spawnFits(held) else strikeMargin(held) > 0))) -> fitSpawn
             held != null -> held
             main != null && main in open && rampartOn(ctx, main) == 0 -> main
             else -> open.filter { t -> t.id in spawnIds || !USE_RAID_BUILDERS_FIRST }.filter { t -> guns.count { getRange(it, pos(t)) <= RANGED_RANGE } < 2 }
@@ -8265,7 +8286,9 @@ object SpawnAndSwamp {
         // at our pace) and the first tick after a change of target left out — the v250 count was two thirds these
         if (target != null && strikeFits && !raidHome && target.id in spawnIds) {
             val tp = pos(target)
-            val field = flowTo(ctx, tp)
+            // (v253) the step field, not the flow's swamp price: an M15A3 walks a swamp cell a tick, and a straight step
+            // across the swamp read as no progress — 25-143 ticks a match against けろびー (v252 series)
+            val field = cellSteps(ctx, tp.x * 100 + tp.y)
             for (r in raiders) {
                 val f = field[r.x * 100 + r.y]
                 val was = raidPrevRange[r.id]
@@ -8281,6 +8304,7 @@ object SpawnAndSwamp {
                 (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "") +
                 (if (USE_RAID_FINISH_BUILDER) " finishB=$raidFinishedBuilder" else "") +
                 (if (USE_RAID_RETREAT_ESCAPES) " heldOn=$raidHeldOn" else "") +
+                (if (USE_RAID_DOOR_KEEPS) " doorKept=$raidDoorKept" else "") +
                 (if (USE_RAID_STAY_AT_DOOR) " stayed=$raidStayed" else "") +
                 (if (USE_RAID_HUNTED_ENTER) " entered=$raidEntered" else "")
             println("raid t=${getTicks()}: ${raiders.joinToString(" ") { "r${it.id}(${it.x},${it.y})${it.hits}" }} home=$raidHome gather=$gathering$apart " +
