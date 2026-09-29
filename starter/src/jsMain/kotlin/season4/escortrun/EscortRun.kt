@@ -439,6 +439,8 @@ object EscortRun {
 
     /** Экономический дебют (null — ещё не решён, решается на 2-м тике). */
     private var econ: Boolean? = null
+    /** Их первая трата — экономика (W/C, без тягачей); решается вместе с econ. */
+    private var theirEcoFirst: Boolean? = null
     /** Эскорт ждёт дома победителя их тяжёлого (decideHold, экономика). */
     private var econWait = false
 
@@ -592,6 +594,7 @@ object EscortRun {
             // экономики 3-5 (stachu3478#6, 29.09.2026: медленный поезд встречал их армию у нашего флага), против лёгкого
             // вооружённого — v40 3-0-1 против 1-0-3 (therevilo2018#3)
             econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.wasArmed(it) && heavy(it) }
+            theirEcoFirst = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.isWorker(it) || Bodies.isHauler(it) }
             println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
             if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
@@ -1186,8 +1189,11 @@ object EscortRun {
         // против экономиста и тяжёлого бойца угроза — вооружённые, и клетку держат хиты. Держатель, который по пути
         // теряет все хиты, не покупается вовсе: T2M2 шёл через стену стрелков therevilo2018#3 в центре и гиб, флаг снова
         // был «пуст», и за матч их купили восемнадцать (живой A/B v42, 6abb9fb5)
+        // и только против экономиста (W/C первой тратой, Suruks#2): против лёгкого вооружённого первым (стена R1M1
+        // therevilo2018#3) хиты заранее отнимали деньги у дебюта — T2M2 на 13-м, блокировщик их флага не удерживался (стенд
+        // wall: −274 против −203); форма соперника видна по его первой покупке
         val alive = { b: Array<BodyPartType> -> holderHits(b) - pathExposure(w, flag, b) }
-        if (!theirEscortWalks(w)) return SCOUT_BODY.takeIf { alive(it) > 0 }
+        if (theirEcoFirst != true) return SCOUT_BODY.takeIf { alive(it) > 0 }
         return HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) <= deadline && alive(it) > 0 }.maxByOrNull { alive(it) }
             ?: SCOUT_BODY.takeIf { alive(it) > 0 }
     }
@@ -1790,7 +1796,9 @@ object EscortRun {
         // или флаг — пока намерение не видно (меньше 11 тиков истории), он угроза флагу. Стрелок Suruks#2 рождался на
         // 107-м, «идущим к флагу» читался к ~130-му, и держатель, купленный тогда, опаздывал и шёл у него за спиной
         // (6abb9463); купленный сразу — вставал на флаг к ~200-му, раньше стрелка (~243-й)
-        val walks = theirEscortWalks(w)
+        // …и только у экономиста (W/C первой тратой): у стены R1M1 therevilo2018#3 каждый новый стрелок покупал держателя, и
+        // деньги уходили из дебюта (стенд wall −234 против −203)
+        val walks = theirEscortWalks(w) && theirEcoFirst == true
         // и рождающийся тоже: стрелок рождается 107–119-й, и к концу его рождения 50 энергии уже уходили в блокировщика
         // их флага (стенд rsq, 111-й), а держателю не хватало
         val heading = w.enemyArmed.filter { x ->
