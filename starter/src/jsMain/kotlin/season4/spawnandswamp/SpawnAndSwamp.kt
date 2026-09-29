@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 269
+    private const val BOT_VERSION = 270
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5482,8 +5482,25 @@ object SpawnAndSwamp {
             val net = ranged + melee - heal
             if (net <= 0.0) inf else c.hits / net
         } ?: inf
-        val hisDps = theirs.sumOf { val q = InfluenceMap.profileOf(it); q.ranged + q.melee }
-        val tHim = if (hisDps <= 0.0) inf else ours.minOf { it.hits } / hisDps
+        // …AND HIS MELEE ON OURS BY THE SAME REACH (v270). tHim summed all his damage on our weakest, his melee included,
+        // whether it could reach our creep or not, while our melee on his counts only where it can (v230). Against
+        // ●ω<♥♪#2 (v263 loss; v267 A/B draw) his M6A6 — a swamp cell in five ticks — stood by our house with a healer, our
+        // M8R4s — one in three — never lost a hit to it in 200 ticks while the race read `k=12/6` and `k=2/2`, the verdict
+        // flipped hold <-> fight twelve times in 200 ticks, and in the draw eight of ours held the house 901 ticks at
+        // 2288/625 and never left. His melee reaches one of ours that must stand by our spawn, is slower than it on both
+        // grounds, or carries a melee itself (contact is mutual); his ranged reaches every one
+        val tHim = if (!USE_KILL_RACE_REACH) {
+            val hisDps = theirs.sumOf { val q = InfluenceMap.profileOf(it); q.ranged + q.melee }
+            if (hisDps <= 0.0) inf else ours.minOf { it.hits } / hisDps
+        } else ours.minOf { o ->
+            val pinnedO = getRange(o, spawn) <= 1
+            val meleeO = InfluenceMap.profileOf(o).melee > 0.0
+            val dps = theirs.sumOf { m ->
+                val q = InfluenceMap.profileOf(m)
+                q.ranged + (if (q.melee > 0.0 && (pinnedO || meleeO || (plainPeriod(o) > plainPeriod(m) && swampPeriod(o) > swampPeriod(m)))) q.melee else 0.0)
+            }
+            if (dps <= 0.0) inf else o.hits / dps
+        }
         return tUs to tHim
     }
 
@@ -7849,6 +7866,8 @@ object SpawnAndSwamp {
     private const val USE_WARDEN_SOONEST = true
     /** The tower's second keeper goes before the hauler when it alone makes the tower stand before his guns (v269). */
     private const val USE_TOWER_KEEPER_STORM = true
+    /** The kill race counts his melee on ours only where it reaches: pinned, slower, or melee itself (v270). */
+    private const val USE_KILL_RACE_REACH = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
