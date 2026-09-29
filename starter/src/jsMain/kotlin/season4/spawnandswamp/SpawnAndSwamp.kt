@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 268
+    private const val BOT_VERSION = 269
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -476,6 +476,8 @@ object SpawnAndSwamp {
     private var spawnSavePrice = 0
     /** The spawn that saves for spawnSavePrice this tick (v264). */
     private var spawnSaveId: String? = null
+    /** The saving is for the keeper that joins the tower's site before his storm (v269): the site's keeper spares it. */
+    private var spawnSaveForSite = false
     private fun saveFor(spawn: StructureSpawn, price: Int) {
         if (price > spawnSavePrice) { spawnSavePrice = price; spawnSaveId = spawn.id }
     }
@@ -1282,6 +1284,7 @@ object SpawnAndSwamp {
         val freeSpawns = ctx.mySpawns.filter { it.spawning == null }.sortedByDescending { it.store[RESOURCE_ENERGY] ?: 0 }
         spawnSavePrice = 0
         spawnSaveId = null
+        spawnSaveForSite = false
         fleetShortNow = false
         if (freeSpawns.isEmpty()) spawnIfNeeded(ctx, defenders, homeBound, alarm, enemyArrival, spawnUnderFire, null, true)
         else freeSpawns.forEachIndexed { i, sp ->
@@ -2659,6 +2662,37 @@ object SpawnAndSwamp {
             reach(if (r.error == null) "kfBuy" else "err")
             if (r.error == null) { spentBuild += price; keeperOrderedAt = getTicks() }
             if (DEBUG_LOG) println("spawn: keeper (fort re-buy) parts=${body.size} cost=$price energy=$energy err=${r.error}")
+            return
+        }
+        // THE TOWER'S SECOND KEEPER BEFORE THE HAULER, WHEN IT ALONE MAKES THE TOWER STAND BEFORE HIS GUNS (v269). The
+        // join (v243) stood after the hauler's turn: against ●ω<♥♪#2 (v263 loss, v267 A/B loss) the site rose at ~420-437
+        // for the storm his forecast army brings, haulers #7 and #8 took the spawn at 437 and 504, the joining keeper was
+        // saved for from 545 and born ~600, and his melee killed the keepers at 660-720 with the site at 74-86 % — both
+        // houses fell without the tower. Where the tower, with the keeper it has, stands no sooner than his guns reach our
+        // door (the forecast horizon), and with one more keeper — its price and birth, the energy for both at the steady
+        // income, the work of both hands — it stands before them, the keeper is bought first and saved for
+        val stormJoin: Array<BodyPartType>? = if (!USE_TOWER_KEEPER_STORM || !homeSpawnTurn || ctx.myTowers.isNotEmpty() ||
+            ctx.builders.size != 1 || keeperOrderedAt == getTicks() || forecastUs < 0) null else run {
+            val job = siteJobs.filter { it.kind == "StructureTower" && it.inTime && it.site != null }.minByOrNull { it.left } ?: return@run null
+            val storm = forecastHorizon(ctx, forecastUs, FORECAST_D, damageOnly = true)
+            if (job.ready < storm) return@run null
+            val joiner = keeperBody(ctx, job.site?.let { InfluenceMap.cell(it.x, it.y) }, job.left, flow)
+            val work = ctx.builders[0].body.count { it.type == WORK && it.hits > 0 } + joiner.count { it == WORK }
+            if (work <= 0) return@run null
+            val price = joiner.sumOf { cost(it) }
+            val steady = realisedIncome().let { if (it < 0.0) flow else it + regenRate() }
+            val inHand = energy + ctx.builders.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
+            val born = energyArrivalTicks(ctx, maxOf(0, price - energy), steady) + joiner.size * CREEP_SPAWN_TIME
+            val supplied = energyArrivalTicks(ctx, maxOf(0, price + job.left - inHand), steady)
+            if (maxOf(supplied, born + job.left.toDouble() / (work * BUILD_POWER)) < storm) joiner else null
+        }
+        if (stormJoin != null) {
+            val price = stormJoin.sumOf { cost(it) }
+            if (energy < price) { saveFor(spawn, price); spawnSaveForSite = true; return reach("kStormSave") }
+            val r = spawn.spawnCreep(stormJoin)
+            reach(if (r.error == null) "kStorm" else "err")
+            if (r.error == null) { spentBuild += price; keeperOrderedAt = getTicks() }
+            if (DEBUG_LOG) println("spawn: builder work=${stormJoin.count { it == WORK }} cost=$price energy=$energy (tower's, before his storm) err=${r.error}")
             return
         }
         // THE PILE BUILDER BEFORE THE THIRD HAULER, WHEN THERE IS A JOB FOR IT NOW (v138). His spawns rise out of the
@@ -7813,6 +7847,8 @@ object SpawnAndSwamp {
     private const val USE_KEEPER_SPARES_STORM = true
     /** The warden's guns are the size that ends the nearest killer soonest: saving, birth, walk and kill (v268). */
     private const val USE_WARDEN_SOONEST = true
+    /** The tower's second keeper goes before the hauler when it alone makes the tower stand before his guns (v269). */
+    private const val USE_TOWER_KEEPER_STORM = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
@@ -9160,11 +9196,11 @@ object SpawnAndSwamp {
         val stormIn = if (!USE_KEEPER_SPARES_STORM || forecastUs < 0) Int.MAX_VALUE / 4
             else forecastHorizon(ctx, forecastUs, FORECAST_D, damageOnly = true)
         val savingHolds = USE_KEEPER_SPARES_SAVING && spawnSavePrice > 0 && spawnSaveId == spawn.id && job != null && site != null &&
-            job.fromSpawn && run {
+            job.fromSpawn && (spawnSaveForSite || run {
                 val steady = realisedIncome().let { if (it < 0.0) regenRate() else it + regenRate() }
                 job.ready + energyArrivalTicks(ctx, maxOf(0, spawnSavePrice - (spawn.store[RESOURCE_ENERGY] ?: 0)), steady) <
                     minOf(job.deadline, stormIn.toDouble())
-            }
+            })
         for (b in ctx.builders) {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
             val free = b.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
