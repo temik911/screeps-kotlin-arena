@@ -1156,8 +1156,13 @@ object EscortRun {
      * хранитель M1 держал флаг против M2R2 Suruks#2 пять тиков, эскорт встал вплотную на 248-м, стрелок шагнул на клетку
      * на 249-м (6abb9463). Никто не успевает — самый быстрый (M1).
      */
-    private fun holderBody(w: World, flag: Position, deadline: Int): Array<BodyPartType> =
-        HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) <= deadline }.maxByOrNull { holderHits(it) } ?: SCOUT_BODY
+    private fun holderBody(w: World, flag: Position, deadline: Int): Array<BodyPartType> {
+        // против гонщика (тягачи первой тратой) угроза флагу — его разведчики, и клетку берёт пришедший первым: M1 (гейт
+        // rev+keep+blk — T1M1 шёл к флагу на ~30 тиков дольше, их блокировщик садился раньше, поражение на 266/292-м);
+        // против экономиста и тяжёлого бойца угроза — вооружённые, и клетку держат хиты
+        if (econ != true) return SCOUT_BODY
+        return HOLDER_BODIES.filter { w.now + scoutEta(w, flag, it) <= deadline }.maxByOrNull { holderHits(it) } ?: SCOUT_BODY
+    }
 
     /** Когда наш уже идущий хранитель встанет на наш флаг (или бесконечность, если его нет). */
     private fun scoutEtaOfKeeper(w: World, flag: Position): Int {
