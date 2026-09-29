@@ -276,12 +276,14 @@ internal object RedTeam {
     private fun ambush(w: EscortRun.World, c: Creep) {
         val theirs = w.enemyEscort ?: return
         val sp = w.enemySpawn ?: return
-        if (!ambushGo && getRange(theirs, sp) > AMBUSH_LEFT) {
+        // трогается из точки ожидания (живьём — стоял в развилке с 60-го по 85-й), а не по дороге к ней
+        val placed = ambushAt >= 0 && maxOf(kotlin.math.abs(c.x - ambushAt / 100), kotlin.math.abs(c.y - ambushAt % 100)) <= 2
+        if (!ambushGo && placed && getRange(theirs, sp) > AMBUSH_LEFT) {
             ambushGo = true
             println("red t=${w.now} ambush: GO — their escort ${getRange(theirs, sp)} from its spawn, ${getRange(c, theirs)} from me")
         }
         if (ambushGo) {
-            if (getRange(c, theirs) <= 1) c.attack(theirs) else EscortRun.stepRed(w, c, theirs, 1)
+            if (getRange(c, theirs) <= 1) c.attack(theirs) else EscortRun.stepRed(w, c, theirs, 1, avoidOwn = true)
             log(w, c, "ambush", "hunting their escort at ${getRange(c, theirs)}, h=${theirs.hits}")
             return
         }
@@ -295,7 +297,7 @@ internal object RedTeam {
             println("red t=${w.now} ambush: wait at (${ambushAt / 100},${ambushAt % 100})")
         }
         val a = ambushAt
-        if (c.x != a / 100 || c.y != a % 100) EscortRun.stepRed(w, c, pos(a / 100, a % 100), 0)
+        if (c.x != a / 100 || c.y != a % 100) EscortRun.stepRed(w, c, pos(a / 100, a % 100), 0, avoidOwn = true)
         log(w, c, "ambush", "waiting")
     }
 

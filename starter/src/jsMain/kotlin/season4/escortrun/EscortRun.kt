@@ -2066,9 +2066,14 @@ object EscortRun {
 
     /** Шаг крипа красной команды: в обход наших неподвижных (эскорт, поезд) — иначе строитель полз за одиноким эскортом
      *  по его коридору четыре тика на клетку (лига, plug против v19, 27.09.2026: к контейнеру на 210-м вместо ~110-го). */
-    internal fun stepRed(w: World, c: Creep, target: Position, range: Int) {
+    internal fun stepRed(w: World, c: Creep, target: Position, range: Int, avoidOwn: Boolean = false) {
         val swampCost = maxOf(1, Bodies.period(Bodies.weight(c) + ((c.store[RESOURCE_ENERGY] ?: 0) + 49) / 50, Bodies.liveMoves(c), true))
-        val step = stepAround(w, c, target, range, swampCost, 20) ?: return
+        // в обход ВСЕХ своих рядом, не только неподвижных: одинокий эскорт идёт клетку в четыре тика, и засада M4A3 шла
+        // за ним до центра вдвое дольше живой (ricardo#7 обогнал свой эскорт на 25-м, 6abb805d)
+        val step = (if (avoidOwn) {
+            val walls = w.active.filter { it !== c && dist(it, c) <= 3 }
+            DistanceMap.flowStep(flowTo("avoid:${idOf(c)}", target, w.blocked + walls, swampCost, ttl = 1), c.x, c.y, range, w.occupant.keys, w.enemyAt)
+        } else null) ?: stepAround(w, c, target, range, swampCost, 20) ?: return
         TrafficManager.request(c, step, SCOUT_PRIORITY)
     }
 
