@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 251
+    private const val BOT_VERSION = 252
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7270,6 +7270,7 @@ object SpawnAndSwamp {
     /** Volleys that killed nobody, aimed by threat at the rate they kill (v251). */
     private var towerAimed = 0
     private val raidPrevRange = HashMap<String, Int>()
+    private val raidPrevTarget = HashMap<String, String>()
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
     private var raidStayed = 0
     /** Ticks a hunted waiting raider entered the visit by its race instead of fleeing (v231, journal). */
@@ -8259,13 +8260,18 @@ object SpawnAndSwamp {
         // his bare main for 95 ticks with `strikeFits` in 8 of 9 samples, one M5R5 in the pocket's mouth: the race took the
         // straight walk, the step the danger matrix's detour (its 254 per cell in reach of one gun) — the fourth time the
         // two paths part (v202, v205, v207 were each worse). Counted before any fifth change of the path
-        if (target != null && strikeFits && !raidHome) {
+        // (v252) measured on the walk, not the range: the flow field to the target (a step along a path that gets shorter
+        // is progress even where the Chebyshev range stays), with a tired raider's tick, a target that walks (his builder
+        // at our pace) and the first tick after a change of target left out — the v250 count was two thirds these
+        if (target != null && strikeFits && !raidHome && target.id in spawnIds) {
             val tp = pos(target)
+            val field = flowTo(ctx, tp)
             for (r in raiders) {
-                val d = getRange(r, tp)
+                val f = field[r.x * 100 + r.y]
                 val was = raidPrevRange[r.id]
-                if (d > 1 && was != null && d >= was) raidStall++
-                raidPrevRange[r.id] = d
+                if (getRange(r, tp) > 1 && r.fatigue <= 0 && f >= 0 && was != null && raidPrevTarget[r.id] == target.id && f >= was) raidStall++
+                raidPrevRange[r.id] = f
+                raidPrevTarget[r.id] = target.id
             }
         } else raidPrevRange.clear()
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
