@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 263
+    private const val BOT_VERSION = 264
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -474,6 +474,11 @@ object SpawnAndSwamp {
     private var haulersLost = 0
     /** The price of what the spawn saves for this tick, 0 when it saves for nothing (v208; set in spawnIfNeeded). */
     private var spawnSavePrice = 0
+    /** The spawn that saves for spawnSavePrice this tick (v264). */
+    private var spawnSaveId: String? = null
+    private fun saveFor(spawn: StructureSpawn, price: Int) {
+        if (price > spawnSavePrice) { spawnSavePrice = price; spawnSaveId = spawn.id }
+    }
     /** The fleet was short of its own peak with a hauler wanted this tick (v208; set in spawnIfNeeded). */
     private var fleetShortNow = false
     /** The most haulers alive at once so far this match (v200, see fleetShort). */
@@ -1276,6 +1281,7 @@ object SpawnAndSwamp {
         // ПЕРВЫЙ ход тика — они общие, и три хода поставили бы три
         val freeSpawns = ctx.mySpawns.filter { it.spawning == null }.sortedByDescending { it.store[RESOURCE_ENERGY] ?: 0 }
         spawnSavePrice = 0
+        spawnSaveId = null
         fleetShortNow = false
         if (freeSpawns.isEmpty()) spawnIfNeeded(ctx, defenders, homeBound, alarm, enemyArrival, spawnUnderFire, null, true)
         else freeSpawns.forEachIndexed { i, sp ->
@@ -2482,7 +2488,7 @@ object SpawnAndSwamp {
                 if (DEBUG_LOG) println("spawn: warden cost=$price energy=$energy killers=" + fleetKillers.joinToString(" ") { "${it.id}(${it.x},${it.y})" } + " err=${r.error}")
                 return
             }
-            spawnSavePrice = maxOf(spawnSavePrice, price)
+            saveFor(spawn, price)
             return reach("wdSave")
         }
         if (USE_FIELD_HUNTER && !armNow && ctx.haulers.size >= 2 && hunterOrderedAt != getTicks() &&
@@ -2544,7 +2550,7 @@ object SpawnAndSwamp {
             // Against けろびー (v198 draws) his M5A1 killed 3 of 5 haulers by 479 in one game and all 5 by 628 in another;
             // the spawn kept saving for a raider of 990 at the income two haulers (or none) bring, the fleet stayed at 2 and
             // 0, there was no raider for 774 and 1160 ticks while his army stood far from his main, and both were draws
-            if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2) && !fleetShort) { spawnSavePrice = maxOf(spawnSavePrice, price); return reach("rSave2") }
+            if (energy < price && (!USE_RAID_THRIFT || ctx.haulers.size >= 2) && !fleetShort) { saveFor(spawn, price); return reach("rSave2") }
             if (energy < price) { reach("rSkip2") } else {
             val r = spawn.spawnCreep(RAID_BODY)
             reach(if (r.error == null) "rBuy" else "err")
@@ -2604,7 +2610,7 @@ object SpawnAndSwamp {
                 if (DEBUG_LOG) println("spawn: pile builder (fort) cost=$price energy=$energy err=${r.error}")
                 return
             }
-            if (!spawnUnderFire && !lastStand) { spawnSavePrice = maxOf(spawnSavePrice, price); return reach("fpSave") }
+            if (!spawnUnderFire && !lastStand) { saveFor(spawn, price); return reach("fpSave") }
         }
         // A STANDING FORT RE-BUYS ITS KEEPER FIRST (v154). Its tower holds one shot and the spawn's regeneration alone is a
         // shot every ten ticks (~90 a tick at range <=4, more than an M5H3 heals); with the keeper dead the tower is
@@ -2708,7 +2714,7 @@ object SpawnAndSwamp {
             // (v261) the first raider's saving is a saving too (v208): the keeper's surplus is what lies above it. Against
             // けろびー#48 (v259 draw) the spawn saved for the raider at 1-3 a tick while the keeper took everything above 500
             // into a second tower it never finished (1190/1250) — another raider's worth
-            if (energy < price) { if (USE_RAID_SAVE_PRICED) spawnSavePrice = maxOf(spawnSavePrice, price); return reach("rSave") }
+            if (energy < price) { if (USE_RAID_SAVE_PRICED) saveFor(spawn, price); return reach("rSave") }
             val r = spawn.spawnCreep(RAID_BODY)
             reach(if (r.error == null) "rBuy" else "err")
             if (r.error == null) { raidOrdered++; raidOrderedAt = getTicks(); spentFighters += price }
@@ -7691,6 +7697,9 @@ object SpawnAndSwamp {
     private const val USE_SITE_SUPPLY_BOUND = true
     /** A warden (R2M10) is bought and sent while a living killer of our haulers is one it outlasts (v263). */
     private const val USE_FLEET_WARDEN = true
+    /** A keeper takes from the spawn nothing the spawn saves for while its site, fed after the saving, still stands before
+     *  its deadline (v264). */
+    private const val USE_KEEPER_SPARES_SAVING = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
@@ -9024,6 +9033,18 @@ object SpawnAndSwamp {
         val job = siteJobs.filter { it.site != null && it.inTime }.minByOrNull { getRange(spawn, it.site!!) }
         val site = job?.site
         val tower = ctx.myTowers.filter { (it.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0) > 0 }.minByOrNull { getRange(spawn, it) }
+        // …NOR WHAT THE SPAWN SAVES FOR, WHILE THE SITE CAN WAIT FOR IT (v264). The spawn chose to save for a body, and the
+        // keeper drew the saving into its site later in the same tick: against けろびー#50 (v262 A/B, three draws of four)
+        // the spawn stood in `rSave2` for the pair's second raider while the tower's keeper took it — the spawn at 1 from
+        // 400 to 1000, the tower built 380 -> 903 at 2.4 a tick while its own clock read ready 120-486 against a deadline of
+        // 1140-1590 — and the second raider came 188-925 ticks after the first died (4-118 in the twelve wins) while his
+        // field builder raised spawn after spawn. A site fed from the spawn gets its energy after the saving is paid, at
+        // the steady income; while it still stands before its own deadline so, the keeper leaves the spawn to the body
+        val savingHolds = USE_KEEPER_SPARES_SAVING && spawnSavePrice > 0 && spawnSaveId == spawn.id && job != null && site != null &&
+            job.fromSpawn && run {
+                val steady = realisedIncome().let { if (it < 0.0) regenRate() else it + regenRate() }
+                job.ready + energyArrivalTicks(ctx, maxOf(0, spawnSavePrice - (spawn.store[RESOURCE_ENERGY] ?: 0)), steady) < job.deadline
+            }
         for (b in ctx.builders) {
             val carrying = b.store[RESOURCE_ENERGY] ?: 0
             val free = b.store.getFreeCapacity(RESOURCE_ENERGY) ?: 0
@@ -9048,7 +9069,8 @@ object SpawnAndSwamp {
             // readings, while the fleet fell 5 -> 0 by 750 unreplaced and three last-stand windows passed with no raider
             val houseCalm = ctx.combatEnemies.none { getRange(it, spawn) <= TOWER_FALLOFF_RANGE }
             val mayTake = !fromPile && (lastSpawnOutlivesFighter || fortTower) && (spawn.store[RESOURCE_ENERGY] ?: 0) > 0 && getRange(b, spawn) <= 1 &&
-                !(USE_SITE_KEEPER_SHORT_FLEET && fleetShortNow && houseCalm)
+                !(USE_SITE_KEEPER_SHORT_FLEET && fleetShortNow && houseCalm) && !savingHolds
+            if (savingHolds && free > 0 && getRange(b, spawn) <= 1) reach("kSpare")
             val mayScoop = pile != null && free > 0 && getRange(b, pile.pos) <= 1
             if (canAct && carrying > 0) {
                 if (site != null) b.build(site) else if (spotRampart != null) b.build(spotRampart) else tower?.let { b.transfer(it, RESOURCE_ENERGY) }
