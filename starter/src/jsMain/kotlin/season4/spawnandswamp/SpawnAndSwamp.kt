@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 245
+    private const val BOT_VERSION = 246
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -660,6 +660,8 @@ object SpawnAndSwamp {
     private var homeFight = false
     /** The home garrison beats the home threats on its own count this tick (v210, see the melee's home fight). */
     private var homeWinsNow = false
+    /** When our house falls to the threats at it, from now: their arrival plus spawn and rampart at their damage (v246). */
+    private var homeFallsIn = Int.MAX_VALUE / 4
     private var homeMode = "-"
 
     /** Страховка от НЕВИДИМОГО урона: хиты и клетка бойца в прошлом тике; ghostHit — сколько снято
@@ -4394,6 +4396,14 @@ object SpawnAndSwamp {
         // for two hundred ticks. A recall is worth it only if the wave gets back before the house falls — the home
         // threats' arrival plus our spawn's hits (and rampart) at their damage; a wave that cannot arrive in time saves
         // nothing by leaving and loses the siege it was winning
+        // the same clock for one marching melee called home by its row (v246, see homeFallsIn)
+        homeFallsIn = run {
+            val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
+            if (threatDps <= 0.0) return@run Int.MAX_VALUE / 4
+            val arrive = if (spawnUnderFire) 0 else homeThreats.minOf { (arrivalById[it.id] ?: Int.MAX_VALUE / 4).coerceAtMost(SPAWN_ALARM_TICKS) }
+            val house = (mySpawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y }.sumOf { it.hits ?: 0 }
+            (arrive + house / threatDps).toInt()
+        }
         val recallSaves = !USE_RECALL_IF_SAVES || waveMembers.isEmpty() || run {
             val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
             if (threatDps <= 0.0) return@run false
@@ -4785,8 +4795,16 @@ object SpawnAndSwamp {
                 // (v206) homeFight read `wins` on the garrison's own count (1-2 guns beating his raiders), and the wave's
                 // M12A5 turned home 80-177 cells off — about 510 fighter-ticks — past his tower, where seven of them died,
                 // while our pile spawns they walked to fell anyway (the same in a v195 draw with #441)
+                // …nor one that gets home no sooner than the house falls (v246): the recall saves nothing then, and the
+                // posture's own recall already asks it (recallSaves, v97) — the melee row did not. Against marlyman#443
+                // (v239 draw) at 1398 f53 (M12A5) stood next to his LAST spawn, 3000 + a rampart of 3104 at ~220 a tick of
+                // ours (28 ticks), when five M5A1 at our gate (150 a tick against 13000: 87 ticks) called it home by a road
+                // of 168; it turned at 1411, was back at 1419, the spawn went down to 150 and his tower killed f53 at 1449
+                // one strike short — he rebuilt the rampart and it stood at 2000. In the loss to #434 three M12A5 walked
+                // 146-172 ticks home to a house that fell in 75 and left the siege of (21,53)
                 homeTarget != null && (!marching || melee) && homeFight && (!melee || meleeHomeTarget != null) &&
-                    !(USE_WAVE_MELEE_STAYS && marching && melee && homeWinsNow) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
+                    !(USE_WAVE_MELEE_STAYS && marching && melee && homeWinsNow) &&
+                    !(USE_WAVE_MELEE_LATE && marching && melee && pathTicks(creep, ctx.loadedToSpawn, creep.x * 100 + creep.y) >= homeFallsIn) -> { target = if (melee) meleeHomeTarget!! else homeTarget; standoff = if (melee) 1 else CLOSE_STANDOFF }
                 melee && wallTarget != null -> { target = wallTarget; standoff = 1 }
                 // поводок — про ПОГОНЮ, а не про осаду: мили, не идущий в волне, остаётся дома, потому
                 // что за кайтящей целью он уходил на другой край карты и становился турелью (02.09).
@@ -7359,6 +7377,8 @@ object SpawnAndSwamp {
     private const val USE_SPAWN_KNOWS_SAVING = true
     /** A marching melee does not turn home to a fight the garrison wins without it (v210). */
     private const val USE_WAVE_MELEE_STAYS = true
+    /** A marching melee is not called home by its row when it gets home no sooner than the house falls (v246). */
+    private const val USE_WAVE_MELEE_LATE = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
