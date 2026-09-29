@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 271
+    private const val BOT_VERSION = 272
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -5495,7 +5495,10 @@ object SpawnAndSwamp {
             val hisDps = theirs.sumOf { val q = InfluenceMap.profileOf(it); q.ranged + q.melee }
             if (hisDps <= 0.0) inf else ours.minOf { it.hits } / hisDps
         } else ours.minOf { o ->
-            val pinnedO = getRange(o, spawn) <= 1
+            // (v272) ours are not pinned: the race asks whether the house leaves its post, and on the sortie nobody of
+            // ours must stand by the spawn — the house at the gates and under fire fights without the race. v270/v271
+            // counted his M6A6 on our M8R4s standing at the post by the spawn: `k=12/6` is 1200 over his 180
+            val pinnedO = !USE_KILL_RACE_UNPINNED && getRange(o, spawn) <= 1
             val meleeO = InfluenceMap.profileOf(o).melee > 0.0
             val dps = theirs.sumOf { m ->
                 val q = InfluenceMap.profileOf(m)
@@ -7874,6 +7877,8 @@ object SpawnAndSwamp {
     private const val USE_KILL_RACE_REACH = true
     /** …and a melee of ours meets his only where one of them reaches the other (v271). */
     private const val USE_KILL_RACE_MUTUAL = true
+    /** …and none of ours counts as pinned by the spawn: the race is the sortie's (v272). */
+    private const val USE_KILL_RACE_UNPINNED = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
