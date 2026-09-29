@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 257
+    private const val BOT_VERSION = 258
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4844,7 +4844,20 @@ object SpawnAndSwamp {
             val siegeSpawn = enemySpawn
             val engage = if (localAggressive) combatEnemies.filter { getRange(creep, it) <= ENGAGE_RANGE && !(marching && costsMoreThanSpawn(it, enemySpawn)) &&
                 (!USE_NO_FUTILE_CHASE || !hasRanged(creep) || gunCatches(creep, it)) &&
-                !(USE_SIEGE_MELEE && marching && siegeGoWin && siegeSpawn != null && getRange(it, siegeSpawn) > RANGED_RANGE && getRange(it, creep) > 2) }.minByOrNull { getRange(creep, it) } else null
+                !(USE_SIEGE_MELEE && marching && siegeGoWin && siegeSpawn != null && getRange(it, siegeSpawn) > RANGED_RANGE && getRange(it, creep) > 2) &&
+                // THE STORM'S MELEE GOES TO THE DOOR, NOT AFTER HIS KITERS (v258). Past the leash of v165 (his creeps farther
+                // than 3 from the spawn, and only while the front's siege wins) the `engage` row, above `marching -> spawn`,
+                // took any unshielded gun of his — and a melee walking a plain cell a tick never catches his M5R3/M4R2
+                // walking one too (the chase check was asked of our guns only). In three storms of his fort in the v252/v255
+                // draws with marlyman#441/#443 our melee struck his spawn from the door in 25 % of their ticks within 6 of it
+                // (58 % in four wins over the same bots) and walked after kiters or stood by his unarmed feeder on a side
+                // rampart in 43 %: 99a1f7 f60 left the door at 952 after an M5R3 three cells off (the rampart at 1526, his
+                // spawn ~36 ticks from falling) and swung at the feeder's rampart to ~1000; 5603d4 #55 walked 9-12 cells
+                // north and died without a swing at the spawn. A mobile defender of his spawn that is not at its door and not
+                // slower than our melee on the plain is left to our guns
+                !(USE_STORM_DOOR && isMelee(creep) && !hasRanged(creep) && marching && siegeSpawn != null &&
+                    siegeDefenders.any { d -> d.id == it.id } && canMove(it) && getRange(it, siegeSpawn) > 1 &&
+                    plainPeriod(it) <= plainPeriod(creep)) }.minByOrNull { getRange(creep, it) } else null
             // при перевесе сближаемся до CLOSE_STANDOFF; без перевеса на врага не идём вовсе —
             // держим пост у спавна отрядом (по одному нас и били), кайт и бегство — в mustFlee
             val closeIn = if (localAggressive) CLOSE_STANDOFF else RANGED_RANGE
@@ -5056,6 +5069,10 @@ object SpawnAndSwamp {
                 // (v199) in reach of his last spawn that the guns there finish: hold the cell and shoot
                 lastShotSpawn?.let { sp -> (hasRanged(creep) && getRange(creep, sp) <= RANGED_RANGE) || (hasMelee(creep) && getRange(creep, sp) <= 1) } == true -> null
                 mustFlee -> fleeStep(creep, nearbyEnemies, ctx.dangerMatrix) ?: pathStep(creep, mySpawn, 1, ctx.dangerMatrix)
+                // (v258) a marching melee at the door of the spawn its wave takes holds the door: no row of the step kept it
+                // there but v199's last shot, and four times in those three draws a melee striking his spawn left the door
+                // for a creep of his a few cells off
+                USE_STORM_DOOR && isMelee(creep) && !hasRanged(creep) && marching && enemySpawn != null && getRange(creep, enemySpawn) <= 1 -> null
                 hold -> null
                 // волна держит кромку башни: из-под огня кормленной башни — прочь; в поле — обычный шаг, но не
                 // в её дальность (враг у кромки бьётся по локальному счёту, см. localAggressive)
@@ -5148,8 +5165,13 @@ object SpawnAndSwamp {
             focusTarget != null && creep.getRangeTo(focusTarget) <= 1 -> focusTarget
             // a defender behind his rampart costs its rampart first (10000) — the last choice, not the weakest (v95:
             // against marlyman123 our melee swung 188 and 302 times at his posts against 64 and 58 at the spawn)
-            adjacent.isNotEmpty() -> (if (USE_SHIELD_LAST) adjacent.filter { shieldAt(it) <= 0 }.minByOrNull { it.hits } else null)
-                ?: adjacent.minByOrNull { it.hits + shieldAt(it) }
+            // (v258) an unarmed creep of his on a rampart away from the spawn's door is not struck: the swing goes into a
+            // rampart of 10000 and its death opens no cell of the door (99a1f7: 47 swings into the feeder's side rampart)
+            adjacent.any { !(USE_STORM_DOOR && shieldAt(it) > 0 && InfluenceMap.profileOf(it).let { p -> p.melee + p.ranged + p.heal <= 0.0 } &&
+                enemySpawn != null && creep.getRangeTo(enemySpawn) > 1 && getRange(it, enemySpawn) > 1) } ->
+                (if (USE_SHIELD_LAST) adjacent.filter { shieldAt(it) <= 0 }.minByOrNull { it.hits } else null)
+                ?: adjacent.filter { !(USE_STORM_DOOR && shieldAt(it) > 0 && InfluenceMap.profileOf(it).let { p -> p.melee + p.ranged + p.heal <= 0.0 } &&
+                    enemySpawn != null && getRange(it, enemySpawn) > 1) }.minByOrNull { it.hits + shieldAt(it) }
             enemySpawn != null && creep.getRangeTo(enemySpawn) <= 1 -> enemySpawn
             wallTarget != null && creep.getRangeTo(wallTarget) <= 1 -> wallTarget
             else -> null
@@ -7554,6 +7576,9 @@ object SpawnAndSwamp {
     private const val USE_HOUSE_CLOCK_TOWER = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
+    /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
+     *  door, no swing into an unarmed creep's rampart away from it (v258). */
+    private const val USE_STORM_DOOR = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
