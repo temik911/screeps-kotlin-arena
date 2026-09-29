@@ -569,6 +569,9 @@ object EscortRun {
 
     private fun runSpawn(w: World) {
         val spawn = w.mySpawn ?: return
+        // стартовая клетка их эскорта — с первого тика, до проверки занятого спавна: спавн рожает M4 с 1-го по 12-й, и
+        // записанная на 13-м клетка делала «эскорт идёт пешком» ложным всегда (живой A/B против ricardo#8: v45 решала гонку)
+        w.enemyEscort?.let { if (theirEscStart < 0) theirEscStart = key(it) }
         if (spawn.spawning != null) return
         val e = energyOf(w)
         val escort = w.escort
@@ -593,7 +596,6 @@ object EscortRun {
             // и ждёт тягачей, и ожидание до 40-го задерживало наш дебют на 13–14 тиков (гейт: none/race/melee 243 → 257,
             // rush+harvest и hunt+harvest проиграны)
             val theirEsc = w.enemyEscort
-            if (theirEsc != null && theirEscStart < 0) theirEscStart = key(theirEsc)
             val walking = theirEsc != null && theirEscStart >= 0 && dist(theirEsc, cellPos(theirEscStart)) >= 2
             // до второго тягача дебюта (13-й) ждать ничего не стоит; после — только за идущим пешком эскортом
             if (first.isNotEmpty() || (w.now >= ECON_WALK_CHECK && !walking) || w.now >= ECON_DECIDE_BY) {
