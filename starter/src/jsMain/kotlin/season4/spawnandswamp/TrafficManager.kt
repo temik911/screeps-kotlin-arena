@@ -58,6 +58,9 @@ object TrafficManager {
         priorityOf[creep.id] = priority
     }
 
+    /** Крип на этом тике уже просил шаг. */
+    fun wants(id: String): Boolean = id in desired
+
     /** Крип на прошлом тике шага не просил (стоял по своей воле или обездвижен). */
     fun wasStatic(id: String): Boolean = id !in lastDesired
 

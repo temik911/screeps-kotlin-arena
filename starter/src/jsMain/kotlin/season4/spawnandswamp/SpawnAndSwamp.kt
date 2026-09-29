@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 243
+    private const val BOT_VERSION = 244
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1101,7 +1101,15 @@ object SpawnAndSwamp {
         val structures: List<Position> = getObjectsByPrototype(StructureSpawn::class).filter { it.exists } +
             getObjectsByPrototype(StructureExtension::class).filter { it.exists } +
             getObjectsByPrototype(StructureTower::class).filter { it.exists }
-        val blocked: List<Position> = walls + ramparts.filter { it.my != true } + structures + immobile
+        // OUR OWN TOWER AND SPAWN SITES ARE NOT A PLACE TO STAND (v244): the engine does not build a structure that blocks
+        // movement while a creep stands on its site — against ●ω<♥♪#2 (v239 loss) our hauler and gunners stood on the
+        // tower's site 51 ticks at 636-700, 255 of its progress, and the keeper died at 701 with the tower one tick of
+        // those short. The site is walked round as the tower will be, and one standing on it is moved off (clearOwnSites)
+        ownSiteCells = if (!USE_SITE_CLEAR) emptySet() else mySites.filter { buildKindOf(it).let { k -> k == "StructureTower" || k == "StructureSpawn" } }
+            .mapTo(HashSet()) { it.x * 100 + it.y }
+        val blocked: List<Position> = walls + ramparts.filter { it.my != true } + structures + immobile +
+            mySites.filter { it.x * 100 + it.y in ownSiteCells }
+        blockedCells = blocked.mapTo(HashSet()) { it.x * 100 + it.y }
         val blockedForEnemy: List<Position> = walls + ramparts.filter { it.my != false } + structures
 
         InfluenceMap.setProtectedCells(ramparts.filter { it.my == true }.mapTo(HashSet()) { it.x * 100 + it.y })
@@ -1281,6 +1289,7 @@ object SpawnAndSwamp {
         val ourOffense = runFighters(ctx, enemyPower, alarm)
         cpuMark("fighters")
 
+        if (USE_SITE_CLEAR) clearOwnSites(active, myCreeps + enemyCreeps)
         TrafficManager.resolve(active.filter { canMove(it) }, myCreeps + enemyCreeps)
         cpuMark("traffic")
         InfluenceMap.pruneStances(myCreeps.mapTo(HashSet()) { it.id })
@@ -1510,6 +1519,36 @@ object SpawnAndSwamp {
     }
 
     private fun canMove(creep: Creep) = creep.body.any { it.type == MOVE && it.hits > 0 }
+
+    /** Our tower and spawn sites of this tick (x·100+y; v244). */
+    private var ownSiteCells: Set<Int> = emptySet()
+    /** Every cell our paths treat as blocked this tick (x·100+y; v244). */
+    private var blockedCells: Set<Int> = emptySet()
+    /** Steps that moved one of ours off our own site (v244). */
+    private var siteCleared = 0
+
+    /** One of ours standing on our tower or spawn site with no step of its own steps off it to a free cell (v244). */
+    private fun clearOwnSites(active: List<Creep>, all: List<Creep>) {
+        if (ownSiteCells.isEmpty()) return
+        val taken = HashSet<Int>()
+        all.forEach { taken.add(it.x * 100 + it.y) }
+        for (c in active) {
+            if (c.x * 100 + c.y !in ownSiteCells || TrafficManager.wants(c.id) || !canMove(c)) continue
+            var to = -1
+            for (dx in -1..1) for (dy in -1..1) {
+                val x = c.x + dx; val y = c.y + dy
+                if (to >= 0 || (dx == 0 && dy == 0) || x !in 0..99 || y !in 0..99) continue
+                val k = x * 100 + y
+                if (k in taken || k in blockedCells || k in ownSiteCells || forecastTerrainAt(k) == 2) continue
+                to = k
+            }
+            if (to < 0) continue
+            TrafficManager.request(c, InfluenceMap.cell(to / 100, to % 100), 0)
+            taken.add(to)
+            siteCleared++
+        }
+        if (DEBUG_LOG && getTicks() % LOG_EVERY == 0 && siteCleared > 0) println("site clear t=${getTicks()}: moved=$siteCleared")
+    }
     private fun hasMelee(creep: Creep) = creep.body.any { it.type == ATTACK && it.hits > 0 }
     private fun isMelee(creep: Creep) = creep.body.any { it.type == ATTACK }
     private fun hasWeapon(creep: Creep) = hasRanged(creep) || hasMelee(creep)
@@ -7380,6 +7419,8 @@ object SpawnAndSwamp {
     private const val USE_RAID_FIRST_BOUND = true
     /** A keeper with less WORK than the tower's body is joined by the tower's keeper wherever the house is (v243). */
     private const val USE_TOWER_KEEPER_ANYWHERE = true
+    /** Our tower and spawn sites are blocked for our paths and one standing on them steps off (clearOwnSites, v244). */
+    private const val USE_SITE_CLEAR = true
     /** A free gun hunts a builder only when his worth (the spawns he will still raise; one that cannot walk, his spawn
      *  sites within reach) pays the sortie there and back, and the house holds without it against those the forecast
      *  brings to it within the sortie (builderHunt, v228). */
