@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 249
+    private const val BOT_VERSION = 250
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -7244,6 +7244,9 @@ object SpawnAndSwamp {
     private var raidFinishedBuilder = 0
     /** Ticks a raider below its retreat share stayed because the guns reaching it are not slower (v249). */
     private var raidHeldOn = 0
+    /** Raider-ticks with the strike accepted, off the target, that closed no distance to it (v250, an instrument). */
+    private var raidStall = 0
+    private val raidPrevRange = HashMap<String, Int>()
     /** Ticks a raider at his door stayed where the old rule would have left (v229, journal). */
     private var raidStayed = 0
     /** Ticks a hunted waiting raider entered the visit by its race instead of fleeing (v231, journal). */
@@ -8226,8 +8229,23 @@ object SpawnAndSwamp {
                 if (step != null) TrafficManager.request(r, step, HAULER_LOADED_PRIORITY)
             }
         }
+        // THE STRIKE ACCEPTED AND NOT WALKED (v250, an instrument): a raider whose strike the race accepted and which is
+        // not at its target closes no distance to it this tick. Against けろびー#48 (v248 draw) r100 swung 4-7 cells from
+        // his bare main for 95 ticks with `strikeFits` in 8 of 9 samples, one M5R5 in the pocket's mouth: the race took the
+        // straight walk, the step the danger matrix's detour (its 254 per cell in reach of one gun) — the fourth time the
+        // two paths part (v202, v205, v207 were each worse). Counted before any fifth change of the path
+        if (target != null && strikeFits && !raidHome) {
+            val tp = pos(target)
+            for (r in raiders) {
+                val d = getRange(r, tp)
+                val was = raidPrevRange[r.id]
+                if (d > 1 && was != null && d >= was) raidStall++
+                raidPrevRange[r.id] = d
+            }
+        } else raidPrevRange.clear()
         if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) {
             val apart = (if (raiders.size >= 2) " apart=${getRange(raiders[0], raiders[1])}" else "") +
+                " stall=$raidStall" +
                 (if (USE_RAID_SAFE_WAIT) " X*=${raidWaitAt?.let { "(${it.x},${it.y})" } ?: "-"} S=${if (raidHorizon >= Int.MAX_VALUE / 4) "-" else raidHorizon.toString()}" else "") +
                 (if (USE_RAID_SPAWN_FIRST) " spawnFirst=$raidSpawnFirst" else "") +
                 (if (USE_RAID_FINISH_BUILDER) " finishB=$raidFinishedBuilder" else "") +
