@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 261
+    private const val BOT_VERSION = 262
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -6900,7 +6900,19 @@ object SpawnAndSwamp {
                 // отвечает, только когда он что-то видел; про причину простоя говорит поток, и на него
                 // отвечает модель ниже. Своя первая проба этого правила молча замораживала площадку
                 // через десять тиков после покупки смотрителя — тот ещё шёл (стенд siege: 0/1250)
-                if (observed > 0.0) return siteLeft / observed
+                // …but never faster than the energy comes (v262): the observed pace is the mean since the keeper came,
+                // and a stock spent at the start holds it up long after the income is gone — against けろびー#48 (v259 and
+                // v261 losses) his M5A1 took the whole fleet by 400-700, the income fell to 0, and the tower's site read
+                // `ready` 37-75 while it went 1.0 a tick (481 -> 201 left); the keeper drew 935-1079 from the spawn into a
+                // tower that never stood (725 and 1056 of 1250), and his storm took a house without it. What is left
+                // beyond the energy already in the spawn and the keepers is brought at the steady income
+                if (observed > 0.0) {
+                    val byHands = siteLeft / observed
+                    if (!USE_SITE_SUPPLY_BOUND || !fromSpawn) return byHands
+                    val inHand = energy + ctx.builders.sumOf { it.store[RESOURCE_ENERGY] ?: 0 }
+                    val steadyNow = realisedIncome().let { if (it < 0.0) flow else it + regenRate() }
+                    return maxOf(byHands, energyArrivalTicks(ctx, maxOf(0, siteLeft - inHand), steadyNow))
+                }
             }
         }
         val keeper = keeperBody(ctx, at, siteLeft, flow)
@@ -7599,6 +7611,9 @@ object SpawnAndSwamp {
     private const val USE_HOUSE_CLOCK_COMING = true
     /** The first raider's saving sets the spawn's saving price, as the second's does (v261). */
     private const val USE_RAID_SAVE_PRICED = true
+    /** A site fed from the spawn is ready no sooner than the steady income brings what is left beyond the energy in hand,
+     *  whatever the keeper's observed pace (v262). */
+    private const val USE_SITE_SUPPLY_BOUND = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
