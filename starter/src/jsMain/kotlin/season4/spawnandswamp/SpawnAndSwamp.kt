@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 267
+    private const val BOT_VERSION = 268
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2489,7 +2489,19 @@ object SpawnAndSwamp {
             // nearest killer (a cell a tick on any ground) and the saving at the steady income end before the last death
             // naming a living killer leaves the window; otherwise the spawn is not held for it. Its guns are the fewest
             // with which it outlasts the killers (wardenGuns)
-            val guns = if (USE_WARDEN_IN_TIME) fleetKillers.maxOf { wardenGunsFor(ctx, it) ?: 1 } else WARDEN_BODY.count { it == RANGED_ATTACK }
+            val steadyIn = realisedIncome().let { if (it < 0.0) flow else it + regenRate() }
+            // …THE BODY THAT ENDS THE KILLING SOONEST (v268). v266 took the fewest guns that answer him, and where no size
+            // kills him before his next hauler — one M5A1 of 600 hits takes a hauler of 400-1000 in 13-33 ticks — it fell
+            // back to the fewest that outlast him: one gun, 60 ticks of his killing instead of 30. Each size is priced in
+            // ticks: the saving at the steady income, its birth, the walk to the nearest killer and his death under its fire
+            val nearest = fleetKillers.minByOrNull { getRange(spawn, it) }!!
+            val guns = if (USE_WARDEN_SOONEST) (1..wardenGunsMost()).mapNotNull { g ->
+                val kill = wardenKillTicks(ctx, nearest, g) ?: return@mapNotNull null
+                val pr = wardenBody(g).sumOf { cost(it) }
+                val save = if (energy >= pr) 0.0 else energyArrivalTicks(ctx, pr - energy, steadyIn)
+                g to save + wardenBody(g).size * CREEP_SPAWN_TIME + getRange(spawn, nearest) + kill
+            }.minByOrNull { it.second }?.first ?: 1
+                else if (USE_WARDEN_IN_TIME) fleetKillers.maxOf { wardenGunsFor(ctx, it) ?: 1 } else WARDEN_BODY.count { it == RANGED_ATTACK }
             val body = if (USE_WARDEN_IN_TIME) wardenBody(guns) else WARDEN_BODY
             val price = body.sumOf { cost(it) }
             val until = if (!USE_WARDEN_IN_TIME) Int.MAX_VALUE else {
@@ -2497,8 +2509,7 @@ object SpawnAndSwamp {
                 haulerDeaths.filter { (_, k) -> k.any { it in ids } }.maxOf { it.first } + PRODUCTION_WINDOW
             }
             val reachTicks = body.size * CREEP_SPAWN_TIME + fleetKillers.minOf { getRange(spawn, it) }
-            val steady = realisedIncome().let { if (it < 0.0) flow else it + regenRate() }
-            val saveTicks = if (energy >= price) 0.0 else energyArrivalTicks(ctx, price - energy, steady)
+            val saveTicks = if (energy >= price) 0.0 else energyArrivalTicks(ctx, price - energy, steadyIn)
             if (getTicks() + saveTicks + reachTicks < until) {
                 if (energy >= price) {
                     val r = spawn.spawnCreep(body)
@@ -6165,6 +6176,20 @@ object SpawnAndSwamp {
     private var wardenOrderedAt = -1
     /** A warden of `guns` RANGED, five MOVE to each, the legs in front (v266). */
     private fun wardenBody(guns: Int): Array<BodyPartType> = Array(5 * guns) { MOVE } + Array(guns) { RANGED_ATTACK }
+    /** The most guns a warden can carry for what one spawn holds (v268). */
+    private fun wardenGunsMost(): Int = maxOf(1, SPAWN_ENERGY_CAPACITY / wardenBody(1).sumOf { cost(it) })
+    /** Ticks a warden of `guns` needs to kill e, or null when it does not outlast him — his fire on it at three against
+     *  its fire on him, his heal on him counted (v268). */
+    private fun wardenKillTicks(ctx: Ctx, e: Creep, guns: Int): Double? {
+        val p = InfluenceMap.profileOf(e)
+        if (p.ranged + p.melee <= 0.0) return null
+        val healOn = ctx.enemyCreeps.sumOf { h -> val hp = h.body.count { it.type == HEAL && it.hits > 0 }; val r = getRange(h, e)
+            if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0 }
+        val net = guns * RANGED_ATTACK_POWER - healOn
+        if (net <= 0.0) return null
+        val kill = e.hits / net
+        return if (p.ranged <= 0.0 || kill < wardenBody(guns).size * 100.0 / p.ranged) kill else null
+    }
     /** The fewest guns — within what one spawn holds — with which a warden kills e before e kills our weakest living
      *  hauler; else the fewest with which it outlasts him; null if none does. His fire on it at three against its fire
      *  on him, his heal on him counted (v266; v263 took two guns by name) */
@@ -7786,6 +7811,8 @@ object SpawnAndSwamp {
     private const val USE_WARDEN_IN_TIME = true
     /** …and the keeper spares the saving only while its site also stands before his guns reach our door (v267). */
     private const val USE_KEEPER_SPARES_STORM = true
+    /** The warden's guns are the size that ends the nearest killer soonest: saving, birth, walk and kill (v268). */
+    private const val USE_WARDEN_SOONEST = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
