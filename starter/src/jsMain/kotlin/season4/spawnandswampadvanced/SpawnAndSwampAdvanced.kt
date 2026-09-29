@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v56"
+    private const val BOT_VERSION = "v58"
 
     private const val LOG_EVERY = 50
 
@@ -1303,6 +1303,11 @@ object SpawnAndSwampAdvanced {
     private fun planTwin(t: Int, b: Base, spawn: StructureSpawn, mine: List<Creep>, all: Array<GameObject>) {
         if (b !== bases.first() || b.twinCell != null) return
         if (mine.none { isCombat(it) } || !homeHolds) return
+        // близнец — после башни своей базы: при доходе источника 10 в тик один спавн занят ~30 % времени, и близнец даёт
+        // очередь и +1 в тик, а не выпуск, башня же — 75–100 урона в тик у базы. Против けろびー#20/#22 близнец вставал
+        // раньше башни в 34 играх из 37 (близнец ~740-го, башня ~935-го), и его рейд из 5–6 M5R5 с ~650-го бил добытчиков:
+        // погиб добытчик до 1150-го — ни одной победы из 15, иначе 12 из 22
+        if (all.none { it is StructureTower && it.asDynamic().my == true && b.towerCell?.let { c -> it.x == c.x && it.y == c.y } == true }) return
         val economyTaken = bases.size >= 2 || (expansionPlanAt >= 0 && expansionPlan == null && expansion == null)
         if (!economyTaken) return
         val blocked = blockedCells(all)
