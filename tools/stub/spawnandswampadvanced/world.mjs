@@ -45,6 +45,7 @@ export const world = {
   // milestones for the calibration against a record (run.mjs prints them; calib.py reads the same off the replay): the
   // first tick a hit landed on a creep of each side, the first death of each side's creep, deaths per side
   first: { hit: [null, null], death: [null, null] }, deaths: [0, 0],
+  hitLog: null, // {from, to, list} — run.mjs HITS=a-b: every hit and heal of those ticks, [t, source, target, how, amount]
   api: null, // game/utils puts findPath/findClosestByPath here (game-object.mjs)
   tickStartNs: null,
   classes: null, // run.mjs: {Resource, StructureSpawn, StructureRampart, StructureTower, StructureExtension, StructureWall, StructureContainer, StructureRoad}
@@ -122,19 +123,32 @@ function settleCreep(c, dmg, heal) {
   if (c.hits !== old) {
     let h = c.hits;
     for (let i = c.body.length - 1; i >= 0; i--) { c.body[i].hits = Math.max(0, Math.min(100, h)); h -= 100; }
+    // the store's capacity follows the live CARRY parts, and what a damaged creep holds over it drops on its cell (World's
+    // _recalc-body.js and _drop-resources-without-space.js, called from creeps/tick.js when the hits fell). The replay
+    // 6abc0dc7 t=857: our founder's CARRY part dies under his fire (550 -> 500 hits) and a pile of 7 appears under it —
+    // what it carried
+    if (c.store) {
+      c.store.capacity = 50 * live(c, 'carry');
+      if (c.hits < old && c.store.energy > c.store.capacity) { const over = c.store.energy - c.store.capacity; c.store.energy = c.store.capacity; dropEnergy(c.x, c.y, over, true); }
+    }
   }
   return true;
 }
 
 /** Energy put on a cell: into a container standing there (arena-docs: "All dropped resources automatically goes to the
  *  container at the same tile"), the rest into the pile there. */
-export function dropEnergy(x, y, amount) {
+export function dropEnergy(x, y, amount, fresh = false) {
   if (amount <= 0) return;
   const cont = world.objects.find((o) => o.exists && o.kind === 'container' && o.x === x && o.y === y);
   if (cont) { const a = Math.min(amount, cont.store.free()); cont.store.energy += a; amount -= a; if (amount <= 0) return; }
   const existing = world.objects.find((o) => o.exists && o.kind === 'resource' && o.x === x && o.y === y);
   if (existing) { existing.amount += amount; return; }
-  world.objects.push(new world.classes.Resource(x, y, amount));
+  const r = new world.classes.Resource(x, y, amount);
+  // a pile made in the creeps' own tick (a creep's excess after its CARRY died, a dead creep's store) is not decayed on
+  // that tick — World inserts it while the objects' ticks already run; a pile made by an intent (a harvest's excess, a
+  // drop) is. The replay 6abc0dc7: the harvest excess of 5 at t=310 shows 4, the founder's 7 dropped at t=857 shows 7
+  if (fresh) r.freshAt = world.tick;
+  world.objects.push(r);
 }
 
 const who = (o) => (o.owner === 0 ? 'ours' : o.owner === 1 ? 'enemy' : 'neutral');
@@ -172,18 +186,20 @@ export function process() {
   // 1. combat
   const damage = new Map();
   const heals = new Map();
-  const addD = (target, d) => { if (d > 0) damage.set(target, (damage.get(target) || 0) + d); };
-  const addH = (target, h) => { if (h > 0) heals.set(target, (heals.get(target) || 0) + h); };
+  // HITS=a-b (run.mjs) keeps every hit and heal of those ticks with its source: world.hitLog
+  const hl = world.hitLog && t >= world.hitLog.from && t <= world.hitLog.to ? world.hitLog.list : null;
+  const addD = (target, d, src, how) => { if (d > 0) { damage.set(target, (damage.get(target) || 0) + d); if (hl) hl.push([t, src, target, how, d]); } };
+  const addH = (target, h, src, how) => { if (h > 0) { heals.set(target, (heals.get(target) || 0) + h); if (hl) hl.push([t, src, target, how, -h]); } };
   const taken = (target) => (target.kind === 'creep' ? effectMul(target, 'eff_damage_taken_modifier') : 1);
   const hittable = (tg) => tg && tg.exists && typeof tg.hits === 'number' && !(tg.kind === 'creep' && tg.spawning);
   for (const [c, m] of acts) {
     if (m.attack) {
       const tg = m.attack.target;
-      if (hittable(tg) && range(c, tg) <= 1 && tg.owner !== c.owner) addD(tg, live(c, 'attack') * 30 * effectMul(c, 'eff_attack_modifier') * taken(tg));
+      if (hittable(tg) && range(c, tg) <= 1 && tg.owner !== c.owner) addD(tg, live(c, 'attack') * 30 * effectMul(c, 'eff_attack_modifier') * taken(tg), c, 'a');
     }
     if (m.rangedAttack) {
       const tg = m.rangedAttack.target;
-      if (hittable(tg) && range(c, tg) <= 3 && tg.owner !== c.owner) addD(tg, live(c, 'ranged_attack') * 10 * effectMul(c, 'eff_ranged_attack_modifier') * taken(tg));
+      if (hittable(tg) && range(c, tg) <= 3 && tg.owner !== c.owner) addD(tg, live(c, 'ranged_attack') * 10 * effectMul(c, 'eff_ranged_attack_modifier') * taken(tg), c, 'r');
     }
     if (m.rangedMassAttack) {
       const parts = live(c, 'ranged_attack');
@@ -195,16 +211,16 @@ export function process() {
         const d = range(c, tg);
         if (d > 3) continue;
         const rate = d <= 1 ? 1 : d === 2 ? 0.4 : 0.1;
-        addD(tg, parts * 10 * rate * effectMul(c, 'eff_ranged_attack_modifier') * taken(tg));
+        addD(tg, parts * 10 * rate * effectMul(c, 'eff_ranged_attack_modifier') * taken(tg), c, 'R');
       }
     }
     if (m.heal) {
       const tg = m.heal.target;
-      if (tg && tg.exists && tg.kind === 'creep' && !tg.spawning && range(c, tg) <= 1) addH(tg, live(c, 'heal') * 12 * effectMul(c, 'eff_heal_modifier'));
+      if (tg && tg.exists && tg.kind === 'creep' && !tg.spawning && range(c, tg) <= 1) addH(tg, live(c, 'heal') * 12 * effectMul(c, 'eff_heal_modifier'), c, 'h');
     }
     if (m.rangedHeal) {
       const tg = m.rangedHeal.target;
-      if (tg && tg.exists && tg.kind === 'creep' && !tg.spawning && range(c, tg) <= 3) addH(tg, live(c, 'heal') * 4 * effectMul(c, 'eff_heal_modifier'));
+      if (tg && tg.exists && tg.kind === 'creep' && !tg.spawning && range(c, tg) <= 3) addH(tg, live(c, 'heal') * 4 * effectMul(c, 'eff_heal_modifier'), c, 'H');
     }
   }
   // towers: attack()/heal() checked owner, energy, cooldown and range at the call; energy and cooldown again here
@@ -217,10 +233,10 @@ export function process() {
     tw.cooldown = TOWER_COOLDOWN;
     if (m.type === 'attack') {
       const d = towerPower(TOWER_POWER_ATTACK, r) * taken(tg);
-      addD(tg, d);
+      addD(tg, d, tw, 'ta');
       world.towerShots[tw.owner]++; world.towerDamage[tw.owner] += d;
       world.events.push(`t=${t} tower ${who(tw)} (${tw.x},${tw.y}) shoots ${tg.summary ? tg.summary() : tg.kind} at (${tg.x},${tg.y}) r=${r} for ${Math.round(d)}`);
-    } else if (tg.kind === 'creep') addH(tg, towerPower(TOWER_POWER_HEAL, r));
+    } else if (tg.kind === 'creep') addH(tg, towerPower(TOWER_POWER_HEAL, r), tw, 'th');
   }
   // a hit on anything standing under a rampart goes into the rampart (attack.js / rangedAttack.js: the target is swapped).
   // A structure takes it now; a creep's damage and heal wait for the creep's own tick, after the movement (World's
@@ -324,14 +340,14 @@ export function process() {
     c.exists = false;
     world.events.push(`t=${t} creep ${who(c)} ${c.summary()} died at (${c.x},${c.y})`);
     if (c.owner === 0 || c.owner === 1) { world.deaths[c.owner]++; if (world.first.death[c.owner] === null) world.first.death[c.owner] = t; }
-    if (c.store && c.store.energy > 0) dropEnergy(c.x, c.y, c.store.energy);
+    if (c.store && c.store.energy > 0) dropEnergy(c.x, c.y, c.store.energy, true);
   }
   // 8. regen, decay, cooldowns
   for (const o of world.objects) {
     if (!o.exists) continue;
     if (o.kind === 'spawn') o.store.energy = Math.min(o.store.capacity, o.store.energy + 1);
     else if (o.kind === 'source' && o.energy < o.energyCapacity) o.energy = Math.min(o.energyCapacity, o.energy + SOURCE_ENERGY_REGEN);
-    else if (o.kind === 'resource') { o.amount -= Math.ceil(o.amount / RESOURCE_DECAY); if (o.amount <= 0) o.exists = false; }
+    else if (o.kind === 'resource' && o.freshAt !== t) { o.amount -= Math.ceil(o.amount / RESOURCE_DECAY); if (o.amount <= 0) o.exists = false; }
     else if (o.kind === 'tower' && o.cooldown > 0) o.cooldown--; // a shot on tick t: ready again on t + TOWER_COOLDOWN
   }
   world.objects = world.objects.filter((o) => o.exists);

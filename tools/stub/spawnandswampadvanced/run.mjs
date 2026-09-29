@@ -15,7 +15,7 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, cpSync
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { homedir } from 'node:os';
-import { world, process as step, idx, inBounds, range, creeps, live, terrainAt, finishSite } from './world.mjs';
+import { world, process as step, idx, inBounds, range, creeps, live, terrainAt, finishSite, towerPower, blockedAt } from './world.mjs';
 import { Resource } from './game/prototypes/resource.mjs';
 import { Source } from './game/prototypes/source.mjs';
 import { StructureSpawn } from './game/prototypes/spawn.mjs';
@@ -27,7 +27,7 @@ import { StructureExtension } from './game/prototypes/extension.mjs';
 import { StructureRoad } from './game/prototypes/road.mjs';
 import { ConstructionSite } from './game/prototypes/construction-site.mjs';
 import { Creep } from './game/prototypes/creep.mjs';
-import { TOWER_ENERGY_COST, TOWER_RANGE, CONSTRUCTION_COST } from './game/constants.mjs';
+import { TOWER_ENERGY_COST, TOWER_RANGE, CONSTRUCTION_COST, TOWER_POWER_ATTACK, TOWER_POWER_HEAL } from './game/constants.mjs';
 import { CostMatrix, searchPath } from './game/path-finder.mjs';
 import { getDirection, createConstructionSite } from './game/utils.mjs';
 
@@ -39,6 +39,9 @@ const BUNDLE = 'kotlin/screeps-kotlin-arena-starter/season4/spawnandswampadvance
 const BOT = process.env.BOT || new URL('../../../build/js/packages/screeps-kotlin-arena-starter/' + BUNDLE, import.meta.url).href;
 const ticks = parseInt(process.argv[2] || '5000', 10);
 const TRACE = process.env.TRACE ? process.env.TRACE.split('-').map((v) => parseInt(v, 10)) : null;
+// HITS=a-b: after each of those ticks, every creep's hits (`hitdump`) and every hit and heal the engine dealt (`hitlog`),
+// by record id (his keep theirs; ours through the calibration's match) — hitcmp.py sets them beside the replay's
+const HITS = process.env.HITS ? process.env.HITS.split('-').map((v) => parseInt(v, 10)) : null;
 const scenario = (process.argv[3] || 'none');
 const PERSONAS = ['kerobii', 'kerobii22', 'ricardo'];
 const KNOWN = new Set(['none', 'ghost', ...PERSONAS]);
@@ -125,7 +128,7 @@ const PART = { m: 'move', w: 'work', c: 'carry', a: 'attack', r: 'ranged_attack'
 const PART_CH = Object.fromEntries(Object.entries(PART).map(([k, v]) => [v, k]));
 const bodyOf = (rle) => [].concat(...[...rle.matchAll(/([a-z])(\d+)/g)].map(([, k, n]) => Array(parseInt(n, 10)).fill(PART[k])));
 const rleOf = (types) => { let s = '', prev = null, n = 0; for (const t of types) { if (t === prev) n++; else { if (prev) s += PART_CH[prev] + n; prev = t; n = 1; } } if (prev) s += PART_CH[prev] + n; return s; };
-const rec = { k: -1, i: 0, pos: new Map(), last: new Map(), drop: new Map(), hits: new Map(), fat: new Map(), side: new Map(), born: new Map(), body: new Map(), died: new Map(), series: new Map(), builds: [], objs: new Map() };
+const rec = { k: -1, i: 0, sp: new Map(), pos: new Map(), last: new Map(), drop: new Map(), hits: new Map(), fat: new Map(), side: new Map(), born: new Map(), body: new Map(), died: new Map(), series: new Map(), builds: [], objs: new Map() };
 if (REPLAY) for (const o of REPLAY.objects) rec.objs.set(o.id, o);
 /** Advance the record to tick k: creeps born (n), moved (u), gone (x), structure values (s), actions (a) of that tick. */
 function recTo(k) {
@@ -134,9 +137,10 @@ function recTo(k) {
   while (rec.i < T.length && T[rec.i].k <= k) {
     const tk = T[rec.i++];
     rec.k = tk.k;
-    for (const [id, side, x, y, hits, , body] of tk.n || []) { rec.pos.set(id, [x, y]); rec.last.set(id, [x, y]); rec.hits.set(id, hits); rec.side.set(id, side === REC_US ? 0 : 1); rec.born.set(id, tk.k); rec.body.set(id, body); }
+    for (const [id, side, x, y, hits, , body, sp] of tk.n || []) { rec.sp.set(id, !!sp); rec.pos.set(id, [x, y]); rec.last.set(id, [x, y]); rec.hits.set(id, hits); rec.side.set(id, side === REC_US ? 0 : 1); rec.born.set(id, tk.k); rec.body.set(id, body); }
     if (tk.k === k) rec.drop = new Map();
-    for (const [id, x, y, hits, fat] of tk.u || []) {
+    for (const [id, x, y, hits, fat, sp] of tk.u || []) {
+      rec.sp.set(id, !!sp);
       if (tk.k === k && rec.hits.has(id) && hits < rec.hits.get(id)) rec.drop.set(id, rec.hits.get(id) - hits);
       rec.pos.set(id, [x, y]); rec.last.set(id, [x, y]); rec.hits.set(id, hits); rec.fat.set(id, fat);
     }
@@ -180,6 +184,45 @@ function matchOurs(t) {
       dev.off++;
       if (dev.first === null) { dev.first = t; dev.where = `${c.summary()} ${c.id} at (${c.x},${c.y}) recorded (${p[0]},${p[1]})`; }
     }
+  }
+}
+
+// STATEDIFF=N: after every tick, the stub against the record, object by object — each creep's cell, hits and fatigue (his
+// by id, ours through the match above), each structure's hits and energy, each pile, each site's progress (by kind and
+// cell) — printing the first N differences, each item once: the first line is where the stub stopped being the match
+const SD = process.env.STATEDIFF ? { n: parseInt(process.env.STATEDIFF, 10) || 40, seen: new Set(), out: 0, maxE: new Map() } : null;
+const REC_KIND = { spawn: 'spawn', tower: 'tower', rampart: 'rampart', extension: 'extension', constructedWall: 'wall', container: 'container', energy: 'resource', constructionSite: 'site' };
+function stateDiff(t) {
+  if (!SD || SD.out >= SD.n || !REPLAY) return;
+  const say = (key, msg) => { if (SD.seen.has(key) || SD.out >= SD.n) return; SD.seen.add(key); SD.out++; origLog(`statediff t=${t} ${msg}`); };
+  const byRec = new Map([...ourMatch].map(([c, id]) => [id, c]));
+  for (const [id, p] of rec.pos) {
+    const side = rec.side.get(id);
+    const c = side === 1 ? world.objects.find((o) => o.exists && o.kind === 'creep' && o.id === id) : byRec.get(id);
+    if (!c || !c.exists) { say(`gone:${id}`, `${side ? 'his' : 'our'} ${rec.body.get(id)} ${id} (born ${rec.born.get(id)}) alive in the record at (${p[0]},${p[1]}), ${side === 0 && !byRec.has(id) ? 'no creep of ours matched to it' : 'dead'} in the stub`); continue; }
+    if (c.spawning !== !!rec.sp.get(id)) say(`sp:${id}`, `${side ? 'his' : 'our'} ${c.summary()} ${id} ${c.spawning ? 'still spawning' : 'out'} in the stub, ${rec.sp.get(id) ? 'spawning' : 'out'} in the record`);
+    if (c.spawning) continue;
+    if (c.x !== p[0] || c.y !== p[1]) say(`cell:${id}`, `${side ? 'his' : 'our'} ${c.summary()} ${id} at (${c.x},${c.y}) recorded (${p[0]},${p[1]})`);
+    if (c.hits !== rec.hits.get(id)) say(`hits:${id}`, `${side ? 'his' : 'our'} ${c.summary()} ${id} hits ${c.hits} recorded ${rec.hits.get(id)}`);
+    if (side === 0 && rec.fat.has(id) && c.fatigue !== rec.fat.get(id)) say(`fat:${id}`, `our ${c.summary()} ${id} fatigue ${c.fatigue} recorded ${rec.fat.get(id)}`);
+  }
+  for (const [id, se] of rec.series) {
+    const o = rec.objs.get(id);
+    const kind = o && REC_KIND[o.kind];
+    if (!kind || rec.died.has(id)) continue;
+    const owner = o.side === null ? undefined : (o.side === REC_US ? 0 : 1);
+    const st = world.objects.find((q) => q.exists && q.kind === kind && q.x === o.x && q.y === o.y && (owner === undefined || q.owner === undefined || q.owner === owner) && (kind !== 'site' || (q.proto && q.proto.name === o.structure)));
+    // the record writes a container's hits as 0 (the vault's four, and ours): only its energy says anything
+    // a site finished keeps its id in the record with its energy back at 0; a pile gone may have a new pile (a new id) on its cell
+    const gone = kind === 'resource' ? se.e <= 0 : kind === 'site' ? (se.e === 0 && (SD.maxE.get(id) || 0) > 0) : (kind !== 'container' && se.hits <= 0);
+    if (kind === 'site') SD.maxE.set(id, Math.max(SD.maxE.get(id) || 0, se.e));
+    if (gone && kind === 'resource' && [...rec.series].some(([q, e]) => q !== id && e.e > 0 && rec.objs.get(q) && rec.objs.get(q).kind === 'energy' && rec.objs.get(q).x === o.x && rec.objs.get(q).y === o.y)) continue;
+    if (gone && kind === 'site') continue;
+    if (gone) { if (st) say(`gone:${id}`, `${o.kind} ${id} (${o.x},${o.y}) gone in the record, standing in the stub`); continue; }
+    if (!st) { if (kind === 'site' && world.objects.some((q) => q.exists && q.x === o.x && q.y === o.y && q.kind === (o.structure || '').replace('Structure', '').toLowerCase())) continue; say(`miss:${id}`, `${o.kind} ${id} (${o.x},${o.y}) in the record (hits ${se.hits}, e ${se.e}), not in the stub`); continue; }
+    if (kind !== 'site' && kind !== 'resource' && kind !== 'container' && st.hits !== se.hits) say(`h:${id}`, `${o.kind} ${id} (${o.x},${o.y}) hits ${st.hits} recorded ${se.hits}`);
+    const e = kind === 'resource' ? st.amount : kind === 'site' ? st.progress : st.store ? st.store.energy : undefined;
+    if (e !== undefined && e !== se.e && !(kind === 'site' && owner === 1)) say(`e:${id}`, `${o.kind} ${id} (${o.x},${o.y}) energy ${e} recorded ${se.e}`);
   }
 }
 
@@ -233,9 +276,10 @@ function towerFire(tw, oursC) {
 // follows the record too: a site of his appears on its first recorded build and gains the recorded progress only while
 // the creep that built it in the record is alive in the stub — kill his builder and his base is never raised; a structure
 // of his appears on its recorded tick only from a site kept in step. His spawns' and towers' energy is the record's.
-// What he does NOT take from the record is his fire: every hit is chosen here, against where our creeps are in the stub
-// (`fight`, `towerFire`), because the record's targets are where OUR recorded creeps stood. A creep of his that outlives
-// its record (we did not kill it live, or killed it later) stands and fights what comes within five.
+// His fire is the record's too, by target cell (below): his recorded shot at a cell hits what of ours stands there in the
+// stub; a shot at a cell we have left, or a creep of his that outlives its record (we did not kill it live, or killed it
+// later), fights by the stub's rule (`fight`, `towerFire`) — the latter standing and fighting what comes within five. On
+// the tick a creep of his dies the record keeps neither its fire nor its last step: `inferDeathFire` and `lastStep`.
 const gh = { sites: new Map(), dead: new Set(), stats: { born: 0, missed: 0, siteLost: 0, off: 0, on: 0, fallback: 0 } };
 function ghostTick(t) {
   const his = creeps().filter((c) => c.owner === 1);
@@ -297,7 +341,7 @@ function ghostTick(t) {
     const dbg = process.env.GHOSTACT && (() => { const [a, b] = process.env.GHOSTACT.split('-').map(Number); return t >= a && t <= b; })();
     // the record keeps no action of a creep on the tick it dies (6abc107c: 22 of 22 hits whose attacker has no action were
     // dealt by a creep dying that tick) — its fire that tick is read off its victims' entries (`A` at its cell)
-    if (rec.died.get(c.id) === t && !recActs.has(c.id)) { deathFire(c, t, oursC, oursS); continue; }
+    if (rec.died.get(c.id) === t && !recActs.has(c.id)) { deathFire(c, t, oursC, oursS); lastStep(c, t, his); continue; }
     if (outlived(c.id, t) || replayFire(c)) { gh.stats.fallback++; if (dbg) origLog(`ghostact t=${t} ${c.summary()} ${c.id} (${c.x},${c.y}) falls back to fight (recorded ${JSON.stringify(recActs.get(c.id) || [])})`); fight(c, oursC, oursS, his); }
     else if (dbg && recActs.get(c.id)) origLog(`ghostact t=${t} ${c.summary()} ${c.id} (${c.x},${c.y}) replays ${JSON.stringify(recActs.get(c.id))}`);
     const p = rec.pos.get(c.id);
@@ -318,26 +362,62 @@ function ghostTick(t) {
     }
   }
 }
-/** The fire of his creep on the tick it dies in the record, where the record keeps no action of it: each victim entry
- *  (`[victim, 'A', x, y]` at the creep's recorded cell) is a hit it dealt; the victim here is our creep matched to the
- *  recorded one, or our structure on the victim's cell. A melee hit when it stood beside the victim; a ranged hit single or
- *  mass by which of the two the victim's recorded loss is nearer (10 a RANGED_ATTACK part, or that times 1 / 0.4 / 0.1). */
+/** The fire of his creep on the tick it dies in the record, where the record keeps no action of it: first what its
+ *  victims' hits say (inferDeathFire — our creeps' unexplained loss, his creeps' unexplained heal); then, for a weapon that
+ *  found no victim there, each victim entry (`[victim, 'A', x, y]` at the creep's recorded cell — a structure, or a creep
+ *  under a rampart) is a hit it dealt; the victim here is our creep matched to the recorded one, or our structure on the
+ *  victim's cell. A melee hit when it stood beside the victim; a ranged hit single or mass by which of the two the victim's
+ *  recorded loss is nearer (10 a RANGED_ATTACK part, or that times 1 / 0.4 / 0.1). */
 function deathFire(c, t, oursC, oursS) {
   const at = rec.last.get(c.id);
   if (!at) return;
   const byRec = new Map([...ourMatch].map(([cr, id]) => [id, cr]));
+  const used = new Set();
+  const his = creeps().filter((q) => q.owner === 1 && !q.spawning);
+  for (const sh of (REPLAY.deathFire.get(t) && REPLAY.deathFire.get(t).get(c.id)) || []) {
+    if (sh.how === 'R') { c.rangedMassAttack(); used.add('ranged'); continue; }
+    if (sh.how === 'h' || sh.how === 'H') { const f = his.find((q) => q.id === sh.victim); if (f) { if (sh.how === 'h') c.heal(f); else c.rangedHeal(f); } continue; }
+    let v = byRec.get(sh.victim);
+    const so = rec.objs.get(sh.victim);
+    if (so && REC_KIND[so.kind]) v = world.objects.find((q) => q.exists && q.kind === REC_KIND[so.kind] && q.x === so.x && q.y === so.y && typeof q.hits === 'number');
+    else if (!v || !v.exists) { const p = rec.last.get(sh.victim); v = p && oursC.find((q) => q.x === p[0] && q.y === p[1]); }
+    if (!v) continue;
+    if (sh.how === 'a') { c.attack(v); used.add('melee'); } else { c.rangedAttack(v); used.add('ranged'); }
+  }
   for (const a of REPLAY.actsAt.get(t) || []) {
     if (a[1] !== 'A' || a[2] !== at[0] || a[3] !== at[1]) continue;
     let v = byRec.get(a[0]);
     if (!v || !v.exists) { const o = rec.objs.get(a[0]); const p = o ? [o.x, o.y] : rec.last.get(a[0]); v = p && (oursC.find((q) => q.x === p[0] && q.y === p[1]) || oursS.find((q) => q.x === p[0] && q.y === p[1] && q.hits !== undefined)); }
     if (!v) continue;
     const r = range(c, v);
-    if (live(c, A) > 0 && r <= 1) { c.attack(v); continue; }
-    if (live(c, R) === 0 || r > 3) continue;
+    if (live(c, A) > 0 && r <= 1 && !used.has('melee')) { c.attack(v); continue; }
+    if (live(c, R) === 0 || r > 3 || used.has('ranged')) continue;
     const drop = rec.drop.get(a[0]) || 0, single = 10 * live(c, R), mass = single * [1, 1, 0.4, 0.1][r];
     if (Math.abs(drop - mass) < Math.abs(drop - single)) c.rangedMassAttack(); else c.rangedAttack(v);
   }
 }
+/** The last step of his creep on the tick it dies in the record — not written either (the creep is gone from the state
+ *  after the tick). The engine moves before it applies the tick's damage (World's creep tick; the processor's movement
+ *  check counts every creep standing still as an obstacle, a dying one too), so when another creep enters the dying one's
+ *  cell on that tick the dying one stepped out first. Measured over the 146 stored replays of this arena: 182 creeps
+ *  entered the cell of a creep dying on that tick, and every one of the 182 dying creeps could step (fatigue 0, a live
+ *  MOVE); of the 14 353 that died unable to step, not one cell was entered. 6abc107c t=857: his m4r5m1 dies on (65,7) and
+ *  his healer steps onto it; the ghost kept the dying one in place, the healer stood a cell short on (66,7), our M5R5 shot
+ *  it there (50 hits instead of 100) and the logs parted at 860. It steps the way the one entering its cell steps (a
+ *  column walking on), else round that way, else into the entering one's cell (a swap). */
+function lastStep(c, t, his) {
+  if (c.fatigue > 0 || live(c, M) === 0) return;
+  const byRec = new Map([...ourMatch].map(([cr, id]) => [id, cr]));
+  let q = his.find((o) => o !== c && !o.spawning && rec.pos.get(o.id) && rec.pos.get(o.id)[0] === c.x && rec.pos.get(o.id)[1] === c.y && (o.x !== c.x || o.y !== c.y));
+  if (!q) for (const [id, p] of rec.pos) { const o = byRec.get(id); if (o && o.exists && p[0] === c.x && p[1] === c.y && (o.x !== c.x || o.y !== c.y) && range(o, c) === 1) { q = o; break; } }
+  if (!q || range(q, c) !== 1) return;
+  const d = getDirection(c.x - q.x, c.y - q.y);
+  const free = (dd) => { const [dx, dy] = DIRXY[dd]; const x = c.x + dx, y = c.y + dy; return inBounds(x, y) && !blockedAt(x, y, c.owner) && !creeps().some((o) => o !== q && !o.spawning && o.x === x && o.y === y); };
+  const order = [d, (d % 8) + 1, ((d + 6) % 8) + 1];
+  const pick = order.find(free);
+  c.move(pick || getDirection(q.x - c.x, q.y - c.y));
+}
+const DIRXY = { 1: [0, -1], 2: [1, -1], 3: [1, 0], 4: [1, 1], 5: [0, 1], 6: [-1, 1], 7: [-1, 0], 8: [-1, -1] };
 /** After the stub's tick t: what the record says of his base after that tick — his sites' progress, his structures that
  *  appear, his spawns' and towers' energy (the replay is the state after a tick, and so is this). */
 function ghostAfter(t) {
@@ -420,7 +500,115 @@ if (REPLAY) {
     if (tk.a) REPLAY.actsAt.set(tk.k, tk.a);
     for (const [id, x, y, , , sp] of tk.u || []) if (inside.has(id) && !sp) { REPLAY.outCell.set(id, [x, y]); inside.delete(id); }
   }
+  REPLAY.deathFire = inferDeathFire();
   recTo(0);
+}
+/**
+ * What the record does not keep of a creep of his on the tick it dies, and the engine did. The replay is the state after a
+ * tick, and a creep that died on it is gone from that state together with its own actionLog: neither its fire nor its last
+ * step of that tick is written (6abc107c: 22 of 22 hits whose attacker has no action were dealt by a creep dying that tick).
+ * Its victims do not make up for it: World's actionLog.attacked is ONE cell, the last hit processed, so a creep hit by two
+ * names one of them — 6abc0dc7 t=1314: our M8R8 lost 100 to two M5R5s at range, its `A` names only the one that lived, the
+ * other's last shot was lost, and from that 50 hits the stub parted from the match (our M8R8 at 1600 against 1550, then a
+ * different retreat at 1351, its death at 1358 missing, the logs apart at 1359 and a win at 2280 against the live 3601).
+ * So its fire is read off the hits: a creep of ours whose recorded loss this tick is more than the tick's recorded actions
+ * deal (the engine's rule on the record's bodies and hits at the start of the tick: 10 a live RANGED_ATTACK, 30 an ATTACK,
+ * 1 / 0.4 / 0.1 of it for a mass attack at 1 / 2 / 3, 12 / 4 a HEAL, a tower by range; nothing through a rampart) took the
+ * rest from a creep dying in reach; so does a creep of his that gained more than the recorded heals give (a dying healer).
+ * Returns tick -> Map(his dying creep -> [{how: 'r' | 'R' | 'a' | 'h' | 'H', victim: record id}]).
+ */
+function inferDeathFire() {
+  const out = new Map();
+  const cr = new Map(); // creeps: id -> {side, x, y, hits, body, sp}
+  const st = new Map(); // structures with hits (spawns, towers, ramparts, extensions, the vault walls): id -> {side, x, y, hits, kind}
+  const towers = new Map([...rec.objs.values()].filter((o) => o.kind === 'tower').map((o) => [o.id, o]));
+  const partsAlive = (c, type) => { const n = c.body.length; let k = 0; for (let i = 0; i < n; i++) if (c.body[i] === type && c.hits > 100 * (n - 1 - i)) k++; return k; };
+  const MASS = [1, 1, 0.4, 0.1];
+  const ourSide = (v) => v.side === REC_US;
+  for (const tk of REPLAY.ticks) {
+    const start = new Map([...cr].map(([id, c]) => [id, { ...c }]));
+    const stStart = new Map([...st].map(([id, o]) => [id, { ...o }]));
+    for (const [id, side, x, y, hits, , body, sp] of tk.n || []) cr.set(id, { side, x, y, hits, body: bodyOf(body), sp: !!sp, creep: true });
+    for (const [id, x, y, hits, , sp] of tk.u || []) { const c = cr.get(id); if (c) Object.assign(c, { x, y, hits, sp: !!sp }); }
+    for (const [id, body] of tk.b || []) { const c = cr.get(id); if (c) c.body = bodyOf(body); }
+    for (const [id, hits] of tk.s || []) {
+      const o = rec.objs.get(id);
+      if (!o || !['spawn', 'tower', 'rampart', 'extension', 'constructedWall'].includes(o.kind)) continue;
+      if (hits > 0) st.set(id, { side: o.side, x: o.x, y: o.y, hits, kind: o.kind }); else if (st.has(id)) st.get(id).hits = 0;
+    }
+    const gone = new Set(tk.x || []);
+    const acting = new Set((tk.a || []).map((a) => a[0]));
+    const dying = [...gone].filter((id) => { const c = start.get(id); return c && !c.sp && !ourSide(c) && !acting.has(id); });
+    if (dying.length) {
+      // the start of the tick: what stands on each cell, and which cells a rampart covers
+      const rampAt = new Map(), creepAt = new Map(), structAt = new Map();
+      for (const [id, o] of stStart) if (o.hits > 0) (o.kind === 'rampart' ? rampAt : structAt).set(idx(o.x, o.y), id);
+      for (const [id, c] of start) if (!c.sp) creepAt.set(idx(c.x, c.y), id);
+      const at = (id) => start.get(id) || stStart.get(id);
+      // a hit at a cell lands on the rampart there, else the creep, else the structure (World's attack/rangedAttack swap the
+      // target for the rampart over it)
+      const hitAt = (x, y) => rampAt.get(idx(x, y)) ?? creepAt.get(idx(x, y)) ?? structAt.get(idx(x, y));
+      // a mass attack: every owned object of the other side in three, not what stands under a rampart (the rampart is hit)
+      const massTargets = (c) => [...start, ...stStart].filter(([, v]) => !v.sp && (v.creep || v.hits > 0) && v.side !== null && v.side !== c.side &&
+        range(c, v) <= 3 && (v.kind === 'rampart' || !rampAt.has(idx(v.x, v.y))));
+      const known = new Map();
+      const add = (id, d) => { if (id !== undefined) known.set(id, (known.get(id) || 0) + d); };
+      for (const [src, how, x, y] of tk.a || []) {
+        const c = start.get(src), tw = towers.get(src);
+        if (c && how === 'R') { for (const [vid, v] of massTargets(c)) add(vid, partsAlive(c, R) * 10 * MASS[range(c, v)]); continue; }
+        if (c && how === 'r') add(hitAt(x, y), partsAlive(c, R) * 10);
+        else if (c && how === 'a') add(hitAt(x, y), partsAlive(c, A) * 30);
+        else if (c && how === 'h') add(creepAt.get(idx(x, y)), -partsAlive(c, H) * 12);
+        else if (c && how === 'H') add(creepAt.get(idx(x, y)), -partsAlive(c, H) * 4);
+        else if (tw && how === 'a') add(hitAt(x, y), towerPower(TOWER_POWER_ATTACK, range(tw, { x, y })));
+        else if (tw && how === 'h') add(creepAt.get(idx(x, y)), -towerPower(TOWER_POWER_HEAL, range(tw, { x, y })));
+      }
+      // the rest: start - known - end (positive: damage nobody recorded; negative: a heal nobody recorded). A creep ending at
+      // full hits says nothing (a heal may have been capped); what died gives a lower bound
+      const rest = new Map();
+      for (const [id, v] of [...start, ...stStart]) {
+        if (v.sp || !(v.creep || v.hits > 0)) continue;
+        if (v.creep && rampAt.has(idx(v.x, v.y))) continue; // shielded: its hits say nothing of fire at it
+        const end = v.creep ? (gone.has(id) ? 0 : cr.get(id).hits) : st.get(id).hits;
+        const dead = end <= 0;
+        if (v.creep && !dead && end >= v.body.length * 100) continue;
+        const r = v.hits - (known.get(id) || 0) - end;
+        if (r !== 0) rest.set(id, { r, dead });
+      }
+      const m = new Map();
+      for (const id of dying.sort()) {
+        const c = start.get(id);
+        const shots = [];
+        const nA = partsAlive(c, A), nR = partsAlive(c, R), nH = partsAlive(c, H);
+        // his fire goes at what is not his: our creeps and structures, the neutral vault walls
+        const foes = [...rest].filter(([vid]) => { const v = at(vid); return v.side !== c.side && (v.creep ? true : v.kind === 'rampart' || !rampAt.has(idx(v.x, v.y))); });
+        const takes = (e, d) => e.r >= d - 0.5 || (e.dead && e.r > 0);
+        if (nA > 0) {
+          const v = foes.find(([vid, e]) => range(c, at(vid)) <= 1 && takes(e, nA * 30));
+          if (v) { shots.push({ how: 'a', victim: v[0] }); v[1].r -= nA * 30; }
+        }
+        if (nR > 0) {
+          const inR = massTargets(c);
+          const single = foes.filter(([vid, e]) => range(c, at(vid)) <= 3 && takes(e, nR * 10)).sort((a, b) => Math.abs(a[1].r - nR * 10) - Math.abs(b[1].r - nR * 10))[0];
+          const mass = inR.length > 0 && inR.every(([vid, v]) => rest.get(vid) && takes(rest.get(vid), nR * 10 * MASS[range(c, v)])) && (inR.length > 1 || range(c, inR[0][1]) > 1);
+          if (mass && (inR.length > 1 || !single)) { shots.push({ how: 'R' }); for (const [vid, v] of inR) rest.get(vid).r -= nR * 10 * MASS[range(c, v)]; }
+          else if (single) { shots.push({ how: 'r', victim: single[0] }); single[1].r -= nR * 10; }
+        }
+        if (nH > 0) {
+          const his = [...rest].filter(([vid, e]) => vid !== id && start.get(vid) && start.get(vid).side === c.side && e.r < 0 && range(c, start.get(vid)) <= 3);
+          const adj = his.find(([vid, e]) => range(c, start.get(vid)) <= 1 && -e.r >= nH * 12 - 0.5);
+          const far = his.find(([, e]) => -e.r >= nH * 4 - 0.5);
+          if (adj) { shots.push({ how: 'h', victim: adj[0] }); adj[1].r += nH * 12; }
+          else if (far) { shots.push({ how: 'H', victim: far[0] }); far[1].r += nH * 4; }
+        }
+        if (shots.length) m.set(id, shots);
+      }
+      if (m.size) out.set(tk.k, m);
+    }
+    for (const id of gone) cr.delete(id);
+    for (const [id, o] of st) if (o.hits <= 0) st.delete(id);
+  }
+  return out;
 }
 // ---------- the personas: live bots of the field, rebuilt from their replays, answering what we do ----------
 // A persona plays its own economy with real intents (harvest, transfer, build, withdraw — the engine's, not a granted
@@ -469,14 +657,14 @@ const dirTo = (from, to) => getDirection(to.x - from.x, to.y - from.y);
 const dpsOf = (c) => live(c, A) * 30 + live(c, R) * 10;
 const PB = (spec) => [].concat(...[...spec.matchAll(/([a-z])(\d+)/g)].map(([, k, n]) => Array(parseInt(n, 10)).fill(PART[k])));
 /** A builder's cycle, as live builders work: harvest while the batch is not full (the bot's `batchFor`: 40 for W4C1), then
- *  build — one of the two a tick (the engine's priority). */
-function buildCycle(c, src, site) {
+ *  build — one of the two a tick (the engine's priority). `batch` 1: build whenever it holds energy — harvest, build,
+ *  harvest, build (けろびー#20/#22/#23's founder, below). */
+function buildCycle(c, src, site, batch = Math.min(c.store.capacity, 40)) {
   const e = c.store.energy;
-  const batch = Math.min(c.store.capacity, 40);
   if (site && (e >= batch || (src.energy === 0 && e > 0)) && range(c, site) <= 3) c.build(site);
   else if (src.energy > 0 && range(c, src) <= 1) c.harvest(src);
 }
-const pers = { role: new Map(), base: new Map(), bases: [], plan: null, st: {}, spawned: 0, ev: (s) => world.events.push(`t=${world.tick} ${scenario}: ${s}`) };
+const pers = { role: new Map(), base: new Map(), bases: [], plan: null, st: {}, spawned: 0, left: new Set(), reached: new Set(), ev: (s) => world.events.push(`t=${world.tick} ${scenario}: ${s}`) };
 function pOrder(sp, spec, role, dir) {
   if (!sp || !sp.exists || sp.spawning) return false;
   const r = sp.spawnCreep(PB(spec));
@@ -505,16 +693,38 @@ const ours0 = () => world.objects.find((o) => o.exists && o.owner === 0 && o.kin
 //   - on a new spawn he fills it by hand (harvest + transfer, 9 a tick) to a W5C1 without MOVE, born onto its slot
 //     63 ticks later (294 for 231); a rampart over the slot ~108 after the spawn, the tower beside the slot ~280 after it
 //     (#19: 339, 517), then he leaves for the next source;
-//   - each base's spawn orders its W5C1, then the army: three fighters to one medic, round and round (#19: m5r5 x3 : m4h2,
-//     #22/#23: t4m8r3a1 x3 : m4h2), as its energy allows (11 a tick a base);
-//   - his army goes for our NEW bases (6abc0dc7: his first m5r5 sat on our second base at 648 and broke the rampart over
-//     our founder by 847), rounds the map as a ball (tools/replay.py track: 12-24 in the largest group by 1800-2400), and
-//     never enters our vaults.
-//   INVENTED: the ball's rule — a rally at his newest base; out for our base without a stood tower (else our nearest spawn
-//   outside a vault) when his ball's damage beats ours round the target with our towers counted, back to the rally when it
-//   falls under 0.8 of it; a base of his under our fighters is defended first.
+//   - each base's spawn orders its W5C1, then the army: a fighter, a medic, then three fighters to a medic, round and round
+//     (#19 6abc1c61: m5r5 434, m4h2 500, m5r5 615 / 706 / 802, m4h2 825; #20 6abc0dc7: 503, 569, 691 / 777 / 869, 920;
+//     #22 6abc0b76 and #23 6abc21a1 the same with t4m8r3a1: 514, 562, 700 / 781 / 869, 903 and 512, 560, 698 / 781 / 871,
+//     905 — the ticks each is first out of its spawn), as its energy allows (11 a tick a base);
+//   - his army, measured on all 68 stored replays of #19-#23 against us (`python3 kerobii.py` beside this file reads them
+//     off `tools/match-log.py list --arena spawn-and-swamp-advanced` and prints every number below), has no rally and no
+//     ball: every fighter walks out as it is born — from birth to 12 cells off every spawn of his, median 33 ticks (p10 13,
+//     p90 187) over 7 167 fighters, half of them (3 582) with no other armed creep of his within 6 as they leave; the first
+//     fighter always alone (#20 6abc0dc7: born 503, out 540, on our second base's rampart (50,21) at 637 and on it until
+//     866; #23 6abc21a1: 512 / 558 / 626, on it until 841; #22 6abc0b76: 514 / 553 / at our base (50,79) by 589);
+//   - it goes for our base nearest to his spawns (kerobiiTarget); a base with no fed tower of ours it walks onto (beside our
+//     nearest structure of it), a base under one it stands off at 12-17 from our nearest structure (KERO_HOLD);
+//   - the one strength test is local: against our armed creep within 7 he closes in when the damage of his armed round him
+//     is at least 1.5 times that of ours round it, else he holds 4-5 off (KERO_ENGAGE — the steepest step of a measured
+//     slope); a worker of ours within 5 he closes on to adjacent;
+//   - no push rule against our towers and no retreat rule is modelled, because the replays show none: his largest group
+//     coming within 14 of our fed tower for 10 ticks (155 such pushes) against it standing at 15-26 (3 067 samples) does
+//     not separate by his group's size (6 or fewer: 55 % of pushes, 35 % of holds), its damage, our damage within 15 (none:
+//     27 % / 48 %) or our armed in all; his "retreats" are his largest group changing. When 3+ of ours stand within 12 of a
+//     spawn of his, his creeps farther than 20 from it step toward it 20 % of the ticks and away 9 % (without an attack
+//     16 % / 22 %): a drift, not a recall — not modelled either;
+//   - his fire (keroFire): a mass attack whenever anything of ours is adjacent, else a single shot at the weakest (by share
+//     of its hits) of our creeps in three, else at our nearest structure — 82 605 mass attacks, 61 160 single shots at our
+//     creeps, 21 936 at our structures.
 function kerobiiTick(t) {
   const variant = scenario === 'kerobii22' ? 't4m8r3a1' : 'm5r5';
+  // his founder's rhythm (the replays' own action lists, spawn site to spawn): #19 harvests two or three ticks and builds
+  // one (125 harvests, 50 builds; 6abc1c61, spawn at 231), #20/#22/#23 harvest one tick and build the next (125 / 124;
+  // 6abc0dc7, 6abc0b76, 6abc21a1, spawns at 300 / 296 / 294) — a build of 8 where #19 builds 20. His spawns only: the
+  // rampart and the tower of #23 are built by his W5C1 (6abc21a1: harvest, harvest, build, 378-402 and 404-652) while the
+  // founder harvests into the spawn; the founder here builds them at the old pace, which puts them near the live ticks
+  const batch = scenario === 'kerobii22' ? 1 : undefined;
   const mine = his1(), oursC = creeps().filter((c) => c.owner === 0 && !c.spawning);
   const oursS = world.objects.filter((o) => o.exists && o.owner === 0 && o.kind !== 'creep' && o.kind !== 'site');
   // the founder: his starting worker (no other of his builds bases)
@@ -544,7 +754,7 @@ function kerobiiTick(t) {
           else {
             let site = siteAt(P.spawn);
             if (!site) { const r = createConstructionSite(P.spawn.x, P.spawn.y, StructureSpawn); site = r.object; if (!site) { pers.plan = null; } }
-            if (site) buildCycle(f, P.src, site);
+            if (site) buildCycle(f, P.src, site, batch);
           }
         }
         if (P.phase === 'fill') {
@@ -585,45 +795,124 @@ function kerobiiTick(t) {
       continue;
     }
     B.n = B.n || 0;
-    const spec = (B.n % 4 === 3) ? 'm4h2' : variant;
+    const spec = (B.n % 4 === 1) ? 'm4h2' : variant; // fighter, medic, then three fighters to a medic (the header)
     const cost = Creep.cost(PB(spec));
     if (sp.store.energy >= cost && pOrder(sp, spec, spec === 'm4h2' ? 'medic' : 'fighter')) B.n++;
   }
-  // the army: one ball
+  // the army — measured on the 68 stored replays of #19-#23 against us (the header): no ball, no rally, no strength test.
+  // Each fighter walks out as soon as it is born to the target base; there it stands off our towers and fires at what
+  // comes into reach
   const army = mine.filter((c) => !c.spawning && (pers.role.get(c.id) === 'fighter' || pers.role.get(c.id) === 'medic'));
   if (!army.length) return;
-  const newest = pers.bases.filter((B) => spawnAt(B.spawn))[pers.bases.filter((B) => spawnAt(B.spawn)).length - 1];
-  const rally = newest ? newest.spawn : theirs.start;
-  const underAttack = pers.bases.find((B) => spawnAt(B.spawn) && oursC.some((c) => dpsOf(c) > 0 && range(c, B.spawn) <= 12));
-  const inVault = (o) => (o.x >= 38 && o.x <= 46 && o.y >= 27 && o.y <= 36) || (o.x >= 53 && o.x <= 61 && o.y >= 63 && o.y <= 72);
-  const ourSpawns = oursS.filter((o) => o.kind === 'spawn' && !inVault(o));
-  const towered = (s) => oursS.some((o) => o.kind === 'tower' && range(o, s) <= 5);
+  const T = kerobiiTarget();
   const fighters = army.filter((c) => dpsOf(c) > 0);
-  const his = fighters.reduce((s, c) => s + dpsOf(c), 0);
-  const localOf = (p) => oursC.filter((c) => range(c, p) <= 12).reduce((s, c) => s + dpsOf(c), 0) + oursS.filter((o) => o.kind === 'tower' && o.store.energy >= 10 && range(o, p) <= 20).length * 50;
-  let goal = null;
-  if (underAttack) goal = underAttack.spawn;
-  else {
-    const soft = ourSpawns.filter((s) => !towered(s)).sort((a, b) => range(a, rally) - range(b, rally))[0];
-    const tgt = soft || ourSpawns.sort((a, b) => range(a, rally) - range(b, rally))[0];
-    if (tgt) {
-      const need = localOf(tgt);
-      if (pers.st.out) { if (his < 0.8 * need) { pers.st.out = false; pers.ev(`ball back to the rally (${his} vs ${need})`); } }
-      else if (fighters.length >= 3 && his > 1.2 * need) { pers.st.out = true; pers.ev(`ball out for (${tgt.x},${tgt.y}) (${his} vs ${need}, ${fighters.length} fighters)`); }
-      if (pers.st.out) goal = tgt;
-    }
-  }
-  const at = goal || rally;
   for (const c of army) {
-    fight(c, oursC, oursS, mine);
-    const near = oursC.filter((o) => range(o, c) <= 5 && dpsOf(o) + live(o, W) > 0).sort((a, b) => range(a, c) - range(b, c))[0];
+    keroFire(c, oursC, oursS, mine);
+    if (c.outAt === undefined) c.outAt = t; // out of its spawn: the replay's first tick of the creep not spawning
+    if (!pers.left.has(c.id) && !pers.bases.some((B) => spawnAt(B.spawn) && range(c, B.spawn) <= 12)) {
+      pers.left.add(c.id);
+      if (pers.left.size <= 6) pers.ev(`${c.summary()} ${c.id} out of home (ordered ${c.bornAt}, out of its spawn ${c.outAt}) with ${army.filter((q) => range(q, c) <= 6).length} of his armed within 6, target ${T ? `(${T.pos.x},${T.pos.y})` : '-'}`);
+    }
+    if (T && !pers.reached.has(c.id) && T.structs.concat(T.sites).some((o) => range(o, c) <= 8)) {
+      pers.reached.add(c.id);
+      if (pers.reached.size <= 6) pers.ev(`${c.summary()} ${c.id} at our base (${T.pos.x},${T.pos.y}) with ${army.filter((q) => range(q, c) <= 6).length} of his armed within 6`);
+    }
     if (pers.role.get(c.id) === 'medic') {
       const hurt = army.filter((o) => o !== c && o.hits < o.hitsMax).sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
-      goTo(c, hurt || fighters.sort((a, b) => range(a, c) - range(b, c))[0] || at, 1);
-    } else if (near && (goal || range(c, rally) <= 15)) goTo(c, near, live(c, R) > 0 ? 2 : 1);
-    else goTo(c, at, goal ? (live(c, R) > 0 ? 3 : 1) : 3);
+      goTo(c, hurt || fighters.sort((a, b) => range(a, c) - range(b, c))[0] || (T && T.pos) || theirs.start, 1);
+      continue;
+    }
+    // our armed creep within 7: he closes in when the damage of his armed within 6 of him is at least KERO_ENGAGE times
+    // that of ours within 6 of it, else he keeps out of its reach at 4-5 (kerobii.py, table `strength`)
+    const foe = oursC.filter((o) => dpsOf(o) > 0).sort((a, b) => range(a, c) - range(b, c))[0];
+    if (foe && range(c, foe) <= 7) {
+      const mineD = fighters.filter((q) => range(q, c) <= 6).reduce((a, q) => a + dpsOf(q), 0);
+      const theirD = oursC.filter((o) => range(o, foe) <= 6).reduce((a, o) => a + dpsOf(o), 0);
+      if (mineD >= KERO_ENGAGE * theirD) { goTo(c, foe, 1); continue; }
+      if (range(c, foe) <= 3) { const away = getDirection(c.x - foe.x, c.y - foe.y); if (away) c.move(away); continue; }
+      if (range(c, foe) <= 5) continue;
+    }
+    // a worker of ours within 5 he closes on to adjacent — under a rampart or not (kerobii.py, table `engage`: with our
+    // worker the nearest of ours, his m5r5 stood adjacent to it 59 % of 38 321 creep-ticks when it was under a rampart,
+    // his t4m8r3a1 36 %, the next ring 15 % / 28 %); our armed creeps he does not chase (the range to the nearest armed
+    // one of ours within 5 is spread flat, 1: 15 %, 2: 14 %, 3: 19 %, 4: 20 %, 5: 30 % of 122 953 for m5r5) — keroFire
+    // shoots whatever comes within three
+    const near = oursC.filter((o) => range(o, c) <= 5 && dpsOf(o) === 0 && live(o, W) > 0).sort((a, b) => range(a, c) - range(b, c))[0];
+    if (near) { goTo(c, near, 1); continue; }
+    if (!T) { const any = oursC.concat(oursS).sort((a, b) => range(a, c) - range(b, c))[0]; if (any) goTo(c, any, live(c, R) > 0 ? 3 : 1); continue; }
+    // no fed tower: onto the base, beside our nearest structure of it (#20's first m5r5 on (51,21) beside our rampart (50,21)
+    // 642-866, #23's t4m8r3a1 on the same cell 631-841, swinging at the rampart and mass-attacking every tick)
+    if (!T.fed) { goTo(c, T.structs.length ? T.structs.sort((a, b) => range(a, c) - range(b, c))[0] : T.pos, 1); continue; }
+    // a fed tower covers the base: stand off at KERO_HOLD from our nearest structure of it
+    const st = T.structs.sort((a, b) => range(a, c) - range(b, c))[0] || T.pos;
+    const r = range(c, st);
+    if (r > KERO_HOLD[1]) goTo(c, st, KERO_HOLD[1]);
+    else if (r < KERO_HOLD[0]) { const away = getDirection(c.x - st.x, c.y - st.y); if (away) c.move(away); }
   }
 }
+/** His creeps' fire, measured (kerobii.py, table `fire`): a mass attack whenever anything of ours is adjacent — a creep
+ *  not under a rampart, or a structure (99 % of 83 267 ranged creep-ticks with something of ours adjacent) — else a
+ *  single shot (95 % of 79 262) at our creep in three with the lowest share of its hits (the rule naming his target in 91 % of
+ *  17 746 single shots with two or more candidates; armed first, then lowest hits: 80 %), else at our nearest structure
+ *  in three; a swing at the adjacent creep with the lowest share of its hits (95 % of 782), else at an adjacent structure;
+ *  a medic heals as `fight` does. */
+function keroFire(c, oursC, oursS, friends) {
+  const share = (o) => o.hits / o.hitsMax;
+  const exposed = oursC.filter((o) => !onRampart(o));
+  if (live(c, A) > 0) {
+    const adj = oursC.filter((o) => range(c, o) <= 1).sort((a, b) => share(a) - share(b));
+    const st = oursS.filter((o) => range(c, o) <= 1 && o.hits !== undefined).sort((a, b) => (a.kind === 'rampart') - (b.kind === 'rampart'));
+    if (adj.length) c.attack(adj[0]); else if (st.length) c.attack(st[0]);
+  }
+  if (live(c, R) > 0) {
+    const adjacent = exposed.some((o) => range(c, o) <= 1) || oursS.some((o) => range(c, o) <= 1 && o.hits !== undefined);
+    const inR = exposed.filter((o) => range(c, o) <= 3).sort((a, b) => share(a) - share(b));
+    if (adjacent) c.rangedMassAttack();
+    else if (inR.length) c.rangedAttack(inR[0]);
+    else { const st = oursS.filter((o) => range(c, o) <= 3 && o.hits !== undefined).sort((a, b) => range(c, a) - range(c, b))[0]; if (st) c.rangedAttack(st); }
+  }
+  if (live(c, H) > 0) fight(c, [], [], friends);
+}
+/** Our bases as he sees them (kerobii.py's own grouping, table `target`): what of ours stands within 3 of a
+ *  source — spawn, tower, rampart, and any construction site — or inside a vault frame, one base a source or vault; its
+ *  position is its spawn, else its spawn site, else its first object. The target is the base nearest (range) to the
+ *  centroid of his spawns: 78 % of 5 008 samples where his largest group (3+) stood within 25 of one of our bases, over
+ *  the 68 replays (our youngest base: 74 %, the base nearest to his first spawn: 76 %, nearest to any spawn of his: 64 %,
+ *  our oldest: 25 %). `fed`: a tower of ours with energy for a shot within 20 of it. */
+function kerobiiTarget() {
+  const VB = [{ x0: 38, x1: 46, y0: 27, y1: 36 }, { x0: 53, x1: 61, y0: 63, y1: 72 }];
+  const srcs = SOURCES();
+  const m = new Map();
+  for (const o of world.objects) {
+    if (!o.exists || o.owner !== 0 || !(o.kind === 'site' || o.kind === 'spawn' || o.kind === 'tower' || o.kind === 'rampart' || o.kind === 'extension')) continue;
+    const vi = VB.findIndex((v) => o.x > v.x0 && o.x < v.x1 && o.y > v.y0 && o.y < v.y1);
+    let key = vi >= 0 ? 'V' + vi : null;
+    if (key === null) { const s = srcs.slice().sort((a, b) => range(a, o) - range(b, o))[0]; if (!s || range(s, o) > 3) continue; key = s.id; }
+    if (!m.has(key)) m.set(key, []);
+    m.get(key).push(o);
+  }
+  if (!m.size) return null;
+  const hs = world.objects.filter((o) => o.exists && o.owner === 1 && o.kind === 'spawn');
+  const hc = hs.length ? { x: hs.reduce((a, o) => a + o.x, 0) / hs.length, y: hs.reduce((a, o) => a + o.y, 0) / hs.length } : theirs.start;
+  const bases = [...m.values()].map((objs) => {
+    const pos = objs.find((o) => o.kind === 'spawn') || objs.find((o) => o.kind === 'site' && o.proto && o.proto.name === 'StructureSpawn') || objs[0];
+    return { pos, structs: objs.filter((o) => o.kind !== 'site'), sites: objs.filter((o) => o.kind === 'site') };
+  });
+  const T = bases.sort((a, b) => Math.max(Math.abs(a.pos.x - hc.x), Math.abs(a.pos.y - hc.y)) - Math.max(Math.abs(b.pos.x - hc.x), Math.abs(b.pos.y - hc.y)))[0];
+  T.fed = world.objects.some((o) => o.exists && o.owner === 0 && o.kind === 'tower' && o.store.energy >= TOWER_ENERGY_COST && range(o, T.pos) <= 20);
+  return T;
+}
+/** The stand-off band round a base under our fed tower: where his out creeps stood with a fed tower of ours within 20 —
+ *  the range to our nearest structure, 651 764 creep-ticks over the 68 replays: 0-5 7 %, 6-8 6 %, 9-11 13 %, 12-14 26 %,
+ *  15-17 24 %, 18-20 20 % — the two modal bins; outside it he steps in, inside it out. */
+const KERO_HOLD = [12, 17];
+/** His armed creeps' approach to our nearest armed creep at range 4-7, by R = the damage of his armed within 6 of him over
+ *  that of ours within 6 of it (kerobii.py, table `strength`, 68 replays; closer minus away per tick, no fed tower of ours
+ *  within 20 / one): R <= 1: -6 % and -3 % / -2 % and +2 %; 1-1.5: +7 % / +15 %; 1.5-2: +20 % / +19 %; 2-3: +15 % to
+ *  +31 % / +15 % to +24 %; above 3: +39 % to +42 % / +25 % to +31 %. Below the step at 1.5 he holds out of reach, above it
+ *  he closes in — his approach is a slope, the persona takes its steepest step for a threshold (6abc0b76: his first
+ *  t4m8r3a1 and medic held 5 off our M5R5 from 588 to 940 and closed when the fourth fighter came, 240 against 100) */
+const KERO_ENGAGE = 1.5;
 
 // 'ricardo' — ricardo18informatica2020#1, replay 6abbba40 (left; won at 952). Measured:
 //   - his founder raises a spawn at the source nearest his start by path — his home corner ((32,98) from the left) — by 241
@@ -757,6 +1046,7 @@ if (BOT2 === 'self') {
   cpSync(src, dst, { recursive: true });
   BOT2 = new URL(BUNDLE, 'file://' + dst).href;
 }
+if (HITS) world.hitLog = { from: HITS[0], to: HITS[1], list: [] };
 const bot = await import(BOT);
 const bot2 = BOT2 ? await import(BOT2) : null;
 origLog(`start: map=${mapName} we=${weLeft ? 'left' : 'right'} (${START0.x},${START0.y}) scenario=${BOT2 ? 'BOT2' : scenario} ticks=${ticks}`);
@@ -792,7 +1082,14 @@ for (let t = 1; t <= ticks; t++) {
   const now = world.tick - 1;
   if (scenario === 'ghost' && !bot2) ghostAfter(now);
   matchOurs(now);
+  stateDiff(now);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
+  if (HITS && now >= HITS[0] && now <= HITS[1]) {
+    const rid = (o) => (o.kind === 'creep' ? (o.owner === 1 ? o.id : (ourMatch.get(o) || 's' + o.id)) : `${o.kind}@${o.x},${o.y}`);
+    for (const c of [...c0, ...c1]) if (!c.spawning) origLog(`hitdump t=${now} ${rid(c)} ${c.owner} ${c.x} ${c.y} ${c.hits} ${c.summary()}`);
+    for (const [k, src, tg, how, d] of world.hitLog.list) if (k === now) origLog(`hitlog t=${k} ${rid(src)} ${rid(tg)} ${how} ${Math.round(d)} ${src.x},${src.y}->${tg.x},${tg.y}`);
+    // the dead of this tick keep their record id in the log above; their last hits are not dumped
+  }
   if (TRACE && now >= TRACE[0] && now <= TRACE[1]) {
     origLog(`trace t=${now} ours ${c0.map((c) => `${c.summary()}@${c.x},${c.y}${c.fatigue ? '/' + c.fatigue : ''}${c.store.energy ? 'e' + c.store.energy : ''}`).join(' ')} | enemy ${c1.map((c) => `${c.summary()}@${c.x},${c.y}${c.fatigue ? '/' + c.fatigue : ''}`).join(' ')}`);
   }
