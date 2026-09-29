@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 255
+    private const val BOT_VERSION = 256
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4398,13 +4398,63 @@ object SpawnAndSwamp {
         // ones stood under ramparts by 1675. With the rampart over our spawn the house is 13000: what the threats at the
         // door take off it in the time the siege needs — and the walk back, when the target is not his last spawn — is
         // the question; his storms (8-12 guns, 500-1000 a tick) still fall inside it and still call the wave home
+        // WHEN THE HOUSE FALLS, BY EACH THREAT'S OWN WALK AND OUR TOWER (v256). The house's clock took every threat as
+        // hitting it together from the nearest one's arrival, capped at the alarm's 40 ticks, and never counted our tower:
+        // against marlyman (five of seven draws in v250-v254, ten recalls) one to three M5A1/M5A5 (30-150 a tick) by our
+        // piles 40 cells off read as a house of 13000 falling in ~127 ticks, the wave winning his spawn was called home,
+        // and after none of the ten did the house lose more than 1425 all match (0, 0, 30, 238). Each threat now starts
+        // at the soonest it can bring its weapon to the spawn — its steps there at its own plain pace — and our fed towers
+        // shoot, once a cooldown while their energy lasts, the arrived threat that dies soonest (the shot at the door's
+        // range less the heal of his healers on it); the house falls when what has arrived has taken its hits
+        fun houseFallsAt(): Double {
+            val house = ((mySpawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y }.sumOf { it.hits ?: 0 }).toDouble()
+            val never = Double.MAX_VALUE
+            class T(val c: Creep, val dps: Double, val arrive: Int, var hits: Double)
+            val rows = homeThreats.mapNotNull { e ->
+                val p = InfluenceMap.profileOf(e)
+                val dps = p.ranged + p.melee
+                if (dps <= 0.0) return@mapNotNull null
+                val reach = if (p.ranged > 0.0) RANGED_RANGE else 1
+                val arrive = if (spawnUnderFire && getRange(e, mySpawn) <= reach) 0 else {
+                    val steps = ctx.stepsToSpawn[e.x * 100 + e.y]
+                    if (steps < 0) return@mapNotNull null
+                    (maxOf(0, steps - reach) * plainPeriod(e)).toInt()
+                }
+                T(e, dps, arrive, e.hits.toDouble())
+            }
+            if (rows.isEmpty()) return never
+            val heal = homeThreats.sumOf { InfluenceMap.profileOf(it).heal }
+            val towers = if (!USE_HOUSE_CLOCK_TOWER) emptyList() else ctx.myTowers.map { t ->
+                val shot = InfluenceMap.towerShot(getRange(t, mySpawn) + 1)
+                intArrayOf(maxOf(0, t.cooldown), (t.store[RESOURCE_ENERGY] ?: 0) / TOWER_ENERGY_COST) to shot
+            }.filter { it.second > 0.0 && it.first[1] > 0 }
+            val cd = InfluenceMap.towerCooldown
+            var hp = house
+            val horizon = arenaInfo.ticksLimit - getTicks()
+            for (t in 0..horizon) {
+                val alive = rows.filter { it.hits > 0.0 && it.arrive <= t }
+                for ((state, shot) in towers) {
+                    if (state[0] > 0) { state[0]--; continue }
+                    if (state[1] <= 0) continue
+                    val target = alive.filter { it.hits > 0.0 }.minByOrNull { it.hits / maxOf(1.0, shot - heal * cd) } ?: continue
+                    target.hits -= maxOf(0.0, shot - heal * cd)
+                    state[0] = cd - 1; state[1]--
+                }
+                hp -= alive.filter { it.hits > 0.0 }.sumOf { it.dps }
+                if (hp <= 0.0) return t.toDouble()
+                if (rows.none { it.hits > 0.0 }) return never
+            }
+            return never
+        }
+        val houseFalls = if (USE_HOUSE_CLOCK) houseFallsAt() else 0.0
         fun houseOutlasts(travel: Int, siegeTicks: Int, back: Int, force: Boolean = false): Boolean {
             if ((!USE_HOUSE_OUTLASTS && !force) || homeThreats.isEmpty() || siegeTicks >= Int.MAX_VALUE / 4) return false
+            val need = travel.toLong() + siegeTicks + (if (ctx.enemySpawns.size <= 1) 0 else back)
+            if (USE_HOUSE_CLOCK) return houseFalls > need.toDouble()
             val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
             if (threatDps <= 0.0) return true
             val arrive = if (spawnUnderFire) 0 else homeThreats.minOf { (arrivalById[it.id] ?: Int.MAX_VALUE / 4).coerceAtMost(SPAWN_ALARM_TICKS) }
             val house = (mySpawn.hits ?: SPAWN_HITS) + ctx.ramparts.filter { it.my == true && it.x == mySpawn.x && it.y == mySpawn.y }.sumOf { it.hits ?: 0 }
-            val need = travel.toLong() + siegeTicks + (if (ctx.enemySpawns.size <= 1) 0 else back)
             return arrive + house / threatDps > need.toDouble()
         }
         val startOutlasts = houseOutlasts(startTravel, siegeStart.ticks, startTravel)
@@ -4419,7 +4469,7 @@ object SpawnAndSwamp {
         // threats' arrival plus our spawn's hits (and rampart) at their damage; a wave that cannot arrive in time saves
         // nothing by leaving and loses the siege it was winning
         // the same clock for one marching melee called home by its row (v246, see homeFallsIn)
-        homeFallsIn = run {
+        homeFallsIn = if (USE_HOUSE_CLOCK) (if (houseFalls >= Int.MAX_VALUE / 4) Int.MAX_VALUE / 4 else houseFalls.toInt()) else run {
             val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
             if (threatDps <= 0.0) return@run Int.MAX_VALUE / 4
             val arrive = if (spawnUnderFire) 0 else homeThreats.minOf { (arrivalById[it.id] ?: Int.MAX_VALUE / 4).coerceAtMost(SPAWN_ALARM_TICKS) }
@@ -4427,6 +4477,10 @@ object SpawnAndSwamp {
             (arrive + house / threatDps).toInt()
         }
         val recallSaves = !USE_RECALL_IF_SAVES || waveMembers.isEmpty() || run {
+            if (USE_HOUSE_CLOCK) {
+                if (houseFalls >= Double.MAX_VALUE / 2) return@run false
+                return@run waveMembers.maxOf { pathTicks(it, ctx.loadedToSpawn, it.x * 100 + it.y).coerceAtMost(Int.MAX_VALUE / 4) } < houseFalls
+            }
             val threatDps = homeThreats.sumOf { val p = InfluenceMap.profileOf(it); p.ranged + p.melee }
             if (threatDps <= 0.0) return@run false
             val arrive = if (spawnUnderFire) 0 else homeThreats.minOf { (arrivalById[it.id] ?: Int.MAX_VALUE / 4).coerceAtMost(SPAWN_ALARM_TICKS) }
@@ -7488,6 +7542,10 @@ object SpawnAndSwamp {
     private const val USE_RECALL_WAVE = true
     /** A last call that goes by the house's arithmetic is not undone by the alarm's recall in the same state (v255). */
     private const val USE_LAST_CALL_HOLDS = true
+    /** The house falls by each threat's own walk to it, their damage from each one's arrival, less what our fed towers
+     *  kill first (houseFallsAt, v256): the clock of houseOutlasts, recallSaves and homeFallsIn. */
+    private const val USE_HOUSE_CLOCK = true
+    private const val USE_HOUSE_CLOCK_TOWER = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
