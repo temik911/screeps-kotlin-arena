@@ -1590,9 +1590,12 @@ object EscortRun {
 
     /** Охотники этого тика (decideHold): их победителя покупает holdSpawn, как против засады. */
     private var huntersNow: List<Creep> = emptyList()
+    /** Однажды ушедшие вперёд своего эскорта больше чем на HUNTER_AHEAD (цена пути их эскорта) — свободные до смерти. */
+    private val hunterMarks = HashSet<String>()
+    private const val HUNTER_AHEAD = 10
 
     /**
-     * Охотники — вооружённые, которых наши бойцы вместе не бьют и которые, выйди эскорт СЕЙЧАС, догоняют поезд на его
+     * Охотники — тяжёлые вооружённые, которых наши бойцы вместе не бьют и которые, выйди эскорт СЕЙЧАС, догоняют поезд на его
      * пути (приходят к клетке пути не позже поезда и ходят не медленнее его) и за оставшийся путь бьют больше хитов
      * эскорта. Выход при них — не гонка, а потеря эскорта: против пешего эскорта соперника без тягачей и охраны матч
      * выигрывают тогда эскорт на рампарте и бойцы (их одинокий эскорт убивают к ~370–410-му, стенд ambush). Телохранитель
@@ -1609,7 +1612,18 @@ object EscortRun {
         var damage = 0.0
         val found = ArrayList<Creep>()
         for (x in w.enemyArmed) {
-            if (isEscort(x) || x.spawning || bodyguard(w, x) || onOurFlag(w, x)) continue
+            // лёгкого (M1A1 перехватчика stachu) бьёт дешёвый боец, купленный по дороге (ранний защитник v29–v30), — выход
+            // при нём не смертелен; держание от него стоило гонки (гейт match1:econ+icpt: их финиш на 473-м, наш на 587-м)
+            if (isEscort(x) || x.spawning || bodyguard(w, x) || onOurFlag(w, x) || !heavy(x)) continue
+            // свободный — однажды ушедший ВПЕРЁД своего эскорта по его пути: ricardo#7 обогнал свой эскорт на 25-м и ждал в
+            // развилке в сорока клетках перед ним. Охрана идёт при эскорте или догоняет его сзади (M3A3 stachu рождается
+            // на ~170-м позади своего эскорта, гейт match4:econ+icpt): она за нашим поездом не пойдёт
+            if (idOf(x) !in hunterMarks) {
+                val te = w.enemyEscort
+                val ef = w.enemyEscortFlow
+                if (te == null || ef == null || ef[key(x)] < 0 || ef[key(te)] < 0 || ef[key(x)] + HUNTER_AHEAD >= ef[key(te)]) continue
+                hunterMarks.add(idOf(x))
+            }
             val xPer = Bodies.period(Bodies.weight(x), Bodies.liveMoves(x), false)
             val dps = 30 * Bodies.live(x, ATTACK) + 10 * Bodies.live(x, RANGED_ATTACK)
             if (dps == 0 || xPer > per) continue
@@ -1620,6 +1634,7 @@ object EscortRun {
             damage += (route.size - meet) * per * dps
             found.add(x)
         }
+        hunterMarks.retainAll(w.enemyArmed.mapTo(HashSet()) { idOf(it) })
         if (damage < escort.hits || wins(ourArmed, found)) return emptyList()
         return found
     }
