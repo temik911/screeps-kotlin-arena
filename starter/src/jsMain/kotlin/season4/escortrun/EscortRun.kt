@@ -65,7 +65,7 @@ object EscortRun {
     // ---------- версия и подпись ----------
     /** Печатается первой строкой матча вместе с подписью ключевых параметров (клиент читает скрипт при старте матча,
      *  и по логу должно быть видно, какая сборка играла). Поднимать при каждой сборке, идущей в матч. */
-    private const val BOT_VERSION = "v45"
+    private const val BOT_VERSION = "v44"
 
     // ---------- поезд ----------
     /** Тягач — тело из одних MOVE не короче этого; короче — разведчик (хранитель или блокировщик флага). */
@@ -439,12 +439,6 @@ object EscortRun {
 
     /** Экономический дебют (null — ещё не решён, решается на 2-м тике). */
     private var econ: Boolean? = null
-    /** Где их эскорт стоял при первом взгляде (идёт ли он пешком, решает, ждать ли их первой траты). */
-    private var theirEscStart = -1
-    /** Тик второго тягача дебюта: до него ожидание их первой траты ничего не стоит. */
-    private const val ECON_WALK_CHECK = 13
-    /** Дольше этого решение о дебюте первую трату соперника не ждёт (ricardo#8 рождал M4A3 с ~20-го). */
-    private const val ECON_DECIDE_BY = 40
     /** Их первая трата — экономика (W/C, без тягачей); решается вместе с econ. */
     private var theirEcoFirst: Boolean? = null
     /** Эскорт ждёт дома победителя их тяжёлого (decideHold, экономика). */
@@ -569,9 +563,6 @@ object EscortRun {
 
     private fun runSpawn(w: World) {
         val spawn = w.mySpawn ?: return
-        // стартовая клетка их эскорта — с первого тика, до проверки занятого спавна: спавн рожает M4 с 1-го по 12-й, и
-        // записанная на 13-м клетка делала «эскорт идёт пешком» ложным всегда (живой A/B против ricardo#8: v45 решала гонку)
-        w.enemyEscort?.let { if (theirEscStart < 0) theirEscStart = key(it) }
         if (spawn.spawning != null) return
         val e = energyOf(w)
         val escort = w.escort
@@ -586,27 +577,27 @@ object EscortRun {
             val first = (w.enemyPending + w.enemies).filter { !isEscort(it) }
             // Экономика окупается, когда их первая трата — ТЯЖЁЛЫЙ боец и ничего из одних MOVE: их доход остаётся 1 в тик,
             // угроза одна и уже на поле, их эскорт идёт пешком (запас гонки ~200), и наш доход успевает купить её
-            // победителя (ricardo #20–#25: 32-0). Любой их крип из одних MOVE — гонка. Против экономиста (W/C первой
-            // тратой) экономика живьём хуже гонки — stachu3478#6: v40 8-0 против 3-5 (медленный поезд встречал их армию у
-            // нашего флага); против лёгкого вооружённого — therevilo2018#3: v40 3-0-1 против 1-0-3 (29.09.2026).
-            // Первой траты ещё нет — решение ждёт её, но не дольше ECON_DECIDE_BY: гонщик покупает тягачей с первого тика,
-            // а пустая первая трата значит, что их эскорт идёт пешком и запас гонки есть. ricardo18informatica2020#8 копил
-            // до ~20-го на M4A3, решение на 13-м выбирало гонку, и его тяжёлый встречал поезд в развилке (живьём 5-3 и 6-2)
-            // ждать — только если их эскорт уже идёт пешком (ушёл от места старта без тягачей): эскорт гонщика стоит у спавна
-            // и ждёт тягачей, и ожидание до 40-го задерживало наш дебют на 13–14 тиков (гейт: none/race/melee 243 → 257,
-            // rush+harvest и hunt+harvest проиграны)
-            val theirEsc = w.enemyEscort
-            val walking = theirEsc != null && theirEscStart >= 0 && dist(theirEsc, cellPos(theirEscStart)) >= 2
-            // до второго тягача дебюта (13-й) ждать ничего не стоит; после — только за идущим пешком эскортом
-            if (first.isNotEmpty() || (w.now >= ECON_WALK_CHECK && !walking) || w.now >= ECON_DECIDE_BY) {
-                econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.wasArmed(it) && heavy(it) }
-                theirEcoFirst = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.isWorker(it) || Bodies.isHauler(it) }
-                println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
-                if (econ == true) openingIdx = openingPlan?.size ?: 0
-            }
+            // победителя. Первая трата — экономика (W3 Suruks, W3M1C1 stachu): их армия придёт позже, быстрый поезд
+            // проходит центр раньше неё (A/B против stachu#10: гонка 5-3, экономика 4-4 — наш медленный поезд пришёл к их
+            // M1A1 и M3A3). Лёгкий первый боец (M1A1 けろびー#32) — гонка с ранним защитником вместо второго тягача (v29).
+            // Любой их крип из одних MOVE — гонка: хранителя M1 первым ставят и гонщики (76561198870429455, ShuP1, けろびー)
+            // …и первая трата — экономика (W/C): их эскорт идёт пешком, запас гонки ~150 тиков, а быстрый поезд на все 500
+            // оставляет доход 1 в тик — ни держателя флага крепче M1, ни бойца. Стрелок Suruks#2 (W3 C1M1 первой тратой)
+            // брал наш флаг в 19–16 руках из 30 стенда (личность rsq), экономика — 30-0 убийством их эскорта. Против
+            // stachu3478#10 v37 это правило снимала (4-4 против 5-3): поезд без бойца гиб в центре, что закрыла v40
+            // лёгкий вооружённый первым (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке центра) экономики не даёт:
+            // живой A/B v40 3-0-1 против экономики 1-0-3 (v42 отвергнута, 29.09.2026)
+            // лёгкий вооружённый первым (therevilo2018#3: R1M1 ×2, потом стена R1M1 в развилке) экономики не даёт: живой A/B
+            // v40 3-0-1 против экономики v42 1-0-3; стенд wall — экономика 15-15 против гонки 1-0-29, в рейтинге −225 против
+            // −203 (ничья −7, поражение −15): поражение гонкой хуже ничьей стоя
+            // экономика — только против тяжёлого первым: против экономиста (W/C первой тратой) живой A/B v40 8-0 против
+            // экономики 3-5 (stachu3478#6, 29.09.2026: медленный поезд встречал их армию у нашего флага), против лёгкого
+            // вооружённого — v40 3-0-1 против 1-0-3 (therevilo2018#3)
+            econ = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.wasArmed(it) && heavy(it) }
+            theirEcoFirst = first.isNotEmpty() && first.none { Bodies.isPureMove(it) } && first.any { Bodies.isWorker(it) || Bodies.isHauler(it) }
+            println("opening t=${w.now}: their first ${first.joinToString(" ") { Bodies.summaryOf(it) }} — ${if (econ == true) "ECONOMY" else "race"}")
+            if (econ == true) openingIdx = openingPlan?.size ?: 0
         }
-        // решение о дебюте ещё не принято — второй тягач ждёт (первый M4 куплен на 1-м в любом случае)
-        if (econ == null && w.now >= 2) { if (DEBUG_LOG && w.now % 5 == 0) println("opening t=${w.now}: their first spend not seen yet — waiting"); return }
         if (econ == true && econOrder(w, e)) return
 
         // 1. дебют: тягачи по прогону. (v16-v17 меняли против «экономиста» второго тягача на охрану поезда: stachu3478
@@ -1612,11 +1603,7 @@ object EscortRun {
         if (econ == true) {
             val heavies = w.enemyArmed.filter { !isEscort(it) && heavy(it) && bodyguard(w, it) }
             val ourArmed = w.fighters.filter { Bodies.isArmed(it) && !it.spawning }
-            // поезд ещё не собран (приход «никогда») — уйти всё равно нельзя, и ожидание ничего не стоит: без этого запас
-            // гонки выходил отрицательным, держание снималось, и эскорт шёл навстречу M4A3 ricardo#8 (v45, 6abbc3.. 5609ad)
-            val oursNow = ourArrival(w)
-            val margin = if (oursNow >= Int.MAX_VALUE / 8) Int.MAX_VALUE / 8 else theirArrival(w) - oursNow - RACE_ERR
-            if (heavies.isNotEmpty() && !wins(ourArmed, heavies) && margin > 0) {
+            if (heavies.isNotEmpty() && !wins(ourArmed, heavies) && theirArrival(w) - ourArrival(w) - RACE_ERR > 0) {
                 if (!holding) { holdSince = w.now; println("hold t=${w.now}: HOME for the winner — ${heavies.joinToString(" ") { Bodies.summaryOf(it) }}, margin ${theirArrival(w) - ourArrival(w)}") }
                 holding = true; holdThreats = heavies; econWait = true
                 return
