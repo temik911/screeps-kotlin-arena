@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 262
+    private const val BOT_VERSION = 263
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -1020,7 +1020,8 @@ object SpawnAndSwamp {
         // among them, so the fleet-first rule never saw the fleet short and the payback check refused the replacement
         val haulers = active.filter { c -> (if (USE_HULK_NOT_HAULER) c.body.any { it.type == CARRY && it.hits > 0 } else c.body.any { it.type == CARRY }) &&
             c.body.none { it.type == WORK } }
-        val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } && !(USE_RAID && isRaider(c)) }
+        val fighters = active.filter { c -> c.body.none { it.type == CARRY } && c.body.none { it.type == WORK } && !(USE_RAID && isRaider(c)) &&
+            !(USE_FLEET_WARDEN && isWarden(c)) }
         // армия врага — И лекари: M4H2 без оружия считался «мягкой» целью, как хаулер, и бойцы шли за ним
         // как за рейдером — прямо в его конвой из четырёх M3R3 (матч 13, t=1150); в локальном перевесе его
         // лечения не было вовсе, и пара лезла в шар с тремя лекарями (t=1060). Лекарь без урона — тоже
@@ -1287,6 +1288,7 @@ object SpawnAndSwamp {
         runBuilders(ctx)
         if (USE_PILE_SPAWN) runPileBuilder(ctx)
         if (USE_RAID) runRaiders(ctx)
+        if (USE_FLEET_WARDEN) runWardens(ctx)
         cpuMark("builders")
         val ourOffense = runFighters(ctx, enemyPower, alarm)
         cpuMark("fighters")
@@ -2462,6 +2464,27 @@ object SpawnAndSwamp {
         // ground, 60 a tick, 1200 hits) bought instead of the third hauler reaches his first site at ~287-319, before
         // it is done in 9 of 9 games against his later versions, and his builder dies in 10 ticks. One at a time, never
         // under a raid at our door, and only once the opening fleet (two haulers) runs — nothing flows without it
+        // THE FLEET'S KILLER IS ANSWERED (v263). A death of our hauler names who could have dealt it (v241), and nothing
+        // answered him: the payback veto only refused the next hauler. Against けろびー#48/#49 (v259/v261 A/B losses, the
+        // v262 loss) one M5A1 of 330 — a swamp cell a tick — took six haulers of six by 700-1000, the income fell to 0,
+        // the spawn bought nothing for 300-600 ticks and his storm took the house; in three of 16 hands a fleet was
+        // butchered, and all three were not wins. A warden walks his pace on every ground (five MOVE to each RANGED)
+        // and shoots from three, where his melee does not reach; it is bought while a killer of the fleet lives that
+        // it outlasts — his fire on it at three against its fire on him — one at a time, before the savings that
+        // count on an income the killer takes
+        val fleetKillers = if (!USE_FLEET_WARDEN) emptyList() else fleetKillers(ctx)
+        if (USE_FLEET_WARDEN && !armNow && fleetKillers.isNotEmpty() && wardenOrderedAt != getTicks() && ctx.myCreeps.none { isWarden(it) }) {
+            val price = WARDEN_BODY.sumOf { cost(it) }
+            if (energy >= price) {
+                val r = spawn.spawnCreep(WARDEN_BODY)
+                reach(if (r.error == null) "wdBuy" else "err")
+                if (r.error == null) { wardenOrderedAt = getTicks(); spentFighters += price }
+                if (DEBUG_LOG) println("spawn: warden cost=$price energy=$energy killers=" + fleetKillers.joinToString(" ") { "${it.id}(${it.x},${it.y})" } + " err=${r.error}")
+                return
+            }
+            spawnSavePrice = maxOf(spawnSavePrice, price)
+            return reach("wdSave")
+        }
         if (USE_FIELD_HUNTER && !armNow && ctx.haulers.size >= 2 && hunterOrderedAt != getTicks() &&
             ctx.myCreeps.none { isHunter(it) } && fieldBuilders(ctx).isNotEmpty()) {
             val price = HUNTER_BODY.sumOf { cost(it) }
@@ -6078,6 +6101,58 @@ object SpawnAndSwamp {
      * against kerobi#20 (v133 loss) it was shot to 160 at t≈400, healed to 448 by 420 and finished its spawn at 424;
      * against #23 it stood at 160 from t=500 to 640 with no hunt line at all. In both v131 wins every wounded builder died.
      */
+    /** The fleet's warden (v263): five MOVE to each RANGED — a swamp cell a tick — the legs in front. */
+    private val WARDEN_BODY: Array<BodyPartType> = arrayOf(MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, RANGED_ATTACK, RANGED_ATTACK)
+    private var wardenOrderedAt = -1
+    /** Ours by body: guns only, five MOVE to each — no fighter body looks like it. */
+    private fun isWarden(c: Creep): Boolean {
+        val r = c.body.count { it.type == RANGED_ATTACK }
+        return r >= 1 && c.body.count { it.type == MOVE } >= 5 * r &&
+            c.body.none { it.type == ATTACK || it.type == WORK || it.type == CARRY || it.type == HEAL }
+    }
+    /** His living creeps named by our haulers' recent deaths (v241) whom the warden outlasts: his fire on it at three
+     *  against its fire on him, his heal on him counted (v263). */
+    private fun fleetKillers(ctx: Ctx): List<Creep> {
+        val named = HashSet<String>()
+        haulerDeaths.forEach { (_, k) -> named.addAll(k) }
+        if (named.isEmpty()) return emptyList()
+        val wardenDps = WARDEN_BODY.count { it == RANGED_ATTACK } * RANGED_ATTACK_POWER.toDouble()
+        val wardenHits = WARDEN_BODY.size * 100.0
+        return ctx.enemyCreeps.filter { e -> e.id in named && e.body.any { it.type == MOVE && it.hits > 0 } && run {
+            val p = InfluenceMap.profileOf(e)
+            if (p.ranged + p.melee <= 0.0) return@run false
+            val healOn = ctx.enemyCreeps.sumOf { h -> val hp = h.body.count { it.type == HEAL && it.hits > 0 }; val r = getRange(h, e)
+                if (hp == 0) 0.0 else if (r <= 1) hp * 12.0 else if (r <= RANGED_RANGE) hp * 4.0 else 0.0 }
+            val net = wardenDps - healOn
+            net > 0.0 && (p.ranged <= 0.0 || e.hits / net < wardenHits / p.ranged)
+        } }
+    }
+    private var wardenLog = 0
+    /** The warden walks to three cells of the nearest living killer of the fleet and shoots it; one of his next to it is
+     *  stepped away from — his melee reaches one; no killer left, it stays with the fleet by our spawn (v263). */
+    private fun runWardens(ctx: Ctx) {
+        val wardens = ctx.active.filter { isWarden(it) }
+        if (wardens.isEmpty()) return
+        val killers = fleetKillers(ctx)
+        for (w in wardens) {
+            val target = killers.minByOrNull { getRange(w, it) }
+            val inReach = ctx.combatEnemies.filter { getRange(w, it) <= RANGED_RANGE }
+            if (target != null && getRange(w, target) <= RANGED_RANGE) w.rangedAttack(target)
+            else inReach.minByOrNull { it.hits }?.let { w.rangedAttack(it) }
+            val meleeNext = ctx.combatEnemies.any { e -> getRange(w, e) <= 1 && InfluenceMap.profileOf(e).melee > 0.0 }
+            val step = when {
+                meleeNext -> fleeStep(w, ctx.combatEnemies, ctx.dangerMatrix)
+                target != null && getRange(w, target) > RANGED_RANGE -> pathStep(w, target, RANGED_RANGE, ctx.dangerMatrix)
+                target != null -> null
+                getRange(w, ctx.mySpawn) > PARK_RANGE -> pathStep(w, ctx.mySpawn, PARK_RANGE, ctx.dangerMatrix)
+                else -> null
+            }
+            if (step != null && canMove(w)) TrafficManager.request(w, step, HAULER_LOADED_PRIORITY)
+            if (DEBUG_LOG && getTicks() % LOG_EVERY == 0) println("warden t=${getTicks()}: w${w.id}(${w.x},${w.y})${w.hits} killers=${killers.size} " +
+                "target=${target?.let { "${it.id}(${it.x},${it.y})${it.hits}" } ?: "-"}")
+        }
+    }
+
     /** The hunter's body (v136): ten MOVE carry two ATTACK at a swamp cell a tick; the legs in front. */
     private val HUNTER_BODY: Array<BodyPartType> = arrayOf(MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, ATTACK, ATTACK)
     private var hunterOrderedAt = -1
@@ -7614,6 +7689,8 @@ object SpawnAndSwamp {
     /** A site fed from the spawn is ready no sooner than the steady income brings what is left beyond the energy in hand,
      *  whatever the keeper's observed pace (v262). */
     private const val USE_SITE_SUPPLY_BOUND = true
+    /** A warden (R2M10) is bought and sent while a living killer of our haulers is one it outlasts (v263). */
+    private const val USE_FLEET_WARDEN = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
