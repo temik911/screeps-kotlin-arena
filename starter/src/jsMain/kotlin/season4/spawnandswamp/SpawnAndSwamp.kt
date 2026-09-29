@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 246
+    private const val BOT_VERSION = 247
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4916,6 +4916,12 @@ object SpawnAndSwamp {
                 for (m in mates) {
                     if (getRange(creep, m) <= RANGED_RANGE) continue // рядом — не отстал
                     if (m.id in linked) continue // в очереди за мной, а не отстал
+                    // …nor one already in its weapon's reach of the target (v247): it has arrived, and the field that calls
+                    // it behind is the walk to the target's cell, which it never takes. Against marlyman#434 (v239 loss)
+                    // f12 (M1A1×6, 180 a tick) and f37 held 5-6 cells from his corner spawn (2,2) at 600-892 for f33,
+                    // which struck it from (5,5) at range 3 on the swamp — flow 15 against their 5-6; his rampart and
+                    // spawn fell at 40 a tick in 325 ticks instead of ~43 at 300, and he raised two spawns meanwhile
+                    if (USE_HOLD_ARRIVED && ((hasRanged(m) && getRange(m, target) <= RANGED_RANGE) || (hasMelee(m) && getRange(m, target) <= 1))) continue
                     val d = cohesionFlow[m.x * 100 + m.y]
                     if (d < 0) continue
                     val lag = (d - myFlow) * plainPeriod(m) // поле в тиках полного хода × его период
@@ -7379,6 +7385,8 @@ object SpawnAndSwamp {
     private const val USE_WAVE_MELEE_STAYS = true
     /** A marching melee is not called home by its row when it gets home no sooner than the house falls (v246). */
     private const val USE_WAVE_MELEE_LATE = true
+    /** A mate in its weapon's reach of the target is not waited for as a laggard (v247). */
+    private const val USE_HOLD_ARRIVED = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
