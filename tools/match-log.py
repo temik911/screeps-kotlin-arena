@@ -668,7 +668,13 @@ def fetch_replay(c, gid, out_dir=REPLAYS, refresh=False, progress=None):
     for i, t in enumerate(targets):
         frames = fetch_replay_chunk(c, gid, t)
         if not isinstance(frames, list):
-            if got == 0:
+            # only the closing chunk (the match's own last tick) may be missing; a chunk lost in the middle used to
+            # end the loop and the truncated replay was written as whole — 29.09.2026 two matches were stored with
+            # 200 and 300 of their ~2000 ticks while the server dropped chunks, and every later `replay` without
+            # --refresh skipped them as fetched. Nothing is written then, so the next call fetches it again
+            if got == 0 or i < len(targets) - 1:
+                if got:
+                    print(f"\n{gid}: chunk at tick {t} failed after {got} of {len(targets)} — replay not written", file=sys.stderr)
                 return None
             break
         for fr in frames:
