@@ -99,7 +99,7 @@ object SpawnAndSwampAdvanced {
 
     /** Печатается первой строкой матча: по ней лог связывается с коммитом, а `--arena` инструментов отличает режим
      *  от базового (фильтр по подстроке — поэтому в имени обязательно `spawn-and-swamp-advanced`). */
-    private const val BOT_VERSION = "v57"
+    private const val BOT_VERSION = "v56"
 
     private const val LOG_EVERY = 50
 
@@ -937,11 +937,7 @@ object SpawnAndSwampAdvanced {
                     founderPlan = plan
                     if (plan == null) { founderId = null }
                 }
-                // с поднятой им базы (не первой) основатель уходит, только когда там стоит башня: так делает けろびー#19 —
-                // его строитель ~460 тиков на каждой базе, пока замена ставит рампарт и башню; наш уходил через ~75 тиков,
-                // и центральная база падала через 150–400 тиков вместе с основателем (поражения от けろびー#17, #22)
-                val towered = b1 === bases.first() || all.any { it is StructureTower && it.asDynamic().my == true && b1.towerCell?.let { c -> it.x == c.x && it.y == c.y } == true }
-                if (plan != null && stay >= needWork && covered && towered && worksiteSafe(listOf(plan.spawnCell))) {
+                if (plan != null && stay >= needWork && covered && worksiteSafe(listOf(plan.spawnCell))) {
                     builderId = fid; expansion = plan; expansionPlaced = false
                     slotOf.remove(fid); founderId = null; founderPlan = null
                     println("founder t=$t ${bodyOf(founder)} leaves for (${plan.spawnCell.x},${plan.spawnCell.y})")
@@ -1229,9 +1225,8 @@ object SpawnAndSwampAdvanced {
         // башня — после сейфа, если дом ещё не трогали. v16 ставил её сразу после первого бойца: 1250 из добычи на
         // 330–460-м тике — ровно когда приходят первые M4R3H1 けろびー, и спавн без притока проиграл дважды к 500-му.
         // Ранний дом держат сторожевые рампарты (planRamparts), башня — ответ на нападение
-        // новая база (не первая) ставит башню сразу: без неё к приходу его армии пали 21 база из 22, с ней устояли 20 из 24
         val v = vaults.firstOrNull()
-        if (b === bases.first() && v != null && v.stage != "run" && !attackedOnce) return
+        if (v != null && v.stage != "run" && !attackedOnce) return
         val blocked = blockedCells(all)
         fun exits(extra: Pos): Int {
             var n = 0
