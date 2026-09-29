@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 264
+    private const val BOT_VERSION = 265
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -4829,6 +4829,34 @@ object SpawnAndSwamp {
             if (USE_HUNT_REACH) fighters.filter { it.id !in wave && inArms(it) && !(USE_FIELD_HUNTER && isHunter(it)) } else homeGuard, homePack, enemySpawn, enemyCreeps, combatEnemies)
         val occupantAt = HashMap<Int, Creep>()
         for (c in ctx.active) occupantAt[c.x * 100 + c.y] = c
+        // THE HEALER'S WARD IS IN ITS OWN COLUMN, AND ONLY THAT COLUMN WAITS FOR IT (v265). The ward was the most hurt
+        // armed mate of the whole wave, else its vanguard on the assault field; a healer walks to its ward, not to the
+        // target, yet every gun of the wave measured it "behind" on the assault field. When the wave split onto two routes
+        // the vanguard flipped between them whenever one group passed the other by a cell, the healer turned back, its
+        // assault field grew while it crossed, and BOTH groups held for it: against marlyman#443 (v263 draw) the last wave
+        // left at 1562 with its own clock `need=229/438`, one gun took the north route after his raider and six the south,
+        // the healer switched five times (1600-1985) and the guns stood 270-323 of the 438 ticks — his main took no blow.
+        // The ward is chosen among the armed mates joined to the healer by a chain of fighters each within two cells of
+        // the next (v95's column), the most hurt else the vanguard; a healer cut off from every column goes to the nearest
+        // armed mate. A gun waits for a healer only if its ward is itself or in its own column
+        val healerWards = HashMap<String, Creep>()
+        if (USE_WARD_IN_COLUMN) for (h in fighters) {
+            if (!(USE_HEALER_WARD && !hasWeapon(h) && hasHeal(h)) || h.id !in wave) continue
+            val armed = fighters.filter { it.id != h.id && it.id in wave && inArms(it) && (!USE_ARMED_WARD || hasWeapon(it)) }
+            if (armed.isEmpty()) continue
+            val seen = HashSet<String>()
+            val queue = ArrayDeque<Creep>()
+            queue.add(h); seen.add(h.id)
+            while (queue.isNotEmpty()) {
+                val c = queue.removeFirst()
+                for (m in fighters) if (m.id !in seen && getRange(c, m) <= 2) { seen.add(m.id); queue.add(m) }
+            }
+            val column = armed.filter { it.id in seen }
+            val ward = column.filter { it.hits < it.hitsMax }.minByOrNull { it.hits.toDouble() / it.hitsMax }
+                ?: column.minByOrNull { assaultFlow.getOrNull(it.x * 100 + it.y)?.takeIf { d -> d >= 0 } ?: Int.MAX_VALUE }
+                ?: armed.minByOrNull { getRange(h, it) }
+            if (ward != null) healerWards[h.id] = ward
+        }
 
         for (creep in fighters) {
             val marching = enemySpawn != null && creep.id in wave && (pushing || !USE_WAVE_SURVIVES_FLIP)
@@ -4936,7 +4964,7 @@ object SpawnAndSwamp {
                     guards.isEmpty() || ourPowerOf(listOf(creep), guards) >= enemyPowerOf(guards, listOf(creep)) * PUSH_RATIO
                 }.minByOrNull { getRange(creep, it) }
             val healer = USE_HEALER_WARD && !hasWeapon(creep) && hasHeal(creep)
-            val ward: Creep? = if (healer && marching) {
+            val ward: Creep? = if (healer && marching && USE_WARD_IN_COLUMN) healerWards[creep.id] else if (healer && marching) {
                 // …an ARMED one (v120): the vanguard of mates in arms was another healer — a healer walks a swamp cell a
                 // tick, a gun one in three, so the healers led the column; against 76561198870429455#51 two of them took
                 // each other as wards and traded cells at its head for 500 ticks, sixteen guns queued behind them 26-30
@@ -5091,6 +5119,9 @@ object SpawnAndSwamp {
                 for (m in mates) {
                     if (getRange(creep, m) <= RANGED_RANGE) continue // рядом — не отстал
                     if (m.id in linked) continue // в очереди за мной, а не отстал
+                    // (v265) a healer walks to its ward: it is behind only for the column its ward is in
+                    val hisWard = if (USE_WARD_IN_COLUMN) healerWards[m.id] else null
+                    if (hisWard != null && hisWard.id != creep.id && hisWard.id !in linked) continue
                     // …nor one already in its weapon's reach of the target (v247): it has arrived, and the field that calls
                     // it behind is the walk to the target's cell, which it never takes. Against marlyman#434 (v239 loss)
                     // f12 (M1A1×6, 180 a tick) and f37 held 5-6 cells from his corner spawn (2,2) at 600-892 for f33,
@@ -7700,6 +7731,8 @@ object SpawnAndSwamp {
     /** A keeper takes from the spawn nothing the spawn saves for while its site, fed after the saving, still stands before
      *  its deadline (v264). */
     private const val USE_KEEPER_SPARES_SAVING = true
+    /** A marching healer's ward is chosen in its own column, and only that column waits for it (v265). */
+    private const val USE_WARD_IN_COLUMN = true
     /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
     private const val USE_FORT_RESERVE_HOME = true
     /** In a storm the melee goes to the spawn's door and holds it: no turn on a defender it cannot outpace, no step off the
