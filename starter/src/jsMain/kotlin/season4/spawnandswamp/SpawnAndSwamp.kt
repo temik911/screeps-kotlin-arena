@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 247
+    private const val BOT_VERSION = 248
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2474,8 +2474,30 @@ object SpawnAndSwamp {
         // (v200) the fleet below its own peak while the economy wants a hauler: the savings ahead of the hauler yield
         val fleetShort = USE_FLEET_FIRST && ctx.haulers.size < haulerPeak && needHauler
         if (fleetShort) fleetShortNow = true
+        // …AND ITS FIRST RAIDER TOO, WHILE THE TOWER BEGUN AFTER THE PAIR STILL STANDS BEFORE HIS GUNS REACH OUR DOOR
+        // (v248). The keeper goes first so that the tower stands before his storm (v145); where it would stand before it
+        // anyway with the whole pair bought first, the keeper's thousand only pushes the pair out of its window. Against
+        // けろびー#48 (v239 draw) the flag rose at 219 and the keeper (1000) was bought at once, the first raider came at
+        // 250 and the second — the income down from 32 to 7 a tick by 290 — at 397, past the window: the pair never met,
+        // nine lone raiders cost 8910, and his bare (19,8) stood untouched to 2000; in the win over the same #48 the pair
+        // was born at 218/272, the keeper at 320, and the tower stood 170 ticks before any storm. "Before his guns" is
+        // the army forecast at our door (armyForecast, v222) over the ticks until the pair, the keeper and the tower's
+        // work have come in and the keeper has built it
+        val pairBeforeKeeper = USE_RAID_PAIR_BEFORE_KEEPER && USE_RAID && !armNow && raidOrdered == 0 && raidRebuyAt < 0 &&
+            USE_FORT_HOME && fortHome && ctx.myTowers.isEmpty() && forecastUs >= 0 && raidWanted(ctx) && run {
+                val job = siteJobs.filter { it.kind == "StructureTower" && it.inTime }.minByOrNull { it.left } ?: return@run false
+                val keeper = keeperBody(ctx, job.site?.let { InfluenceMap.cell(it.x, it.y) }, job.left, flow)
+                val work = keeper.count { it == WORK }
+                if (work <= 0) return@run false
+                val before = RAID_SIZE * RAID_BODY.sumOf { cost(it) } + keeper.sumOf { cost(it) }
+                val keeperIn = energyArrivalTicks(ctx, before - energy, flow) + keeper.size * CREEP_SPAWN_TIME
+                val ready = maxOf(energyArrivalTicks(ctx, before + job.left - energy, flow), keeperIn + job.left.toDouble() / (work * BUILD_POWER))
+                val h = ready.toInt().coerceIn(1, arenaInfo.ticksLimit)
+                armyForecast(ctx, forecastUs, FORECAST_D, h).announced.none { InfluenceMap.profileOf(it).let { pr -> pr.ranged + pr.melee > 0.0 } }
+            }
+        if (pairBeforeKeeper) reach("pFirst")
         if (USE_RAID_LAST && USE_RAID && !armNow && (if (USE_RAID_TOPUP) raidWanted(ctx) && (raidOrdered in 1 until RAID_SIZE || raidRebuyAt >= 0)
-                else raidOrdered in 1 until RAID_SIZE && raidWanted(ctx))) {
+                else raidOrdered in 1 until RAID_SIZE && raidWanted(ctx)) || pairBeforeKeeper) {
             val price = RAID_BODY.sumOf { cost(it) }
             // …saved for only while a fleet brings the energy (v171): against kerobi#49 `rSave2` held the spawn 944 ticks
             // (460-1500) at an income of 0 while the haulers went 4 -> 0 unreplaced, and the house fell at 1592
@@ -7387,6 +7409,9 @@ object SpawnAndSwamp {
     private const val USE_WAVE_MELEE_LATE = true
     /** A mate in its weapon's reach of the target is not waited for as a laggard (v247). */
     private const val USE_HOLD_ARRIVED = true
+    /** The pair's first raider goes before the fort's keeper too while the tower begun after the pair stands before the
+     *  forecast brings his guns to our door (v248). */
+    private const val USE_RAID_PAIR_BEFORE_KEEPER = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
