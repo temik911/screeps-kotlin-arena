@@ -117,7 +117,7 @@ object SpawnAndSwamp {
     /** Запас тиков к «последнему звонку» (марш + снос спавна) — бой в пути, кайтеры, усталость. */
     /** Версия бота: печатается первой строкой лога и привязывает матч к коду (правило 5 в CLAUDE.md).
      *  Растёт на каждую правку поведения, которая уходит в живой матч. */
-    private const val BOT_VERSION = 256
+    private const val BOT_VERSION = 257
 
     // ---------- switches of v84 (each rule can be turned off alone; the verdicts go into their KDoc) ----------
     /** A healer in a wave follows the most damaged member / the vanguard instead of walking home (runFighters). */
@@ -2205,7 +2205,13 @@ object SpawnAndSwamp {
         // (hauler queue, the pile builder's saving, `poor`) and held 1000 in the fort's reserve from 1000 to 1400
         val lastStand = USE_RAID_BUILDERS_FIRST && raidSignal && ctx.enemySpawns.size in 1..RAID_REBUY_SPAWNS &&
             ctx.enemyCreeps.none { isHisBuilder(it) } && getTicks() > RAID_BUY_UNTIL
-        val fortReserve = USE_FORT_RESERVE && !armNow && !lastStand && fortPending(ctx)
+        // …and only at the spawn whose energy the fort's work takes (v257): the keeper takes at the home spawn only (v159),
+        // and a pile spawn holding the reserve keeps energy nobody will take. Against けろびー#22 (v255 draw) the reserve
+        // held every spawn from 1340 to 1813 while the second tower waited, the pile spawns (56,77), (68,88) and (65,66)
+        // stood full at 1000 from 1393, 1505 and 1712, no fighter was bought from 290 to 1814, and the house the fort
+        // was for lost 180 all match
+        val fortReserve = USE_FORT_RESERVE && !armNow && !lastStand && fortPending(ctx) &&
+            (!USE_FORT_RESERVE_HOME || spawn.id == ctx.mySpawn.id)
         // …and while it is on, a gun that matches the raid's damage is bought now rather than saved for (v125): the first
         // gun at the door, even an M4R2 for 500, cut the house's loss from 9.7 a tick to 0.9 (Ranamar#6); a runt below
         // the raid's damage — the 230-360 of v113 — still waits
@@ -7546,6 +7552,8 @@ object SpawnAndSwamp {
      *  kill first (houseFallsAt, v256): the clock of houseOutlasts, recallSaves and homeFallsIn. */
     private const val USE_HOUSE_CLOCK = true
     private const val USE_HOUSE_CLOCK_TOWER = true
+    /** The fort's reserve holds only the home spawn, the one whose energy its keeper takes (v257). */
+    private const val USE_FORT_RESERVE_HOME = true
     /** v208's short-fleet rule for the keeper holds while the tower is still a site too (runBuilders, v211). */
     private const val USE_SITE_KEEPER_SHORT_FLEET = true
     /** A gun does not turn on (engage) or hunt a creep of his it cannot catch — out of reach, retreating, not slower (v212). */
