@@ -11,9 +11,9 @@
 // The win (measured live, docs/spawn-and-swamp-advanced.md): a side with no creep and no structure left loses (sites do
 // not count, ramparts do — the replay 6abc0dc7 ran on until his last rampart and tower fell); both at once — a draw;
 // 5000 ticks — a draw.
-import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, cpSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, cpSync, rmSync, openSync, writeSync, closeSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { homedir } from 'node:os';
 import { world, process as step, idx, inBounds, range, creeps, live, terrainAt, finishSite, towerPower, blockedAt } from './world.mjs';
 import { Resource } from './game/prototypes/resource.mjs';
@@ -1047,6 +1047,55 @@ if (BOT2 === 'self') {
   BOT2 = new URL(BUNDLE, 'file://' + dst).href;
 }
 if (HITS) world.hitLog = { from: HITS[0], to: HITS[1], list: [] };
+// ---------- FIGHTS=1 | <path>: the combat trace (fights.py reads it; README "The combat instrument") ----------
+// One JSON line per tick that changed anything a fight is made of: creeps out of their spawn and owned structures that
+// appeared (`n`: id, owner, kind, x, y, hitsMax, body as part letters), creeps whose cell or hits changed and structures
+// whose hits or energy changed (`c`: id, x, y, hits / `s`: id, hits, energy), every hit and heal the engine dealt this tick
+// on a creep or an owned structure (`h`: source id, target id, how — a r R h H ta th —, amount, heal negative, the rampart
+// that took it for what stood under it), and what is gone (`d`). The hits of tick t are dealt from the cells after t-1 —
+// the engine resolves the fire before the movement. Off, the run is the same run: nothing here touches the world.
+const FT = process.env.FIGHTS ? { path: null, fd: null, prev: new Map() } : null;
+if (FT) {
+  const outDir0 = fileURLToPath(new URL('out/', import.meta.url));
+  mkdirSync(outDir0, { recursive: true });
+  FT.path = process.env.FIGHTS !== '1' ? process.env.FIGHTS : `${outDir0}fights-${process.env.LOGTAG || ''}${BOT2 ? 'bot2' : scenario}.jsonl`;
+  FT.fd = openSync(FT.path, 'w');
+  world.combatSink = [];
+  writeSync(FT.fd, JSON.stringify({ hdr: 1, map: mapName, we: weLeft ? 'left' : 'right', scenario: BOT2 ? 'bot2' : scenario, bot: BOT, bot2: BOT2 || null, ticks }) + '\n');
+}
+const FT_KINDS = new Set(['spawn', 'tower', 'rampart', 'extension']);
+function fightTrace(t) {
+  const n = [], c = [], s = [], d = [];
+  const seen = new Set();
+  for (const o of world.objects) {
+    if (!o.exists) continue;
+    if (o.kind === 'creep') {
+      if (o.spawning) continue;
+      seen.add(o.id);
+      const key = `${o.x},${o.y},${o.hits}`;
+      const prev = FT.prev.get(o.id);
+      if (prev === undefined) n.push([o.id, o.owner, 'creep', o.x, o.y, o.hitsMax, o.body.map((p) => PART_CH[p.type]).join(''), o.hits]);
+      else if (prev !== key) c.push([o.id, o.x, o.y, o.hits]);
+      FT.prev.set(o.id, key);
+    } else if (FT_KINDS.has(o.kind) && (o.owner === 0 || o.owner === 1)) {
+      seen.add(o.id);
+      const e = o.store ? o.store.energy : 0;
+      const key = `${o.hits},${e}`;
+      const prev = FT.prev.get(o.id);
+      if (prev === undefined) n.push([o.id, o.owner, o.kind, o.x, o.y, o.hitsMax, '', o.hits, e]);
+      else if (prev !== key) s.push([o.id, o.hits, e]);
+      FT.prev.set(o.id, key);
+    }
+  }
+  for (const id of [...FT.prev.keys()]) if (!seen.has(id)) { d.push(id); FT.prev.delete(id); }
+  const h = [];
+  for (const [src, tg, how, amt, rp] of world.combatSink) {
+    if (!(tg.kind === 'creep' || (FT_KINDS.has(tg.kind) && (tg.owner === 0 || tg.owner === 1)))) continue;
+    h.push([src.id, tg.id, how, Math.round(amt), rp]);
+  }
+  world.combatSink = [];
+  if (n.length || c.length || s.length || d.length || h.length) writeSync(FT.fd, JSON.stringify({ t, n, c, s, h, d }) + '\n');
+}
 const bot = await import(BOT);
 const bot2 = BOT2 ? await import(BOT2) : null;
 origLog(`start: map=${mapName} we=${weLeft ? 'left' : 'right'} (${START0.x},${START0.y}) scenario=${BOT2 ? 'BOT2' : scenario} ticks=${ticks}`);
@@ -1081,6 +1130,7 @@ for (let t = 1; t <= ticks; t++) {
   step();
   const now = world.tick - 1;
   if (scenario === 'ghost' && !bot2) ghostAfter(now);
+  if (FT) fightTrace(now);
   matchOurs(now);
   stateDiff(now);
   const c0 = creeps().filter((c) => c.owner === 0), c1 = creeps().filter((c) => c.owner === 1);
@@ -1110,6 +1160,13 @@ if (bot2) writeFileSync(log.replace(/\.log$/, '.enemy.log'), lines2.join('\n') +
 if (process.env.BOT2 === 'self') rmSync(fileURLToPath(new URL(`out/bot2-${process.pid}/`, import.meta.url)), { recursive: true, force: true });
 const n0 = creeps().filter((c) => c.owner === 0).length, n1 = creeps().filter((c) => c.owner === 1).length;
 origLog(`cpu: max=${cpuMax.toFixed(1)}ms at t=${cpuMaxTick} avg=${(cpuSum / Math.max(1, world.tick - 1)).toFixed(2)}ms slow(>50ms)=${cpuSlow} over(>100ms)=${cpuOver}`);
+if (FT) {
+  writeSync(FT.fd, JSON.stringify({ end: world.tick - 1, outcome: ended || `DRAW: ${ticks} ticks`, log, enemyLog: bot2 ? log.replace(/\.log$/, '.enemy.log') : null }) + '\n');
+  closeSync(FT.fd);
+  writeFileSync(FT.path + '.gz', gzipSync(readFileSync(FT.path)));
+  unlinkSync(FT.path);
+  origLog(`fights: ${FT.path}.gz`);
+}
 origLog(`done: ${ended || `DRAW: ${ticks} ticks`} alive=${n0}/${n1} structures=[${structs(0)}]/[${structs(1)}] tw=${world.towerShots[0]}/${world.towerShots[1]} errors=${loopErrors} time=${((Date.now() - t0) / 1000).toFixed(1)}s log=${log}`);
 // milestones — the same list calib.py reads off the replay of the match: first structures of each kind per side, the first
 // hit on a creep and the first creep death of each side

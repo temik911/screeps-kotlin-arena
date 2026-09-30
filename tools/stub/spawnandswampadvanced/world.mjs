@@ -45,6 +45,7 @@ export const world = {
   // milestones for the calibration against a record (run.mjs prints them; calib.py reads the same off the replay): the
   // first tick a hit landed on a creep of each side, the first death of each side's creep, deaths per side
   first: { hit: [null, null], death: [null, null] }, deaths: [0, 0],
+  combatSink: null, // run.mjs FIGHTS=1: [src, target, how, amount (heal negative), rampart id or 0] of the current tick
   hitLog: null, // {from, to, list} — run.mjs HITS=a-b: every hit and heal of those ticks, [t, source, target, how, amount]
   api: null, // game/utils puts findPath/findClosestByPath here (game-object.mjs)
   tickStartNs: null,
@@ -188,8 +189,12 @@ export function process() {
   const heals = new Map();
   // HITS=a-b (run.mjs) keeps every hit and heal of those ticks with its source: world.hitLog
   const hl = world.hitLog && t >= world.hitLog.from && t <= world.hitLog.to ? world.hitLog.list : null;
-  const addD = (target, d, src, how) => { if (d > 0) { damage.set(target, (damage.get(target) || 0) + d); if (hl) hl.push([t, src, target, how, d]); } };
-  const addH = (target, h, src, how) => { if (h > 0) { heals.set(target, (heals.get(target) || 0) + h); if (hl) hl.push([t, src, target, how, -h]); } };
+  // FIGHTS=1 (run.mjs, the combat instrument): every hit and heal of every tick, with the rampart that took a hit meant
+  // for what stands under it — the instrument's only input besides the per-tick state; off, nothing here changes
+  const cs = world.combatSink;
+  const rampOver = (tg) => (tg.kind === 'rampart' ? null : world.objects.find((r) => r.exists && r.kind === 'rampart' && r.x === tg.x && r.y === tg.y) || null);
+  const addD = (target, d, src, how) => { if (d > 0) { damage.set(target, (damage.get(target) || 0) + d); if (hl) hl.push([t, src, target, how, d]); if (cs) { const rp = rampOver(target); cs.push([src, target, how, d, rp ? rp.id : 0]); } } };
+  const addH = (target, h, src, how) => { if (h > 0) { heals.set(target, (heals.get(target) || 0) + h); if (hl) hl.push([t, src, target, how, -h]); if (cs) cs.push([src, target, how, -h, 0]); } };
   const taken = (target) => (target.kind === 'creep' ? effectMul(target, 'eff_damage_taken_modifier') : 1);
   const hittable = (tg) => tg && tg.exists && typeof tg.hits === 'number' && !(tg.kind === 'creep' && tg.spawning);
   for (const [c, m] of acts) {

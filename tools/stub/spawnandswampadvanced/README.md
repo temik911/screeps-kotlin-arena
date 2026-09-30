@@ -276,6 +276,74 @@ caps V8's heap (`NODE_OPTIONS`, `STUB_NODE_FLAGS`), as the other stubs do.
 `kerobii` left WIN at 2162 / right DRAW at 5000; `kerobii22` left WIN at 2016 / right WIN at 4063; `ricardo` LOSS at 876
 (left) / 894 (right) — as live (lost at 952); `BOT2=self` a draw at 5000.
 
+## The combat instrument and the league
+
+Built 30.09.2026 for the operator's order to dig into the fight itself — trades, retreats, positions, rotation, healing,
+the strength estimate and the entry — by playing the bot against its own past versions here.
+
+**The trace** (`FIGHTS=1`, or `FIGHTS=<path>`, on any `run.mjs` run — `none`, a persona, `ghost`, `BOT2`): the runner writes
+`out/fights-<LOGTAG><scenario>.jsonl.gz`, one JSON line per tick that changed something a fight is made of — creeps out of
+their spawn and owned structures that appeared (id, owner, kind, cell, hitsMax, body), cells and hits that changed,
+structures' hits and energy, **every hit and heal the engine dealt that tick** with its source, how (`a r R h H ta th`) and
+the rampart that took a hit meant for what stood under it (`world.combatSink`, filled in `process()` beside the `HITS`
+log), what is gone; a trailer names the outcome and both bots' consoles. Off (the default) nothing changes: the gate is
+the same run. ≈40 KB for 1500 ticks, ≈0.5-1.5 MB for a 5000-tick bot-against-bot game; the run's time does not move.
+
+**`python3 fights.py <traces>... [--fights N|-1] [--min E] [--tsv file]`** — the fights, per run and over the series,
+for side A (owner 0: `BOT`, this build) and side B (owner 1: `BOT2` or the persona). Both sides get every column, so any
+pair of builds is measured both ways (`B=…` block). What a fight is and each column's rule are in the file's docstring;
+in short:
+
+- **a fight**: hostile hits (creep or tower on a creep, creep on an owned structure) linked in time and space — joins an
+  open fight within `GAP`=10 ticks when its shooter or target is a member or stands within `JOIN`=6 of a member active in
+  the last 10 ticks; a tower's hit joins but does not keep a fight open (it fires every 10 ticks at anything within 20);
+  **members** — every creep that hit, was hit or healed a member; its **entry** — the first such tick, with its hits and
+  live parts then;
+- **per side**: entry (combat creeps, how many entered more than 5 ticks after the first hit and the median delay, damage
+  and heal a tick, hits); **energy lost** — a creep is worth body cost × hits / hitsMax, a structure construction cost × the
+  same, lost = worth at entry − worth at the end (0 dead), so it adds up over fights; the **trade** (his loss / ours);
+  the **place** (the nearest standing spawn within 12 of the fight's hits: `base0`, `base1`, else `field`; `tw=U/T` —
+  whose towers fired); **where the fire went** (healers / fighters / workers / structures / ramparts that took a shot at
+  the creep under them), overkill, **focus** (distinct creep targets a tick against shooters a tick); **turned** — a member
+  in contact (within 4 of an armed enemy) that steps away 3+ cells within 8 ticks, and what it lost after; the bot's
+  **retreat/recall** inside a wave fight and what the side lost after the line; **flips** — push/strike/retreat lines inside
+  one fight; **piecemeal** deaths — a member dead while a friend already out of its spawn had not yet joined (`near`: the
+  friend came within 20 ticks); **lone** deaths — no own combat creep within 5; **wounded in front** — a dead combat member
+  that spent 3+ of its last 15 ticks under half hits within 3 of an armed enemy (`fresh`: a friend at 80 %+ within 4
+  stood farther from the enemy); **healing** — raw, effective (no more than the missing hits), the heal parts' potential,
+  towers'; **healed back** — his effective heal over our damage on his creeps;
+- **the forecast**: the side's last `push`/`strike` within 300 ticks before the fight (no retreat since; not for a fight
+  at its own base) against the outcome, the bots' `calib` lines, and `simAct` — the bot's own `simulate()` (ported from
+  v58) on the forces that actually engaged (fired towers as 85 a tick with their hits): wrong model versus wrong input;
+- **ranked**: the energy of ours each failure accounts for, as a share of our loss — the cuts overlap, the order is the
+  point.
+
+**The league** — `zsh league.sh <tag> [ticks]`: this build (a snapshot copied to `out/league-<tag>/cur/` at the start, so
+a rebuild half-way does not change who plays) against `OPPS` (default `v52 v56 v58 kerobii kerobii22`: `vNN` =
+`out/frozen-vNN/`, `self` = `BOT2=self`, `name=<file url of a separate copy's export .mjs>` = any build, any other word =
+a scenario) on `MAPS` (default the four terrains of `./replays/`) × `SIDES` (`left right`), `JOBS`=4 node processes at
+once, heap capped as in `regress.sh`. It writes `out/league-<tag>/results.tsv`, each run's stdout, the traces,
+`report.txt` (`fights.py`) and `fights.tsv` (one line per fight and side). Time, 30.09.2026: a 5000-tick bot-against-bot
+game is 50-204 s (median 97), a persona game 11-216 s (median 24); the default 40 games (3 frozen builds + 2 personas × 4
+terrains × 2 starts) at 4 at once took 887 s, `fights.py` over them 16 s, the traces 9.6 MB. A frozen v58 against this
+build (v58) IS the self-play line: `OPPS=self` on 6abc0dc7-right gave the same game fight for fight (126 fights, 77 867 /
+159 594 lost) — the two bundles differ only in the compiler's mangled names. The stub is deterministic, so v52 and v56,
+which play alike on three of the terrains, give identical games there.
+
+**First slice** (`league.sh s1`, v58 against v52/v56/v58/kerobii/kerobii22, 30.09.2026; the numbers are the main phase —
+fights before either side's last call — of v58 against the three frozen builds, 24 games, 1788 fights, our loss 2.03 M):
+the fights at our base trade 1.37-1.42 and under our towers 1.76-1.99, at his base 0.58-0.74 and under his towers 0.41-0.52;
+after a push/strike 0.64-0.76. Ranked by the energy each failure accounts for: piecemeal deaths 50-52 % (a friend within 20
+ticks: 37-42 %; armed members have something of his within 3 in only 58-62 % of their ticks after entering, and fire in 98-99 %
+of those); push/strike promised keep >= 50 % and the fight traded worse 44-48 % (134-140 fights per 8 games); lost fights
+away from our base 27-33 %; wounded in the front with a fresh friend behind 23-27 % (wounded in front: 51-56 % of our combat
+deaths); lone deaths 17-19 %; lost after the bot's retreat/recall 12-14 %; flip-flop fights 11-14 %; lost after a kinematic
+turn 6-9 %. The entry's miss is the strength estimate: when `simAct` says win and 30 %+ of our fire went into ramparts over
+his creeps, the trade is lost in 40 of 54 fights (74 %; our 513 k against his 332 k), below 10 % into ramparts in 158 of 818
+(19 %) — `simulate()` sees no rampart over a defender and `shoot()` fires at the creep under one; of 466 waves sent on a
+promised win his creeps were all dead at the wave's end in 130, while our own keep fell more than 20 points below the
+forecast in only 84.
+
 ## Commands
 
 ```shell
@@ -294,6 +362,11 @@ HITS=1300-1360 REPLAY=6abc0dc7 $NODE --import ./register.mjs run.mjs 1360 ghost 
 python3 kerobii.py             # the measurement behind the kerobii personas' army, over his stored replays #19-#23
 zsh regress.sh gate            # the gate (what land.sh runs), ≈28 s
 zsh regress.sh v58             # the gate plus the open lines, ≈4 min
+FIGHTS=1 REPLAY=6abc0dc7 BOT2=file://$PWD/out/frozen-v56/kotlin/screeps-kotlin-arena-starter/season4/spawnandswampadvanced/SpawnAndSwampAdvanced.export.mjs \
+  $NODE --import ./register.mjs run.mjs 5000 none && python3 fights.py out/fights-bot2.jsonl.gz --fights 10   # one game, its fights
+zsh league.sh s1               # the league (≈17 min at JOBS=4): out/league-s1/report.txt, fights.tsv
+OPPS="v56 kerobii" MAPS=6abc21a1 zsh league.sh q 2500          # a small cut
+python3 fights.py out/league-s1/fights-*-v52.jsonl.gz --fights -1 --min 3000   # every fight of 3000+ energy against v52
 ```
 
 The runner prints `cpu t=N` and a status line every 100 ticks, and at the end `done:` (the outcome, survivors, both
